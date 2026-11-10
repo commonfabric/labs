@@ -477,6 +477,34 @@ export interface ChatRoomLink {
 }
 
 /**
+ * A room's identifying metadata, materialized in its own document in the room's
+ * space. Its navigation address is plain data, so reading it requires no
+ * reference to the room result.
+ */
+export interface ChatRoomMetadata {
+  /** The kind of conversation the room holds. */
+  kind: ChatRoomKind;
+
+  /** The title a member last set, or the room's original title. */
+  title?: string;
+
+  /** Profiles of those who joined the room, in the order they joined. */
+  roster: ProfileCell[];
+
+  /**
+   * The resolved room result's address, without a cell reference; absent for
+   * a room core instantiated without its containing room's identity.
+   */
+  room?: {
+    /** The room result's space. */
+    space: DID;
+
+    /** The room result's tagged entity hash, as `entityRefToString` returns it. */
+    id: string;
+  };
+}
+
+/**
  * A container's explicit declaration of the conversation it holds, and where
  * it keeps the store of its space's files, which a room in its space that
  * isn't its root uses as its own. It offers the record rather than a stream

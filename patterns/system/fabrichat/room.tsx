@@ -30,9 +30,11 @@ import {
   type FabricEpochNsec,
   grantSpaceAccess,
   handler,
+  lift,
   NAME,
   pattern,
   type PerSession,
+  type PerSpace,
   type PerUser,
   principalOf,
   profileOwnerOf,
@@ -87,6 +89,7 @@ import {
   type ComposerCell,
   type ComposerState,
   dropAttachment,
+  entityKeyOf,
   FABRICHAT_POLICY,
   isOwnerOf,
   type JoinedEvent,
@@ -140,6 +143,7 @@ import {
   type ChatRoomAbout,
   type ChatRoomKind,
   type ChatRoomLink,
+  type ChatRoomMetadata,
   type ChatRoomPolicy,
   epochNsec,
   isPrincipalDID,
@@ -1110,10 +1114,38 @@ export interface ChatMessageRights extends MessageRights {
   message: MessageCell;
 }
 
+/** The room's shared facts needed to materialize its list metadata. */
+interface RoomMetadataInput {
+  /** The kind of conversation. */
+  kind: ChatRoomKind;
+
+  /** The effective title, absent for an untitled conversation. */
+  title: string | undefined;
+
+  /** The profiles on the room's own roster. */
+  roster: ProfileCell[];
+
+  /** The containing room result's scalar address, if supplied. */
+  roomAddress: ChatRoomMetadata["room"];
+}
+
+/** Materializes a room's list metadata as one document of plain facts. */
+const roomMetadata = lift<RoomMetadataInput, PerSpace<ChatRoomMetadata>>(
+  ({ kind, title, roster, roomAddress }) => ({
+    kind,
+    ...(title === undefined ? {} : { title }),
+    roster: [...roster],
+    ...(roomAddress === undefined ? {} : { room: roomAddress }),
+  }),
+);
+
 /** A room's data face, for hosts that draw it natively. */
 export interface ChatRoomView {
   /** What the room says about itself. */
   about: ChatRoomAbout;
+
+  /** A separately addressable descriptor, when the room provides one. */
+  metadata?: ChatRoomMetadata;
 
   /**
    * The shape of `replyTo` the room reads and stores, which a client sends a
@@ -1319,6 +1351,9 @@ export interface FabriChatRoomCoreInput {
   /** The space's root, which may explicitly declare this conversation. */
   container?: Cell<ChatContainer>;
 
+  /** The containing room result's scalar address, supplied by its wrapper. */
+  roomAddress?: ChatRoomMetadata["room"];
+
   /** The viewer's profile, which holds no value while it is unknown. */
   myProfile: ProfileCell | undefined;
 
@@ -1514,6 +1549,7 @@ export const FabriChatRoomCore = pattern<
   const {
     myProfile,
     container,
+    roomAddress,
     about,
     messages,
     titles,
@@ -1712,6 +1748,18 @@ export const FabriChatRoomCore = pattern<
     // The stored record itself, as a link, so a reader can read its label.
     record: about,
   };
+  const metadataValue = roomMetadata({
+    kind,
+    title,
+    roster: joined,
+    roomAddress,
+  });
+  const metadata = new Writable.perSpace<ChatRoomMetadata>();
+  // The materializer has standing demand while the room runs, so a writer
+  // updates this document even when its readers hold only the remote address.
+  const _writeMetadata = computed(() => {
+    metadata.set(metadataValue);
+  });
   const name = computed(() =>
     title ?? (kind === "direct" ? "Direct chat" : "Chat")
   );
@@ -1927,6 +1975,7 @@ export const FabriChatRoomCore = pattern<
   };
   const view = {
     about: aboutView,
+    metadata,
     replyShape: CHAT_REPLY_SHAPE,
     participants,
     roster: joined,
@@ -2228,6 +2277,19 @@ export interface FabriChatRoomInput {
   fileStore?: FileStoreRecordCell;
 }
 
+/** Extracts the room result's address without reading its contents. */
+const roomAddressOf = lift<
+  Cell<Pick<ChatRoomLink, never>>,
+  ChatRoomMetadata["room"]
+>(
+  (room) => {
+    const target = room.resolveAsCell();
+    const space = spaceOf(target);
+    const id = entityKeyOf(target);
+    return space === undefined || id === undefined ? undefined : { space, id };
+  },
+);
+
 /**
  * A FabriChat room whose viewer is the person looking at it: the
  * `ChatRoomOutput` its space's members share. A viewer with no profile can
@@ -2244,6 +2306,7 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
     // The room itself, the link another member's manager lists it by.
     [SELF]: self,
   }) => {
+    const roomAddress = roomAddressOf(self);
     // Each session finds its own profile: a session whose wish finds none, or
     // fails, writes that into its own instance, never over the one a session
     // that found the profile reads.
@@ -2264,6 +2327,7 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
       {
         myProfile: profileWish.result,
         container: containerWish.result,
+        roomAddress,
         about,
         messages,
         titles,
@@ -2289,6 +2353,7 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
       [NAME]: room[NAME],
       [VIEWS]: room[VIEWS],
       about: room.about,
+      metadata: room.metadata,
       replyShape: room.replyShape,
       participants: room.participants,
       roster: room.roster,

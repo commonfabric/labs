@@ -47,6 +47,9 @@ import {
   cellRuntime,
   convertCellsToLinks,
   createSpaceRootIfAbsent,
+  getPatternIdentityRef,
+  getPatternSource,
+  hostValueOf,
   isCell,
   markUiInputBlindWriteTx,
   parseLink,
@@ -67,7 +70,7 @@ import {
   ExtendedStorageTransactionForTestingOnly,
   MemoryWebSocketForTestingOnly,
 } from "@commonfabric/runner/for-testing-only";
-import { type DID, Identity } from "@commonfabric/identity";
+import { createSession, type DID, Identity } from "@commonfabric/identity";
 import {
   ensurePrivateInboxOf,
   inboxPieceLinkSchema,
@@ -107,6 +110,8 @@ let cc: PiecesController | undefined;
 let piece: PieceController | undefined;
 let resultSchema: unknown;
 let resultSinkCancel: (() => void) | undefined;
+let addressSinkCancel: (() => void) | undefined;
+let addressValue: FabricValue;
 let boundedReads = false;
 let watchPaths: readonly (readonly (string | number)[])[] = [[]];
 
@@ -175,6 +180,9 @@ function recorded(): CommitRejection[] {
   }
   return rejections;
 }
+
+/** The actor whose independent runtime this worker hosts. */
+let sessionIdentity: Identity | undefined;
 
 function controller(): PiecesController {
   if (!cc) throw new Error("worker not initialized");
@@ -512,6 +520,7 @@ const handlers: Record<
     const identity = await Identity.fromKeyPair(
       keyPair as FabricKeyPair,
     );
+    sessionIdentity = identity;
     if (typeof wsDelayMs === "number") installWsDelay(wsDelayMs);
     if (inboundHold === true) installInboundHold();
     boundedReads =
@@ -553,7 +562,9 @@ const handlers: Record<
     return { did: identity.did() };
   },
 
-  async createPiece({ programPath, rootPath, dataFilePaths, input }) {
+  async createPiece(
+    { programPath, rootPath, dataFilePaths, input, sourceSnapshots },
+  ) {
     // Each runtime compiles the pattern in its own worker, so data files have
     // to cross this boundary with the paths rather than be attached where the
     // worker was spawned.
@@ -567,6 +578,25 @@ const handlers: Record<
           : {}),
       },
     );
+    if (Array.isArray(sourceSnapshots)) {
+      for (const snapshot of sourceSnapshots) {
+        if (
+          !isObjectNotArray(snapshot) || typeof snapshot.name !== "string" ||
+          typeof snapshot.filePath !== "string"
+        ) {
+          throw new TypeError(
+            "A source snapshot needs its program name and file path",
+          );
+        }
+        const file = program.files.find((file) => file.name === snapshot.name);
+        if (!file) {
+          throw new Error(
+            `Source snapshot is outside the program: ${snapshot.name}`,
+          );
+        }
+        file.contents = await Deno.readTextFile(snapshot.filePath);
+      }
+    }
     const created = await controller().create(program, {
       input: isObjectNotArray(input) ? input : undefined,
       start: true,
@@ -574,6 +604,44 @@ const handlers: Record<
     await attachPiece(created);
     await idle();
     return { pieceId: created.id };
+  },
+
+  /** Changes an addressed piece's origin through the ordinary source API. */
+  async repointPiece({ piece: address, url }) {
+    if (!sessionIdentity) throw new Error("worker not initialized");
+    const { id, space } = address as PieceAddress;
+    const pieces = new PiecesController(
+      createSession({ identity: sessionIdentity, spaceDid: space as DID }),
+      controller().runtime,
+    );
+    // This controller shares the worker's runtime and its disposal lifetime.
+    const target = await pieces.get(id, true);
+    const receipt = await target.changeSource({
+      kind: "repoint",
+      url: url as string,
+    });
+    addressedResults.delete(addressKey({ id, space }));
+    await idle();
+    if (receipt.status === "incompatible") {
+      return { status: receipt.status, message: receipt.message };
+    }
+    return {
+      status: receipt.status,
+      executionWarning: receipt.executionWarning,
+    };
+  },
+
+  /** Reads source metadata, optionally without starting or reconciling the piece. */
+  async pieceSource({ piece: address, start }) {
+    const { id, space } = address as PieceAddress;
+    const target = start === false
+      ? controller().runtime.getCellFromEntityId(space as MemorySpace, id)
+      : await resultAt(address);
+    await target.sync();
+    return {
+      pattern: getPatternIdentityRef(target),
+      source: getPatternSource(target),
+    };
   },
 
   async openPiece({ pieceId }) {
@@ -1506,6 +1574,40 @@ const handlers: Record<
   },
 
   /**
+   * Holds one explicitly addressed cell under the schema its link carries,
+   * without opening a piece. Replaces this command's preceding subscription.
+   */
+  async watchAddress({ link }) {
+    const parsed = parseLink(link);
+    if (
+      parsed === undefined || parsed.id === undefined ||
+      parsed.space === undefined
+    ) {
+      throw new TypeError("`watchAddress()` needs an absolute cell link.");
+    }
+    const cell = controller().runtime.getCellFromLink(parsed);
+    addressSinkCancel?.();
+    addressValue = undefined;
+    addressSinkCancel = cell.sink((value) => {
+      addressValue = hostValueOf(value);
+    });
+    await idle();
+    return addressValue;
+  },
+
+  /** Returns the most recent value delivered to `watchAddress()`. */
+  async watchedAddress() {
+    await idle();
+    return addressValue;
+  },
+
+  /** Reports retained structures without adding a cell read or subscription. */
+  async memorySizes() {
+    await idle();
+    return controller().runtime.getSizes();
+  },
+
+  /**
    * The rendered view's reconciliation errors since the last call, as
    * messages, and nothing when the view mounted and reconciled cleanly or
    * the session holds no view. Drained on each call.
@@ -1636,6 +1738,8 @@ const handlers: Record<
   },
 
   async dispose() {
+    addressSinkCancel?.();
+    addressSinkCancel = undefined;
     for (const intake of shareIntakes.splice(0)) intake.stop();
     viewMountCancel?.();
     viewMountCancel = undefined;

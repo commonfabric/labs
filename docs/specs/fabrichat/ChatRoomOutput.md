@@ -12,6 +12,9 @@ same role. Everything in this document binds every implementation.
 interface ChatRoomOutput {
   about: ChatRoomAbout;
 
+  /** The room's list metadata, in a document of its own. */
+  metadata?: ChatRoomMetadata;
+
   /** The shape of `replyTo` the room reads and stores. */
   replyShape: "thread-quotes";
 
@@ -324,7 +327,7 @@ A room's fields fall into three [scopes](../scoped-cell-instances.md#summary),
 and the difference matters to a client:
 
 - **`PerSpace`**: one instance for the whole room, the same for everyone the
-  room's space admits. That is nearly everything: `about`, the messages,
+  room's space admits. That is nearly everything: `about`, `metadata`, the messages,
   `participants` and `roster`, and the streams. These are the room: a link to the room names them,
   and passing the link around, to another component or another person, passes
   the room.
@@ -351,6 +354,50 @@ and the difference matters to a client:
 Some values are derived when they're read, and stored nowhere, so reading them
 needs no instance of anything: `participants`, `roster`, and everything in
 `messages`.
+
+## List metadata
+
+`metadata` is an optional projection held in a separate `PerSpace` document in
+the room's space. It holds the room's `kind` and optional `title`, and its
+`roster` of profile references. These have the same meaning as `about.kind`,
+`about.title`, and `roster`. The projection depends on those shared records;
+maintaining it requires no message-history traversal. Activity remains on
+`messages`.
+
+The metadata is advisory display data. The roster claims who joined; neither
+it nor the metadata's address proves membership, access, or authorship. A
+consumer reads the original records and their labels when it needs those
+facts.
+
+Its optional `room` is the resolved room result's identity as plain
+`{ space, id }` data. `space` is the space DID, and `id` is the tagged entity
+hash returned by `entityRefToString`, not a storage URI. A host converts it to
+a storage URI with `idStringForEntityAddress` from `@commonfabric/runner`
+before passing it to a route that takes a string address. It names the room to
+navigate to without embedding a reference whose schema reaches the room's full
+output. A room core used without its containing room's identity omits it.
+
+A reader can resolve the room's `metadata` field as a cell and retain that
+reference while it has the room open, then read that document directly under
+the room space's access checks.
+Reading the room result to find `metadata` still reads that result document
+and its schema closure. A list that needs only profile references declares
+those references explicitly in its read schema; reading their values also
+reads the profiles.
+
+A reader must tolerate absent metadata: an older room implementation need
+not offer it, and the document may not yet be initialized. Opening an updated
+room initializes its projection from the existing records without a backfill
+or a rewrite of those records. A runtime executing an older generation alone
+does not maintain the projection. Consumers that require current facts must
+use the room's existing fields when metadata is unavailable or its producer
+is not known to be current.
+
+The manager's [`ChatIndexEntry`](ChatIndexEntry.md) still locates the room
+through its `room` reference. A retained metadata address does not establish
+that a catalog entry still exists, that a container still declares this room,
+or that a replaced root is the same room; discovery must establish those
+facts independently.
 
 ## Streams
 

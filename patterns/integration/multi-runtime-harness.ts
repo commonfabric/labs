@@ -114,6 +114,13 @@ export type { PieceAddress, TrustedUiDescriptor };
 export type { CommitRejection, RuntimeDiagnosticsSnapshot };
 
 export interface MultiRuntimeSessionSpec {
+  /**
+   * Starts only the runtime, leaving the harness's piece unopened. Direct
+   * address readers use this to measure their own demand independently of a
+   * piece's startup and subscriptions.
+   */
+  unattached?: boolean;
+
   /** Explicit host policy for this session and, for the first session, creation. */
   cfc?: Omit<MultiRuntimeCfcOptions, "cfcReadMaxConfidentiality">;
 
@@ -187,8 +194,15 @@ export interface MultiRuntimeSessionSpec {
 }
 
 export interface MultiRuntimeHarnessOptions {
+  /** Reopens a persisted piece instead of bootstrapping a new one. Requires spaceDid. */
+  pieceId?: string;
+
+  /** Exact historical source files substituted into the resolved bootstrap closure. */
+  sourceSnapshots?: readonly { name: string; filePath: string }[];
+
   /** Result paths to keep active, instead of eagerly observing private siblings. */
   watchPaths?: readonly (readonly (string | number)[])[];
+
   /** Path to the pattern entry file (e.g. `<dir>/main.tsx`). */
   programPath: string;
 
@@ -954,6 +968,9 @@ export class MultiRuntimeHarness {
   static async create(
     options: MultiRuntimeHarnessOptions,
   ): Promise<MultiRuntimeHarness> {
+    if (options.pieceId !== undefined && options.spaceDid === undefined) {
+      throw new Error("Reopening a piece requires its spaceDid");
+    }
     if (options.sessions.length === 0) {
       throw new Error("MultiRuntimeHarness needs at least one session");
     }
@@ -1070,30 +1087,37 @@ export class MultiRuntimeHarness {
       // client loads the pattern through a verified load (required for
       // trusted-action CFC writes), and no session holds special in-memory
       // compile state.
-      bootstrap = new WorkerClient("bootstrap");
-      await bootstrap.call("init", {
-        identity: owner.keyPair,
-        spaceDid,
-        apiUrl,
-        diagnostics: options.diagnostics === true,
-        watchPaths: options.watchPaths as FabricValue,
-        cfc: cfcFor(specs[0]),
-        ...(options.cfcWriteFloor !== undefined
-          ? { cfcWriteFloor: options.cfcWriteFloor }
-          : {}),
-      });
-      const { pieceId } = await bootstrap.call("createPiece", {
-        programPath: options.programPath,
-        rootPath: options.rootPath,
-        dataFilePaths: options.dataFilePaths,
-        input: options.input,
-      }) as { pieceId: string };
-      await bootstrap.dispose();
-      await bootstrap.terminate();
-      bootstrap = undefined;
+      let pieceId = options.pieceId;
+      if (pieceId === undefined) {
+        bootstrap = new WorkerClient("bootstrap");
+        await bootstrap.call("init", {
+          identity: owner.keyPair,
+          spaceDid,
+          apiUrl,
+          diagnostics: options.diagnostics === true,
+          watchPaths: options.watchPaths as FabricValue,
+          cfc: cfcFor(specs[0]),
+          ...(options.cfcWriteFloor !== undefined
+            ? { cfcWriteFloor: options.cfcWriteFloor }
+            : {}),
+        });
+        const created = await bootstrap.call("createPiece", {
+          programPath: options.programPath,
+          sourceSnapshots: options.sourceSnapshots,
+          rootPath: options.rootPath,
+          dataFilePaths: options.dataFilePaths,
+          input: options.input,
+        }) as { pieceId: string };
+        pieceId = created.pieceId;
+        await bootstrap.dispose();
+        await bootstrap.terminate();
+        bootstrap = undefined;
+      }
 
-      for (const session of sessions) {
-        await session.client().call("openPiece", { pieceId });
+      for (const [index, session] of sessions.entries()) {
+        if (specs[index].unattached !== true) {
+          await session.client().call("openPiece", { pieceId });
+        }
       }
 
       // A server the harness cannot see into, or one whose serving loop runs
@@ -1132,7 +1156,8 @@ export class MultiRuntimeHarness {
    * reads all of it from storage. Its label must be one no session holds or
    * is starting under. Throws, and starts nothing, when the space's access list
    * does not admit its identity, as it did when the harness was made or as a
-   * grant since has.
+   * grant since has. With `unattached`, starts the runtime alone; commands
+   * that require the harness's piece then refuse until it is opened.
    */
   async addSession(
     spec: string | MultiRuntimeSessionSpec,
@@ -1148,7 +1173,9 @@ export class MultiRuntimeHarness {
     try {
       const session = await this.#startSession(spec);
       try {
-        await session.client().call("openPiece", { pieceId: this.pieceId });
+        if (typeof spec === "string" || spec.unattached !== true) {
+          await session.client().call("openPiece", { pieceId: this.pieceId });
+        }
       } catch (error) {
         await session.disposeSession().catch(() => {});
         throw error;

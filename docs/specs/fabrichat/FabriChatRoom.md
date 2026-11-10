@@ -57,6 +57,15 @@ record for all the message rows, keyed by message, which of each row's edit,
 delete, and obliterate controls show and whether its editor does. A row reads
 its own entry.
 
+The room materializes [`metadata`](ChatRoomOutput.md#list-metadata) in its
+own `PerSpace` document. A materializer with standing demand takes the kind,
+title, and roster from the same derivations the room offers, independently of
+its messages. While this room implementation runs, writes to those source
+records update the metadata even when its readers hold only the metadata
+document's address. It stores the navigation identity as plain data and the
+roster as profile references. The projection initializes from existing records;
+room and message addresses and write policies remain unchanged.
+
 `members` is computed by `memberSet()`, in the shared social-space code
 (`patterns/system/social-space/member-set.ts`), from the space's access list,
 which `spaceMembers()` reads, and from the profiles `participants` lists ahead
