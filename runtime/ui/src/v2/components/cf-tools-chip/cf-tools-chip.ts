@@ -1,5 +1,5 @@
 import { ToolsArraySchema } from "@commonfabric/runner/component-read-contract";
-import { type CellHandle } from "@commonfabric/runtime-client";
+import type { CellHandle } from "@commonfabric/runtime-client";
 import { css, html, nothing, render } from "lit";
 import { property, state } from "lit/decorators.js";
 

@@ -15,11 +15,14 @@
  * otherwise recurse forever.
  */
 
-import { backtickQuote } from "@commonfabric/utils/markdown";
-import { type Immutable, isPlainContainer } from "@commonfabric/utils/types";
-import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
-
+import { backtickQuote } from "@commonfabric/text/markdown";
 import {
+  type Immutable,
+  isPlainContainer,
+} from "@commonfabric/js-values/types";
+import { isArrayIndexPropertyName } from "@commonfabric/js-values/arrays";
+
+import type {
   FabricArray,
   FabricInstance,
   FabricPlainObject,

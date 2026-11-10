@@ -1,4 +1,4 @@
-import {
+import type {
   BuiltInGenerateObjectParams,
   BuiltInGenerateTextParams,
   BuiltInLLMMessage,
@@ -22,12 +22,16 @@ import {
   resolveScopeKey,
   type ScopeKeyIdentity,
 } from "@commonfabric/memory/v2";
-import { getLogger } from "@commonfabric/utils/logger";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
+import { getLogger } from "@commonfabric/logger";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 
 import type { CellScope, JSONSchema } from "../builder/types.ts";
 import { type Cell, isCell } from "../cell.ts";
-import type { CfcConfClause } from "../cfc/clause.ts";
 import { cfcLabelViewForCellFailClosed } from "../cfc/label-view.ts";
 import { uniqueCfcAtoms } from "../cfc/observation.ts";
 import { createFrozenRequestSnapshot } from "../cfc/request-snapshot.ts";
@@ -47,9 +51,9 @@ import {
   isCellResultForDereferencing,
   snapshotQueryResult,
 } from "../query-result-proxy.ts";
-import { type RawBuiltinResult } from "../module.ts";
+import type { RawBuiltinResult } from "../module.ts";
 import type { Runtime } from "../runtime.ts";
-import { type Action } from "../scheduler.ts";
+import type { Action } from "../scheduler.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import { llmToolExecutionHelpers } from "./llm-dialog.ts";
 import {
@@ -443,7 +447,7 @@ async function handleLLMError<T, P>(
 ): Promise<void> {
   if (thisRun !== getCurrentRun() && announce === undefined) return;
 
-  const message = error instanceof Error ? error.message : String(error);
+  const message = describeFailure(error);
   if (thisRun === getCurrentRun() && (!ownsRefusal || ownsRefusal())) {
     console.warn(`[LLM Error] ${message}`);
     logger.warn("llm", "Error in LLM request", { error });
@@ -2162,7 +2166,7 @@ export function generateObject<T extends Record<string, unknown>>(
       const settleWithError = (error: unknown) => {
         logGenerateObject("error", {
           ...toolsRequestSummary,
-          error: error instanceof Error ? error.message : String(error),
+          error: describeFailure(error),
         });
         return handleLLMError(
           error,
@@ -2576,7 +2580,7 @@ export function generateObject<T extends Record<string, unknown>>(
       const settleWithError = (error: unknown) => {
         logGenerateObject("error", {
           ...directRequestSummary,
-          error: error instanceof Error ? error.message : String(error),
+          error: describeFailure(error),
         });
         return handleLLMError(
           error,

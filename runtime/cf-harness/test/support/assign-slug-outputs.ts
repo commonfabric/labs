@@ -3,7 +3,7 @@
  * store, for tests that write a turn's artifacts by hand.
  */
 
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import { createFileSystemHarnessArtifactStore } from "../../src/artifacts.ts";
 import type { HarnessTranscriptMessage } from "../../src/contracts/transcript.ts";
 import {

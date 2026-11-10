@@ -12,6 +12,7 @@ import {
 import { Server } from "@commonfabric/memory/v2/server";
 import type { MemorySpace } from "@commonfabric/memory/interface";
 
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import { hasOperationStorageCapability } from "../src/storage/interface.ts";
 import {
   type Options,
@@ -47,6 +48,7 @@ describe("storage space access retry", () => {
     failNextGuestMount = undefined;
     failNextGuestWatch = undefined;
     server = new Server({
+      namesInstances: namesInstancesByDefault,
       store: new URL(`memory://storage-retry-space-access-${++serverCount}`),
       sessionOpenAuth: { audience: "did:key:z6Mk-retry-access-audience" },
       authorizeSessionOpen: (message) =>
@@ -62,7 +64,10 @@ describe("storage space access retry", () => {
           failNextGuestMount = undefined;
           if (failure !== undefined) throw failure;
         }
-        const client = await connect({ transport: loopback(server) });
+        const client = await connect({
+          instanceNames: namesInstancesByDefault(),
+          transport: loopback(server),
+        });
         try {
           const session = await client.mount(
             target,
@@ -134,6 +139,7 @@ describe("storage space access retry", () => {
       async create(target, _signer, options) {
         const transport = loopback(server);
         const client = await connect({
+          instanceNames: namesInstancesByDefault(),
           transport: {
             ...transport,
             send(payload) {
@@ -398,6 +404,28 @@ describe("storage space access retry", () => {
     });
     await manager.retrySpaceAccess(space);
     expect((await manager.open(space).sync("of:next")).error).toBeDefined();
+    expect(guestMounts).toBe(1);
+  });
+
+  it("retains an `instance-names` revocation of an established session across reads, Retry, ACL notices, and new spaces", async () => {
+    await setAccess(true);
+    expect((await manager.open(space).sync("of:first")).error).toBeUndefined();
+    const notices: unknown[] = [];
+    manager.subscribeClientUpdateRequired((status) => notices.push(status));
+    guestSessions[0].handleRevoked("instance-names");
+    const status = {
+      message: `Space ${space} now holds data written with instance names, ` +
+        "which this runtime does not use",
+      unconfirmedWrites: false,
+    };
+    expect(manager.clientUpdateRequired()).toEqual(status);
+    expect(notices).toEqual([status]);
+    expect(manager.spaceAccessError(space)).toBeUndefined();
+    manager.noteSpaceAclChanged(space);
+    await manager.retrySpaceAccess(space);
+    expect((await manager.open(space).sync("of:second")).error).toBeDefined();
+    expect((await manager.open(guest.did()).sync("of:another-space")).error)
+      .toBeDefined();
     expect(guestMounts).toBe(1);
   });
 

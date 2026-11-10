@@ -1,5 +1,5 @@
 import type { FabricValue } from "@commonfabric/api";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import { ChangeSet } from "@codemirror/state";
 import { toFileUrl } from "@std/path";
 
@@ -193,6 +193,7 @@ type StructuredDocument = {
 
 const structuredCodec: OperationCodec = {
   id: "synthetic-structured-document@1",
+  mapAnchors: ({ anchors }) => anchors,
   integrate({ materialized, submitted }) {
     const document = materialized as StructuredDocument;
     const node = (submitted as { append?: FabricValue }).append;

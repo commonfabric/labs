@@ -36,9 +36,9 @@ import type { JSONSchema, JSONSchemaObj } from "@commonfabric/api";
 import {
   decodeJsonPointer,
   encodeJsonPointer,
-} from "@commonfabric/utils/json-pointer";
-import { isObjectNotArray } from "@commonfabric/utils/types";
-import { utf8Compare } from "@commonfabric/utils/utf8";
+} from "@commonfabric/json/json-pointer";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
+import { utf8Compare } from "@commonfabric/text/utf8";
 import { internSchema } from "@commonfabric/data-model-schema";
 import {
   classifySchemaMetaValue,

@@ -43,6 +43,7 @@ import type {
   NormalizedFullLink,
 } from "@commonfabric/runner";
 import {
+  ACLManager,
   cellRuntime,
   convertCellsToLinks,
   createSpaceRootIfAbsent,
@@ -62,6 +63,10 @@ import {
   markRendererTrustedEvent,
   reviewedActionProvenance,
 } from "@commonfabric/runner/cfc";
+import {
+  ExtendedStorageTransactionForTestingOnly,
+  MemoryWebSocketForTestingOnly,
+} from "@commonfabric/runner/for-testing-only";
 import { type DID, Identity } from "@commonfabric/identity";
 import {
   ensurePrivateInboxOf,
@@ -93,9 +98,9 @@ import {
   clearTimingMeasures,
   getLoggerCountsBreakdown,
   TIMING_MEASURE_PREFIX,
-} from "@commonfabric/utils/logger";
-import { isObjectNotArray } from "@commonfabric/utils/types";
-import { holdWorkerLifetimeLock } from "@commonfabric/utils/worker-lifetime";
+} from "@commonfabric/logger";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
+import { holdWorkerLifetimeLock } from "@commonfabric/platform/worker-lifetime";
 import { authenticatedOwnerFromLabel } from "../../runtime/ui/src/v2/components/cf-owner-view/owner-predicate.ts";
 
 let cc: PiecesController | undefined;
@@ -297,85 +302,63 @@ async function mountView(): Promise<() => void> {
   };
 }
 
+/** Whether `installWsShim` has run in this realm. */
+let wsShimInstalled = false;
+
 /**
- * Test-only network shaping: wraps this realm's WebSocket so that every
- * inbound frame is handed to `inbound` as a thunk that delivers it, and every
- * outbound frame to `outbound` as a thunk that sends it. Installed BEFORE the
- * runtime opens its storage session, the shim reaches the whole client stack.
- * A second install wraps the first.
+ * Memory frames the network shim has handed to its shaping functions, in
+ * either direction.
+ */
+let shapedFrames = 0;
+
+/**
+ * Test-only network shaping: patches the class behind this realm's memory
+ * sockets so that every inbound frame is handed to `inbound` as a thunk that
+ * delivers it, and every outbound frame to `outbound` as a thunk that sends
+ * it. A shaped send reports its local write complete at once, so the client
+ * puts its next frame in `outbound` without waiting for the last to go out.
+ * Installed BEFORE the runtime opens its storage session, the shim reaches the
+ * whole client stack. A second install wraps the first.
  */
 function installWsShim(
   inbound: (deliver: () => void) => void,
   outbound: (send: () => void) => void,
 ): void {
-  const Native = globalThis.WebSocket;
-  const Shimmed = function (
-    this: WebSocket,
-    url: string | URL,
-    protocols?: string | string[],
-  ): WebSocket {
-    const ws = protocols !== undefined
-      ? new Native(url, protocols)
-      : new Native(url);
-    const listeners = new Set<EventListenerOrEventListenerObject>();
-    const nativeAdd = ws.addEventListener.bind(ws);
-    const nativeRemove = ws.removeEventListener.bind(ws);
-    ws.addEventListener = (
-      type: string,
-      listener: EventListenerOrEventListenerObject | null,
-      options?: boolean | AddEventListenerOptions,
-    ) => {
-      if (type === "message" && listener) listeners.add(listener);
-      else if (listener) nativeAdd(type, listener, options);
-    };
-    // Mirror removal for the diverted message listeners, preserving
-    // WebSocket semantics for callers that unsubscribe/re-subscribe.
-    ws.removeEventListener = (
-      type: string,
-      listener: EventListenerOrEventListenerObject | null,
-      options?: boolean | EventListenerOptions,
-    ) => {
-      if (type === "message" && listener) listeners.delete(listener);
-      else if (listener) nativeRemove(type, listener, options);
-    };
-    let onmessage: ((this: WebSocket, ev: MessageEvent) => unknown) | null =
-      null;
-    Object.defineProperty(ws, "onmessage", {
-      configurable: true,
-      get: () => onmessage,
-      set: (fn) => {
-        onmessage = fn;
-      },
+  wsShimInstalled = true;
+  const prototype = MemoryWebSocketForTestingOnly.prototype;
+  const emit = prototype.emit;
+  const send = prototype.send;
+  // Every frame the receiver completes reaches listeners and `onmessage`
+  // through this one `emit()`.
+  prototype.emit = function (event, ...args) {
+    if (event !== "message") return emit.call(this, event, ...args);
+    shapedFrames++;
+    inbound(() => emit.call(this, event, ...args));
+    return true;
+  };
+  prototype.send = function (
+    this: InstanceType<typeof MemoryWebSocketForTestingOnly>,
+    data: Parameters<typeof send>[0],
+    optionsOrCallback?: object | ((error?: Error) => void),
+    callback?: (error?: Error) => void,
+  ) {
+    const options = typeof optionsOrCallback === "object"
+      ? optionsOrCallback
+      : {};
+    shapedFrames++;
+    outbound(() => {
+      try {
+        // A socket closed while the frame was in flight reports it to this
+        // callback, the same as a network drop.
+        send.call(this, data, options, () => {});
+      } catch {
+        // A socket that never opened throws instead.
+      }
     });
-    nativeAdd("message", (ev: Event) => {
-      const deliver = () => {
-        onmessage?.call(ws, ev as MessageEvent);
-        for (const listener of listeners) {
-          const fn = typeof listener === "function"
-            ? listener
-            : listener.handleEvent.bind(listener);
-          fn.call(ws, ev);
-        }
-      };
-      inbound(deliver);
-    });
-    const nativeSend = ws.send.bind(ws);
-    ws.send = (data: Parameters<WebSocket["send"]>[0]) => {
-      outbound(() => {
-        try {
-          nativeSend(data);
-        } catch {
-          // Socket closed while the frame was in flight; same as a network drop.
-        }
-      });
-    };
-    return ws;
-  } as unknown as typeof WebSocket;
-  Shimmed.prototype = Native.prototype;
-  for (const k of ["CONNECTING", "OPEN", "CLOSING", "CLOSED"] as const) {
-    (Shimmed as unknown as Record<string, unknown>)[k] = Native[k];
-  }
-  globalThis.WebSocket = Shimmed;
+    (typeof optionsOrCallback === "function"
+      ? optionsOrCallback
+      : callback)?.();
+  } as typeof send;
 }
 
 /**
@@ -523,6 +506,7 @@ const handlers: Record<
       watchPaths: requestedWatchPaths,
       renderView: requestedRenderView,
       clientClass,
+      preferredProfileSpace,
     },
   ) {
     const identity = await Identity.fromKeyPair(
@@ -544,7 +528,18 @@ const handlers: Record<
         ? { cfcWriteFloor: cfcWriteFloor as CfcWriteFloorMode }
         : {}),
       ...(clientClass === "web" ? { clientClass } : {}),
+      ...(typeof preferredProfileSpace === "string"
+        ? { preferredProfileSpace: preferredProfileSpace as MemorySpace }
+        : {}),
     });
+    // Opening the storage session exchanges frames, so a shim that has shaped
+    // none patches a class this realm's memory sockets do not use.
+    if (wsShimInstalled && shapedFrames === 0) {
+      throw new Error(
+        "Network shaping intercepted no memory frames: the memory sockets do " +
+          "not use `MemoryWebSocketForTestingOnly`",
+      );
+    }
     if (recordRejections === true) {
       recordRejectionsInto(controller().runtime.telemetry);
     }
@@ -1130,6 +1125,32 @@ const handlers: Record<
     return {};
   },
 
+  /** Removes `user` from the access list of `space`, as an OWNER of it. */
+  async removeFromAccessList({ space, user }) {
+    if (typeof space !== "string" || typeof user !== "string") {
+      throw new TypeError(
+        "removeFromAccessList takes a space DID and a list entry.",
+      );
+    }
+    const { runtime } = controller();
+    await new ACLManager(runtime, space as DID).remove(user as DID | "*");
+    await idle();
+    return {};
+  },
+
+  /** Deletes `space`, whose sole member this session's identity is. */
+  async deleteSpace({ space }) {
+    if (typeof space !== "string") {
+      throw new TypeError("deleteSpace takes a space DID.");
+    }
+    const { runtime } = controller();
+    await new ACLManager(runtime, space as DID).delete(
+      runtime.userIdentityDID,
+    );
+    await idle();
+    return {};
+  },
+
   /** Whether this runtime retains a refusal of `space`, without opening it. */
   async spaceRefused({ space }) {
     if (typeof space !== "string") {
@@ -1190,6 +1211,32 @@ const handlers: Record<
   },
 
   /**
+   * Stores `value` whole as the document at an explicit storage address, in a
+   * commit nothing prepares, which holds what no pattern here writes. `value`
+   * is the document as `rawRead` returns it. The write has the runtime's own
+   * authority, so it can change the document's `cfc` label map.
+   */
+  async rawWrite({ id, space, scope, value }) {
+    const outer = controller().runtime.edit();
+    if (!(outer instanceof ExtendedStorageTransactionForTestingOnly)) {
+      throw new TypeError("rawWrite needs the runtime's own transaction");
+    }
+    outer.accessForTestingOnly.privilegedSystemWrite({
+      space: space as never,
+      id: id as never,
+      type: "application/json",
+      path: [],
+      ...(scope !== undefined ? { scope: scope as never } : {}),
+    } as never, value as never);
+    const committed = await outer.tx.commit().settled;
+    if (committed.error !== undefined) {
+      throw new Error(`rawWrite failed: ${committed.error.message}`);
+    }
+    await idle();
+    return {};
+  },
+
+  /**
    * Has the host give the Home stand-in reached from the piece result by
    * `path` its private inbox, as `PiecesController.ensurePrivateInbox()` gives
    * the identity's Home its own, and answers what the host found, naming an
@@ -1210,21 +1257,22 @@ const handlers: Record<
       runtime.userIdentityDID,
     );
     await idle();
-    const inbox = "inbox" in found
-      ? found.inbox.getAsNormalizedFullLink()
-      : undefined;
-    const profile = "profile" in found
-      ? found.profile?.getAsNormalizedFullLink()
-      : undefined;
+    const addressOf = (link: Cell<unknown>) => {
+      const { id, space } = link.getAsNormalizedFullLink();
+      return { id, space };
+    };
+    const refused = found.outcome === "replace" ? found.refused : undefined;
     return {
       outcome: found.outcome,
       ...("reason" in found ? { reason: found.reason } : {}),
-      ...(inbox === undefined
-        ? {}
-        : { inbox: { id: inbox.id, space: inbox.space } }),
-      ...(profile === undefined
-        ? {}
-        : { profile: { id: profile.id, space: profile.space } }),
+      ...("inbox" in found ? { inbox: addressOf(found.inbox) } : {}),
+      ...("inboxes" in found ? { inboxes: found.inboxes.map(addressOf) } : {}),
+      ...(refused === undefined ? {} : {
+        refused: { reason: refused.reason, inbox: addressOf(refused.inbox) },
+      }),
+      ...("profile" in found && found.profile !== undefined
+        ? { profile: addressOf(found.profile) }
+        : {}),
     };
   },
 
@@ -1567,8 +1615,9 @@ const handlers: Record<
     const counts = getLoggerCountsBreakdown();
     // The declaration cannot say this is a `FabricValue`: `LoggerBreakdown` is
     // an index signature intersected with `total`, and `LogCounts` beneath it
-    // is an interface. Nor can `utils` be where that is said, `data-model`
-    // depending on it. So the question is settled by checking, the same way
+    // is an interface. Nor does `logger` say it, since that would make the
+    // logger, which nearly every package imports, depend on `data-model`. So
+    // the question is settled by checking, the same way
     // `assertFabricLoggerFlags()` settles it for the flag breakdown the
     // runtime connection sends.
     if (!isValidFabricValue(counts)) {

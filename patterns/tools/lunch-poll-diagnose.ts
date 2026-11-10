@@ -13,7 +13,8 @@
 
 import { dirname, fromFileUrl, join } from "@std/path";
 import { parseLink } from "@commonfabric/runner";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import {
   MultiRuntimeHarness,
   type MultiRuntimeSession,
@@ -1108,7 +1109,7 @@ if (import.meta.main) {
   try {
     await run();
   } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
+    console.error(describeFailure(error));
     Deno.exit(1);
   }
 }

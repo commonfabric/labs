@@ -224,6 +224,10 @@ export class BuildConfig {
     return this.#path("runtime", "toolshed", "index.ts");
   }
 
+  toolshedServingWorkerPath() {
+    return this.#path("runtime", "toolshed", "lib", "serving-worker.ts");
+  }
+
   toolshedEnvPath() {
     return this.#path("runtime", "toolshed", "COMPILED");
   }
@@ -281,6 +285,7 @@ export class BuildConfig {
       this.shellProjectPath(),
       this.toolshedProjectPath(),
       this.toolshedEntryPath(),
+      this.toolshedServingWorkerPath(),
       this.staticAssetsPath(),
       ...this.patternPaths(),
       this.staticTypesPath(),
@@ -306,6 +311,9 @@ export class BuildConfig {
         return [
           this.toolshedShellFrontendPath(),
           this.toolshedShellFrontendPathDev(),
+          // The serving loop's worker entry. The compile does not follow a
+          // worker's module, so it is named here.
+          this.toolshedServingWorkerPath(),
           this.toolshedEnvPath(),
           this.staticAssetsPath(),
           ...this.patternPaths(),
@@ -759,6 +767,10 @@ export async function runBuildBinaries(
       // --background re-runs this binary as a detached server child, so the
       // compiled binary needs permission to spawn itself.
       "--allow-run",
+      // V8's default limit of about 4 GB is less than a serving worker can need
+      // on a busy board. The limit applies to each isolate, so a worker gets
+      // its own.
+      "--v8-flags=--max-old-space-size=8192",
     ],
     binaries: requestedBinaries(args),
     cachedOnly: Deno.env.get("CF_DENO_DEPENDENCIES_INSTALLED") === "1",

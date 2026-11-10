@@ -23,6 +23,7 @@
  */
 
 import type { JSONSchema } from "@commonfabric/api";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   type Cell,
   getPatternIdentityRef,
@@ -44,7 +45,6 @@ import {
 } from "@commonfabric/runner/shared";
 import { disclosedCfcLabels } from "../cfc-label-disclosure.ts";
 import type { HarnessToolDescriptor } from "../contracts/tool-descriptor.ts";
-import { errorMessage } from "../error-message.ts";
 import { scrubBareFabricIdentifiers } from "../fabric-identifier-scrub.ts";
 import {
   admitsFabricReference,
@@ -344,7 +344,7 @@ export const readValueTool: HarnessToolDefinition<
         );
       }
       return fail(
-        `read_value could not read ${entry.token}: ${errorMessage(error)}`,
+        `read_value could not read ${entry.token}: ${describeFailure(error)}`,
       );
     } finally {
       releaseTx.abort("read_value release measurement");

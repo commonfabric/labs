@@ -10,7 +10,7 @@
  * watched.
  */
 
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import type { ConsoleHandle, ConsoleStep, ConsoleStepStatus } from "./steps.ts";
 import { consoleStepArguments, handleTokensIn } from "./steps.ts";
 import type {

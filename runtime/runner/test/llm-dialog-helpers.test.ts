@@ -2,7 +2,7 @@ import { assert, assertEquals, assertThrows } from "@std/assert";
 import { expect } from "@std/expect";
 
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
-import { spliceAll } from "@commonfabric/utils/arrays";
+import { spliceAll } from "@commonfabric/collections/splice";
 import type { BuiltInLLMMessage, BuiltInLLMToolCallPart } from "commonfabric";
 
 import {

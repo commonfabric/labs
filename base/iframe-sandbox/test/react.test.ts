@@ -2,7 +2,7 @@
 
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import type { FabricClient, ResourceSnapshot } from "../src/guest.ts";
 import {

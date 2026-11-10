@@ -35,10 +35,9 @@ installFakeClock({
     // transport edges, never on a delay.
     "list-resume-preserve",
     // The serving loop (server-execution v2 stage F) is wall-clock-paced
-    // by design: the lease renew cadence, the consequence-flush deadline
-    // (T_flush), and IDLE_PARK_MS are real-time policies, and
-    // auto-advance fires the renew interval and park timers as fast as
-    // they arm — a semantics change, not a speedup. The test waits on
+    // by design: the consequence-flush deadline (T_flush) and IDLE_PARK_MS are
+    // real-time policies, and auto-advance fires the flush and park timers as
+    // fast as they arm — a semantics change, not a speedup. The test waits on
     // watermark/subscription edges under the stuck-condition net.
     "executor-serving-loop",
     "executor-llm-supersession",
@@ -46,34 +45,37 @@ installFakeClock({
     // under the same wall-clock policies.
     "engine-read-through",
     "executor-llm-dialog",
-    // The compiled-child suite runs the same live serving host. Its lease
-    // renew interval must advance in real time while compiler work settles.
+    // The compiled-child suite runs the same live serving host, whose flush
+    // deadline must advance in real time while compiler work settles.
     "executor-compile-and-run",
-    // Scoped effect requests use the same live serving host and lease cadence.
+    // The quiescence suite asks what the same live serving host has finished,
+    // among it what real-time timers hold back: a demand grace, a rescan
+    // backstop, a wave's flush deadline. Auto-advance would fire them as they
+    // arm.
+    "executor-quiescence",
+    // Scoped effect requests use the same live serving host and deadlines.
     "executor-fetch-instances",
     "executor-fetch-program-instances",
     "executor-sqlite-instances",
     "executor-home-sqlite",
-    // Same wall-clock pacing, same machinery (the SpaceServer's renew
-    // interval and flush deadline), one level down: the stage-G
-    // recovery-seam tests drive a real SpaceServer directly.
+    // Same wall-clock pacing, same machinery (the SpaceServer's flush
+    // deadline), one level down: the stage-G recovery-seam tests drive a real
+    // SpaceServer directly.
     "executor-space-server",
-    // View publication drives a live ExecutorHost with the same flush, renew,
-    // and disposal deadlines. The fixture waits on view-plan events.
+    // View publication drives a live ExecutorHost with the same flush and
+    // disposal deadlines. The fixture waits on view-plan events.
     "view-replication-client",
-    // The activation lease suite controls Date and renewal intervals itself,
-    // while scheduler and transport dispatch use ordinary zero-delay timers.
+    // The activation lease suite controls Date itself, while scheduler and
+    // transport dispatch use ordinary zero-delay timers.
     "activation-lease",
     // The OW45 arm-B stage-1 space-root ensure suite drives a real
-    // SpaceServer directly under the same wall-clock policies (renew
-    // interval, flush deadline); auto-advance turns the renew cadence
-    // into a runaway (the guard names SpaceServer.activate's timers).
+    // SpaceServer directly under the same wall-clock policies (the flush
+    // deadline).
     "executor-space-root-ensure",
     // Stage C tuning T3: the cooperative-yield suite drives a live
-    // ExecutorHost with a real flush deadline and a (short) real lease
-    // TTL — the yield's `setTimeout(0)` turns and the deadline/renew
-    // timers are the wall-clock behavior under test; auto-advance would
-    // fire them as fast as they arm.
+    // ExecutorHost with a real flush deadline — the yield's `setTimeout(0)`
+    // turns and the deadline timer are the wall-clock behavior under test;
+    // auto-advance would fire them as fast as they arm.
     "executor-cooperative-yield",
     // The lifecycle-verb suite drives a live ExecutorHost through verbs
     // and reads what they left through a client under the same policies.
@@ -89,8 +91,8 @@ installFakeClock({
     // catch-up rides transport edges, not virtual time.
     "ui-cell-write-conflict-retry",
     // Stage C W3.1 (S1): the drain-settle quiescence-advance pins drive
-    // a live ExecutorHost under the same wall-clock policies (flush
-    // deadline, renew cadence), and pins 3/5 assert QUIET-window
+    // a live ExecutorHost under the same wall-clock policies (the flush
+    // deadline), and pins 3/5 assert QUIET-window
     // behavior (nothing further commits) over real elapsed time.
     "executor-settle-advance",
     // The land-off all-no-op-wave pin drives the same serving loop and
@@ -140,22 +142,27 @@ installFakeClock({
     "cfc-prepare-crash-surfacing",
     // The stage-C intent-listener suite (design (e)): its e2e pins drive
     // a live memory server and, for the served-mark pin, a live
-    // ExecutorHost under the same wall-clock policies (renew cadence,
-    // flush deadline); it waits on replica/store edges with bounded
-    // timeouts.
+    // ExecutorHost under the same wall-clock policies (the flush
+    // deadline); it waits on replica/store edges with bounded timeouts.
     "speculation-intent-listener",
     // The Phase-4 client-effect-channel suite drives a live
     // ExecutorHost (the served navigateTo → intent → enact/ack →
     // retirement journeys) under the same wall-clock policies — the
-    // renew interval and flush deadline; auto-advance turns the renew
-    // cadence into a runaway.
+    // flush deadline.
     "executor-effect-channel",
     // The Phase-5 cross-space suite drives a live ExecutorHost (the
     // foreign-wake journey) under the same wall-clock policies — the
-    // renew interval, flush deadline, and the failure-park backoff;
-    // auto-advance expires the lease TTL instantly and turns the renew
-    // cadence + reactivation backoff into a runaway.
+    // flush deadline and the failure-park backoff; auto-advance turns the
+    // reactivation backoff into a runaway.
     "executor-cross-space",
+    // The owner-routing suite drives two live ExecutorHosts over one file
+    // store. Closing a host parks each space under the park's dispose
+    // deadline, and the dispose waits on loopback work the pump reads as an
+    // idle loop, so auto-advance fires that deadline at once: `close()`
+    // returns with the dispose abandoned and still writing into the store the
+    // teardown then removes. It waits on activation and store edges, never on
+    // a delay.
+    "executor-owner-routing",
     // The Phase-6 outbox-budget suite: the egress-rate token bucket's
     // pacing sleeps are wall-clock policy, and the auto-advance clock's
     // virtual timers diverge from the bucket's time source (Date.now) —
@@ -163,15 +170,11 @@ installFakeClock({
     "executor-outbox-budget",
     // The OW34-family trust-attribution suite drives a live
     // ExecutorHost (served handler runs minting CFC labels) under the
-    // same wall-clock policies — the renew interval and flush deadline;
-    // auto-advance turns the renew cadence into a runaway (the guard
-    // names SpaceServer.activate's timers).
+    // same wall-clock policies — the flush deadline.
     "executor-trust-attribution",
     // The explicit warm-request suite drives a live ExecutorHost (the
     // staged-setup provisioning + warm activation journeys, park-race
-    // pin included) under the same wall-clock policies — the renew
-    // interval and flush deadline; auto-advance turns the renew cadence
-    // into a runaway (the guard names SpaceServer.activate's timers).
+    // pin included) under the same wall-clock policies — the flush deadline.
     "executor-warm-request",
     // Holds the sidecar pattern fetch on an explicit test-side gate while
     // the duplicate launch registers, with a short test-armed pump inside
@@ -180,6 +183,13 @@ installFakeClock({
     // file stays on the real clock; it waits on the gate and on
     // runtime.idle(), never on a bare delay for its verdict.
     "wish-sidecar-duplicate-launch",
+    // These run the serving loop in a real Worker, whose heartbeat timer ticks
+    // on the real clock. Auto-advance would run the watchdog's timer here at
+    // once, and it would kill a healthy worker for the silence.
+    "serving-worker",
+    "serving-worker-watchdog",
+    "serving-memory-server",
+    "watermark-settled-through-head",
     // The shared-connection cases reach a standalone memory server over a real
     // websocket, so each round trip waits on real I/O, which auto-advance
     // reads as an idle loop. Each such wait jumps logical time to the memory

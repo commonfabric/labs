@@ -1,10 +1,9 @@
 # Hash Byte Format
 
 This document specifies the precise byte-level format for hashing of
-`FabricValue`s. It is the implementation-ready companion to Section 6.4 of the
-formal spec (`1-fabric-values.md`), which defines the algorithm at the
-pseudocode level. The tag byte assignments used here are defined in formal spec
-Section 6.3.
+`FabricValue`s, including the tag byte assignments. It is the
+implementation-ready companion to Section 6 of `1-fabric-values.md`, which
+defines what is hashed and the properties the hash has.
 
 An implementer can work from this document alone to produce a byte-for-byte
 compatible hasher. All encodings are deterministic; two conforming
@@ -13,8 +12,7 @@ hashes) for any given `FabricValue`.
 
 ## Status
 
-Draft byte-level spec — extracted from the formal spec Section 6.3 and the
-implementation plan Phase 6.1.
+Draft byte-level spec.
 
 ---
 
@@ -24,16 +22,16 @@ The hash function is **SHA-256** (FIPS 180-4). All byte sequences described in
 this document are fed to a SHA-256 context in the order specified.
 
 The digest output is **32 raw bytes** (256 bits). The `hashOf()` function wraps
-the raw bytes into a `FabricHash` instance (Section 1.4.9 of the formal spec)
-with algorithm tag `fid1`. Callers who need a string representation call
-`toString()` on the result, which produces `fid1:<base64urlhash>` (unpadded
-base64url, RFC 4648 Section 5). `hashStringOf()` returns the base64url hash
-directly as a plain string, avoiding `FabricHash` allocation when only the
-string form is needed.
+the raw bytes into a `FabricHash` instance (Section 1.4.9 of
+`1-fabric-values.md`) with algorithm tag `fid1`. Callers who need a string
+representation call `toString()` on the result, which produces
+`fid1:<base64urlhash>` (unpadded base64url, RFC 4648 Section 5).
+`hashStringOf()` returns the base64url hash directly as a plain string, avoiding
+`FabricHash` allocation when only the string form is needed.
 
-> **Future addition.** BLAKE2b is listed as a recommended second algorithm in
-> the formal spec. When added, it will use the same byte-level input format
-> defined here; only the digest function changes.
+> **Future addition.** BLAKE2b is named as a possible second algorithm in
+> `1-fabric-values.md` Section 6.4. When added, it will use the same byte-level
+> input format defined here; only the digest function changes.
 
 ---
 
@@ -43,13 +41,62 @@ Every value fed to the hasher begins with a single-byte type tag. The tag
 prevents cross-type collisions (e.g., the number `0` and the boolean `false`
 produce different hashes even though both could be represented as a zero byte).
 
-The authoritative tag assignments are in formal spec Section 6.3. Tags are
-organized into four categories by high nibble: **meta** (`0x0N`) for structural
-markers like `TAG_END`, `TAG_HOLE`, and `TAG_CYCLE`, **compound** (`0x1N`) for
-containers whose children are tagged values, **primitive** (`0x2N`) for leaf
-value types, and **optimized** (`0xFN`) for hash-level encodings of primitive
-values that substitute a digest for the raw payload (see Section 4.4 for the
-long-string optimization). All unassigned values are reserved for future use.
+The tags are organized into four categories by high nibble:
+
+**Meta tags (`0x0N`)** — structural markers that are not themselves value types:
+
+| Tag               | Hex    | Decimal | Used for                        |
+|:------------------|:-------|:--------|:--------------------------------|
+| `TAG_END`         | `0x00` | 0       | end-of-sequence sentinel         |
+| `TAG_HOLE`        | `0x01` | 1       | sparse array holes (run-length) |
+| `TAG_CYCLE`       | `0x02` | 2       | cycle reference to a container on the path |
+
+**Compound tags (`0x1N`)** — containers whose children are tagged values:
+
+| Tag               | Hex    | Decimal | Used for                        |
+|:------------------|:-------|:--------|:--------------------------------|
+| `TAG_ARRAY`       | `0x10` | 16      | plain arrays                    |
+| `TAG_OBJECT`      | `0x11` | 17      | plain objects                   |
+| `TAG_INSTANCE`    | `0x12` | 18      | `FabricInstance` (general)    |
+
+**Primitive tags (`0x2N`)** — leaf value types:
+
+| Tag               | Hex    | Decimal | Used for                          |
+|:------------------|:-------|:--------|:----------------------------------|
+| `TAG_NULL`        | `0x20` | 32      | `null`                            |
+| `TAG_UNDEFINED`   | `0x21` | 33      | `undefined`                       |
+| `TAG_BOOLEAN`     | `0x22` | 34      | `boolean`                         |
+| `TAG_NUMBER`      | `0x23` | 35      | `number` (any IEEE 754 binary64)  |
+| `TAG_STRING`      | `0x24` | 36      | `string` (direct form)            |
+| `TAG_BYTES`       | `0x25` | 37      | `FabricBytes`                     |
+| `TAG_BIGINT`      | `0x26` | 38      | `bigint`                          |
+| `TAG_EPOCH_NSEC`  | `0x27` | 39      | `FabricEpochNsec`                 |
+| `TAG_EPOCH_DAY`   | `0x28` | 40      | `FabricEpochDay`                  |
+| `TAG_HASH`        | `0x29` | 41      | `FabricHash`                      |
+| `TAG_SYMBOL`      | `0x2A` | 42      | `symbol` (registry-interned only) |
+| `TAG_REGEXP`      | `0x2B` | 43      | `FabricRegExp`                    |
+| `TAG_KEY_PAIR`    | `0x2C` | 44      | `FabricKeyPair` (holding material) |
+| `TAG_UNAVAILABLE` | `0x2D` | 45      | `FabricUnavailable`               |
+| `TAG_DURATION_NSEC` | `0x2E` | 46    | `FabricDurationNsec`              |
+| `TAG_DURATION_DAY` | `0x2F` | 47     | `FabricDurationDay`               |
+
+**Optimized tags (`0xFN`)** — hash-level substitutes that replace the raw
+payload of a primitive type with a digest, when doing so shortens the byte
+stream fed to the outer hasher:
+
+| Tag                | Hex    | Decimal | Used for                                 |
+|:-------------------|:-------|:--------|:-----------------------------------------|
+| `TAG_STRING_HASH`  | `0xF0` | 240     | `string` (hashed form; see Section 4.4) |
+
+All unassigned values are reserved for future use. The category structure
+(meta/compound/primitive/optimized) is a convention for readability and is not
+enforced by the encoding — a decoder should handle any tag byte it encounters
+regardless of nibble range.
+
+> **Scope.** These tag bytes are recommended for any wire format that needs to
+> distinguish `FabricValue` types at the byte level (`1-fabric-values.md`
+> Section 6.3). This format is the first consumer; future binary encoding
+> formats may reuse the same tag assignments.
 
 ---
 
@@ -135,7 +182,7 @@ four special values that JSON cannot represent natively (`-0`, `NaN`,
 
 > **Conversion-gate cross-reference.** Whether `-0`, `NaN`, or `±Infinity` reach
 > this layer depends on the `FabricValue` conversion gate; see
-> `1-fabric-values.md` Section 4.9. The byte-level encoding above is the
+> `1-fabric-values.md` Section 8.2. The byte-level encoding above is the
 > hasher's contract regardless of how the values arrived.
 
 ### 4.4 `string`
@@ -256,7 +303,7 @@ unchanged.
 
 > **Conversion-gate cross-reference.** Whether a symbol value reaches this layer
 > depends on the `FabricValue` conversion gate; see `1-fabric-values.md` Section
-> 4.9. The byte-level encoding above is the hasher's contract regardless of how
+> 8.2. The byte-level encoding above is the hasher's contract regardless of how
 > the value arrived.
 
 ### 4.7 `undefined`
@@ -537,7 +584,7 @@ Bytes: TAG_CYCLE  DISTANCE_LEB128
 
 Total: 1 + len(LEB128) bytes (typically 2).
 
-A value may hold a cycle (formal spec Section 1.6). At any point in the
+A value may hold a cycle (`1-fabric-values.md` Section 1.6). At any point in the
 traversal, the **path** is the sequence of containers whose encodings enclose
 that point, outermost first. The containers are arrays (Section 4.12), plain
 objects (Section 4.13), and `FabricInstance`s (Section 4.14). An instance

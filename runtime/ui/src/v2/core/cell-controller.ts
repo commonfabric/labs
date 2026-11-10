@@ -7,7 +7,7 @@ import {
   isCellHandle,
   type JSONSchema,
 } from "@commonfabric/runtime-client";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import { valueForDisplay } from "./value-for-display.ts";
 import {
   InputTimingController,

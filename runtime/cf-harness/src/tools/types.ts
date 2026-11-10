@@ -267,7 +267,7 @@ export interface HarnessToolContext {
   /** Host-owned Loom retrieval routing, absent when the run has no grant. */
   loomRetrieval?: HarnessLoomRetrievalConfig;
 
-  /** Host-owned command broker routing, absent when the run has no grant. */
+  /** Host-owned command endpoint, absent when the run has no grant. */
   loomCommands?: HarnessLoomCommandsConfig;
 
   /**
@@ -295,6 +295,9 @@ export interface HarnessToolContext {
     value: HarnessResearchHandleValue,
     label: IFCLabel,
   ): Promise<string>;
+
+  /** Opt-in host return channel; false reports a recoverable publication failure. */
+  reportProgress?: (message: string) => Promise<void | boolean>;
 
   /**
    * Where the run's structured result goes, absent when the run was
@@ -422,7 +425,10 @@ export interface HarnessToolDefinition<Input = unknown, Output = unknown> {
    * authorized as one even when the tool's ordinary calls are reads. A tool
    * without it has the descriptor's class for every call.
    */
-  effectClassOf?(input: Record<string, unknown>): HarnessToolEffectClass;
+  effectClassOf?(
+    input: Record<string, unknown>,
+    context: HarnessToolContext,
+  ): HarnessToolEffectClass | Promise<HarnessToolEffectClass>;
 
   invoke(context: HarnessToolContext, input: Input): Promise<Output>;
 }

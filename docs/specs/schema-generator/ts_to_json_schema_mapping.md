@@ -196,7 +196,8 @@ transformer prints a wrapper it builds as `__cfHelpers.PerUser<…>`, a name no
 scope declares), and follows CFC alias chains under their bindings (§11). A
 scope wrapper without a payload argument remains unread, including through an
 alias. `Date` also has a by-name special case. Keyword types and a final
-resolve-else-`true` fallback complete the node path.
+resolve-else-`true` fallback complete the node path; the `symbol` keyword is
+refused as the type is (§4.0.1), not left to that fallback.
 
 A `true` from that fallback is a guess rather than a reading, and is recorded
 as one (`uninterpretedTypeNodes`). A wrapper holding a resolved type recovers
@@ -221,7 +222,8 @@ keeps it on this path alone, as the checker hands the type path `any`
 itself, which holds nothing of the constituents beside it; a constituent
 whose value, with its labels and whole-value keywords set aside, is `{}` or
 `{ not: true }` is read as `any` or `never`; otherwise a union constituent
-distributes and every combination of arms is settled on its own; `unknown`
+distributes and every combination of arms is settled on its own, a cell
+holding a union being no union, as `Cell<A | B>` is one cell; `unknown`
 is the identity; an empty object part drops out and takes `null` and
 `undefined` with it, as `T & {}` does; primitives are narrowed or found
 disjoint wherever they sit, `"a" & string` being `"a"` and `string & number`
@@ -253,7 +255,15 @@ holds is set aside while the values are settled and stated of what they
 settle to, as the type path reads it from the checker's type: its scope and
 its default belong to the whole value, so two scopes refuse the
 intersection, as a scope wrapper nested in another with no cell between
-them, and defaults that differ leave none; its labels are placed as the type
+them, and defaults that differ leave none. Neither of a cell's scopes is
+set aside: its own is the cap on its handle, and the one written beside its
+handles is that of what it holds, so `Cell<PerUser<string>> & string[]` is
+`Cell<PerUser<string>>`
+(`{ type: "string", scope: "user", asCell: ["cell"] }`), while a scope
+another constituent states of the whole value caps the handle of the cell
+the intersection is, `PerUser<{ x: string }> & Cell<PerSession<{ x: string }>>`
+giving `{ …, scope: "session", asCell: [{ kind: "cell", scope: "user" }] }`;
+its labels are placed as the type
 path places a CFC carrier's (§11): a restriction goes on the members of the
 result it declares, or on the whole result where it declares all of them or
 none, and evidence (`integrity`, `addIntegrity`) goes on the whole result
@@ -278,13 +288,22 @@ beside another primitive (`undefined & void` is `undefined`, `string & void`
 nothing), while the wrapper is a cell, the value beside any other part; an
 unsupported-pattern fallback keeps the constituents behind it, so a nested
 or named intersection is reopened when an enclosing one reduces it
-(`(string & Brand) & number` is nothing); and a union whose arms fold to one
-schema — `void | OpaqueCell<any>`, two branded primitives with the same
+(`(string & Brand) & number` is nothing), with the scope, default and
+restrictions a reference to it states beside it stated of each of them, since
+a value of `PerUser<A & B>` is a value of `PerUser<A>` and of `PerUser<B>`, so
+`PerUser<F> & { y: number }` keeps its scope and
+`Confidential<F, L> & { y: number }` its label, while evidence beside the
+reference is stated of none of them, as no one of them is the labeled payload;
+and a union whose arms fold to one schema — `void | OpaqueCell<any>`, two branded primitives with
+the same
 fallback, or `Record<string, T> | Record<number, T>` — keeps every arm, a
 labeled or scoped copy of it included and wherever it sits among the arms of
 another union, so an intersection reading the survivor still distributes over
 them, and the labels the survivor states are that union's (an arm accepting
-nothing is no arm, and is neither counted nor kept).
+nothing is no arm, and is neither counted nor kept). A cell written around
+such a schema, in place or beside a reference to it, holds it and keeps none
+of this: `Cell<PerUser<F>>` with `F` a union that folded or an intersection
+that fell back is one cell, whose scope stays beside its handle.
 Schemas with recorded union or intersection constituents are deduplicated by
 identity: equal fallback schemas can hide disjoint source types, so separate
 folded unions remain separate constraints in an enclosing intersection.
@@ -394,6 +413,8 @@ by any repo test.
 | `bigint` | `{ type: "integer" }`; the runtime reads and validates a stored bigint under `integer` and `number` | `primitive-formatter.ts` | probe only |
 | bigint literal (`42n`) | `{ type: "integer", enum: [Number(v)] }` — converted through `Number`, so precision above 2^53 would be lost; the runtime matches a stored bigint to a whole-number member of its value | `primitive-formatter.ts` | probe only |
 | Template literal type | `{ type: "string" }` | `primitive-formatter.ts` | probe only |
+| `symbol`, a `unique symbol` (`typeof s`), and a union holding one (`string \| symbol`, `PropertyKey`, `keyof any`) | the `schema-type:symbol` **error**; the symbol reads as `false`, so a union drops it (§4.0.1) | `#formatType()` in `schema-generator.ts`, before any formatter, and the node path's `symbol` keyword; `reportSymbolType()` in `unread-type-diagnostics.ts` | `test/unread-type-diagnostics.test.ts`; end-to-end: ts-transformers `test/symbol-type-diagnostic.test.ts` |
+| A well-known symbol (`typeof Symbol.iterator`, as in `keyof string`) | `false`, with no diagnostic, so `keyof string` reads as its string and number keys (§4.0.1) | `isWellKnownSymbol()` in `typescript/default-library.ts` | `test/unread-type-diagnostics.test.ts` |
 | `null` | `{ type: "null" }` | `primitive-formatter.ts` | fixtures |
 | `undefined` | `{ type: "undefined" }` — non-standard, deliberate (`api/index.ts`) | `primitive-formatter.ts`; node `schema-generator.ts` | fixtures |
 | `void` | `{ asCell: ["opaque"] }` ("matches anything, but we will not access the cell") | `primitive-formatter.ts`; node `schema-generator.ts` | void-type.test.ts ×3 |
@@ -424,6 +445,41 @@ by any repo test.
 Fallback sentinel: a primitive-flagged type matching none of the branches emits
 `{ type: "string", enum: ["unknown"] }` (`primitive-formatter.ts`) — a
 silent, mis-typed sentinel; untested and believed unreachable in practice.
+
+### 4.0.1 Symbols
+
+The schema dialect has no symbol type, so no schema describes a symbol value.
+What the generator does with a symbol depends on whether the runtime could store
+it.
+
+A well-known symbol, such as `Symbol.iterator`, is never stored. The language
+keeps well-known symbols out of the symbol registry, and the data model stores
+only a registered symbol, by its key. A well-known symbol therefore reads as
+`false`, as `never` does, with no diagnostic. `isWellKnownSymbol()` recognizes
+one as a `unique symbol` declared on `SymbolConstructor` in the default library.
+So `keyof string`, which holds `typeof Symbol.iterator`, reads as its string and
+number keys.
+
+Any other symbol could be a registered one: TypeScript gives the type `unique
+symbol` to `const r = Symbol.for("r")` as to `const s = Symbol()`. Leaving such
+a symbol out would refuse stored values the type admits, so the generator
+reports the `schema-type:symbol` error, which refuses the schema. The schema
+reads the symbol as `false`, so a union drops it. The message names the type
+written nearest the symbol. That is the symbol's own node where it has one. A
+symbol with no node of its own, such as a member of `keyof T`, is named by the
+node written around it (`GenerationContext.writtenAround`). Where that node is a
+union holding the symbol, the message suggests `Exclude<…, symbol>`.
+
+A symbol key is a different case. A plain object's data is its string keys, so a
+symbol-keyed member is skipped without a diagnostic (the `FabricInstancePlus`
+row above), and `Record<symbol, V>` reads as an object with no entries.
+
+A symbol branded by intersection with a symbol-keyed member, such as `symbol & {
+readonly [brand]: true }`, reads as the symbol, because the intersection reading
+leaves out a constituent that holds only a brand. It is then refused like any
+other symbol. A symbol branded with a string-keyed member, such as `symbol & {
+__brand: "x" }`, reads through the unsupported-intersection fallback (§9)
+instead, as a string or number branded that way does.
 
 ### 4.1 Generic declarations and their bindings
 
@@ -1186,8 +1242,19 @@ Default paths of §7:
   `labelsBesideAnyValue()`): every restriction a constituent states anywhere
   in its value, a member's or an array's items' included, goes on the whole
   fallback, and its evidence goes nowhere. `{ x: Confidential<string, C> } &
-  string[]` gives the fallback `ifc: { confidentiality: C }`. A scope a
-  member states is not lifted. A fallback that meets a definition still
+  string[]` gives the fallback `ifc: { confidentiality: C }`. A scope on
+  the whole value is kept, as `PerUser<{ x: string }> & string[]` gives the
+  fallback `scope: "user"`. A scope a member declares, anywhere in a
+  constituent's value, on any handle of a cell the member is, and through
+  its references, is refused ("An
+  intersection whose constituents cannot be merged falls back to a schema
+  that accepts any object and describes nothing inside them, so it cannot
+  keep the scope `user` declared on `x` …"): the write path reads a value's
+  scope from its own schema, and the fallback has none for its members, so
+  the member's data would be stored in the whole value's scope, one copy
+  shared across the space where the whole value has none. Where that member
+  is in a definition still being generated, the refusal comes once
+  generation is done. A fallback that meets a definition still
   being generated, as one inside a recursive interface does, is checked once
   generation is done, at each position emitting it, and refused where one
   holds fewer restrictions than that definition states ("An intersection
@@ -1238,7 +1305,24 @@ Default paths of §7:
   declarations beside the one that declares `any`, the property accepts any
   value and keeps what would otherwise fail open. It keeps the scope a
   declaration states, read from its type's brand or, where its type is `any`,
-  from its schema, a cell's cap counting as its scope. It keeps every
+  from its schema, a cell's cap counting as its scope. A scope a member of a
+  declaration declares cannot be kept by a value that describes nothing
+  inside the declaration, and is refused ("A value intersected with `any`
+  accepts any value and describes nothing inside what it is intersected
+  with, so it cannot keep the scope `user` declared on `x` …"), as an
+  unsupported intersection's fallback refuses one;
+  `{ a: { x: PerUser<string> } } & { a: any }` is refused where
+  `{ a: PerUser<{ x: string }> } & { a: any }` gives `a`
+  `{ scope: "user" }`. Of a declaration that is a cell, the value keeps only
+  the scope that cell's own slot is read in: its outermost handle's cap, or,
+  where no handle declares one, the scope beside the handles. A scope inside
+  the cell, on an inner handle or on what a capped cell holds, is refused
+  the same way ("… so it cannot keep the scope `user` declared inside a cell
+  there …"); `{ a: Cell<PerUser<Cell<string>>> } & { a: any }` and
+  `{ a: PerUser<Cell<PerSession<string>>> } & { a: any }` are refused where
+  `{ a: PerUser<Cell<Cell<string>>> } & { a: any }` and
+  `{ a: Cell<Cell<PerUser<string>>> } & { a: any }` give `a`
+  `{ scope: "user" }`. It keeps every
   restriction a declaration states anywhere in its value, through its
   references, on the whole value, which may hold that declaration's data
   anywhere: every `ifc` key but the evidence keys `integrity` and
@@ -1269,9 +1353,12 @@ Default paths of §7:
   `context.definitions`. Tested: intersection-formatter.test.ts,
   intersection-provenance.test.ts, the descriptions-intersection-conflict
   fixture.
-- Constituent-level JSDoc joins with `\n\n` plus provenance `$comment`s ("Docs
-  inherited from intersection constituents." / "Sources: …" / "Missing docs
-  for: …") (descriptions-intersection-* fixtures ×7).
+- Constituent-level JSDoc, the first doc of each constituent that has one,
+  becomes the intersection's `description` where it has none of its own: each
+  distinct doc in constituent order, joined with `\n\n`. Nothing records which
+  constituents it came from, since a constituent's name as the checker prints
+  it depends on the compiler's options (descriptions-intersection-* fixtures
+  ×6, intersection-formatter.test.ts).
 
 ## 10. Scope Wrappers
 
@@ -2084,7 +2171,7 @@ producing alias in this package as of this writing.
   points (§4 table; §9).
 - Hashtags remain in attached descriptions. Discovery extracts them at runtime
   with `tagsFromSchema` in `runtime/runtime-client/src/schema-tags.ts`,
-  using `extractHashtags` from `@commonfabric/utils/hashtags`. Tags are
+  using `extractHashtags` from `@commonfabric/runner/hashtags`. Tags are
   lowercased and deduplicated in first-seen order across nested schemas.
   Fixtures: descriptions-hashtag-tags, descriptions-index-signature-tags,
   descriptions-root-with-tags.
@@ -2260,7 +2347,7 @@ Everything that throws, with source (test-pinned unless noted):
 
 | Condition | Message (prefix) | Source |
 | --- | --- | --- |
-| No formatter matches a type | `No formatter found for type: …` | `schema-generator.ts` (untested) |
+| No formatter matches a type (symbol types are read before the formatters, §4.0.1) | `No formatter found for type: …` | `schema-generator.ts` (untested) |
 | `Map`/`WeakMap` | `… not JSON-serializable … Use Record<string, V> …` | `type-utils.ts` |
 | `Set`/`WeakSet` | `… Use Array<T> instead.` | `type-utils.ts` |
 | `Cell<Stream<T>>` | `Cell<Stream<T>> is unsupported. Wrap the stream: …` | `common-fabric-formatter.ts` |
@@ -2275,6 +2362,7 @@ Everything that throws, with source (test-pinned unless noted):
 | Scope wrapper as a union member beside a value other than `null` or `undefined` | `A scope wrapper cannot be a member of a union.` | `common-fabric-formatter.ts`, `scope-placement.ts` |
 | Scope wrapper around a cell beside anything, `null` and `undefined` included | `A scope wrapper around a cell cannot hold anything beside the cell` | `common-fabric-formatter.ts` |
 | Scope wrapper beside `null` or `undefined` in a written union whose members do not read as wrappers or `null` or `undefined` | ``A scope wrapper beside `null` or `undefined` is read from the union written around it`` | `common-fabric-formatter.ts` |
+| A scope a member declares inside an intersection whose constituents cannot be merged, or one declared on a member or inside a cell beside `any` | `An intersection whose constituents cannot be merged falls back to a schema that accepts any object and describes nothing inside them` / ``A value intersected with `any` accepts any value and describes nothing inside what it is intersected with`` | `scope-placement.ts` |
 | An `ifc` key other than `confidentiality` declared differently by nested wrappers, or by a `$ref` and its definition | ``One value declares `ifc.<key>` twice, as … and as ….`` | `ifc-labels.ts` |
 | Circular type alias (wrapper chain) | `Circular type alias detected: A -> B -> …` | `type-utils.ts` |
 | Circular type alias (union alias) | `Circular type alias detected: <name>` | `union-formatter.ts` |

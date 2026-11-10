@@ -13,8 +13,8 @@ function sourceCoveragePath(name: string): string {
  * `commonfabric` reactive surface is swapped for
  * `tools/test-support/source-coverage-commonfabric.ts` (those primitives need
  * the real runtime), but the pure `data-model` helpers stay real, so the child
- * also produces coverage for the `data-model`/`content-hash`/`leb128` code the
- * pattern runtime exercises.
+ * also produces coverage for the code of `data-model`, and of the base packages
+ * it imports, that the pattern runtime exercises.
  *
  * A flat `--import-map` replaces the workspace's `imports`/`scopes`, so the real
  * graph's dependencies must be present in it. Rather than hand-maintain (and

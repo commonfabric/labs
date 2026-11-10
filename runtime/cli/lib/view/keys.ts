@@ -15,7 +15,9 @@ export interface Key {
    * Normalized name: an arrow/nav name ("up", "down", "left", "right",
    * "pageup", "pagedown", "home", "end"), a mouse-wheel name ("wheel-up",
    * "wheel-down"), a press or release of the primary mouse button ("mouse"),
-   * a function key ("f1".."f12"), an editing name ("enter",
+   * the pointer moving with that button held ("drag"), text pasted while
+   * bracketed paste is on ("paste", the text in `text`), a function key
+   * ("f1".."f12"), an editing name ("enter",
    * "escape", "backspace", "delete", "tab", "space"), a control combo
    * ("ctrl-c", "ctrl-d", …), or the literal character for a printable key
    * ("a", "/", "?").
@@ -35,6 +37,12 @@ export interface Key {
 
   /** The primary mouse button going down or coming up, for a "mouse" key. */
   readonly mouse?: MouseButton;
+
+  /** Where the pointer was, for a "drag" or wheel key. */
+  readonly at?: { readonly x: number; readonly y: number };
+
+  /** The text pasted, for a "paste" key, as it arrived. */
+  readonly text?: string;
 }
 
 /** A press or release of the primary mouse button. */
@@ -92,6 +100,15 @@ export function decodeKeys(buf: Uint8Array): DecodeResult {
           j += 1;
         }
         if (j >= buf.length) break; // final byte not arrived yet
+        if (params === "200" && buf[j] === 0x7e) {
+          // A bracketed paste runs to `ESC [ 201 ~`, and waits for it.
+          const end = indexOf(buf, PASTE_END, j + 1);
+          if (end < 0) break;
+          const text = new TextDecoder().decode(buf.slice(j + 1, end));
+          keys.push({ name: "paste", text });
+          i = end + PASTE_END.length;
+          continue;
+        }
         keys.push(csiToKey(buf[j], params));
         i = j + 1;
         continue;
@@ -183,6 +200,24 @@ export function decodeKeys(buf: Uint8Array): DecodeResult {
     }
   }
   return { keys, rest: buf.slice(i) };
+}
+
+/** What ends a bracketed paste: `ESC [ 201 ~`. */
+const PASTE_END = new TextEncoder().encode("\x1b[201~");
+
+/** Where `needle` first occurs in `haystack` at or after `from`, or -1. */
+function indexOf(
+  haystack: Uint8Array,
+  needle: Uint8Array,
+  from: number,
+): number {
+  outer: for (let at = from; at + needle.length <= haystack.length; at++) {
+    for (let k = 0; k < needle.length; k++) {
+      if (haystack[at + k] !== needle[k]) continue outer;
+    }
+    return at;
+  }
+  return -1;
 }
 
 /** Decode the `1;<m>` modifier suffix of a CSI sequence: m-1 is a bitmask of
@@ -297,11 +332,12 @@ function sgrMouseToKey(params: string, release: boolean): Key {
 }
 
 /**
- * Maps a terminal mouse report to the wheel step it represents, or to the press
- * or release of the primary button at the zero-based cell `x`, `y`. An SGR
- * report says whether it is a release; an X10 report gives every release as
- * button 3, whichever button was let go. A report of the pointer moving, which
- * sets the 32 bit, is unknown.
+ * Maps a terminal mouse report at the zero-based cell `x`, `y` to the wheel
+ * step it represents, the press or release of the primary button, or the
+ * pointer moving with that button held. An SGR report says whether it is a
+ * release; an X10 report gives every release as button 3, whichever button
+ * was let go. A report of the pointer moving, which sets the 32 bit, is a
+ * drag when the primary button is held and unknown otherwise.
  */
 function mouseToKey(
   button: number,
@@ -315,8 +351,9 @@ function mouseToKey(
   }
   if (release) return { name: "unknown" };
   if (baseButton === 3) return { name: "mouse", mouse: { down: false, x, y } };
-  if (baseButton === 64) return { name: "wheel-up" };
-  if (baseButton === 65) return { name: "wheel-down" };
+  if (baseButton === 32) return { name: "drag", at: { x, y } };
+  if (baseButton === 64) return { name: "wheel-up", at: { x, y } };
+  if (baseButton === 65) return { name: "wheel-down", at: { x, y } };
   return { name: "unknown" };
 }
 

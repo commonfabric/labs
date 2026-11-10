@@ -1,4 +1,5 @@
 import type { Identity } from "@commonfabric/identity";
+import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import {
   ExecutionLeaseCycle,
@@ -83,6 +84,19 @@ export class ServingWaves {
     return this.#storageManager;
   }
 
+  /** The memory server, for a test that opens a client of its own on it. */
+  get server(): ReturnType<typeof newSharedServer> {
+    return this.#server;
+  }
+
+  /**
+   * The identity a wave resolves a scoped write against when the run that
+   * sealed it declared none of its own.
+   */
+  get scopeKeyIdentity(): ScopeKeyIdentity {
+    return { principal: this.#signer.did(), sessionId: "wave-test" };
+  }
+
   /** The space the runtime serves, which is the signer's own. */
   get space(): MemorySpace {
     return this.#space;
@@ -109,10 +123,7 @@ export class ServingWaves {
       lease: this.#lease,
       foreignWrites: "accept",
       foreignWriteGrant: () => true,
-      scopeKeyIdentity: {
-        principal: this.#signer.did(),
-        sessionId: "wave-test",
-      },
+      scopeKeyIdentity: this.scopeKeyIdentity,
       replicaFor: (target) => this.#storageManager.open(target).replica,
     });
     this.#waves.push(wave);
@@ -122,7 +133,8 @@ export class ServingWaves {
 
   /**
    * Installs the seal destination. Every scheduler run is stamped with its
-   * action and kind, and with `acting` as the identity it runs as.
+   * action and kind, with the scope-key identity it declares, and with
+   * `acting` as the identity it runs as.
    */
   serve(acting?: WaveRunContext["acting"]): void {
     let sealing: Promise<unknown> = Promise.resolve();
@@ -149,6 +161,9 @@ export class ServingWaves {
         stampWaveRunContext(tx, {
           actionId: info.actionId,
           kind: info.kind,
+          ...(info.scopeKeyIdentity === undefined
+            ? {}
+            : { scopeKeyIdentity: info.scopeKeyIdentity }),
           ...(acting === undefined ? {} : { acting }),
         }),
     });
@@ -240,7 +255,7 @@ export class ServingWaves {
     this.#runtime.clearSealDestination();
     for (const wave of this.#waves) wave.abandon("test cleanup");
     await Promise.all(this.#waves.map((wave) => wave.settled()));
-    this.#lease.release();
+    await this.#lease.release();
     await this.#storageManager.synced();
     await this.#runtime.dispose();
     await this.#peer?.dispose();
@@ -281,11 +296,11 @@ export class ServingWaves {
     });
     const engine = await server.engineForSpace(space);
     const lease = new ExecutionLeaseCycle({
-      engine,
+      leases: engine.executionLeases,
       space,
       holder: executionLeaseHolder(`service:${space}`),
     });
-    if (!lease.acquire()) throw new Error("Could not acquire the lease");
+    if (!await lease.acquire()) throw new Error("Could not acquire the lease");
     return new ServingWaves(
       signer,
       server,

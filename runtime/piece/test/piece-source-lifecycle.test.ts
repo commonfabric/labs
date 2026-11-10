@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { createSession, Identity } from "@commonfabric/identity";
-import { defer } from "@commonfabric/utils/defer";
-import { terminateWorker } from "@commonfabric/utils/worker-lifetime";
+import { defer } from "@commonfabric/async/defer";
+import { terminateWorker } from "@commonfabric/platform/worker-lifetime";
 import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
 import {
   type Cell,

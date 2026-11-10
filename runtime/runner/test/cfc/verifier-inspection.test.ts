@@ -10,6 +10,7 @@ import {
   prepareBoundaryCommit,
 } from "../../src/cfc/prepare.ts";
 import type { CfcMetadata } from "../../src/cfc/types.ts";
+import { writeChokepointMark } from "../../src/storage/write-chokepoint.ts";
 import { Runtime } from "../../src/runtime.ts";
 import { StorageManager } from "../../src/storage/cache.deno.ts";
 import type { IExtendedStorageTransaction } from "../../src/storage/interface.ts";
@@ -148,8 +149,15 @@ describe("prepareBoundaryCommit()", () => {
                       path: ["entry"],
                       label: { integrity: ["new-endorsement"] },
                     }];
+                    // A change beneath the extended transaction, as another
+                    // writer's would land, carrying the mark the chokepoint
+                    // puts on what it forwards.
                     expect(
-                      tx.tx.write({ ...source, path: ["cfc"] }, metadata).ok,
+                      tx.tx.write(
+                        { ...source, path: ["cfc"] },
+                        metadata,
+                        writeChokepointMark(),
+                      ).ok,
                     )
                       .toBeDefined();
                   }

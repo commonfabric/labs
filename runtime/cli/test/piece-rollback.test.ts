@@ -14,7 +14,7 @@ import type {
   RestorableRevision,
   RestoreOutcome,
 } from "@commonfabric/piece/ops";
-import { decode } from "@commonfabric/utils/encoding";
+import { decode } from "@commonfabric/text/utf8";
 
 import { runRestore, runRollback } from "../lib/bulk.ts";
 import { resetUnreportedRunGuardsForTest } from "../lib/unreported-run.ts";

@@ -225,6 +225,16 @@ export interface Suite {
   unitsForChange?(changed: ReadonlySet<string>): readonly Unit[];
 
   /**
+   * The repository files a unit runs, for a unit that is not itself one
+   * file: the test files of a unit that holds a directory's tests, the files
+   * a shell suite's step can source, call or deploy, or the source a named
+   * unit judges. A change reaches the unit through what
+   * reaches them. Absent, or empty for a unit, a unit is the file it is
+   * named for where it is named for one, and stands for no file otherwise.
+   */
+  sourcesOf?(unit: Unit): readonly string[];
+
+  /**
    * What this suite's coverage is gated on: one entry per workspace
    * member whose lines a subset of these units is scored over. Absent
    * where nothing here is measured, which is every suite whose runner
@@ -510,16 +520,6 @@ export async function writeBatchSkipList(
 }
 
 /**
- * The flag every `deno test` a suite builds shuffles by. The seed is the
- * one the commit under test was committed on unless the environment names
- * another, and the runner that starts a run puts the seed it settled on
- * in the environment, so every invocation of that run takes the same one.
- */
-export function shuffleArguments(): string[] {
-  return [shuffleFlag(shuffleSeed())];
-}
-
-/**
  * The command that runs `deno test` over `files` under `flags`, recording
  * and shuffling as every suite's `deno test` does, and writing its report to
  * `junitPath`. The preload is permitted to read `skipList`, where the
@@ -545,7 +545,7 @@ export function denoTestCommand(
     Deno.execPath(),
     "test",
     ...unchecked,
-    ...shuffleArguments(),
+    shuffleFlag(shuffleSeed()),
     ...recordingArguments(unchecked, {
       spool: context.spoolDir,
       root: context.root,

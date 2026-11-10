@@ -7,7 +7,7 @@ import {
   relative,
   SEPARATOR,
 } from "@std/path";
-import { deepEqual } from "@commonfabric/utils/deep-equal";
+import { deepEqual } from "@commonfabric/js-values/deep-equal";
 
 import type { CfHarnessStructuredResultConfig } from "./contracts/structured-result.ts";
 import type { PromptSlotBinding } from "./contracts/prompt-slot.ts";

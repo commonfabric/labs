@@ -14,7 +14,8 @@ import {
   CFC_DIAL_LADDERS,
   type CfcPostureReport,
 } from "@commonfabric/runner/cfc";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 /** What a spec may assert about a posture record. */
 export interface ExpectedPosture {
@@ -225,7 +226,7 @@ export const loadExpectedPosture = async (
   } catch (error) {
     throw new Error(
       `expected-posture spec \`${path}\` could not be read: ${
-        error instanceof Error ? error.message : String(error)
+        describeFailure(error)
       }`,
     );
   }
@@ -235,7 +236,7 @@ export const loadExpectedPosture = async (
   } catch (error) {
     throw new Error(
       `expected-posture spec \`${path}\` is not valid JSON: ${
-        error instanceof Error ? error.message : String(error)
+        describeFailure(error)
       }`,
     );
   }

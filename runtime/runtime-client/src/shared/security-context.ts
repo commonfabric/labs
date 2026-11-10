@@ -7,7 +7,7 @@
  * live here rather than on either side of the IPC.
  */
 
-import { deepEqual } from "@commonfabric/utils/deep-equal";
+import { deepEqual } from "@commonfabric/js-values/deep-equal";
 import { clausesEqual } from "@commonfabric/runner/cfc/clause";
 import {
   buildCfcTrustConfig,

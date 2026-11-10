@@ -15,7 +15,7 @@
  */
 
 import type { JSONObject, JSONValue } from "@commonfabric/api";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import type { LoomCommandEntry } from "./loom-commands.ts";
 

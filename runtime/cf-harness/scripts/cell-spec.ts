@@ -13,7 +13,7 @@
  * asserted and is not reported as satisfied.
  */
 
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import type { ConsolePolicyReport } from "../console/policy.ts";
 
 /**

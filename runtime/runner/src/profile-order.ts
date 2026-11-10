@@ -10,7 +10,7 @@
  */
 
 import { internSchema } from "@commonfabric/data-model-schema";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import type { Cell } from "./cell.ts";
 import { DocumentLoadError, loadDocument } from "./document-readiness.ts";
 import type { NormalizedFullLink } from "./link-types.ts";

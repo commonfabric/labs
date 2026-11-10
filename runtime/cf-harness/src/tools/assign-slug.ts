@@ -18,7 +18,8 @@ import {
   PieceController,
   type PiecesController,
 } from "@commonfabric/piece/ops";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import type { HarnessToolDescriptor } from "../contracts/tool-descriptor.ts";
 import { observedOutputsIn } from "../run-pattern-output-concerns.ts";
 import { pieceUrl } from "../piece-url.ts";
@@ -39,6 +40,9 @@ export interface AssignSlugToolSuccessOutput {
    * reads the address it got from here rather than from what it asked for.
    */
   slug: string;
+
+  /** Whole-piece reference, usable directly as a Loom component ref. */
+  ref: string;
 
   /**
    * The slug's target, joining this artifact to the `run_pattern` attempt
@@ -94,7 +98,7 @@ export const assignSlugToolDescriptor: HarnessToolDescriptor = {
   toolId: "assign_slug",
   title: "Assign Slug",
   description:
-    "List the piece behind a handle token in the space's piece list under a named address a person can open; returns a receipt with the address it got.",
+    "List the piece behind a handle token in the space's piece list under a named address a person can open; returns the assigned slug and ref, usable directly as a Loom component reference.",
   effectClass: "side-effect",
   inputSchema: {
     type: "object",
@@ -118,6 +122,10 @@ export const assignSlugToolDescriptor: HarnessToolDescriptor = {
       outputId: { type: "string" },
       status: { enum: ["ok", "error"] },
       slug: { type: "string" },
+      ref: {
+        type: "string",
+        description: "Composition-ready whole-piece reference.",
+      },
       pieceId: { type: "string" },
       space: { type: "string" },
       url: { type: "string" },
@@ -128,9 +136,6 @@ export const assignSlugToolDescriptor: HarnessToolDescriptor = {
   },
   tags: ["fabric", "piece"],
 };
-
-const errorMessage = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
 
 /**
  * What each `SlugResolutionError` code says about the name.
@@ -213,7 +218,7 @@ const slugAvailability = async (
   try {
     binding = await readSlugBinding(pieces, slug);
   } catch (error) {
-    return { state: "unknown", reason: errorMessage(error) };
+    return { state: "unknown", reason: describeFailure(error) };
   }
   try {
     const holder = await resolvePieceAddress(pieces, slug);
@@ -226,7 +231,7 @@ const slugAvailability = async (
     // Only `unknown` carries the resolver's text. The other two are answers
     // about what the space holds, and their refusals name the caller's own
     // slug and nothing the caller did not already have.
-    if (state === "unknown") return { state, reason: errorMessage(error) };
+    if (state === "unknown") return { state, reason: describeFailure(error) };
     return state === "free" ? { state, binding } : { state };
   }
 };
@@ -280,7 +285,7 @@ export const assignSlugTool: HarnessToolDefinition<
       requested = validateSlug(input.slug);
     } catch (error) {
       return errorOutput(
-        `assign_slug slug is invalid: ${errorMessage(error)}`,
+        `assign_slug slug is invalid: ${describeFailure(error)}`,
       );
     }
     let pieces: PiecesController;
@@ -289,7 +294,7 @@ export const assignSlugTool: HarnessToolDefinition<
     } catch (error) {
       return errorOutput(
         `assign_slug could not establish the fabric session: ${
-          errorMessage(error)
+          describeFailure(error)
         }`,
       );
     }
@@ -324,7 +329,7 @@ export const assignSlugTool: HarnessToolDefinition<
     } catch (error) {
       return errorOutput(
         `assign_slug could not load the referenced piece: ${
-          errorMessage(error)
+          describeFailure(error)
         }`,
       );
     }
@@ -368,6 +373,7 @@ export const assignSlugTool: HarnessToolDefinition<
         outputId,
         status: "ok",
         slug,
+        ref: createLLMFriendlyLink(cell.getAsNormalizedFullLink()),
         pieceId: targetId,
         space,
         ...(url !== undefined ? { url } : {}),
@@ -394,7 +400,7 @@ export const assignSlugTool: HarnessToolDefinition<
         } catch (error) {
           return errorOutput(
             `assign_slug slug "${requested}" is taken and no free slug can ` +
-              `be derived from it: ${errorMessage(error)}`,
+              `be derived from it: ${describeFailure(error)}`,
           );
         }
       }
@@ -424,7 +430,7 @@ export const assignSlugTool: HarnessToolDefinition<
         } catch (error) {
           return errorOutput(
             `assign_slug failed while listing the piece: ${
-              errorMessage(error)
+              describeFailure(error)
             }`,
           );
         }
@@ -448,7 +454,9 @@ export const assignSlugTool: HarnessToolDefinition<
         await ensureRegistered(pieces, cell, targetId);
       } catch (error) {
         return errorOutput(
-          `assign_slug failed while listing the piece: ${errorMessage(error)}`,
+          `assign_slug failed while listing the piece: ${
+            describeFailure(error)
+          }`,
         );
       }
       listed = true;
@@ -478,7 +486,7 @@ export const assignSlugTool: HarnessToolDefinition<
         }
         return errorOutput(
           `assign_slug failed while naming the piece: ${
-            errorMessage(error)
+            describeFailure(error)
           }. The piece is listed in this space.`,
         );
       }

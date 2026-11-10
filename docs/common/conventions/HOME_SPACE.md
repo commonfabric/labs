@@ -130,11 +130,54 @@ most-recently-used (MRU) ordering:
   the person's profiles share. A space whose recorded profile is retired
   keeps that record, and `sharedSpaces.profiles` reads it as `retired`
   ([Social-space collection](#social-space-collection)).
+- A profile whose space is
+  [deleted](../../specs/random-space-identities.md#deleting-a-space) is
+  retired. The memory server refuses its space, with the `deleted` marker,
+  which is not the absence of a missing profile's document, and its `name`
+  cannot be followed, so it is never one of the user's own profiles. Until it
+  is retired, `#profile` cannot read it, and if it leaves no other live
+  profile, `#profile` reports an error rather than opening profile creation
+  ([`wish.md`](wish.md)). Retiring it records the deletion: a retired profile
+  is skipped before it is read, so once it is retired and no live profile is
+  left, the roster is empty and `#profile` opens profile creation. The
+  runtime that holds the person's Home sends `retireProfile` for a profile
+  `profiles` lists when it is refused that profile's space with the `deleted`
+  marker, as it sends the catalog's `markDeleted`
+  ([`shared-space-catalog.md`](../../features/shared-space-catalog.md#deleted-spaces)),
+  through the same `PiecesController.markDeletedSpace`
+  (`retireDeletedProfileOf()`). `setProfileRetired` admits such a
+  profile in place of the ownership test it can no longer pass: its link is in
+  `profiles` and `spaceDeleted(space)` returns `true` in the handler, asked by
+  the handler itself, so an event naming a profile that is not deleted is held
+  to the usual refusals. The refusals that keep `#profile` from moving without the
+  person choosing do not apply, since a deleted profile is none of the live
+  ones they protect. Where the memory server has not yet answered for the
+  space, the handler runs again once it has, under the conditions
+  [`shared-space-catalog.md`](../../features/shared-space-catalog.md#deleted-spaces)
+  gives for `markDeleted`. The picker lists a deleted profile apart, by its
+  space and marked deleted, with no control. It shows no name, since a
+  profile's name is kept in its own space, which is gone. `restoreProfile`
+  refuses a deleted profile.
 
 Each profile lives in its own space, created with the anonymous
 `PatternFactory.inSpace()` — one allocation per creation, each a new space with
-a random DID owned by the creating user and writable by anyone, since its ACL
-grants the wildcard `"*"` WRITE: a runtime showing a profile writes into the
+a random DID that owns itself (`selfOwned`) and declares the `profile` kind:
+its ACL grants its own DID OWNER and the wildcard `"*"` WRITE, and the
+creating user, who is not in the list, holds instead a delegation the space's
+key issued over it before being destroyed. The home space records that
+delegation beside the allocation, in the list under the cause
+`{ delegations: <space DID> }`, in the commit that appends the profile link;
+the record is a list so that a delegation issued later, with another
+command or policy, has a place beside it. A runtime loads every profile's
+delegations at startup
+(`Runtime.loadProfileDelegations`) so its sessions on the profile space act
+under the profile's own grant ([profile delegation](../../specs/profile-delegation.md)).
+The creating runtime holds the delegation from the moment the key signs it, so
+the commit that places the profile and the copy of its pattern into the space
+are made under the profile's grant too, and creation needs nothing from the
+wildcard. A profile created before profiles owned themselves names its creator
+as owner and has no delegation; it keeps opening on the creator's grant. The
+wildcard WRITE is there because a runtime showing a profile writes into the
 profile's space, so a visitor needs more than READ. CFC owner-protects the
 profile's data fields that store an owner policy (all but `picture`, as below),
 and its view state is per session; nothing else in the space is protected from
@@ -153,14 +196,30 @@ profile created with the field, and no one on a profile that gained the field
 in a later release, since a source update is no principal's act. The value
 cell's own label is minted by the write that stored the value. Only the second
 says whose word the value is, so a reader that relies on who a field
-represents, such as a host showing a member's picture as their face, reads the
-value cell's label and takes the field as the owner's only when that label
-names the owner alone. A pattern reads it in a handler or a reactive
-computation, since the call throws in a pattern body, with
+represents reads the value cell's label and takes the field as the owner's only
+when that label names the owner alone. A pattern reads it in a handler or a
+reactive computation, since the call throws in a pattern body, with
 `principalOf(profile.key(field), "represents-principal")`; a host reads it with
 `cfcLabelViewForResolvedTarget()`. Like every claim, it binds honest runtimes
 only: the memory server does not check a claim against the session that
 committed it ([`principal-of.md`](../../features/principal-of.md)).
+
+A profile's face is its `picture`, or else its legacy `avatar` text, when that
+value's own cell represents its owner. The runtime decides whom a value's own
+cell represents by one rule (`runtime/runner/src/cfc/written-principal.ts`):
+the one principal the label of the cell a write to the field lands in names,
+when the value is the whole of that cell and no link stored there leads
+elsewhere. That label says nothing of who pointed the field at the cell; a
+profile's owner-protected fields keep their write redirects from being
+repointed. A pattern asks
+with `writtenPrincipalOf()`, a host holding a runtime with
+`writtenPrincipalAt()`, and a host holding cell handles with
+`observeWrittenPrincipal()` from `@commonfabric/runtime-client`. Patterns read
+a face with `profileFace()` from
+`patterns/system/profile-face/profile-face.ts`, which compares that principal
+with `profileOwnerOf()`; `cf-profile-badge` compares it with the principal its
+seal shows. So a picture a visitor set, or one stored before pictures were
+labeled, is not shown as the owner's face.
 
 A field's writes are checked only once a write stores its policy in the value
 cell. A field with a default, such as `name` or `bio`, has its owner-protected
@@ -367,7 +426,9 @@ user's favorites only, and the queue is not a favorite.
 The piece holds two things:
 
 - `entries` - one `{ run, host }` entry per `AgentRun` record the user has
-  submitted, across spaces and toolsheds. The `agent` builtin adds an entry
+  submitted and not removed, across spaces and toolsheds. `cf agent remove`
+  takes a finished run's entry off the queue and leaves its record where it
+  is. The `agent` builtin adds an entry
   when a request commits, as an element addressed by the record's id
   (`elementById` and `addUnique`, the way favorites are keyed), so two requests
   indexed side by side land as two elements. `run` links to the record in the requesting space;
@@ -404,8 +465,9 @@ pattern is a version without the field, `wish({ query: "#agent_queue" })`
 resolves to nothing; where there is no home pattern yet, a headless wish
 resolves to nothing too, and any other resolves through the empty slot. A write
 through that cell is refused with a `SpaceRootMissingError`. When the write is a
-handler's on a client runtime and the refusal escapes the handler, the home
-pattern is created and the handler runs again; a serving runtime creates none.
+handler's and the refusal escapes the handler, the handler runs again once the
+home pattern exists: a client runtime creates it, and a serving runtime waits
+for the home space's own server to create it and link it.
 [Built-in Targets](wish.md#built-in-targets) describes both.
 [`docs/common/capabilities/agent.md`](../capabilities/agent.md) describes the
 request side.
@@ -421,10 +483,14 @@ keeps its stable identity, and the flat catalog fields remain aliases.
 The **Social spaces** tab lists saved and archived looms, chats, and other kinds
 without fetching their roots. Search and filters belong to the current session.
 Archive puts a space away and restore saves it again; both compare the revision
-the rendered control showed and leave space access unchanged. Unfamiliar states
-remain visible in **Other states**. An unavailable collection has an explicit
-notice rather than an empty list. Ordinary space navigation opens a listed
-space using the runtime's configured routing.
+the rendered control showed and leave space access unchanged. A space recorded
+as deleted
+([`shared-space-catalog.md`](../../features/shared-space-catalog.md#deleted-spaces))
+appears under **Deleted**, with neither control. Unfamiliar states remain
+visible in **Other states**. An unavailable collection has an explicit notice
+rather than an empty list.
+Ordinary space navigation opens a listed space using the runtime's configured
+routing.
 
 Home also records which of the person's profiles acts in each space, as part of
 their membership in it: `sharedSpaceProfiles` holds one record per space, keyed

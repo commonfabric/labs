@@ -28,7 +28,10 @@ import type {
 import { hashStringOf } from "@commonfabric/data-model";
 import { Database } from "@db/sqlite";
 
-import type { ReasoningEffort } from "./profiles.ts";
+import type {
+  LocalJobHostMountSelection,
+  ReasoningEffort,
+} from "./profiles.ts";
 
 /** A job's state. */
 export type LocalJobState =
@@ -59,6 +62,9 @@ export interface LocalJobRequest extends HarnessModelLimits {
   tools?: string[];
   maxModelTurns?: number;
   imageAttachments?: HarnessInlineImageAttachment[];
+
+  /** Selected profile mounts, retained with the request across follow-ups. */
+  hostMounts?: LocalJobHostMountSelection[];
 
   /** A person is waiting: ordered first and eligible for the reserved slot. */
   interactive?: boolean;
@@ -593,11 +599,44 @@ export class LocalJobStore {
     return row === undefined ? undefined : this.#view(row);
   }
 
-  /** The newest `limit` jobs, newest first. */
-  list(limit: number): LocalJob[] {
+  /**
+   * The newest `limit` jobs, newest first: only `of.caller`'s and only
+   * `of.profile`'s where `of` names them. A context filter matches a top-level
+   * string field or a string member of its array. `before` names the last job
+   * of the preceding page; all filters apply before the limit.
+   */
+  list(
+    limit: number,
+    of: {
+      caller?: string;
+      profile?: string;
+      contextKey?: string;
+      contextValue?: string;
+      before?: string;
+    } = {},
+  ): LocalJob[] {
     return (this.#database.prepare(`
-      SELECT * FROM jobs ORDER BY created_at DESC, rowid DESC LIMIT :limit
-    `).all({ limit }) as JobRow[]).map((row) => this.#view(row));
+      SELECT * FROM jobs
+      WHERE (:caller IS NULL OR caller = :caller)
+        AND (:profile IS NULL OR profile = :profile)
+        AND (:contextKey IS NULL OR (
+          json_type(jobs.request_json, '$.context.' || :contextKey) IN ('text', 'array')
+          AND EXISTS (
+          SELECT 1 FROM json_each(jobs.request_json, '$.context.' || :contextKey)
+          WHERE type = 'text' AND value = :contextValue
+        )))
+        AND (:before IS NULL OR (created_at, rowid) < (
+          SELECT created_at, rowid FROM jobs WHERE id = :before
+        ))
+      ORDER BY created_at DESC, rowid DESC LIMIT :limit
+    `).all({
+      limit,
+      caller: of.caller ?? null,
+      profile: of.profile ?? null,
+      contextKey: of.contextKey ?? null,
+      contextValue: of.contextValue ?? null,
+      before: of.before ?? null,
+    }) as JobRow[]).map((row) => this.#view(row));
   }
 
   /** The events of job `id` after `seq`, in order. */

@@ -16,7 +16,7 @@
  * over every field a value was entered into.
  */
 
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 /** Where the page model places an operation's target: a ref from a snapshot. */
 export type BrowserHostRef = string;

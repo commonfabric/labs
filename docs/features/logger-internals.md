@@ -1,6 +1,6 @@
 # Logger Internals (TypeScript API)
 
-The runtime uses a structured logging system (`@commonfabric/utils/logger`)
+The runtime uses a structured logging system (`@commonfabric/logger`)
 across all packages. Loggers are tagged by module name, support severity
 levels, and track call counts, timing stats, and flags — all accessible at
 runtime. This page covers the TypeScript API for *writing* runtime code. For
@@ -11,7 +11,7 @@ inspecting loggers interactively from the browser console, see
 
 ```typescript
 // Shown at module scope.
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 
 // Create a logger for your module (disabled by default, debug level)
 const logger = getLogger("my-module", { enabled: false, level: "debug" });
@@ -172,7 +172,7 @@ These operate across all registered loggers:
 | `resetAllCountBaselines()` | Set count baselines for all loggers |
 | `resetAllTimingBaselines()` | Set timing baselines for all loggers |
 
-All are importable from `@commonfabric/utils/logger` and also registered on
+All are importable from `@commonfabric/logger` and also registered on
 `globalThis.commonfabric` for browser console access. See
 [debugging/console-commands](../development/debugging/console-commands.md) for interactive
 usage.

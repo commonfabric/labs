@@ -710,8 +710,8 @@ way before adding a wait here.
 
 The "wait on an event, not a poll" principle of
 [waiting-in-tests.md](waiting-in-tests.md) applies to production code too. The
-three studies below are where the shape is worth knowing: a deliberate
-exception where no event exists to await, and two readiness handshakes that
+five studies below are where the shape is worth knowing: three deliberate
+exceptions where no event exists to await, and two readiness handshakes that
 stay event-driven across process boundaries that look like they rule an event
 out.
 
@@ -751,6 +751,81 @@ Cancelling an in-progress backoff stays event-driven: the pause between
 attempts is a single timer that `close()` cancels directly, so a client closed
 mid-backoff settles at once and nothing wakes on an interval. The backoff
 delay between attempts stays; its cancellation carries no poll.
+
+### The serving worker's watchdog
+
+The other deliberate exception is the timer `ServingWorker` keeps on a serving
+worker in `runtime/runner/src/executor/serving-worker-host.ts`, the one wait left
+in the execution lease ([`serving-loop.md`](../specs/server-side-execution/serving-loop.md)
+§2). A worker whose thread has stopped holds its spaces' leases, and a thread
+that has stopped cannot report that it has stopped, so no event exists to await.
+Once a worker has sent its first message, it posts a heartbeat every 10 seconds
+from a timer of its own, and the main thread kills it after six consecutive
+10-second intervals with no message of any kind from it. A worker that hangs
+before its first message holds no lease and is not replaced.
+
+The bound passes the test of [whether firing early is
+safe](waiting-in-tests.md#wall-clock-time-is-not-a-measure-of-progress). A kill of
+a worker that was only slow costs its spaces a rebuild and its in-flight waves a
+withdrawal, and reaches a correct outcome: the successor recomputes them, and a
+commit the killed worker left in flight is refused if it reaches admission after
+the release. Nor does the wait count
+wall-clock time. It counts its own firings, so a main thread that itself stalled,
+or a process that was suspended, fires it once on waking, and a clock jump moves
+nothing.
+
+### A deployed client's wait on its server
+
+A client that is not built alongside its server takes the deployment's posture
+from `/api/meta` before it constructs a `Runtime`, and then asks each host's
+`/_health`. A server that accepts a connection and then says nothing sends no
+event, so each wait needs a bound for the client to ever report it. Everything
+else about the wait is shaped so that the bound decides as little as possible.
+
+The read stays outstanding, because a server that is only slow still gives the
+right answer, and a client that gave up early would run on the wrong
+server-execution arm. So the first thing to happen at five seconds is a log
+line, and the read goes on. The bound is `DEPLOYMENT_RESPONSE_BOUND_MS`, 60
+seconds, and an early fire costs a real result: on the read, a client on its own
+flags, with an error saying so; on the health check, a startup that fails. By
+the test in [Wall-clock time is not a measure of
+progress](waiting-in-tests.md#wall-clock-time-is-not-a-measure-of-progress),
+that makes it the kind of bound the repository accepts for want of an event,
+sized to sit well above what is measured.
+
+The measurement probed both routes in sequence, each request timed to its end,
+against a local toolshed from its process start, with its compile cache cleared,
+while four `cf piece new` runs deployed the largest patterns in the repository
+at once, and at background priority a second burst of up to eight, of which five
+to seven deployed. The toolshed ran on the same machine as the client, a shared
+18-core Mac with a load average of about 8 to 14 from other work. "Background"
+runs the toolshed under `taskpolicy -b`. Each normal-priority cell is one run,
+and each background cell the slowest of two: one at background priority from the
+toolshed's start, and one from after its first deploys. The slowest response, in
+milliseconds, for either route:
+
+| Toolshed                                    | Normal priority | Background |
+| ------------------------------------------- | --------------- | ---------- |
+| Server execution off                        | 296             | 1,598      |
+| Server execution on, serving worker         | 311             | 2,485      |
+| Server execution on, serving on main thread | 833             | 3,330      |
+
+The two routes rise and fall together, since both wait on the toolshed's main
+thread, and an idle toolshed responds within 100 milliseconds. Sixty seconds is
+18 times the slowest of these. The five-second log line is above all of them,
+and costs nothing if a slower server reaches it. A browser test against a
+toolshed at background priority has been seen past five seconds, which this
+measurement did not reproduce, and it did not cover a store holding a lot of
+data. The one production number on record is a different read: [the rehearsal
+plan](../plans/space-clone-rehearsal.md) allows twenty seconds for a cold load
+before calling a deployment unhealthy, and the bound is three times that.
+
+The two waits run one after the other, so a server that says nothing fails a
+client 120 seconds after it asked, with `Could not connect to "..."`. An aborted
+signal from the caller still ends either wait at once. The read's request and
+timers hold a Deno process up until the read settles, so a process that returns
+from `main` with the read still going lives for up to 60 seconds; `cf` and the
+Topics tool end with `Deno.exit`.
 
 ### The FUSE mount handshake
 
@@ -867,8 +942,8 @@ that would have succeeded on a loaded machine, the ceiling
 starting the server. The command spawns a second copy of itself as the server,
 waits until that copy reports it has bound its port, and only then returns. A
 caller that runs it starts the toolshed and moves straight on to work that
-needs it, with no readiness poll of its own. The CI integration jobs start the
-toolshed this way and go straight to their tests.
+needs it, with no readiness poll of its own. The browser benchmark job starts
+the toolshed this way and goes straight to its benchmark.
 
 Readiness travels over the child's stdout. The child writes a single marker
 line the moment `Deno.serve`'s `onListen` fires — the point the port is
@@ -891,3 +966,25 @@ There is no deadline on this read either. A server that neither binds nor
 exits blocks the command, which is what a foreground start does too, and the
 outer job limit catches it. A per-command ceiling would instead fail a start
 that a loaded machine would have completed.
+
+A `--background` caller learns when the server is listening, but not when it
+stops, because the server is not its child. A CI lane needs both, since it
+removes a work directory that holds the server's log. So the lane's `toolshed`
+capability (`tasks/ci-capabilities.ts`) starts the child copy itself, passes the
+log path in the environment, and reads the same marker. The server is then the
+lane's own child. When the capability closes, it sends SIGTERM and waits for the
+child's exit status, so the lane removes the directory only after the server has
+exited. A server that exits with any status other than success makes the close
+fail. The server exits with a non-zero status when its shutdown fails or runs
+out of time, so the close reports those as well. There is no deadline on that
+wait either. The server puts its own limit on how long its shutdown takes, and
+then exits.
+
+One wait sits outside that limit, inside `Deno.exit()` itself. A compiled server
+runs Deno's own OpenTelemetry with metrics on, and each metric export waits for
+the main thread to observe the isolate's gauges, while `Deno.exit()` waits on
+the main thread for the metric exporter to shut down. An export that falls due
+while the main thread is busy with the server's shutdown leaves each waiting on
+the other, and the process never exits. So the capability starts every server
+with `OTEL_METRIC_EXPORT_INTERVAL` set to a week, which no lane outlives, and no
+export falls due.

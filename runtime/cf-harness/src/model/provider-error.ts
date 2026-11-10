@@ -8,7 +8,7 @@
  * surfaced, and the retry decision keys off the same fields everywhere.
  */
 
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 /** A provider's stated reason for a failed exchange. */
 export interface HarnessProviderError {

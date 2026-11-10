@@ -20,8 +20,9 @@ import { LLM_DERIVED_RESULT_STAMP_SCHEMA } from "./llm-schemas.ts";
  * The tool names a request may select from. A deployment publishes this
  * list; the requester's registered runner offers a subset of it, and a
  * request naming a tool outside that subset fails before it is staged. The
- * `loom_*` names are the read-only Loom retrieval tools; the rest are the
- * harness tools a run over handles observes the fabric and the web through.
+ * `loom_*` names are the read-only Loom retrieval tools, `list_commands` and
+ * `run_command` reach the host's commands, and the rest are the harness
+ * tools a run over handles observes the fabric and the web through.
  */
 export const AGENT_TOOL_NAMES = [
   "loom_search",
@@ -32,6 +33,8 @@ export const AGENT_TOOL_NAMES = [
   "loom_calendar_list",
   "loom_context",
   "loom_profile",
+  "list_commands",
+  "run_command",
   "describe_handle",
   "run_pattern",
   "call_verb",
@@ -119,6 +122,7 @@ export const AgentParamsSchema = internSchema(
   {
     type: "object",
     properties: {
+      progress: { type: "boolean" },
       task: { type: "string" },
       inputs: {
         type: "object",
@@ -145,6 +149,7 @@ export const AgentResultSchema = internSchema(
   {
     type: "object",
     properties: {
+      progress: {},
       pending: { type: "boolean", default: false },
       result: {},
       error: { type: "string" },
@@ -163,7 +168,7 @@ export const AgentResultSchema = internSchema(
  * Two writers share it and never overlap. The builtin's post-commit effect
  * writes the request fields once, at creation: `requestHash`, `request`,
  * `piece`, `space`, `task`, `inputs`, `resultSchema`, `maxConfidentiality`,
- * `tools`, `submittedAt`, `state`, and `stateSince`. A runner writes
+ * `tools`, `progressRequested`, `submittedAt`, `state`, and `stateSince`. A runner writes
  * everything from `claim` on as an authored client — `claim`, `attempts`,
  * the terminal fields — and moves `state` and `stateSince` as it goes. The
  * builtin never writes the record again; it reads it, which is what lets a
@@ -203,6 +208,8 @@ export const AgentRunRecordSchema = internSchema(
         },
         required: ["runner", "leaseUntil"],
       },
+      progressRequested: { type: "boolean" },
+      progress: { asCell: ["cell"] },
       attempts: { type: "number" },
       cancelRequestedAt: { type: "string" },
       result: { asCell: ["cell"] },
@@ -285,6 +292,7 @@ export const AgentQueueIndexSchema = internSchema(
           host: { type: "string" },
           tools: { type: "array", items: { type: "string" } },
           registrationId: { type: "string" },
+          progress: { type: "boolean" },
           registeredAt: { type: "string" },
           lastClaimAt: { type: "string" },
         },

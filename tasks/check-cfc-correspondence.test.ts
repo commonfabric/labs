@@ -8,7 +8,9 @@ import type {
 import type { SpecSnapshot } from "./cfc-spec-snapshot.ts";
 import {
   type CheckInput,
+  CITATION_SOURCE,
   collectFindings,
+  declaresSymbol,
   type Exemption,
   exportedFunctions,
   GOVERNED_SOURCE,
@@ -81,6 +83,7 @@ const input = (overrides: Partial<CheckInput>): CheckInput => ({
   exemptions: [],
   markerFiles: [],
   budget: 3,
+  decidedFiles: new Map(),
   ...overrides,
 });
 
@@ -516,7 +519,7 @@ export { le as atomLe };
 
       it("reports value imports reaching outside the kernel, the api package included", () => {
         const file = kernelFile(
-          `import { deepEqual } from "@commonfabric/utils/deep-equal";\n` +
+          `import { deepEqual } from "@commonfabric/js-values/deep-equal";\n` +
             `import type { Tx } from "../../storage/interface.ts";\n` +
             `import { clauseLe } from "./label.ts";\n` +
             `import { atom } from "@commonfabric/api/cfc";\n` +
@@ -527,7 +530,7 @@ export { le as atomLe };
           .toEqual([
             [
               1,
-              "imports `@commonfabric/utils/deep-equal`, which is outside " +
+              "imports `@commonfabric/js-values/deep-equal`, which is outside " +
               "the kernel; a kernel function takes no transaction, reads " +
               "no dial and calls no hook, and a value it needs from outside " +
               "is declared inside the kernel",
@@ -546,7 +549,7 @@ export { le as atomLe };
         const manifest: SourceFile = {
           path: `${KERNEL_DIR}manifest.ts`,
           text:
-            `import { deepEqual } from "@commonfabric/utils/deep-equal";\n` +
+            `import { deepEqual } from "@commonfabric/js-values/deep-equal";\n` +
             `export const rows = () => [];\n`,
         };
         expect(
@@ -554,7 +557,7 @@ export { le as atomLe };
             collectFindings(input({ kernelFiles: [atomLeSource, manifest] })),
           ),
         ).toEqual([
-          "imports `@commonfabric/utils/deep-equal`, which is outside the " +
+          "imports `@commonfabric/js-values/deep-equal`, which is outside the " +
           "kernel; a kernel function takes no transaction, reads no dial " +
           "and calls no hook, and a value it needs from outside is " +
           "declared inside the kernel",
@@ -636,6 +639,63 @@ export { le as atomLe };
           "EXEMPTIONS excuses §3.2.1, and the file no longer writes it",
           "cites §3.2.1, which the specification at 9e751d58 has no " +
           "section for",
+        ]);
+      });
+    });
+
+    describe("a `missing` row's runtime symbols", () => {
+      const decidedRow: ManifestRow = {
+        ...cnfRow,
+        decidedToday: [{
+          file: "../../memory/v2/cfc-release-authority.ts",
+          symbol: "clauseReleasableBy",
+        }],
+      };
+
+      it("returns no findings when the file declares each symbol", () => {
+        const decidedFiles = new Map([[
+          "../../memory/v2/cfc-release-authority.ts",
+          "export const clauseReleasableBy = () => true;\n",
+        ]]);
+        expect(
+          collectFindings(
+            input({ manifest: [atomLeRow, decidedRow], decidedFiles }),
+          ),
+        )
+          .toEqual([]);
+      });
+
+      it("returns a finding for a symbol the file does not declare", () => {
+        const decidedFiles = new Map([[
+          "../../memory/v2/cfc-release-authority.ts",
+          "export const somethingElse = () => true;\n",
+        ]]);
+        expect(
+          messages(
+            collectFindings(
+              input({ manifest: [atomLeRow, decidedRow], decidedFiles }),
+            ),
+          ),
+        ).toEqual([
+          "the row for `isMoreRestrictiveCNF` names `clauseReleasableBy` in " +
+          "../../memory/v2/cfc-release-authority.ts, which does not declare it at top level",
+        ]);
+      });
+
+      it("returns a finding for a file that does not exist", () => {
+        const decidedFiles = new Map([[
+          "../../memory/v2/cfc-release-authority.ts",
+          undefined,
+        ]]);
+        expect(
+          messages(
+            collectFindings(
+              input({ manifest: [atomLeRow, decidedRow], decidedFiles }),
+            ),
+          ),
+        ).toEqual([
+          "the row for `isMoreRestrictiveCNF` names " +
+          "../../memory/v2/cfc-release-authority.ts, which does not exist",
         ]);
       });
     });
@@ -761,6 +821,41 @@ export { le as atomLe };
         "./k.ts",
         "./p.ts",
       ]);
+    });
+  });
+
+  describe("declaresSymbol()", () => {
+    it("returns `true` for a top-level declaration, exported or not, and for an export list", () => {
+      expect(declaresSymbol("export const a = 1;\n", "a")).toBe(true);
+      expect(declaresSymbol("function b() {}\n", "b")).toBe(true);
+      expect(declaresSymbol("export async function c() {}\n", "c")).toBe(true);
+      expect(declaresSymbol("const x = 1;\nexport { x as d };\n", "d"))
+        .toBe(true);
+    });
+
+    it("returns `false` for a declaration written in a comment or a string", () => {
+      expect(declaresSymbol("// export const g = 1;\n", "g")).toBe(false);
+      expect(declaresSymbol("/*\nexport const h = 1;\n*/\n", "h")).toBe(false);
+      expect(
+        declaresSymbol("const s = `\nexport const i = 1;\n`;\n", "i"),
+      ).toBe(false);
+    });
+
+    it("returns `false` for a name declared only inside a body, or a longer name", () => {
+      expect(declaresSymbol("function f() {\n  const e = 1;\n}\n", "e"))
+        .toBe(false);
+      expect(declaresSymbol("export const ef = 1;\n", "e")).toBe(false);
+    });
+  });
+
+  describe("CITATION_SOURCE", () => {
+    it("holds the runner's and the memory package's CFC sources", () => {
+      const held = (path: string) =>
+        CITATION_SOURCE.some((pattern) => pattern.test(path));
+      expect(held("runtime/runner/src/cfc/prepare.ts")).toBe(true);
+      expect(held("runtime/memory/v2/cfc-release-authority.ts")).toBe(true);
+      expect(held("runtime/memory/v2/envelope-admission.ts")).toBe(true);
+      expect(held("runtime/memory/v2/engine.ts")).toBe(false);
     });
   });
 

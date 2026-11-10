@@ -12,9 +12,9 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
-import { defer } from "@commonfabric/utils/defer";
-import { IndexTrackingStack } from "@commonfabric/utils/index-tracking-stack";
-import { terminateWorker } from "@commonfabric/utils/worker-lifetime";
+import { defer } from "@commonfabric/async/defer";
+import { IndexTrackingStack } from "@commonfabric/collections/index-tracking-stack";
+import { terminateWorker } from "@commonfabric/platform/worker-lifetime";
 
 import type { FabricValue } from "@";
 import {

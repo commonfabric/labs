@@ -23,17 +23,17 @@
  * picks the store would stall module evaluation inside an import cycle.
  */
 
-import { isDeno } from "@commonfabric/utils/env";
+import { isDeno } from "@commonfabric/platform/env";
 import {
   type AsyncLocalStore,
   FallbackAsyncLocalStore,
-} from "@commonfabric/utils/async-local-store";
+} from "@commonfabric/async/async-local-store";
 
 import type { Frame } from "./types.ts";
 
 // Deno/Node `AsyncLocalStorage` when available, the promise-aware fallback
-// otherwise. The `await import` stays here (not in the shared utils module): a
-// top-level await in widely-imported utils stalls Deno module evaluation.
+// otherwise. The `await import` stays here (not in `@commonfabric/async`): a
+// top-level await in a widely-imported package stalls Deno module evaluation.
 const FrameContextStorage = (isDeno()
   // deno-lint-ignore cf-imports/no-inline-module-import
   ? (await import("node:async_hooks")).AsyncLocalStorage
@@ -131,9 +131,10 @@ export function topFrame(): Frame | undefined {
  *
  * The mark lives on the action's context, so an async action's continuations
  * stay covered past its awaits, and a module evaluated on another context is
- * not covered. A module evaluated inside the action's own context pushes a
- * frame marked `moduleEvaluation` and is fully synchronous, so the guard
- * admits mints made while such a frame is on top.
+ * not covered. A module evaluated inside the action's own context runs
+ * synchronously under a frame marked `moduleEvaluation`, which is on the stack
+ * only while it runs, so the guard admits mints made while such a frame is on
+ * top.
  */
 export function runInActionExecution<R>(fn: () => R): R {
   const context = contexts.getStore();

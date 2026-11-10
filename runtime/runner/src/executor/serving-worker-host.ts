@@ -3,7 +3,7 @@
  * (serving-loop-worker.md): one `ServingPortBridge` per worker over the
  * worker's own port, the service key and the host's options handed over as
  * the first request, and a fresh worker, under a fresh lease-holder process
- * component, when one dies.
+ * component, when one dies or its watchdog finds it stalled.
  */
 
 import { type Identity, realmValueFromKeyPair } from "@commonfabric/identity";
@@ -12,8 +12,9 @@ import {
   executionLeaseHolder,
 } from "@commonfabric/memory/v2/execution-lease";
 import type { Server } from "@commonfabric/memory/v2/server";
-import { getLogger } from "@commonfabric/utils/logger";
-import { terminateWorker } from "@commonfabric/utils/worker-lifetime";
+import { getLogger } from "@commonfabric/logger";
+import { terminateWorker } from "@commonfabric/platform/worker-lifetime";
+import type { CollectedMemory } from "../collected-memory.ts";
 import type { ExperimentalOptions } from "../runtime.ts";
 import type { MemorySpace } from "../storage/interface.ts";
 import {
@@ -39,6 +40,15 @@ const logger = getLogger("serving-worker-host", {
   enabled: true,
   level: "warn",
 });
+
+/** How often a worker posts a heartbeat and its watchdog checks for messages. */
+const WATCHDOG_INTERVAL_MS = 10_000;
+
+/**
+ * How many whole intervals a worker may pass without a message before its
+ * watchdog kills it: at the default interval, a minute of silence.
+ */
+const WATCHDOG_SILENT_INTERVALS = 6;
 
 /**
  * The serving loop as whatever starts it hands it back, whichever thread
@@ -88,6 +98,21 @@ export type ServingWorkerOptions = {
   /** The serving runtimes' experimental options. */
   experimental?: ExperimentalOptions;
 
+  /**
+   * The deployment's memory endpoint, through which the worker's host
+   * reaches each space's owner (`ExecutorHostOptions.route`). The worker
+   * dials it itself, signing its sessions with the key that crosses.
+   */
+  route?: URL;
+
+  /**
+   * How often the worker posts a heartbeat and the watchdog checks for
+   * messages; a worker is killed after six such intervals in which it sent
+   * none. Default: ten seconds. A test shortens it, to see a kill in less time
+   * than the test is allowed.
+   */
+  watchdogIntervalMs?: number;
+
   /** DIAGNOSTIC (tests): the worker's activation outcomes. */
   onActivationSettled?: (
     space: MemorySpace,
@@ -102,7 +127,7 @@ export type ServingWorkerOptions = {
 type WorkerGeneration = {
   worker: Worker;
   bridge: ServingPortBridge;
-  /** The lease holder this worker's rows name. */
+  /** The lease holder this worker's leases name. */
   holder: string;
 
   /** Settles once the worker's host serves. */
@@ -113,6 +138,9 @@ type WorkerGeneration = {
 
   /** The lifetime lock the worker's host holds, if it holds one. */
   lifetimeLock: string | undefined;
+
+  /** The timer that watches this worker for silence. */
+  watchdog: ReturnType<typeof setInterval> | undefined;
 };
 
 /**
@@ -122,7 +150,8 @@ type WorkerGeneration = {
  * applies to a space whose tenures keep failing, widening until a worker
  * commits a wave, and the replacement adopts a new lease-holder process
  * component, so its commits never meet its predecessor's under the engine's
- * replay keying.
+ * replay keying. A worker counts as failed when it reports an error it did not
+ * handle, and when it stops sending messages (`#watch()`).
  */
 export class ServingWorker {
   readonly #options: ServingWorkerOptions;
@@ -133,6 +162,9 @@ export class ServingWorker {
 
   /** The timer that starts the next worker, while it is pending. */
   #respawn: ReturnType<typeof setTimeout> | undefined;
+
+  /** The leases the watchdog released, across every worker it killed. */
+  #leasesLost = 0;
 
   #failures = 0;
   #closed = false;
@@ -165,6 +197,16 @@ export class ServingWorker {
   }
 
   /**
+   * Collects the worker's whole heap, once its host serves, and returns the
+   * memory its isolate still holds. Rejects unless `exposeGarbageCollector()`
+   * has run in this process.
+   */
+  async collectedMemory(): Promise<CollectedMemory> {
+    await this.ready;
+    return await this.#bridge().requestCollectedMemory();
+  }
+
+  /**
    * Runs a lifecycle verb on the worker's host, once it serves. Throws
    * {@link SpaceNotServedError} while no worker runs: once closed, and between
    * a worker that failed and its replacement.
@@ -184,9 +226,9 @@ export class ServingWorker {
    * and once a worker that failed before the call has been torn down. A
    * worker whose host has not yet reported serving is terminated without
    * asking its host to close, since one that stalls in its startup never
-   * answers. A host that does not close, for that reason or because the
-   * worker fails first, leaves the lease rows its worker held to be released
-   * here.
+   * answers; a host that stalls in closing is the watchdog's to fail. A host
+   * that does not close, for either reason or because the worker fails first,
+   * leaves the leases its worker held to be released here.
    */
   async close(): Promise<void> {
     if (this.#closed) return;
@@ -212,10 +254,11 @@ export class ServingWorker {
         error,
       ]);
     } finally {
+      clearInterval(generation.watchdog);
       generation.bridge.close();
       await terminateWorker(generation.worker, generation.lifetimeLock);
     }
-    if (!hostClosed) await generation.bridge.releaseLeasesOf(generation.holder);
+    if (!hostClosed) generation.bridge.releaseLeasesOf(generation.holder);
   }
 
   #bridge(): ServingPortBridge {
@@ -235,8 +278,8 @@ export class ServingWorker {
 
   #spawn(): WorkerGeneration {
     const { server, identity } = this.#options;
-    // Both realms adopt the component before the worker writes a lease row
-    // under it: the server's synchronous lease scan matches it from here.
+    // Both realms adopt the component before the worker acquires a lease
+    // under it: the server's synchronous lease read matches it from here.
     const processInstanceId = crypto.randomUUID();
     adoptProcessInstanceId(processInstanceId);
     const worker = new Worker(
@@ -253,6 +296,7 @@ export class ServingWorker {
       onWaveCommitted: () => {
         this.#failures = 0;
       },
+      leasesLostEarlier: () => this.#leasesLost,
       ...(this.#options.onActivationSettled === undefined
         ? {}
         : { onActivationSettled: this.#options.onActivationSettled }),
@@ -260,6 +304,8 @@ export class ServingWorker {
         ? {}
         : { onSpaceParked: this.#options.onSpaceParked }),
     });
+    const intervalMs = this.#options.watchdogIntervalMs ??
+      WATCHDOG_INTERVAL_MS;
     const generation: WorkerGeneration = {
       worker,
       bridge,
@@ -267,14 +313,18 @@ export class ServingWorker {
       lifetimeLock: undefined,
       ready: Promise.resolve(),
       serving: false,
+      watchdog: undefined,
     };
+    generation.watchdog = this.#watch(generation, intervalMs);
     const init: ServingWorkerInit = {
       serviceKeyPair: realmValueFromKeyPair(identity.keyPair),
       processInstanceId,
+      heartbeatIntervalMs: intervalMs,
       apiUrl: this.#options.apiUrl.href,
       policy: this.#options.policy,
       ensureSpaceRoots: this.#options.ensureSpaceRoots,
       experimental: this.#options.experimental,
+      route: this.#options.route?.href,
     };
     generation.ready = bridge.init(init).then(({ lifetimeLock }) => {
       generation.lifetimeLock = lifetimeLock;
@@ -291,14 +341,60 @@ export class ServingWorker {
   }
 
   /**
-   * Replaces a worker that reported an error it did not handle. Its bridge
-   * closes first, which closes the loopback connections its runtimes held, so
-   * the server sees their sessions detach, and fails whatever still waits on
-   * the worker, a `close()` already under way included; once the worker is
-   * gone, the lease rows it held are released, so its successor, which
-   * carries a holder of its own, acquires them without waiting out their TTL.
+   * Helper for `#spawn()`, which starts the timer that watches `generation`
+   * for silence (serving-loop.md §2). It counts its own firings instead of
+   * reading a clock, so nothing but the worker's silence moves the count: a
+   * main thread that itself stalled, or a process that was suspended, fires the
+   * timer once on waking, with the worker's messages already queued behind it.
+   * The count starts at the worker's first message, since until its modules
+   * have loaded a worker has no timer to post from and no lease to release.
    */
-  #onWorkerFailed(generation: WorkerGeneration, message: string): void {
+  #watch(
+    generation: WorkerGeneration,
+    intervalMs: number,
+  ): ReturnType<typeof setInterval> {
+    let lastSeen = 0;
+    let silentIntervals = 0;
+    return setInterval(() => {
+      const seen = generation.bridge.messagesReceived;
+      if (seen === 0) return;
+      if (seen !== lastSeen) {
+        lastSeen = seen;
+        silentIntervals = 0;
+        return;
+      }
+      silentIntervals += 1;
+      if (silentIntervals < WATCHDOG_SILENT_INTERVALS) return;
+      this.#onWorkerFailed(
+        generation,
+        `no message in ${silentIntervals} watchdog intervals`,
+        { killed: true },
+      );
+    }, intervalMs);
+  }
+
+  /**
+   * Replaces a worker that failed, as the class's doc comment describes. Its
+   * bridge closes first, which closes the loopback connections its runtimes
+   * held, so the server sees their sessions detach, and fails whatever still
+   * waits on the worker, a `close()` already under way included; once the
+   * worker is gone, the leases it held are released, so its successor, which
+   * carries a holder of its own, acquires them at once. The leases of a worker
+   * the watchdog `killed` count as lost.
+   *
+   * `terminate()` takes effect when a worker's thread next reaches its event
+   * loop, and a stalled thread may never do so, nor release its lifetime lock.
+   * So nothing waits for a killed worker's teardown. What its thread still does
+   * cannot reach the memory server, whose port to it closed here, and the
+   * commits it left in flight name a holder no lease is held under.
+   */
+  #onWorkerFailed(
+    generation: WorkerGeneration,
+    message: string,
+    { killed }: { killed: boolean } = { killed: false },
+  ): void {
+    clearInterval(generation.watchdog);
+    if (killed) generation.lifetimeLock = undefined;
     const stats = generation.bridge.stats();
     generation.bridge.close();
     if (this.#generation !== generation) return;
@@ -306,19 +402,26 @@ export class ServingWorker {
     this.#terminating = terminateWorker(
       generation.worker,
       generation.lifetimeLock,
-    ).then(() => generation.bridge.releaseLeasesOf(generation.holder)).catch(
-      (error) => {
-        logger.warn("worker-teardown-failed", () => [
-          "tearing down the failed serving worker failed",
-          error,
-        ]);
-      },
-    );
+    ).then(() => {
+      const released = generation.bridge.releaseLeasesOf(generation.holder);
+      if (killed) this.#leasesLost += released;
+    }).catch((error) => {
+      logger.warn("worker-teardown-failed", () => [
+        "tearing down the failed serving worker failed",
+        error,
+      ]);
+    });
     if (this.#closed) return;
     // The health route reads a process with no serving-loop counters as one
     // whose loop is off, so until the next worker's bridge reports its own,
     // the failed worker's last counters stand in.
-    registerServingLoopStatsProvider(() => stats ?? emptyServingLoopStats());
+    registerServingLoopStatsProvider(() => {
+      const last = stats ?? emptyServingLoopStats();
+      return {
+        ...last,
+        lease: { ...last.lease, lost: this.#leasesLost },
+      };
+    });
     this.#failures += 1;
     const delayMs = failureParkBackoffDelayMs(
       this.#failures,

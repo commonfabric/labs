@@ -3,10 +3,10 @@
 // is enforced by the tokenizer-level guard; `_cf_link` encode/decode happens on
 // the client (runner) before/after these calls.
 
-import { type BindValue, Database } from "@db/sqlite";
+import type { BindValue, Database } from "@db/sqlite";
 import { fabricFromConvertibleJsValue } from "@commonfabric/data-model";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
-import { isPlainObject } from "@commonfabric/utils/types";
+import { isPlainObject } from "@commonfabric/js-values/types";
 import type { SqliteNativeRow } from "../../v2.ts";
 import { assertReadOnly, assertWriteSafe } from "./guard.ts";
 import { columnOrigins } from "./column-origin.ts";

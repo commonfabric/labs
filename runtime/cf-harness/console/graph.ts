@@ -15,7 +15,10 @@
 
 import type { ConsoleDisclosure, ConsoleHandle, ConsoleStep } from "./steps.ts";
 import { renderCellReference } from "@commonfabric/runner/shared";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 import { HANDLE_TOKEN_PATTERN } from "../src/contracts/handle-table.ts";
 import { type ConsoleCellLabels, foldCellLabels } from "./cell-labels.ts";
 import { parseConsoleReference } from "./reference.ts";

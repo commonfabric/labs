@@ -9,7 +9,7 @@
  * a sandbox, or a disk.
  */
 
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import type { HarnessRunState, HarnessRunStatus } from "../src/run-state.ts";
 import type {
   HarnessToolCall,

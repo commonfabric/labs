@@ -1,11 +1,9 @@
-import { deepEqual } from "@commonfabric/utils/deep-equal";
+import { deepEqual } from "@commonfabric/js-values/deep-equal";
 import { hashStringOf } from "@commonfabric/data-model";
 import type { MemorySpace } from "@commonfabric/memory/interface";
-import {
-  type CfcConfClause,
-  clauseSubsumes,
-  normalizeClause,
-} from "./clause.ts";
+import { cfcCanonicalClauseDigest } from "@commonfabric/memory/v2/cfc-clause-identity";
+import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
+import { clauseSubsumes, normalizeClause } from "./clause.ts";
 import { canonicalizeLogicalPath } from "./canonical.ts";
 import type { CfcDeclaredWideningExemption, LabelMapEntry } from "./types.ts";
 
@@ -53,14 +51,7 @@ import type { CfcDeclaredWideningExemption, LabelMapEntry } from "./types.ts";
  * dropped or widened. Integrity violations are never exemptable.
  */
 
-/**
- * Canonical clause digest — clause identity for the exemption seam and the
- * future §4 event record (`{doc, path, clauseDigest, …}`). Clause indices
- * are evaluation-ephemeral; the digest of the canonicalized clause (
- * alternatives deduped and hash-sorted, singleton unwrapped) is not.
- */
-export const cfcCanonicalClauseDigest = (clause: CfcConfClause): string =>
-  hashStringOf(normalizeClause(clause));
+export { cfcCanonicalClauseDigest };
 
 const samePath = (
   left: readonly string[],

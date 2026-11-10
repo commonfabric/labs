@@ -4,7 +4,7 @@ import { afterEach, describe, it } from "@std/testing/bdd";
 import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
-import { VERIFIED_BINDING_METADATA_FIELD } from "@commonfabric/utils/sandbox-contract";
+import { VERIFIED_BINDING_METADATA_FIELD } from "@commonfabric/pattern-contract/sandbox-contract";
 
 import {
   brandTrustedBuilderArtifact,

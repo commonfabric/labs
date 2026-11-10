@@ -1,13 +1,14 @@
 import type { CellScope, ScopeKeyIdentity } from "@commonfabric/memory/v2";
-import { BoundedKeyMap } from "@commonfabric/utils/cache";
-import { ensureNotRenderThread } from "@commonfabric/utils/env";
-import { getLogger } from "@commonfabric/utils/logger";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { BoundedKeyMap } from "@commonfabric/collections/cache";
+import { ensureNotRenderThread } from "@commonfabric/platform/env";
+import { getLogger } from "@commonfabric/logger";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import { getTopFrame } from "../builder/pattern.ts";
 import type { Cancel } from "../cancel.ts";
 import { waveRunContextOf, waveSettlementOf } from "../executor/wave.ts";
-import { ConsoleEvent } from "../harness/console.ts";
+import type { ConsoleEvent } from "../harness/console.ts";
 import {
   type NormalizedFullLink,
   toMemorySpaceAddress,
@@ -608,9 +609,7 @@ export class Scheduler {
   /**
    * The serving posture's cooperative macrotask yield (`cooperative-yield.ts`):
    * constructed _only_ for a serving runtime, so the OFF arm and flag-ON
-   * clients keep their settle loops' exact microtask shape. Its observer is the
-   * runtime's `servingYieldObserver` seam — the `SpaceServer`'s mid-wave lease
-   * renew.
+   * clients keep their settle loops' exact microtask shape.
    */
   readonly #cooperativeYield: CooperativeYield | undefined;
 
@@ -623,11 +622,7 @@ export class Scheduler {
     consoleHandler?: ConsoleHandler,
     errorHandlers?: ErrorHandler[],
   ) {
-    if (runtime.servingPosture) {
-      const yielder = new CooperativeYield();
-      yielder.onYield = () => runtime.servingYieldObserver?.();
-      this.#cooperativeYield = yielder;
-    }
+    if (runtime.servingPosture) this.#cooperativeYield = new CooperativeYield();
     this.#initializeSchedulerState();
 
     this.#consoleHandler = consoleHandler ||
@@ -1278,13 +1273,16 @@ export class Scheduler {
     }
     if (
       this.#hasPendingLineageHeadEvent() || this.#hasLoadParkedHeadEvent() ||
-      this.#eventQueue[0]?.retryReadinessPending === true
+      this.#eventQueue[0]?.retryReadinessPending === true ||
+      this.#eventQueue[0]?.presyncPending === true
     ) {
       // A cross-space lineage head has no timer — its origin commit callback
       // is the wake source; a load-parked head wakes on load completion or
       // drops on an explicit load failure; a head requeued by a stale-basis
-      // retry wakes once the retry's readiness resolves. Either way idle
-      // must stay open until the callback re-queues execution.
+      // retry wakes once the retry's readiness resolves; a head held for its
+      // input presync wakes once the presync settles, or once a drop takes
+      // it off the queue. Either way idle must stay open until the callback
+      // re-queues execution.
       return { kind: "drain" };
     }
     // Execution is scheduled - wait for it to complete
@@ -1580,6 +1578,22 @@ export class Scheduler {
       for (const writer of writers) this.#reconcileDemandedWriter(writer);
     }
     return writers;
+  }
+
+  /** Whether a client session tracks the instance key `(space, id, scope)`. */
+  isDemandedEntity(
+    address: { space: MemorySpace; id: string; scope: CellScope },
+  ): boolean {
+    return this.#demandedEntityRefs.has(entityNameKey(address as never));
+  }
+
+  /** Whether a client session tracks an instance a node of the piece `id` writes. */
+  pieceHasDemandedWriter(space: MemorySpace, id: string): boolean {
+    for (const action of this.#nodes.demandedWriters) {
+      const { viewPiece } = action as Partial<TelemetryAnnotations>;
+      if (viewPiece?.space === space && viewPiece.id === id) return true;
+    }
+    return false;
   }
 
   /** LEAVE: the last session tracking the instance key left (R-D's
@@ -2817,9 +2831,10 @@ export class Scheduler {
     const deferredBefore = this.#settleDeferredForLoadPark;
     const { eventBlockingDeps, dispatched } = await this
       .#processExecuteEventPhases();
-    // Under the serving posture a head the preflight parked on its loads,
+    // Under the serving posture a head waiting on loads, parked on its
+    // closure's by the preflight or held for its handler's input presync,
     // behind events this pass dispatched, ends the pass without its settle:
-    // the pass the park's end queues dispatches it and settles behind it,
+    // the pass the wait's end queues dispatches it and settles behind it,
     // so the derivations the events before it invalidated run once behind
     // all of them rather than once per parked event. That is the trade: the
     // scheduler is not idle while the head is parked, and a serving cycle
@@ -2834,7 +2849,7 @@ export class Scheduler {
     // whose derivations the deferral exists to run once.
     this.#settleDeferredForLoadPark = this.runtime.servingPosture === true &&
       (dispatched > 0 || deferredBefore) && eventBlockingDeps.size === 0 &&
-      this.#hasLoadParkedHeadEvent();
+      this.#hasLoadWaitingHeadEvent();
     if (this.#settleDeferredForLoadPark) {
       this.#recordExecuteEndTelemetry();
       this.#applyExecuteContinuation();
@@ -3472,7 +3487,7 @@ export class Scheduler {
         return shouldRerun;
       },
       hasPendingLineageHeadEvent: () => this.#hasPendingLineageHeadEvent(),
-      hasLoadParkedHeadEvent: () => this.#hasLoadParkedHeadEvent(),
+      hasLoadWaitingHeadEvent: () => this.#hasLoadWaitingHeadEvent(),
       settleDeferredForLoadPark: () => this.#settleDeferredForLoadPark,
       scheduleWake: (at) => this.#gates.scheduleWake(at),
       hasWakeTimer: () => this.#gates.hasWakeTimer(),
@@ -4085,7 +4100,7 @@ export class Scheduler {
     const keys = this.#headEventLoadPark.keys.join(", ");
     this.#endHeadEventLoadPark();
     this.#headEventLoadParkHistory = null;
-    const detail = error instanceof Error ? error.message : String(error);
+    const detail = describeFailure(error);
     if (event.served === undefined) {
       this.#dropEvent(
         event,
@@ -4157,6 +4172,11 @@ export class Scheduler {
       // The park's release finds no park once the drop has ended it.
       this.#endHeadEventLoadPark();
     }
+    if (event.presyncPending === true) {
+      // The presync may never settle, so the pass that runs what waited on
+      // the head is queued here.
+      this.queueExecution();
+    }
     if (this.#headEventLoadParkHistory?.eventId === event.id) {
       this.#headEventLoadParkHistory = null;
     }
@@ -4180,8 +4200,9 @@ export class Scheduler {
    * head for a load, or mid-presync at the head, never one whose
    * dispatch has shifted it off the queue — through the pre-dispatch
    * drop chokepoint (`dropQueuedEvent`: lineage released, the final-
-   * outcome guard honored, a head dispatch parked in presync bails when
-   * it finds itself no longer at the head). Returns how many were
+   * outcome guard honored, and a head held for its presync off the queue,
+   * so the events behind it proceed whether or not the presync ever
+   * settles). Returns how many were
    * removed. Server-execution v2 stage C build W3, (α1): the serving
    * loop calls this at its flush-deadline decision to purge the LT1
    * in-process leftovers (`served !== undefined && served.streamEntry
@@ -4209,6 +4230,15 @@ export class Scheduler {
   #hasLoadParkedHeadEvent(): boolean {
     const head = this.#eventQueue[0];
     return head !== undefined && this.#headEventLoadPark?.eventId === head.id;
+  }
+
+  /**
+   * Whether the head waits out of the pass for loads: its closure's, in a load
+   * park, or its handler's inputs, in a presync.
+   */
+  #hasLoadWaitingHeadEvent(): boolean {
+    return this.#hasLoadParkedHeadEvent() ||
+      this.#eventQueue[0]?.presyncPending === true;
   }
 
   #canAutomaticallyDebounce(action: Action): boolean {

@@ -3,10 +3,11 @@
  * each row names; an unreadable response leaves that fact unknown.
  */
 
-import { type HarnessPatternIndexClientFactory } from "../src/pattern-index/factory.ts";
+import type { HarnessPatternIndexClientFactory } from "../src/pattern-index/factory.ts";
 import { PatternIndexError } from "@commonfabric/pattern-index/client";
 import { debugStr } from "@commonfabric/data-model";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import { basename, dirname, join } from "@std/path";
 import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
 import {
@@ -183,7 +184,7 @@ export const consoleRunscHealthProbe = (
           state: "failed",
           checkedAt,
           value: "configuration refused",
-          reason: error instanceof Error ? error.message : String(error),
+          reason: describeFailure(error),
           remedy:
             "Correct the runsc settings in the console's environment (CF_HARNESS_RUNSC_BINARY, CF_HARNESS_SANDBOX_ROOTFS, CF_HARNESS_RUNSC_CFC_POLICY) or its host mounts, then restart the console.",
         }, {

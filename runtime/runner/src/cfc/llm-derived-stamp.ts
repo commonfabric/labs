@@ -21,7 +21,7 @@ import type { JSONSchema } from "@commonfabric/api";
 import { cfcAtom } from "@commonfabric/api/cfc";
 import { internSchema } from "@commonfabric/data-model-schema";
 import { mapSubschemas } from "@commonfabric/data-model-schema/schema-walk";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import type { JSONSchemaObj } from "../builder/types.ts";
 

@@ -4,7 +4,7 @@ import type {
   CfcStreamChannel,
   IFCLabel,
 } from "@commonfabric/runner/cfc";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import type { SandboxCommandResult } from "./types.ts";
 

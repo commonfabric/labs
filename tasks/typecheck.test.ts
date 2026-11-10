@@ -6,6 +6,7 @@ import { dirname, extname, fromFileUrl, join, relative } from "@std/path";
 import { recordsSpooledBy } from "@commonfabric/test-support/records";
 
 import {
+  changeReach,
   checkGroup,
   collectPathsByScope,
   excludedByManifest,
@@ -156,6 +157,14 @@ describe("typecheck", () => {
       );
       const checkedPaths = [...(await collectPathsByScope(REPO_ROOT)).values()]
         .flat();
+      // A file a manifest excludes is opened by no gate, so neither side of
+      // the split speaks for it.
+      const dropped = await excludedByManifest(
+        REPO_ROOT,
+        (await readWorkspaceMembers(join(REPO_ROOT, "deno.jsonc"))).map((
+          member,
+        ) => member.replace(/^\.\//, "")),
+      );
       const unchecked: string[] = [];
       const straddling = new Set<string>();
       const excusedOwned = new Map<UncheckedTree, boolean>();
@@ -167,6 +176,7 @@ describe("typecheck", () => {
       ) {
         const file = relative(REPO_ROOT, entry.path);
         if (checkedPaths.some((checkPath) => covers(checkPath, file))) continue;
+        if (dropped.some((pattern) => pattern.test(file))) continue;
         // A non-test file left to cfcheck has to be one cfcheck walks.
         if (!isTestModule(file) && !owned.has(file)) unchecked.push(file);
         // And no entry may speak for files on both sides of that line,
@@ -296,22 +306,91 @@ describe("typecheck", () => {
     });
   });
 
-  describe("scopesReached()", () => {
-    /** A tree of the given files, each group checking its own directory. */
-    async function tree(files: Record<string, string>): Promise<string> {
-      const root = await Deno.makeTempDir({ prefix: "typecheck-reach-" });
-      for (
-        const [file, contents] of Object.entries({
-          "deno.jsonc": '{ "workspace": [] }\n',
-          ...files,
-        })
-      ) {
-        await Deno.mkdir(join(root, dirname(file)), { recursive: true });
-        await Deno.writeTextFile(join(root, file), contents);
-      }
-      return root;
+  /** A tree of the given files, under a root manifest naming no member. */
+  async function tree(files: Record<string, string>): Promise<string> {
+    const root = await Deno.makeTempDir({ prefix: "typecheck-reach-" });
+    for (
+      const [file, contents] of Object.entries({
+        "deno.jsonc": '{ "workspace": [] }\n',
+        ...files,
+      })
+    ) {
+      await Deno.mkdir(join(root, dirname(file)), { recursive: true });
+      await Deno.writeTextFile(join(root, file), contents);
     }
+    return root;
+  }
 
+  describe("changeReach()", () => {
+    it("returns each module importing a change at its fewest steps", async () => {
+      // `top.test.ts` imports `base` both directly and through `middle`.
+
+      const root = await tree({
+        "runtime/base/mod.ts": "export const base = 1;\n",
+        "runtime/middle/mod.ts": 'export { base } from "../base/mod.ts";\n',
+        "runtime/top/top.test.ts": 'import "../middle/mod.ts";\n' +
+          'import "../base/mod.ts";\n',
+        "runtime/far/far.test.ts": 'import "../middle/mod.ts";\n',
+        "runtime/apart/apart.test.ts": "export const apart = 1;\n",
+      });
+      try {
+        const reach = await changeReach(root, () => [
+          "runtime/top/top.test.ts",
+          "runtime/far/far.test.ts",
+          "runtime/apart/apart.test.ts",
+        ]);
+        expect(reach(new Set(["runtime/base/mod.ts"]))).toEqual(
+          new Map([
+            ["runtime/base/mod.ts", 0],
+            ["runtime/middle/mod.ts", 1],
+            ["runtime/top/top.test.ts", 1],
+            ["runtime/far/far.test.ts", 2],
+          ]),
+        );
+        expect(reach(new Set())).toEqual(new Map());
+      } finally {
+        await Deno.remove(root, { recursive: true });
+      }
+    });
+
+    it("returns a member's modules and their importers for a change to its manifest", async () => {
+      const root = await tree({
+        "deno.jsonc": JSON.stringify({ workspace: ["./runtime/base"] }),
+        "runtime/base/deno.json": "{}\n",
+        "runtime/base/mod.ts": "export const base = 1;\n",
+        "runtime/top/top.test.ts": 'import "../base/mod.ts";\n',
+        "runtime/apart/apart.test.ts": "export const apart = 1;\n",
+      });
+      try {
+        const reach = await changeReach(root, () => [
+          "runtime/top/top.test.ts",
+          "runtime/apart/apart.test.ts",
+        ]);
+        expect(reach(new Set(["runtime/base/deno.json"]))).toEqual(
+          new Map([
+            ["runtime/base/deno.json", 0],
+            ["runtime/base/mod.ts", 1],
+            ["runtime/top/top.test.ts", 2],
+          ]),
+        );
+      } finally {
+        await Deno.remove(root, { recursive: true });
+      }
+    });
+
+    it("returns everything for a change to the lock file, and not for a change to another file", async () => {
+      const root = await tree({ "runtime/a/a.test.ts": "" });
+      try {
+        const reach = await changeReach(root, () => ["runtime/a/a.test.ts"]);
+        expect(reach(new Set(["deno.lock"]))).toBe("everything");
+        expect(reach(new Set(["runtime/a/deno.lock"]))).not.toBe("everything");
+      } finally {
+        await Deno.remove(root, { recursive: true });
+      }
+    });
+  });
+
+  describe("scopesReached()", () => {
     it("reaches every group importing a changed file, however indirectly", async () => {
       const root = await tree({
         "runtime/base/mod.ts": "export const base = 1;\n",
@@ -746,7 +825,7 @@ describe("main()", () => {
     console.error = () => {};
     try {
       expect(
-        await main(["--scope=leb128"], REPO_ROOT, {
+        await main(["--scope=bytes"], REPO_ROOT, {
           check: (scope) =>
             Promise.resolve({
               scope,
@@ -758,7 +837,7 @@ describe("main()", () => {
         }),
       ).toBe(0);
       expect(
-        await main(["--scope=leb128"], REPO_ROOT, {
+        await main(["--scope=bytes"], REPO_ROOT, {
           check: (scope) =>
             Promise.resolve({
               scope,

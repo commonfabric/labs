@@ -2,7 +2,7 @@ import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
-import "@commonfabric/utils/equal-ignoring-symbols";
+import "@commonfabric/test-support/equal-ignoring-symbols";
 
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
@@ -10,6 +10,7 @@ import type { Server as MemoryV2Server } from "@commonfabric/memory/v2/server";
 import { patternLiteralForTestingOnly } from "@commonfabric/runner/for-testing-only";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import {
   type JSONSchema,
   type Module,
@@ -46,11 +47,11 @@ import {
   SEALING_RECEIPT_REFUSAL,
   SEALING_SOURCE_UPDATE_REFUSAL,
 } from "../src/runner.ts";
-import {
-  type ICommitNotification,
-  type IExtendedStorageTransaction,
-  type MediaType,
-  type URI,
+import type {
+  ICommitNotification,
+  IExtendedStorageTransaction,
+  MediaType,
+  URI,
 } from "../src/storage/interface.ts";
 import { trustExecutable } from "./support/trusted-builder.ts";
 import {
@@ -109,6 +110,7 @@ async function openRemoteSession(
     throw new Error("the receipt fixture needs an emulated storage manager");
   }
   const client = await MemoryV2Client.connect({
+    instanceNames: namesInstancesByDefault(),
     transport: MemoryV2Client.loopback(candidate.server()),
   });
   const session = await client.mount(space, {}, testSessionOpenAuthFactory);
@@ -1486,6 +1488,38 @@ describe("setup/start", () => {
     runtime.start(resultCell);
     cellValue = await resultCell.pull();
     expect(cellValue).toEqual({ output: 1 });
+  });
+
+  it("says whether a piece runs in a space while it runs, and not once it stops", async () => {
+    const pattern: Pattern = {
+      argumentSchema: {
+        type: "object",
+        properties: { input: { type: "number" }, output: { type: "number" } },
+      },
+      resultSchema: {},
+      result: { output: { $alias: { partialCause: "output", path: [] } } },
+      nodes: [
+        {
+          module: { type: "passthrough" },
+          inputs: { value: { $alias: { cell: "argument", path: ["input"] } } },
+          outputs: {
+            value: { $alias: { partialCause: "output", path: [] } },
+          },
+        },
+      ],
+    };
+    const other = (await Identity.fromPassphrase("runs-piece-in other")).did();
+    const resultCell = runtime.getCell(space, "runs piece in");
+    setupTrusted(runtime, undefined, pattern, { input: 1 }, resultCell);
+    expect(runtime.runner.runsPieceIn(space)).toBe(false);
+
+    runtime.start(resultCell);
+    expect(await resultCell.pull()).toEqual({ output: 1 });
+
+    expect(runtime.runner.runsPieceIn(space)).toBe(true);
+    expect(runtime.runner.runsPieceIn(other)).toBe(false);
+    runtime.runner.stop(resultCell);
+    expect(runtime.runner.runsPieceIn(space)).toBe(false);
   });
 
   it("reports the start failure, not a failure of the cleanup it triggers", () => {

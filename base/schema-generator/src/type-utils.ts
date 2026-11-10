@@ -2,6 +2,7 @@ import ts from "typescript";
 
 import { type FabricValue, hashStringOf } from "@commonfabric/data-model";
 import type { MutableJSONSchema } from "@commonfabric/api";
+import type { GenerationContext } from "./interface.ts";
 import { NativeTypeFormatter } from "./formatters/native-type-formatter.ts";
 import { declaresFabricPrimitiveBrand } from "./typescript/fabric-primitive-brand.ts";
 import { getPropertyNameText } from "./typescript/property-name.ts";
@@ -1187,4 +1188,16 @@ export function extractDefaultBrandPayloadValue(
     hasDefaultMarker(member, typeChecker)
   );
   return extractDefaultValueFromBrandedMembers(branded, typeChecker);
+}
+
+/**
+ * `context` without its `typeNode`, for reading a type that has no node of
+ * its own. The node dropped, or the one written around it, becomes
+ * `writtenAround`, which a diagnostic names in its place.
+ */
+export function withoutTypeNode(
+  { typeNode, ...rest }: GenerationContext,
+): GenerationContext {
+  const writtenAround = typeNode ?? rest.writtenAround;
+  return writtenAround ? { ...rest, writtenAround } : rest;
 }

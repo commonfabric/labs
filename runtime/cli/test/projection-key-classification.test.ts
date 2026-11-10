@@ -4,7 +4,10 @@ import { Identity } from "@commonfabric/identity";
 import { type Cell, type JSONSchema, Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { ANNOTATION_KEYS } from "@commonfabric/piece/schema-compatibility";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 import {
   deriveSelectedValue,
   outputSchemaWithSourceRequired,

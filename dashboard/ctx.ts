@@ -3,12 +3,8 @@
  * deliveries of the GitHub webhook relay change the runs a source reads.
  */
 
-import {
-  type GitHubDelivery,
-  pushOf,
-  sameRepo,
-  workflowRunOf,
-} from "./github-webhooks.ts";
+import type { GitHubDelivery } from "@commonfabric/github-webhooks/relay";
+import { pushOf, sameRepo, workflowRunOf } from "./github-webhooks.ts";
 import { github } from "./lib.ts";
 import {
   CI_RUNS_MAX,

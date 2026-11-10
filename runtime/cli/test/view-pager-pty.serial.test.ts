@@ -17,6 +17,8 @@
 
 import { assert } from "@std/assert";
 import { join } from "@std/path";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { shellQuote } from "../lib/shell-quote.ts";
 
 const CLI_MOD = join(import.meta.dirname!, "..", "mod.ts");
 const ENC = new TextEncoder();
@@ -48,9 +50,10 @@ const SCRIPT = await hasScript();
 function spawnUnderPty(args: string[]): Deno.ChildProcess {
   const inner = [Deno.execPath(), "run", "-A", CLI_MOD, ...args];
   const cmd = Deno.build.os === "linux"
-    // util-linux: -e returns the child's exit code, -c runs the command.
+    // util-linux: -e returns the child's exit code, -c runs the command,
+    // which a shell parses.
     ? new Deno.Command("script", {
-      args: ["-q", "-e", "-c", inner.join(" "), "/dev/null"],
+      args: ["-q", "-e", "-c", inner.map(shellQuote).join(" "), "/dev/null"],
       stdin: "piped",
       stdout: "piped",
       stderr: "piped",
@@ -185,7 +188,7 @@ class PtyPager {
     } catch (error) {
       throw new Error(this.#report(
         `writing ${JSON.stringify(text)} to the child failed (${
-          error instanceof Error ? error.message : error
+          describeFailure(error)
         })`,
       ));
     }

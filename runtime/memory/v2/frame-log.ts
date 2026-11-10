@@ -1,5 +1,6 @@
-import { isDeno } from "@commonfabric/utils/env";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isDeno } from "@commonfabric/platform/env";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 /**
  * A per-frame record of what the memory client exchanges with its server,
@@ -281,7 +282,7 @@ export function createFrameLog(write: (line: string) => void): FrameLog {
     } catch (error) {
       summary = {
         dir: "error",
-        message: error instanceof Error ? error.message : String(error),
+        message: describeFailure(error),
       };
     }
     append(summary);

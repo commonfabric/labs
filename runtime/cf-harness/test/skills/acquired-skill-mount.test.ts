@@ -263,6 +263,39 @@ describe("childSandboxOptions() on the runsc runtime", () => {
     expect(asRoot).not.toHaveProperty("sandboxRunscSetpriv");
   });
 
+  it("gives a child the host ports its parent forwards, beside the parent's network helper, mount or no mount", () => {
+    // A child given the helper without the ports would reach every port of
+    // the host's loopback that its parent could not.
+    const forwarding = resolveRunscSandboxConfig({
+      workspaceHostPath: "/tmp/workspace",
+      rootfs: "/images/kitchensink",
+      runscBinary: "/opt/runsc",
+      scratchDir: "/tmp/scratch",
+      runId: "run-1",
+      platform: "linux",
+      networkHelper: "/usr/bin/pasta",
+      setpriv: "/usr/bin/setpriv",
+      forwardedHostPorts: [8000],
+    });
+
+    for (const acquired of [acquiredAt(COMMIT_SHA), undefined]) {
+      const options = childSandboxOptions(
+        { sandbox, ownedRunscSandboxConfig: forwarding },
+        acquired,
+      );
+      expect([
+        options.sandboxRunscNetworkHelper,
+        options.sandboxRunscForwardedHostPorts,
+      ]).toEqual([forwarding.networkHelper, [8000]]);
+    }
+    expect(
+      childSandboxOptions(
+        { sandbox, ownedRunscSandboxConfig: parentRunsc },
+        undefined,
+      ),
+    ).not.toHaveProperty("sandboxRunscForwardedHostPorts");
+  });
+
   it("gives a child of root's run the `unshare` its network helper runs under, mount or no mount", () => {
     const root = resolveRunscSandboxConfig({
       workspaceHostPath: "/tmp/workspace",

@@ -1,6 +1,6 @@
 import type { FabricValue } from "@commonfabric/api";
 import { isKeyableObjectOrArray } from "@commonfabric/data-model";
-import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
+import { isArrayIndexPropertyName } from "@commonfabric/js-values/arrays";
 
 export type ReadPathOptions = {
   allowArrayLength?: boolean;

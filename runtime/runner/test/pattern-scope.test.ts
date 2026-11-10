@@ -1,5 +1,6 @@
 import { assertEquals } from "@std/assert";
 import { Identity } from "@commonfabric/identity";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   getServerExecutionConfig,
   setServerExecutionConfig,
@@ -14,7 +15,7 @@ import {
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 import { type Cell, createCell } from "../src/cell.ts";
 import { ContextualFlowControl } from "../src/cfc.ts";
-import { type FactoryInput } from "../src/builder/types.ts";
+import type { FactoryInput } from "../src/builder/types.ts";
 
 const signer = await Identity.fromPassphrase("test operator");
 const space = signer.did();
@@ -1023,7 +1024,7 @@ Deno.test("runtime rejects inherit scope on full normalized links", async () => 
           } as any);
           return undefined;
         } catch (error) {
-          return error instanceof Error ? error.message : String(error);
+          return describeFailure(error);
         }
       })(),
       "NormalizedFullLink.scope cannot be 'inherit'; resolve scope before creating a full link",

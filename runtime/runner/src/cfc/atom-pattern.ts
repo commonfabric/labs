@@ -6,13 +6,16 @@ import {
   isValidFabricValue,
   valueEqual,
 } from "@commonfabric/data-model";
-import { deepEqual } from "@commonfabric/utils/deep-equal";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import { deepEqual } from "@commonfabric/js-values/deep-equal";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 import {
   commitmentAwareEquals,
-  containsCfcFieldCommitment,
   isCfcFieldCommitment,
-} from "./label-representation.ts";
+} from "@commonfabric/memory/v2/cfc-release-authority";
+import { containsCfcFieldCommitment } from "./label-representation.ts";
 
 /**
  * Atom pattern matching for the exchange-rule calculus (spec §4.3.3/§4.4.5,

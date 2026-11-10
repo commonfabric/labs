@@ -203,6 +203,7 @@ const Viewer = pattern<ViewerInput, ViewerOutput>((input) => {
   const requests = Writable.of<Record<string, ChatRequestOutcome>>({});
   const manager = FabriChatManagerCore({
     myProfile: profile,
+    sessionProfile: profile,
     sharedSpaceCatalog: catalog,
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests,
@@ -233,7 +234,7 @@ const Viewer = pattern<ViewerInput, ViewerOutput>((input) => {
     // Stand-ins for what the room derives; a row's streams read none of it.
     places: {},
     cannotWrite: false,
-    isOwner: false,
+    rowFacts: {},
     messages: setup.messages,
     canJoin: true,
     manager: { joinRoom: counted },

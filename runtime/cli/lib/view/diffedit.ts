@@ -13,8 +13,9 @@
 
 import { basename, dirname } from "@std/path";
 
-import { spliceAll } from "@commonfabric/utils/arrays";
-import { maxOf } from "@commonfabric/utils/math";
+import { spliceAll } from "@commonfabric/collections/splice";
+import { maxOf } from "@commonfabric/collections/math";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 
 import type { BlameRequest, BlameTarget } from "./blame.ts";
 import type { Document, Line, Span, ViewMode } from "./model.ts";
@@ -152,6 +153,7 @@ export function diffSource(
       label: null,
       isDiff: true,
       diffCountContexts,
+      declaredTests: ws.declaredTests,
       blameTargets,
       editable: false,
       reason:
@@ -270,6 +272,7 @@ export function diffSource(
       : `${files.length} files`,
     isDiff: true,
     diffCountContexts,
+    declaredTests: ws.declaredTests,
     blameTargets,
     editable: true,
     policy,
@@ -486,7 +489,7 @@ export function diffSource(
             rollbackErrors.push(String(rollbackError));
           }
         }
-        const detail = error instanceof Error ? error.message : String(error);
+        const detail = describeFailure(error);
         const suffix = rollbackErrors.length > 0
           ? `; restoring files failed: ${rollbackErrors.join("; ")}`
           : "";
@@ -1851,7 +1854,7 @@ function diffLogicalEnd(
   row: number,
 ): number {
   const line = lines[row] ?? "";
-  const length = [...line].length;
+  const length = cpLen(line);
   if (!line.endsWith("\r")) return length;
   const hunk = model ? hunkAt(model, row)?.hunk : undefined;
   const noTrailingNewline = lines[row + 1]?.replace(/\r$/, "") ===

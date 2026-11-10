@@ -46,11 +46,12 @@ import {
   resolveCfcSchemaRefs,
 } from "@commonfabric/runner/cfc/schema-refs";
 import { createLLMFriendlyLink } from "@commonfabric/runner/shared";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   isInstance,
   isObjectNotArray,
   isObjectOrArray,
-} from "@commonfabric/utils/types";
+} from "@commonfabric/js-values/types";
 import { runtimeErrorLog } from "./callable.ts";
 import { timeCliPhase } from "./trace-timing.ts";
 
@@ -1153,9 +1154,7 @@ export async function parseSelectionProjection(
       contents = await (deps.readTextFile ?? Deno.readTextFile)(path);
     } catch (error) {
       throw new CellSelectionError(
-        `Could not read --schema file "${path}": ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        `Could not read --schema file "${path}": ${describeFailure(error)}`,
         { cause: error },
       );
     }
@@ -1164,9 +1163,7 @@ export async function parseSelectionProjection(
       parsed = JSON.parse(contents);
     } catch (error) {
       throw new CellSelectionError(
-        `Invalid JSON in --schema file "${path}": ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        `Invalid JSON in --schema file "${path}": ${describeFailure(error)}`,
         { cause: error },
       );
     }
@@ -1184,9 +1181,7 @@ export async function parseSelectionProjection(
       parsed = JSON.parse(trimmed);
     } catch (error) {
       throw new CellSelectionError(
-        `Invalid JSON passed to --schema: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        `Invalid JSON passed to --schema: ${describeFailure(error)}`,
         { cause: error },
       );
     }
@@ -1940,7 +1935,7 @@ export function schemaMayBeArray(
       unresolvedRef: (error) => {
         throw new CellSelectionError(
           `Could not resolve source schema reference for ${flag}: ${
-            error instanceof Error ? error.message : String(error)
+            describeFailure(error)
           }`,
           { cause: error },
         );
@@ -3245,9 +3240,7 @@ function transformReadsFor(runtime: Runtime): TransformReads {
 /** `error`, reported as a failure to apply a get transform. */
 function transformError(error: unknown): CellSelectionError {
   return new CellSelectionError(
-    `Could not apply get transform: ${
-      error instanceof Error ? error.message : String(error)
-    }`,
+    `Could not apply get transform: ${describeFailure(error)}`,
     { cause: error },
   );
 }
@@ -3280,8 +3273,59 @@ async function sourceRootIsArray(cell: Cell<unknown>): Promise<boolean> {
 }
 
 /**
- * Applies `selection` to `sourceCell` through an actual runtime pattern graph,
- * returning the value the caller asked for.
+ * Helper for {@link deriveSelectedValue}, which answers a selection under server
+ * execution: the server runs the piece, so the source is read through
+ * `readSchema` and the value in hand is shaped here, which starts nothing and
+ * commits nothing.
+ */
+async function selectFromRead(
+  source: Cell<unknown>,
+  readSchema: JSONSchema,
+  selection: CellSelection,
+  projection: ReturnType<typeof resolveProjection>,
+  space: MemorySpace,
+  deps: DeriveSelectedValueDependencies,
+): Promise<unknown> {
+  const read = source.asSchema(
+    sanitizeSchemaForLinks(readSchema, KeepAsCell.OnlyStream),
+  );
+  const value = await timeSelectionPhase("read", () => read.pull());
+  const { filter } = selection;
+  const isList = filter !== undefined || projection?.projectsArrayItems;
+  if (isList && value !== undefined && !Array.isArray(value)) {
+    throw filter !== undefined
+      ? new CellSelectionError("--filter can only be applied to an array")
+      : arrayItemProjectionError(selection.projection!.flag);
+  }
+  // An unset declared array is the empty array, as it is to the runner's list
+  // builtins.
+  const selected = !isList
+    ? value
+    : Array.from((value ?? []) as unknown[]).filter((element) =>
+      filter === undefined ||
+      evaluateSelectionPredicate(filter.predicate, element)
+    );
+  const implicitArrayTraversal = selection.projection?.kind === "concise";
+  const output = projection === undefined ? selected : projectValue(
+    selected,
+    projection.projectionSchema,
+    implicitArrayTraversal,
+  );
+  deps.onOutputCell?.(read);
+  return projection?.markers === undefined
+    ? output
+    : await composeLinkAddresses(
+      sourcePosition(source, space),
+      projection.markers,
+      output,
+      implicitArrayTraversal,
+    );
+}
+
+/**
+ * Applies `selection` to `sourceCell` and returns the value the caller asked
+ * for. Under server execution that is a read shaped here. Otherwise it goes
+ * through an actual runtime pattern graph.
  *
  * `runtime` and `space` say where that pattern runs, and are the caller's to
  * decide rather than the cell's: a path that crosses a link can land
@@ -3430,6 +3474,17 @@ export async function deriveSelectedValue(
     sourceMask = projectionMaskSchema;
   }
   const sourceReadSchema = selectSourceSchema(sourceSchema, sourceMask);
+
+  if (runtime.experimental.serverExecution === true) {
+    return await selectFromRead(
+      sourceValueCell,
+      sourceReadSchema,
+      selection,
+      projection,
+      space,
+      deps,
+    );
+  }
 
   const { commonfabric } = createBuilder({
     unsafeHostTrust: runtime.createUnsafeHostTrust({

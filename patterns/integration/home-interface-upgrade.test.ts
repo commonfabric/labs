@@ -19,12 +19,13 @@ import {
   ensurePrivateInboxOf,
   PiecesController,
 } from "@commonfabric/piece/ops";
-import { getLoggerCountsBreakdown } from "@commonfabric/utils/logger";
+import { getLoggerCountsBreakdown } from "@commonfabric/logger";
 import {
   type Cell,
   getDerivedInternalCellLink,
   getPatternIdentityRef,
   getPatternSource,
+  type JSONValue,
   parseLink,
   Runtime,
   sendEvent,
@@ -33,6 +34,7 @@ import {
   markRendererTrustedEvent,
   reviewedActionProvenance,
 } from "@commonfabric/runner/cfc";
+import { instancePartialCauseForTestingOnly } from "@commonfabric/runner/for-testing-only";
 import { PatternsRoute } from "@commonfabric/runner/patterns-route.deno";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import {
@@ -81,7 +83,10 @@ describe("Home interface upgrade", () => {
         mode === "automatic-cold" ? "cold" : "running"
       } system-origin update`;
     it(description + suffix, async () => {
-      const server = newLoopbackServer();
+      // Its runtimes name instances, and a cold case's first one does not,
+      // so the server's posture names instances, as a deployment's does once
+      // it runs runtimes of either mode (INV-16).
+      const server = newLoopbackServer({ namesInstances: () => true });
       const patterns = fromFileUrl(new URL("..", import.meta.url));
       const temporary = await Deno.makeTempDir({
         prefix: "home-origin-rehearsal-",
@@ -124,10 +129,17 @@ describe("Home interface upgrade", () => {
             new Response("Not found", { status: 404 }),
       );
       const apiUrl = new URL(`http://127.0.0.1:${http.addr.port}`);
+      // A cold case's deployed Home is set up as a runtime with instance
+      // naming off sets it up, so its `const`-bound children sit at positional
+      // spots until the runtime that opens it, with naming on, carries them
+      // over to their names. The other cases update Home in the runtime that
+      // set it up, which never mixes the two.
+      const positional = mode === "automatic-cold";
       let storage = EmulatedStorageManager.connectTo(server, { as: owner });
       let runtime = new Runtime({
         apiUrl,
         storageManager: storage,
+        experimental: { instanceNames: !positional },
       });
       let controller = new PiecesController(
         createSession({ identity: owner, spaceDid: owner.did() }),
@@ -149,8 +161,9 @@ describe("Home interface upgrade", () => {
         );
         expect(entry).toBeDefined();
         // Snapshots of Home at `676e4cae1b` and `181f2464ac`, before the
-        // interface change. Retaining the entry path keeps each production
-        // dependency's identity intact.
+        // interface change, each leaving `spaceName` out where it has no value
+        // so that it compiles on the authoring path. Retaining the entry path
+        // keeps each production dependency's identity intact.
         entry!.contents = oldHome;
         let home: Cell<unknown>;
         if (mode === "explicit") {
@@ -340,7 +353,14 @@ describe("Home interface upgrade", () => {
             const { space, id, path } = stored.getAsNormalizedFullLink();
             return { address: { space, id, path }, value: stored.getRaw() };
           }));
-        const ownedFields = async (reader: Runtime, root: Cell<unknown>) => {
+        // The answering child sits at its positional spot in a positional
+        // deployed Home, and at its instance name once it has been carried
+        // over.
+        const ownedFields = async (
+          reader: Runtime,
+          root: Cell<unknown>,
+          answeringCause: JSONValue,
+        ) => {
           const values = await Promise.all(
             ["favorites", "journal", "spaces"].map(async (field) => {
               const stored = root.key(field).resolveAsCell();
@@ -383,7 +403,7 @@ describe("Home interface upgrade", () => {
             });
             const spot = reader.getCellFromLink(
               getDerivedInternalCellLink(root, {
-                partialCause: deepFreeze({ $generated: 4 }),
+                partialCause: answeringCause,
               }),
             );
             await spot.sync();
@@ -459,7 +479,13 @@ describe("Home interface upgrade", () => {
             };
           });
         };
-        const ownedBefore = await ownedFields(runtime, home);
+        const ownedBefore = await ownedFields(
+          runtime,
+          home,
+          positional
+            ? deepFreeze({ $generated: 4 })
+            : instancePartialCauseForTestingOnly("privateInboxAnswering"),
+        );
         const flatBefore = await flatBindings(home);
         for (const field of ownedBefore.slice(0, 3)) {
           expect(field.value).toHaveLength(1);
@@ -515,7 +541,11 @@ describe("Home interface upgrade", () => {
             await runtime.dispose();
             await storage.close();
             storage = EmulatedStorageManager.connectTo(server, { as: owner });
-            runtime = new Runtime({ apiUrl, storageManager: storage });
+            runtime = new Runtime({
+              apiUrl,
+              storageManager: storage,
+              experimental: { instanceNames: true },
+            });
             controller = new PiecesController(
               createSession({ identity: owner, spaceDid: owner.did() }),
               runtime,
@@ -546,7 +576,13 @@ describe("Home interface upgrade", () => {
           expect(after.slice(0, 2)).toEqual(before.slice(0, 2));
           expect(await noticeRecords(rolled)).toEqual(noticesBefore);
         }
-        expect(await ownedFields(runtime, rolled)).toEqual(ownedBefore);
+        expect(
+          await ownedFields(
+            runtime,
+            rolled,
+            instancePartialCauseForTestingOnly("privateInboxAnswering"),
+          ),
+        ).toEqual(ownedBefore);
         expect(await rolled.key("sharedSpaceCatalog").pull()).toEqual(
           ownedBefore[3].value,
         );
@@ -570,6 +606,7 @@ describe("Home interface upgrade", () => {
         const peer = new Runtime({
           apiUrl,
           storageManager: peerStorage,
+          experimental: { instanceNames: true },
         });
         const peerController = new PiecesController(
           createSession({ identity: owner, spaceDid: owner.did() }),
@@ -583,15 +620,18 @@ describe("Home interface upgrade", () => {
           await peer.idle();
           await reopened.pull();
           const reopenedFields = await storedFields(peer, reopened);
-          // A normal Home open can materialize the notice array in a cell
-          // and rebase its element links. Requests and direct bindings keep
-          // their addresses; the queued notice content and room stay intact.
+          // Requests and direct bindings keep their addresses. A normal Home
+          // open can materialize the notice array in a cell and rebase its
+          // element links, so compare the queued notice content and room.
           expect(reopenedFields.slice(0, 2)).toEqual(before.slice(0, 2));
-          if (!update) {
-            expect(reopenedFields[2].address).not.toEqual(before[2].address);
-          }
           expect(await noticeRecords(reopened)).toEqual(noticesBefore);
-          expect(await ownedFields(peer, reopened)).toEqual(ownedBefore);
+          expect(
+            await ownedFields(
+              peer,
+              reopened,
+              instancePartialCauseForTestingOnly("privateInboxAnswering"),
+            ),
+          ).toEqual(ownedBefore);
           expect(await reopened.key("sharedSpaceCatalog").pull()).toEqual(
             ownedBefore[3].value,
           );

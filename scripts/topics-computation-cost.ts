@@ -24,7 +24,7 @@ import { fromFileUrl } from "@std/path";
 // deno-lint-ignore no-external-import
 import { getHeapStatistics } from "node:v8";
 
-import { maxOf } from "@commonfabric/utils/math";
+import { maxOf } from "@commonfabric/collections/math";
 import {
   BOARD_NOT_MEASURED,
   caseNamed,

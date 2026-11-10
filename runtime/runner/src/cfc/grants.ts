@@ -5,16 +5,21 @@ import {
 } from "@commonfabric/data-model";
 import { isDID } from "@commonfabric/identity/did";
 import type { CfcAtom } from "@commonfabric/api/cfc";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 import type { URI } from "@commonfabric/memory/interface";
 import { getCommitPreconditionsConfig } from "@commonfabric/memory/v2";
+import { isOrClause } from "@commonfabric/memory/v2/cfc-release-authority";
 import type {
   IExtendedStorageTransaction,
   MemorySpace,
 } from "../storage/interface.ts";
 import { internalVerifierRead } from "../storage/reactivity-log.ts";
 import { type AtomPattern, isAtomPattern } from "./atom-pattern.ts";
-import { FORBIDDEN_OR_CLAUSE_ALTERNATIVE_TYPES, isOrClause } from "./clause.ts";
+import { FORBIDDEN_OR_CLAUSE_ALTERNATIVE_TYPES } from "./clause.ts";
 import type {
   CfcGrantResolver,
   CfcGrantResolverQuery,
@@ -181,8 +186,8 @@ export const cfcGrantDocId = (identity: CfcGrantIdentity): URI =>
  *
  * Spec §6.5.1 derives an intent's consumption cell as
  * `refer({ intentConsumed: { intentOnceId } })`; the runner's shipped event
- * receipts derive theirs as `runtime.getCell(space, { resultFor: cause })` —
- * `createRef` over the cause record, minting an ordinary `of:` entity id.
+ * receipts derive theirs as `handlingReceiptId()`, a hash of the event id and its
+ * stream under the `receipt:` scheme, which no gate covers.
  * This receipt instead follows the §6.5.1 SHAPE (`{ grantConsumed:
  * { grantId } }`, one receipt per grant id) realized with the #4627 ADDRESS
  * IDIOM (the reserved `grant:cfc:` URI scheme + a versioned `hashStringOf`
@@ -341,9 +346,7 @@ export const flushCfcGrantConsumptionClaims = (
     } catch (error) {
       reasons.push(
         `cfc-grant: staging consumption receipt for single-use grant ` +
-          `${claim.grantId} failed (${
-            error instanceof Error ? error.message : String(error)
-          })`,
+          `${claim.grantId} failed (${describeFailure(error)})`,
       );
     }
   }

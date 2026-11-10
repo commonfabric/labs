@@ -115,8 +115,10 @@ export default pattern<MainInput, MainOutput>((
   const privateInboxRefusal = new Writable<PrivateInboxRefusalHolder>({}).for(
     "privateInboxRefusal",
   );
+  const profile = firstProfileOf(profiles);
   const chats = FabriChatManagerCore({
-    myProfile: firstProfileOf(profiles),
+    myProfile: profile,
+    sessionProfile: profile,
     sharedSpaceCatalog,
     direct,
     requests,

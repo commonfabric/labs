@@ -1,13 +1,20 @@
+import {
+  bundledBuild,
+  comparePeerBuilds,
+  normalizeBuildMarker,
+} from "@commonfabric/platform/peer-build";
 import { isCanonicalEd25519DID } from "@commonfabric/identity";
 import type { FabricPlainObject, FabricValue } from "@commonfabric/api";
 import { cloneIfNecessary, debugStr } from "@commonfabric/data-model";
-import { getLogger } from "@commonfabric/utils/logger";
-import { maxOf } from "@commonfabric/utils/math";
+import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
+import { getLogger } from "@commonfabric/logger";
+import { maxOf } from "@commonfabric/collections/math";
 import {
   isObjectNotArray,
   isPlainObject,
   unsafeObjectKeyIn,
-} from "@commonfabric/utils/types";
+} from "@commonfabric/js-values/types";
+import { backtickQuote } from "@commonfabric/text/markdown";
 
 import {
   type ClientCommit,
@@ -33,12 +40,16 @@ import {
   type OperationFieldQuery,
   type OperationFieldQueryResult,
   parseMemoryProtocolFlags,
+  PATTERN_LIFECYCLE_MAX_BYTES,
+  type PatternLifecycleVerb,
   type PresenceJoinResult,
   type PresencePublication,
   type PresenceRecord,
   type PresenceRemoveMessage,
   type PresenceUpsertMessage,
   type ResponseMessage,
+  SERVED_REQUEST_MAX_BYTES,
+  type ServedRequestKind,
   type ServerMessage,
   SESSION_REPORT_TEXT_MAX,
   type SessionAdmissibleMessage,
@@ -52,6 +63,7 @@ import {
   type SessionReport,
   type SessionRevokedMessage,
   type SessionSync,
+  type SpaceInviteRequest,
   type SqliteDbRef,
   type SqliteParamsWire,
   type SqliteQueryReader,
@@ -65,6 +77,7 @@ import {
   type WatchSetResult,
   type WatchSpec,
 } from "../v2.ts";
+import type { RedeemReceipt } from "../space-invites.ts";
 import {
   compressClientMessageLabels,
   expandServerMessageCommitLabels,
@@ -133,6 +146,42 @@ const connectionLostWhileRestoring = (): Error =>
   toConnectionError(
     new Error("memory connection lost while restoring the session"),
   );
+
+/**
+ * A `PatternLifecycleRefusal` raised before a request is sent, shaped as the
+ * server's own refusal arrives: `.code` names the reason.
+ */
+const lifecycleRefusal = (code: string, message: string): Error => {
+  const error = new Error(message);
+  error.name = "PatternLifecycleRefusal";
+  return Object.assign(error, { code });
+};
+
+/**
+ * A `ServedRequestRefusal` raised before a request is sent, shaped as the
+ * server's own refusal arrives: `.code` names the reason.
+ */
+const servedRefusal = (code: string, message: string): Error => {
+  const error = new Error(message);
+  error.name = "ServedRequestRefusal";
+  return Object.assign(error, { code });
+};
+
+/**
+ * A `SpaceInviteRefusal` raised on the client's side, shaped as the server's
+ * own refusal arrives: `.code` names the reason.
+ */
+export const spaceInviteRefusalError = (
+  code: string,
+  message: string,
+): Error => {
+  const error = new Error(message);
+  error.name = "SpaceInviteRefusal";
+  return Object.assign(error, { code });
+};
+
+/** An invitation operation a session may send: any but redemption. */
+export type InviteAdministration = SpaceInviteRequest["invite"];
 
 const logger = getLogger("memory.v2.client", {
   enabled: true,
@@ -252,6 +301,29 @@ export type ConnectOptions = {
 
   transport: Transport;
   signal?: AbortSignal;
+
+  /** Where `transport` connects, named in the error of a failed connect. */
+  address?: string;
+
+  /**
+   * Whether the runtime this client serves names instances (INV-16,
+   * 04-protocol.md §4.1.2). When `true`, every `session.open` the client
+   * sends, a reopen included, declares `instanceNames: true`, and a handshake
+   * with a server that does not advertise `instanceNameMark` fails the
+   * connection permanently, before any open is signed. Absent or `false`, the
+   * client declares nothing and its sessions are positional.
+   */
+  instanceNames?: boolean;
+
+  /**
+   * How many handshakes the connect may make, one when absent. Each after the
+   * first follows a failed one after the reconnect backoff. A permanent
+   * failure fails the connect at once, and so does any failure on a transport
+   * without `reset()`, which cannot discard a failed connection to try again.
+   * When more than one is allowed and every one fails, the connect rejects
+   * with `firstHandshakeFailedError()`. Must be a positive safe integer.
+   */
+  firstHandshakeAttempts?: number;
 };
 
 /**
@@ -297,6 +369,13 @@ export type MountOptions = {
    * execution that is configured with one, and carried on every reopen so
    * a resumed session is bounded exactly as the first open was. */
   readCeiling?: SessionReadCeiling;
+
+  /**
+   * An invitation the open redeems before its grant is checked (the wire
+   * `SessionDescriptor.invite`). Sent on the mount's own open and on none of
+   * the session's reopens, which the grant it conferred already admits.
+   */
+  invite?: { inviteId: string; code: string };
 };
 
 /**
@@ -329,6 +408,12 @@ export type SessionOpenAuthContext = {
   audience: string;
   /** Pinned deployment for a routed connection-auth invocation. */
   deployment?: string;
+  /**
+   * The proof chain this open presents, as `SessionPrincipal.proofs` gave it
+   * for this open: a signed open names each proof's CID in `prf` and carries
+   * the bytes as `authorization.proofs`. Absent for an open presenting none.
+   */
+  proofs?: readonly Uint8Array[];
 };
 
 export type SessionOpenAuthFactory = (
@@ -364,6 +449,19 @@ export type SessionPrincipal = {
 
   /** Signs a `session.open`, for a server that verifies only those. */
   readonly authorizeSessionOpen: SessionOpenAuthFactory;
+
+  /**
+   * The proof chain an open of a session mounted as this key presents
+   * (04-protocol.md §4.5.1, "Proof chains"), asked for at every open and
+   * reopen so that each presents the chain as it stands then: each
+   * delegation's bytes as its issuer encoded them, root first, the last
+   * one's audience being this key, or `undefined` for no chain. An open
+   * naming the connection's authenticated principal carries them as
+   * `authorization.proofs`; `authorizeSessionOpen` is expected to carry them
+   * the same way and to name their CIDs in the signed `prf`. Absent for a
+   * key that never presents one.
+   */
+  readonly proofs?: (space: string) => readonly Uint8Array[] | undefined;
 };
 
 /** How a session is authenticated when it opens and each time it reopens. */
@@ -675,6 +773,10 @@ export class Client {
   #sessionOpenAuthContext: SessionOpenAuthContext | null = null;
   #serverFlags: MemoryProtocolFlags | null = null;
   readonly #clientInfo: Readonly<ClientInfo>;
+
+  /** Whether every open declares `instanceNames: true` (`ConnectOptions`). */
+  readonly #instanceNames: boolean;
+
   #syncLabelTable = false;
   #commitLabelTable = false;
   /** Whether both peers advertised `syncPartsV1`. */
@@ -793,19 +895,31 @@ export class Client {
   private constructor(
     transport: Transport,
     clientInfo: Readonly<ClientInfo>,
+    instanceNames: boolean,
   ) {
     this.#clientInfo = clientInfo;
+    this.#instanceNames = instanceNames;
     this.#transport = transport;
     this.#transport.setReceiver((payload) => this.#onMessage(payload));
     this.#transport.setCloseReceiver?.((error) => this.#onClose(error));
   }
 
   static async connect(options: ConnectOptions): Promise<Client> {
+    const attempts = options.firstHandshakeAttempts ?? 1;
+    if (!Number.isSafeInteger(attempts) || attempts < 1) {
+      throw new RangeError(
+        debugStr`Invalid first handshake attempts: $quote${attempts}`,
+      );
+    }
     const info = options.client === undefined
       ? createClientInfo({ application: "memory", gitSha: null })
       : parseClientInfo(options.client);
     if (info === null) throw new TypeError("Invalid memory client metadata");
-    const client = new Client(options.transport, Object.freeze(info));
+    const client = new Client(
+      options.transport,
+      Object.freeze(info),
+      options.instanceNames === true,
+    );
     const abortError = (): Error =>
       options.signal?.reason instanceof Error
         ? options.signal.reason
@@ -816,8 +930,21 @@ export class Client {
     options.signal?.addEventListener("abort", closeForAbort, { once: true });
     try {
       if (options.signal?.aborted) throw abortError();
-      await client.#hello();
+      if (attempts === 1) {
+        await client.#hello();
+      } else {
+        await client.#reconnect({ attempts, address: options.address });
+        if (client.#fatalError !== null) throw client.#fatalError;
+      }
       if (options.signal?.aborted) throw abortError();
+      // The reconnect loop ends connected, failed, or closed. A client is
+      // closed only by an abort of `signal` until `connect()` returns it, and
+      // the check above reports that, so this one guards that invariant.
+      if (!client.#connected) {
+        // deno-coverage-ignore-start -- only an abort closes it mid-connect
+        throw new Error("memory client closed before its first handshake");
+      }
+      // deno-coverage-ignore-stop
       return client;
     } catch (error) {
       await client.close().catch(() => {});
@@ -832,6 +959,17 @@ export class Client {
    *  optional-capability consumers fail closed by reading this. */
   get serverFlags(): MemoryProtocolFlags | null {
     return this.#serverFlags;
+  }
+
+  /**
+   * Most UTF-8 bytes one request sent whole may take on the current
+   * connection: the routed bound on a routed connection, and the transport's
+   * own where it declares one; `undefined` before the first handshake.
+   */
+  get requestBytesLimit(): number | undefined {
+    return this.#requestLimits === undefined
+      ? undefined
+      : wholeLimits(this.#requestLimits).bytes;
   }
 
   /**
@@ -906,6 +1044,48 @@ export class Client {
     auth?: SessionAuth,
     signal?: AbortSignal,
   ): Promise<SpaceSession> {
+    return (await this.#mount(space, options, auth, signal)).session;
+  }
+
+  /**
+   * Like `mount()`, except that the open first redeems `invite` as the
+   * principal `auth` authenticates, so a principal the space's access list
+   * does not name yet is admitted by the grant the invitation confers. Returns
+   * the session with the redemption's receipt.
+   *
+   * @throws `SpaceInviteRefusal`, with the invitation service's code as
+   *   `.code`, when the service refuses the redemption, or with
+   *   `invite-service-unsupported`, before anything is sent, when the server
+   *   does not advertise `spaceInvites`.
+   */
+  async mountRedeeming(
+    space: string,
+    invite: { inviteId: string; code: string },
+    auth?: SessionAuth,
+    signal?: AbortSignal,
+  ): Promise<{ session: SpaceSession; redemption: RedeemReceipt }> {
+    const { session, result } = await this.#mount(
+      space,
+      { invite },
+      auth,
+      signal,
+    );
+    if (result.invite === undefined) {
+      await session.close();
+      throw protocolError(
+        "memory server opened the session without redeeming its invitation",
+      );
+    }
+    return { session, redemption: result.invite };
+  }
+
+  /** Helper for `mount()`, which also returns the open's result. */
+  async #mount(
+    space: string,
+    options: MountOptions,
+    auth: SessionAuth | undefined,
+    signal: AbortSignal | undefined,
+  ): Promise<{ session: SpaceSession; result: SessionOpenResult }> {
     options = {
       ...options,
       ...(options.genesisRoot === undefined ? {} : {
@@ -959,13 +1139,26 @@ export class Client {
       declaredSpaceKindOf(result),
       options.resumeKey,
       options.resumeAttempt,
+      result.serverBuild,
     );
     this.#spaces.add(session);
-    return session;
+    return { session, result };
   }
 
   forgetSession(session: SpaceSession): void {
     this.#spaces.delete(session);
+  }
+
+  /**
+   * Refuses every later `session.open` from this client with `error`, a
+   * refusal `isClientUpdateRequiredError()` recognizes, as a response that
+   * carries `clientUpdateRequired` does. Once one is kept, a later one changes
+   * nothing.
+   *
+   * @internal For `SpaceSession`.
+   */
+  noteClientUpdateRequired(error: Error): void {
+    this.#clientUpdateError ??= error;
   }
 
   /**
@@ -1086,6 +1279,9 @@ export class Client {
         (error as Error & { retriable?: boolean }).retriable =
           result.error.retriable;
       }
+      if (result.error.code !== undefined) {
+        (error as Error & { code?: string }).code = result.error.code;
+      }
       if (result.error.permanentEvidence === true) {
         (error as Error & { permanentEvidence?: true }).permanentEvidence =
           true;
@@ -1093,6 +1289,9 @@ export class Client {
       if (result.error.aclRevision !== undefined) {
         (error as Error & { aclRevision?: number }).aclRevision =
           result.error.aclRevision;
+      }
+      if (result.error.deleted === true) {
+        (error as Error & { deleted?: true }).deleted = true;
       }
       serverVerdicts.add(error);
       throw error;
@@ -1237,6 +1436,7 @@ export class Client {
     const session: SessionDescriptor = {
       ...mount,
       client: this.#clientInfo,
+      ...(this.#instanceNames ? { instanceNames: true as const } : {}),
     };
     const whileConnected = options.restoring === true;
     // A mount made while the connection is down waits for the reconnect to
@@ -1252,7 +1452,9 @@ export class Client {
     // held to the server it is declared to. A server that does not
     // advertise `sessionReadCeiling` would accept the descriptor and serve
     // every query unbounded.
-    const requireCapabilities = (): void => {
+    const requireCapabilities = (
+      proofs: readonly Uint8Array[] | undefined,
+    ): void => {
       if (
         session.readCeiling !== undefined &&
         this.serverFlags?.sessionReadCeiling !== true
@@ -1278,6 +1480,27 @@ export class Client {
           "memory server does not seal a space's declared kind",
         );
       }
+      // A server that does not know the field would open, or refuse, the
+      // session without redeeming anything.
+      if (
+        session.invite !== undefined && this.serverFlags?.spaceInvites !== true
+      ) {
+        throw spaceInviteRefusalError(
+          "invite-service-unsupported",
+          "memory server does not redeem invitations on `session.open`",
+        );
+      }
+      // A server admitting no chain refuses an open presenting one, so a
+      // key holding a chain is told here rather than refused there.
+      if (
+        proofs !== undefined && this.serverFlags?.sessionOpenProofs !== true
+      ) {
+        throw protocolError(
+          "memory server does not admit a session.open proof chain " +
+            "(`sessionOpenProofs` is not among its protocol flags), so a " +
+            "session presenting one cannot act under it",
+        );
+      }
     };
     // A mount whose caller has cancelled it sends nothing more.
     const requireUncancelled = (): void => {
@@ -1294,7 +1517,12 @@ export class Client {
       // meanwhile, and the next connection's server may advertise other
       // capabilities than the one the first round was checked against.
       requireUncancelled();
-      requireCapabilities();
+      // The chain as it stands for this round's open, asked for once so the
+      // capability check and the open it admits see the same chain.
+      const proofs = typeof auth === "object"
+        ? auth.proofs?.(space)
+        : undefined;
+      requireCapabilities(proofs);
       if (
         typeof auth === "object" && this.serverFlags?.connectionAuth === true
       ) {
@@ -1309,12 +1537,21 @@ export class Client {
             : this.#waitForRenewal(renewal, options.signal));
           if (principal !== STALE) {
             requireUncancelled();
+            // The chain rides outside any signature here: the connection
+            // authenticated the key, and each proof carries its own.
             return await this.request<SessionOpenResult>({
               type: "session.open",
               requestId: this.#nextRequestId(),
               space,
               principal,
               session,
+              ...(proofs === undefined ? {} : {
+                authorization: {
+                  proofs: proofs.map((proof) =>
+                    new FabricBytes(proof)
+                  ),
+                },
+              }),
               ...(holdings !== undefined
                 ? { holdings: this.declarableHoldings(holdings) }
                 : {}),
@@ -1353,11 +1590,10 @@ export class Client {
             return STALE;
           }
           const epoch = this.#connectionEpoch;
-          const signed = await sign?.(
-            space,
-            session,
-            this.sessionOpenAuthContext(),
-          );
+          const signed = await sign?.(space, session, {
+            ...this.sessionOpenAuthContext(),
+            ...(proofs === undefined ? {} : { proofs }),
+          });
           if (this.#staleSince(epoch)) {
             if (whileConnected) throw connectionLostWhileRestoring();
             return STALE;
@@ -2004,8 +2240,9 @@ export class Client {
     const ack: PromiseWithResolvers<void> & { receiveError?: Error } = Promise
       .withResolvers<void>();
     this.#helloPending = ack;
-    // `sessionReportV1`, `watchRemoveV1` and `watchSetPartsV1` are the
-    // server's capabilities alone: the client reads them from `hello.ok` and
+    // `sessionReportV1`, `watchRemoveV1`, `watchSetPartsV1`,
+    // `patternLifecycle`, `servedRequests`, `spaceInvites` and
+    // `instanceNameMark` are the server's capabilities alone: the client reads them from `hello.ok` and
     // never offers them. Other flags an endpoint does not know are ignored
     // there, since the routed flag allowlists were removed (infra DEVIATIONS
     // row 41).
@@ -2013,6 +2250,10 @@ export class Client {
       sessionReportV1: _reportsServerOnly,
       watchRemoveV1: _removalServerOnly,
       watchSetPartsV1: _stagedSetsServerOnly,
+      patternLifecycle: _lifecycleServerOnly,
+      servedRequests: _servedServerOnly,
+      spaceInvites: _invitesServerOnly,
+      instanceNameMark: _instanceNameMarkServerOnly,
       ...expectedFlags
     } = getMemoryProtocolFlags();
     const offerRoutedCompression = this.#offersRoutedCompression(
@@ -2153,6 +2394,17 @@ export class Client {
           this.#helloPending.reject(permanentProtocolError(
             "The memory server does not enforce stable expression result " +
               "identities. Update the server before connecting this runtime.",
+          ));
+          return;
+        }
+        // A server that does not advertise it would admit this runtime's
+        // commits and record no mark, leaving the data it names open to
+        // positional runtimes (INV-16).
+        if (this.#instanceNames && !helloOk.flags.instanceNameMark) {
+          this.#helloPending.reject(permanentProtocolError(
+            "The memory server does not record which spaces hold data " +
+              "written with instance names, and this runtime names " +
+              "instances. Update the server before connecting this runtime.",
           ));
           return;
         }
@@ -2444,7 +2696,15 @@ export class Client {
     void this.#reconnect().catch(() => undefined);
   }
 
-  async #reconnect(): Promise<void> {
+  /**
+   * Reconnects, handshaking until one succeeds, the client closes, or a
+   * failure is permanent. `firstHandshake`, for the handshakes a connect
+   * makes, bounds them: the last allowed one to fail fails the client with
+   * `firstHandshakeFailedError()`.
+   */
+  async #reconnect(
+    firstHandshake?: { attempts: number; address?: string },
+  ): Promise<void> {
     if (this.#closed) {
       throw new Error("memory client is closed");
     }
@@ -2497,6 +2757,22 @@ export class Client {
             const err = error instanceof Error
               ? error
               : new Error(String(error));
+            if (
+              firstHandshake !== undefined &&
+              attempt + 1 >= firstHandshake.attempts
+            ) {
+              // A close, as the abort of a connect's signal makes, cancelled
+              // the attempts rather than spending them.
+              if (this.#closed) return;
+              const failure = firstHandshakeFailedError(
+                attempt + 1,
+                firstHandshake.address,
+                err,
+              );
+              logger.error("first-handshake-failed", () => [failure.message]);
+              this.#discardConnection(failure);
+              return;
+            }
             if (!this.#discardConnection(err)) return;
             await this.#waitForReconnectDelay(reconnectDelayMs(attempt));
             attempt += 1;
@@ -2633,6 +2909,7 @@ export class SpaceSession {
   #precedingWatchSyncs: SessionSync[] = [];
   #sessionId: string;
   #sessionToken: string | undefined;
+  #serverBuild: string | undefined;
   #serverSeq: number;
   #ackedSeq = 0;
   #pendingAckSeq = 0;
@@ -2761,6 +3038,7 @@ export class SpaceSession {
     declaredSpaceKind?: DeclaredSpaceKind,
     resumeKey: string = crypto.randomUUID(),
     resumeAttempt = 1,
+    serverBuild?: string,
   ) {
     this.#client = client;
     this.#resumeKey = resumeKey;
@@ -2776,12 +3054,19 @@ export class SpaceSession {
     this.#declaredSpaceKind = declaredSpaceKind;
     this.#sessionId = sessionId;
     this.#sessionToken = sessionToken;
+    this.#serverBuild = normalizeBuildMarker(serverBuild);
+    logger.debug("peer-build", () => [this.space, this.buildDiagnostics]);
     this.#serverSeq = serverSeq;
     this.#ackedSeq = serverSeq;
   }
 
   get sessionId(): string {
     return this.#sessionId;
+  }
+
+  /** Serving-process provenance from the latest successful session open. */
+  get buildDiagnostics() {
+    return comparePeerBuilds(bundledBuild, this.#serverBuild);
   }
 
   get sessionToken(): string | undefined {
@@ -3097,6 +3382,136 @@ export class SpaceSession {
     return result;
   }
 
+  /**
+   * Runs pattern-lifecycle verb `verb` with `body` in this session's space,
+   * as the session's principal, and returns the verb's receipt
+   * (04-protocol.md §4.3.10). The request is answered when the verb has
+   * run, however long that takes.
+   *
+   * @throws `PatternLifecycleRefusal`, with the server's stable reason as
+   *   `.code`, when the server refuses the verb. Two codes are raised here,
+   *   before anything is sent: `lifecycle-unsupported` when the server does
+   *   not advertise `patternLifecycle`, and `payload-too-large` when the
+   *   request takes more than `PATTERN_LIFECYCLE_MAX_BYTES`, or more than
+   *   the connection takes in one request (`ROUTED_QUEUE_LIMIT` when
+   *   routed). A connection lost before the answer throws a
+   *   `ConnectionError`, and the verb's outcome is then unknown.
+   */
+  async runPatternLifecycle(
+    verb: PatternLifecycleVerb,
+    body: FabricPlainObject,
+  ): Promise<FabricPlainObject> {
+    await this.#ensureSessionRestored();
+    if (this.#client.serverFlags?.patternLifecycle !== true) {
+      throw lifecycleRefusal(
+        "lifecycle-unsupported",
+        "The memory server does not advertise `patternLifecycle`",
+      );
+    }
+    const message = {
+      type: "pattern.lifecycle",
+      requestId: crypto.randomUUID(),
+      space: this.space,
+      sessionId: this.#sessionId,
+      verb,
+      body,
+    };
+    const limit = Math.min(
+      PATTERN_LIFECYCLE_MAX_BYTES,
+      this.#client.requestBytesLimit ?? PATTERN_LIFECYCLE_MAX_BYTES,
+    );
+    const bytes = new TextEncoder().encode(encodeMemoryBoundary(message))
+      .length;
+    if (bytes > limit) {
+      throw lifecycleRefusal(
+        "payload-too-large",
+        `A \`pattern.lifecycle\` request takes at most ${limit} bytes on ` +
+          `this connection, and this one takes ${bytes}`,
+      );
+    }
+    return await this.#client.request<FabricPlainObject>(message);
+  }
+
+  /**
+   * Sends one crossing into this session's space to the process that owns
+   * it, and returns what the owner's handler returns for it (04-protocol.md
+   * §4.3.12). The session is a serving process's, opened as the delegating
+   * class; the owner refuses any other.
+   *
+   * @throws `ServedRequestRefusal`, with the server's code as `.code`, when
+   *   the owner refuses the crossing (`refused`, deterministic, or
+   *   `unavailable`, `internal`), when the session's principal is outside the
+   *   delegating class (`forbidden`), or, before sending, when the server
+   *   does not advertise `servedRequests` (`served-unsupported`) or the
+   *   request takes more than `SERVED_REQUEST_MAX_BYTES` or than the
+   *   connection takes in one request (`payload-too-large`). A connection
+   *   lost before the answer throws a `ConnectionError`, and the crossing's
+   *   outcome is then unknown.
+   */
+  async runServed(
+    kind: ServedRequestKind,
+    body: FabricPlainObject,
+  ): Promise<FabricPlainObject> {
+    await this.#ensureSessionRestored();
+    if (this.#client.serverFlags?.servedRequests !== true) {
+      throw servedRefusal(
+        "served-unsupported",
+        "The memory server does not advertise `servedRequests`",
+      );
+    }
+    const message = {
+      type: "served",
+      requestId: crypto.randomUUID(),
+      space: this.space,
+      sessionId: this.#sessionId,
+      kind,
+      body,
+    };
+    const limit = Math.min(
+      SERVED_REQUEST_MAX_BYTES,
+      this.#client.requestBytesLimit ?? SERVED_REQUEST_MAX_BYTES,
+    );
+    const bytes = new TextEncoder().encode(encodeMemoryBoundary(message))
+      .length;
+    if (bytes > limit) {
+      throw servedRefusal(
+        "payload-too-large",
+        `A \`served\` request takes at most ${limit} bytes on this ` +
+          `connection, and this one takes ${bytes}`,
+      );
+    }
+    return await this.#client.request<FabricPlainObject>(message);
+  }
+
+  /**
+   * Administers this session space's invitations, as the session's
+   * principal, and returns what the invitation service returns for
+   * `invite` (04-protocol.md §4.3.11).
+   *
+   * @throws `SpaceInviteRefusal`, with the service's code as `.code`, when
+   *   the service refuses the operation, or with `invite-service-unsupported`
+   *   when the server does not advertise `spaceInvites` or knows no
+   *   invitation host.
+   */
+  async administerInvites(
+    invite: InviteAdministration,
+  ): Promise<FabricValue> {
+    await this.#ensureSessionRestored();
+    if (this.#client.serverFlags?.spaceInvites !== true) {
+      throw spaceInviteRefusalError(
+        "invite-service-unsupported",
+        "The memory server does not administer invitations",
+      );
+    }
+    return await this.#client.request<FabricValue>({
+      type: "space.invite",
+      requestId: crypto.randomUUID(),
+      space: this.space,
+      sessionId: this.#sessionId,
+      invite,
+    });
+  }
+
   async listEntityIds(
     options: EntityIdListOptions = {},
   ): Promise<EntityIdListResult | undefined> {
@@ -3222,7 +3637,7 @@ export class SpaceSession {
    */
   async watchSetSync(
     watches: WatchSpec[] | undefined,
-    holdings?: SessionHolding[],
+    holdings?: SessionHolding[] | (() => SessionHolding[]),
     views?: ViewInterest[],
     restore?: typeof RESTORE_WATCH_SET,
   ): Promise<WatchMutationResult> {
@@ -3244,6 +3659,7 @@ export class SpaceSession {
     return await this.#runWatchMutation(
       () => {
         requestedWatches = watches ?? this.#watchSpecs;
+        const held = typeof holdings === "function" ? holdings() : holdings;
         return this.#client.requestWatchSet({
           type: "session.watch.set",
           requestId: crypto.randomUUID(),
@@ -3251,8 +3667,8 @@ export class SpaceSession {
           sessionId: this.#sessionId,
           watches: requestedWatches,
           ...(views === undefined ? {} : { views }),
-          ...(holdings !== undefined
-            ? { holdings: this.#client.declarableHoldings(holdings) }
+          ...(held !== undefined
+            ? { holdings: this.#client.declarableHoldings(held) }
             : {}),
         });
       },
@@ -3292,7 +3708,8 @@ export class SpaceSession {
 
   /**
    * Observes this session ending with an error, which `closeError` then
-   * holds: a revocation (a takeover or an authorization denial), a permanent
+   * holds: a revocation (a takeover, an authorization denial, or a space
+   * marked for instance names, which requires an update), a permanent
    * reopen denial, a restore the server cannot base on declared holdings, or
    * a client that gives up reconnecting. A session that has already ended
    * that way reports to a late observer synchronously. Normal closure and
@@ -3861,10 +4278,29 @@ export class SpaceSession {
     if (this.#closed) {
       return;
     }
+    if (reason === "instance-names") {
+      // A naming commit marked the space (INV-16). The revocation carries no
+      // message, so the refusal's message is made from the space.
+      const error = Object.assign(
+        new Error(
+          `Space ${this.space} now holds data written with instance names, ` +
+            "which this runtime does not use",
+        ),
+        { name: "SessionRevokedError", clientUpdateRequired: true as const },
+      );
+      this.#client.noteClientUpdateRequired(error);
+      this.#terminateSession(error);
+      return;
+    }
     const error = new Error(`memory session revoked: ${reason}`);
-    error.name = reason === "unauthorized"
-      ? "AuthorizationError"
-      : "SessionRevokedError";
+    error.name = reason === "taken-over"
+      ? "SessionRevokedError"
+      : "AuthorizationError";
+    // A session open when its space is deleted reports the deletion as a
+    // refused reopen would.
+    if (reason === "deleted") {
+      (error as Error & { deleted?: true }).deleted = true;
+    }
     this.#terminateSession(error);
   }
 
@@ -4604,6 +5040,8 @@ export class SpaceSession {
     this.#sessionId = restored.sessionId;
     this.#sessionToken = restored.sessionToken ?? this.#sessionToken;
     this.#declaredSpaceKind = declaredSpaceKindOf(restored);
+    this.#serverBuild = normalizeBuildMarker(restored.serverBuild);
+    logger.debug("peer-build", () => [this.space, this.buildDiagnostics]);
     this.#noteResult(restored.serverSeq);
 
     if (sessionReplaced) {
@@ -4745,6 +5183,8 @@ export class WatchView {
   #subscribers = 0;
   #syncQueue: SessionSync[] = [];
   #syncPending = new Set<PromiseWithResolvers<IteratorResult<SessionSync>>>();
+  /** Callers of `whenSyncsConsumed()`, until the consumer comes back. */
+  #syncsConsumedWaiters: Array<() => void> = [];
   #entities = new Map<string, EntitySnapshot>();
   #orderedEntitiesCache: EntitySnapshot[] | null = null;
   #closed = false;
@@ -4903,9 +5343,33 @@ export class WatchView {
         }
         const pending = Promise.withResolvers<IteratorResult<SessionSync>>();
         this.#syncPending.add(pending);
+        this.#releaseSyncsConsumedWaiters();
         return await pending.promise;
       },
     };
+  }
+
+  /**
+   * Resolves once the consumer of `subscribeSync()` has come back for another
+   * sync with none left to give it, or once this view has closed. A consumer
+   * that finishes with each sync before it asks for the next has then finished
+   * with every sync pushed before this call.
+   */
+  whenSyncsConsumed(): Promise<void> {
+    if (
+      this.#closed ||
+      (this.#syncQueue.length === 0 && this.#syncPending.size > 0)
+    ) {
+      return Promise.resolve();
+    }
+    const { promise, resolve } = Promise.withResolvers<void>();
+    this.#syncsConsumedWaiters.push(resolve);
+    return promise;
+  }
+
+  /** Helper for `subscribeSync()` and `close()`, which ends the waits. */
+  #releaseSyncsConsumedWaiters(): void {
+    for (const resolve of this.#syncsConsumedWaiters.splice(0)) resolve();
   }
 
   push(result: GraphQueryResult): void {
@@ -4947,6 +5411,7 @@ export class WatchView {
     }
     this.#pending.clear();
     this.#subscribers = 0;
+    this.#releaseSyncsConsumedWaiters();
     for (const pending of this.#syncPending) {
       pending.resolve({
         done: true,
@@ -5093,19 +5558,27 @@ export type QueuedFrameTransport = Transport & {
 /**
  * A transport to an in-process server, delivering its frames as
  * {@link queuedFrameTransport} does. Nothing calls `lose()` over it, so a
- * disconnect the server initiates is invisible over loopback.
+ * disconnect the server initiates is invisible over loopback. The server
+ * takes the connection as one from this process unless `inProcess` is
+ * `false`, which a test passes where its loopback transport stands for the
+ * deployment's network.
  */
 export const loopback = (
   server: {
     connect(
       send: (message: ServerMessage, payload?: string) => void,
       syncParts?: PartLimits,
+      options?: { inProcess?: boolean },
     ): {
       receive(payload: string): Promise<void>;
       close(): void;
     };
   },
-  options: { syncParts?: PartLimits; messageLimits?: PartLimits } = {},
+  options: {
+    syncParts?: PartLimits;
+    messageLimits?: PartLimits;
+    inProcess?: boolean;
+  } = {},
 ): Transport => {
   // The transport exists before the connection, so a frame the server
   // sends as it connects is queued rather than lost.
@@ -5114,9 +5587,13 @@ export const loopback = (
     receive: (payload) => built.connection!.receive(payload),
     close: () => built.connection?.close(),
   });
-  built.connection = server.connect((message, payload) => {
-    transport.deliver(payload ?? encodeMemoryBoundary(message));
-  }, options.syncParts);
+  built.connection = server.connect(
+    (message, payload) => {
+      transport.deliver(payload ?? encodeMemoryBoundary(message));
+    },
+    options.syncParts,
+    { inProcess: options.inProcess ?? true },
+  );
   return options.messageLimits === undefined
     ? transport
     : { ...transport, messageLimits: options.messageLimits };
@@ -5154,6 +5631,44 @@ export const writeFailedError = (message: string, cause?: unknown): Error =>
  */
 export const receiveFailedError = (message: string, cause?: unknown): Error =>
   Object.assign(connectionError(message, cause), { ownReceiveFailed: true });
+
+/**
+ * Returns the error a transport rejects a send with once it is closed for
+ * good. The client gives up on a connection that fails with it, rather than
+ * repeating a handshake that no later attempt can complete.
+ */
+export const transportClosedError = (message: string): Error =>
+  Object.assign(new Error(message), { permanent: true });
+
+/**
+ * Returns the error a connect rejects with when every one of the `attempts`
+ * handshakes it was allowed has failed, `cause` being the last failure. It
+ * names `address` when given, and the client reads it as permanent.
+ */
+export const firstHandshakeFailedError = (
+  attempts: number,
+  address: string | undefined,
+  cause: Error,
+): Error =>
+  Object.assign(
+    connectionError(
+      (address === undefined
+        ? "Memory connection"
+        : `Memory connection to ${backtickQuote(address)}`) +
+        ` failed its first handshake ${attempts} times; the last failure was ` +
+        `${describeError(cause)}`,
+      cause,
+    ),
+    { permanent: true, firstHandshakeFailed: true },
+  );
+
+/**
+ * Returns whether `error` is one `firstHandshakeFailedError()` made: a
+ * connection that never completed a handshake.
+ */
+export const isFirstHandshakeFailure = (error: unknown): boolean =>
+  (error as { firstHandshakeFailed?: unknown } | null)
+    ?.firstHandshakeFailed === true;
 
 const isOwnReceiveFailure = (error: unknown): boolean =>
   (error as { ownReceiveFailed?: unknown } | null)?.ownReceiveFailed === true;
@@ -5227,6 +5742,19 @@ export function isPermanentAuthorizationError(error: unknown): boolean {
     (error as { retriable?: unknown }).retriable !== true;
 }
 
+/**
+ * Recognizes the memory server's refusal of a deleted space: an
+ * `AuthorizationError` marked `deleted`, which no principal's retry can undo
+ * (INV-15 in `docs/specs/memory-v2/09-invariants.md`).
+ */
+export function isDeletedSpaceError(error: unknown): error is Error & {
+  /** The space is deleted, and refused to every principal for good. */
+  deleted: true;
+} {
+  return error instanceof Error && error.name === "AuthorizationError" &&
+    (error as { deleted?: unknown }).deleted === true;
+}
+
 /** Recognizes a server refusal whose recovery requires replacing the runtime. */
 export function isClientUpdateRequiredError(error: unknown): error is Error & {
   /** Explicit recovery instruction, independent of the refusal's error name. */
@@ -5237,7 +5765,8 @@ export function isClientUpdateRequiredError(error: unknown): error is Error & {
 }
 
 // A reconnect handshake failure the whole client must give up on rather than
-// retry: an incompatible protocol negotiation at hello. An authorization denial
+// retry: an incompatible protocol negotiation at hello, or a transport closed
+// for good (`transportClosedError()`). An authorization denial
 // is deliberately NOT here — it is per-space, handled inside restore() by
 // terminating just that session, so it never escalates to a client-wide failure
 // that would take down sessions for other spaces.
@@ -5376,7 +5905,8 @@ const isSessionRevoked = (
   return type === "session/revoked" &&
     typeof space === "string" &&
     typeof sessionId === "string" &&
-    (reason === "taken-over" || reason === "unauthorized");
+    (reason === "taken-over" || reason === "unauthorized" ||
+      reason === "deleted" || reason === "instance-names");
 };
 
 const isSessionAdmissible = (

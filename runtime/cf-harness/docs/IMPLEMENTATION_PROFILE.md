@@ -27,7 +27,7 @@ separately, under
 | Core batch    | implemented; provisional conformance                       | Package unit tests cover configuration, lifecycle, context management, tools, handles, attachment integrity, artifacts, resume, and diagnostics. Real `runsc`, Fabric, and other external-runtime behavior requires integration tests.                                                                                                                                                                              |
 | Delegation    | implemented; experimental                                  | Unit tests cover profiles, fresh child context, retained child artifacts, and sanitized/structured return handling. A child inherits its parent's model-context label, and its return brings the child's label back into the parent's, since whatever crosses was derived from what the child observed. Children run together only when one model turn starts them; nothing schedules or budgets them across turns. |
 | Interactive   | implemented; experimental                                  | NDJSON v1 and SQLite-backed sessions/turns/events/replay are covered by package and Loom adapter tests, including crash-restart regressions that reconstruct a service from the same SQLite store at each mid-tool fault point and assert the transcript the next turn is given. The protocol is not yet declared stable.                                                                                           |
-| CFC transport | partial; reduced assurance in current product integrations | Prompt-slot, invocation-context, model-influence, mediation, and deny/recovery behavior are tested. Loom and Pattern Factory still select `observe` because trusted mediation is not wired end to end.                                                                                                                                                                                                              |
+| CFC transport | partial; reduced assurance in current product integrations | Prompt-slot, invocation-context, model-influence, mediation, and deny/recovery behavior are tested. Loom still selects `observe` because trusted mediation is not wired end to end.                                                                                                                                                                                                                                 |
 
 ## Relationship to the CFC implementation profiles
 
@@ -137,12 +137,6 @@ dependency readiness.
 - CFC authority: Common Fabric runner/runtime evidence and the CFC results the
   trusted sandbox runtime reports. Harness-local policy logic is conservative
   transport/enforcement, not the source of label meaning.
-- Host-broker context reads: at strict enforcement, an explicitly context-bound
-  task may discover the host's command catalog and invoke `run_read_command`.
-  The invocation requires a fresh host read-effect declaration and per-job
-  read-only grant, then the host revalidates both at execution. This narrow
-  authority path changes no other strict read or write gate; quoted and absent
-  task authority remain refused. See [Host commands](LOOM_COMMANDS.md).
 - Host execution: no parent-run shell reaches the host. Bounded host-side
   surfaces exist beside the sandbox: the browser child profile's typed `browser`
   tool, which a browser host attached to the run carries out when there is one
@@ -161,22 +155,25 @@ dependency readiness.
   authority-only host boundary, not a new flow-aware store commit gate; see
   [LOOM_AUTHORING.md](LOOM_AUTHORING.md). The agent result writer
   (`src/result-writer.ts`) is a third trusted host path and not a model tool: a
-  host caller invokes it after a run reaches its structured result, and it
-  writes that result into the same configured space over the same session. Its
-  bounded authority is the session's (AH-TOOL-7): every handle the result names
-  must be one the run's table holds, a cell handle becomes a link and never a
-  copy, a non-cell referent becomes a document under the label its tool reported
-  when the result cites it, and an uncited referent passes the same write
-  admission in an isolated aborted transaction and contributes through an opaque
-  runtime CONTENT-observation receipt. The cells the run observed and the cited
-  referents are read through the writing transaction so the runner derives the
-  inline text's label without making uncited content durable. The write is
-  attributed to the `agent` builtin so the result carries the runtime-minted
-  `LlmDerived` family, and the run's observation ceiling is declared as the
-  result document's store policy so the runner's commit boundary — not the
-  writer — decides whether the derived join fits. A refusal reaches the caller
-  as a typed failure carrying the refusal code and the boundary's structured
-  detail, with no label atom in its message.
+  host caller invokes it for opt-in progress reports and after a run reaches its
+  structured result, and it writes those outputs into the same configured space
+  over the same session. Its bounded authority is the session's (AH-TOOL-7). For
+  a final result, every handle the result names must be one the run's table
+  holds, a cell handle becomes a link and never a copy, a non-cell referent
+  becomes a document under the label its tool reported when the result cites it,
+  and an uncited referent passes the same write admission in an isolated aborted
+  transaction and contributes through an opaque runtime CONTENT-observation
+  receipt. Progress reports use `literalStrings: true`: handle tokens remain
+  display text, create no links, and cite no referents. Observed non-cell
+  referents still contribute through the uncited observation path. In both
+  paths, the cells the run observed and any cited referents are read through the
+  writing transaction so the runner derives the inline text's label without
+  making uncited content durable. The write is attributed to the `agent` builtin
+  so the result carries the runtime-minted `LlmDerived` family, and the run's
+  observation ceiling is declared as the result document's store policy so the
+  runner's commit boundary — not the writer — decides whether the derived join
+  fits. A refusal reaches the caller as a typed failure carrying the refusal
+  code and the boundary's structured detail, with no label atom in its message.
 - Network: explicit in configuration but still provisional. Sandboxed `bash`
   applies a direct-`curl` destination guard; `web_fetch` and web child profiles
   have their own bounded request policies.
@@ -204,26 +201,26 @@ Current selectable parent tools are `bash`, `read_file`, `view_image`,
 `loom_authoring_context`, and the eight read-only Loom tools `loom_search`,
 `loom_page_discover`, `loom_page_inspect`, `loom_page_read`, `loom_people`,
 `loom_calendar_list`, `loom_context`, and `loom_profile`, the host-command tools
-`list_commands`, `run_command`, and `run_read_command`, plus `submit_result`.
-Individual runs receive only their configured subset; `web_fetch` and
-`run_skill_script` are not in the ordinary default surface. Optional tools are
-gated on the backing a run can supply — a fabric session for `run_pattern`,
-`assign_slug`, `resolve_piece`, `call_verb`, `read_value`, and `acquire_skill`,
-the pattern index for `search_patterns` and `record_feedback`, configured
-skills.sh discovery for `search_skills`, and a resolved documentation corpus or
-pattern index for `research`, explicit host Loom authoring configuration for the
-three authoring tools, explicit host Loom retrieval configuration for the eight
-retrieval tools, explicit host command broker configuration for `list_commands`,
-`run_command`, and `run_read_command`, and a configured structured-result schema
-for `submit_result` — and a tool the run cannot back is absent from the surface
-rather than present and failing, so an explicit allowlist naming it does not
-conjure it. `run_pattern` additionally requires the three `--fabric-*` session
-flags. `browser` exists only as a built-in used by the authorized browser child
-profile and cannot be selected as a parent CLI tool. It sends its typed action
-vocabulary to a browser host attached to the run when there is one, and
-otherwise drives the host `agent-browser` CLI, with the Browser Access CDP
-endpoint attached by the harness rather than written by the model. In neither
-case does an input name a session, an endpoint, or a jar.
+`list_commands` and `run_command`, plus `submit_result`. Individual runs receive
+only their configured subset; `web_fetch` and `run_skill_script` are not in the
+ordinary default surface. Optional tools are gated on the backing a run can
+supply — a fabric session for `run_pattern`, `assign_slug`, `resolve_piece`,
+`call_verb`, `read_value`, and `acquire_skill`, the pattern index for
+`search_patterns` and `record_feedback`, configured skills.sh discovery for
+`search_skills`, and a resolved documentation corpus or pattern index for
+`research`, explicit host Loom authoring configuration for the three authoring
+tools, explicit host Loom retrieval configuration for the eight retrieval tools,
+an explicit host command endpoint for `list_commands` and `run_command`, and a
+configured structured-result schema for `submit_result` — and a tool the run
+cannot back is absent from the surface rather than present and failing, so an
+explicit allowlist naming it does not conjure it. `run_pattern` additionally
+requires the three `--fabric-*` session flags. `browser` exists only as a
+built-in used by the authorized browser child profile and cannot be selected as
+a parent CLI tool. It sends its typed action vocabulary to a browser host
+attached to the run when there is one, and otherwise drives the host
+`agent-browser` CLI, with the Browser Access CDP endpoint attached by the
+harness rather than written by the model. In neither case does an input name a
+session, an endpoint, or a jar.
 
 `submit_result` is how a run returns its structured result without a sandbox
 write. It takes the value as its input, validates it with the structured-result
@@ -240,6 +237,20 @@ schema (AH-TOOL-4's explicit grant), it is absent from a run configured with
 none, and it reaches nothing but that run's own result file. A subagent run is
 not offered it. The model writing the file itself remains available to a run
 that holds a tool able to.
+
+`report_progress` is the opt-in interim return channel. The host supplies its
+publication callback, and the tool is absent without that callback and in child
+runs. It accepts a nonempty message of at most 2,000 characters and continues
+the run. Its description asks for user-facing milestone reports. Like
+`submit_result`, it is admitted under every prompt-slot role, with reason
+`progress_return`, because its destination is fixed by the host. For `agent()`
+requests the callback writes a separate labeled document through the canonical
+agent result writer, retaining literal message text, observed-input influence,
+and the model-derived integrity stamp. Attaching the document's link requires
+the runner still to own the active, uncancelled attempt. These are host-owned
+return boundaries; they grant no general write authority. Their storage writes
+remain subject to ordinary CFC commit admission (§18.2.4 and §18.3.3 of the CFC
+runtime implementation profile).
 
 `describe_handle` reports the referent's structural schema and path segments,
 never its data. It prefers the session Fabric's declared shape when available
@@ -352,15 +363,14 @@ placeholders resolve only at the SQLite query boundary.
    sessions. Owner: `cf-harness` and each product adapter. Retirement: the
    selected run profile has a caller-visible preflight that checks every
    required dependency before the first model turn.
-2. **Product `observe` bridges.** Loom and Pattern Factory select `observe` for
-   workflows whose sandbox output does not yet carry trusted mediation metadata
-   end to end. Which mode each adapter selects is a fact about adapters that
-   live outside this repository, so it is stated here on their behalf and is not
-   established by anything in this tree; each adapter's own conformance
-   statement is the authority for it. Owners: the respective product adapters
-   plus the cf-harness/CFC integration. Retirement: real sidecar evidence is
-   present for every exposed observation and enforcing-mode adapter suites pass
-   without opaque-output regressions.
+2. **Product `observe` bridges.** Loom selects `observe` for workflows whose
+   sandbox output does not yet carry trusted mediation metadata end to end.
+   Which mode Loom selects is a fact about an adapter that lives outside this
+   repository, so it is stated here on Loom's behalf and is not established by
+   anything in this tree; Loom's own conformance statement is the authority for
+   it. Owners: Loom plus the cf-harness/CFC integration. Retirement: real
+   sidecar evidence is present for every exposed observation and enforcing-mode
+   adapter suites pass without opaque-output regressions.
 3. **Provisional network policy.** The package-default `sandbox` network, which
    on the Linux default `pasta` gives egress and the host, and the shell `curl`
    guard are integration mechanisms, not a complete destination capability
@@ -448,5 +458,3 @@ placeholders resolve only at the SQLite query boundary.
 - Loom `tests/harness/` and dispatch tests — capability skew, commands,
   cancellation, mounts, structured results, interactive translation, and run
   review.
-- Pattern Factory launcher tests and phase smokes — phase ownership, validation,
-  repair routing, skills, browser leases, and finalization.

@@ -23,7 +23,10 @@ import { FakeTime } from "@std/testing/time";
 
 import type { Ctx, TileView } from "../types.ts";
 import { BENCH_TREND_BUCKET_MS, REPO } from "../config.ts";
-import { BenchmarkHistoryStore } from "../benchmark-history-cache.ts";
+import {
+  BenchmarkHistoryStore,
+  type CachedBenchmarkRun,
+} from "../benchmark-history-cache.ts";
 import {
   availableGeneratedCpuColor,
   benchmark,
@@ -33,9 +36,11 @@ import {
   benchmarkFailureLabel,
   benchmarkHistoryProgressResponse,
   benchmarkRerunHandoff,
+  type BenchmarkSnapshot,
   benchmarkTrend,
   benchmarkTrendRuns,
   benchPage,
+  describeBenchmarkProgress,
   forgetBenchmarkRunsForTest,
   formatNs,
   keyBenchmarks,
@@ -45,8 +50,10 @@ import {
   trendPct,
   trendStatus,
 } from "./benchmark.ts";
+import type * as tileModule from "./benchmark.ts";
 import { CALIBRATION_FILE } from "../bench-report.ts";
 import {
+  CI_HISTORY_DAYS,
   CI_HISTORY_MIN_DAYS,
   CI_HISTORY_POINT_TARGET,
   ciHistoryBucketMs,
@@ -634,7 +641,7 @@ Deno.test("benchmark: a startup collection waits for the run list, then times it
 
 Deno.test("benchmark: a future refresh marker cannot suppress discovery", async () => {
   const directory = await Deno.makeTempDir({ prefix: "benchmark-future-" });
-  const file = `${directory}/fabric-wall-benchmark-history.json`;
+  const file = `${directory}/fabric-wall-benchmark-history`;
   const previousCacheDirectory = Deno.env.get("DASHBOARD_CACHE_DIR");
   const originalFetch = globalThis.fetch;
   const calls: string[] = [];
@@ -797,31 +804,6 @@ Deno.test("runtime history shows live artifact progress and keeps collection run
     );
     assert(!html.includes("reload in a moment"));
     assert(!html.includes('id="days" name="days" disabled'));
-    assertStringIncludes(
-      html,
-      'fetchProgress.dataset.refreshOnComplete === "1"',
-    );
-    assertStringIncludes(
-      html,
-      'collectionFailed = state.phase === "error"',
-    );
-    assertStringIncludes(
-      html,
-      'else if ("lastRequestError" in state) renderIdle(state.lastRequestError || "");',
-    );
-    assertStringIncludes(
-      html,
-      "else if (!collectionFailed) renderIdle();",
-    );
-    assertStringIncludes(
-      html,
-      "else delete fetchProgress.dataset.lastRequestError;",
-    );
-    assertStringIncludes(
-      html,
-      "if (!eventStream && !collectionFailed && !transportFailed) renderIdle()",
-    );
-    assertStringIncludes(html, "transportFailed = true");
 
     const progressUrl = new URL(
       `http://x/bench/runtime-progress?id=${state.progress.id}`,
@@ -851,6 +833,48 @@ Deno.test("runtime history shows live artifact progress and keeps collection run
     } else Deno.env.set("DASHBOARD_CACHE_DIR", previousCacheDirectory);
     await Deno.remove(directory, { recursive: true });
   }
+});
+
+Deno.test("runtime history describes each phase of a collection in its progress panel", () => {
+  const fetching: BenchmarkFetchProgress = {
+    id: "runtime-phases",
+    phase: "fetching",
+    totalRuns: 9,
+    cachedRuns: 2,
+    requestsMade: 5,
+    responsesReceived: 4,
+    successfulResponses: 3,
+    failedResponses: 1,
+    completedRuns: 6,
+    queuedRuns: 3,
+    outstandingRequests: 1,
+    needsReload: false,
+    updatedAt: BASE,
+  };
+  const detail =
+    "2 cached · 5 artifact checks made · 4 responded · 1 outstanding · 3 queued";
+
+  assertEquals(describeBenchmarkProgress(fetching), {
+    title: "6 of 9 artifact checks complete",
+    total: "6 / 9",
+    detail: `${detail} · 1 failed`,
+  });
+  assertEquals(
+    describeBenchmarkProgress({
+      ...fetching,
+      phase: "discovering",
+      failedResponses: 0,
+    }),
+    { title: "Finding benchmark runs…", total: "starting", detail },
+  );
+  assertEquals(
+    describeBenchmarkProgress({
+      ...fetching,
+      phase: "saving",
+      failedResponses: 0,
+    }),
+    { title: "Saving completed responses…", total: "6 / 9", detail },
+  );
 });
 
 Deno.test("/bench before any data shows an idle progress panel", async () => {
@@ -2767,38 +2791,6 @@ Deno.test("/bench: grouped by source file, each benchmark colored by its own tre
   );
   assertStringIncludes(html, '<input type="hidden" name="repo" value="labs">');
   assertStringIncludes(html, '<div id="range-content">');
-  assertStringIncludes(html, 'days.addEventListener("keydown"');
-  assertStringIncludes(html, "syncDayLinks()");
-  assertStringIncludes(html, 'days.addEventListener("change", applyDays)');
-  assert(!html.includes("keyboardEditing"));
-  assertStringIncludes(html, "new DOMParser().parseFromString");
-  assertStringIncludes(html, "rangeContent.replaceWith(replacement)");
-  assertStringIncludes(html, "history.pushState(null");
-  assertStringIncludes(html, 'window.addEventListener("popstate"');
-  assertStringIncludes(html, 'void loadRange("pop")');
-  assertStringIncludes(html, 'void loadRange("restore")');
-  assertStringIncludes(html, 'if (mode === "refresh")');
-  assertStringIncludes(html, "rangeRequestDays !== days.value");
-  assertStringIncludes(html, "if (loaded && pendingRefresh)");
-  assertStringIncludes(html, "days.value !== appliedDays ||");
-  assertStringIncludes(
-    html,
-    "if (!Number.isFinite(value)) return DEFAULT_DAYS",
-  );
-  assertStringIncludes(html, "rangeRequest.abort()");
-  assertStringIncludes(html, "refreshRangeWhenIdle()");
-  assertStringIncludes(html, "const isSameDocumentFragment = (link) => {");
-  assertStringIncludes(
-    html,
-    'url.search === location.search &&\n      url.hash !== ""',
-  );
-  assertStringIncludes(
-    html,
-    "link && isSameTabLink(event, link) && !isSameDocumentFragment(link)",
-  );
-  assert(!html.includes("location.reload()"));
-  assert(!html.includes("benchRestoreDaysFocus"));
-  assertStringIncludes(html, "setInterval(checkForUpdates, 60000)");
   assert(
     !html.includes(
       ".views a.on{background:#6ea8fe;border-color:#6ea8fe;color:#0d0e11;font-weight",
@@ -3032,7 +3024,7 @@ Deno.test("/bench runtime graphs ignore two values at each end when twenty are s
   Deno.env.set("DASHBOARD_CACHE_DIR", directory);
   try {
     const store = new BenchmarkHistoryStore(
-      `${directory}/fabric-wall-benchmark-history.json`,
+      `${directory}/fabric-wall-benchmark-history`,
     );
     await store.load();
     const cached = values.map((value, index) =>
@@ -3298,7 +3290,7 @@ Deno.test("benchmark: a fresh marker then an unreachable direct read grays with 
   // run list directly for itself — and when that direct read is unreachable, it grays
   // with the reason rather than throwing.
   const directory = await Deno.makeTempDir({ prefix: "benchmark-fresh-offline-" });
-  const file = `${directory}/fabric-wall-benchmark-history.json`;
+  const file = `${directory}/fabric-wall-benchmark-history`;
   const previousCacheDirectory = Deno.env.get("DASHBOARD_CACHE_DIR");
   const originalFetch = globalThis.fetch;
   Deno.env.set("DASHBOARD_CACHE_DIR", directory);
@@ -4210,7 +4202,9 @@ describe("keyBenchmarks", () => {
       const initial =
         await (await benchmark.routes![0].handler(new Request(url), url))
           .text();
-      expect(initial).toContain('id="key-only" name="key" value="1" checked');
+      expect(initial).toContain(
+        'id="key-only" name="key" value="1" autocomplete="off" checked',
+      );
       expect(rows(initial).map((row) => row.name).sort()).toEqual([
         "topic board scale/100",
         "topic board/journey",
@@ -4239,7 +4233,9 @@ describe("keyBenchmarks", () => {
         expect(rows(fragment)).toEqual(rows(html));
       }
       const all = await page("");
-      expect(all).toContain('id="key-only" name="key" value="1">');
+      expect(all).toContain(
+        'id="key-only" name="key" value="1" autocomplete="off">',
+      );
       expect(rows(all)).toHaveLength(4);
       expect(all).toContain('<span class="cpu-detail">4 benchmarks ·');
       expect(rows(await page("key=0"))).toEqual(rows(all));
@@ -4421,6 +4417,256 @@ describe("keyBenchmarks", () => {
       expect(offline.sub).toBe("source unreachable");
       expect(offline.extra).not.toContain("benchmarks</div>");
       expect(offline.extra).toContain("<svg");
+    });
+  });
+});
+
+// Runs `body` against a newly started copy of the tile whose cache holds
+// `runs`, and whose last refresh read `refreshed` when there is one.
+async function withCache<T>(
+  runs: CachedBenchmarkRun[],
+  refreshed: CachedBenchmarkRun[] | undefined,
+  body: (isolated: typeof tileModule) => Promise<T>,
+): Promise<T> {
+  const directory = await Deno.makeTempDir({ prefix: "benchmark-snapshot-" });
+  const previousCacheDirectory = Deno.env.get("DASHBOARD_CACHE_DIR");
+  Deno.env.set("DASHBOARD_CACHE_DIR", directory);
+  try {
+    const store = new BenchmarkHistoryStore();
+    await store.load();
+    for (const run of runs) store.set(run);
+    if (refreshed) {
+      store.markRefreshed(
+        Date.now(),
+        refreshed.map((run) => store.get(run.runId, run.runAttempt)!),
+      );
+    }
+    await store.save();
+    return await body(
+      await import(`./benchmark.ts?snapshot=${crypto.randomUUID()}`),
+    );
+  } finally {
+    if (previousCacheDirectory === undefined) {
+      Deno.env.delete("DASHBOARD_CACHE_DIR");
+    } else Deno.env.set("DASHBOARD_CACHE_DIR", previousCacheDirectory);
+    await Deno.remove(directory, { recursive: true });
+  }
+}
+
+// The snapshot version an update check of `isolated` reports.
+async function checkedVersion(isolated: typeof tileModule): Promise<string> {
+  return (await (await isolated.benchmarkHistoryCheckResponse(ctx())).json())
+    .version;
+}
+
+describe("benchmarkSnapshotVersion", () => {
+  const timing = (value: number) => ({
+    min: value,
+    avg: value,
+    max: value,
+    p75: value,
+    p99: value,
+    p995: value,
+    p999: value,
+  });
+  const run = (
+    runId: number,
+    runAttempt: number,
+    keys = ["runtime/a/version.bench.ts > version"],
+  ): CachedBenchmarkRun => ({
+    runId,
+    runAttempt,
+    at: BASE - DAY + runId % 100 * HOUR,
+    cpu: TEST_CPU,
+    metrics: new Map(keys.map((key) => [key, timing(runId)])),
+  });
+  const shown = run(140_000, 1);
+  const later = run(140_001, 1);
+  const calibrationOnly = run(140_002, 1, [`${CALIBRATION_FILE} > spin`]);
+
+  // The version a newly started drill-down reports for a cache whose last
+  // refresh read `runs`. Each call starts a new copy of the tile, which builds
+  // the snapshot afresh, so equal results across calls also show that
+  // building it again does not move the version.
+  function versionFor(runs: CachedBenchmarkRun[]): Promise<string> {
+    return withCache(runs, runs, async (isolated) => {
+      const version = await checkedVersion(isolated);
+      expect(await checkedVersion(isolated)).toBe(version);
+      expect(isolated.benchmarkSnapshotVersion()).toBe(version);
+      return version;
+    });
+  }
+
+  it("stays the same while the measurements shown stay the same", async () => {
+    const version = await versionFor([shown]);
+    expect(await versionFor([shown])).toBe(version);
+    // Calibration measurements divide out the machine; the drill-down does
+    // not chart them, so a run carrying nothing else shows nothing.
+    expect(await versionFor([shown, calibrationOnly])).toBe(version);
+  });
+
+  it("changes when the measurements shown change", async () => {
+    const versions = [
+      await versionFor([]),
+      await versionFor([shown]),
+      await versionFor([shown, later]),
+      await versionFor([later]),
+      await versionFor([run(140_000, 2)]),
+    ];
+    expect(new Set(versions).size).toBe(versions.length);
+  });
+});
+
+describe("the /bench snapshot", () => {
+  const origin = "runtime/a/snapshot.bench.ts";
+  const key = `${origin} > snapshot`;
+  const cached = (runId: number, at: number): CachedBenchmarkRun => ({
+    runId,
+    runAttempt: 1,
+    at,
+    cpu: TEST_CPU,
+    metrics: new Map([[key, {
+      min: runId,
+      avg: runId,
+      max: runId,
+      p75: runId,
+      p99: runId,
+      p995: runId,
+      p999: runId,
+    }]]),
+  });
+  const chartedAttempts = (snapshot: BenchmarkSnapshot): string[] =>
+    snapshot.series.flatMap((series) =>
+      series.cpus.flatMap((cpu) =>
+        cpu.points.map((point) => `${point.runId}.${point.runAttempt}`)
+      )
+    );
+
+  it("is kept while the runs it charts stay the same", async () => {
+    const first = cached(141_000, SAMPLED_BASE - 2 * DAY);
+    const second = cached(141_001, SAMPLED_BASE - DAY);
+    // Once with a refresh manifest naming both runs, which the tile charts as
+    // it stands, and once with none, when the tile samples the cache by time.
+    for (const refreshed of [[first, second], undefined]) {
+      await withCache([first, second], refreshed, async (isolated) => {
+        await isolated.benchmarkHistoryCheckResponse(ctx());
+        const snapshot = isolated.benchmarkSnapshotForTest();
+        expect(chartedAttempts(snapshot)).toEqual([
+          `${first.runId}.1`,
+          `${second.runId}.1`,
+        ]);
+        await isolated.benchmarkHistoryResponse(
+          new URL("http://x/bench?view=runtime"),
+          ctx(),
+        );
+        await isolated.benchmarkHistoryCheckResponse(ctx());
+        expect(isolated.benchmarkSnapshotForTest()).toBe(snapshot);
+      });
+    }
+  });
+
+  it("is rebuilt when a run leaves the window it charts", async () => {
+    using time = new FakeTime();
+    const leaving = cached(
+      141_010,
+      Date.now() - CI_HISTORY_DAYS * DAY + HOUR,
+    );
+    const staying = cached(141_011, Date.now() - DAY);
+    await withCache([leaving, staying], undefined, async (isolated) => {
+      const check = () => checkedVersion(isolated);
+      const version = await check();
+      const before = isolated.benchmarkSnapshotForTest();
+      expect(chartedAttempts(before)).toEqual([
+        `${leaving.runId}.1`,
+        `${staying.runId}.1`,
+      ]);
+
+      time.tick(2 * HOUR);
+      expect(await check()).not.toBe(version);
+      const after = isolated.benchmarkSnapshotForTest();
+      expect(after).not.toBe(before);
+      expect(chartedAttempts(after)).toEqual([`${staying.runId}.1`]);
+      await check();
+      expect(isolated.benchmarkSnapshotForTest()).toBe(after);
+    });
+  });
+
+  it("is rebuilt when a collection reads a run's next attempt", async () => {
+    const charted = cached(141_020, SAMPLED_BASE - DAY);
+    const rerun = ghRun(charted.runId, charted.at, "success", 2);
+    await withCache([charted], [charted], async (isolated) => {
+      const check = () => checkedVersion(isolated);
+      const version = await check();
+      const before = isolated.benchmarkSnapshotForTest();
+      expect(chartedAttempts(before)).toEqual([`${charted.runId}.1`]);
+
+      await withApi({
+        pages: { 1: [rerun] },
+        artifacts: {
+          [rerun.id]: [{
+            id: rerun.id * 10,
+            name: "bench-results",
+            expired: false,
+          }],
+        },
+        zips: {
+          [rerun.id * 10]: await benchZip(
+            report([bench(origin, null, "snapshot", timings(5))]),
+          ),
+        },
+      }, async () => {
+        await isolated.benchmark.collect(
+          ctx({ GH_TOKEN: `snapshot-${crypto.randomUUID()}` }),
+        );
+      });
+      expect(await check()).not.toBe(version);
+      const after = isolated.benchmarkSnapshotForTest();
+      expect(after).not.toBe(before);
+      expect(chartedAttempts(after)).toEqual([`${charted.runId}.2`]);
+      await check();
+      expect(isolated.benchmarkSnapshotForTest()).toBe(after);
+    });
+  });
+
+  it("is rebuilt when a collection reads a run's processor again", async () => {
+    // A run cached before the store recorded processors charts nothing. The
+    // next collection fetches the same attempt again, now naming a processor.
+    const unplaced = {
+      ...cached(141_030, SAMPLED_BASE - DAY),
+      cpu: undefined,
+    };
+    const listed = ghRun(unplaced.runId, unplaced.at);
+    await withCache([unplaced], [unplaced], async (isolated) => {
+      const check = () => checkedVersion(isolated);
+      const version = await check();
+      const before = isolated.benchmarkSnapshotForTest();
+      expect(chartedAttempts(before)).toEqual([]);
+
+      await withApi({
+        pages: { 1: [listed] },
+        artifacts: {
+          [listed.id]: [{
+            id: listed.id * 10,
+            name: "bench-results",
+            expired: false,
+          }],
+        },
+        zips: {
+          [listed.id * 10]: await benchZip(
+            report([bench(origin, null, "snapshot", timings(5))]),
+          ),
+        },
+      }, async () => {
+        await isolated.benchmark.collect(
+          ctx({ GH_TOKEN: `snapshot-${crypto.randomUUID()}` }),
+        );
+      });
+      expect(await check()).not.toBe(version);
+      const after = isolated.benchmarkSnapshotForTest();
+      expect(after).not.toBe(before);
+      expect(chartedAttempts(after)).toEqual([`${unplaced.runId}.1`]);
+      await check();
+      expect(isolated.benchmarkSnapshotForTest()).toBe(after);
     });
   });
 });

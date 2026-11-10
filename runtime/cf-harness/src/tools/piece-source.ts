@@ -29,6 +29,7 @@
  */
 
 import type { JSONSchema } from "@commonfabric/api";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { pieceId } from "@commonfabric/piece";
 import {
   type PatternCompatibilityReport,
@@ -49,7 +50,6 @@ import {
   type DisclosedCfcLabel,
   disclosedCfcLabels,
 } from "../cfc-label-disclosure.ts";
-import { errorMessage } from "../error-message.ts";
 import type { HarnessForeignSpaces } from "../foreign-spaces.ts";
 import { scrubBareFabricIdentifiers } from "../fabric-identifier-scrub.ts";
 import type { HarnessToolDescriptor } from "../contracts/tool-descriptor.ts";
@@ -337,7 +337,7 @@ export const resolvePiece = async (
     return {
       ok: false,
       message: `${toolId} could not load the referenced piece: ${
-        errorMessage(error)
+        describeFailure(error)
       }`,
     };
   }
@@ -391,7 +391,7 @@ export const sessionPieces = async (
     return {
       ok: false,
       message: `${toolId} could not establish the fabric session: ${
-        errorMessage(error)
+        describeFailure(error)
       }`,
     };
   }
@@ -428,7 +428,7 @@ export const readPieceSourceTool: HarnessToolDefinition<
     } catch (error) {
       return fail(
         `read_piece_source could not read the piece's source: ${
-          errorMessage(error)
+          describeFailure(error)
         }`,
       );
     }
@@ -510,7 +510,7 @@ export const revisePieceTool: HarnessToolDefinition<
       controller = await pieces.get(piece.id);
     } catch (error) {
       return fail(
-        `revise_piece could not open the piece: ${errorMessage(error)}`,
+        `revise_piece could not open the piece: ${describeFailure(error)}`,
       );
     }
 
@@ -527,7 +527,7 @@ export const revisePieceTool: HarnessToolDefinition<
       } catch (error) {
         return fail(
           `revise_piece could not read the piece's current revision: ${
-            errorMessage(error)
+            describeFailure(error)
           }`,
         );
       }
@@ -549,7 +549,9 @@ export const revisePieceTool: HarnessToolDefinition<
       report = await controller.checkPattern(program);
     } catch (error) {
       return fail(
-        `revise_piece could not compile the candidate: ${errorMessage(error)}`,
+        `revise_piece could not compile the candidate: ${
+          describeFailure(error)
+        }`,
       );
     }
     if (!report.compatible) {
@@ -597,7 +599,7 @@ export const revisePieceTool: HarnessToolDefinition<
         );
       }
       return fail(
-        `revise_piece could not apply the revision: ${errorMessage(error)}`,
+        `revise_piece could not apply the revision: ${describeFailure(error)}`,
       );
     }
     const resultRef = createLLMFriendlyLink(

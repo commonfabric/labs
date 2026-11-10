@@ -1,7 +1,7 @@
-import {
+import type {
   JSONSchemaObj,
-  type JSONSchemaTypes,
-  type JSONValue,
+  JSONSchemaTypes,
+  JSONValue,
 } from "@commonfabric/api";
 import { isDeepFrozen } from "@commonfabric/data-model";
 import { internSchema } from "@commonfabric/data-model-schema";
@@ -9,8 +9,12 @@ import { forEachSubschema } from "@commonfabric/data-model-schema/schema-walk";
 import {
   isExternalSchemaRef,
 } from "@commonfabric/data-model-schema/schema-refs";
-import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import { isArrayIndexPropertyName } from "@commonfabric/js-values/arrays";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
+import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
 
 import type {
   AsCellEntry,
@@ -19,7 +23,6 @@ import type {
   SchemaScope,
 } from "./builder/types.ts";
 import { BranchListWalk, REACHED_AGAIN } from "./cfc/branch-list-walk.ts";
-import type { CfcConfClause } from "./cfc/clause.ts";
 import { uniqueCfcAtoms } from "./cfc/observation.ts";
 import {
   cfcSchemaDocumentOf,

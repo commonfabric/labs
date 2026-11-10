@@ -1,10 +1,19 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { fromFileUrl, join, toFileUrl } from "@std/path";
+import {
+  readDenoConfig,
+  runDenoCommandWithTemporaryLock,
+} from "@commonfabric/test-support/isolated-deno";
 import {
   acceptedMoveProblems,
   compareDumps,
   describeCompileErrors,
   describeFailures,
+  dumperConfig,
+  dumperEnvironment,
+  failureReports,
+  workspacePackages,
 } from "./check-cause-assignments.ts";
 import {
   assignmentDigest,
@@ -14,6 +23,7 @@ import {
   ACCEPTED_MOVES,
   type AcceptedMove,
 } from "./cause-assignments-accepted-moves.ts";
+import { CONNECTOR_PATTERN_SOURCES } from "../connectors/pattern-sources.ts";
 
 const CHILD = "cell, computed, written by sub-pattern child#Child";
 const LIFT = "cell, computed, written by function";
@@ -39,6 +49,14 @@ const build = (
 
 const dump = (...assignments: PatternAssignment[]) => ({
   assignments,
+  unassigned: [],
+  errors: [],
+});
+
+/** A dump of a side that compiled each of `builds`' sources to no assignment. */
+const dumpUnassigned = (...builds: PatternAssignment[]) => ({
+  assignments: [],
+  unassigned: builds.map(({ pattern, source }) => ({ pattern, source })),
   errors: [],
 });
 
@@ -54,6 +72,61 @@ const RENUMBERED = build("room.tsx", "s", [CHILD]);
 // reads the other two as unmoved.
 const THREE_CHILDREN = build("lobby.tsx", "s", [CHILD, CHILD, CHILD]);
 const TWO_CHILDREN = build("lobby.tsx", "s", [CHILD, CHILD]);
+
+const ROOT = fromFileUrl(new URL("..", import.meta.url));
+
+/**
+ * A stand-in for the compiler of a checkout, at the paths the dump loads: a
+ * module whose source names a pattern evaluates to one, and any other to no
+ * default export.
+ */
+const STAND_IN_COMPILER: Readonly<Record<string, string>> = {
+  "runtime/cli/lib/dev.ts": `
+    import { evaluate } from "../../runner/src/harness/evaluate.ts";
+    export const createRuntime = () => ({
+      harness: {
+        resolve: () => {},
+        compileToRecordGraph: () => ({ id: "", graph: {}, mainSpecifier: "" }),
+        evaluateRecordGraph: (_id, _graph, _main, program) => evaluate(program),
+      },
+      patternManager: {
+        registerEvaluatedModules: () => {},
+        getArtifactEntryRef: () => undefined,
+      },
+      dispose: () => {},
+    });
+  `,
+  "runtime/runner/src/harness/local-program.deno.ts": `
+    export const resolveLocalProgram = async (_resolve, { main }) => ({
+      main,
+      files: [{ name: "/main.tsx", contents: await Deno.readTextFile(main) }],
+    });
+  `,
+  "runtime/runner/src/harness/evaluate.ts": `
+    export const evaluate = (program) => ({
+      main: program.files[0].contents.includes("pattern")
+        ? { default: { nodes: [], argumentSchema: {}, result: {} } }
+        : {},
+    });
+  `,
+  "runtime/runner/src/harness/read-by-no-build.ts": "// a comment\n",
+};
+
+/** The stand-in compiler's evaluation, changed to give no entry module. */
+const EVALUATES_TO_NOTHING = "export const evaluate = () => ({});\n";
+
+/** A change to a file under the gate's watched paths that no build reads. */
+const WATCHED_EDIT: Readonly<Record<string, string>> = {
+  "runtime/runner/src/harness/read-by-no-build.ts": "// an edited comment\n",
+};
+
+/** Writes `files`, each a path under `root` and its contents. */
+async function write(root: string, files: Readonly<Record<string, string>>) {
+  for (const [path, text] of Object.entries(files)) {
+    await Deno.mkdir(join(root, path, ".."), { recursive: true });
+    await Deno.writeTextFile(join(root, path), text);
+  }
+}
 
 describe("check-cause-assignments", () => {
   describe("compareDumps()", () => {
@@ -219,6 +292,8 @@ describe("check-cause-assignments", () => {
         forgiven: [],
         unused: [],
         compared: 1,
+        dropped: [],
+        built: { base: 1, head: 1 },
         compileErrors: [],
       });
     });
@@ -280,10 +355,12 @@ describe("check-cause-assignments", () => {
       const comparison = compareDumps(
         {
           assignments: [],
+          unassigned: [],
           errors: [{ pattern: "a.tsx", error: "base broke" }],
         },
         {
           assignments: [NUMBERED],
+          unassigned: [],
           errors: [{ pattern: "b.tsx", error: "head broke" }],
         },
         [],
@@ -304,6 +381,7 @@ describe("check-cause-assignments", () => {
         dump(),
         {
           assignments: [],
+          unassigned: [],
           errors: [{ pattern: "listed.tsx", error: "never evaluates" }],
         },
         [],
@@ -317,6 +395,7 @@ describe("check-cause-assignments", () => {
       const comparison = compareDumps(
         {
           assignments: [],
+          unassigned: [],
           errors: [{ pattern: "room.tsx", error: "never evaluates" }],
         },
         dump(NUMBERED),
@@ -332,6 +411,7 @@ describe("check-cause-assignments", () => {
         dump(NUMBERED),
         {
           assignments: [],
+          unassigned: [],
           errors: [{ pattern: "room.tsx", error: "broke" }],
         },
         [],
@@ -341,6 +421,165 @@ describe("check-cause-assignments", () => {
       expect(comparison.compileErrors).toEqual([
         { side: "head", pattern: "room.tsx", error: "broke" },
       ]);
+    });
+
+    it("returns as dropped a pattern the base built and the head compiled from the same source to no assignment", () => {
+      const comparison = compareDumps(
+        dump(NUMBERED),
+        dumpUnassigned(NUMBERED),
+        [],
+        NOTHING_UNEVALUABLE,
+      );
+
+      expect(comparison.dropped).toEqual(["room.tsx"]);
+      expect(comparison.compared).toBe(0);
+    });
+
+    it("returns nothing as dropped where the head compiled an edited source to no assignment", () => {
+      const comparison = compareDumps(
+        dump(NUMBERED),
+        dumpUnassigned(build("room.tsx", "edited", [])),
+        [],
+        NOTHING_UNEVALUABLE,
+      );
+
+      expect(comparison.dropped).toEqual([]);
+    });
+
+    it("returns nothing as dropped for a module neither side builds an assignment of", () => {
+      const helper = build("schemas.ts", "s", []);
+
+      const comparison = compareDumps(
+        dumpUnassigned(helper),
+        dumpUnassigned(helper),
+        [],
+        NOTHING_UNEVALUABLE,
+      );
+
+      expect(comparison.dropped).toEqual([]);
+    });
+
+    it("returns nothing as dropped, and a compile error, where the head failed to compile a pattern the base built", () => {
+      const comparison = compareDumps(
+        dump(NUMBERED),
+        {
+          assignments: [],
+          unassigned: [],
+          errors: [{ pattern: "room.tsx", error: "broke" }],
+        },
+        [],
+        NOTHING_UNEVALUABLE,
+      );
+
+      expect(comparison.dropped).toEqual([]);
+      expect(comparison.compileErrors.length).toBe(1);
+    });
+  });
+
+  describe("failureReports()", () => {
+    const OTHER = build("other.tsx", "s", [LIFT]);
+    const HELPER = build("schemas.ts", "s", []);
+
+    it("returns no report for patterns numbered alike on both sides, beside a module neither side builds an assignment of", () => {
+      const side = {
+        ...dump(NUMBERED, OTHER),
+        unassigned: dumpUnassigned(HELPER).unassigned,
+      };
+
+      expect(
+        failureReports(compareDumps(side, side, [], NOTHING_UNEVALUABLE)),
+      ).toEqual([]);
+    });
+
+    it("returns a report naming each pattern, and a report of nothing compared, for a head side whose builds all return `undefined`", () => {
+      const reports = failureReports(
+        compareDumps(
+          dump(NUMBERED, OTHER),
+          dumpUnassigned(NUMBERED, OTHER),
+          [],
+          NOTHING_UNEVALUABLE,
+        ),
+      );
+
+      expect(reports.length).toBe(2);
+      expect(reports[0]).toContain("room.tsx");
+      expect(reports[0]).toContain("other.tsx");
+      expect(reports[1]).toContain("gave 2 patterns an assignment");
+      expect(reports[1]).toContain("this build 0");
+    });
+
+    it("returns a report naming the one pattern the head side stopped building, while the others compare", () => {
+      const reports = failureReports(
+        compareDumps(
+          dump(NUMBERED, OTHER),
+          { ...dumpUnassigned(NUMBERED), assignments: [OTHER] },
+          [],
+          NOTHING_UNEVALUABLE,
+        ),
+      );
+
+      expect(reports.length).toBe(1);
+      expect(reports[0]).toContain("room.tsx");
+      expect(reports[0]).not.toContain("other.tsx");
+    });
+
+    it("returns a report of nothing compared where neither side built a pattern", () => {
+      const reports = failureReports(
+        compareDumps(
+          dumpUnassigned(HELPER),
+          dumpUnassigned(HELPER),
+          [],
+          NOTHING_UNEVALUABLE,
+        ),
+      );
+
+      expect(reports.length).toBe(1);
+      expect(reports[0]).toContain("compared no patterns");
+    });
+
+    it("returns a report of nothing compared where every pattern's source differs", () => {
+      const reports = failureReports(
+        compareDumps(
+          dump(NUMBERED),
+          dump(build("room.tsx", "edited", [LIFT, CHILD])),
+          [],
+          NOTHING_UNEVALUABLE,
+        ),
+      );
+
+      expect(reports.length).toBe(1);
+      expect(reports[0]).toContain("compared no patterns");
+    });
+
+    it("returns no report for one edited pattern beside one compared", () => {
+      expect(
+        failureReports(
+          compareDumps(
+            dump(NUMBERED, OTHER),
+            dump(build("room.tsx", "edited", [CHILD]), OTHER),
+            [],
+            NOTHING_UNEVALUABLE,
+          ),
+        ),
+      ).toEqual([]);
+    });
+
+    it("returns a report of a moved cell and a report of a compile error", () => {
+      const reports = failureReports(
+        compareDumps(
+          dump(NUMBERED),
+          {
+            ...dump(RENUMBERED),
+            errors: [{ pattern: "broken.tsx", error: "broke" }],
+          },
+          [],
+          NOTHING_UNEVALUABLE,
+        ),
+      );
+
+      expect(reports.length).toBe(2);
+      expect(reports[0]).toContain("broken.tsx (head build): broke");
+      expect(reports[1]).toContain("room.tsx");
     });
   });
 
@@ -449,6 +688,263 @@ describe("check-cause-assignments", () => {
       expect(text).toContain(
         `  ambiguous, holds state: [0, 1, 2] -> [0, 1]: ${CHILD} (entry pattern)`,
       );
+    });
+  });
+  describe("dumperConfig()", () => {
+    /**
+     * Runs `test` against a base checkout with package `@t/a` and a change
+     * that adds `@t/b`, and removes both afterwards.
+     */
+    async function withCheckouts(
+      test: (checkouts: { base: string; head: string }) => Promise<void>,
+    ): Promise<void> {
+      const scratch = await Deno.makeTempDir({ prefix: "dumper-config-" });
+      const a = {
+        "base/a/deno.json": JSON.stringify({
+          name: "@t/a",
+          exports: "./src/m.ts",
+        }),
+        "base/a/src/m.ts": "export const m = 1;\n",
+      };
+      const base = join(scratch, "base");
+      await write(base, {
+        ...a,
+        "deno.jsonc": JSON.stringify({
+          workspace: ["./base/a"],
+          imports: { "@std/path": "jsr:@std/path@^1" },
+        }),
+      });
+      const head = join(scratch, "head");
+      await write(head, {
+        ...a,
+        "deno.jsonc": JSON.stringify({ workspace: ["./base/a", "./base/b"] }),
+        "base/b/deno.jsonc": JSON.stringify({
+          name: "@t/b",
+          imports: { "@/": "./src/" },
+          exports: { ".": "./src/index.ts", "./n": "./src/n.ts" },
+        }),
+        "base/b/src/index.ts": 'export { n as b } from "@/n.ts";\n',
+        "base/b/src/n.ts": "export const n = 3;\n",
+        "tasks/use.ts":
+          'import { n } from "@t/b/n";\nimport { b } from "@t/b";\n' +
+          "console.log(n, b);\n",
+      });
+      try {
+        await test({ base, head });
+      } finally {
+        await Deno.remove(scratch, { recursive: true });
+      }
+    }
+
+    it("lists each workspace package with its directory, the file each export names, and its own imports", () =>
+      withCheckouts(async ({ head }) => {
+        const url = (path: string) => toFileUrl(join(head, path)).href;
+        expect(await workspacePackages(head)).toEqual(
+          new Map([
+            ["@t/a", {
+              dir: url("base/a/"),
+              exports: new Map([["@t/a", url("base/a/src/m.ts")]]),
+              imports: {},
+            }],
+            ["@t/b", {
+              dir: url("base/b/"),
+              exports: new Map([
+                ["@t/b", url("base/b/src/index.ts")],
+                ["@t/b/n", url("base/b/src/n.ts")],
+              ]),
+              imports: { "@/": url("base/b/src/") },
+            }],
+          ]),
+        );
+      }));
+
+    it("returns the checkout's own configuration where the change adds no package", () =>
+      withCheckouts(async ({ head }) => {
+        expect(await dumperConfig(head, head)).toBe(join(head, "deno.jsonc"));
+      }));
+
+    it("adds an import for each module of a package only the change has, and that package's own imports, and nothing for one both have", () =>
+      withCheckouts(async ({ base, head }) => {
+        const config = JSON.parse(
+          await Deno.readTextFile(await dumperConfig(base, head)),
+        );
+        expect(config.workspace).toEqual(["./base/a"]);
+        expect(config.imports).toEqual({
+          "@std/path": "jsr:@std/path@^1",
+          "@t/b": toFileUrl(join(head, "base/b/src/index.ts")).href,
+          "@t/b/n": toFileUrl(join(head, "base/b/src/n.ts")).href,
+        });
+        expect(config.scopes).toEqual({
+          [toFileUrl(join(head, "base/b/")).href]: {
+            "@/": toFileUrl(join(head, "base/b/src/")).href,
+          },
+        });
+      }));
+
+    it("lets a module of the change name its new package while the base checkout's configuration is in force", () =>
+      withCheckouts(async ({ base, head }) => {
+        const run = (config: string) =>
+          new Deno.Command(Deno.execPath(), {
+            args: ["run", "--config", config, join(head, "tasks/use.ts")],
+            cwd: base,
+            stdout: "piped",
+            stderr: "piped",
+          }).output();
+        const without = await run(join(base, "deno.jsonc"));
+        expect(without.code).not.toBe(0);
+        expect(new TextDecoder().decode(without.stderr)).toContain(
+          'not a dependency and not in import map from "' +
+            toFileUrl(join(head, "tasks/use.ts")).href,
+        );
+        const withAdded = await run(await dumperConfig(base, head));
+        expect(new TextDecoder().decode(withAdded.stdout)).toBe("3 3\n");
+      }));
+  });
+
+  describe("dumperEnvironment()", () => {
+    it("leaves out each variable that sets an experimental flag, and keeps the rest", () => {
+      expect(
+        dumperEnvironment({
+          PATH: "/bin",
+          EXPERIMENTAL_LOCAL_FOLD: "true",
+          EXPERIMENTAL_MODERN_CELL_REP: "false",
+          EXPERIMENTAL_UNMAPPED_NAME: "true",
+          LOG_LEVEL: "debug",
+        }),
+      ).toStrictEqual({
+        PATH: "/bin",
+        EXPERIMENTAL_UNMAPPED_NAME: "true",
+        LOG_LEVEL: "error",
+      });
+    });
+
+    it("leaves out the coverage directory, so the dumper writes no profile", () => {
+      expect(
+        dumperEnvironment({ PATH: "/bin", DENO_COVERAGE_DIR: "coverage/raw" }),
+      ).toStrictEqual({ PATH: "/bin", LOG_LEVEL: "error" });
+    });
+  });
+
+  describe("the script", () => {
+    /** Runs git in `repo`, under a configuration no developer's can change. */
+    async function git(repo: string, ...args: string[]): Promise<void> {
+      const { code, stderr } = await new Deno.Command("git", {
+        args: [
+          "-c",
+          "user.name=test",
+          "-c",
+          "user.email=test@example.com",
+          "-c",
+          "commit.gpgsign=false",
+          ...args,
+        ],
+        cwd: repo,
+        stdout: "null",
+        stderr: "piped",
+      }).output();
+      if (code !== 0) {
+        throw new Error(
+          `git ${args.join(" ")}: ${new TextDecoder().decode(stderr)}`,
+        );
+      }
+    }
+
+    /**
+     * Commits a repository holding a pattern, a helper module, a note, and the
+     * stand-in compiler, applies `change` to its working tree, and returns the
+     * result of running the gate there against that commit. The repository's
+     * configuration lets the dump, whose modules are this checkout's, name the
+     * packages it imports, and compiles them with this checkout's compiler
+     * options. Deno caches one compiled copy of each module, so a dump compiled
+     * under other options replaces the copy a coverage profile of this test
+     * process was taken against, and that profile then fails to convert.
+     */
+    async function runGate(
+      change: Readonly<Record<string, string>>,
+      patterns: Readonly<Record<string, string>> = {
+        "patterns/room.tsx": "// a pattern\n",
+        "patterns/schemas.ts": "// a helper\n",
+      },
+    ): Promise<{ code: number; stdout: string; stderr: string }> {
+      const repo = await Deno.makeTempDir({
+        prefix: "cause-assignments-gate-",
+      });
+      try {
+        const { imports, compilerOptions } = await readDenoConfig(
+          join(ROOT, "deno.jsonc"),
+        );
+        await write(repo, {
+          ...STAND_IN_COMPILER,
+          ...patterns,
+          "deno.jsonc": JSON.stringify({ imports, compilerOptions }),
+          "notes.md": "a note\n",
+        });
+        await Deno.rename(
+          await dumperConfig(repo, ROOT),
+          join(repo, "deno.jsonc"),
+        );
+        await Deno.copyFile(join(ROOT, "deno.lock"), join(repo, "deno.lock"));
+        await Deno.mkdir(join(repo, "patterns"), { recursive: true });
+        for (const tree of CONNECTOR_PATTERN_SOURCES) {
+          await Deno.mkdir(join(repo, tree.directory), { recursive: true });
+        }
+        await git(repo, "init", "--quiet");
+        await git(repo, "add", ".");
+        await git(repo, "commit", "--quiet", "--no-verify", "-m", "base");
+        await write(repo, change);
+        const output = await runDenoCommandWithTemporaryLock({
+          root: ROOT,
+          cwd: repo,
+          args: (lockPath) => [
+            "run",
+            "--config",
+            join(ROOT, "deno.jsonc"),
+            "--lock",
+            lockPath,
+            "-A",
+            join(ROOT, "tasks/check-cause-assignments.ts"),
+            "HEAD",
+          ],
+        });
+        return {
+          code: output.code,
+          stdout: new TextDecoder().decode(output.stdout),
+          stderr: new TextDecoder().decode(output.stderr),
+        };
+      } finally {
+        await Deno.remove(repo, { recursive: true });
+      }
+    }
+
+    it("exits 0 without comparing, for a change touching none of its watched paths", async () => {
+      const { code, stdout } = await runGate({ "notes.md": "edited\n" });
+
+      expect(code).toBe(0);
+      expect(stdout).toContain("nothing a pattern's numbering is built by");
+    });
+
+    it("exits 0 having compared the pattern, for a change that builds each pattern as the base does", async () => {
+      const { code, stdout } = await runGate(WATCHED_EDIT);
+
+      expect(stdout).toContain("compared 1 patterns");
+      expect(code).toBe(0);
+    });
+
+    it("exits 1 naming the pattern, where every build on the head side returns `undefined`", async () => {
+      const { code, stderr } = await runGate({
+        "runtime/runner/src/harness/evaluate.ts": EVALUATES_TO_NOTHING,
+      });
+
+      expect(code).toBe(1);
+      expect(stderr).toContain("room.tsx");
+      expect(stderr).not.toContain("schemas.ts");
+    });
+
+    it("exits 1 for a change reaching the comparison where no pattern exists to compare", async () => {
+      const { code, stderr } = await runGate(WATCHED_EDIT, {});
+
+      expect(code).toBe(1);
+      expect(stderr).toContain("compared no patterns");
     });
   });
 });

@@ -42,7 +42,7 @@ import {
   setContentAddressedSchemasConfig,
 } from "../src/schema-doc-config.ts";
 import { LINK_V1_TAG } from "../src/sigil-types.ts";
-import { type IExtendedStorageTransaction } from "../src/storage/interface.ts";
+import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 
 const signer = await Identity.fromPassphrase("test operator");
 const space = signer.did();

@@ -79,13 +79,3 @@ export const DEFAULT_OUTPUT: IframeOutputData = {
   displayName: "",
   hue: null,
 };
-
-export const IFRAME_PATTERN = {
-  name: "IframeCursorCanvas",
-  displayName: "Cursor Canvas",
-  stateScope: "space",
-  outputScope: "user",
-  frameHeight: "100vh",
-  databases: {},
-  presence: { cursors: "state" },
-} as const;

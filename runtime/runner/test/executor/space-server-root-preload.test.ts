@@ -7,7 +7,7 @@ import {
   setServerExecutionConfig,
 } from "@commonfabric/memory/v2";
 import * as Engine from "@commonfabric/memory/v2/engine";
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 
 import { cellTx } from "../../src/cell.ts";
 import { SpaceServer } from "../../src/executor/space-server.ts";
@@ -152,7 +152,7 @@ describe("SpaceServer", () => {
       }
     };
     const facade = new Proxy(server, {
-      get(target, key, receiver) {
+      get(target, key) {
         if (key === "demandForSpace") {
           return () => {
             onPass?.();
@@ -161,7 +161,7 @@ describe("SpaceServer", () => {
             );
           };
         }
-        const value = Reflect.get(target, key, receiver);
+        const value = Reflect.get(target, key);
         return typeof value === "function" ? value.bind(target) : value;
       },
     });

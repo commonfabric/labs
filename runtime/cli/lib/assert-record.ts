@@ -8,8 +8,8 @@
 
 import type { AssertPart, AssertRecord } from "@commonfabric/api";
 import { debugStr } from "@commonfabric/data-model";
-import { maxOf } from "@commonfabric/utils/math";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { maxOf } from "@commonfabric/collections/math";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 /**
  * Recognizes the record an `assert(...)` assertion carries. A `computed(...)`

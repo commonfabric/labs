@@ -161,6 +161,7 @@ export default pattern(() => {
   const directCatalog = emptyCatalog();
   const direct = FabriChatManagerCore({
     myProfile: profile,
+    sessionProfile: profile,
     sharedSpaceCatalog: directCatalog,
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests: directRequests,
@@ -187,7 +188,7 @@ export default pattern(() => {
     direct.forget.send({
       requestId: "f-not-room",
       room: directHeld.key("room").key("messages").resolveAsCell(),
-      revision: direct.rooms[0]?.revision,
+      revision: direct.rooms[0]!.revision!,
     })
   );
   // The revision the forget below names, which another client's request made
@@ -217,6 +218,7 @@ export default pattern(() => {
   const groupCatalog = emptyCatalog();
   const group = FabriChatManagerCore({
     myProfile: profile,
+    sessionProfile: profile,
     sharedSpaceCatalog: groupCatalog,
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests: groupRequests,
@@ -228,7 +230,7 @@ export default pattern(() => {
   const action_open_direct_with_self = action(() =>
     group.openDirect.send({
       requestId: "d-self",
-      counterpart: currentPrincipal(),
+      counterpart: currentPrincipal()!,
     })
   );
   // A profile page's address, pasted where a principal's DID goes.
@@ -246,6 +248,7 @@ export default pattern(() => {
   const acceptCatalog = emptyCatalog();
   const accepting = FabriChatManagerCore({
     myProfile: profile,
+    sessionProfile: profile,
     sharedSpaceCatalog: acceptCatalog,
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests: acceptRequests,
@@ -262,21 +265,21 @@ export default pattern(() => {
     accepting.forget.send({
       requestId: "f-1",
       room: acceptHeld.key("room").resolveAsCell(),
-      revision: accepting.rooms[0]?.revision,
+      revision: accepting.rooms[0]!.revision!,
     })
   );
   const action_forget_group_again = action(() =>
     accepting.forget.send({
       requestId: "f-2",
       room: acceptHeld.key("room").resolveAsCell(),
-      revision: accepting.rooms[0]?.revision,
+      revision: accepting.rooms[0]!.revision!,
     })
   );
   const action_forget_accepted_direct = action(() =>
     accepting.forget.send({
       requestId: "f-3",
       room: acceptHeld.key("room").resolveAsCell(),
-      revision: accepting.rooms[0]?.revision,
+      revision: accepting.rooms[0]!.revision!,
     })
   );
   // A space's own chat, which no manager created, so it has no record.
@@ -311,6 +314,7 @@ export default pattern(() => {
   const deliveredNotices = Writable.of<ChatManagerNotice[]>([]);
   const delivering = FabriChatManagerCore({
     myProfile: profile,
+    sessionProfile: profile,
     sharedSpaceCatalog: emptyCatalog(),
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests: Writable.of<Record<string, ChatRequestOutcome>>({}),

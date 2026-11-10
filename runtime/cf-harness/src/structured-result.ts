@@ -5,7 +5,7 @@ import {
   validateAndSanitizeStructuredResultValue,
   validateStructuredResultValue as validateCfcStructuredResultValue,
 } from "@commonfabric/runner/cfc";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 export const DEFAULT_STRUCTURED_RESULT_SCHEMA_MAX_BYTES = 32 * 1024;
 

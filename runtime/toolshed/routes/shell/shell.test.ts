@@ -3,6 +3,7 @@ import { expect } from "@std/expect";
 import * as path from "@std/path";
 import { cors } from "@hono/hono/cors";
 import env from "@/env.ts";
+import { browserAssetBase } from "@/lib/build-info.ts";
 import createApp, { createRouter } from "@/lib/create-app.ts";
 import { generateETag } from "@commonfabric/static/etag";
 import type { DeploymentMetaContent } from "@commonfabric/runner/deployment-meta";
@@ -685,4 +686,37 @@ describe("StaticResponse", () => {
     expect(response.status).toBe(200);
     expect(await response.text()).toBe(INDEX_HTML);
   });
+});
+
+describe("advertised browser asset namespace", () => {
+  let pageDir: string;
+  beforeAll(async () => {
+    pageDir = await Deno.makeTempDir();
+    await Deno.writeTextFile(
+      path.join(pageDir, "index.html"),
+      "<!doctype html><head></head><body></body>",
+    );
+    await Deno.writeTextFile(path.join(pageDir, "app.js"), APP_JS);
+  });
+  afterAll(async () => {
+    await Deno.remove(pageDir, { recursive: true });
+  });
+  for (const mode of ["production", "development", "test"] as const) {
+    for (const commitSha of ["commit-123", null, undefined]) {
+      it(`serves the advertised namespace for ${mode} with ${commitSha}`, async () => {
+        const app = createApp().route(
+          "/",
+          await compiledShellRouter(pageDir, {
+            ENV: mode,
+            MEMORY_PUBLIC_URL: undefined,
+          }, commitSha),
+        );
+        const base = browserAssetBase(true, commitSha, mode);
+        const response = await app.request(`${base}app.js`);
+        expect(response.status).toBe(200);
+        expect(await response.text()).toBe(APP_JS);
+        expect(browserAssetBase(false, commitSha, mode)).toBe("/");
+      });
+    }
+  }
 });

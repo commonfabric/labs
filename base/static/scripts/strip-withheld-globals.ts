@@ -1,6 +1,6 @@
 #!/usr/bin/env -S deno run --allow-read --allow-write
 import { fromFileUrl } from "@std/path";
-import { SANDBOX_WITHHELD_GLOBALS } from "@commonfabric/utils/sandbox-contract";
+import { SANDBOX_WITHHELD_GLOBALS } from "@commonfabric/pattern-contract/sandbox-contract";
 
 /**
  * Removes the declaration of each global a sandbox compartment does not

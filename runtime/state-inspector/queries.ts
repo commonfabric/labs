@@ -3,13 +3,17 @@
 // required, since those tables are usually absent).
 
 import type { CommitRow, SpaceDb } from "./db.ts";
-import { hasSchedulerBasisTable } from "./db.ts";
+import { hasSchedulerBasisTable, tableNames } from "./db.ts";
 import { decodeStored } from "./decode.ts";
+import {
+  deletionTombstoneOf,
+  readAclHeads,
+} from "@commonfabric/memory/v2/acl-heads";
 import { decodeHollowedPayload } from "@commonfabric/memory/v2/compact";
 import { COMPACTION_SESSION_PREFIX } from "@commonfabric/memory/v2/engine";
 import { rowLimit } from "./model.ts";
 import { branchReadChain, owningLink } from "./reconstruct.ts";
-import { utf8Compare } from "@commonfabric/utils/utf8";
+import { utf8Compare } from "@commonfabric/text/utf8";
 
 export interface SpaceSummary {
   path: string;
@@ -26,6 +30,14 @@ export interface SpaceSummary {
   ops: Record<string, number>;
   branches: { name: string; head_seq: number; status: string }[];
   scopes: { scope_key: string; count: number }[];
+
+  /**
+   * The space's deletion, when its ACL document holds a deletion tombstone:
+   * who deleted it, and the seq of the deletion commit (INV-15). A reaped
+   * store holds that commit and little else, which reads as a deleted space
+   * rather than as a damaged one.
+   */
+  deletion?: { by: string; seq: number };
 }
 
 export function summarizeSpace(space: SpaceDb): SpaceSummary {
@@ -64,6 +76,22 @@ export function summarizeSpace(space: SpaceDb): SpaceSummary {
     }
   }
 
+  // A store from before the head table has no ACL head to read.
+  const acl = tableNames(db).includes("head") ? readAclHeads(db) : [];
+  let deletion: SpaceSummary["deletion"];
+  if (acl.length === 1) {
+    let tombstone;
+    try {
+      tombstone = deletionTombstoneOf(acl[0], decodeStored);
+    } catch {
+      // An ACL document that does not decode holds no tombstone, and the
+      // summary goes on to report the rest of the store.
+    }
+    if (tombstone !== undefined) {
+      deletion = { by: tombstone.deleted.by, seq: acl[0].seq };
+    }
+  }
+
   return {
     path: space.path,
     hasSchedulerBasisTable: hasSched,
@@ -78,6 +106,7 @@ export function summarizeSpace(space: SpaceDb): SpaceSummary {
     ops: Object.fromEntries(ops.map((r) => [r.op, r.c])),
     branches,
     scopes,
+    ...(deletion === undefined ? {} : { deletion }),
   };
 }
 

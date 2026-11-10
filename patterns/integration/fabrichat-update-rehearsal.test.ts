@@ -36,9 +36,9 @@
  * refused transition, a dropped stored slot or a failed start of a nested
  * piece, that every stored slot and per-user outcome reads as it did, that the
  * updated room can edit and react to a seeded message, that the manager lists
- * its rooms and its outgoing notices and the group room its participants'
- * principals, before and after a room is started, and that starting a direct
- * chat with the same person again finds the room the manager holds.
+ * its rooms and its outgoing notices and the group room its members and that
+ * its reader can send, before and after a room is started, and that starting a
+ * direct chat with the same person again finds the room the manager holds.
  *
  * The whole rehearsal runs twice: once with the manager's and the group room's
  * views never read before the update, and once with a client showing Home and
@@ -65,7 +65,7 @@ import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 
 import { createSession, Identity } from "@commonfabric/identity";
 import { PiecesController } from "@commonfabric/piece/ops";
-import { getLoggerCountsBreakdown } from "@commonfabric/utils/logger";
+import { getLoggerCountsBreakdown } from "@commonfabric/logger";
 import {
   type Cell,
   currentPatternKey,
@@ -93,6 +93,16 @@ const counterpart = (await Identity.fromPassphrase("rehearsal counterpart"))
   .did();
 const member = (await Identity.fromPassphrase("rehearsal group member")).did();
 const added = (await Identity.fromPassphrase("rehearsal added member")).did();
+
+// Someone whose data none of the rehearsal's documents hold, named by the
+// stand-in stamp the stamped run leaves on the manager's result.
+const stranger = (await Identity.fromPassphrase("rehearsal stranger")).did();
+
+/** A `PersonalSpace` clause naming `owner`. */
+const personalSpace = (owner: string) => ({
+  type: "https://commonfabric.org/cfc/atom/PersonalSpace",
+  owner,
+});
 
 const PATTERNS = fromFileUrl(new URL("..", import.meta.url));
 
@@ -248,6 +258,70 @@ const render = async (piece: Cell<unknown>): Promise<void> => {
   await visit(piece.key("$UI").asSchema(rendererVDOMSchema));
 };
 
+/**
+ * Writes the tree's `system/fabrichat/` into `directory` with the manager's
+ * name rewired to a cell of its own, so that a release of it sets the manager
+ * up again with a changed result wiring even where the tree's FabriChat is the
+ * one deployed.
+ *
+ * @throws If the manager's result no longer names `core[NAME]` once.
+ */
+const writeChangedManagerRelease = async (directory: string): Promise<void> => {
+  const fabrichat = join(PATTERNS, "system", "fabrichat");
+  for await (const { path, isFile } of walk(fabrichat)) {
+    if (!isFile) continue;
+    const target = join(directory, relative(fabrichat, path));
+    await Deno.mkdir(posix.dirname(target), { recursive: true });
+    const source = await Deno.readTextFile(path);
+    if (relative(fabrichat, path) !== "manager.tsx") {
+      await Deno.writeTextFile(target, source);
+      continue;
+    }
+    const named = "    [NAME]: core[NAME],\n";
+    if (source.split(named).length !== 2) {
+      throw new Error("the manager's result no longer names `core[NAME]` once");
+    }
+    await Deno.writeTextFile(
+      target,
+      source.replace(named, "    [NAME]: computed(() => core[NAME]),\n"),
+    );
+  }
+};
+
+/**
+ * The stored label entries of the document `cell` resolves to, read raw.
+ */
+const storedLabelEntries = (
+  runtime: Runtime,
+  cell: Cell<unknown>,
+): { observes?: string; label?: { confidentiality?: unknown[] } }[] => {
+  const link = cell.resolveAsCell().getAsNormalizedFullLink();
+  const tx = runtime.edit();
+  try {
+    const stored = tx.readOrThrow({ ...link, path: [] }) as
+      | { cfc?: { labelMap?: { entries?: unknown[] } } }
+      | undefined;
+    return (stored?.cfc?.labelMap?.entries ?? []) as {
+      observes?: string;
+      label?: { confidentiality?: unknown[] };
+    }[];
+  } finally {
+    tx.abort("label read");
+  }
+};
+
+/** Whether any of `entries` names `owner`'s personal space. */
+const namesPersonalSpace = (
+  entries: { label?: { confidentiality?: unknown[] } }[],
+  owner: string,
+): boolean =>
+  entries.some((entry) =>
+    (entry.label?.confidentiality ?? []).some((clause) => {
+      const atom = clause as { type?: unknown; owner?: unknown };
+      return atom.type === personalSpace(owner).type && atom.owner === owner;
+    })
+  );
+
 /** The slots of `after` that `before` holds too, in `after`'s order. */
 const kept = (
   after: readonly StoredSlot[],
@@ -259,6 +333,21 @@ const kept = (
 const kindsOf = (rooms: unknown): string[] | undefined =>
   Array.isArray(rooms)
     ? rooms.map((entry) => (entry as { kind?: string }).kind ?? "none").sort()
+    : undefined;
+
+/**
+ * A room's members, each as its principal and how many profiles it holds, in
+ * the order the room lists them.
+ */
+const membersOf = (members: unknown): string[] | undefined =>
+  Array.isArray(members)
+    ? members.map((member) => {
+      const { principal, profiles } = member as {
+        principal?: string;
+        profiles?: unknown[];
+      };
+      return `${principal ?? "none"}:${profiles?.length ?? "none"}`;
+    })
     : undefined;
 
 const recipientsOf = (notices: unknown): string[] | undefined =>
@@ -273,8 +362,21 @@ const recipientsOf = (notices: unknown): string[] | undefined =>
  * reads the manager's and the group room's views before the update, as one
  * showing them would have. Without it, nothing reads those views until the
  * update has happened. A deployed piece can be updated in either state.
+ *
+ * With `stamped`, the manager's result carries, before the update, a
+ * membership stamp naming someone whose data it does not hold, as an earlier
+ * setup can leave one (spec §8.9.1.3), and the update releases a manager whose
+ * result wiring differs from the deployed one, so that the update sets the
+ * manager up again and writes its wiring. An update that leaves the wiring
+ * unchanged keeps the stamp: the manager is set up in Home's start, a
+ * transaction the runner makes, which restates no unchanged wiring until it
+ * carries the reads that decided the update.
  */
-const rehearse = (title: string, readBefore: boolean): void => {
+const rehearse = (
+  title: string,
+  readBefore: boolean,
+  stamped = false,
+): void => {
   describe(title, () => {
     // Set up once, in `beforeAll()`: the deployed release, seeded and then
     // updated to this tree's source. Each test reads what that left, so each
@@ -296,6 +398,8 @@ const rehearse = (title: string, readBefore: boolean): void => {
     let after: Snapshot;
     let failuresBefore: Record<string, number>;
     let failuresAfter: Record<string, number>;
+    let stampedBefore = false;
+    let stampedAfter = false;
     const adopted: {
       source: string | undefined;
       identity: string | undefined;
@@ -355,10 +459,11 @@ const rehearse = (title: string, readBefore: boolean): void => {
     type Snapshot = Awaited<ReturnType<typeof snapshot>>;
 
     /**
-     * What a client reads of the manager's rooms and of the group room's
-     * participants, each directly and through the views a client that draws
-     * natively reads. Rooms are listed by kind, sorted, since two rooms started
-     * in the same instant may list in either order.
+     * What a client reads of the manager's rooms, of the group room's
+     * members, and of whether the group room's reader can send, each
+     * directly and through the views a client that draws natively reads. Rooms
+     * are listed by kind, sorted, since two rooms started in the same instant
+     * may list in either order.
      */
     const views = async () => ({
       rooms: kindsOf(await manager.key("rooms").pull()),
@@ -371,10 +476,16 @@ const rehearse = (title: string, readBefore: boolean): void => {
       entries: ((await room.key("participantEntries").pull()) as
         | { principal?: string }[]
         | undefined)?.map((entry) => entry.principal ?? "none"),
+      members: membersOf(await room.key("members").pull()),
+      viewedMembers: membersOf(
+        await room.key("$VIEWS").key("room").key("members").pull(),
+      ),
       notices: recipientsOf(await manager.key("outgoingNotices").pull()),
       viewedNotices: recipientsOf(
         await manager.key("$VIEWS").key("chats").key("outgoingNotices").pull(),
       ),
+      canSend: await room.key("canSend").pull(),
+      viewedCanSend: await room.key("$VIEWS").key("room").key("canSend").pull(),
     });
     type Views = Awaited<ReturnType<typeof views>>;
     let viewsBefore: Views | undefined;
@@ -585,10 +696,77 @@ const rehearse = (title: string, readBefore: boolean): void => {
         expect(slots.map((slot) => slot.name)).toContain("messages");
       }
 
+      if (stamped) {
+        // The stand-in stamp: the manager's result's membership, its root's
+        // `enumerate` entry and its slots' templates, naming the stranger
+        // beside the owner. It is written as the runtime writes a label map,
+        // under the transaction's privileged system write.
+        const result = home.key("chatManager");
+        const link = result.resolveAsCell().getAsNormalizedFullLink();
+        const document = { ...link, path: [] };
+        const tx = runtime.edit();
+        const stored = tx.readOrThrow(document) as {
+          schema?: { $ref?: string };
+          cfc?: {
+            schemaHash?: string;
+            labelMap?: { entries?: unknown[] };
+          };
+        };
+        const label = {
+          confidentiality: [
+            personalSpace(owner.did()),
+            personalSpace(stranger),
+          ],
+        };
+        (tx as unknown as {
+          accessForTestingOnly: {
+            privilegedSystemWrite(address: unknown, value: unknown): void;
+          };
+        }).accessForTestingOnly.privilegedSystemWrite(
+          { ...document, path: ["cfc"] },
+          {
+            ...(stored.cfc ?? {}),
+            version: 1,
+            schemaHash: stored.cfc?.schemaHash ??
+              (stored.schema?.$ref ?? "").replace(/^cid:/, ""),
+            labelMap: {
+              version: 1,
+              entries: [
+                ...(stored.cfc?.labelMap?.entries ?? []),
+                ...[
+                  { path: [], observes: "enumerate" },
+                  { path: ["*"], observes: "followRef" },
+                  { path: ["*"], observes: "shape" },
+                  { path: ["*"], observes: "value" },
+                ].map((entry) => ({ ...entry, origin: "structure", label })),
+              ],
+            },
+          },
+        );
+        runtime.prepareTxForCommit(tx);
+        expect((await tx.commit().settled).error).toBeUndefined();
+        await runtime.idle();
+        stampedBefore = namesPersonalSpace(
+          storedLabelEntries(runtime, result),
+          stranger,
+        );
+      }
+
       // The update to this tree's source.
       failuresBefore = updateFailureCounts();
       // A route made afresh models a release replacing its source cache.
-      route = new PatternsRoute(PATTERNS);
+      if (stamped) {
+        const changed = join(temporary, "changed");
+        await writeChangedManagerRelease(join(changed, "system", "fabrichat"));
+        route = new PatternsRoute(PATTERNS, [
+          {
+            routePrefix: "system/fabrichat/",
+            directory: join(changed, "system", "fabrichat"),
+          },
+        ]);
+      } else {
+        route = new PatternsRoute(PATTERNS);
+      }
       const expected = [
         await route.identity("system/home/home.tsx"),
         ...rooms.map(() => route.identity("system/fabrichat/room.tsx")),
@@ -604,6 +782,12 @@ const rehearse = (title: string, readBefore: boolean): void => {
       await runtime.idle();
 
       failuresAfter = updateFailureCounts();
+      if (stamped) {
+        stampedAfter = namesPersonalSpace(
+          storedLabelEntries(runtime, home.key("chatManager")),
+          stranger,
+        );
+      }
       const resolved = await Promise.all(expected);
       for (const [index, piece] of [home, ...rooms].entries()) {
         const current = await piece.withTx().sync();
@@ -701,19 +885,48 @@ const rehearse = (title: string, readBefore: boolean): void => {
       expect(emoji.map((reaction) => reaction.emoji)).toEqual(["🎉"]);
     });
 
-    it("lists the manager's rooms and outgoing notices and the group room's participants after the update, and a room started since", async () => {
+    it("lists the manager's rooms and outgoing notices and the group room's members after the update, and a room started since", async () => {
+      const groupPrincipals = [owner.did(), member, added].sort();
+      const groupMembers = groupPrincipals.map((did) =>
+        `${did}:${did === owner.did() ? 1 : 0}`
+      );
       const listed = {
         rooms: ["direct", "group"],
         viewedRooms: ["direct", "group"],
-        principals: [owner.did()],
-        viewedPrincipals: [owner.did()],
+        // Everyone the group room's space admits, of whom only the owner has
+        // joined, so has a profile to pair with their principal.
+        principals: groupPrincipals,
+        viewedPrincipals: groupPrincipals,
         entries: [owner.did()],
+        members: groupMembers,
+        viewedMembers: groupMembers,
         // No room's roster attests anyone but the owner, so every notice is
         // still to be delivered.
         notices: [added, counterpart, member].sort(),
         viewedNotices: [added, counterpart, member].sort(),
+        canSend: true,
+        viewedCanSend: true,
       };
-      if (readBefore) expect(viewsBefore).toEqual(listed);
+      // What the group room reports of its members is derived from its
+      // space's access list in this tree and may be derived otherwise in the
+      // deployed release, so what was read of it before the update is not
+      // held to what is read after.
+      const membership = [
+        "principals",
+        "viewedPrincipals",
+        "entries",
+        "members",
+        "viewedMembers",
+      ];
+      const withoutMembers = (views: object | undefined) =>
+        Object.fromEntries(
+          Object.entries(views ?? {}).filter(([key]) =>
+            !membership.includes(key)
+          ),
+        );
+      if (readBefore) {
+        expect(withoutMembers(viewsBefore)).toEqual(withoutMembers(listed));
+      }
       expect(await views()).toEqual(listed);
 
       await send(
@@ -733,6 +946,8 @@ const rehearse = (title: string, readBefore: boolean): void => {
         viewedRooms: ["direct", "group", "group"],
         notices: [added, counterpart, member, member].sort(),
         viewedNotices: [added, counterpart, member, member].sort(),
+        canSend: true,
+        viewedCanSend: true,
       });
     });
 
@@ -762,8 +977,40 @@ const rehearse = (title: string, readBefore: boolean): void => {
       >({ type: "object" }).pull();
       expect(Object.keys(direct)).toEqual([counterpart]);
     });
+
+    if (stamped) {
+      it("takes a stamp naming someone whose data it does not hold off the manager's result at the update", () => {
+        // The release changes the manager's result wiring. One that leaves it
+        // unchanged keeps the stamp, until the start that sets the manager up
+        // carries the reads that decided the update (#9650).
+
+        expect(stampedBefore).toBe(true);
+        expect(stampedAfter).toBe(false);
+      });
+
+      it("commits the outcome of an add made after the update", async () => {
+        await send(
+          room,
+          "addMember",
+          trusted(
+            { requestId: "add after the update", target: { value: added } },
+            "ChatAddMemberSurface",
+            "ChatAddMember",
+          ),
+        );
+        await runtime.idle();
+        expect(
+          await room.key("addRequests").key("add after the update").pull(),
+        ).toMatchObject({ status: "done" });
+      });
+    }
   });
 };
 
 rehearse("FabriChat update rehearsal", false);
 rehearse("FabriChat update rehearsal, its views read before the update", true);
+rehearse(
+  "FabriChat update rehearsal, its manager's result stamped before the update",
+  false,
+  true,
+);

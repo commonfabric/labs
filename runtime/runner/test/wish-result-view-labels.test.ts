@@ -13,8 +13,12 @@ import { expect } from "@std/expect";
 import { cfcAtom } from "@commonfabric/api/cfc";
 import type { FabricValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
-import { deepEqual } from "@commonfabric/utils/deep-equal";
+import { deepEqual } from "@commonfabric/js-values/deep-equal";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  type CfcConfClause,
+  clauseAlternatives,
+} from "@commonfabric/memory/v2/cfc-release-authority";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
@@ -29,7 +33,6 @@ import {
   UI,
 } from "../src/builder/types.ts";
 import type { Cell } from "../src/cell.ts";
-import { type CfcConfClause, clauseAlternatives } from "../src/cfc/clause.ts";
 import { commitCfcFieldValue } from "../src/cfc/label-representation.ts";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 import { atomsOutsideCeiling } from "../src/cfc/observation.ts";

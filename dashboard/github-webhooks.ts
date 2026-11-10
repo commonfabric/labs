@@ -13,31 +13,19 @@
  * that cannot be said, because the relay is not connected or has fallen
  * silent, the reader reads GitHub again on its own schedule, as it would with
  * no relay at all.
- *
- * Each delivery reaches the relay as a frame: the length of the HTTP request
- * GitHub made, as a 32-bit big-endian unsigned integer, and then that request.
  */
 
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import {
+  FrameReader,
+  type GitHubDelivery,
+  type RelayConnect,
+  type RelayConnection,
+  readDelivery,
+  relayAddress,
+} from "@commonfabric/github-webhooks/relay";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import type { GitHubRun } from "./github-runs.ts";
-
-/** One delivery of the organization's webhook. */
-export interface GitHubDelivery {
-  /** The kind of activity, from the `X-GitHub-Event` header. */
-  readonly event: string;
-
-  /** The body GitHub signed, parsed. */
-  readonly payload: unknown;
-}
-
-/** A connection to the relay, as far as a subscriber uses one. */
-export interface RelayConnection {
-  readonly readable: ReadableStream<Uint8Array>;
-  close(): void;
-}
-
-/** Opens a connection to the relay. */
-export type RelayConnect = () => Promise<RelayConnection>;
 
 /** Identifies one connection to the relay. */
 export type RelayStream = { readonly opened: number };
@@ -57,8 +45,6 @@ export const RELAY_QUIET_MS = 2 * 60_000;
  * was read even when no delivery has said it changed.
  */
 export const RELAY_VOUCH_MS = 15 * 60_000;
-
-const DECODER = new TextDecoder();
 
 /** The connection open, and whether to replace it once it ends. */
 interface Open {
@@ -153,7 +139,7 @@ export class GitHubWebhooks {
         this.#refused = true;
         console.error(
           "GitHub webhook relay: could not connect:",
-          error instanceof Error ? error.message : String(error),
+          describeFailure(error),
         );
       },
     ).finally(() => {
@@ -178,26 +164,22 @@ export class GitHubWebhooks {
     this.#heardAt = open.stream.opened;
     try {
       for (;;) {
-        const prefix = await open.frames.read(4);
-        if (prefix === undefined) break;
-        const length = new DataView(
-          prefix.buffer,
-          prefix.byteOffset,
-          prefix.byteLength,
-        ).getUint32(0);
-        const request = await open.frames.read(length);
-        if (request === undefined) break;
+        const frame = await readDelivery(open.frames);
+        if (frame === undefined) break;
         this.#heardAt = Date.now();
         this.#heard = true;
         open.replace = true;
-        const delivery = parseDelivery(request);
-        if (delivery === undefined || !isReadable(delivery)) break;
-        if (!this.#dispatch(delivery)) break;
+        const { delivery } = frame;
+        if (delivery === undefined) {
+          console.error(`GitHub webhook relay: ${frame.unreadable}`);
+          break;
+        }
+        if (!isReadable(delivery) || !this.#dispatch(delivery)) break;
       }
     } catch (error) {
       console.error(
         "GitHub webhook relay: the connection failed:",
-        error instanceof Error ? error.message : String(error),
+        describeFailure(error),
       );
     } finally {
       this.#open = undefined;
@@ -225,7 +207,7 @@ export class GitHubWebhooks {
         taken = false;
         console.error(
           `GitHub webhook relay: a ${delivery.event} listener failed:`,
-          error instanceof Error ? error.message : String(error),
+          describeFailure(error),
         );
       }
     }
@@ -245,25 +227,6 @@ export const githubWebhooks = new GitHubWebhooks(
       "github-webhooks.stage.commonfabric.dev:8081",
   ),
 );
-
-/**
- * Returns the `RelayConnect` for the relay at `address`, as `host:port`, with
- * TCP keepalive on each connection, or `undefined` for an empty address. An
- * address that names no host and port fails each connection.
- */
-export function relayAddress(address: string): RelayConnect | undefined {
-  if (address === "") return undefined;
-  return async () => {
-    const { hostname, port } = new URL(`tcp://${address}`);
-    if (port === "") throw new Error(`"${address}" names no port`);
-    const connection = await Deno.connect({
-      hostname: hostname.replace(/^\[(.*)\]$/, "$1"),
-      port: Number(port),
-    });
-    connection.setKeepAlive(true);
-    return connection;
-  };
-}
 
 /**
  * Says whether what a reader last read from GitHub is still current, by the
@@ -449,52 +412,6 @@ function repositoryOf(
 }
 
 /**
- * Helper for `GitHubWebhooks`, which reads the delivery an HTTP request from
- * GitHub carries, or logs why it carries none and returns `undefined`.
- */
-function parseDelivery(request: Uint8Array): GitHubDelivery | undefined {
-  const end = headEnd(request);
-  if (end === -1) {
-    console.error("GitHub webhook relay: a request had no end to its head");
-    return undefined;
-  }
-  const headers = new Map<string, string>();
-  for (
-    const line of DECODER.decode(request.subarray(0, end)).split("\r\n").slice(
-      1,
-    )
-  ) {
-    const colon = line.indexOf(":");
-    if (colon > 0) {
-      headers.set(
-        line.slice(0, colon).trim().toLowerCase(),
-        line.slice(colon + 1).trim(),
-      );
-    }
-  }
-  const event = headers.get("x-github-event");
-  if (event === undefined) {
-    console.error("GitHub webhook relay: a request named no event");
-    return undefined;
-  }
-  const body = DECODER.decode(request.subarray(end + 4));
-  try {
-    const form = headers.get("content-type")?.startsWith(
-      "application/x-www-form-urlencoded",
-    );
-    const json = form ? new URLSearchParams(body).get("payload") : body;
-    if (json === null) throw new Error("the form carries no payload");
-    return { event, payload: JSON.parse(json) };
-  } catch (error) {
-    console.error(
-      `GitHub webhook relay: a ${event} delivery could not be read:`,
-      error instanceof Error ? error.message : String(error),
-    );
-    return undefined;
-  }
-}
-
-/**
  * Helper for `GitHubWebhooks`, which returns whether the dashboard can read
  * what `delivery` says, or logs why it cannot. A `workflow_run` or `push`
  * delivery whose payload lacks what the dashboard reads of it could have
@@ -511,76 +428,4 @@ function isReadable(delivery: GitHubDelivery): boolean {
     );
   }
   return !unreadable;
-}
-
-/**
- * Helper for `parseDelivery()`, which returns where the empty line ending
- * `request`'s head starts, or -1 when it has none.
- */
-function headEnd(request: Uint8Array): number {
-  for (let i = 0; i + 3 < request.length; i++) {
-    if (
-      request[i] === 13 && request[i + 1] === 10 && request[i + 2] === 13 &&
-      request[i + 3] === 10
-    ) return i;
-  }
-  return -1;
-}
-
-/** Reads a byte stream in pieces of the lengths asked for. */
-class FrameReader {
-  #reader: ReadableStreamDefaultReader<Uint8Array>;
-  #chunks: Uint8Array[] = [];
-  #held = 0;
-
-  constructor(readable: ReadableStream<Uint8Array>) {
-    this.#reader = readable.getReader();
-  }
-
-  /**
-   * Reads the next `length` bytes, or returns `undefined` when the stream
-   * ends first.
-   */
-  async read(length: number): Promise<Uint8Array | undefined> {
-    while (this.#held < length) {
-      const { done, value } = await this.#reader.read();
-      if (done) return undefined;
-      this.#chunks.push(value);
-      this.#held += value.length;
-    }
-    this.#held -= length;
-    const first = this.#chunks[0];
-    if (first !== undefined && first.length >= length) {
-      // The bytes asked for are in one chunk, and are handed out in place.
-      this.#take(first, length);
-      return first.subarray(0, length);
-    }
-    const bytes = new Uint8Array(length);
-    for (let filled = 0; filled < length;) {
-      const chunk = this.#chunks[0];
-      const taken = Math.min(chunk.length, length - filled);
-      bytes.set(chunk.subarray(0, taken), filled);
-      filled += taken;
-      this.#take(chunk, taken);
-    }
-    return bytes;
-  }
-
-  /** Ends the stream, so that a read under way returns `undefined`. */
-  cancel(): void {
-    // A stream that failed rejects the cancel as it does the read under way,
-    // which reports the failure.
-    this.#reader.cancel().catch(() => {});
-  }
-
-  /** Stops reading the stream. */
-  release(): void {
-    this.#reader.releaseLock();
-  }
-
-  /** Helper for `read()`, which drops `length` bytes from `chunk`, the first. */
-  #take(chunk: Uint8Array, length: number): void {
-    if (length === chunk.length) this.#chunks.shift();
-    else this.#chunks[0] = chunk.subarray(length);
-  }
 }

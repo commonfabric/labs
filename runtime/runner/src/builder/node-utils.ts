@@ -1,9 +1,9 @@
 import { FabricInstance, refuseFabricInstance } from "@commonfabric/data-model";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
+import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
 
 import { exportCell, isCell } from "../cell.ts";
 import { ContextualFlowControl } from "../cfc.ts";
-import type { CfcConfClause } from "../cfc/clause.ts";
 import {
   getCellOrThrow,
   isCellResultForDereferencing,
@@ -11,7 +11,7 @@ import {
 import { getAuthoredDebugSource } from "../harness/authored-debug-source.ts";
 import { closureCaptureErrorMessage } from "./closure-capture-diagnostic.ts";
 import { traverseValue, visitValue } from "./traverse-utils.ts";
-import { type FactoryInput, type JSONSchema, type NodeRef } from "./types.ts";
+import type { FactoryInput, JSONSchema, NodeRef } from "./types.ts";
 
 export function connectInputAndOutputs(node: NodeRef) {
   function connect(value: any): any {

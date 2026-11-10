@@ -17,6 +17,7 @@
 //   4. claim the request id (replay defense)
 //   5. only then mint or mutate
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import type { Runtime } from "@commonfabric/runner";
 import {
   authorizeSpaceOwner,
@@ -591,9 +592,7 @@ export async function processMint(
       link = parseWireCellLink(input.target);
     } catch (error) {
       return bad(
-        `The target is not a cell link: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        `The target is not a cell link: ${describeFailure(error)}`,
       );
     }
     target = cellTargetOf(link);

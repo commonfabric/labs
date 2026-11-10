@@ -31,6 +31,7 @@ import { runPatternTool } from "./run-pattern.ts";
 import { runSkillScriptTool } from "./run-skill-script.ts";
 import { searchPatternsTool } from "./search-patterns.ts";
 import { searchSkillsTool } from "./search-skills.ts";
+import { reportProgressTool } from "./report-progress.ts";
 import { submitResultTool } from "./submit-result.ts";
 import { webFetchTool } from "./web-fetch.ts";
 import { viewImageTool } from "./view-image.ts";
@@ -68,6 +69,7 @@ export const BUILTIN_TOOLS = [
   loomAuthoringContextTool,
   ...LOOM_RETRIEVAL_TOOLS,
   ...LOOM_COMMAND_TOOLS,
+  reportProgressTool,
   submitResultTool,
 ] as const;
 

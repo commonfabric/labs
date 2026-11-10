@@ -19,7 +19,7 @@
 // and revoked proxies included, so neither call needs a guard. A duplicated
 // module graph can only cause a missed classification, which safely fails
 // toward retrying.
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 const deterministicCompileFailures = new WeakSet<object>();
 

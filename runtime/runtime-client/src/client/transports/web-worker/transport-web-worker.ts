@@ -2,9 +2,10 @@ import {
   fabricFromRealmValue,
   realmFromFabricValue,
 } from "@commonfabric/data-model/codecs";
-import { defer } from "@commonfabric/utils/defer";
-import { isDeno } from "@commonfabric/utils/env";
-import { terminateWorker } from "@commonfabric/utils/worker-lifetime";
+import { defer } from "@commonfabric/async/defer";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { isDeno } from "@commonfabric/platform/env";
+import { terminateWorker } from "@commonfabric/platform/worker-lifetime";
 import {
   ClientTransportNotificationType,
   ErrorNotification,
@@ -21,7 +22,6 @@ import {
   RuntimeTransportEvents,
 } from "@/client/transport.ts";
 import { EventEmitter } from "@/client/emitter.ts";
-import { describeFailure } from "@/shared/utils.ts";
 
 export interface WebWorkerRuntimeTransportOptions {
   // URL to hosted `backends/web-worker/index.ts`
@@ -109,7 +109,7 @@ export class WebWorkerRuntimeTransport
 
   /**
    * Terminates the worker, and settles once its runtime has been torn down,
-   * as `terminateWorker()` from `@commonfabric/utils/worker-lifetime` does. A
+   * as `terminateWorker()` from `@commonfabric/platform/worker-lifetime` does. A
    * worker that never reported ready, or whose ready notification named no
    * lock, is not waited for.
    */

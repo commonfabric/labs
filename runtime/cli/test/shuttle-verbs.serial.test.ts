@@ -38,7 +38,7 @@ import { UI } from "@commonfabric/runner";
 import { ValidationError } from "@cliffy/command";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { BaseFabricSpecialObject } from "@commonfabric/data-model/fabric-bases";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import { pieceDataCommand } from "../commands/piece.ts";
 import {

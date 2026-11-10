@@ -17,7 +17,6 @@ import { ProtocolError } from "@commonfabric/memory/v2";
 import type {
   AdmittedCommitNotice,
   DemandChangeReason,
-  ServedAclChange,
   ServedAclChangeVerdict,
   Server,
   SessionDemand,
@@ -27,10 +26,11 @@ import {
   getLogger,
   type getLoggerCountsBreakdown,
   type TimingStatsBreakdown,
-} from "@commonfabric/utils/logger";
-import type { SpaceAccessChange } from "../builder/types.ts";
+} from "@commonfabric/logger";
+import type { CollectedMemory } from "../collected-memory.ts";
 import type { ExperimentalOptions } from "../runtime.ts";
 import type { MemorySpace, Result } from "../storage/interface.ts";
+import type { ServedAclChangeData } from "./served-acl-change.ts";
 import type { SpaceServerPolicy } from "./space-server.ts";
 import type { ServingLoopStats } from "./stats.ts";
 import { LifecycleVerbFailure } from "./lifecycle-verb.ts";
@@ -60,15 +60,6 @@ export type PortLike = {
     listener: (event: MessageEvent) => void,
   ): void;
   start?(): void;
-};
-
-/**
- * A served access-list change as it crosses the port: the function that
- * applies it replaced by the list of changes it applies, from which the other
- * side rebuilds the function.
- */
-export type ServedAclChangeData = Omit<ServedAclChange, "change"> & {
-  readonly changes: readonly SpaceAccessChange[];
 };
 
 /** The entry `Server.commitDelegatedAppend()` takes. */
@@ -118,6 +109,9 @@ export type ServingWorkerInit = {
   /** The lease holder's process component this worker start adopts. */
   readonly processInstanceId: string;
 
+  /** How often the worker posts `worker.heartbeat`. */
+  readonly heartbeatIntervalMs: number;
+
   /** The serving runtimes' patterns and compile base. */
   readonly apiUrl: string;
 
@@ -129,6 +123,13 @@ export type ServingWorkerInit = {
 
   /** The serving runtimes' experimental options. */
   readonly experimental: ExperimentalOptions | undefined;
+
+  /**
+   * The deployment's memory endpoint, through which the worker's host
+   * reaches each space's owner (`ExecutorHostOptions.route`); absent, the
+   * host crosses through the process's own server.
+   */
+  readonly route: string | undefined;
 };
 
 /** What the worker asks of the thread that holds the memory server. */
@@ -139,6 +140,18 @@ export type PlaneRequests = {
    */
   "space.open": { params: { space: string }; result: { url: string } };
 
+  "server.acquireExecutionLease": {
+    params: { space: string; holder: string };
+    result: boolean;
+  };
+  "server.releaseExecutionLease": {
+    params: { space: string; holder: string };
+    result: void;
+  };
+  "server.commitDeliveryFailureNotice": {
+    params: { notice: Parameters<Server["commitDeliveryFailureNotice"]>[0] };
+    result: void;
+  };
   "server.idle": { params: null; result: void };
   "server.flushSessions": {
     params: { spaces: string[] | undefined };
@@ -195,15 +208,11 @@ export type PlaneRequests = {
   /**
    * Commits one wave batch (a `WaveSpaceCommit` in the memory boundary's
    * encoding) under the worker's counter value, through the sink the server's
-   * thread keeps for `sessionId`. `homeRefused` reports that applying a home
-   * batch threw, which the worker's sink turns into its own refusal hook.
+   * thread keeps for `sessionId`.
    */
   "sink.commitWave": {
     params: { sessionId: string; localSeq: number; batch: string };
-    result: {
-      result: Result<{ seq: number }, WaveCommitRejection>;
-      homeRefused: boolean;
-    };
+    result: Result<{ seq: number }, WaveCommitRejection>;
   };
   "sink.commitSpaceAccessChange": {
     params: {
@@ -228,12 +237,23 @@ export type PlaneNotices = {
    */
   "worker.ready": null;
 
+  /**
+   * The worker's thread still runs. It says nothing else: the watchdog on the
+   * server's thread reads any message from the worker the same way
+   * (serving-loop.md §2).
+   */
+  "worker.heartbeat": null;
+
   "server.noteExecutorCommit": { notice: AdmittedCommitNotice };
-  "server.noteLeaseReacquired": {
-    notice: { space: string; principal: string };
-  };
   "loopback.close": { transport: number };
   "host.stats": { stats: ServingLoopStats };
+
+  /**
+   * The `events` block of the counters alone, posted ahead of each wave
+   * commit. It updates the copy the last `host.stats` left, which the next
+   * `host.stats` replaces whole.
+   */
+  "host.eventStats": { events: ServingLoopStats["events"] };
   "host.activationSettled": {
     space: MemorySpace;
     outcome: "active" | "refused" | "failed";
@@ -251,6 +271,7 @@ export type BridgeRequests = {
 
   "host.stats": { params: null; result: ServingLoopStats };
   "host.diagnostics": { params: null; result: ServingLoopDiagnostics };
+  "host.collectedMemory": { params: null; result: CollectedMemory };
   "host.runLifecycleVerb": {
     params: { space: MemorySpace; verb: LifecycleVerbDescriptor };
     result: LifecycleVerbRun;
@@ -330,8 +351,8 @@ const faultOf = (error: unknown): PortFault => {
  * The error a fault stands for on this side. An untimed `ProtocolError`
  * keeps its class: the outbox classifies delegated-append refusals by it.
  * Lifecycle failures instead retain their timing envelope and reconstruct
- * the underlying error as its cause. Lifecycle routes classify those
- * failures by name and code, which the envelope also keeps.
+ * the underlying error as its cause. A lifecycle verb's caller classifies
+ * those failures by name and code, which the envelope also keeps.
  */
 const errorOf = (fault: PortFault): Error => {
   const error = fault.name === "ProtocolError"
@@ -377,6 +398,7 @@ export class PortEndpoint<
   readonly #listener: (event: MessageEvent) => void;
   #nextId = 1;
   #closed: Error | undefined;
+  #messagesReceived = 0;
 
   constructor(port: PortLike, onFault: (error: Error) => void) {
     this.#port = port;
@@ -389,6 +411,11 @@ export class PortEndpoint<
   /** Whether `close()` has run. */
   get closed(): boolean {
     return this.#closed !== undefined;
+  }
+
+  /** How many messages of any kind have arrived from the other side. */
+  get messagesReceived(): number {
+    return this.#messagesReceived;
   }
 
   /**
@@ -481,6 +508,7 @@ export class PortEndpoint<
   }
 
   #receive(envelope: Envelope): void {
+    this.#messagesReceived += 1;
     switch (envelope.t) {
       case "req":
         this.#answer(envelope);

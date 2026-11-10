@@ -15,7 +15,7 @@ import {
   type TestIdentity,
   testIdentityKey,
 } from "@commonfabric/test-support/records";
-import { maxOf } from "@commonfabric/utils/math";
+import { maxOf } from "@commonfabric/collections/math";
 import {
   DISCRETIONARY_SECONDS,
   FILL_DENSITY_SHARE,
@@ -24,6 +24,7 @@ import {
   FLAKE_EXCLUSION_RATE,
   FULL_LANE_BOUND_SECONDS,
   FULL_LANE_BUDGET_SECONDS,
+  FULL_LANES_MAX,
   LANE_BOUND_SECONDS,
   LANE_BUDGET_SECONDS,
   LANES_MAX,
@@ -1697,7 +1698,7 @@ export function placedOnlyMandatory(laid: Pick<Plan, "lanes">): boolean {
  * membership, so a reason added later is held back like any other and
  * does not become non-gating without anybody deciding that it should.
  */
-function excused(manifest: Manifest): Manifest["withheld"] {
+export function excused(manifest: Manifest): Manifest["withheld"] {
   return manifest.withheld.filter((held) => held.reason === "flaky");
 }
 
@@ -1786,6 +1787,14 @@ function discretionaryTarget(input: PlanInput): number {
 }
 
 /**
+ * The most lanes a run packed from `input` may take: `FULL_LANES_MAX` for the
+ * full run, and `LANES_MAX` for any other.
+ */
+export function lanesMaxOf(input: Pick<PlanInput, "policy">): number {
+  return input.policy === "everything" ? FULL_LANES_MAX : LANES_MAX;
+}
+
+/**
  * How many lanes a run takes: the fewest at which a bisection finds that
  * the plan holds the run, or `most` where even that many lanes do not. A
  * plan holds the run where nothing mandatory overflows, so that each
@@ -1811,7 +1820,7 @@ function discretionaryTarget(input: PlanInput): number {
  */
 export function laneCount(
   input: Omit<PlanInput, "lanes">,
-  most: number = LANES_MAX,
+  most: number = lanesMaxOf(input),
 ): LaneCount {
   const holds = (lanes: number) => {
     const laid = packed({ ...input, lanes }, false);

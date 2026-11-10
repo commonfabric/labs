@@ -66,6 +66,7 @@ import {
 } from "@commonfabric/pattern-index/front";
 import { legacySpaceDid } from "@commonfabric/identity";
 import { type DID, isDID } from "@commonfabric/identity/did";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   dirname,
   extname,
@@ -100,12 +101,15 @@ import {
   resolveCfcEnforcementMode,
 } from "../src/config.ts";
 import type { CfcPosture } from "@commonfabric/runner";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 import {
-  type HarnessChatError,
-  type HarnessChatEventEnvelope,
-  type HarnessChatPolicy,
-  type HarnessChatResponse,
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
+import type {
+  HarnessChatError,
+  HarnessChatEventEnvelope,
+  HarnessChatPolicy,
+  HarnessChatResponse,
 } from "../src/contracts/interactive-chat.ts";
 import { HARNESS_CREDENTIAL_OWNER_REF_TYPE } from "../src/contracts/run-manifest.ts";
 import { createCliPromptSlotBinding } from "../src/contracts/prompt-slot.ts";
@@ -584,7 +588,7 @@ const readSystemPromptFile = (path: string, cwd: string): string => {
   } catch (error) {
     throw new Error(
       `--system-prompt-file could not be read: ${resolved}: ${
-        error instanceof Error ? error.message : String(error)
+        describeFailure(error)
       }`,
     );
   }
@@ -1396,6 +1400,7 @@ const resolveConsoleRunscConfig = (
     ...(options.sandboxRunscSetpriv !== undefined
       ? { setpriv: options.sandboxRunscSetpriv }
       : {}),
+    forwardedHostPorts: options.sandboxRunscForwardedHostPorts,
     additionalMounts: options.additionalMounts,
     ...(platform !== undefined ? { platform } : {}),
     homeDir: env.HOME,
@@ -2207,7 +2212,7 @@ export class ConsoleServer {
       patternRefs = parseTaskPatternRefs(body.patternRefs);
     } catch (error) {
       return Response.json({
-        error: error instanceof Error ? error.message : String(error),
+        error: describeFailure(error),
       }, { status: 400 });
     }
     let browserHost: ConsoleBrowserHost | undefined;
@@ -2641,7 +2646,7 @@ export class ConsoleServer {
       afterSequence = parseAfterSequence(url.searchParams.get("afterSequence"));
     } catch (error) {
       return Response.json({
-        error: error instanceof Error ? error.message : String(error),
+        error: describeFailure(error),
       }, { status: 400 });
     }
     const resumeFrom = afterSequence ?? 0;
@@ -2921,7 +2926,7 @@ export const startConsoleServer = async (
       }
     },
     onError: (error) => {
-      console.error(error instanceof Error ? error.message : String(error));
+      console.error(describeFailure(error));
       return new Response("internal error", { status: 500 });
     },
   }, (request) => server.handle(request)).finished.finally(() => {
@@ -2936,7 +2941,7 @@ if (import.meta.main) {
   } catch (error) {
     // A misconfigured server is an operator's problem to fix, and the message
     // is the whole of what they need; the stack behind it is noise.
-    console.error(error instanceof Error ? error.message : String(error));
+    console.error(describeFailure(error));
     Deno.exit(1);
   }
 }

@@ -106,6 +106,10 @@ entries; a new gap is filed as a specs pull request.
 
 - [Shared profile space](shared-profile-space.md)
 - [Shared-profile participant rosters](shared-profile-rosters.md)
+- [Profile delegation](profile-delegation.md) (design sketch): a profile
+  space that owns itself and, before its key is destroyed, delegates to the
+  core identity; the delegation is presented as a UCAN proof chain when a
+  session opens
 
 ### Chat
 

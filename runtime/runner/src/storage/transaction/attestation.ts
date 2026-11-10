@@ -14,8 +14,8 @@ import {
   isFabricDataUri,
   valueFromDataUriPayloadText,
 } from "@commonfabric/data-model/codec-data-uri";
-import { LRUCache } from "@commonfabric/utils/cache";
-import { getLogger } from "@commonfabric/utils/logger";
+import { LRUCache } from "@commonfabric/collections/cache";
+import { getLogger } from "@commonfabric/logger";
 
 import { immutableSnapshot, isImmutableCellId } from "../../immutable-cell.ts";
 import type {

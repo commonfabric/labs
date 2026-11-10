@@ -1,6 +1,6 @@
 import type { Schema } from "@commonfabric/api/schema";
 import { TranscriptionDataSchema } from "@commonfabric/runner/component-read-contract";
-import { type CellHandle } from "@commonfabric/runtime-client";
+import type { CellHandle } from "@commonfabric/runtime-client";
 import { css, html } from "lit";
 import { property } from "lit/decorators.js";
 import { classMap } from "lit/directives/class-map.js";

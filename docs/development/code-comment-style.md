@@ -876,7 +876,7 @@ stays in the message as text and the value gets the default rendering, so a
 message composed on an error path still says something.
 
 Two pairs of functions serve the cases a template does not fit.
-`backtickQuote()` and `backtickFence()` from `@commonfabric/utils/markdown`
+`backtickQuote()` and `backtickFence()` from `@commonfabric/text/markdown`
 quote text of any content as a code span or a fenced block.
 `toCompactDebugString()` and `toIndentedDebugString()` from
 `@commonfabric/data-model` render a value where the rendering is handed on as

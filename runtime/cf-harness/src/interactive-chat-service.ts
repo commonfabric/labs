@@ -11,12 +11,13 @@ import {
 import { selectResearchContext } from "./research/context.ts";
 import { loomAuthoringForTurn } from "./loom-authoring.ts";
 import { ensureSESLockdown, type Runtime } from "@commonfabric/runner";
-import { spliceAll } from "@commonfabric/utils/arrays";
-import { maxOf } from "@commonfabric/utils/math";
+import { spliceAll } from "@commonfabric/collections/splice";
+import { maxOf } from "@commonfabric/collections/math";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   isObjectNotArray,
   type ReadonlyRecord,
-} from "@commonfabric/utils/types";
+} from "@commonfabric/js-values/types";
 import { CfHarnessEngine } from "./engine.ts";
 import type { HarnessFabricSession } from "./fabric-session.ts";
 import {
@@ -741,7 +742,7 @@ const chatTurnError = (error: unknown): HarnessChatError => {
   }
   return {
     code: "internal_error",
-    message: error instanceof Error ? error.message : String(error),
+    message: describeFailure(error),
   };
 };
 
@@ -2264,6 +2265,7 @@ export class HarnessInteractiveChatService {
       config: {
         ...(skillsRoot !== undefined ? { skillsRoot } : {}),
         skillNames: [],
+        allowedToolIds: options.allowedToolIds,
       },
       onGrantsUnavailable: (error) =>
         console.error("fabric grants unavailable for this turn:", error),
@@ -2777,7 +2779,7 @@ export class HarnessInteractiveChatService {
     // delivery that worked.
     console.error(
       `cf-harness chat event ${envelope.sequence} (${envelope.event.kind}) was not delivered: ${
-        error instanceof Error ? error.message : String(error)
+        describeFailure(error)
       }`,
     );
   }

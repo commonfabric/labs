@@ -1,4 +1,4 @@
-import { decode, encode } from "@commonfabric/utils/encoding";
+import { decode, encode } from "@commonfabric/text/utf8";
 import * as ed25519 from "@noble/ed25519";
 import { varint } from "multiformats";
 import { base58btc } from "multiformats/bases/base58";

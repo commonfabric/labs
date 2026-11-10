@@ -19,12 +19,15 @@ import {
   type ApplyOpResolution,
   type CellHandle,
   CODEMIRROR_CHANGESET_CODEC,
+  type FieldAnchors,
   type JSONValue,
+  mapFieldAnchors,
   type OpCursor,
   type OperationFieldSnapshot,
   type RuntimeClient,
+  sameAnchors,
 } from "@commonfabric/runtime-client";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 export type CodeMirrorOperationPayload = {
   updates: Array<{
@@ -48,12 +51,47 @@ export type CodeMirrorCollaborationFieldIdentity = {
   path: readonly string[];
 };
 
-/** Read-only document synchronization state exposed to ephemeral consumers. */
+/**
+ * Read-only document synchronization state exposed to ephemeral consumers,
+ * from the first snapshot of the field the controller installs. The confirmed
+ * text is the text Memory has confirmed to this editor: the field's text at
+ * `confirmedCursor`, or the field's stored value while it has no collaborative
+ * edit.
+ */
 export type CodeMirrorSynchronizationSnapshot = {
-  confirmedCursor: OpCursor;
+  /**
+   * The field version Memory has confirmed, or `null` while the field has no
+   * collaborative edit and so no version.
+   */
+  confirmedCursor: OpCursor | null;
+
+  /**
+   * The editor's edits Memory has not confirmed, in order, which take the
+   * confirmed text to the editor's document.
+   */
   pendingChanges: readonly ChangeDesc[];
+
+  /** The field the controller synchronizes. */
   field: CodeMirrorCollaborationFieldIdentity;
+
+  /** The field's anchors, each the offset of a point in the confirmed text. */
+  anchors: FieldAnchors;
 };
+
+/** A synchronization snapshot of a field that has a confirmed version. */
+export type CodeMirrorConfirmedSynchronization =
+  & CodeMirrorSynchronizationSnapshot
+  & { confirmedCursor: OpCursor };
+
+/**
+ * Whether `snapshot` is one of a field that has a confirmed version, which
+ * anything stated against a version, such as presence, requires.
+ */
+export const hasConfirmedCursor = (
+  snapshot: CodeMirrorSynchronizationSnapshot | null | undefined,
+): snapshot is CodeMirrorConfirmedSynchronization =>
+  snapshot !== null && snapshot !== undefined &&
+  snapshot.confirmedCursor !== null;
 
 /** Preserves both values when a new epoch cannot absorb unconfirmed edits. */
 export class CodeMirrorReconciliationError extends Error {
@@ -260,6 +298,7 @@ export class CodeMirrorCollaborationController {
     (snapshot: CodeMirrorSynchronizationSnapshot | null) => void
   >();
   #cursor: OpCursor | null = null;
+  #anchors: FieldAnchors = {};
   #field: CodeMirrorCollaborationFieldIdentity | null = null;
   #baselineHash = "";
   #unsubscribe: (() => void) | undefined;
@@ -289,20 +328,28 @@ export class CodeMirrorCollaborationController {
     return this.#cell;
   }
 
+  /**
+   * What the controller holds of the field now, or `null` while it holds no
+   * snapshot of it: before the first is installed, while one is being
+   * installed, and once the controller is closing, failed or disposed.
+   */
   get synchronizationSnapshot(): CodeMirrorSynchronizationSnapshot | null {
-    if (!this.active || this.#cursor === null || this.#field === null) {
-      return null;
-    }
+    if (!this.active || this.#field === null) return null;
     return {
-      confirmedCursor: { ...this.#cursor },
+      confirmedCursor: this.#cursor === null ? null : { ...this.#cursor },
       pendingChanges: sendableUpdates(this.#view.state).map((update) =>
         update.changes
       ),
       field: { ...this.#field, path: [...this.#field.path] },
+      anchors: this.#anchors,
     };
   }
 
-  /** Observes canonical cursor advancement without granting operation control. */
+  /**
+   * Observes the synchronization snapshot, starting with the current one,
+   * without granting operation control. The observer runs whenever the
+   * confirmed version, the pending edits or the anchors change.
+   */
   observeSynchronization(
     observer: (snapshot: CodeMirrorSynchronizationSnapshot | null) => void,
   ): () => void {
@@ -508,6 +555,7 @@ export class CodeMirrorCollaborationController {
       annotations: Transaction.remote.of(true),
     });
     this.#cursor = snapshot.cursor;
+    this.#holdAnchors(snapshot.anchors);
     this.#baselineHash = snapshot.baselineHash;
     this.#ready = true;
     this.#notifySynchronization();
@@ -528,12 +576,18 @@ export class CodeMirrorCollaborationController {
           // The first apply activates the field asynchronously. A concurrent
           // sync can still carry the unchanged inactive baseline while that
           // submission is in flight; it says nothing newer about the local
-          // edit and must not be mistaken for an epoch reset.
+          // edit and must not be mistaken for an epoch reset. Its anchors are
+          // stated against that same baseline, which the pending edits are
+          // made over.
+          if (this.#holdAnchors(snapshot.anchors)) {
+            this.#notifySynchronization();
+          }
           return;
         }
         if (this.#cursor !== null) {
           if (this.#releasing) {
             this.#cursor = null;
+            this.#holdAnchors(snapshot.anchors);
             this.#baselineHash = snapshot.baselineHash;
             return;
           }
@@ -549,6 +603,9 @@ export class CodeMirrorCollaborationController {
             this.#install(snapshot);
           } else {
             this.#baselineHash = snapshot.baselineHash;
+            if (this.#holdAnchors(snapshot.anchors)) {
+              this.#notifySynchronization();
+            }
           }
         } else if (this.#view.state.doc.toString() !== snapshot.materialized) {
           throw new CodeMirrorReconciliationError(
@@ -594,7 +651,10 @@ export class CodeMirrorCollaborationController {
             "CodeMirror snapshot disagrees at the current operation cursor",
           );
         }
-        if (becameActive) this.#notifySynchronization();
+        // A write to the field's anchors advances no version, so a snapshot
+        // at the current cursor can still carry different anchors.
+        const anchorsChanged = this.#holdAnchors(snapshot.anchors);
+        if (becameActive || anchorsChanged) this.#notifySynchronization();
         return;
       }
       const updates = codeMirrorIntegratedUpdates(snapshot, current);
@@ -612,6 +672,7 @@ export class CodeMirrorCollaborationController {
         epoch: snapshot.cursor.epoch,
         version: getSyncedVersion(this.#view.state),
       };
+      this.#holdAnchors(snapshot.anchors);
       this.#baselineHash = snapshot.baselineHash;
       this.#notifySynchronization();
       if (
@@ -766,6 +827,7 @@ export class CodeMirrorCollaborationController {
       cursor: resolution.to,
       baselineHash: this.#baselineHash,
       materialized: this.#view.state.doc.toString(),
+      anchors: {},
       operations: resolution.operations,
     };
     const updates = codeMirrorIntegratedUpdates(snapshot, current);
@@ -779,11 +841,32 @@ export class CodeMirrorCollaborationController {
         ),
       ));
     }
+    // A resolution carries operations and not the anchors they moved, so the
+    // anchors follow those operations by Memory's own rule until a snapshot
+    // restates them.
+    let anchors = this.#anchors;
+    for (const update of updates) {
+      anchors = mapFieldAnchors(anchors, update.changes);
+    }
+    this.#holdAnchors(anchors);
     this.#cursor = {
       epoch: resolution.to.epoch,
       version: getSyncedVersion(this.#view.state),
     };
     this.#notifySynchronization();
+  }
+
+  /**
+   * Takes `anchors` as the field's, stated against the confirmed text the
+   * controller holds, and returns whether they differ from the anchors it
+   * held. Equal anchors leave the held object in place, so the anchors a
+   * synchronization snapshot carries are one object for as long as no anchor
+   * has changed, and an observer can compare them by identity.
+   */
+  #holdAnchors(anchors: FieldAnchors): boolean {
+    if (sameAnchors(this.#anchors, anchors)) return false;
+    this.#anchors = anchors;
+    return true;
   }
 
   #fail(cause: unknown): void {

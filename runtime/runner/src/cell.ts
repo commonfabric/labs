@@ -48,16 +48,16 @@ import {
   type StreamLinkRef,
 } from "@commonfabric/memory/v2";
 import type { OutboxAppendRow } from "@commonfabric/memory/v2/execution-outbox";
-import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
-import { ensureNotRenderThread } from "@commonfabric/utils/env";
-import { IndexTrackingStack } from "@commonfabric/utils/index-tracking-stack";
-import { getLogger } from "@commonfabric/utils/logger";
+import { isArrayIndexPropertyName } from "@commonfabric/js-values/arrays";
+import { ensureNotRenderThread } from "@commonfabric/platform/env";
+import { IndexTrackingStack } from "@commonfabric/collections/index-tracking-stack";
+import { getLogger } from "@commonfabric/logger";
 import {
   type Immutable,
   isObjectNotArray,
   isObjectOrArray,
   isPlainContainer,
-} from "@commonfabric/utils/types";
+} from "@commonfabric/js-values/types";
 
 import { toCell } from "./back-to-cell.ts";
 import {
@@ -162,7 +162,7 @@ import {
   parseLink,
   toMemorySpaceAddress,
 } from "./link-utils.ts";
-import { type MetaField, type RawMetaWriteAuthorization } from "./meta-seam.ts";
+import type { MetaField, RawMetaWriteAuthorization } from "./meta-seam.ts";
 import {
   type CellResult,
   createQueryResultProxy,
@@ -176,9 +176,14 @@ import { isRuntime } from "./runtime-brand.ts";
 import {
   type Action,
   ignoreReadForScheduling,
+  type ReactivityLog,
   txToReactivityLog,
 } from "./scheduler.ts";
-import { mintEventId, scopeCallerEventId } from "./scheduler/event-identity.ts";
+import {
+  handlingReceiptLink,
+  mintEventId,
+  scopeCallerEventId,
+} from "./scheduler/event-identity.ts";
 import { withdrawHandlerWhileLoading } from "./scheduler/handler-load-wait.ts";
 import { InSpaceTargetUnresolved } from "./scheduler/retry-immediately.ts";
 import {
@@ -186,14 +191,11 @@ import {
   processDefaultValue,
   resolveSchema,
   schemaHasIfc,
+  singleReadTx,
   validateAndTransform,
 } from "./schema.ts";
 import { isCellScope, narrowerScopeCap, normalizeCellScope } from "./scope.ts";
-import {
-  type SigilLink,
-  type SigilWriteRedirectLink,
-  type URI,
-} from "./sigil-types.ts";
+import type { SigilLink, SigilWriteRedirectLink, URI } from "./sigil-types.ts";
 import { speculationRunContextOf } from "./speculation/overlay-destination.ts";
 import { flattenBuilderArtifacts } from "./storage-preflight.ts";
 import {
@@ -684,6 +686,15 @@ export type StreamSendOptions = {
     delivery: EventAppendDeliveryOutcome,
     tx: IExtendedStorageTransaction,
   ) => void;
+
+  /**
+   * `false` sends the event without running its handler in this runtime, for a
+   * client under server execution that has no use for a speculative echo: the
+   * event append is the whole of the send, the piece is not started for it, and
+   * the commit callback receives a transaction that wrote nothing and names the
+   * handling's receipt. A runtime that runs its own events ignores it.
+   */
+  echo?: false;
 };
 
 // The mint registry backing `runtimeInjectedEventKeys` (see
@@ -1394,8 +1405,13 @@ export function syncCellForIdentity<T>(
  * The container stores only the entity reference parts that need to be synchronized.
  */
 interface CauseContainer {
-  // Root cell that created this cause container
-  cell: OpaqueCell<unknown>;
+  // The object the siblings share as their identity: what the pattern builder
+  // attaches nodes under and what an export names. A cell made without a link
+  // is its own, since the builder compares it with the cells it made. One
+  // made from a link mints it on first use, without a transaction, so that
+  // the siblings of a cell bound to a transaction do not keep that
+  // transaction alive through it.
+  cell: OpaqueCell<unknown> | undefined;
   // Entity reference - shared across all siblings
   id: URI | undefined;
   space: MemorySpace | undefined;
@@ -1445,6 +1461,12 @@ let setOf: (
 let labelViewOf: (cell: CellImpl<FabricValue>) => CfcLabelView | undefined;
 let markSynced: (cell: CellImpl<FabricValue>) => void;
 let isStreamCell: (cell: CellImpl<FabricValue>) => boolean;
+let pullProjectedOf: <R>(
+  cell: CellImpl<FabricValue>,
+  project: (value: unknown) => R,
+  options: { awaitDurability?: boolean },
+) => Promise<R>;
+let writeTargetOf: (cell: CellImpl<FabricValue>) => Cell<FabricValue>;
 let sinkProjectedOf: <R>(
   cell: CellImpl<FabricValue>,
   project: (value: unknown) => R,
@@ -1597,7 +1619,9 @@ export class CellImpl<T extends FabricValue>
     // Use provided container or create one
     // If link has an id, extract it to the container
     this.#causeContainer = causeContainer ?? {
-      cell: this as unknown as OpaqueCell<unknown>,
+      cell: this.#_link.id === undefined
+        ? this as unknown as OpaqueCell<unknown>
+        : undefined,
       id: this.#_link.id,
       space: this.#_link.space,
       cause: undefined,
@@ -1753,9 +1777,31 @@ export class CellImpl<T extends FabricValue>
       space,
       ...(id !== undefined ? { id } : {}),
     });
-    for (const node of cellNodes.get(this.#causeContainer.cell) ?? []) {
+    for (const node of cellNodes.get(this.#identityCell()) ?? []) {
       (node.module as Module).targetSpace = space;
     }
+  }
+
+  /**
+   * The object the siblings share as their identity; `CauseContainer.cell`.
+   * A sibling made with no transaction and no frame, as `#linkOnlyCopy()`
+   * makes a copy: `withTx()` keeps the transaction of a cell bound to the run
+   * under way, and a frame carries its action's transaction.
+   */
+  #identityCell(): OpaqueCell<unknown> {
+    if (this.#causeContainer.cell === undefined) {
+      const identity = new CellImpl(
+        this.#runtime,
+        undefined,
+        this.#_link,
+        this.#synced,
+        this.#causeContainer,
+        this.#kind,
+      );
+      identity.#frame = undefined;
+      this.#causeContainer.cell = identity as unknown as OpaqueCell<unknown>;
+    }
+    return this.#causeContainer.cell;
   }
 
   /**
@@ -1997,9 +2043,9 @@ export class CellImpl<T extends FabricValue>
     if (!this.#synced) this.#startLoad(); // No await, just kicking this off
 
     // Wrap the transaction to make all reads non-reactive. Child cells created
-    // during validateAndTransform will use the original transaction (via
-    // getTransactionForChildCells).
-    const readTx = this.#runtime.readTx(this.#tx);
+    // during validateAndTransform use the cell's own transaction while it is
+    // open, and none otherwise (via getTransactionForChildCells).
+    const readTx = singleReadTx(this.#runtime, this.#tx);
     const nonReactiveTx = createNonReactiveTransaction(readTx);
 
     return validateAndTransform(this.#runtime, nonReactiveTx, this.#viewRef);
@@ -2042,6 +2088,15 @@ export class CellImpl<T extends FabricValue>
    * @returns The cell's reactive value after the selected readiness barrier.
    */
   pull(options: { awaitDurability?: boolean } = {}): Promise<Readonly<T>> {
+    return this.#pullProjected((value) => value, options, true);
+  }
+
+  /** Runs the shared readiness barrier for a projected or recursive pull. */
+  #pullProjected<R>(
+    project: (value: Readonly<T>) => R,
+    options: { awaitDurability?: boolean },
+    traverse: boolean,
+  ): Promise<R> {
     if (this.#boundToRun()) {
       return Promise.reject(new Error(runOwnTransactionRefusal("pull")));
     }
@@ -2062,12 +2117,11 @@ export class CellImpl<T extends FabricValue>
       );
     }
 
-    // Check if we need to traverse the result to register all dependencies.
-    // This is needed when there's no schema or when the schema is TrueSchema ("any"),
-    // because without schema constraints we need to read all nested values.
+    // Ordinary pull recursively demands schemaless values. A projected pull
+    // demands the schema view and the projection's reads without that traversal.
     const schema = this.#_link.schema;
-    const needsTraversal = schema === undefined ||
-      ContextualFlowControl.isTrueSchema(schema);
+    const needsTraversal = traverse && (schema === undefined ||
+      ContextualFlowControl.isTrueSchema(schema));
 
     const idle = () =>
       options.awaitDurability === true
@@ -2081,11 +2135,11 @@ export class CellImpl<T extends FabricValue>
           // Read the value inside the effect - this ensures dependencies are pulled
           const value = validateAndTransform(this.#runtime, tx, this.#viewRef);
 
-          // If no schema or TrueSchema, traverse the result to register all
-          // nested values as read dependencies.
+          // Ordinary schemaless pull also registers nested read dependencies.
           if (needsTraversal && value !== undefined && value !== null) {
             deepTraverse(value);
           }
+          project(value);
         } finally {
           // Schemaless traversal can add reads in other spaces. Each effect
           // run replaces the set so obsolete dependencies do not fail the pull.
@@ -2161,7 +2215,9 @@ export class CellImpl<T extends FabricValue>
             sessionError.name !== "AuthorizationError"
           ) throw sessionError;
         }
-        return validateAndTransform(this.#runtime, undefined, this.#viewRef);
+        return project(
+          validateAndTransform(this.#runtime, undefined, this.#viewRef),
+        );
       };
       ready().then(resolve, reject);
     });
@@ -2780,8 +2836,18 @@ export class CellImpl<T extends FabricValue>
             // with the recorded mergeable append below — keeps it out
             // of the commit's conflict read set, and with it out of
             // the sealed reads that feed wave basis rows (§3b).
+            // `writeDestinationRead` keeps it out of the run's CFC flow
+            // join as well, as `Cell.pushAll()`'s snapshot is: the entries
+            // already there stay where they are and only this run's entry
+            // is appended, so a label an earlier entry's `consequenced` mark
+            // carries is no input of this run (CFC §18.6.2, write-destination
+            // reads; `docs/specs/cfc-write-destination-reads.md`).
             const currentEntries = this.#tx.readValueOrThrow(entriesLink, {
-              meta: { ...ignoreReadForScheduling, ...mergeableOpRead },
+              meta: {
+                ...ignoreReadForScheduling,
+                ...mergeableOpRead,
+                ...writeDestinationRead,
+              },
             });
             const emittedEntry = {
               eventId: emittedId,
@@ -2977,29 +3043,40 @@ export class CellImpl<T extends FabricValue>
           onCommit?.(tx);
         }
         : onCommit;
-      this.#runtime.scheduler.queueEvent(
-        resolvedToValueLink,
-        event,
-        undefined,
-        settleCallback,
-        false,
-        {
-          // Under events-down the COMMITTED append's id is the one the
-          // echo must carry (overlay origin `intent(eventId)`,
-          // speculation.md §1) — the same session-scoped id, one mint.
-          eventId: firedEventId ?? deliveryEventId,
-          ...(clientCascadeParent !== undefined
-            ? { parentEventId: clientCascadeParent }
-            : {}),
-          originTx: this.#tx ?? undefined,
-          // Forward injection provenance only when it carries the mint (see
-          // markRuntimeInjectedEventKeys): a plain array here — the shape any
-          // in-process or sandboxed caller could pass — is dropped, and the
-          // closed-world gate then judges the key like any other undeclared
-          // field.
-          runtimeInjectedEventKeys: mintedKeys,
-        },
-      );
+      if (firedEventId !== undefined && sendOptions?.echo === false) {
+        if (settleCallback !== undefined) {
+          const unechoed = this.#runtime.edit();
+          unechoed.handlingReceiptLink = handlingReceiptLink(
+            firedEventId,
+            resolvedToValueLink,
+          );
+          void unechoed.commit().settled.then(() => settleCallback(unechoed));
+        }
+      } else {
+        this.#runtime.scheduler.queueEvent(
+          resolvedToValueLink,
+          event,
+          undefined,
+          settleCallback,
+          false,
+          {
+            // Under events-down the COMMITTED append's id is the one the
+            // echo must carry (overlay origin `intent(eventId)`,
+            // speculation.md §1) — the same session-scoped id, one mint.
+            eventId: firedEventId ?? deliveryEventId,
+            ...(clientCascadeParent !== undefined
+              ? { parentEventId: clientCascadeParent }
+              : {}),
+            originTx: this.#tx ?? undefined,
+            // Forward injection provenance only when it carries the mint (see
+            // markRuntimeInjectedEventKeys): a plain array here — the shape any
+            // in-process or sandboxed caller could pass — is dropped, and the
+            // closed-world gate then judges the key like any other undeclared
+            // field.
+            runtimeInjectedEventKeys: mintedKeys,
+          },
+        );
+      }
 
       this.#cleanup?.();
       const [cancel, addCancel] = useCancelGroup();
@@ -3013,6 +3090,34 @@ export class CellImpl<T extends FabricValue>
           "Transaction required for .set() - mutations only work in handlers\n" +
             "help: use handler() to create transaction context, or computed() for read-only transformations",
         );
+      }
+
+      // A handler's write into another space, at a link-hop target whose
+      // document has not arrived (`pendingHopDoc`), cannot tell a send to a
+      // stream from a write: the stream marker is unknowable there, not
+      // absent. Written as a value, it would open a writer in a second space,
+      // which the transaction refuses, and lose the event. So while that
+      // document's load is in flight the run is withdrawn, and the dispatch
+      // runs it again once the load lands (events.md §5), as a cell resolved
+      // through a loading document is (`resolveAsCell()`); the resolution
+      // above kicked that load. A target confirmed absent, a same-space
+      // target, or one outside a handler, writes as before.
+      if (resolvedToValueLink.pendingHopDoc === true) {
+        const run = patternRun(this.#runtime);
+        if (
+          run?.kind === "handler" && run.space !== undefined &&
+          resolvedToValueLink.space !== run.space
+        ) {
+          withdrawHandlerWhileLoading(
+            this.#runtime,
+            run.tx,
+            resolvedToValueLink,
+            `a write into another space reached \`${resolvedToValueLink.id}\` while its document was still loading`,
+          );
+          if (run.tx.dispatchedHandlerNotRun !== undefined) {
+            return this as unknown as Cell<T>;
+          }
+        }
       }
 
       // No await for the sync, just kicking this off, so we have the data to
@@ -4145,13 +4250,25 @@ export class CellImpl<T extends FabricValue>
    * snapshot of its content, unless `options` asks for its stored address.
    */
   resolveAsCell(options?: ResolveAsCellOptions): Cell<T> {
+    return this.#resolveAsCell("value", options);
+  }
+
+  /**
+   * The cell this one's links lead to, for `"value"`, or the cell a write to
+   * this one lands in, for `"writeRedirect"`: write redirects are followed,
+   * and a link stored there as the value is not.
+   */
+  #resolveAsCell(
+    lastNode: "value" | "writeRedirect",
+    options?: ResolveAsCellOptions,
+  ): Cell<T> {
     const readTx = this.#runtime.readTx(this.#tx);
     const tracesBefore = readTx.getCfcState().dereferenceTraces.length;
     let link: NormalizedFullLink = resolveLink(
       this.#runtime,
       readTx,
       this.#link,
-      "value",
+      lastNode,
       { markIfcCrossings: true },
     );
     // The handle carries how it was obtained, the restrictions of the slots
@@ -4197,7 +4314,8 @@ export class CellImpl<T extends FabricValue>
     const subPath = path || [];
     return createQueryResultProxy(
       this.#runtime,
-      requireTransaction(tx) ?? this.#tx ?? this.#runtime.edit(),
+      requireTransaction(tx) ?? this.#tx ??
+        singleReadTx(this.#runtime, undefined),
       {
         ...this.#link,
         path: [...this.path, ...subPath.map((p) => p.toString())] as string[],
@@ -4456,7 +4574,7 @@ export class CellImpl<T extends FabricValue>
     // For cells created during pattern construction, we need to track which nodes
     // they're connected to. Since Cell doesn't have a nodes set like Reactive's store,
     // we'll store this in a WeakMap keyed by the cell instance.
-    const top = this.#causeContainer.cell;
+    const top = this.#identityCell();
     if (!cellNodes.has(top)) {
       cellNodes.set(top, new Set());
     }
@@ -4474,12 +4592,13 @@ export class CellImpl<T extends FabricValue>
           "disposed, so it cannot take part in building a pattern",
       );
     }
+    const identity = this.#identityCell();
     return {
-      cell: this.#causeContainer.cell,
+      cell: identity,
       path: this.#_link.path,
       schema: this.schema,
       scope: isCellScope(this.#_link.scope) ? this.#_link.scope : undefined,
-      nodes: cellNodes.get(this.#causeContainer.cell) ?? new Set(),
+      nodes: cellNodes.get(identity) ?? new Set(),
       frame: this.#frame,
       kind: this.#kind,
       name: this.#causeContainer.cause,
@@ -4601,12 +4720,12 @@ export class CellImpl<T extends FabricValue>
   query<Row = Record<string, unknown>>(
     sql: string,
     options?: {
-      params?: ReadonlyArray<unknown> | Record<string, unknown>;
+      params?: ReadonlyArray<unknown> | Record<string, unknown> | undefined;
       reactOn?: unknown;
-      requestKey?: string;
-      maxConfidentiality?: ReadonlyArray<unknown>;
-      onExceed?: "fail" | "skip";
-      readClearance?: boolean;
+      requestKey?: string | undefined;
+      maxConfidentiality?: ReadonlyArray<unknown> | undefined;
+      onExceed?: "fail" | "skip" | undefined;
+      readClearance?: boolean | undefined;
       scope?: CellScope;
     },
   ): Reactive<
@@ -4620,10 +4739,12 @@ export class CellImpl<T extends FabricValue>
   > {
     // The scope binds the node the way `.asScope` binds the builder export:
     // the runner folds the node's default scope into the result cell's link.
-    // Validated at the boundary: an invalid scope must not reach the link.
+    // Validated at the boundary: an invalid scope must not reach the link. A
+    // pattern input or a computed value is still a reference here, which no
+    // check can resolve, so the message names that case.
     if (options?.scope !== undefined && !isCellScope(options.scope)) {
       throw new TypeError(
-        `sqlite: invalid query result scope ${JSON.stringify(options.scope)}`,
+        debugStr`sqlite: \`db.query()\`'s \`scope\` is read when the pattern is built, so it is \`"space"\`, \`"user"\`, or \`"session"\` written in the pattern, not a pattern input or a computed value; got $quote${options.scope}`,
       );
     }
     const factory = options?.scope === undefined
@@ -5106,8 +5227,11 @@ export class CellImpl<T extends FabricValue>
       cell.#synced = true;
     };
     isStreamCell = (cell) => cell.isStream();
+    pullProjectedOf = (cell, project, options) =>
+      cell.#pullProjected(project, options, false);
     sinkProjectedOf = (cell, project, callback, options) =>
       cell.#sinkProjected(project, callback, options);
+    writeTargetOf = (cell) => cell.#resolveAsCell("writeRedirect");
   }
 }
 
@@ -5178,13 +5302,17 @@ function patternRunTx(
 }
 
 /**
- * Returns the kind and the transaction of the handler or lift of `runtime`
- * that is running, while that transaction is open.
+ * Returns the kind, the transaction and the space of the handler or lift of
+ * `runtime` that is running, while that transaction is open.
  */
 function patternRun(
   runtime: Runtime,
 ):
-  | { kind: "handler" | "lift"; tx: IExtendedStorageTransaction }
+  | {
+    kind: "handler" | "lift";
+    tx: IExtendedStorageTransaction;
+    space: MemorySpace | undefined;
+  }
   | undefined {
   let frame = getTopFrame();
   while (frame !== undefined && frame.frameKind === undefined) {
@@ -5192,7 +5320,7 @@ function patternRun(
   }
   const tx = frame?.runtime === runtime ? frame.tx : undefined;
   return frame?.frameKind !== undefined && tx?.status().status === "ready"
-    ? { kind: frame.frameKind, tx }
+    ? { kind: frame.frameKind, tx, space: frame.space }
     : undefined;
 }
 
@@ -5431,18 +5559,7 @@ function sinkHelper(
   });
   (sink.action as Action & { src?: string }).src = sinkName;
 
-  // Call action once immediately, which also defines what docs need to be
-  // subscribed to. Wrap with withExecutingAction so that any child sinks
-  // created during the callback see this action as their parent.
-  const tx = runtime.edit();
-  runtime.scheduler.withExecutingAction(sink.action, () => sink.action(tx));
-  const log = txToReactivityLog(tx);
-
-  // Technically unnecessary since we don't expect/allow callbacks to sink to
-  // write to other cells, and we retry by design anyway below when read data
-  // changed. But ideally we enforce read-only as well.
-  runtime.prepareTxForCommit(tx);
-  tx.commit();
+  const log = runSinkOnce(sink, runtime);
 
   // Mark as effect since sink() is a side-effectful consumer (FRP effect/sink)
   // Use resubscribe because we've already run it once above
@@ -5459,6 +5576,28 @@ function sinkHelper(
     if (isCancel(sink.cleanup)) sink.cleanup();
     sink.cleanup = undefined;
   };
+}
+
+/**
+ * Runs `sink`'s action once, in a transaction of its own, and returns what it
+ * read, which defines the documents it subscribes to. Any child sink the
+ * callback creates sees this action as its parent.
+ *
+ * The transaction is confined to this function: a closure here sharing scope
+ * with the cancel function `sinkHelper()` returns would keep it, and all it
+ * read, reachable for as long as the sink is live.
+ */
+function runSinkOnce(sink: SinkAction, runtime: Runtime): ReactivityLog {
+  const tx = runtime.edit();
+  runtime.scheduler.withExecutingAction(sink.action, () => sink.action(tx));
+  const log = txToReactivityLog(tx);
+
+  // Technically unnecessary since we don't expect/allow callbacks to sink to
+  // write to other cells, and we retry by design anyway below when read data
+  // changed. But ideally we enforce read-only as well.
+  runtime.prepareTxForCommit(tx);
+  tx.commit();
+  return log;
 }
 
 /**
@@ -5890,6 +6029,34 @@ export function readProjected<R>(
   const tx = cellRuntime(cell).readTx();
   const value = project(cell.withTx(tx).get());
   return { value, consumed: collectConsumedLabel(tx) };
+}
+
+/**
+ * Pulls the dependencies of the cell's schema view and `project`, returning
+ * the projection's result from a fresh read. The projection runs inside the
+ * temporary effect, then again after readiness, so it must be synchronous and
+ * free of side effects. Early demand runs can supply `undefined` or partially
+ * loaded values, which the projection must tolerate. Schemaless values are
+ * traversed only as far as the projection reads.
+ * Readiness and terminal connection errors follow `pull()`; `awaitDurability`
+ * also waits for producers installed by pending commits.
+ */
+export function pullProjected<R>(
+  cell: Cell<unknown>,
+  project: (value: unknown) => R,
+  options: { awaitDurability?: boolean } = {},
+): Promise<R> {
+  return pullProjectedOf(requireCellImpl(cell), project, options);
+}
+
+/**
+ * The cell a write to `cell` lands in, as `resolveAsCell()` resolves one: its
+ * write redirects are followed, and a link stored there as the value is not.
+ * A host that must tell a value written into a cell from one reached through
+ * a link stored there compares this with `cell.resolveAsCell()`.
+ */
+export function resolveWriteTarget(cell: Cell<unknown>): Cell<unknown> {
+  return writeTargetOf(requireCellImpl(cell));
 }
 
 /**

@@ -2,8 +2,12 @@
 
 Server deployments run through the bastion using binaries that CI has built
 and published. Rapids releases coordinate Labs, Loom, Weaver, gVisor, and infra
-at verified green `main` revisions. Estuary takes a manually selected Labs
-revision from `main` or the time-limited `alex-daily` demo branch.
+at verified green revisions, and take Labs at the commit Loom's `main` pins
+rather than at Labs' own `main`, so a Labs change reaches Rapids only once a
+Loom pull request moves that pin. Estuary deploys the Labs revision named when
+its deployment is dispatched. Loom dispatches it with the pin each time the pin
+changes, and a person can dispatch any Labs commit on `main` by hand, which
+reaches Estuary without moving the pin.
 
 Two browser shells reach users, and they are configured in different places.
 The toolshed binary carries one and serves it from its own origin, so it is
@@ -16,7 +20,7 @@ The server deployment entrypoints are:
 | Job | Workflow | Bastion command | Trigger |
 | --- | --- | --- | --- |
 | `deploy` | `.github/workflows/rapids-release.yml` | `/opt/cf/deploy-rapids.sh "$INFRA_SHA"` | infra dispatch on Labs `main`, naming the candidate's infra commit |
-| `deploy-estuary` | `.github/workflows/deploy-production.yml` | `/opt/cf/deploy.sh <environment> <Labs SHA>` | manual dispatch on `main`, naming a full SHA and source branch |
+| `deploy-estuary` | `.github/workflows/deploy-production.yml` | `/opt/cf/deploy.sh <environment> <Labs SHA>` | dispatch on `main` naming a full SHA, by Loom when its Labs pin changes or by hand |
 
 The production job reads the environment name from a repository variable rather
 than naming it, because the variable is defined on the GitHub environment the
@@ -27,28 +31,23 @@ The Rapids job declares GitHub's `toolshed` environment, which holds
 production job downloads the selected commit's artifacts itself and fails with
 a message naming that commit if they are absent.
 
-## Estuary demo deployment and verification
+## Estuary deployment and verification
 
-**Manual Production Deployment** (`deploy-production.yml`) runs from `main`
-and takes these inputs:
+**Manual Production Deployment** (`deploy-production.yml`) runs from `main`.
+Loom's `deploy-labs-from-vendor-bump.yml` dispatches it with Loom's Labs pin
+whenever a push to Loom's `main` changes `vendor/config/`. It can also be
+dispatched by hand with any Labs commit on `main`, which Loom's pin does not
+constrain. It takes these inputs:
 
-- `ref`: the full lowercase Labs commit SHA to deploy or verify.
-- `source_branch`: `main` (default) or `alex-daily`. The selected SHA must be
-  an ancestor of this branch, verified through GitHub before the protected job
+- `ref`: the full lowercase Labs commit SHA to deploy or verify. The SHA must
+  be an ancestor of `main`, verified through GitHub before the protected job
   can start.
 - `verify_only`: `false` (default) deploys through the existing bastion wrapper;
   `true` checks the running backend without deploying or downloading artifacts.
 
-`alex-daily` is authorized from `2026-10-19T22:15:16Z` inclusive until
-`2026-10-22T22:15:16Z` exclusive. The workflow checks the window before requesting
-environment approval, after approval, and immediately before deployment.
-Concurrent Estuary runs serialize without cancelling an in-progress run.
-
-The `estuary` environment retains its required reviewers. An hourly coordinator
-must arrange approval by an existing required reviewer; dispatch alone does not
-make a release active. A temporary reviewer credential used for automation must
-be restricted by the coordinator to the exact selected run and authorization
-window, and removed at expiry.
+The protected job declares the `estuary` environment, so one of its required
+reviewers approves each run before it starts. Concurrent Estuary runs serialize
+without cancelling an in-progress run.
 
 After deployment, or immediately in verification-only mode, the workflow uses
 the existing bastion connection to read `/api/meta` from all 21 Estuary workers
@@ -59,21 +58,11 @@ mismatched endpoint.
 
 Successful verification uploads `receipt.json` in the GitHub artifact
 `estuary-deployment-<run_id>-<run_attempt>`. It records `repository`,
-`workflow_sha`, `run_id`, `run_attempt`, `source_branch`, `verify_only`,
-`labs_sha`, `verified_at`, `expected_workers`, `workers`, and `https`.
+`workflow_sha`, `run_id`, `run_attempt`, `verify_only`, `labs_sha`,
+`verified_at`, `expected_workers`, `workers`, and `https`.
 Each worker has `host`, `port`, and `git_sha`; `https` has `url` and `git_sha`.
 The receipt is uploaded only after the complete worker set and HTTPS result
-have been validated. The coordinator must verify the successful workflow
-identity, run attempt, artifact digest, selected SHA, and receipt freshness
-before advancing the Estuary channel in infra.
-
-Production deployment and verification-only completions wake infra's
-`rapids.yml` on `main` with `channel=estuary` while the authorization window is
-open. `.github/workflows/notify-rapids.yml` selects the production workflow by
-its path, main branch, repository, and dispatch event. It uses the existing
-infra-only App token. Every completion is a reconciliation hint, including a
-failed or cancelled run; the coordinator still validates the selected source,
-successful run, and receipt before publishing.
+have been validated.
 
 ## Coordinated Rapids releases
 
@@ -89,9 +78,17 @@ Each notification uses a separate repository-scoped Actions-write token from
 `RAPIDS_APP_ID` and `RAPIDS_APP_PRIVATE_KEY`. Notifications follow successful
 main-push CI runs in this repository. They execute no checked-out code.
 
-The infra coordinator selects the latest green main revisions and verifies
-their immutable artifacts. It lands `releases/rapids-candidate.json` on infra
-`main` and keeps that candidate frozen through deployment and publication. See
+The infra coordinator selects Loom's latest green `main` revision and takes
+Labs and gVisor from what that revision pins: Labs from the `labs` ref in
+Loom's `vendor/config/vendors.json`, never from Labs `main` directly. It refuses
+a candidate whose Labs commit differs from that pin. A Labs commit therefore
+reaches Rapids once a Loom pull request moves the pin, which Loom's
+`docs/development/reference/policies/vendoring.md` describes, and Loom's
+`main` is green with it; the commit needs its own successful main-push
+`deno.yml` build first. Weaver comes from its latest valid main-push
+publication. The coordinator verifies every selected artifact, lands
+`releases/rapids-candidate.json` on infra `main`, and keeps that candidate
+frozen through deployment and publication. See
 [infra's Rapids release documentation](https://github.com/commonfabric/infra/blob/main/releases/rapids.md)
 for selection and reconciliation rules.
 
@@ -184,6 +181,18 @@ That playbook is `ansible/playbooks/toolshed_binary_deploy.yml` in the
 [infra repository](https://github.com/commonfabric/infra), behind the
 `/opt/cf/deploy.sh` wrapper described above. Making the download replace what
 it finds, rather than skip it, is a change in that repository.
+
+## The toolshed's heap limit
+
+The toolshed binary is built with `--v8-flags=--max-old-space-size=8192`
+(`tasks/build-binaries.ts`), and `scripts/start-local-dev.sh` and the package's
+`dev` and `production` tasks run with the same flag. V8 applies the limit to each
+isolate rather than to the process, so the main thread and the serving worker
+can each reach 8 GiB, and a host's memory has to cover both for every instance
+it runs.
+
+A worker that reaches the limit takes its process down. Events still queued
+survive that, and the restarted process handles them.
 
 ## A deploy states when it happened
 

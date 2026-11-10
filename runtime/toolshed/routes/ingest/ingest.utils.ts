@@ -11,8 +11,11 @@ import {
   linkRefPayloadFromString,
   type WireLinkRefPayload,
 } from "@commonfabric/runner/shared";
-import { toUnpaddedBase64url } from "@commonfabric/utils/base64url";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import { toUnpaddedBase64url } from "@commonfabric/bytes/base64url";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 
 import {
   custodyIngest,

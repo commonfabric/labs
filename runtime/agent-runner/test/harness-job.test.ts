@@ -186,6 +186,75 @@ describe("runHarnessJob()", () => {
       return loopResult(runRoot);
     };
 
+  for (const progress of [false, true]) {
+    it(`offers milestone reporting only when opted in: ${progress}`, async () => {
+      const messages: string[] = [];
+      let turns = 0;
+      const result = await runHarnessJob(
+        plainSpec({
+          progress,
+          tools: [],
+          maxModelTurns: 3,
+          taskRole: "context",
+        }),
+        {
+          runRoot,
+          signal: new AbortController().signal,
+          onProgress: (message) => {
+            messages.push(message);
+            return Promise.resolve();
+          },
+          harnessDeps: {
+            env: {
+              ...SCRIPTED_ENV,
+              CF_HARNESS_RUNSC_CFC_POLICY:
+                "/nonexistent/harness-job-test/policy.json",
+            },
+            createPromptLoop: (options) =>
+              new CfHarnessPromptLoop({
+                ...options,
+                modelClient: {
+                  providerId: "fixture",
+                  complete: (request) => {
+                    expect(
+                      request.tools?.some((tool) =>
+                        tool.toolId === "report_progress"
+                      ),
+                    ).toBe(progress);
+                    expect(messages.length).toBe(progress ? turns : 0);
+                    const reporting = progress && turns < 2;
+                    turns++;
+                    return Promise.resolve({
+                      assistant: {
+                        role: "assistant",
+                        content: "",
+                        toolCalls: [{
+                          id: `call-${turns}`,
+                          type: "function",
+                          function: {
+                            name: reporting
+                              ? "report_progress"
+                              : "submit_result",
+                            arguments: JSON.stringify(
+                              reporting
+                                ? { message: `Milestone ${turns}` }
+                                : { result: { answer: "Titan" } },
+                            ),
+                          },
+                        }],
+                      },
+                    });
+                  },
+                },
+              }),
+          },
+        },
+      );
+      expect(result.outcome).toBe("completed");
+      expect(messages).toEqual(progress ? ["Milestone 1", "Milestone 2"] : []);
+    });
+  }
+
   for (const valid of [true, false]) {
     it(`keeps the real loop's final-turn ${valid ? "submission" : "failure report"}`, async () => {
       let calls = 0;
@@ -282,30 +351,19 @@ describe("runHarnessJob()", () => {
     });
   });
 
-  it("passes the trusted job identity through the commands config into the harness", async () => {
-    const configPath = join(runRoot, "commands.json");
-    await Deno.writeTextFile(
-      configPath,
-      JSON.stringify({
-        cliPath: "/trusted/loom",
-        transport: { kind: "broker", queuePath: "/trusted/queue" },
-        jobIdEnvVar: "HOST_JOB_ID",
-        jobId: "untrusted-file-id",
-      }),
-    );
+  it("passes the job's command endpoint, actor, own id and relevant commands into the harness", async () => {
+    const commands = {
+      url: "http://127.0.0.1:8080",
+      actor: "agent:agent-runner",
+      runId: "job-own-id",
+      relevant: ["search.run", "person.find"],
+    };
     const { result, seen } = await runScripted(
-      plainSpec({
-        tools: ["list_commands", "run_command"],
-        loomCommandsConfigPath: configPath,
-        commandJobId: "job-own-id",
-      }),
+      plainSpec({ tools: ["list_commands", "run_command"], commands }),
       answering("Titan"),
     );
     expect(result.outcome).toBe("completed");
-    expect(seen.loopOptions!.loomCommands).toMatchObject({
-      jobIdEnvVar: "HOST_JOB_ID",
-      jobId: "job-own-id",
-    });
+    expect(seen.loopOptions!.loomCommands).toEqual(commands);
   });
 
   it("hands a browser host to the run's engine, with the subagent profiles the spec allows", async () => {

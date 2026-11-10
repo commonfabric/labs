@@ -10,3 +10,7 @@ docs/history/INDEX.md merge=union
 
 # Keep generated measurement data available without expanding it in code review.
 docs/history/**/*.results.json linguist-generated=true
+
+# An iframe pattern's guest bundle is `deno bundle` output, read as a data file
+# by the pattern beside it; review its `guest.ts` or `guest.tsx` instead.
+patterns/*/iframe-*/**/guest.js linguist-generated=true

@@ -4,9 +4,12 @@ import type {
   NonDocumentPath,
   ValuePath,
 } from "@commonfabric/memory/v2";
-import { getLogger } from "@commonfabric/utils/logger";
+import {
+  type CfcConfClause,
+  isOrClause,
+} from "@commonfabric/memory/v2/cfc-release-authority";
+import { getLogger } from "@commonfabric/logger";
 import { normalizeCellScope } from "../scope.ts";
-import type { CfcConfClause } from "./clause.ts";
 import { encodePointer } from "../../../memory/v2/path.ts";
 import type {
   AttemptedWrite,
@@ -25,7 +28,7 @@ import type {
   WritePolicyInput,
 } from "./types.ts";
 import { cloneCfcLabelView, type IFCLabel } from "./label-view-core.ts";
-import { isOrClause, normalizeClause } from "./clause.ts";
+import { normalizeClause } from "./clause.ts";
 
 /**
  * Returns the canonical form of a logical path — a path inside a document's
@@ -242,6 +245,7 @@ const compareWritePolicyInput = (
     case "preserved-output":
     case "policy-application":
     case "release-program":
+    case "result-wiring":
     case "owner-adoption":
     case "initialization": {
       primary = compareAddress(
@@ -324,6 +328,7 @@ export const canonicalizeWritePolicyInput = (
     case "preserved-output":
     case "policy-application":
     case "release-program":
+    case "result-wiring":
     case "owner-adoption":
     case "initialization":
       return {

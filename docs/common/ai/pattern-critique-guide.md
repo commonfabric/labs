@@ -250,9 +250,9 @@ Applies only to patterns with multiple people or a "current user" concept. **N/A
 |-------|----------------|-----|
 | people rendered as data | a person shown as `{name}` text or a raw `<img>` | render **every** participant with `cf-profile-badge` bound to their profile cell; `cf-avatar` + snapshot only as an explicit offline fallback |
 | others rendered as `cf-avatar` when a live cell exists | `cf-avatar` used for co-participants even though their `#profile` cell is (or could be) stored on join | store each joiner's profile cell in the shared roster and badge it — cross-space reads resolve (CT-1667/1687). `cf-avatar` is only for snapshot-only cases |
-| current viewer | a "type your name" / "who am I" text field used as the viewer's identity | resolve via `wish({ query: "#profile" })` (+ `#profileName` / `#profilePicture`, with `#profileAvatar` as the fallback when there is no picture) |
+| current viewer | a "type your name" / "who am I" text field used as the viewer's identity | resolve via `wish({ query: "#profile" })` (+ `#profileName`, and `profileFace()` from `patterns/system/profile-face/profile-face.ts` on the profile for its picture or avatar text) |
 | per-user isolation | stored DIDs / user-ids / name strings used to fake isolation | use `PerUser` / `PerSpace` scope; let the scope select the instance |
-| roster construction | a participant list built from typed names | join by profile cell: each viewer pushes their own live `#profile` cell (plus a snapshot of the name and `profileLook(picture, avatar)` as a fallback) into the shared roster |
+| roster construction | a participant list built from typed names | join by profile cell: each viewer pushes their own live `#profile` cell (plus a snapshot of the name and `profileFace(profile)` as a fallback) into the shared roster |
 | identity comparison | dedup or "is this me?" by display-name equality | compare a cell reference with `equals()`, never the mutable name |
 | ownership / authorship | "who created / wrote this" stored as a bare name | snapshot the actor's profile, or attest with CFC `AuthoredByCurrentUser` / `RepresentsCurrentUser` |
 
@@ -338,7 +338,7 @@ calls, for example:
 
 ## Severity and Prioritization
 
-Use the shared severity taxonomy from the factory protocol:
+Use this severity taxonomy:
 
 - `critical` - breaks correctness or reactivity, or loses data. Examples: a
   reactive loop, `.get()` on a computed during render, `new Writable(reactiveValue)`,
@@ -350,12 +350,6 @@ Use the shared severity taxonomy from the factory protocol:
   Examples: `handler()` where `action()` suffices, helper defined inside the
   pattern body that happens to work.
 - `info` - observation, no change required.
-
-For modify-mode pre-build reviews, findings should also be easy for an
-orchestrator to triage into:
-
-- correctness or divergence risks that are `MUST-FIX`
-- style or taste observations that are `NOTED`
 
 Every non-trivial finding should include:
 

@@ -21,7 +21,10 @@ import {
   parseLLMFriendlyLink,
   renderCellReference,
 } from "@commonfabric/runner/shared";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 import {
   ADDRESS_HANDLE_TOKEN_PREFIX,
   HANDLE_TOKEN_ALPHABET,
@@ -88,7 +91,7 @@ export const parseHandleRef = (refText: string): NormalizedFullLink => {
   );
   if (parsed.id === undefined || !hasEntityUriScheme(parsed.id)) {
     throw new Error(
-      `Handle refs must name an entity URI (\`of:\`/\`computed:\`): \`${refText}\``,
+      `Handle refs must name an entity URI (\`of:\`/\`computed:\`/\`receipt:\`): \`${refText}\``,
     );
   }
   return {

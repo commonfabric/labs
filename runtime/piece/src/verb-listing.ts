@@ -15,8 +15,11 @@ import {
   pruneCfcSchemaDefinitions,
   resolveCfcSchemaRefs,
 } from "@commonfabric/runner/cfc";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
-import { utf8Compare } from "@commonfabric/utils/utf8";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
+import { utf8Compare } from "@commonfabric/text/utf8";
 import { isSchemaObject } from "./declared-fields.ts";
 
 /** One row of `cf piece verbs`: a callable the piece exposes. */

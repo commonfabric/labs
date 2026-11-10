@@ -87,6 +87,7 @@ import type {
 import {
   entityKindOfIdString,
   hashStringForEntityAddress,
+  RECEIPT_URI_SCHEME,
 } from "@commonfabric/runner/entity-kind";
 import { rawMetaWriteAuthorization } from "@commonfabric/runner/meta-seam";
 import {
@@ -96,9 +97,10 @@ import {
   viewPieceSchema,
 } from "@commonfabric/runner/schemas";
 import { StorageManager } from "@commonfabric/runner/storage/cache";
-import { ensureNotRenderThread } from "@commonfabric/utils/env";
-import { getLogger } from "@commonfabric/utils/logger";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { ensureNotRenderThread } from "@commonfabric/platform/env";
+import { getLogger } from "@commonfabric/logger";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import { prepareSourceClosureVerification } from "../../../runner/src/compilation-cache/cell-cache.ts";
 import { getResultCellWithSourceSchema } from "../../../runner/src/piece-helpers.ts";
@@ -126,6 +128,11 @@ import {
   type JoinVisitDecision,
   joinVisitedRoomOf,
 } from "./join-visited-room.ts";
+import {
+  type DeletionMarkDecision,
+  markDeletedSpaceOf,
+  retireDeletedProfileOf,
+} from "./mark-deleted-space.ts";
 import {
   advertisedSystemRelease,
   reconcilePieceSource,
@@ -300,6 +307,7 @@ export class PiecesController<T = unknown> {
       cfcWriteFloor,
       cfcReadMaxConfidentiality,
       cfcReadOnExceed,
+      preferredProfileSpace,
       clientClass,
       clientBuild,
     }: {
@@ -380,6 +388,10 @@ export class PiecesController<T = unknown> {
       // space server, whose runtime reads under it for the session's runs.
       cfcReadMaxConfidentiality?: readonly CfcConfClause[];
       cfcReadOnExceed?: CfcReadOnExceed;
+      // The profile this controller's runtime answers `#profile` with, for a
+      // controller acting as one of the user's profiles (the remoteClient
+      // preset's `preferredProfileSpace`); unset means the home's order.
+      preferredProfileSpace?: MemorySpace;
       // The client class the runtime declares (the remoteClient preset's
       // `clientClass`): a controller standing in for a browser tab, as the
       // pattern integration harness's sessions do, declares `"web"`.
@@ -433,6 +445,9 @@ export class PiecesController<T = unknown> {
           ? { cfcReadMaxConfidentiality }
           : {}),
         ...(cfcReadOnExceed !== undefined ? { cfcReadOnExceed } : {}),
+        ...(preferredProfileSpace !== undefined
+          ? { preferredProfileSpace }
+          : {}),
         ...(clientClass !== undefined ? { clientClass } : {}),
         ...(navigateCallback !== undefined ? { navigateCallback } : {}),
         ...(onPatternInstantiated !== undefined
@@ -627,7 +642,9 @@ export class PiecesController<T = unknown> {
   }
 
   /**
-   * Get the default pattern cell from the space cell.
+   * Get the default pattern cell from the space cell. The cell carries no
+   * transaction, so a caller can keep it: every read through it, or through a
+   * cell made from it, returns what the replica holds at that read.
    * @returns The default pattern cell, or undefined if not set
    */
   async getDefaultPattern(
@@ -827,9 +844,7 @@ export class PiecesController<T = unknown> {
       ]);
     }
     if (passiveRoot) {
-      // Registry callers keep a live handle across edits. Canonical-address
-      // inspection must not pin it to the root lookup's read transaction.
-      const exported = this.#pieceRegistryExport(passiveRoot).withTx();
+      const exported = this.#pieceRegistryExport(passiveRoot);
       await this.syncPieces(exported);
       // `pieceListSchema` carries `default: []`, so a root that never
       // exported a registry and a root whose registry is empty read the same
@@ -889,9 +904,8 @@ export class PiecesController<T = unknown> {
     const piecesCell = await this.getPieceRegistry();
     const pieces = await this.syncPieces(piecesCell);
     return pieces.map((piece) => {
-      // The registry names pieces without loading their documents. Controllers
-      // load and mutate those documents after this read snapshot was taken.
-      const target = piece.resolveAsCell().withTx();
+      // The registry names pieces without loading their documents.
+      const target = piece.resolveAsCell();
       const space = target.getAsNormalizedFullLink().space;
       const controller = space === this.#space ? this : new PiecesController(
         { as: this.#session.as, space },
@@ -1046,7 +1060,9 @@ export class PiecesController<T = unknown> {
       ? id
       : this.runtime.getCellFromEntityId(
         this.#space,
-        entityIdFrom(id),
+        // A receipt's id is the whole of its address: a caller reads it off
+        // one command and hands it to another to read the handling's outcome.
+        id.startsWith(`${RECEIPT_URI_SCHEME}:`) ? id : entityIdFrom(id),
         [],
         undefined,
         undefined,
@@ -2581,6 +2597,34 @@ export class PiecesController<T = unknown> {
     );
   }
 
+  /**
+   * Records in Home that `space` is deleted, for a Home the identity has: in
+   * its shared-space catalog, as `markDeletedSpaceOf()` says, and, where the
+   * space is a profile's, among its retired profiles, as
+   * `retireDeletedProfileOf()` says. A Home is not created for it, and
+   * `no-home` is answered where there is none. This controller must be over
+   * the identity's Home space.
+   *
+   * Resolves with what was decided for the catalog, once anything is sent,
+   * which is before Home has handled it.
+   */
+  async markDeletedSpace(
+    space: MemorySpace,
+  ): Promise<DeletionMarkDecision | "no-home"> {
+    this.#assertHomeSpace("mark a deleted space");
+    const home = await this.getDefaultPattern(false);
+    if (home === undefined) return "no-home";
+    // Each is sent whatever becomes of the other, since nothing sends either
+    // again; a failure of either is still reported.
+    const [mark, retirement] = await Promise.allSettled([
+      markDeletedSpaceOf(home, space),
+      retireDeletedProfileOf(home, space),
+    ]);
+    if (mark.status === "rejected") throw mark.reason;
+    if (retirement.status === "rejected") throw retirement.reason;
+    return mark.value;
+  }
+
   #assertHomeSpace(operation: string): void {
     if (this.#space !== this.runtime.userIdentityDID) {
       throw new Error(
@@ -2635,11 +2679,14 @@ export class PiecesController<T = unknown> {
    *
    * An existing root follows its origin before it is started. A root that was
    * already running when its origin moved it has been re-instantiated on the
-   * incoming pattern by the time this resolves, as one started here has. The
-   * exception is a runtime that seals its writes into a serving wave: there
-   * the re-instantiation follows the wave's settlement, which a call made
-   * within the wave's cycle cannot wait for, and this resolves with the
-   * outgoing pattern's graph still running.
+   * incoming pattern by the time this resolves, as one started here has. Two
+   * runtimes are exceptions. One that seals its writes into a serving wave
+   * re-instantiates after the wave's settlement, which a call made within the
+   * wave's cycle cannot wait for, so this resolves with the outgoing pattern's
+   * graph still running. One that replicates views runs no piece: it enables
+   * the view and syncs the root through it, and the serving runtime follows
+   * the origin and starts the root on its own cycles, so this resolves before
+   * either has happened.
    *
    * With `reconcile: false`, an existing root starts on the pattern it holds,
    * and its origin is consulted only if that pattern cannot load: then the
@@ -2739,6 +2786,20 @@ export class PiecesController<T = unknown> {
     root: Cell<NameSchema>,
     reconcileBeforeStart: boolean,
   ): Promise<PieceController<NameSchema>> {
+    // A client that replicates views runs no piece, the root included: the
+    // serving runtime follows the root's origin before it starts it, and
+    // repairs what its start finds. The start here only enables the view and
+    // syncs the root through it, as it does for any piece.
+    if (
+      this.runtime.viewScopedReplicationRequested &&
+      await this.runtime.viewReplication.enable(root.space)
+    ) {
+      await timePiecePhase(
+        "ensureDefaultPattern.startPiece",
+        () => this.startPiece(root),
+      );
+      return new PieceController<NameSchema>(this, root);
+    }
     let rootToStart = root;
     if (reconcileBeforeStart) {
       const outcome = await timePiecePhase(
@@ -2746,8 +2807,7 @@ export class PiecesController<T = unknown> {
         () => reconcilePieceSource(this.runtime, root),
       );
       // The swap committed through a transaction view. Resolve the root again
-      // so start() observes the committed patternIdentity rather than the
-      // pre-transaction snapshot held by the caller's cell.
+      // so start() observes the committed patternIdentity.
       rootToStart = await this.getDefaultPattern(false) ?? root;
       // Only when the origin CONFIRMED the pinned pattern, or offered an
       // earlier release than it, which the root keeps. Then a disagreeing
@@ -2861,10 +2921,6 @@ export class PiecesController<T = unknown> {
         ],
       );
       const repairPattern = pattern;
-      // Detach any transaction view the resolved root carries: getDefault-
-      // Pattern hands back a cell bound to a read-only tx, and runSynced
-      // would otherwise adopt it for the setup writes.
-      const writableRoot = rootToStart.withTx();
       // expectedPatternIdentity is the repair precondition, not a formality:
       // it atomically rejects a repair superseded by a concurrent source
       // update (the identity is re-asserted inside every setup retry), and it
@@ -2875,7 +2931,7 @@ export class PiecesController<T = unknown> {
         await timePiecePhase(
           "ensureDefaultPattern.coldStartSetupRepair",
           () =>
-            runtime.runSynced(writableRoot, repairPattern, undefined, {
+            runtime.runSynced(rootToStart, repairPattern, undefined, {
               expectedPatternIdentity: ref,
             }),
         );
@@ -3108,8 +3164,6 @@ export class PiecesController<T = unknown> {
     // Reuse the canonical official-URL derivation (home.tsx for the home DID,
     // default-app.tsx otherwise) — never hard-code home here.
     const officialUrlPath = deriveSystemPatternSource(space, runtime);
-    const msg = (error: unknown) =>
-      error instanceof Error ? error.message : String(error);
     // Name the check that actually refused. Two signals escalate to this heal —
     // a CFC migration rejection and a refused stored argument — and reporting
     // the second as a migration failure sends the reader to the wrong guard.
@@ -3122,7 +3176,7 @@ export class PiecesController<T = unknown> {
       new Error(
         `default-root heal failed for ${space}: pinned pattern ` +
           `${pinnedRef.identity}#${pinnedRef.symbol} ${pinnedFailure} ` +
-          `(${msg(migrationError)}) and roll-forward to official ` +
+          `(${describeFailure(migrationError)}) and roll-forward to official ` +
           `${officialUrlPath} ${reason}`,
         { cause },
       );
@@ -3159,7 +3213,7 @@ export class PiecesController<T = unknown> {
       // the migration reason is already named in the message, and the compile
       // stack is the new information here.
       throw clearError(
-        `could not be compiled (${msg(compileError)})`,
+        `could not be compiled (${describeFailure(compileError)})`,
         compileError,
       );
     }
@@ -3314,7 +3368,7 @@ export class PiecesController<T = unknown> {
       // Chain the actual commit failure as `cause` (the migration reason is
       // already in the message).
       throw clearError(
-        `identity swap could not commit (${msg(swapResult.error)})`,
+        `identity swap could not commit (${describeFailure(swapResult.error)})`,
         swapResult.error,
       );
     }
@@ -3396,11 +3450,7 @@ export class PiecesController<T = unknown> {
           isCfcMigrationRejection(materializeError)
             ? "CFC migration"
             : "to materialize"
-        } (${
-          materializeError instanceof Error
-            ? materializeError.message
-            : String(materializeError)
-        })`,
+        } (${describeFailure(materializeError)})`,
         materializeError,
       );
     }

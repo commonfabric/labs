@@ -101,8 +101,9 @@ type-tagged, so `null` equals no DID. In particular it is not the serving
 runtime's own identity: that identity is not the actor of such a run, just as
 `currentPrincipal()` returns `undefined` there rather than naming it.
 
-The cells a handler creates, and the address of its receipt, derive from the
-raw event id and the handler's bindings, not from the event key, so the actor
+The cells a handler creates derive from the raw event id and the handler's
+bindings, and the address of its receipt derives from the raw event id and the
+stream (`handlingReceiptId()`). Neither derives from the event key, so the actor
 does not reach them.
 
 ## How far it can be trusted

@@ -1,12 +1,13 @@
 import { internSchema } from "@commonfabric/data-model-schema";
 import { HttpProgramResolver } from "@commonfabric/js-compiler/program";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   resolveScopeKey,
   type ScopeKeyIdentity,
 } from "@commonfabric/memory/v2";
 
 import type { CellScope } from "../builder/types.ts";
-import { type Cell } from "../cell.ts";
+import type { Cell } from "../cell.ts";
 import type { NormalizedFullLink } from "../link-utils.ts";
 import { createFrozenRequestSnapshot } from "../cfc/request-snapshot.ts";
 import { enqueueSinkRequestPostCommitEffect } from "../cfc/sink-request.ts";
@@ -22,9 +23,9 @@ import {
 } from "../executor/wave.ts";
 import { ensureCompilerStack } from "../harness/deferred-compiler-stack.ts";
 import { setResultCell } from "../result-utils.ts";
-import { type RawBuiltinResult } from "../module.ts";
+import type { RawBuiltinResult } from "../module.ts";
 import type { Runtime } from "../runtime.ts";
-import { type Action } from "../scheduler.ts";
+import type { Action } from "../scheduler.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import { computeInputHashFromValue } from "./fetch-utils.ts";
 import { ownedCell, ownedStoreLinks } from "./runtime-owned-store.ts";
@@ -669,7 +670,7 @@ async function startFetch(
             inputHash,
             state: {
               type: "error",
-              message: err instanceof Error ? err.message : String(err),
+              message: describeFailure(err),
             },
           },
         });

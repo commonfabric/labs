@@ -24,8 +24,8 @@ import {
 import { JsonCodecEngine } from "@commonfabric/data-model/codec-json";
 import { fabricFromJsonValue } from "@commonfabric/data-model/codecs";
 import { FabricLink } from "@commonfabric/data-model/fabric-instances";
-import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isArrayIndexPropertyName } from "@commonfabric/js-values/arrays";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import { shortDid } from "./did-display.ts";
 

@@ -1,4 +1,8 @@
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 
 import type { OpenAICodexOAuthCredential } from "../auth/types.ts";
 import {
@@ -19,6 +23,7 @@ import {
   type HarnessModelTurnResult,
   observedModelId,
 } from "./client.ts";
+import { emptyReplyDiagnostic } from "./empty-reply.ts";
 import {
   assertHarnessModelInputBound,
   assertHarnessModelLimits,
@@ -46,6 +51,7 @@ import {
   type HarnessTransportRetryOptions,
   TransportRetrySchedule,
 } from "./transport-retry.ts";
+import { type SleepWatch, watchMachineSleep } from "./machine-sleep.ts";
 import { normalizeOpenAIUsage } from "./usage.ts";
 
 export const OPENAI_CODEX_RESPONSES_URL =
@@ -73,6 +79,13 @@ export interface OpenAICodexResponsesClientOptions
    * `performance.now()`.
    */
   monotonicNowMs?: () => number;
+
+  /**
+   * Watches each attempt for the machine sleeping while it is open, which
+   * ends the attempt as an interrupted stream (`machine-sleep.ts`). Defaults
+   * to `watchMachineSleep` on the real clocks.
+   */
+  watchSleep?: SleepWatch;
 }
 
 const OPENAI_CODEX_PROVIDER_ID = "openai-codex";
@@ -271,7 +284,10 @@ interface CodexExchange {
  * transient failure that justified it.
  */
 type CodexAttemptOutcome =
-  | { terminal: Record<string, unknown> }
+  | {
+    terminal: Record<string, unknown>;
+    rawPayload: { terminal: Record<string, unknown>; streamedItems: unknown[] };
+  }
   | { error: HarnessControlError; retry?: HarnessTransientFailureKind };
 
 const selectedHeaders = (
@@ -357,6 +373,7 @@ export class OpenAICodexResponsesClient implements HarnessModelClient {
   readonly #now: () => Date;
   readonly #monotonicNowMs: () => number;
   readonly #retrySchedule: TransportRetrySchedule;
+  readonly #watchSleep: SleepWatch;
 
   constructor(options: OpenAICodexResponsesClientOptions) {
     this.#resolver = options.credentialResolver;
@@ -392,6 +409,8 @@ export class OpenAICodexResponsesClient implements HarnessModelClient {
     this.#now = options.now ?? (() => new Date());
     this.#monotonicNowMs = options.monotonicNowMs ?? (() => performance.now());
     this.#retrySchedule = new TransportRetrySchedule(options);
+    this.#watchSleep = options.watchSleep ??
+      ((onSlept) => watchMachineSleep(onSlept));
   }
 
   /** Whole milliseconds elapsed since a monotonic reading. */
@@ -578,7 +597,11 @@ export class OpenAICodexResponsesClient implements HarnessModelClient {
     for (let attempt = 1;; attempt += 1) {
       const outcome = await this.#attempt(exchange, attempt);
       if ("terminal" in outcome) {
-        return this.#turnResult(outcome.terminal, request.model);
+        return this.#turnResult(
+          outcome.terminal,
+          request.model,
+          outcome.rawPayload,
+        );
       }
       if (outcome.retry === undefined) throw outcome.error;
       await this.#retrySchedule.waitBefore(attempt + 1, request.signal);
@@ -586,15 +609,50 @@ export class OpenAICodexResponsesClient implements HarnessModelClient {
   }
 
   /**
-   * Issues and records one exchange. An unbounded transient failure carries
-   * a retry kind when its schedule has an attempt left. Bounded calls, aborts
-   * and protocol failures end without another provider attempt.
+   * One attempt at an exchange, watched for the machine sleeping while it is
+   * open. A sleep cuts the attempt off as an interrupted stream: the provider
+   * may have dropped the connection with nothing to say so, and a read of it
+   * would wait forever (`machine-sleep.ts`). The retry schedule issues an
+   * interrupted attempt again, as it does any other.
    */
   async #attempt(
     exchange: CodexExchange,
     attempt: number,
   ): Promise<CodexAttemptOutcome> {
+    const interruption = new AbortController();
+    const stopWatching = this.#watchSleep((sleptMs) =>
+      interruption.abort(
+        new StreamInterrupted(
+          `Codex Responses exchange was cut off: the machine slept for ${
+            Math.round(sleptMs / 1000)
+          } s while it was open`,
+        ),
+      )
+    );
+    try {
+      return await this.#issue(exchange, attempt, interruption.signal);
+    } finally {
+      stopWatching();
+    }
+  }
+
+  /**
+   * Issues and records one exchange, which `interruption` cuts off as an
+   * interrupted stream. An unbounded transient failure carries a retry kind
+   * when its schedule has an attempt left. Bounded calls, aborts and protocol
+   * failures end without another provider attempt.
+   */
+  async #issue(
+    exchange: CodexExchange,
+    attempt: number,
+    interruption: AbortSignal,
+  ): Promise<CodexAttemptOutcome> {
     const { request, credential, body, affinityKey } = exchange;
+    // The caller's abort and the interruption both end the request and its
+    // stream; only the caller's is a cancellation.
+    const signal = request.signal === undefined
+      ? interruption
+      : AbortSignal.any([request.signal, interruption]);
     const redact = (text: string): string =>
       redactCredentialValues(text, credential);
     const startedAt = this.#now();
@@ -654,7 +712,7 @@ export class OpenAICodexResponsesClient implements HarnessModelClient {
           "x-client-request-id": crypto.randomUUID(),
         },
         body,
-        signal: request.signal,
+        signal,
       });
       if (request.signal?.aborted) {
         await response.body?.cancel(request.signal.reason).catch(() => {});
@@ -670,7 +728,7 @@ export class OpenAICodexResponsesClient implements HarnessModelClient {
         responseCompleteDurationMs: durationMs,
         outcome: "transport_error",
         errorDetail: redact(
-          error instanceof Error ? error.message : String(error),
+          describeFailure(error),
         ),
       }, providerUnavailable("OpenAI Codex transport request failed"));
     }
@@ -687,6 +745,7 @@ export class OpenAICodexResponsesClient implements HarnessModelClient {
     if (!response.ok) {
       let responseBodyBytes: number | undefined;
       let providerError: HarnessProviderError | undefined;
+      let errorDetail: string | undefined;
       try {
         const text = await response.text();
         responseBodyBytes = textBytes(text);
@@ -696,6 +755,11 @@ export class OpenAICodexResponsesClient implements HarnessModelClient {
           : mapProviderError(stated, redact);
       } catch {
         if (request.signal?.aborted) throw abortReason(request.signal);
+        // The status still decides the retry; an interruption that cut off
+        // reading the body says why the record has no body.
+        if (signal.aborted && signal.reason instanceof StreamInterrupted) {
+          errorDetail = redact(signal.reason.message);
+        }
       }
       return await failed(
         isTransientHttpStatus(response.status) ? "http_status" : undefined,
@@ -704,22 +768,25 @@ export class OpenAICodexResponsesClient implements HarnessModelClient {
           responseCompleteDurationMs: this.#elapsedMsSince(startedAtMs),
           ...(responseBodyBytes !== undefined ? { responseBodyBytes } : {}),
           ...(providerError !== undefined ? { providerError } : {}),
+          ...(errorDetail !== undefined ? { errorDetail } : {}),
         },
         httpFailure(response.status, providerError),
       );
     }
     let reading: StreamReading;
     try {
-      reading = await readResponsesStream(response, request.signal);
+      reading = await readResponsesStream(response, signal);
     } catch (error) {
       const completed = {
         ...httpAttempt,
         responseCompleteDurationMs: this.#elapsedMsSince(startedAtMs),
       };
       if (error instanceof StreamInterrupted) {
+        // why the stream ended stays on the record, so a retry that succeeds
+        // does not leave the interruption unexplained
         return await failed(
           "transport_error",
-          completed,
+          { ...completed, errorDetail: redact(error.message) },
           providerUnavailable(error.message),
         );
       }
@@ -797,13 +864,20 @@ export class OpenAICodexResponsesClient implements HarnessModelClient {
     // does not cover, so an abort landing during it would otherwise surface as
     // a completed turn.
     if (request.signal?.aborted) throw abortReason(request.signal);
-    return { terminal };
+    return {
+      terminal,
+      rawPayload: {
+        terminal: reading.terminal,
+        streamedItems: reading.streamedItems,
+      },
+    };
   }
 
   /** Normalizes a completed terminal response into the turn's result. */
   #turnResult(
     terminal: Record<string, unknown>,
     model: string,
+    rawPayload: unknown,
   ): HarnessModelTurnResult {
     const rawUsage = isObjectNotArray(terminal.usage)
       ? terminal.usage
@@ -824,11 +898,13 @@ export class OpenAICodexResponsesClient implements HarnessModelClient {
     } catch (error) {
       throw providerUnavailable(
         "OpenAI Codex returned an invalid terminal response: " +
-          (error instanceof Error ? error.message : String(error)),
+          describeFailure(error),
       );
     }
+    const emptyReply = emptyReplyDiagnostic(assistant, "responses", rawPayload);
     return {
       assistant,
+      ...(emptyReply !== undefined ? { emptyReply } : {}),
       observedModel: observedModelId(terminal.model),
       ...(usage !== undefined ? { usage } : {}),
     };

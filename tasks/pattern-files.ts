@@ -144,8 +144,8 @@ export function isPatternSource(
 
 /**
  * Whether a path under the patterns root is an iframe pattern's guest source:
- * browser code that the iframe wrapper generator bundles into the pattern's
- * generated `main.tsx`, and that the pattern compiler never loads.
+ * browser code that `deno bundle` turns into the module the pattern hands its
+ * `cf-iframe`, and that the pattern compiler never loads.
  */
 export function isIframeGuestSource(
   path: string,

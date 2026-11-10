@@ -1,7 +1,7 @@
 import type { FabricValue, JSONSchema } from "@commonfabric/api";
 import { deepFreeze } from "@commonfabric/data-model";
 import { internSchema } from "@commonfabric/data-model-schema";
-import { isPlainObject } from "@commonfabric/utils/types";
+import { isPlainObject } from "@commonfabric/js-values/types";
 
 import type {
   ServerMessage,

@@ -14,9 +14,11 @@ import { connect, loopback } from "@commonfabric/memory/v2/client";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import { Server } from "@commonfabric/memory/v2/server";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
-import { defer } from "@commonfabric/utils/defer";
-import { utf8SortedKeysOf } from "@commonfabric/utils/utf8";
+import { defer } from "@commonfabric/async/defer";
+import { utf8SortedKeysOf } from "@commonfabric/text/utf8";
 
+import { ACLManager } from "../../src/acl-manager.ts";
+import { namesInstancesByDefault } from "../../src/builder/instance-name.ts";
 import { popFrame, pushFrame } from "../../src/builder/pattern.ts";
 import {
   spaceAccess,
@@ -61,6 +63,7 @@ describe("spaceAccess()", () => {
     cleanups = [];
     sessionOpens = [];
     server = new Server({
+      namesInstances: namesInstancesByDefault,
       store: new URL(`memory://space-access-${++serverCount}`),
       authorizeSessionOpen: async (message, context) => {
         const principal = await authorizeLoopbackSessionOpen(message, context);
@@ -93,7 +96,10 @@ describe("spaceAccess()", () => {
     on: Server = server,
   ): Promise<(id: string, value: FabricValue) => Promise<void>> {
     const target = owner.did() as MemorySpace;
-    const client = await connect({ transport: loopback(on) });
+    const client = await connect({
+      instanceNames: namesInstancesByDefault(),
+      transport: loopback(on),
+    });
     cleanups.push(() => client.close());
     const session = await client.mount(
       target,
@@ -612,6 +618,74 @@ describe("spaceAccess()", () => {
       expect(callIn(runtime, servedTx(runtime, bob))).toBe("WRITE");
       expect(callIn(runtime, servedTx(runtime, carol))).toBe("READ");
       expect(callIn(runtime, servedTx(runtime, dave))).toBe("none");
+    });
+
+    describe("once the space is deleted", () => {
+      /**
+       * A serving runtime holding the space's access list, which names
+       * `alice` alone, after `alice` deletes the space and the runtime has
+       * heard of it.
+       */
+      async function deletedSpaceHolder(): Promise<Runtime> {
+        const setAcl = await aclWriter();
+        await setAcl({ [alice.did()]: "OWNER" });
+        const runtime = servingRuntime();
+        await syncAcl(runtime);
+        expect(callIn(runtime, servedTx(runtime, alice))).toBe("OWNER");
+
+        const heard = Promise.withResolvers<void>();
+        const cancel = runtime.storageManager.subscribeSpaceAccessLoss?.(
+          (lost) => {
+            if (lost === space) heard.resolve();
+          },
+        );
+        await new ACLManager(clientRuntime(alice), space).delete(alice.did());
+        await heard.promise;
+        cancel?.();
+        return runtime;
+      }
+
+      it("returns `none` to the principal the list its replica kept names", async () => {
+        const runtime = await deletedSpaceHolder();
+        expect(callIn(runtime, servedTx(runtime, alice))).toBe("none");
+      });
+
+      it("returns `none` in a served handler, and for another principal", async () => {
+        const runtime = await deletedSpaceHolder();
+        const tx = handlerTx(runtime, alice, alice);
+        expect(callIn(runtime, tx, { kind: "handler" })).toBe("none");
+        expect(
+          callWith(
+            (target) => spaceAccessOf(target, alice.did()),
+            runtime,
+            servedTx(runtime, bob),
+          ),
+        ).toBe("none");
+      });
+
+      it("returns no members", async () => {
+        const runtime = await deletedSpaceHolder();
+        expect(membersIn(runtime, servedTx(runtime, alice))).toBeUndefined();
+      });
+    });
+
+    it("has a computation that asks run again at a change of the verdict", async () => {
+      const setAcl = await aclWriter();
+      await setAcl({ [alice.did()]: "OWNER" });
+      const runtime = servingRuntime();
+      await syncAcl(runtime);
+      const action = () => {};
+      Object.defineProperty(runtime.scheduler, "executingAction", {
+        value: action,
+        configurable: true,
+      });
+
+      callIn(runtime, servedTx(runtime, alice));
+
+      expect(
+        runtime.spaceAccessWatch.accessForTestingOnly.waiting.get(space)
+          ?.has(action),
+      ).toBe(true);
     });
 
     it("returns `undefined` to a run with no demanding principal", async () => {

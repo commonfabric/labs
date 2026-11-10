@@ -1061,6 +1061,82 @@ Deno.test(
 );
 
 Deno.test(
+  "Capability analysis widens to its list an imported WriteonlyCell argument a run-time index picks",
+  () => {
+    const { program, sourceFile } = createProgramWithFiles({
+      "/client.d.ts": `
+        import type { WriteonlyCell } from "commonfabric";
+
+        export type Auth = { token: string };
+        export function persist(auth: WriteonlyCell<Auth>): void;
+      `,
+      "/test.ts": `
+        import { persist, type Auth } from "client";
+        import type { Writable } from "commonfabric";
+
+        const fn = (
+          _event: unknown,
+          state: { auths: Writable<Auth>[]; index: number },
+        ) => {
+          persist(state.auths[state.index]!);
+        };
+      `,
+      "/commonfabric.d.ts": COMMONFABRIC_TYPES["commonfabric.d.ts"]!,
+    });
+    const summary = analyzeFunctionCapabilities(
+      findArrowByVariableName(sourceFile, "fn"),
+      { checker: program.getTypeChecker() },
+    );
+    const state = getPaths(summary, "state");
+
+    // No path names the element the index picks, so the callee may write any
+    // element of the list.
+    assertEquals(state.wildcard, true);
+    assertEquals(
+      summary.params.find((entry) => entry.name === "state")?.wildcardPaths,
+      [["auths"]],
+    );
+    assertEquals(state.readPaths, ["index"]);
+  },
+);
+
+Deno.test(
+  "Capability analysis records a comparison, and no read, from imported ComparableCell parameters",
+  () => {
+    const { program, sourceFile } = createProgramWithFiles({
+      "/client.d.ts": `
+        import type { ComparableCell } from "commonfabric";
+
+        export type Auth = { token: string };
+        export function isCurrent(auth: ComparableCell<Auth>): boolean;
+      `,
+      "/test.ts": `
+        import { isCurrent, type Auth } from "client";
+        import type { Writable } from "commonfabric";
+
+        const fn = (
+          _event: unknown,
+          state: { auth: Writable<Auth> },
+        ) => {
+          isCurrent(state.auth);
+        };
+      `,
+      "/commonfabric.d.ts": COMMONFABRIC_TYPES["commonfabric.d.ts"]!,
+    });
+    const summary = analyzeFunctionCapabilities(
+      findArrowByVariableName(sourceFile, "fn"),
+      { checker: program.getTypeChecker() },
+    );
+    const state = getPaths(summary, "state");
+
+    assertEquals(state.capability, "comparable");
+    assertEquals(state.identityPaths, ["auth"]);
+    assertEquals(state.identityCellPaths, ["auth"]);
+    assertEquals(state.readPaths, []);
+  },
+);
+
+Deno.test(
   "Capability analysis keeps a member-access WriteonlyCell argument write-only",
   () => {
     const { program, sourceFile } = createProgramWithFiles({

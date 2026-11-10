@@ -9,7 +9,8 @@
  * Not a `*.test.ts` file, so the runner does not pick it up as a suite.
  */
 
-import { holdWorkerLifetimeLock } from "@commonfabric/utils/worker-lifetime";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { holdWorkerLifetimeLock } from "@commonfabric/platform/worker-lifetime";
 
 import { BaseFabricSpecialObject } from "@/fabric-bases/BaseFabricSpecialObject.ts";
 import * as internal from "@/value-debug-internal.ts";
@@ -70,7 +71,7 @@ scope.onmessage = async (ev) => {
         forwarders[name] = { returned: call() };
       } catch (e) {
         forwarders[name] = {
-          threw: e instanceof Error ? e.message : String(e),
+          threw: describeFailure(e),
         };
       }
     }
@@ -84,7 +85,7 @@ scope.onmessage = async (ev) => {
   } catch (e) {
     scope.postMessage({
       lifetimeLock,
-      error: e instanceof Error ? e.message : String(e),
+      error: describeFailure(e),
     });
   }
 };

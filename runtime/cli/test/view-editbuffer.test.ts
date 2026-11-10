@@ -44,6 +44,14 @@ Deno.test("editbuffer: line and word motion", () => {
   assertEquals(b.col, 6, "back to start of `bar`");
 });
 
+Deno.test("editbuffer: word motion keeps a combining mark with its letter", () => {
+  const b = new EditBuffer("cafe\u0301 x");
+  b.moveWordForward();
+  assertEquals(b.col, 5, "past the accent on `e`");
+  b.moveWordBackward();
+  assertEquals(b.col, 0);
+});
+
 //
 // insertion / deletion
 //

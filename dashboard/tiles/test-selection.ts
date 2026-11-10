@@ -27,7 +27,7 @@
 
 import type { Manifest } from "@commonfabric/test-support/records";
 
-import { maxOf } from "@commonfabric/utils/math";
+import { maxOf } from "@commonfabric/collections/math";
 import { compactSpan, groupDigits } from "../lib.ts";
 import {
   collectSelectionTile,

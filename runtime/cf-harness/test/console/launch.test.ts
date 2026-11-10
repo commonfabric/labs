@@ -12,7 +12,6 @@ import {
   DEPLOYMENT_PATTERN_INDEX_URL,
   DEPLOYMENT_SKILLS_REGISTRY_URL,
   LAUNCHER_OWNED_VARIABLES,
-  launchFailureMessage,
   readOptionalFile,
   readToolshedStoreDir,
   resolveConsoleLaunchPlan,
@@ -1630,18 +1629,6 @@ describe("launch", () => {
     it("returns `undefined` for arguments that ask for no help", () => {
       expect(consoleLaunchHelpText(["--instance", "loom", "--", "--port", "1"]))
         .toBeUndefined();
-    });
-  });
-
-  describe("launchFailureMessage()", () => {
-    it("returns the error's message", () => {
-      expect(launchFailureMessage(new Error("no space named"))).toBe(
-        "no space named",
-      );
-    });
-
-    it("returns the string form of something thrown that is not an error", () => {
-      expect(launchFailureMessage("plain")).toBe("plain");
     });
   });
 

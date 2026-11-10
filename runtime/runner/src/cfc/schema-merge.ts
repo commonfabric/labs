@@ -13,14 +13,18 @@ import {
   forEachSubschema,
   mapSubschemas,
 } from "@commonfabric/data-model-schema/schema-walk";
-import { deepEqual } from "@commonfabric/utils/deep-equal";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
-import { utf8Compare } from "@commonfabric/utils/utf8";
+import { deepEqual } from "@commonfabric/js-values/deep-equal";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
+import { utf8Compare } from "@commonfabric/text/utf8";
+import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
 
 import type { JSONSchema, JSONSchemaObj } from "../builder/types.ts";
 import { registerSchemaDocument } from "../schema-registry.ts";
 import { schemaTypesAreDisjoint } from "../schema-type-disjointness.ts";
-import type { CfcConfClause } from "./clause.ts";
 import { normalizeClause } from "./clause.ts";
 import {
   bindCurrentPrincipalToStoredClauses,
@@ -1711,7 +1715,7 @@ export const cfcSchemaMergeIssue = (
       return { message: error.message, migration: true };
     }
     return {
-      message: error instanceof Error ? error.message : String(error),
+      message: describeFailure(error),
       migration: false,
     };
   }

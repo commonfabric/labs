@@ -31,6 +31,10 @@ import type { PromptSlotRole } from "@commonfabric/cf-harness/contracts/prompt-s
 import type { HarnessRunDepth } from "@commonfabric/cf-harness/contracts/run-depth";
 import type { HarnessTranscriptEvent } from "@commonfabric/cf-harness/contracts/transcript";
 import { createHarnessHandleTable } from "@commonfabric/cf-harness/handle-table";
+import {
+  type CfHarnessHostMountConfig,
+  formatHostMountSpec,
+} from "@commonfabric/cf-harness/host-mounts";
 import { createHarnessImageAttachmentFromBase64 } from "@commonfabric/cf-harness/image-attachments";
 import type {
   HarnessModelLimits,
@@ -60,6 +64,21 @@ import {
 import type { CfcObservationMaxConfidentiality } from "@commonfabric/runner/cfc";
 
 import type { AgentRunReport } from "./agent-runner.ts";
+
+/** The host command endpoint a job's command tools call. */
+export interface HarnessJobCommands {
+  /** Base URL of the endpoint: `GET <url>/commands`, `POST <url>/command`. */
+  url: string;
+
+  /** The actor every command runs as, passed to the host as given. */
+  actor: string;
+
+  /** The host's id for this job, sent on every request. */
+  runId: string;
+
+  /** The commands the host names as relevant to this job. */
+  relevant?: readonly string[];
+}
 
 /** What a job does in the fabric, when it does anything there. */
 export interface HarnessJobFabric {
@@ -107,8 +126,14 @@ export interface HarnessJobSpec extends HarnessModelLimits {
   /** The submitted result schema; absent when the answer is final assistant text. */
   resultSchema?: JSONSchema;
 
+  /** Whether this job offers the host-provided milestone tool. */
+  progress?: boolean;
+
   /** The tools the job may use; a schema adds `submit_result`. */
   tools: readonly string[];
+
+  /** Host directories granted to this run's sandbox. */
+  hostMounts?: readonly CfHarnessHostMountConfig[];
 
   /**
    * The subagent profiles `delegate_task` may spawn; none when absent. A job
@@ -145,13 +170,10 @@ export interface HarnessJobSpec extends HarnessModelLimits {
   loomRetrievalConfigPath?: string;
 
   /**
-   * The host-owned file naming the command broker behind `list_commands`,
-   * `run_command`, and `run_read_command`.
+   * The host's command endpoint behind `list_commands` and `run_command`,
+   * the actor commands run as, and the id the host attributes them to.
    */
-  loomCommandsConfigPath?: string;
-
-  /** Host job identity attributed to this job's brokered commands. */
-  commandJobId?: string;
+  commands?: HarnessJobCommands;
 
   /** The job's fabric session and input cells; absent for a job with none. */
   fabric?: HarnessJobFabric;
@@ -192,7 +214,6 @@ export const HARNESS_JOB_GRANT_ENV_KEYS = [
   "CF_HARNESS_SPACE_DB",
   "CF_HARNESS_LOOM_AUTHORING_CONFIG",
   "CF_HARNESS_LOOM_RETRIEVAL_CONFIG",
-  "CF_HARNESS_LOOM_COMMANDS_CONFIG",
   "CF_HARNESS_PATTERN_INDEX_URL",
   "CF_HARNESS_PATTERN_INDEX_PUBLISH",
   "CF_HARNESS_PATTERN_INDEX_PUBLISH_DISCOVERABLE",
@@ -232,6 +253,9 @@ export interface HarnessJobOptions {
 
   /** Records the artifact root before this job starts its model loop. */
   onStart?: (runRoot: string) => void;
+
+  /** Publishes opt-in milestones with their observation context. */
+  onProgress?: RunCfHarnessCliDependencies["reportProgress"];
 
   /** Cumulative usage after a completed model call, with its accounting scope. */
   onUsage?: (update: {
@@ -324,6 +348,10 @@ const argvOf = (
   HARNESS_JOB_CFC_ENFORCEMENT_MODE,
   "--workspace",
   workspace,
+  ...(spec.hostMounts ?? []).flatMap((mount) => [
+    "--host-mount",
+    formatHostMountSpec(mount),
+  ]),
   "--artifact-root",
   artifactRoot,
   // One word, so that a task starting with `-` still reads as the value
@@ -365,8 +393,19 @@ const argvOf = (
   ...(spec.loomRetrievalConfigPath !== undefined
     ? ["--loom-retrieval-config", spec.loomRetrievalConfigPath]
     : []),
-  ...(spec.loomCommandsConfigPath !== undefined
-    ? ["--loom-commands-config", spec.loomCommandsConfigPath]
+  ...(spec.commands !== undefined
+    ? [
+      "--commands-url",
+      spec.commands.url,
+      "--commands-actor",
+      spec.commands.actor,
+      "--commands-run-id",
+      spec.commands.runId,
+      ...(spec.commands.relevant ?? []).flatMap((id) => [
+        "--commands-relevant",
+        id,
+      ]),
+    ]
     : []),
   // One word each, for the reason the prompt is.
   ...(spec.instructions !== undefined
@@ -392,7 +431,10 @@ const argvOf = (
   ]),
   // The job's tools, and the tool it returns its result through.
   ...[
-    ...spec.tools.filter((tool) => tool !== "submit_result"),
+    ...spec.tools.filter((tool) =>
+      tool !== "submit_result" && tool !== "report_progress"
+    ),
+    ...(spec.progress === true ? ["report_progress"] : []),
     ...(spec.resultSchema === undefined ? [] : ["submit_result"]),
   ].flatMap(
     (tool) => ["--allow-tool", tool],
@@ -437,6 +479,9 @@ export const runHarnessJob = async (
   spec: HarnessJobSpec,
   options: HarnessJobOptions,
 ): Promise<HarnessJobResult> => {
+  if (spec.progress === true && options.onProgress === undefined) {
+    throw new Error("Progress requires a host publication channel");
+  }
   const workspace = options.workspace ?? join(options.runRoot, "workspace");
   await Deno.mkdir(workspace, { recursive: true });
   const resultDir = join(workspace, ".job-results");
@@ -500,10 +545,8 @@ export const runHarnessJob = async (
   const deps: RunCfHarnessCliDependencies = {
     ...options.harnessDeps,
     ...SANDBOX_SELECTION,
+    reportProgress: spec.progress === true ? options.onProgress : undefined,
     env,
-    ...(spec.commandJobId !== undefined
-      ? { commandJobId: spec.commandJobId }
-      : {}),
     ...(options.browserHost !== undefined
       ? { browserHost: options.browserHost }
       : {}),

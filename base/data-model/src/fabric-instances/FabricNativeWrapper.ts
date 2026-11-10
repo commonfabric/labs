@@ -1,4 +1,4 @@
-import { backtickQuote } from "@commonfabric/utils/markdown";
+import { backtickQuote } from "@commonfabric/text/markdown";
 import type { FabricInstance, FabricValue } from "@/interface.ts";
 import { BaseFabricInstance, DEEP_CLONE_CORE } from "@/fabric-bases";
 

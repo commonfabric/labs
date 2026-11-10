@@ -98,7 +98,8 @@ session replacement. `subscribeSpaceAccessLoss` remains loss-only.
 changing what the sync barrier does:
 
 - `toPullError` keeps a real `AuthorizationError` — its name, message, and the
-  `retriable` marker — rather than flattening it to a `ConnectionError`.
+  server's markers, `retriable` and `deleted` among them — rather than
+  flattening it to a `ConnectionError`.
   `PullError` admits `AuthorizationError`.
 - Each replica holds its current authorization status: a permanent
   (non-retriable) `AuthorizationError` from a watch refresh is remembered, and a
@@ -122,7 +123,12 @@ the affected space immediately, without waiting for another document watch. An
 explicit successful session replacement after a new grant clears the old
 verdict. The runtime client forwards `spaceaccesslost` with the affected space,
 and `spaceaccessrestored` with the space once a retry admits the principal
-again; it does not send the server's diagnostic error text to the UI.
+again; it does not send the server's diagnostic error text to the UI. For a
+deleted space
+([`space-access.md`](space-access.md#a-deleted-space)) `spaceaccesslost` also
+carries `deleted: true`, the one marker of the refusal it forwards. A space
+already refused that turns out to be deleted is reported again, with the
+marker, to the storage provider's loss and access-change observers alike.
 
 The worker renderer subscribes at cell boundaries. Revoking a foreign target
 removes that target's content and event handlers while retaining the authorized
@@ -133,7 +139,11 @@ content and do not masquerade as revoked authority. What stands in for revoked
 content reads "Access unavailable" beside a Retry button, which asks for the
 revoked space once more, and the status reads "Retrying…" until the answer
 comes; an
-admission restores the content.
+admission restores the content. Content of a deleted space is replaced by a
+placeholder reading "Deleted", marked `data-space-deleted`, with no Retry
+button. A page opened on a deleted space has no content to replace, and the
+shell says instead that the space was deleted
+([`space-access.md`](space-access.md#a-deleted-space)).
 
 A `cf-render` or `cf-picker` bound to content of a revoked space shows the same
 placeholder as revoked content shown directly, while its binding is withheld,
@@ -144,7 +154,10 @@ again.
 
 An admission refusal marked `clientUpdateRequired: true` says that this runtime
 cannot mount until its code is replaced. It is independent of the error name;
-the expression-result identity check sends it on a `SessionRevokedError`.
+the expression-result identity check sends it on a `SessionRevokedError`. A
+`session/revoked` with the reason `instance-names` (INV-16) carries no message,
+so the memory client ends that session with a `SessionRevokedError` that carries
+the marker and a message made from the space.
 A refused restore keeps the server's actual reason. The memory client remembers
 the update requirement across mounts, and the storage manager retains it across
 spaces and route changes. Reads, access Retry, and ACL notices cannot trigger
@@ -168,7 +181,10 @@ conservative warning, not proof that a write was lost or saved.
 The worker reports this status with `RuntimeErrorCode.ClientUpdateRequired` to
 its connected clients and replays it to clients that attach later. The shell
 shows persistent reload guidance, including a request to copy recent edits
-when writes were unconfirmed. It preserves the browser's leave-page warning
+when writes were unconfirmed. The guidance fits every refusal it shows: a reload
+loads the runtime the deployment serves, retrying access cannot change the
+runtime, and a refusal that comes back after a reload means that the deployment
+cannot open that space. It preserves the browser's leave-page warning
 for those writes and never reloads automatically. Updating the CLI checkout
 and starting a new process is the equivalent recovery for a command-line host.
 This recovery mechanism does not enable client-generation retirement.
@@ -240,6 +256,13 @@ Two properties follow from terminating rather than looping:
   challenge race, a transport blip — can heal on a fresh connection when the
   transport supports reset. Classification as retriable does not supply that
   transport capability.
+
+  A serving host also reports admitted ACL changes to already-open providers.
+  When that notice and an authorization termination have both arrived, the
+  provider opens through server admission and restores its retained watches,
+  including watches that previously confirmed a document absent. The input
+  barrier includes that restoration. A refused reopen retains its failed
+  loads for a later ACL notice; it starts no retry loop.
 - **A wedged-but-reachable backend still waits.** With no wall-clock guard, a
   backend that completes the handshake but then never answers the authenticated
   sync (and never closes the transport) leaves `synced()` waiting with no event

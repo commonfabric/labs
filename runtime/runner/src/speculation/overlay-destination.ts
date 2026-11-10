@@ -75,7 +75,7 @@
 // to the last committed result while only the server performs egress
 // (README §3.5).
 
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 import {
   type CellScope,
   type DeliveryAttention,
@@ -83,7 +83,8 @@ import {
   type StreamEventEntry,
   type StreamEventsDocValue,
 } from "@commonfabric/memory/v2";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import type { Runtime, ServerRunInfo } from "../runtime.ts";
 import type {
   CommitError,
@@ -392,6 +393,15 @@ export class SpeculationOverlayDestination
    * one raw replica read, ZERO transactions, ZERO probes, ZERO scheduler
    * runs, no demand edge. */
   #intentListener: CoalescedDocListener | undefined;
+
+  /**
+   * The cancel of the document reader that has the storage manager keep
+   * each sidecar with an intent outstanding on it loaded and watched
+   * through a release of unread documents (`addDocumentReader()`), so that
+   * its consequence mark arrives. Installed by the first `trackIntent`,
+   * and cancelled on close.
+   */
+  #intentSidecarReaderCancel: (() => void) | undefined;
 
   /** space\0sidecarId -> per-sidecar check state: entry-index HINTS the
    * differential's leaf paths named since the last check (a mark on
@@ -888,7 +898,7 @@ export class SpeculationOverlayDestination
       // catch, entries already collected kept unresolved verdicts and
       // live pending writes forever. Withdraw them and surface a
       // CommitError like any other seal failure.
-      const message = cause instanceof Error ? cause.message : String(cause);
+      const message = describeFailure(cause);
       result = {
         error: {
           name: "StorageTransactionAborted",
@@ -1108,6 +1118,7 @@ export class SpeculationOverlayDestination
     // the stream unwatched — NO frame would arrive — until the set
     // drains (independent review of W2, MIN-4; the old sink's single
     // `if (!synced) sync()` kick had the same hole).
+    this.#ensureIntentSidecarReader();
     this.#watchIntentSidecar(space, sidecarId);
     // The IMMEDIATE raw check (design contract point 2(iii)): a
     // duplicate fire whose consequence already landed (a re-delivered
@@ -1133,6 +1144,23 @@ export class SpeculationOverlayDestination
         error,
       ]);
     }
+  }
+
+  /**
+   * Helper for `trackIntent()`, which installs the reader that keeps each
+   * sidecar with an intent outstanding on it (`#intentSidecarReaderCancel`),
+   * once per overlay. Nothing else reads a sidecar here: the watch below
+   * holds it only until a release pass finds it unread, and the pass would
+   * then drop the document and its watch, so the mark of an intent still
+   * outstanding would never arrive.
+   */
+  #ensureIntentSidecarReader(): void {
+    if (this.#intentSidecarReaderCancel !== undefined) return;
+    this.#intentSidecarReaderCancel = this.#runtime.storageManager
+      .addDocumentReader?.((address) =>
+        (address.scope === undefined || address.scope === "space") &&
+        this.#trackedIntents.get(address.space)?.has(address.id) === true
+      );
   }
 
   /** Keep the sidecar doc watched (contract point 2(ii)) — the
@@ -1674,9 +1702,10 @@ export class SpeculationOverlayDestination
       if (bySidecar!.size === 0) {
         this.#trackedIntents.delete(space);
         // The listener lives exactly as long as something is outstanding
-        // (contract point 5). The sidecar WATCH stays: a session's watch
-        // set is coarse by ruling (R-D), and the next fire on this stream
-        // is likely imminent.
+        // (contract point 5). The sidecar WATCH stays until a release pass
+        // finds nothing reading the sidecar: a session's watch set is
+        // coarse by ruling (R-D), and the next fire on this stream is
+        // likely imminent.
         if (this.#trackedIntents.size === 0) this.#releaseIntentListener();
         this.#flushIntentQuiescenceWaiters();
       }
@@ -2309,6 +2338,8 @@ export class SpeculationOverlayDestination
     }
     this.#watermarkSinks.clear();
     this.#releaseIntentListener();
+    this.#intentSidecarReaderCancel?.();
+    this.#intentSidecarReaderCancel = undefined;
     this.#intentSidecarStates.clear();
     this.#trackedIntents.clear();
     this.#intentOutcomeSubscribers.clear();

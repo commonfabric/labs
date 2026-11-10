@@ -10,7 +10,7 @@
 
 import { unicodeWidth } from "@std/cli/unicode-width";
 
-import { maxOf } from "@commonfabric/utils/math";
+import { maxOf } from "@commonfabric/collections/math";
 
 /** The largest summary GitHub accepts. */
 export const SUMMARY_LIMIT = 1024 * 1024;

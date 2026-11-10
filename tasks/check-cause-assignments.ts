@@ -17,10 +17,17 @@
  * A move the repository decides to ship is declared in
  * `cause-assignments-accepted-moves.ts`.
  *
+ * A comparison only protects the patterns it reaches, so the gate also fails
+ * on a pattern the base builds and the change compiles from the same source to
+ * no assignment, and on a run that compares no patterns at all.
+ *
  * Usage: check-cause-assignments.ts [base-ref]   (default: origin/main)
  */
 
-import { join } from "@std/path";
+import { parse as parseJsonc } from "@std/jsonc";
+import { fromFileUrl, join, toFileUrl } from "@std/path";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
+import { EXPERIMENTAL_ENV_VARS } from "../runtime/runner/src/experimental-posture.ts";
 import { collectAllPatternFiles } from "./pattern-files.ts";
 import {
   type AmbiguousCells,
@@ -37,19 +44,22 @@ import {
 } from "./cause-assignments-accepted-moves.ts";
 
 /**
- * The trees a pattern's numbering is built by: the transformer that lowers
+ * The paths a pattern's numbering is built by: the transformer that lowers
  * pattern source, the compiler and harness driving it, the builder that
  * numbers the cells and classifies them, the builtins whose node factories
  * and result schemas the builder takes in (`sqliteQuery`'s factory runs
- * `lift()` as its module evaluates), and the schema generator that
- * classification reads. The gate passes a change touching none of them, or
- * its own files, without compiling anything; a change elsewhere that moves a
- * cell is one it does not see.
+ * `lift()` as its module evaluates), the schema generator that
+ * classification reads, and the local defaults of the experimental flags a
+ * runtime consumes itself, any of which can change what the compiler builds.
+ * The gate passes a change touching none of them, or its own files, without
+ * compiling anything; a change elsewhere that moves a cell is one it does not
+ * see.
  */
 export const COMPILER_PATHS: readonly string[] = [
   "base/js-compiler/",
   "runtime/runner/src/builder/",
   "runtime/runner/src/builtins/",
+  "runtime/runner/src/experimental-defaults.ts",
   "runtime/runner/src/harness/",
   "base/schema-generator/src/",
   "base/ts-transformers/src/",
@@ -101,6 +111,16 @@ export interface Comparison {
   compared: number;
 
   /**
+   * The patterns the base built and the head compiled from the same source to
+   * no assignment. Such a pattern is not among `compared`, so it would
+   * otherwise pass unseen.
+   */
+  dropped: string[];
+
+  /** How many patterns each side's build gave an assignment. */
+  built: { base: number; head: number };
+
+  /**
    * The patterns either side failed to compile, less those that side's own
    * `UNEVALUABLE_PATTERNS` lists. Such a pattern is in neither side's
    * builds, so it would otherwise pass unseen.
@@ -130,11 +150,18 @@ export function compareDumps(
   const before = new Map(
     base.assignments.map((assignment) => [assignment.pattern, assignment]),
   );
+  const unassigned = new Map(
+    head.unassigned.map(({ pattern, source }) => [pattern, source]),
+  );
   const comparison: Comparison = {
     failing: [],
     forgiven: [],
     unused: [],
     compared: 0,
+    dropped: base.assignments
+      .filter(({ pattern, source }) => unassigned.get(pattern) === source)
+      .map(({ pattern }) => pattern),
+    built: { base: base.assignments.length, head: head.assignments.length },
     compileErrors: [
       ...base.errors
         .filter((error) => !unevaluable.base.has(error.pattern))
@@ -274,6 +301,49 @@ export function describeFailures(comparison: Comparison): string {
   return lines.join("\n");
 }
 
+/** The report of `comparison`'s dropped patterns. */
+export function describeDropped(comparison: Comparison): string {
+  return [
+    "The base build gives these patterns a cause assignment and this build " +
+    "compiles the same source to none, so their numbering could not be " +
+    "compared. `buildAssignment()` in tasks/cause-assignments-dump.ts found " +
+    "no pattern among what each module evaluated to:",
+    "",
+    ...comparison.dropped,
+  ].join("\n");
+}
+
+/** The report of a run that compared no patterns. */
+export function describeNothingCompared({ built }: Comparison): string {
+  return "This run compared no patterns, so it checked nothing. The base " +
+    `build gave ${built.base} patterns an assignment and this build ` +
+    `${built.head}, with no pattern on both sides from the same source. ` +
+    "Either a build yields nothing tasks/cause-assignments-dump.ts can read, " +
+    "or the change moves or edits every pattern, which has to land apart " +
+    "from a change to what numbers them.";
+}
+
+/**
+ * A report of each kind of failure in `comparison`. An empty list says the gate
+ * passes.
+ */
+export function failureReports(comparison: Comparison): string[] {
+  const reports: string[] = [];
+  if (comparison.compileErrors.length > 0) {
+    reports.push(describeCompileErrors(comparison));
+  }
+  if (comparison.failing.length > 0) {
+    reports.push(describeFailures(comparison));
+  }
+  if (comparison.dropped.length > 0) {
+    reports.push(describeDropped(comparison));
+  }
+  if (comparison.compared === 0) {
+    reports.push(describeNothingCompared(comparison));
+  }
+  return reports;
+}
+
 /**
  * The patterns the checkout at `root` lists as unevaluable, which is none
  * where it holds no such list.
@@ -287,7 +357,7 @@ async function unevaluableIn(root: string): Promise<ReadonlySet<string>> {
     throw error;
   }
   const { UNEVALUABLE_PATTERNS: listed } = await import(
-    new URL(`file://${list}`).href
+    toFileUrl(list).href
   );
   return listed;
 }
@@ -306,19 +376,158 @@ async function git(...args: string[]): Promise<string> {
   return new TextDecoder().decode(stdout);
 }
 
+/** What the dumper needs of a workspace package to load it by name. */
+export interface WorkspacePackage {
+  /** The URL of the package's directory, with a trailing slash. */
+  dir: string;
+
+  /** Each specifier the package exports, mapped to the URL of its file. */
+  exports: Map<string, string>;
+
+  /**
+   * The package's own import map, which its modules resolve through, with
+   * each relative target made a URL.
+   */
+  imports: Record<string, string>;
+}
+
+/** The workspace packages of the checkout at `root`, by package name. */
+export async function workspacePackages(
+  root: string,
+): Promise<Map<string, WorkspacePackage>> {
+  const config = parseJsonc(await Deno.readTextFile(join(root, "deno.jsonc")));
+  const members = isObjectNotArray(config) && Array.isArray(config.workspace)
+    ? config.workspace
+    : [];
+  const packages = new Map<string, WorkspacePackage>();
+  for (const member of members) {
+    if (typeof member !== "string") continue;
+    const manifest = await memberManifest(join(root, member));
+    if (!isObjectNotArray(manifest) || typeof manifest.name !== "string") {
+      continue;
+    }
+    const name = manifest.name;
+    const dir = toFileUrl(join(root, member, "/")).href;
+    const exports = typeof manifest.exports === "string"
+      ? { ".": manifest.exports }
+      : isObjectNotArray(manifest.exports)
+      ? manifest.exports
+      : {};
+    const specifiers = new Map<string, string>();
+    for (const [key, file] of Object.entries(exports)) {
+      if (typeof file !== "string") continue;
+      specifiers.set(
+        key === "." ? name : `${name}${key.slice(1)}`,
+        new URL(file, dir).href,
+      );
+    }
+    const imports: Record<string, string> = {};
+    if (isObjectNotArray(manifest.imports)) {
+      for (const [key, target] of Object.entries(manifest.imports)) {
+        if (typeof target !== "string") continue;
+        imports[key] = target.startsWith(".")
+          ? new URL(target, dir).href
+          : target;
+      }
+    }
+    packages.set(name, { dir, exports: specifiers, imports });
+  }
+  return packages;
+}
+
+/** The parsed manifest of the workspace member at `dir`, if it has one. */
+async function memberManifest(dir: string): Promise<unknown> {
+  for (const file of ["deno.jsonc", "deno.json"]) {
+    try {
+      return parseJsonc(await Deno.readTextFile(join(dir, file)));
+    } catch (error) {
+      if (!(error instanceof Deno.errors.NotFound)) throw error;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The configuration the dumper runs under against the checkout at `root`.
+ * The dumper's own modules come from the change at `head`, so they may name a
+ * package that the change adds and `root` lacks. The configuration is the
+ * checkout's own, with an import for every module of each such package, which
+ * then comes from the change as the dumper does, and that package's own
+ * import map scoped to its directory. It is written beside the checkout's
+ * own, so that the paths of its workspace members still resolve.
+ */
+export async function dumperConfig(
+  root: string,
+  head: string,
+): Promise<string> {
+  const own = join(root, "deno.jsonc");
+  const present = await workspacePackages(root);
+  const added: Record<string, string> = {};
+  const scopes: Record<string, Record<string, string>> = {};
+  for (const [name, pkg] of await workspacePackages(head)) {
+    if (present.has(name)) continue;
+    for (const [specifier, url] of pkg.exports) added[specifier] = url;
+    if (Object.keys(pkg.imports).length > 0) scopes[pkg.dir] = pkg.imports;
+  }
+  if (Object.keys(added).length === 0) return own;
+  const config = parseJsonc(await Deno.readTextFile(own));
+  if (!isObjectNotArray(config)) throw new Error(`${own} is not an object`);
+  const imports = isObjectNotArray(config.imports) ? config.imports : {};
+  const ownScopes = isObjectNotArray(config.scopes) ? config.scopes : {};
+  const path = join(root, "deno.cause-assignments.json");
+  await Deno.writeTextFile(
+    path,
+    JSON.stringify({
+      ...config,
+      imports: { ...imports, ...added },
+      scopes: { ...ownScopes, ...scopes },
+    }),
+  );
+  return path;
+}
+
+/**
+ * The environment the dumper runs in: `env`, without the variables that set
+ * an experimental flag (`EXPERIMENTAL_ENV_VARS`), and with logging quieted.
+ * Each build is then compiled under its own revision's defaults. An inherited
+ * flag would set both builds alike, and so hide a change to its default from
+ * the comparison.
+ *
+ * `DENO_COVERAGE_DIR` goes too. The dumper runs under a configuration of its
+ * own, so a profile it wrote could not be converted, and a tracked file that
+ * will not convert fails the lane (docs/development/COVERAGE.md).
+ */
+export function dumperEnvironment(
+  env: Readonly<Record<string, string>>,
+): Record<string, string> {
+  const leftOut = new Set<string>([
+    "DENO_COVERAGE_DIR",
+    ...Object.values(EXPERIMENTAL_ENV_VARS).filter((name) => name !== null),
+  ]);
+  return {
+    ...Object.fromEntries(
+      Object.entries(env).filter(([name]) => !leftOut.has(name)),
+    ),
+    LOG_LEVEL: "error",
+  };
+}
+
 /**
  * Helper for `main()`, which dumps the patterns `files` names with the
- * compiler of the checkout at `root`, in `shards` processes at once.
+ * compiler of the checkout at `root`, in `shards` processes at once, running
+ * the dumper under the configuration at `config`.
  */
 async function dumpTree(
   root: string,
+  config: string,
   files: readonly string[],
   shards: number,
   outDir: string,
   label: string,
 ): Promise<DumpOutput> {
-  const dumper = new URL("./cause-assignments-dump.ts", import.meta.url)
-    .pathname;
+  const dumper = fromFileUrl(
+    new URL("./cause-assignments-dump.ts", import.meta.url),
+  );
   const parts = Array.from(
     { length: shards },
     (_, shard) => files.filter((_, index) => index % shards === shard),
@@ -329,7 +538,7 @@ async function dumpTree(
       args: [
         "run",
         "--config",
-        join(root, "deno.jsonc"),
+        config,
         "-A",
         dumper,
         "--root",
@@ -339,7 +548,8 @@ async function dumpTree(
         ...part,
       ],
       cwd: root,
-      env: { LOG_LEVEL: "error" },
+      env: dumperEnvironment(Deno.env.toObject()),
+      clearEnv: true,
       stdout: "inherit",
       stderr: "piped",
     }).output();
@@ -353,6 +563,7 @@ async function dumpTree(
   }));
   return {
     assignments: outputs.flatMap((output) => output.assignments),
+    unassigned: outputs.flatMap((output) => output.unassigned),
     errors: outputs.flatMap((output) => output.errors),
   };
 }
@@ -416,8 +627,15 @@ async function main() {
     );
     const started = performance.now();
     const [baseDump, headDump] = await Promise.all([
-      dumpTree(baseTree, inBase, shards, scratch, "base"),
-      dumpTree(head, files, shards, scratch, "head"),
+      dumpTree(
+        baseTree,
+        await dumperConfig(baseTree, head),
+        inBase,
+        shards,
+        scratch,
+        "base",
+      ),
+      dumpTree(head, join(head, "deno.jsonc"), files, shards, scratch, "head"),
     ]);
     const comparison = compareDumps(baseDump, headDump, ACCEPTED_MOVES, {
       base: await unevaluableIn(baseTree),
@@ -437,14 +655,9 @@ async function main() {
           `${entry.head}) forgives nothing in this run and can be removed`,
       );
     }
-    if (comparison.compileErrors.length > 0) {
-      console.error(describeCompileErrors(comparison));
-      Deno.exitCode = 1;
-    }
-    if (comparison.failing.length > 0) {
-      console.error(describeFailures(comparison));
-      Deno.exitCode = 1;
-    }
+    const reports = failureReports(comparison);
+    for (const report of reports) console.error(report);
+    if (reports.length > 0) Deno.exitCode = 1;
   } finally {
     await git("worktree", "remove", "--force", baseTree);
     await Deno.remove(scratch, { recursive: true });

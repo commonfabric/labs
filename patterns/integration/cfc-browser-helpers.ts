@@ -53,6 +53,23 @@ const settledTextPresent = async (
   );
 };
 
+// `settledTextPresent` for an element's whole text, with its whitespace
+// collapsed.
+const settledTextIs = async (
+  probe: ProbeApi,
+  selector: string,
+  text: string,
+): Promise<boolean> => {
+  const settle = (globalThis as typeof globalThis & {
+    commonfabric?: { viewSettled?: () => Promise<void> };
+  }).commonfabric?.viewSettled;
+  if (!settle) return false;
+  await settle();
+  return probe.collect(selector).some((element) =>
+    probe.deepText(element).replace(/\s+/g, " ").trim() === text
+  );
+};
+
 const textAbsent = (
   probe: ProbeApi,
   selector: string,
@@ -749,20 +766,28 @@ export async function waitForText(
  *
  * The settle is inside the predicate, so each re-check drives the page and reads
  * the result of that same drive.
+ *
+ * With `exact`, the wait is for the element's whole text, with its whitespace
+ * collapsed, to be `text`. A wait for text that a rendering from before the
+ * stimulus already contains needs it, since that rendering satisfies a wait for
+ * containment.
  */
 export async function waitForSettledText(
   page: Page,
   selector: string,
   text: string,
+  { exact = false }: { exact?: boolean } = {},
 ) {
   try {
-    await waitForCondition(page, settledTextPresent, {
+    await waitForCondition(page, exact ? settledTextIs : settledTextPresent, {
       args: [selector, text],
     });
   } catch (cause) {
     const probe = await readTextProbe(page, selector).catch(() => undefined);
     throw new Error(
-      `Timed out waiting for "${selector}" to contain "${text}". ` +
+      `Timed out waiting for "${selector}" to ${
+        exact ? "be" : "contain"
+      } "${text}". ` +
         debugStr`Last probe: $quote,indent,long${probe}`,
       { cause },
     );

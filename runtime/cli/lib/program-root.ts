@@ -1,6 +1,6 @@
 import { dirname, join } from "@std/path";
 import { parse } from "@std/jsonc";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 /**
  * Infer the root directory for resolving a test pattern's relative imports:

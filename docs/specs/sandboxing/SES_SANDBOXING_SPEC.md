@@ -933,7 +933,7 @@ serves from `base/static/assets/types` MUST NOT declare a global the
 Compartment does not install. A name the compiler declares but the sandbox
 lacks type checks, compiles and deploys, and then throws a `TypeError` in the
 user's hands, which is the one failure mode every gate lets through.
-`SANDBOX_WITHHELD_GLOBALS` in `base/utils/src/sandbox-contract.ts` records
+`SANDBOX_WITHHELD_GLOBALS` in `base/pattern-contract/src/sandbox-contract.ts` records
 the names held back and why; `deno task strip-withheld-globals` in
 `base/static` removes their declarations, and
 `runtime/runner/test/sandbox-global-contract.test.ts` checks both directions

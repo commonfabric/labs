@@ -1,4 +1,4 @@
-import { VERIFIED_BINDING_METADATA_FIELD } from "@commonfabric/utils/sandbox-contract";
+import { VERIFIED_BINDING_METADATA_FIELD } from "@commonfabric/pattern-contract/sandbox-contract";
 
 /**
  * Content-addressed provenance for verified implementation functions.

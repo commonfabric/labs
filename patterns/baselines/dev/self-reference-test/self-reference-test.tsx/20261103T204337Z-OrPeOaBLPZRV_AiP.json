@@ -1,0 +1,112 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "AnonymousType_2": {
+        "items": {
+          "$ref": "#/$defs/Output"
+        },
+        "type": "array"
+      },
+      "AnonymousType_3": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Output"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "Output": {
+        "properties": {
+          "children": {
+            "$ref": "#/$defs/AnonymousType_2"
+          },
+          "label": {
+            "type": "string"
+          },
+          "parent": {
+            "$ref": "#/$defs/AnonymousType_3"
+          }
+        },
+        "required": [
+          "label",
+          "parent",
+          "children"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "label": {
+        "default": "Untitled",
+        "type": "string"
+      },
+      "parent": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Output"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "registry": {
+        "$ref": "#/$defs/AnonymousType_2",
+        "asCell": [
+          "cell"
+        ],
+        "default": []
+      }
+    },
+    "required": [
+      "label",
+      "parent",
+      "registry"
+    ],
+    "type": "object"
+  },
+  "pattern": "dev/self-reference-test/self-reference-test.tsx",
+  "resultSchema": {
+    "$defs": {
+      "AnonymousType_2": {
+        "items": {
+          "$ref": "#/$defs/Output"
+        },
+        "type": "array"
+      },
+      "AnonymousType_3": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Output"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "Output": {
+        "properties": {
+          "children": {
+            "$ref": "#/$defs/AnonymousType_2"
+          },
+          "label": {
+            "type": "string"
+          },
+          "parent": {
+            "$ref": "#/$defs/AnonymousType_3"
+          }
+        },
+        "required": [
+          "label",
+          "parent",
+          "children"
+        ],
+        "type": "object"
+      }
+    },
+    "$ref": "#/$defs/Output"
+  }
+}

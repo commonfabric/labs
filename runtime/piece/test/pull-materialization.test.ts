@@ -34,7 +34,7 @@ import {
   newLoopbackServer,
   StorageManager,
 } from "@commonfabric/runner/storage/cache.deno";
-import { defer } from "@commonfabric/utils/defer";
+import { defer } from "@commonfabric/async/defer";
 
 import { patchableCell } from "../../runner/test/support/patchable-cell.ts";
 import {

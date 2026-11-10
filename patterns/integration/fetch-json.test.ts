@@ -1,5 +1,5 @@
 import { createTestSpace, env, Page } from "@commonfabric/integration";
-import { sleep } from "@commonfabric/utils/sleep";
+import { sleep } from "@commonfabric/async/sleep";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
 import { waitForText } from "./cfc-browser-helpers.ts";
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";

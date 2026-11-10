@@ -1,6 +1,6 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { type JSONSchema } from "@commonfabric/runner";
+import type { JSONSchema } from "@commonfabric/runner";
 import {
   acceptedBreakKey,
   type Baseline,
@@ -75,6 +75,7 @@ describe("checkPattern", () => {
       baseline("v1", EMPTY_ARGUMENT, {
         type: "object",
         properties: { title: { type: "string" }, body: { type: "string" } },
+        required: ["title", "body"],
       }),
     ]);
 
@@ -105,6 +106,7 @@ describe("checkPattern", () => {
       baseline("v1", EMPTY_ARGUMENT, {
         type: "object",
         properties: { "foo: bar": { type: "string" } },
+        required: ["foo: bar"],
       }),
     ]);
 

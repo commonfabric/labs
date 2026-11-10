@@ -1062,6 +1062,28 @@ describe("RuntimeClient", () => {
     });
   });
 
+  describe("retryUnreachableSpaces", () => {
+    it("asks the worker to retry every space it could not reach", async () => {
+      const requests: unknown[] = [];
+      const conn = {
+        on: () => {},
+        request: (message: unknown) => {
+          requests.push(message);
+          return Promise.resolve(undefined);
+        },
+      } as unknown as never;
+      const client = new (RuntimeClient as unknown as {
+        new (conn: never, options: unknown): RuntimeClient;
+      })(conn, undefined);
+
+      await client.retryUnreachableSpaces();
+
+      expect(requests).toEqual([{
+        type: RequestType.RetryUnreachableSpaces,
+      }]);
+    });
+  });
+
   describe("hasPendingWrites", () => {
     // The constructor registers connection listeners; capture them so the
     // pending-writes notification can be driven directly, no worker needed.
@@ -1215,6 +1237,13 @@ describe("RuntimeClient", () => {
     it("returns null when the worker has no collector", async () => {
       const { client } = clientWithResponse({ data: null });
       expect(await client.getPatternCoverage()).toBeNull();
+    });
+
+    it("returns the messages the worker's loggers kept", async () => {
+      const messages = { runner: { "a-key": ["it broke"] } };
+      const { client, requests } = clientWithResponse({ messages });
+      expect(await client.getLoggerErrorMessages()).toEqual(messages);
+      expect(requests).toEqual([{ type: RequestType.GetLoggerErrorMessages }]);
     });
   });
 

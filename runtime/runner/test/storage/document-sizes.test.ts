@@ -11,7 +11,7 @@ import {
   FabricRegExp,
 } from "@commonfabric/data-model/fabric-primitives";
 import type { EntityDocument } from "@commonfabric/memory/v2";
-import { approximateJsonSize } from "@commonfabric/utils/approximate-json-size";
+import { approximateJsonSize } from "@commonfabric/json/approximate-json-size";
 import {
   DocumentSizeEstimate,
   type MeasurableSpace,

@@ -17,8 +17,11 @@ import type {
   FabricError as ApiFabricError,
   FabricErrorConstructor as ApiFabricErrorConstructor,
 } from "@/api.ts";
-import { constructorOfObject } from "@commonfabric/utils/objects";
-import { isPlainObject, isUnsafeObjectKey } from "@commonfabric/utils/types";
+import { constructorOfObject } from "@commonfabric/js-values/objects";
+import {
+  isPlainObject,
+  isUnsafeObjectKey,
+} from "@commonfabric/js-values/types";
 
 import { FabricNativeWrapper } from "./FabricNativeWrapper.ts";
 import {
@@ -123,7 +126,8 @@ export type FabricErrorState = {
  * frozen and immutable thereafter. Every mutator -- the slot setters along with
  * `setExtra` / `deleteExtra` -- throws once the instance is `Object.freeze`'d.
  * The codec layer handles `FabricError` via its static `[CODEC]`, which is the
- * source of truth for the encoded form. See Section 1.4.1 of the formal spec.
+ * source of truth for the encoded form. See Section 1.4.2 of
+ * `1-fabric-values.md`.
  */
 export class FabricError extends FabricNativeWrapper<Error>
   implements ApiFabricError {

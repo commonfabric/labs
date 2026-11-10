@@ -17,6 +17,7 @@ import {
   codeMirrorTextChangesPayload,
   type CommitPrecondition,
   getCommitPreconditionsConfig,
+  operationAnchorsDocId,
   operationBaselineHash,
   type PatchOp,
   resolveScopeKey,
@@ -26,10 +27,14 @@ import {
   toDocumentPath,
   toValuePath,
 } from "@commonfabric/memory/v2";
-import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
-import { getLogger } from "@commonfabric/utils/logger";
-import { PathKeyMap } from "@commonfabric/utils/path-key-map";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import { isArrayIndexPropertyName } from "@commonfabric/js-values/arrays";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { getLogger } from "@commonfabric/logger";
+import { PathKeyMap } from "@commonfabric/collections/path-key-map";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 
 import { readStatsActive, recordDocumentRead } from "../read-stats.ts";
 import {
@@ -114,6 +119,7 @@ import {
   isMutableTransactionReadAllowed,
   isReadIgnoredForScheduling,
   isReadMarkedAsAttemptedWrite,
+  isServedDerivationTx,
   isUiInputBlindWriteTx,
   pendingWriteElisionRead,
   registerCommitRejectionListener,
@@ -142,6 +148,12 @@ import { toTransactionDocumentValue } from "./v2-document.ts";
 import { hasValueAtPath, readValueAtPath } from "./v2-path.ts";
 import { recordWriteStackTrace } from "./write-stack-trace.ts";
 import { hasInlineCellScheme } from "../immutable-cell.ts";
+import { metaFieldChanges } from "../meta-seam.ts";
+import {
+  isReservedSibling,
+  reservedSiblingChanges,
+} from "../reserved-sibling-seam.ts";
+import { passedWriteChokepoint } from "./write-chokepoint.ts";
 
 type RootAttestation = IAttestation;
 
@@ -244,6 +256,12 @@ type TextChangeIntent = {
 
   /** The id the `apply-op` is submitted under. */
   submissionId: string;
+
+  /**
+   * The transaction's activity clock when the first batch was recorded: a
+   * write stamped at or after it came after the edit.
+   */
+  recordedAt: number;
 };
 
 type SpaceBranch = {
@@ -285,7 +303,7 @@ const multiSpaceCommitLogger = getLogger("storage.v2.multi-space-commit", {
 });
 
 const toStoreError = (error: unknown): StorageTransactionRejected => {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = describeFailure(error);
   return {
     name: "StoreError" as const,
     message,
@@ -1440,6 +1458,14 @@ export class V2StorageTransaction implements IStorageTransaction {
     delta: MergeableOpDelta,
   ): void {
     this.#assertWritable("recordMergeableOp()");
+    // An intent stands in for a diff at its path, so one at a reserved
+    // sibling would change it with no write to refuse. The extended
+    // transaction records intents only on the value surface.
+    if (isReservedSibling(address.path[0] ?? "")) {
+      throw new Error(
+        debugStr`${address.id}: refusing a mergeable op at $quote${address.path}, which is runtime state rather than user data.`,
+      );
+    }
     const ready = this.#editable();
     if (ready.error) throw ready.error;
     if (isNoopMergeableDelta(delta)) {
@@ -1634,6 +1660,7 @@ export class V2StorageTransaction implements IStorageTransaction {
       batches: [recorded],
       expected: next,
       submissionId: crypto.randomUUID(),
+      recordedAt: this.#activityClock,
     });
     return next;
   }
@@ -1832,6 +1859,9 @@ export class V2StorageTransaction implements IStorageTransaction {
     const applyOps = this.#textChangesAsWholeDocuments
       ? []
       : this.#textChangeOperations(space);
+    if (applyOps.length > 0) {
+      this.#refuseAnchorsWrittenAfterTheirEdits(space, operations);
+    }
     return {
       operations,
       ...(nativePreconditions.length
@@ -1840,6 +1870,57 @@ export class V2StorageTransaction implements IStorageTransaction {
       ...(sqliteOps?.length ? { sqliteOps: [...sqliteOps] } : {}),
       ...(applyOps.length ? { applyOps } : {}),
     };
+  }
+
+  /**
+   * Helper for `getNativeCommit()`, which throws when `operations` write the
+   * anchors document of a field this transaction edits in `space`, and the
+   * transaction wrote the document's value after recording the edit. The
+   * runtime's own writes beside the value, such as the confidentiality
+   * `prepareCfc()` records at `["cfc"]`, state no offsets. The store maps
+   * a field's anchors through each edit that follows their write in the
+   * commit, and a commit hands it every document write ahead of every edit,
+   * so anchors written against the edited text would be moved through the
+   * same edit again. Anchors written before the edit are stated against the
+   * text it applies to, and moving them through it is right; deleting the
+   * document maps nothing.
+   */
+  #refuseAnchorsWrittenAfterTheirEdits(
+    space: MemorySpace,
+    operations: readonly NativeStorageCommitOperation[],
+  ): void {
+    // TODO(ubik2): Honor the order instead, sending such a write after the
+    // edit, once a transaction's reads of a field's anchors move them through
+    // the edits it has recorded on the field.
+    const anchorsWritten = new Set(
+      operations
+        .filter((operation) => operation.op !== "delete")
+        .map(({ id, scope }) => `${normalizeCellScope(scope)} ${id}`),
+    );
+    for (const docKey of this.#textChanges.get(space)?.keys() ?? []) {
+      const { id, scope } = this.#parseDocKey(docKey);
+      for (const intent of this.#pendingTextChanges(space, docKey) ?? []) {
+        const path = toValuePath(intent.path.slice(1));
+        const anchors = operationAnchorsDocId({ id, scope, path });
+        if (!anchorsWritten.has(`${normalizeCellScope(scope)} ${anchors}`)) {
+          continue;
+        }
+        const writtenAfter = this.#writeAttemptLog.some((write) =>
+          write.space === space && write.id === anchors &&
+          write.scope === normalizeCellScope(scope) &&
+          (write.path.length === 0 || write.path[0] === "value") &&
+          write.journalIndex >= intent.recordedAt
+        );
+        if (writtenAfter) {
+          throw new Error(
+            debugStr`the transaction wrote the anchors of the field at ` +
+              debugStr`$quote${path} of $quote${id} after editing it; write ` +
+              "them before the edit, against the text it applies to, or in " +
+              "a commit of their own",
+          );
+        }
+      }
+    }
   }
 
   /**
@@ -2365,6 +2446,13 @@ export class V2StorageTransaction implements IStorageTransaction {
     if (ready.error) {
       return { error: ready.error };
     }
+    if (!passedWriteChokepoint(options)) {
+      this.#refuseUnmarkedMemberChange(
+        ready.ok,
+        address,
+        options?.delete === true ? undefined : value,
+      );
+    }
     return this.#writeWithinBranch(
       ready.ok,
       address.space,
@@ -2388,6 +2476,15 @@ export class V2StorageTransaction implements IStorageTransaction {
       const ready = this.#prepareWriteSpace(address.space);
       if (ready.error) {
         return { error: ready.error };
+      }
+      // A batch request carries no options, so it carries no mark either. The
+      // whole run is checked before any of it is applied.
+      for (const write of run) {
+        this.#refuseUnmarkedMemberChange(
+          ready.ok,
+          write.address,
+          write.delete === true ? undefined : write.value,
+        );
       }
       const result = this.#writeBatchRun(address.space, ready.ok, run);
       run = [];
@@ -2418,6 +2515,52 @@ export class V2StorageTransaction implements IStorageTransaction {
     }
 
     return flushRun();
+  }
+
+  /**
+   * Throws when a write at `address` carrying `value` changes a member of the
+   * document the runtime owns: a meta field, as `metaFieldChanges()` defines a
+   * change, or a reserved sibling, as `reservedSiblingChanges()` does. A
+   * delete carries `undefined`, whatever value it names, since applying it
+   * stores nothing there: a root delete erases every stored member.
+   *
+   * The extended transaction's write chokepoint is where such a write is
+   * judged. It refuses a meta write the runtime didn't authorize, and records
+   * a reserved-sibling write from outside the runtime's privileged
+   * persistence scope for the commit boundary to refuse, and it marks every
+   * write it forwards here. A write without that mark came from whatever
+   * holds this transaction directly, skipping the chokepoint, so it is
+   * refused whatever the CFC enforcement mode. A root write is decided
+   * against the document as this transaction holds it in `branch`, read from
+   * the entry the write itself lands in, so deciding records no read.
+   */
+  #refuseUnmarkedMemberChange(
+    branch: SpaceBranch,
+    address: IMemorySpaceAddress,
+    value: FabricValue | undefined,
+  ): void {
+    const storedRoot = (): unknown => {
+      const { doc } = this.#document(branch, address);
+      return (doc.current ?? doc.initial).value;
+    };
+    const metaChanges = metaFieldChanges(address.path, value, storedRoot);
+    if (metaChanges.length > 0) {
+      throw new Error(
+        debugStr`${address.id}: refusing a write that changes meta fields of the document (${
+          metaChanges.map((field) => `\`${field}\``).join(", ")
+        }). They name the program a piece runs and the cells it is wired to, and the runtime writes them through \`setMetaRaw()\` on an extended transaction.`,
+      );
+    }
+    const changes = reservedSiblingChanges(address.path, value, (sibling) => {
+      const root = storedRoot();
+      return isObjectNotArray(root) ? root[sibling] : undefined;
+    });
+    if (changes.length === 0) return;
+    throw new Error(
+      debugStr`${address.id}: refusing a write that changes reserved members of the document (${
+        changes.map(([sibling]) => `\`${sibling}\``).join(", ")
+      }). They hold runtime state, which the runtime writes through an extended transaction's write chokepoint.`,
+    );
   }
 
   #writeWithinSpace(
@@ -2494,6 +2637,7 @@ export class V2StorageTransaction implements IStorageTransaction {
     const isDelete = options?.delete === true;
 
     const { doc: readDoc } = this.#document(branch, address);
+    this.#dependOnUnseenWriteTarget(space, address, readDoc);
     const doc = ensureWritableDocument(readDoc);
     this.#preserveForReaders(doc);
     const current = doc.current;
@@ -2583,6 +2727,44 @@ export class V2StorageTransaction implements IStorageTransaction {
     return { ok: collapsedNext };
   }
 
+  /**
+   * Makes a served derivation's write to a scoped instance its replica has
+   * never seen depend on that instance's arrival, as a read of it would.
+   *
+   * The replica holds an instance a served run asks for only once the run
+   * names it (`#loadRoot()` starts the load), so a run that writes such an
+   * instance without reading it writes over an absent view, and its commit
+   * is a whole-document `set`. Where the store already holds the instance,
+   * the wave drops that write (serving-loop.md §3d), and with no read of the
+   * instance nothing re-runs the derivation when the instance lands. The
+   * read here is that dependency: it is at the document root and not
+   * recursive, so the instance's arrival wakes the run and the run's own
+   * later writes to the instance, a child path, do not.
+   */
+  #dependOnUnseenWriteTarget(
+    space: MemorySpace,
+    address: IMemoryAddress,
+    doc: DocumentEntry,
+  ): void {
+    if (
+      doc.initial.value !== undefined ||
+      this.#scopeKeyIdentity === undefined ||
+      normalizeCellScope(address.scope) === "space" ||
+      usesLocalReads(this) ||
+      !isServedDerivationTx(this)
+    ) {
+      return;
+    }
+    const read = this.read({
+      space,
+      id: address.id,
+      ...(address.type === undefined ? {} : { type: address.type }),
+      ...(address.scope === undefined ? {} : { scope: address.scope }),
+      path: [],
+    }, { trackReadWithoutLoad: true, nonRecursive: true });
+    if (read.error) throw read.error;
+  }
+
   /** Elision over a pending document retains its commit basis. */
   #retainPendingWriteElision(
     branch: SpaceBranch,
@@ -2641,6 +2823,7 @@ export class V2StorageTransaction implements IStorageTransaction {
     }
 
     const { doc: readDoc } = this.#document(branch, writes[0]!.address);
+    this.#dependOnUnseenWriteTarget(space, writes[0]!.address, readDoc);
     const doc = ensureWritableDocument(readDoc);
     this.#preserveForReaders(doc);
     let nextRoot = doc.current.value;

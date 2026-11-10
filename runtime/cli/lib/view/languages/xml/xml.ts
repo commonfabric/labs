@@ -6,17 +6,10 @@
  * attribute value that is never closed ends where the next tag begins.
  */
 
-import type {
-  Definition,
-  Document,
-  Line,
-  StructureNode,
-  TokenClass,
-} from "../../model.ts";
+import type { Document, Line, StructureNode, TokenClass } from "../../model.ts";
 import { flattenStructure } from "../../model.ts";
-import { computeLineStarts } from "../../lines.ts";
 import { linesFromClasses } from "../classes.ts";
-import { structureNode, type StructureSource } from "../structure.ts";
+import { structureNode, structureSource } from "../structure.ts";
 
 /** An element as the scan finds it, before it has line coordinates. */
 interface Element {
@@ -264,11 +257,7 @@ export function xmlLines(text: string): Line[] {
 /** Color `text` and build its tree of elements. */
 export function xmlDocument(text: string): Document {
   const scanner = new Scanner(text);
-  const source: StructureSource = {
-    text,
-    lineStarts: computeLineStarts(text),
-    definitions: new Map<string, Definition[]>(),
-  };
+  const source = structureSource(text);
   const place = (element: Element, depth: number): StructureNode =>
     structureNode(
       source,

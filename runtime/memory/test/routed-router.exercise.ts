@@ -6,7 +6,7 @@ import {
 } from "@commonfabric/data-model";
 import { setModernCellRepConfig } from "@commonfabric/data-model/cell-rep";
 import { Identity } from "@commonfabric/identity";
-import { isPlainObject } from "@commonfabric/utils/types";
+import { isPlainObject } from "@commonfabric/js-values/types";
 import { assert, assertEquals } from "@std/assert";
 import { expect } from "@std/expect";
 import { fromFileUrl, toFileUrl } from "@std/path";
@@ -1775,6 +1775,9 @@ finally:
       `${router.did()} local-mode-a`,
     ]);
     expect(sdk.serverFlags?.sessionReportV1).toBe(true);
+    // A capability the endpoints advertise and the router does not name
+    // reaches the client through the router's intersection.
+    expect(sdk.serverFlags?.instanceNameMark).toBe(true);
     for (
       const [i, session, signer] of [[0, sa, alice], [1, sb, bob]] as const
     ) {

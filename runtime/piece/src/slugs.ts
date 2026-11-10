@@ -18,7 +18,7 @@ import {
 } from "@commonfabric/runner";
 import { rawMetaWriteAuthorization } from "@commonfabric/runner/meta-seam";
 import { createLLMFriendlyLink } from "@commonfabric/runner/shared";
-import { utf8Compare } from "@commonfabric/utils/utf8";
+import { utf8Compare } from "@commonfabric/text/utf8";
 import type { PiecesController } from "./ops/pieces-controller.ts";
 import { pieceId } from "./piece-id.ts";
 

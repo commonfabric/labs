@@ -1,6 +1,7 @@
 import { setModernCellRepConfig } from "@commonfabric/data-model/cell-rep";
 import * as FS from "@std/fs";
 
+import { normalizeInviteHost } from "@commonfabric/memory/space-invites";
 import { verifyConnectionAuthorization } from "@commonfabric/memory/v2/connection-auth";
 import * as MemoryServer from "@commonfabric/memory/v2/server";
 import { verifySessionOpenAuthorization } from "@commonfabric/memory/v2/session-open-auth";
@@ -9,6 +10,8 @@ import { experimentalOptionsFromEnv } from "@commonfabric/runner/experimental-po
 import { MemoryRouterPolicy } from "./memory-router.ts";
 import { memoryEngineStoreUrl } from "./memory-store-url.ts";
 import env from "@/env.ts";
+import { buildInfo } from "@/lib/build-info.ts";
+import { experimentalPosture } from "@/lib/experimental-posture.ts";
 import { identity } from "@/lib/identity.ts";
 import {
   memoryAclPrincipalsFor,
@@ -102,12 +105,20 @@ export { memoryEngineStoreUrl };
 await FS.ensureDir(memoryEngineStoreUrl);
 
 export const memoryServer = new MemoryServer.Server({
+  serverBuild: buildInfo.commitSha ?? undefined,
   minimumClientGeneration: env.MEMORY_MINIMUM_CLIENT_GENERATION,
   store: memoryEngineStoreUrl,
   authorizeSessionOpen,
   ...(sharedMemoryConnection || routerPolicy !== undefined
     ? { authorizeConnection: verifyConnectionAuthorization }
     : {}),
+  // Invitations issued here name this deployment's public origin, so the
+  // HTTP routes and `space.invite` requests check codes against the same host.
+  inviteHost: normalizeInviteHost(env.API_URL),
+  // The posture this process publishes on `/api/meta`, read when an open asks
+  // rather than now: it is published once the Runtime exists, after this
+  // server is constructed, and until then it names no instances.
+  namesInstances: () => experimentalPosture()?.instanceNames === true,
   sessionOpenAuth: {
     audience: memoryAudience,
   },
@@ -115,6 +126,7 @@ export const memoryServer = new MemoryServer.Server({
     mode: env.MEMORY_ACL_MODE,
     serviceDids: memoryAclPrincipals.serviceDids,
     delegatingDids: memoryAclPrincipals.delegatingDids,
+    delegations: env.MEMORY_ACL_DELEGATIONS,
   },
   ...(routerPolicy !== undefined
     ? {
@@ -129,9 +141,7 @@ export const memoryServer = new MemoryServer.Server({
 });
 const routedListener = await routerPolicy?.start(memoryServer);
 export const memory = {
-  async close(): Promise<
-    { ok: Record<PropertyKey, never> } | { error: unknown }
-  > {
+  async close(): Promise<void> {
     try {
       await routedListener?.close();
     } catch (error) {
@@ -143,7 +153,6 @@ export const memory = {
       throw error;
     }
     await memoryServer.close();
-    return { ok: {} };
   },
 };
 console.log("Memory: Provider initialized successfully");

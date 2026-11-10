@@ -27,6 +27,7 @@ import type {
   ClientCommit,
   StreamEventsDocValue,
 } from "@commonfabric/memory/v2";
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
 import { sendEvent } from "../src/cell.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
@@ -82,6 +83,7 @@ const appendOf = (
 describe("event-append queue (events.md §5, LT9)", () => {
   it("settles a READ principal's authoritative append refusal without retrying it", async () => {
     const server = new MemoryV2Server.Server({
+      namesInstances: namesInstancesByDefault,
       sessionOpenAuth: TEST_MEMORY_SERVER_AUTH.sessionOpenAuth,
       authorizeSessionOpen: (message) =>
         (message.authorization as { principal: string }).principal,
@@ -103,6 +105,7 @@ describe("event-append queue (events.md §5, LT9)", () => {
       },
     });
     const client = await MemoryV2Client.connect({
+      instanceNames: namesInstancesByDefault(),
       transport: MemoryV2Client.loopback(server),
     });
     const session = await client.mount(
@@ -274,6 +277,41 @@ describe("event-append queue (events.md §5, LT9)", () => {
       } finally {
         queue.close();
       }
+    }
+  });
+
+  it("settles an append to a deleted space as refused without retrying it, though the revoked session's error carries no ACL revision", async () => {
+    const refused: string[] = [];
+    let attempts = 0;
+    const queue = new EventAppendQueue({
+      space,
+      nextLocalSeq: () => ++attempts,
+      // The error a session revoked with the reason `deleted` closes with,
+      // which every later send on it rejects with too. A second attempt
+      // would be admitted, so a retry shows as a delivery.
+      transact: () =>
+        attempts === 1
+          ? Promise.reject(
+            Object.assign(
+              namedError(
+                "AuthorizationError",
+                "memory session revoked: deleted",
+              ),
+              { deleted: true },
+            ),
+          )
+          : Promise.resolve(),
+      onRefused: (append) => refused.push(append.eventId),
+    });
+    try {
+      expect(await queue.enqueue(appendOf("evt-deleted"))).toEqual({
+        delivered: false,
+        refused: expect.stringContaining("revoked: deleted"),
+      });
+      expect(attempts).toBe(1);
+      expect(refused).toEqual(["evt-deleted"]);
+    } finally {
+      queue.close();
     }
   });
 

@@ -17,7 +17,7 @@
  * gains alone fails here as well.
  */
 
-import type { MustBeTrue, Same } from "@commonfabric/utils/types";
+import type { MustBeTrue, Same } from "@commonfabric/js-values/types";
 
 import type {
   FabricInstance as ApiFabricInstance,

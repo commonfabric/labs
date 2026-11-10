@@ -157,3 +157,59 @@ export const spaceFromStoreFilename = (
     return null;
   }
 };
+
+/**
+ * A deterministic token for a file-name component: the FNV-1a 32-bit hash of
+ * `s` and its length, in hex. It is unkeyed and 32 bits wide, so it does not
+ * resist collisions, found or made (see {@link cellDatabaseFileName}).
+ */
+function hashToken(s: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return `${(h >>> 0).toString(16).padStart(8, "0")}${s.length.toString(16)}`;
+}
+
+/**
+ * The start every cell database file name of `space` shares: the space's cell
+ * databases are among the files beside its store whose names start with it.
+ * It is a 32-bit hash of the DID, which another space's can share, by chance
+ * or by a key ground to match, so a file named with it is not proof of whose
+ * it is.
+ */
+export const cellDatabaseFilePrefix = (space: string): string =>
+  `cell-${hashToken(space)}-`;
+
+/**
+ * The file name of the cell database `id` of `space` holds for `scopeKey`,
+ * the resolved scope key: `space` for the default scope, which is left out of
+ * the name, or `user:<did>` / `session:<did>:<sid>` for a scoped one, hashed
+ * in so each user or session has its own file. The space and id are hashed in
+ * too, each to 32 bits and its length, so two distinct pairs share a name
+ * when both hashes collide.
+ */
+export const cellDatabaseFileName = (
+  space: string,
+  id: string,
+  scopeKey: string = "space",
+): string => {
+  // TODO(danfuzz): This naming lets one space reach another's cell databases
+  // (`top/2495`), and getting past it is a major migration. A name is
+  // `cell-<h(space)>-<h(id)>[-<h(scopeKey)>].sqlite`, where `h` is
+  // `hashToken()`: FNV-1a 32-bit plus the input's length in hex, unkeyed.
+  // Every `did:key` DID has the same length, so the space part carries 32
+  // bits. A client mints its own space key and chooses its own cell-database
+  // ids, so about 2^32 tries each grind a (space, id) pair onto another
+  // space's file name, and the server then attaches that space's cell
+  // database to the grinder's commits, which reads and writes across spaces.
+  // Chance does it too, at about N^2 / 2^64 over N pairs. A store that is not
+  // a `file:` URL keeps every space's cell databases in one `TMPDIR`, so there
+  // the same holds across the whole server. A wider or keyed name renames
+  // every existing cell-database file, so the fix is a migration (renaming
+  // each file as it is opened, or recording each name in a table), not a
+  // change of hash.
+  const scopeTag = scopeKey === "space" ? "" : `-${hashToken(scopeKey)}`;
+  return `${cellDatabaseFilePrefix(space)}${hashToken(id)}${scopeTag}.sqlite`;
+};

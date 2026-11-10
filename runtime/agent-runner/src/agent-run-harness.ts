@@ -17,6 +17,7 @@ import {
   createHarnessFabricSessionFactory,
   type HarnessFabricSession,
 } from "@commonfabric/cf-harness/fabric-session";
+import { createHarnessHandleTable } from "@commonfabric/cf-harness/handle-table";
 import {
   agentObservedHandlesOfTable,
   AgentResultWriteError,
@@ -28,7 +29,9 @@ import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import { cloneIfNecessary, hashStringOf } from "@commonfabric/data-model";
 import type { ACL } from "@commonfabric/memory/acl";
 import { cloneSchemaMutable } from "@commonfabric/data-model-schema";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
+  INVALID_INPUT,
   INVALID_RESULT,
   PROVIDER_FAILURE,
   withAgentInputAccessTools,
@@ -60,6 +63,12 @@ export interface HarnessAgentRunExecutorOptions {
 
   /** The host-owned file backing the read-only Loom tools. */
   loomRetrievalConfigPath?: string;
+
+  /**
+   * The host's command endpoint behind `list_commands` and `run_command`, and
+   * the actor commands run as. Each run sends an id of its own.
+   */
+  commands?: { url: string; actor: string };
 
   /** Model name passed to `cf-harness`. */
   model?: string;
@@ -95,7 +104,7 @@ export async function agentRunObservationCeiling(
     } catch (error) {
       options.report?.(
         `agent runner: could not verify space membership: ${
-          error instanceof Error ? error.message : String(error)
+          describeFailure(error)
         }`,
       );
     }
@@ -123,7 +132,8 @@ export async function agentRunObservationCeiling(
  * A run ends `completed` with a link to the result document; `cancelled`
  * when its signal aborted; `refused` when the space's policy refused the
  * result write; `failed` as `LIMIT_REACHED` when the model-turn limit ended
- * it; `INVALID_RESULT` when the completed loop supplied no result satisfying
+ * it; `INVALID_INPUT` when progress is requested without a host publisher;
+ * `INVALID_RESULT` when the completed loop supplied no result satisfying
  * its schema; and `PROVIDER_FAILURE` for other model, tool, or storage errors.
  *
  * @throws Error when no ACL reader is supplied for the Fabric lane.
@@ -138,10 +148,15 @@ export const createHarnessAgentRunExecutor = (
   }
   return async (run: ClaimedAgentRun): Promise<AgentRunExecution> => {
     const { record } = run;
-    const runRoot = join(
-      options.workRoot,
-      hashStringOf([run.host, addressKey(run.link)]),
-    );
+    if (
+      record.progressRequested === true && run.publishProgress === undefined
+    ) {
+      return { outcome: "failed", errorCode: INVALID_INPUT };
+    }
+    const attempt = record.attempts;
+    let progressSequence = 0;
+    const runKey = hashStringOf([run.host, addressKey(run.link)]);
+    const runRoot = join(options.workRoot, runKey);
 
     // The record reads as live proxies; the harness and the writer take plain
     // values.
@@ -164,6 +179,7 @@ export const createHarnessAgentRunExecutor = (
 
     const job = await runHarnessJob({
       task: record.task,
+      progress: record.progressRequested === true,
       taskRole: "context",
       // The run validates everything but the `asCell` positions, where the
       // model writes a handle token and the writer places a link.
@@ -174,6 +190,9 @@ export const createHarnessAgentRunExecutor = (
       ...(options.model !== undefined ? { model: options.model } : {}),
       ...(options.loomRetrievalConfigPath !== undefined
         ? { loomRetrievalConfigPath: options.loomRetrievalConfigPath }
+        : {}),
+      ...(options.commands !== undefined
+        ? { commands: { ...options.commands, runId: `agent-run-${runKey}` } }
         : {}),
       fabric: {
         host: run.host,
@@ -193,6 +212,79 @@ export const createHarnessAgentRunExecutor = (
       // Each transcript event the harness persists is a durable write, so it
       // renews the lease.
       onEvent: () => run.renewLease(),
+      ...(record.progressRequested === true
+        ? {
+          onProgress: async (
+            message: string,
+            handleTable: Parameters<
+              NonNullable<RunCfHarnessCliDependencies["reportProgress"]>
+            >[1],
+          ) => {
+            run.signal.throwIfAborted();
+            handleTable ??= createHarnessHandleTable(runKey);
+            const sequence = ++progressSequence;
+            let publicationLost = false;
+            let session: HarnessFabricSession | undefined;
+            const ownsSession =
+              options.harnessDeps?.fabricSessionFactory === undefined;
+            try {
+              session = await (options.harnessDeps?.fabricSessionFactory ??
+                createHarnessFabricSessionFactory({
+                  apiUrl: run.host,
+                  identityKeyPath: options.identityKeyPath,
+                  space: run.link.space,
+                }))();
+              const written = await writeAgentResult({
+                session,
+                handleTable,
+                literalStrings: true,
+                structuredResult: {
+                  message,
+                  sequence,
+                  updatedAt: new Date().toISOString(),
+                },
+                resultSchema: {
+                  type: "object",
+                  properties: {
+                    message: { type: "string" },
+                    sequence: { type: "integer" },
+                    updatedAt: { type: "string" },
+                  },
+                  required: ["message", "sequence", "updatedAt"],
+                  additionalProperties: false,
+                },
+                observedHandles: agentObservedHandlesOfTable(handleTable),
+                maxConfidentiality: maxConfidentiality as never,
+                cause: {
+                  agentRunProgress: runKey,
+                  attempt,
+                  sequence,
+                },
+              });
+              run.signal.throwIfAborted();
+              if (!await run.publishProgress!(written.link)) {
+                publicationLost = true;
+                throw new Error("Progress publication is no longer available");
+              }
+            } catch (error) {
+              options.report?.(
+                `agent runner: progress publication failed: ${
+                  describeFailure(error)
+                }`,
+              );
+              run.signal.throwIfAborted();
+              if (publicationLost) {
+                throw new Error("Progress publication is no longer available");
+              }
+              return false;
+            } finally {
+              if (ownsSession) {
+                await session?.pieces.runtime.dispose().catch(() => {});
+              }
+            }
+          },
+        }
+        : {}),
       ...(options.harnessDeps !== undefined
         ? { harnessDeps: options.harnessDeps }
         : {}),
@@ -243,7 +335,7 @@ export const createHarnessAgentRunExecutor = (
         : "";
       options.report?.(
         `agent runner: writing the result failed: ${
-          error instanceof Error ? error.message : String(error)
+          describeFailure(error)
         }${detail}`,
       );
       return {

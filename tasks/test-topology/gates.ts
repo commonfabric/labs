@@ -148,7 +148,14 @@ export const WORKING_TREE_GATES: readonly Gate[] = [
       "runtime/cf-harness/src/contracts/",
       "runtime/cf-harness/src/sandbox/runsc-cfc-result.ts",
       "runtime/html/src/worker/display-fit.ts",
+      "runtime/html/src/worker/display-fit-atoms.ts",
       "runtime/html/src/worker/reconciler.ts",
+      "runtime/memory/test/v2-cfc-label-fields.test.ts",
+      "runtime/memory/test/v2-cfc-release-authority.test.ts",
+      "runtime/memory/test/v2-envelope-admission.test.ts",
+      "runtime/memory/v2/cfc-label-fields.ts",
+      "runtime/memory/v2/cfc-release-authority.ts",
+      "runtime/memory/v2/envelope-admission.ts",
       "runtime/runner/src/cfc.ts",
       "runtime/runner/src/cfc/",
       "runtime/runner/test/cfc/",
@@ -216,9 +223,8 @@ export const WORKING_TREE_GATES: readonly Gate[] = [
     name: "check-test-shuffle",
     kind: "gate",
     run: ["task", "check-test-shuffle"],
-    // Reads every manifest, workflow and shell script in the tree, so a
-    // command that starts a test runner is reached wherever it is
-    // written.
+    // Reads every manifest, workflow and shell script in the tree, and
+    // the `deno` commands TypeScript sources write as array literals.
     reachedBy: [],
   },
   {
@@ -380,7 +386,7 @@ export const WORKING_TREE_GATES: readonly Gate[] = [
     reachedBy: [
       "base/static/assets/types/",
       "base/static/scripts/",
-      "base/utils/",
+      "base/pattern-contract/",
     ],
   },
 ];
@@ -412,7 +418,7 @@ export const HISTORY_GATES: readonly Gate[] = [
     kind: "gate",
     run: ["task", "check-cause-assignments"],
     args: ({ baseRef }) => [baseRef],
-    // The trees a pattern's numbering is built by, and the gate's own
+    // The paths a pattern's numbering is built by, and the gate's own
     // modules. The task passes a change touching none of them without
     // compiling anything, so the two lists are one.
     reachedBy: [...COMPILER_PATHS, ...GATE_PATHS],
@@ -686,6 +692,10 @@ async function patternCompatSuite(root: string): Promise<Suite> {
     // patterns.
     whole: units,
     unitsForChange: patternsReached(root, files, new Set(units)),
+    sourcesOf(unit) {
+      const source = byKey.get(unit);
+      return source === undefined ? [] : [source];
+    },
     locate(record): Location | undefined {
       if (!claimsIdentity({ recordSurfaces }, record.test)) return undefined;
       if (record.test.n === name) return { level: "suite" };

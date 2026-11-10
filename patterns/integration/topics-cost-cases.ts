@@ -15,7 +15,7 @@ import type {
   IExtendedStorageTransaction,
   SchedulerGraphSnapshot,
 } from "@commonfabric/runner";
-import { maxOf } from "@commonfabric/utils/math";
+import { maxOf } from "@commonfabric/collections/math";
 
 import {
   type AttemptReads,

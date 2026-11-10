@@ -7,7 +7,7 @@ import {
   getLoggerCountsBreakdown,
   getTimingStatsBreakdown,
   resetAllTimingStats,
-} from "@commonfabric/utils/logger";
+} from "@commonfabric/logger";
 import type { MemorySpace, Signer } from "@commonfabric/memory/interface";
 import {
   decodeMemoryBoundary,
@@ -16,6 +16,7 @@ import {
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import type { Cell } from "../src/cell.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -249,7 +250,10 @@ class DenyingSpaceSessionFactory implements SessionFactory {
         },
         setCloseReceiver: (r) => base.setCloseReceiver?.(r),
       };
-    const client = await MemoryV2Client.connect({ transport });
+    const client = await MemoryV2Client.connect({
+      instanceNames: namesInstancesByDefault(),
+      transport,
+    });
     const session = await client.mount(
       space,
       mountOptions,

@@ -1,9 +1,4 @@
-import {
-  type VNode,
-  type WishParams,
-  type WishState,
-  type WishTag,
-} from "@commonfabric/api";
+import type { VNode, WishParams, WishState, WishTag } from "@commonfabric/api";
 import { internSchema } from "@commonfabric/data-model-schema";
 import {
   debugStr,
@@ -13,9 +8,13 @@ import {
 import { favoriteListSchema } from "@commonfabric/home-schemas";
 import { type DID, isDID } from "@commonfabric/identity/did";
 import type { MemorySpace } from "@commonfabric/memory/interface";
-import { extractHashtags } from "@commonfabric/utils/hashtags";
-import { getLogger } from "@commonfabric/utils/logger";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import { extractHashtags } from "../hashtags.ts";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { getLogger } from "@commonfabric/logger";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 
 import { h } from "../builder/h.ts";
 // The sidecar instantiation observes its wave settlement (a serving-wave
@@ -30,7 +29,7 @@ import {
   UI,
 } from "../builder/types.ts";
 import { useCancelGroup } from "../cancel.ts";
-import { type Cell } from "../cell.ts";
+import type { Cell } from "../cell.ts";
 import { resolveLink, unlessCyclic } from "../link-resolution.ts";
 import {
   createSigilLinkFromParsedLink,
@@ -54,7 +53,7 @@ import {
 } from "../profile-order.ts";
 import { setRunnableName } from "../runner-utils.ts";
 import { type Runtime, spaceCellSchema } from "../runtime.ts";
-import { type Action, type ReactivityLog } from "../scheduler.ts";
+import type { Action, ReactivityLog } from "../scheduler.ts";
 import { RetryImmediately } from "../scheduler/retry-immediately.ts";
 import { isCellScope, narrowestScope } from "../scope.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
@@ -242,8 +241,6 @@ function getResolutionKind(parsed: ParsedWishTarget): string {
     case "#chatManager":
     case "#profile":
     case "#profileName":
-    case "#profileAvatar":
-    case "#profilePicture":
     case "#profileBio":
     case "#profileSpace":
       return "home-target";
@@ -252,7 +249,26 @@ function getResolutionKind(parsed: ParsedWishTarget): string {
   }
 }
 
-export function parseWishTarget(target: string): ParsedWishTarget {
+/**
+ * Targets that once answered with a profile's face field as stored, which
+ * anyone may have written. A wish for one, or for the same field below
+ * `#profile`, fails, rather than searching for the tag or reading the field,
+ * so that a pattern asking for one hears why.
+ */
+const FACE_FIELD_TARGETS: ReadonlySet<string> = new Set([
+  "#profilePicture",
+  "#profileAvatar",
+]);
+const FACE_FIELDS: ReadonlySet<string> = new Set(["picture", "avatar"]);
+
+/**
+ * Parses the wish target `target`, with `extraPath` (a wish's `path`)
+ * appended to the path it names.
+ */
+export function parseWishTarget(
+  target: string,
+  extraPath: readonly string[] = [],
+): ParsedWishTarget {
   const trimmed = target.trim();
   if (trimmed === "") {
     throw new WishError(`Wish target "${target}" is empty.`);
@@ -266,12 +282,23 @@ export function parseWishTarget(target: string): ParsedWishTarget {
       throw new WishError(`Wish tag target "${target}" is not recognized.`);
     }
     const key = `#${segments[0]}` as WishTag;
-    return { key, path: segments.slice(1) };
+    const path = [...segments.slice(1), ...extraPath];
+    if (
+      FACE_FIELD_TARGETS.has(key) ||
+      (key === "#profile" && FACE_FIELDS.has(path[0]))
+    ) {
+      throw new WishError(
+        `Wish target "${target}" does not exist: a profile's picture or ` +
+          "avatar is its owner's only when its label says so, so read the " +
+          "face from the profile `#profile` resolves to.",
+      );
+    }
+    return { key, path };
   }
 
   if (trimmed.startsWith("/")) {
     const segments = trimmed.split("/").filter((segment) => segment.length > 0);
-    return { key: "/", path: segments };
+    return { key: "/", path: [...segments, ...extraPath] };
   }
 
   throw new WishError(`Wish path target "${target}" is not recognized.`);
@@ -441,11 +468,11 @@ function findHomeRootCell(ctx: WishContext): Cell<any> | undefined {
  * and otherwise the space cell's empty `defaultPattern` slot itself. A wish
  * creates no root. A read through the empty slot finds nothing, and a write
  * through it is refused unless the root exists by then
- * (`SpaceRootMissingError`); on a client runtime, when a handler's write there
- * is refused and the refusal escapes the handler, the root is brought up and
- * the handler runs again (`bringUpHomeRootForRefusedWrite`). A headless wish
- * hands out nothing over an empty slot, and throws `NoHomeRootError`, so it
- * resolves to nothing.
+ * (`SpaceRootMissingError`); when a handler's write there is refused and the
+ * refusal escapes the handler, the handler runs again once the root exists,
+ * which a client runtime creates and a serving runtime waits for
+ * (`bringUpHomeRootForRefusedWrite`). A headless wish hands out nothing over
+ * an empty slot, and throws `NoHomeRootError`, so it resolves to nothing.
  */
 function getHomeRootCell(ctx: WishContext): Cell<any> {
   const found = findHomeRootCell(ctx);
@@ -1163,21 +1190,6 @@ function resolveHomeSpaceTarget(
       return [{ cell: profileDefault, pathPrefix: ["initialNameApplied"] }];
     }
 
-    case "#profileAvatar": {
-      return [{
-        cell: getDefaultProfileCell(ctx),
-        pathPrefix: ["avatar"],
-      }];
-    }
-
-    case "#profilePicture": {
-      // The default profile's picture: the bytes of a raster image.
-      return [{
-        cell: getDefaultProfileCell(ctx),
-        pathPrefix: ["picture"],
-      }];
-    }
-
     case "#profileBio": {
       // The owner-authored free-text bio of the default profile (CT-1648).
       // Tracks edits made via the profile's setBio handler.
@@ -1632,8 +1644,6 @@ function resolveSpaceTarget(
     "#mentionable": ["defaultPattern", "backlinksIndex", "mentionable"],
     "#summaryIndex": ["defaultPattern", "summaryIndex"],
     "#knowledgeGraph": ["defaultPattern", "knowledgeGraph"],
-
-    "#suggestions": ["defaultPattern", "suggestionHistory"],
   };
 
   const registryTarget = parsed.key === "#pieceRegistry";
@@ -1851,9 +1861,7 @@ function createSharedHashtagResolver(
       });
     } catch (error) {
       if (error instanceof DocumentPending) return;
-      const errorMessage = error instanceof Error
-        ? error.message
-        : String(error);
+      const errorMessage = describeFailure(error);
       stateCell.set({
         result: undefined,
         candidates: [],
@@ -2103,10 +2111,6 @@ export const wishSidecarDiagnostics = {
 
 function errorUI(message: string): VNode {
   return h("span", { style: "color: red" }, `⚠️ ${message}`);
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function cellLinkUI(cell: Cell<unknown>): VNode {
@@ -2978,7 +2982,7 @@ export function wish(
           return;
         }
         if (disposition === "retry") continue;
-        await commitPatternErrorUI(resultCell, errorMessage(error));
+        await commitPatternErrorUI(resultCell, describeFailure(error));
         return;
       }
     }
@@ -3274,7 +3278,7 @@ export function wish(
         if (!cancelled && slot.resultCell) {
           commitPatternErrorUI(
             slot.resultCell,
-            errorMessage(error),
+            describeFailure(error),
           );
         }
       });
@@ -3372,11 +3376,7 @@ export function wish(
             const activeParsed = parsed = measureWishPhase(
               "parse-target",
               queryKey,
-              () => {
-                const nextParsed = parseWishTarget(query);
-                nextParsed.path = [...nextParsed.path, ...(path ?? [])];
-                return nextParsed;
-              },
+              () => parseWishTarget(query, path ?? []),
             );
 
             // Interval #now is not a resolution — it's a timer subscription.

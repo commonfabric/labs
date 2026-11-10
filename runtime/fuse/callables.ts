@@ -3,7 +3,7 @@ import {
   isPatternToolSchema,
   isPatternToolValue,
 } from "@commonfabric/piece/verb-listing";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import { ContextualFlowControl } from "../runner/src/cfc.ts";
 
@@ -72,6 +72,8 @@ export function buildCallableScript(
   const shim = execCli || "/usr/bin/false";
   // Comments are readable via `cat` and `head`; cf exec handles --help and
   // flag-based invocation (--value <x> for scalars, --flag <v> for objects).
+  // The shell runs the launcher, because a shebang line ends its
+  // interpreter at the first space and a launcher's path may hold one.
   const schemaComment = schema !== undefined
     ? `# schema: ${JSON.stringify(schema)}\n`
     : "";
@@ -79,7 +81,7 @@ export function buildCallableScript(
     ? `# input: ${typeStr.replaceAll("\n", "\n# ")}\n`
     : "";
   return encoder.encode(
-    `#!${shim} exec\n${schemaComment}${typeComment}exec ${
+    `#!/bin/sh\n${schemaComment}${typeComment}exec ${
       shellQuote(shim)
     } exec "$0" "$@"\n`,
   );

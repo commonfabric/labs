@@ -20,7 +20,7 @@
  */
 
 import { html, LitElement, nothing, svg, type TemplateResult } from "lit";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import {
   type ConsoleChatEventEnvelope,
   type ConsoleRunDetail,
@@ -1227,8 +1227,6 @@ const REASONS: ReadonlyMap<string, Reason> = new Map(Object.entries(
     cfc_enforce_explicit_direct_command: (task) => `${task} ${WHY}`,
     cfc_enforce_explicit_requires_direct_command: (task) => `${task} ${WHY}`,
     cfc_enforce_strict_direct_command: (task) => `${task} ${WHY}`,
-    cfc_enforce_strict_host_command_read: () =>
-      "The host allows this context task to discover commands and invoke only its granted read commands.",
     cfc_enforce_strict_requires_direct_command: (task) =>
       `${task} ${WHY} ${EVEN_LOOKING}`,
     write_file_disabled: () => CHECKS_OFF,
@@ -1243,6 +1241,8 @@ const REASONS: ReadonlyMap<string, Reason> = new Map(Object.entries(
       `${task} ${WRITE_WHERE}`,
     write_file_enforce_strict_requires_direct_command: (task) =>
       `${task} ${WHY}`,
+    progress_return: () =>
+      "This run may report progress through its configured return channel.",
     structured_result_return: () =>
       "Handing back the run's result is always allowed.",
     subagent_profile_allowed: () =>

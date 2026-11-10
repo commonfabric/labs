@@ -1,4 +1,4 @@
-import { type LogLevel, setGlobalLogFloor } from "@commonfabric/utils/logger";
+import { type LogLevel, setGlobalLogFloor } from "@commonfabric/logger";
 
 const VALID_LOG_LEVELS = new Set([
   "debug",

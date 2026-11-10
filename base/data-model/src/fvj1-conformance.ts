@@ -36,6 +36,7 @@ import {
   FabricDurationNsec,
   FabricEpochDay,
   FabricEpochNsec,
+  FabricHash,
   type FabricPrimitiveClassesByName,
   FabricRegExp,
   FabricUnavailable,
@@ -153,7 +154,7 @@ const SECTION_SYMBOL = "3-json-encoding.md section 3, `Symbol@1`";
 const SECTION_BIGINT = "3-json-encoding.md section 3, `BigInt@1`";
 const SECTION_BASE64 = "3-json-encoding.md section 3, base64url convention";
 const SECTION_UNKNOWN = "3-json-encoding.md section 8";
-const SECTION_TAG_SYNTAX = "3-json-encoding.md section 2";
+const SECTION_TAG_SYNTAX = "1-fabric-values.md section 2.5.1";
 const SECTION_RESERVATION = "3-json-encoding.md section 9";
 const SECTION_TYPES = "3-json-encoding.md section 3";
 const SECTION_TEMPORAL = "3-json-encoding.md section 3, temporal quantities";
@@ -161,6 +162,7 @@ const SECTION_ERROR = "3-json-encoding.md section 3, `Error@1`";
 const SECTION_LINK = "3-json-encoding.md section 3, `Link@1`";
 const SECTION_REGEXP = "3-json-encoding.md section 3, `RegExp@1`";
 const SECTION_UNAVAILABLE = "3-json-encoding.md section 3, `Unavailable@1`";
+const SECTION_HASH_TAG = "1-fabric-values.md section 1.4.9";
 
 /**
  * The integers at and just past the edges of a signed 64-bit integer, and a
@@ -585,6 +587,31 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     section: SECTION_UNKNOWN,
     text: 'fvj1:[{"/Abc123@1234":null}]',
   },
+  {
+    name: "unknown tag with prefixes",
+    section: SECTION_TAG_SYNTAX,
+    text: 'fvj1:{"/sys.beep.Boop@1":{"x":1}}',
+  },
+  {
+    name: "unknown tag with the prefix core",
+    section: SECTION_TAG_SYNTAX,
+    text: 'fvj1:{"/core.Thing@1":null}',
+  },
+  // Type tags in any case.
+  ...["bytes@1", "Sys.Boop@1", "sys.boop@1", "SYS.BEEP.boop@7"].map((
+    tag,
+  ): Fvj1ConformanceCase => ({
+    name: `unknown tag ${JSON.stringify(tag)}`,
+    section: SECTION_TAG_SYNTAX,
+    text: `fvj1:${JSON.stringify({ [`/${tag}`]: 1 })}`,
+  })),
+  // A special form's name with a version is a type tag like any other, even
+  // among an array's elements.
+  ...["quote@1", "object@1", "hole@1"].map((tag): Fvj1ConformanceCase => ({
+    name: `unknown tag ${JSON.stringify(tag)}`,
+    section: SECTION_TAG_SYNTAX,
+    text: `fvj1:${JSON.stringify([{ [`/${tag}`]: 1 }])}`,
+  })),
 
   // Decodes the spec refuses.
   { name: "text without the prefix", section: SECTION_PREFIX, text: "42" },
@@ -596,15 +623,29 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
   { name: "prefix alone", section: SECTION_PREFIX, text: "fvj1:" },
   { name: "prefix over broken JSON", section: SECTION_PREFIX, text: "fvj1:{" },
   ...[
-    "bytes@1",
     "By-tes@1",
     "Bytes@0",
     "Bytes@01",
     "Bytes@1.0",
+    "Bytes@",
     " Bytes@1",
     "Bytes@1\n",
+    "1Bytes@1",
+    "sys..Boop@1",
+    ".Boop@1",
+    "sys.Boop.@1",
+    "sys_x.Boop@1",
+    "sys.Boop",
+    "core.Globals",
+    "sys.Boop@01",
   ].map((tag): Fvj1ConformanceCase => ({
     name: `malformed tag ${JSON.stringify(tag)}`,
+    section: SECTION_TAG_SYNTAX,
+    text: `fvj1:${JSON.stringify({ [`/${tag}`]: 1 })}`,
+  })),
+  // Tags in the general syntax that, having no version, are not type tags.
+  ...["Bytes", "widget", "fid1"].map((tag): Fvj1ConformanceCase => ({
+    name: `key that is a tag but not a type tag ${JSON.stringify(tag)}`,
     section: SECTION_TAG_SYNTAX,
     text: `fvj1:${JSON.stringify({ [`/${tag}`]: 1 })}`,
   })),
@@ -673,6 +714,16 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     section: "3-json-encoding.md section 3, `Hash@1`",
     text: 'fvj1:{"/Hash@1":{"hash":7,"tag":"fid1"}}',
   },
+  ...["sha256", "SHA256", "sys.sha@2"].map((tag): Fvj1ConformanceCase => ({
+    name: `hash under the algorithm tag ${JSON.stringify(tag)}`,
+    section: SECTION_HASH_TAG,
+    make: () => new FabricHash(new Uint8Array([1]), tag),
+  })),
+  ...["fid-1", "", "sys.sha256", "1sha"].map((tag): Fvj1ConformanceCase => ({
+    name: `hash under the algorithm tag ${JSON.stringify(tag)}`,
+    section: SECTION_HASH_TAG,
+    text: `fvj1:${JSON.stringify({ "/Hash@1": { hash: "AQ", tag } })}`,
+  })),
   {
     name: "key pair with a key outside base64url",
     section: "3-json-encoding.md section 3, `KeyPair@1`",
@@ -703,6 +754,11 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     make: () => ({ "/Bytes@1": "AQ" }),
   },
   {
+    name: "slash key that is a tag with a prefix, over a literal",
+    section: SECTION_ESCAPE_DISPATCH,
+    make: () => ({ "/sys.Boop@1": 1 }),
+  },
+  {
     name: "quote escape nested in an object escape",
     section: SECTION_ESCAPES,
     text: 'fvj1:{"/object":{"/a":{"/quote":{"/b":1}}}}',
@@ -730,7 +786,7 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
   {
     name: "quote escape over a key that is not a tag",
     section: SECTION_ESCAPES,
-    text: 'fvj1:{"/quote":{"/bytes@1":1}}',
+    text: 'fvj1:{"/quote":{"/sys.Boop":1}}',
   },
   {
     name: "object escape over a key that is an escape",

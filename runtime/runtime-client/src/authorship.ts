@@ -21,7 +21,10 @@ import {
   cfcSchemaIsInternalKey,
 } from "@commonfabric/runner/cfc/schema-primitives";
 import type { JSONSchema } from "@commonfabric/runner/shared";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 
 import {
   type CellDelivery,
@@ -425,17 +428,22 @@ const deliveredLabel = (
  * value, else the worker's answer to `getCfcLabel()`. When the direct label
  * lacks a root claim of `requiredRootIntegrityKind`, the label of the cell
  * `value` resolves to is read and merged in.
+ *
+ * `superseded` says whether a later read has taken this one's place. Once it
+ * has, the worker is asked nothing further and the result is `undefined`.
  */
 const readLabelView = async (
   value: unknown,
-  requiredRootIntegrityKind?: string,
-  delivered?: DeliveredLabel,
-): Promise<LabelViewResult> => {
+  requiredRootIntegrityKind: string | undefined,
+  delivered: DeliveredLabel | undefined,
+  superseded: () => boolean,
+): Promise<LabelViewResult | undefined> => {
   let direct: CfcLabelView | undefined;
   if (delivered !== undefined) {
     direct = delivered.cfcLabel;
   } else if (hasLabelQuery(value)) {
     direct = await value.getCfcLabel();
+    if (superseded()) return undefined;
   }
 
   if (
@@ -449,8 +457,10 @@ const readLabelView = async (
   let unloadedCell: CfcLabelSubscribableValue | undefined;
   if (hasLabelResolution(value)) {
     const resolved = await value.resolveAsCell();
+    if (superseded()) return undefined;
     if (hasLabelQuery(resolved)) {
       resolvedLabel = await resolved.getCfcLabel();
+      if (superseded()) return undefined;
       if (resolvedLabel === undefined && hasLabelSubscription(resolved)) {
         unloadedCell = resolved;
       }
@@ -764,11 +774,18 @@ class AuthorshipObservationState {
    */
   async #refreshLabel(delivered?: DeliveredLabel): Promise<void> {
     const requestId = ++this.#labelRequestId;
-    let result: LabelViewResult;
+    const superseded = () =>
+      this.#cancelled || requestId !== this.#labelRequestId;
+    let result: LabelViewResult | undefined;
     try {
-      result = await readLabelView(this.#value, this.#kind, delivered);
+      result = await readLabelView(
+        this.#value,
+        this.#kind,
+        delivered,
+        superseded,
+      );
     } catch (error) {
-      if (this.#cancelled || requestId !== this.#labelRequestId) return;
+      if (superseded()) return;
       if (error instanceof CellReadRefusedError) {
         // A refused read carries no attestation, as a refused subscription
         // does.
@@ -781,7 +798,7 @@ class AuthorshipObservationState {
         return;
       }
     }
-    if (this.#cancelled || requestId !== this.#labelRequestId) return;
+    if (result === undefined || superseded()) return;
     this.#cfcLabel = result.view;
     this.#watchUnloadedLabel(
       "value",
@@ -799,6 +816,8 @@ class AuthorshipObservationState {
    */
   async #refreshAuthorClaim(delivered?: DeliveredLabel): Promise<void> {
     const requestId = ++this.#authorRequestId;
+    const superseded = () =>
+      this.#cancelled || requestId !== this.#authorRequestId;
     const author = this.#author;
     const canReadAuthor = hasReadableClaim(author);
     if (
@@ -817,11 +836,17 @@ class AuthorshipObservationState {
       const valueClaim = canReadAuthor
         ? await readClaimValue(author)
         : undefined;
+      // A delivery that arrived while the claim was read started a read of
+      // its own, as the subscription's first update does on a handle that
+      // held nothing, and that read asks for the label.
+      if (superseded()) return;
       const profile = await readLabelView(
         author,
         "represents-principal",
         delivered,
+        superseded,
       );
+      if (profile === undefined) return;
       unloadedCell = profile.unloadedCell;
       // A profile whose owner wrote a name attests by that name, so the value
       // read above, when there is one, says which of its fields count. A name
@@ -840,7 +865,7 @@ class AuthorshipObservationState {
         authorDisplayName(valueClaim) ?? this.#authorName,
       ) ?? valueClaim;
     } catch (error) {
-      if (this.#cancelled || requestId !== this.#authorRequestId) return;
+      if (superseded()) return;
       if (!(error instanceof CellReadRefusedError)) {
         // As for the value's label: a failure other than a refusal decides
         // nothing, and the claim is unread again.
@@ -852,7 +877,7 @@ class AuthorshipObservationState {
       unloadedCell = undefined;
     }
 
-    if (this.#cancelled || requestId !== this.#authorRequestId) return;
+    if (superseded()) return;
     this.#authorClaim = authorClaim;
     this.#watchUnloadedLabel(
       "author",

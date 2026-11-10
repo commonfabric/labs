@@ -19,7 +19,7 @@ import {
 import type { DID } from "@commonfabric/identity";
 import { navigate } from "@commonfabric/navigation";
 import { openPieceMenu } from "@commonfabric/ui";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 type SubPages = {
   sidebarUI?: VNode;
@@ -292,13 +292,33 @@ export class XBodyView extends BaseView {
     `;
   }
 
+  /**
+   * What stands where a space would be when the space is deleted: a statement
+   * saying so, with nothing to try, since no retry admits anyone to it.
+   */
+  #renderSpaceDeleted() {
+    return html`
+      <div slot="main" class="load-error">
+        <cf-alert status="info">
+          <h2 slot="title">This space was deleted</h2>
+          <span slot="description">
+            Its content is gone, for everyone, and it can't be brought back.
+          </span>
+        </cf-alert>
+      </div>
+    `;
+  }
+
   override render() {
     // The shell opened the active piece itself (`getPattern`,
     // `getSpaceRootPattern`), so its render need not; a view at a path inside
     // it may lead to another piece, which the render opens.
     const hostOpened = this.activeCell?.ref().path.length === 0;
-    const mainContent = this.loadError?.kind === "space" &&
-        isSpaceNotFound(this.loadError.error)
+    const mainContent = this.loadError !== undefined &&
+        isSpaceDeleted(this.loadError.error)
+      ? this.#renderSpaceDeleted()
+      : this.loadError?.kind === "space" &&
+          isSpaceNotFound(this.loadError.error)
       ? this.#renderSpaceNotFound()
       : this.loadError
       ? html`
@@ -379,6 +399,12 @@ export class XBodyView extends BaseView {
 function isSpaceNotFound(error: unknown): boolean {
   return isObjectOrArray(error) && "code" in error &&
     error.code === RuntimeErrorCode.SpaceNotFound;
+}
+
+/** Whether a load failed because the space it addresses is deleted. */
+function isSpaceDeleted(error: unknown): boolean {
+  return isObjectOrArray(error) && "code" in error &&
+    error.code === RuntimeErrorCode.SpaceDeleted;
 }
 
 /** Return the useful detail carried by an unknown thrown value. */

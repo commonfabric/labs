@@ -18,8 +18,8 @@
 //   6. Three array appends survive a conflict storm so the durable count reaches
 //      three (the profile-append bug in miniature).
 
-import { defer } from "@commonfabric/utils/defer";
-import { getLoggerCountsBreakdown } from "@commonfabric/utils/logger";
+import { defer } from "@commonfabric/async/defer";
+import { getLoggerCountsBreakdown } from "@commonfabric/logger";
 
 import { resolveLink } from "../src/link-resolution.ts";
 import {

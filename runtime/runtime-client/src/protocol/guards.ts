@@ -8,7 +8,7 @@
  */
 
 import { isDID } from "@commonfabric/identity/did";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import {
   AttachPortNotification,
   CellRef,
@@ -279,7 +279,8 @@ export function isSpaceAccessLostNotification(
   value: unknown,
 ): value is SpaceAccessLostNotification {
   return isObjectNotArray(value) &&
-    value.type === NotificationType.SpaceAccessLost && isDID(value.space);
+    value.type === NotificationType.SpaceAccessLost && isDID(value.space) &&
+    (value.deleted === undefined || value.deleted === true);
 }
 
 /** Recognizes a space-scoped notification that access was restored. */

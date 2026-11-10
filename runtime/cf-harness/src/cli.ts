@@ -1,10 +1,14 @@
 import { readLoomAuthoringConfig } from "./loom-authoring.ts";
-import { readLoomCommandsConfig } from "./loom-commands.ts";
+import {
+  type HarnessLoomCommandsConfig,
+  validateLoomCommandsConfig,
+} from "./loom-commands.ts";
 import { readLoomRetrievalConfig } from "./loom-retrieval.ts";
 import { parseArgs } from "@std/cli/parse-args";
 import { dirname, isAbsolute, join, relative, resolve } from "@std/path";
 import { normalize as normalizeSandboxPath } from "@std/path/posix";
 import type { JSONSchema } from "@commonfabric/api";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import type { HarnessRunState } from "./run-state.ts";
 import type { CfHarnessStructuredResultConfig } from "./contracts/structured-result.ts";
 import type {
@@ -43,7 +47,6 @@ import {
   resolveHarnessRunPaths,
 } from "./artifacts.ts";
 import { httpOriginOf } from "./tools/handle-values.ts";
-import { errorMessage } from "./error-message.ts";
 import {
   createCliPromptSlotBinding,
   type PromptSlotRole,
@@ -79,7 +82,7 @@ import type {
   HarnessTranscriptEvent,
   HarnessTranscriptMessage,
 } from "./contracts/transcript.ts";
-import { CfHarnessEngine } from "./engine.ts";
+import { CfHarnessEngine, type CreateHarnessEngineOptions } from "./engine.ts";
 import {
   assertContinuationOutputPaths,
   assertHarnessRootSource,
@@ -264,7 +267,10 @@ const CLI_STRING_FLAGS = [
   "fabric-mount",
   "loom-authoring-config",
   "loom-retrieval-config",
-  "loom-commands-config",
+  "commands-url",
+  "commands-actor",
+  "commands-run-id",
+  "commands-relevant",
   "fabric-api-url",
   "fabric-identity",
   "fabric-space",
@@ -303,6 +309,7 @@ const CLI_COLLECT_FLAGS = [
   "host-mount",
   "handle-value-origin",
   "input-cell",
+  "commands-relevant",
 ] as const;
 
 export type CfHarnessCliOutputMode = (typeof CLI_OUTPUT_MODES)[number];
@@ -446,9 +453,6 @@ export interface RunCfHarnessCliDependencies
   cwd?: string;
   env?: Record<string, string | undefined>;
 
-  /** Current host job identity, passed only to brokered command processes. */
-  commandJobId?: string;
-
   /** Trusted, fixed binding supplied only by the dedicated local Loom host. */
   loomLocalHostBinding?: LoomLocalHostBinding;
 
@@ -496,12 +500,24 @@ export interface RunCfHarnessCliDependencies
   sandboxRuntimeNamedBy?: string;
 
   /**
+   * The platform this process runs on, for an embedder that sets
+   * `sandboxRuntimeNamedBy` and so states no `platform`; the one this process
+   * runs on when absent. It decides no default: on Linux, the host ports a
+   * run forwards are forwarded by pasta, and a named `runsc` under `bridge`
+   * runs under pasta.
+   */
+  processPlatform?: SandboxPlatform;
+
+  /**
    * Whether whoever starts this run can give it the sandbox selection flags,
    * which they can when absent. An embedder that writes the argument list
    * itself says `false`, and a refusal then names each setting's variable
    * alone, since a flag is nothing its operator can pass.
    */
   sandboxSelectionFlags?: boolean;
+
+  /** Host-owned opt-in progress return channel. */
+  reportProgress?: CreateHarnessEngineOptions["reportProgress"];
 
   writeTextFile?: (path: string, text: string) => Promise<void>;
 
@@ -632,14 +648,14 @@ Options:
   --workspace <path>            Workspace host path (defaults to current directory)
   --cwd <path>                  Initial working directory inside the workspace
   --focus-root <path>           Narrow exploration to a workspace subpath when possible
-  --allow-tool <tool>           Restrict available tools (repeatable: bash | read_file | view_image | web_fetch | read_skill_resource | run_skill_script | edit_file | write_file | delegate_task | describe_handle | finish_task | submit_result | run_pattern | assign_slug | resolve_piece | call_verb | read_value | search_patterns | record_feedback | search_skills | acquire_skill | research | loom_compose | loom_inspect | loom_authoring_context | loom_search | loom_page_discover | loom_page_inspect | loom_page_read | loom_people | loom_calendar_list | loom_context | loom_profile | list_commands | run_command | run_read_command);
+  --allow-tool <tool>           Restrict available tools (repeatable: bash | read_file | view_image | web_fetch | read_skill_resource | run_skill_script | edit_file | write_file | delegate_task | describe_handle | finish_task | submit_result | run_pattern | assign_slug | resolve_piece | call_verb | read_value | search_patterns | record_feedback | search_skills | acquire_skill | research | loom_compose | loom_inspect | loom_authoring_context | loom_search | loom_page_discover | loom_page_inspect | loom_page_read | loom_people | loom_calendar_list | loom_context | loom_profile | list_commands | run_command);
                                 run_pattern, assign_slug, resolve_piece, call_verb, read_value, and acquire_skill additionally require the three --fabric-* session flags,
                                 search_patterns and record_feedback require --pattern-index-url,
                                 search_skills and acquire_skill require --skills-registry-url,
                                 research requires a documentation corpus or pattern index (query_docs is a deprecated input alias),
                                 loom_compose, loom_inspect, and loom_authoring_context require --loom-authoring-config (or CF_HARNESS_LOOM_AUTHORING_CONFIG),
                                 the eight read-only loom_* tools require --loom-retrieval-config (or CF_HARNESS_LOOM_RETRIEVAL_CONFIG),
-                                and list_commands, run_command, and run_read_command require --loom-commands-config (or CF_HARNESS_LOOM_COMMANDS_CONFIG)
+                                and list_commands and run_command require --commands-url, --commands-actor and --commands-run-id
   --allow-skill-scripts         Run skill scripts in the sandbox, for every skill this run holds,
                                 registry and acquired alike. Off unless named.
   --allow-skill-script <spec>   Allow one exact skill script (repeatable: skill:scripts/path,
@@ -701,7 +717,9 @@ Options:
   --sandbox-runtime <kind>      runsc: run runsc directly; the same on Linux and on
                                 macOS through the darwin runsc. Tool calls may name a
                                 sandbox session, except under pasta's network (the
-                                Linux default's). With no runtime
+                                Linux default's, any Linux run's that forwards host
+                                ports, and a named runsc's under bridge on Linux).
+                                With no runtime
                                 named, macOS (Apple silicon only) runs runsc from the
                                 native cfc-vm store (CFC_VM_HOME, or ~/Library/Application
                                 Support/cfc-vm), Linux runs it from the store under
@@ -727,8 +745,13 @@ Options:
   --fabric-mount <path>         Host path for a Fabric FUSE mount (mounted at /fabric in the sandbox)
   --loom-authoring-config <path> Absolute host-owned JSON file backing the Loom authoring tools
   --loom-retrieval-config <path> Absolute host-owned JSON file backing the read-only Loom tools
-  --loom-commands-config <path> Absolute host-owned JSON file naming the command broker
-                                behind list_commands and the command execution tools
+  --commands-url <url>          Base URL of the host's command endpoint behind list_commands
+                                and run_command (GET <url>/commands, POST <url>/command)
+  --commands-actor <actor>      The actor each command runs as, passed to the host unread
+  --commands-run-id <id>        The host's id for this run, sent on every command request;
+                                --commands-url, --commands-actor and --commands-run-id go together
+  --commands-relevant <id>      A command relevant to this run, which list_commands shows first
+                                and marks (repeatable; needs --commands-url)
   --fabric-api-url <url>        Deployed Fabric API URL for the fabric-session tools (run_pattern, assign_slug, resolve_piece, call_verb, read_value)
   --fabric-identity <path>      PKCS#8 identity keyfile for the fabric session
   --fabric-space <space>        Target space (name or did:key) for the fabric-session tools;
@@ -780,12 +803,15 @@ Environment:
   CF_HARNESS_SKILLS_REGISTRY_URL Default value for --skills-registry-url
   CF_HARNESS_DOCKER_NETWORK_MODE none | bridge | host, in Docker's words (default:
                                 bridge, which runsc reports as sandbox: on macOS the
-                                VM's network; on Linux under the default pasta's, with
-                                egress and the host as host.docker.internal; on Linux
-                                with no pasta configured, loopback alone)
+                                VM's network; on Linux pasta's, with egress, and the host
+                                as host.docker.internal: every port of its loopback for
+                                the default, the forwarded ports alone for a run that
+                                forwards some or a named runsc that names bridge. A
+                                named runsc on Linux whose network is unnamed and that
+                                forwards no host ports gets runsc's own, loopback alone.
+                                A run that needs pasta refuses to start without it)
   CF_HARNESS_LOOM_AUTHORING_CONFIG Default host authoring configuration file
   CF_HARNESS_LOOM_RETRIEVAL_CONFIG Default host retrieval configuration file
-  CF_HARNESS_LOOM_COMMANDS_CONFIG Default host command broker configuration file
   CF_HARNESS_FABRIC_API_URL     Default value for --fabric-api-url
   CF_HARNESS_FABRIC_IDENTITY    Default value for --fabric-identity
   CF_HARNESS_FABRIC_SPACE       Default value for --fabric-space
@@ -806,6 +832,10 @@ Environment:
                                 its store)
   CFC_VM_HOME                   The macOS cfc-vm store, read by the darwin runsc and by the
                                 macOS default (default: ~/Library/Application Support/cfc-vm)
+  CFC_VM_FORWARD_PORTS          Host ports the sandbox reaches, comma-separated: the darwin
+                                runsc forwards them into its VM; on Linux pasta forwards
+                                them and no other port of the host's loopback, for a
+                                named runsc too, and no sandbox session is offered
   CF_HARNESS_CFC_ENFORCEMENT_MODE Default value for --cfc-enforcement-mode (ignored on --resume-run)
   CF_CFC_MODE                   Fallback for CF_HARNESS_CFC_ENFORCEMENT_MODE
 `;
@@ -840,6 +870,7 @@ const CLI_PARENT_TOOL_IDS = [
   "delegate_task",
   "describe_handle",
   "finish_task",
+  "report_progress",
   "submit_result",
   "loom_compose",
   "loom_inspect",
@@ -854,7 +885,6 @@ const CLI_PARENT_TOOL_IDS = [
   "loom_profile",
   "list_commands",
   "run_command",
-  "run_read_command",
   "run_pattern",
   "assign_slug",
   "resolve_piece",
@@ -998,9 +1028,7 @@ const parseAllowedSkillScripts = (
     );
   } catch (error) {
     throw new Error(
-      `invalid --allow-skill-script: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      `invalid --allow-skill-script: ${describeFailure(error)}`,
     );
   }
 };
@@ -1105,6 +1133,50 @@ const parseHandleValueOrigins = (
     origins.push(origin);
   }
   return uniqueStrings(origins);
+};
+
+/**
+ * The command endpoint `--commands-url`, `--commands-actor` and
+ * `--commands-run-id` name, with the commands `--commands-relevant` names as
+ * relevant to the run, or `undefined` when none is given. The three go
+ * together, the relevant commands need them, and the endpoint they name is
+ * checked at parse.
+ */
+const commandsConfigOf = (
+  url: unknown,
+  actor: unknown,
+  runId: unknown,
+  relevant: string | readonly string[] | undefined,
+): HarnessLoomCommandsConfig | undefined => {
+  const named = relevant === undefined
+    ? []
+    : typeof relevant === "string"
+    ? [relevant]
+    : [...relevant];
+  const given = [url, actor, runId].filter((value) => value !== undefined);
+  if (given.length === 0) {
+    if (named.length > 0) {
+      throw new Error("--commands-relevant needs --commands-url.");
+    }
+    return undefined;
+  }
+  if (
+    given.length < 3 ||
+    typeof url !== "string" || typeof actor !== "string" ||
+    typeof runId !== "string"
+  ) {
+    throw new Error(
+      "--commands-url, --commands-actor and --commands-run-id go together.",
+    );
+  }
+  const config = {
+    url,
+    actor,
+    runId,
+    ...(named.length > 0 ? { relevant: named } : {}),
+  };
+  validateLoomCommandsConfig(config);
+  return config;
 };
 
 /**
@@ -1443,6 +1515,7 @@ type CliSandboxSelectionDependencies = Pick<
   | "sandboxHomeDir"
   | "platform"
   | "arch"
+  | "processPlatform"
   | "uid"
   | "readSysctl"
   | "which"
@@ -1462,7 +1535,12 @@ const cliSandboxRuntimeSelection = (
 ): Promise<SandboxRuntimeSelection> =>
   resolveSandboxRuntimeSelection(env, explicit, {
     ...(deps.sandboxRuntimeNamedBy !== undefined
-      ? { namedBy: deps.sandboxRuntimeNamedBy }
+      ? {
+        namedBy: deps.sandboxRuntimeNamedBy,
+        ...(deps.processPlatform !== undefined
+          ? { processPlatform: deps.processPlatform }
+          : {}),
+      }
       : { platform: deps.platform ?? Deno.build.os }),
     ...sandboxProcessOf(deps),
     flags: deps.sandboxSelectionFlags ?? true,
@@ -1519,9 +1597,6 @@ export const processCfHarnessCliEnv = (): Record<
   CF_HARNESS_LOOM_RETRIEVAL_CONFIG: Deno.env.get(
     "CF_HARNESS_LOOM_RETRIEVAL_CONFIG",
   ),
-  CF_HARNESS_LOOM_COMMANDS_CONFIG: Deno.env.get(
-    "CF_HARNESS_LOOM_COMMANDS_CONFIG",
-  ),
   CF_HARNESS_SPACE_DB: Deno.env.get("CF_HARNESS_SPACE_DB"),
   CF_HARNESS_FABRIC_CFC_ENFORCEMENT_MODE: Deno.env.get(
     "CF_HARNESS_FABRIC_CFC_ENFORCEMENT_MODE",
@@ -1574,7 +1649,6 @@ export const parseCfHarnessCliArgs = async (
     | "readTextFile"
     | "pathExists"
     | "sandboxHomeDir"
-    | "commandJobId"
     | "platform"
     | "arch"
     | "uid"
@@ -1583,6 +1657,7 @@ export const parseCfHarnessCliArgs = async (
     | "sandboxRuntimeNamedBy"
     | "sandboxSelectionFlags"
     | "providerSettingsStore"
+    | "reportProgress"
   > = {},
 ): Promise<CfHarnessCliConfig | { help: true }> => {
   const normalizedArgv = argv[0] === "--" ? argv.slice(1) : argv;
@@ -1940,12 +2015,11 @@ export const parseCfHarnessCliArgs = async (
       : env.CF_HARNESS_LOOM_RETRIEVAL_CONFIG,
     readTextFile,
   );
-  const loomCommands = await readLoomCommandsConfig(
-    typeof args["loom-commands-config"] === "string"
-      ? args["loom-commands-config"]
-      : env.CF_HARNESS_LOOM_COMMANDS_CONFIG,
-    readTextFile,
-    deps.commandJobId,
+  const loomCommands = commandsConfigOf(
+    args["commands-url"],
+    args["commands-actor"],
+    args["commands-run-id"],
+    args["commands-relevant"] as string | readonly string[] | undefined,
   );
   const inputCells = parseInputCells(
     args["input-cell"] as string | readonly string[] | undefined,
@@ -1989,18 +2063,7 @@ export const parseCfHarnessCliArgs = async (
   // One derivation shared with the interactive entrypoints; flags win over
   // the environment, and a default policy is looked up through
   // `deps.pathExists`.
-  const {
-    sandboxRuntimeKind,
-    sandboxRootfs,
-    sandboxCfcPolicy,
-    sandboxRunscBinary,
-    sandboxRunscNetworkMode,
-    sandboxRunscRootless,
-    sandboxRunscNetworkHelper,
-    sandboxRunscUnshare,
-    sandboxRunscSetpriv,
-    sandboxRuntimeChoice,
-  } = await cliSandboxRuntimeSelection(
+  const selection = await cliSandboxRuntimeSelection(
     env,
     {
       ...(typeof args["sandbox-runtime"] === "string"
@@ -2147,6 +2210,14 @@ export const parseCfHarnessCliArgs = async (
     );
   }
   if (
+    allowedToolIds?.includes("report_progress") === true &&
+    deps.reportProgress === undefined
+  ) {
+    throw new Error(
+      "--allow-tool report_progress requires a host progress publisher",
+    );
+  }
+  if (
     allowedToolIds?.includes("search_skills") === true &&
     skillsSh === undefined
   ) {
@@ -2175,7 +2246,7 @@ export const parseCfHarnessCliArgs = async (
   );
   if (commandTool !== undefined && loomCommands === undefined) {
     throw new Error(
-      `--allow-tool ${commandTool} requires a host command broker configuration; missing --loom-commands-config`,
+      `--allow-tool ${commandTool} requires a host command endpoint; missing --commands-url`,
     );
   }
   const apiKey = env.CF_HARNESS_API_KEY ?? env.OPENAI_API_KEY;
@@ -2259,20 +2330,8 @@ export const parseCfHarnessCliArgs = async (
     printTranscript: Boolean(args["print-transcript"]),
     ...(apiKey !== undefined ? { apiKey } : {}),
     ...(apiKeySource !== undefined ? { apiKeySource } : {}),
-    ...(sandboxRuntimeKind !== undefined ? { sandboxRuntimeKind } : {}),
-    ...(sandboxRootfs !== undefined ? { sandboxRootfs } : {}),
-    ...(sandboxCfcPolicy !== undefined ? { sandboxCfcPolicy } : {}),
-    ...(sandboxRunscBinary !== undefined ? { sandboxRunscBinary } : {}),
-    ...(sandboxRunscNetworkMode !== undefined
-      ? { sandboxRunscNetworkMode }
-      : {}),
-    ...(sandboxRunscRootless === true ? { sandboxRunscRootless } : {}),
-    ...(sandboxRunscNetworkHelper !== undefined
-      ? { sandboxRunscNetworkHelper }
-      : {}),
-    ...(sandboxRunscUnshare !== undefined ? { sandboxRunscUnshare } : {}),
-    ...(sandboxRunscSetpriv !== undefined ? { sandboxRunscSetpriv } : {}),
-    sandboxRuntimeChoice,
+    // The selection leaves out what it does not set.
+    ...selection,
     ...(fabricMount !== undefined ? { fabricMount } : {}),
     ...(fabricSession !== undefined ? { fabricSession } : {}),
     ...(spaceDbPath !== undefined ? { spaceDbPath } : {}),
@@ -2628,11 +2687,14 @@ const appendStructuredResultInstructions = (
     lines.push(
       "- Finish by calling submit_result with the whole result as `result`. It validates the value against the configured schema and tells you what to correct; an accepted result ends the run, so make it your last call. Where the result refers to something you hold a handle for, write the handle token, not an address.",
     );
+  } else {
+    lines.push(
+      `- Write a JSON file at ${structuredResult.sandboxPath} when an available tool can write it; the run then still ends on your final response.`,
+      "- The harness validates that file against the configured structured-result schema after the run.",
+      "- If the file is missing, invalid JSON, or schema-invalid, the CLI exits nonzero and records the validation failure in the batch result sidecar when configured.",
+    );
   }
   lines.push(
-    `- Writing a JSON file at ${structuredResult.sandboxPath} yourself is the other way to the same place when an available tool can write it; the run then still ends on your final response.`,
-    "- The harness validates that file against the configured structured-result schema after the run.",
-    "- If the file is missing, invalid JSON, or schema-invalid, the CLI exits nonzero and records the validation failure in the batch result sidecar when configured.",
     "- Object schemas are closed by default: include only properties the schema declares unless it explicitly allows additional properties.",
     "",
     "Result schema (JSON):",
@@ -2876,7 +2938,7 @@ export const validateCfHarnessStructuredResult = async (
       schema_digest: schemaDigest,
       result_path: options.config.path,
       validation_error: `structured result did not match the schema: ${
-        errorMessage(error)
+        describeFailure(error)
       }`,
     };
   }
@@ -3763,7 +3825,7 @@ export const runCfHarnessCli = async (
       } catch (error) {
         throw new HarnessControlError(
           "provider-mismatch",
-          error instanceof Error ? error.message : String(error),
+          describeFailure(error),
         );
       }
     }
@@ -4005,6 +4067,7 @@ export const runCfHarnessCli = async (
               },
             }
             : {}),
+          reportProgress: deps.reportProgress,
           ...(deps.fabricSessionFactory !== undefined
             ? { fabricSessionFactory: deps.fabricSessionFactory }
             : {}),
@@ -4062,7 +4125,9 @@ export const runCfHarnessCli = async (
               engine: continuedEngine,
               config: parsed,
               onGrantsUnavailable: (error) =>
-                io.stderr(`fabric grants: unavailable (${String(error)})\n`),
+                io.stderr(
+                  `fabric grants: unavailable (${describeFailure(error)})\n`,
+                ),
             });
             return { messages, runState: continuedEngine.getRunState() };
           },
@@ -4198,6 +4263,7 @@ export const runCfHarnessCli = async (
       });
       const engine = new CfHarnessEngine({
         ...sessionOptions,
+        reportProgress: deps.reportProgress,
         modelProvider,
         credentialOwnerKey,
         ...(modelProvider === "openai-compatible-gateway"
@@ -4252,9 +4318,7 @@ export const runCfHarnessCli = async (
         config: parsed,
         onGrantsUnavailable: (error) =>
           io.stderr(
-            `fabric grants: unavailable (${
-              error instanceof Error ? error.message : String(error)
-            })\n`,
+            `fabric grants: unavailable (${describeFailure(error)})\n`,
           ),
       });
       // The classification decides how much orientation the run starts
@@ -4350,7 +4414,7 @@ export const runCfHarnessCli = async (
     io.stderr(
       deps.structuredHostFailures
         ? `${JSON.stringify(createCfHarnessHostFailure(hostError))}\n`
-        : `${error instanceof Error ? error.message : String(error)}\n`,
+        : `${describeFailure(error)}\n`,
     );
     return 1;
   } finally {

@@ -6,7 +6,7 @@ import { getFrozenObjectHashCacheHitsForTestingOnly } from "@commonfabric/data-m
 import { Identity } from "@commonfabric/identity";
 import { table } from "@commonfabric/memory/sqlite/schema";
 import type { SqliteDbRef } from "@commonfabric/memory/v2";
-import { getTimingStatsBreakdown } from "@commonfabric/utils/logger";
+import { getTimingStatsBreakdown } from "@commonfabric/logger";
 
 import { preparedDigestFor } from "../../src/cfc/canonical.ts";
 import {

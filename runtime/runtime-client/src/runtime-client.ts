@@ -9,7 +9,7 @@ import type { CellScope, JSONValue } from "@commonfabric/api";
 import type { FabricPlainObject, FabricValue } from "@commonfabric/data-model";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import type { DID, Identity } from "@commonfabric/identity";
-import { Program } from "@commonfabric/js-compiler/interface";
+import type { Program } from "@commonfabric/js-compiler/interface";
 import type {
   ApplyOpResolution,
   OpCursor,
@@ -18,7 +18,7 @@ import type {
 } from "@commonfabric/memory/v2";
 import type { PresenceEvent } from "@commonfabric/memory/v2/client";
 import type { JoinVisitDecision } from "@commonfabric/piece/ops";
-import { NameSchema } from "@commonfabric/runner/schemas";
+import type { NameSchema } from "@commonfabric/runner/schemas";
 import type {
   ActionRunTraceEntry,
   JSONSchema,
@@ -43,7 +43,7 @@ import {
   type SubscriptionDiagnostics,
 } from "./client/connection.ts";
 import { EventEmitter } from "./client/emitter.ts";
-import { RuntimeTransport } from "./client/transport.ts";
+import type { RuntimeTransport } from "./client/transport.ts";
 import { PieceHandle } from "./piece-handle.ts";
 import {
   type CellRef,
@@ -59,6 +59,7 @@ import {
   InitializationData,
   type LoggerCountsData,
   type LoggerCountsResponse,
+  type LoggerErrorMessagesData,
   type LoggerFlagsData,
   type LoggerMetadata,
   type LoggerTimingData,
@@ -169,7 +170,12 @@ export type RuntimeClientEvents = {
   console: [ConsoleMessage];
   navigaterequest: [{ cell: CellHandle }];
   error: [ErrorNotification];
-  spaceaccesslost: [{ space: DID }];
+
+  /**
+   * The memory server refused the runtime principal a space. `deleted` is
+   * present when the space is deleted, which no retry can undo.
+   */
+  spaceaccesslost: [{ space: DID; deleted?: true }];
 
   /**
    * A space that refused the runtime principal admitted it again. A load the
@@ -1478,11 +1484,31 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
    * whether this client's or a rendered retry control's, shares that retry
    * rather than asking again, and a rendered retry control shows it in
    * flight either way. It rejects on any failure other than a refusal.
+   *
+   * A space whose first connection never completed a handshake, such as one
+   * on a host that was down or out of the network's reach, counts as refused
+   * here: its loads fail at once without dialing again until this call makes
+   * one more round of connection attempts, after which the loads that failed
+   * are made again. It rejects if the space is still out of reach.
    */
   async retrySpaceAccess(space: DID): Promise<void> {
     await this.#conn.request<RequestType.RetrySpaceAccess>({
       type: RequestType.RetrySpaceAccess,
       space,
+    });
+  }
+
+  /**
+   * Asks again, as `retrySpaceAccess()` does, for every space the runtime
+   * could not reach: those whose first connection never completed a
+   * handshake. It is for a host that learns the network changed, such as from
+   * the platform's path monitor, and so cannot know which spaces were out of
+   * reach. Resolves once each retry has settled, whatever it decided; a space
+   * still out of reach stays as it was, and its loads keep failing at once.
+   */
+  async retryUnreachableSpaces(): Promise<void> {
+    await this.#conn.request<RequestType.RetryUnreachableSpaces>({
+      type: RequestType.RetryUnreachableSpaces,
     });
   }
 
@@ -1528,6 +1554,11 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
     return this.#conn.getRequestTimelineDiagnostics();
   }
 
+  /** Provenance of the client library and the worker it joined. */
+  get buildDiagnostics() {
+    return this.#conn.buildDiagnostics;
+  }
+
   resetSubscriptionDiagnostics(): void {
     this.#conn.resetSubscriptionDiagnostics();
   }
@@ -1564,6 +1595,17 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
       compileCache: res.compileCache,
       sizes: res.sizes,
     };
+  }
+
+  /**
+   * The earliest messages the worker's loggers logged at `error`, which a
+   * browser test's failure report prints. The text can quote a value.
+   */
+  async getLoggerErrorMessages(): Promise<LoggerErrorMessagesData> {
+    const res = await this.#conn.request<RequestType.GetLoggerErrorMessages>({
+      type: RequestType.GetLoggerErrorMessages,
+    });
+    return res.messages;
   }
 
   /**
@@ -1861,8 +1903,10 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
     this.emit("eventintentoutcome", { space, eventId, kind, reason });
   };
 
-  #onSpaceAccessLost = ({ space }: SpaceAccessLostNotification): void => {
-    this.emit("spaceaccesslost", { space });
+  #onSpaceAccessLost = (
+    { space, deleted }: SpaceAccessLostNotification,
+  ): void => {
+    this.emit("spaceaccesslost", { space, ...(deleted && { deleted }) });
   };
 
   #onSpaceAccessRestored = (

@@ -36,9 +36,9 @@
 // carries no implicit index signature, so it does not satisfy
 // `FabricPlainObject`, and the whole marker union stops being serializable.
 
-import { deepEqual, deepEqualKey } from "@commonfabric/utils/deep-equal";
+import { deepEqual, deepEqualKey } from "@commonfabric/js-values/deep-equal";
+import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
 
-import type { CfcConfClause } from "./clause.ts";
 import type { CfcAddress } from "./types.ts";
 
 /**

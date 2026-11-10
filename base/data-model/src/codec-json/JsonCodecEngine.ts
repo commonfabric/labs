@@ -1,4 +1,4 @@
-import { backtickQuote } from "@commonfabric/utils/markdown";
+import { backtickQuote } from "@commonfabric/text/markdown";
 
 import {
   BaseCodecEngine,
@@ -16,7 +16,7 @@ import { createBaseJsonRegistry } from "./createBaseJsonRegistry.ts";
 
 /**
  * Whole-value JSON codec implementing the `/<Type>@<Version>` wire format from
- * the formal spec (Section 5).
+ * `3-json-encoding.md`.
  *
  * Public instance surface, one boundary type and two directions:
  * - `encode(value, env?)` -- full pipeline: tree-encode + stringify
@@ -38,8 +38,8 @@ import { createBaseJsonRegistry } from "./createBaseJsonRegistry.ts";
  * reaching into the private wrapper.
  *
  * **Cycles are refused** and **shared references are flattened**, per Section
- * 1.6 of the formal spec, which requires an engine to say which of these it
- * does. Both follow from reaching text: JSON cannot represent a reference,
+ * 1.6 of `1-fabric-values.md`, which requires an engine to say which of these
+ * it does. Both follow from reaching text: JSON cannot represent a reference,
  * so a cycle has no encoding at all and is raised at the walk, and a value
  * held at two positions is written out twice, arriving as two objects that a
  * receiver cannot tell from two that were always distinct.

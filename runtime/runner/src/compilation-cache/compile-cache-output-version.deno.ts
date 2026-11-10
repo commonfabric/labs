@@ -1,7 +1,7 @@
 import { join } from "@std/path";
 import { Identity } from "@commonfabric/identity";
 import { hashStringOf } from "@commonfabric/data-model";
-import { utf8Compare } from "@commonfabric/utils/utf8";
+import { utf8Compare } from "@commonfabric/text/utf8";
 import { resolveLocalProgram } from "../harness/local-program.deno.ts";
 import type { CacheableModule } from "../harness/types.ts";
 import { PatternCoverageCollector } from "../pattern-coverage.ts";

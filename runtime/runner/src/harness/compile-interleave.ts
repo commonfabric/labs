@@ -1,21 +1,24 @@
-import { isBrowser } from "@commonfabric/utils/env";
-import { yieldToEventLoop } from "@commonfabric/utils/sleep";
+import { isBrowser } from "@commonfabric/platform/env";
+import { yieldToEventLoop } from "@commonfabric/async/sleep";
 
 /**
- * Whether cold pattern compilation should yield real macrotask turns between
- * its steps (per-module transform/emit, per-body SES verify, pre-evaluate).
+ * Whether cold pattern compilation yields real macrotask turns between its
+ * steps (per-module transform/emit, per-body SES verify, per-module evaluate)
+ * when nothing says otherwise.
  *
- * Yielding lets latency-sensitive work sharing the SAME event loop interleave
- * with the CPU-bound compile. That matters in exactly one place: the browser
- * runtime worker, where a synchronous compile wedges the event loop and stalls
- * every queued IPC delivery (cell traffic) for the whole compile (measured
- * `runner.loop/workerLag` ~1.6s on a cold space-root compile).
+ * Yielding lets work sharing the SAME event loop interleave with the CPU-bound
+ * compile. In the browser runtime worker that work is IPC, and a synchronous
+ * compile stalls every queued delivery for the whole compile (measured
+ * `runner.loop/workerLag` ~1.6s on a cold space-root compile). A serving runtime
+ * has the same need and turns this on for itself (`EngineOptions`): the waves of
+ * every other space on its thread wait for the compile, and in a serving worker
+ * so does the heartbeat its watchdog listens for (serving-loop.md §2).
  *
- * Everywhere else the compiler runs in Deno as a BATCH step — `cf test`, the
- * toolshed server, the CLI — with nothing latency-sensitive sharing its loop,
- * so each yield is pure macrotask overhead. Left on, it ~doubles the pattern
- * unit-test wall time. So gate the interleave on the browser context: yield in
- * the worker, run straight through the synchronous driver in Deno.
+ * Every other runtime in Deno compiles as a BATCH step — a `cf test` pattern
+ * test's runtime, the CLI — with nothing latency-sensitive sharing its loop, so
+ * each yield is pure macrotask overhead. Left on, it ~doubles the pattern
+ * unit-test wall time. So the default yields in the browser and runs straight
+ * through the synchronous driver in Deno.
  *
  * Evaluated once at module load; the runtime environment does not change.
  */
@@ -23,17 +26,37 @@ export const COMPILE_INTERLEAVES_EVENT_LOOP = isBrowser();
 
 /**
  * One compile-pipeline yield point: a real macrotask turn where compilation
- * interleaves the event loop ({@link COMPILE_INTERLEAVES_EVENT_LOOP}), and a
- * plain microtask completion — zero added event-loop turns — everywhere else.
- * Call sites mark the seams between CPU-bound compile steps (per-body SES
- * verify, pre-evaluate); keeping the predicate here keeps them one-liners.
+ * interleaves the event loop, and a plain microtask completion — zero added
+ * event-loop turns — everywhere else. An engine's seams between CPU-bound compile
+ * steps (per-body SES verify, per-module evaluate) reach it through
+ * `Engine.yieldBetweenCompileSteps()`, which says which of the two applies.
  *
- * `interleave` is injectable so tests can pin both behaviors from Deno: the
- * browser arm (yield behind queued tasks) and the batch arm (no macrotask —
- * the sync-driver contract the pattern unit suites rely on).
+ * The default arm is {@link COMPILE_INTERLEAVES_EVENT_LOOP}, so tests can pin
+ * both behaviors from Deno: the interleaved arm (yield behind queued tasks) and
+ * the batch arm (no macrotask — the sync-driver contract the pattern unit suites
+ * rely on).
  */
 export async function interleaveCompileYield(
   interleave: boolean = COMPILE_INTERLEAVES_EVENT_LOOP,
 ): Promise<void> {
   if (interleave) await yieldToEventLoop();
+}
+
+/**
+ * Turns at a cold compile, one at a time in the order they are taken, for the
+ * runtimes that share one instance. A compile that yields lets another runtime
+ * read the byte cache while it runs, and without a turn to wait for that runtime
+ * would read a miss and compile the same modules again.
+ */
+export class CompileTurns {
+  #last: Promise<void> = Promise.resolve();
+
+  /** Waits for every earlier turn to end; returns what ends this one. */
+  async take(): Promise<() => void> {
+    const { promise: ended, resolve: end } = Promise.withResolvers<void>();
+    const previous = this.#last;
+    this.#last = ended;
+    await previous;
+    return end;
+  }
 }

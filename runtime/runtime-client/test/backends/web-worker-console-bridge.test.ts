@@ -8,9 +8,9 @@ import {
   fabricFromRealmValue,
   realmFromFabricValue,
 } from "@commonfabric/data-model/codecs";
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 import { CompilerStackLoadError } from "@commonfabric/runner";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import {
   ClientNotificationType,
@@ -357,13 +357,16 @@ describe("web-worker-console-bridge", () => {
         expect(ledgerCount(`responded-error/${RequestType.PieceGet}`)).toBe(
           before.respondedErrorPieceGet + 1,
         );
-        expect(
-          consoleErrors.some((args) =>
-            args.some((arg) =>
-              arg instanceof Error && arg.message === "handler exploded"
-            )
-          ),
-        ).toBe(true);
+        // Logged as text, its stack, rather than as the error object, which
+        // would keep what the failing frames captured for as long as the
+        // console keeps the message.
+        const logged = consoleErrors.find((args) =>
+          args.some((arg) =>
+            typeof arg === "string" && arg.includes("handler exploded")
+          )
+        );
+        expect(logged).toBeDefined();
+        expect(logged!.some((arg) => arg instanceof Error)).toBe(false);
 
         // A non-Error throw is stringified into the error reply.
         posted.length = 0;

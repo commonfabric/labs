@@ -1,5 +1,5 @@
 import { stringSchema } from "@commonfabric/runner/schemas";
-import { type CellHandle } from "@commonfabric/runtime-client";
+import type { CellHandle } from "@commonfabric/runtime-client";
 import { css, html } from "lit";
 import { property } from "lit/decorators.js";
 import { ifDefined } from "lit/directives/if-defined.js";
@@ -7,7 +7,7 @@ import { ifDefined } from "lit/directives/if-defined.js";
 import { BaseElement } from "../../core/base-element.ts";
 import { createStringCellController } from "../../core/cell-controller.ts";
 import { createFormFieldController } from "../../core/form-field-controller.ts";
-import { type InputTimingOptions } from "../../core/input-timing-controller.ts";
+import type { InputTimingOptions } from "../../core/input-timing-controller.ts";
 import {
   applyThemeToElement,
   type CFTheme,

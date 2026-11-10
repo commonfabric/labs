@@ -65,12 +65,3 @@ export const DEFAULT_OUTPUT: IframeOutputData = {
   selectedAnnotationId: null,
   lastAssessmentId: null,
 };
-
-export const IFRAME_PATTERN = {
-  name: "IframeSharedTapeLab",
-  displayName: "Shared Tape Lab",
-  stateScope: "space",
-  outputScope: "user",
-  frameHeight: "100vh",
-  databases: {},
-} as const;

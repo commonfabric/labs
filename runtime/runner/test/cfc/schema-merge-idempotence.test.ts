@@ -14,7 +14,7 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { internSchema } from "@commonfabric/data-model-schema";
 import { forEachSubschema } from "@commonfabric/data-model-schema/schema-walk";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import type { JSONSchema, JSONSchemaObj } from "../../src/builder/types.ts";
 import { cfcSchemaEntries } from "../../src/cfc/schema-label-view.ts";

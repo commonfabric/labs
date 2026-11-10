@@ -1,16 +1,22 @@
 /**
  * Stands in for a person's Home around FabriChat, in their home space, with a
- * share inbox whose offers carry the person's `PersonalSpace` label. Taking an
- * offer into the person's shared-space catalog, as Home's share intake does,
- * carries that label into the catalog, which no room's space admits. The
- * person's FabriChat manager, whose profile is their first, creates rooms over
- * that catalog. An offer naming a space the catalog lists, with a title,
+ * share inbox whose offers carry the person's `PersonalSpace` label. Its
+ * `ingest` takes those offers into the person's shared-space catalog in the
+ * transaction that reads them, as a writer outside Home's share intake can,
+ * which carries that label into the catalog, where no room's space admits it.
+ * The person's FabriChat manager, whose profile is their first, creates rooms
+ * over that catalog. An offer naming a space the catalog lists, with a title,
  * retitles that space's entry, which carries the label onto the entry's title
  * alone. The catalog and the share inbox are each a cell of their own, apart
  * from the manager's records, as Home's catalog and a share inbox are. The
  * stand-in also holds a private inbox, as Home does, which its profiles point
- * at, so that another person's manager can offer them a room. Fixture for
- * `fabrichat-stamped-catalog-multi-runtime.test.ts` and
+ * at, so that another person's manager can offer them a room, and it can
+ * record a request outcome from an offer, which carries the label onto the
+ * manager's own records. Fixture for
+ * `fabrichat-labeled-catalog-multi-runtime.test.ts`,
+ * `fabrichat-repeated-creates-multi-runtime.test.ts`,
+ * `fabrichat-stamped-catalog-multi-runtime.test.ts`,
+ * `fabrichat-stamped-records-multi-runtime.test.ts` and
  * `fabrichat-stamped-title-offers-multi-runtime.test.ts`.
  */
 
@@ -30,8 +36,10 @@ import {
   FabriChatManagerCore,
   type FabriChatManagerInput,
   type ManagerStreamEvent,
+  type RequestsCell,
 } from "../../../system/fabrichat/manager.tsx";
 import {
+  type ChatIndexEntry,
   type ChatManagerNotice,
   type ChatRequestOutcome,
   type ManagerProfileCell,
@@ -161,6 +169,23 @@ const retitle = handler<
   }
 });
 
+/**
+ * Records, under each of the inbox's offers' ids, a refused request whose
+ * reason is the offer's title, so that the manager's own records carry the
+ * inbox's label, as a request a manager act decided over labeled data does.
+ */
+const recordOffers = handler<
+  Record<PropertyKey, never>,
+  { inbox: Writable<InboxOffers>; requests: RequestsCell }
+>((_, { inbox, requests }) => {
+  for (const offer of inbox.get() ?? []) {
+    requests.key(offer.id).set({
+      status: "refused",
+      reason: offer.title ?? "",
+    });
+  }
+});
+
 /** What the stand-in stores, the FabriChat manager's records among it. */
 export interface MainInput
   extends Omit<FabriChatManagerInput, "sharedSpaceCatalog"> {
@@ -191,6 +216,9 @@ export interface MainOutput {
   /** Retitles the catalog's entries the share inbox's offers name. */
   retitle: Stream<Record<PropertyKey, never>>;
 
+  /** Records a refused request for each of the share inbox's offers. */
+  recordOffers: Stream<Record<PropertyKey, never>>;
+
   /** Finds or creates a direct room from the person's manager. */
   openDirect: Stream<ManagerStreamEvent>;
 
@@ -208,6 +236,9 @@ export interface MainOutput {
 
   /** The notices the manager holds for a client to deliver. */
   outgoingNotices: PerUser<ChatManagerNotice[]>;
+
+  /** The rooms the manager lists for the person. */
+  rooms: PerUser<ChatIndexEntry[]>;
 
   /** The person's shared-space catalog, as stored. */
   sharedSpaceCatalog: SharedSpaceCatalogStorage;
@@ -227,8 +258,10 @@ export default pattern<MainInput, MainOutput>((
     offers: {},
   }).for("sharedSpaceCatalog");
   const inbox = new Writable<InboxOffers>([]).for("inbox");
+  const profile = firstProfileOf(profiles);
   const chats = FabriChatManagerCore({
-    myProfile: firstProfileOf(profiles),
+    myProfile: profile,
+    sessionProfile: profile,
     sharedSpaceCatalog: catalog,
     direct,
     requests,
@@ -257,12 +290,14 @@ export default pattern<MainInput, MainOutput>((
     receive: receive({ inbox }),
     ingest: ingest({ inbox, catalog }),
     retitle: retitle({ inbox, catalog }),
+    recordOffers: recordOffers({ inbox, requests }),
     openDirect: chats.openDirect,
     createGroup: chats.createGroup,
     offerRoom: chats.offerRoom,
     joinRoom: chats.joinRoom,
     requests: chats.requests,
     outgoingNotices: chats.outgoingNotices,
+    rooms: chats.rooms,
     sharedSpaceCatalog: chats.sharedSpaceCatalog,
   };
 });

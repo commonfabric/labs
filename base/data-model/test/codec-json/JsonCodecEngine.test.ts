@@ -63,8 +63,8 @@ import {
   FabricUnavailable,
   UNAVAILABLE_PENDING,
 } from "@/fabric-primitives";
-import { IndexTrackingStack } from "@commonfabric/utils/index-tracking-stack";
-import { utf8SortedKeysOf } from "@commonfabric/utils/utf8";
+import { IndexTrackingStack } from "@commonfabric/collections/index-tracking-stack";
+import { utf8SortedKeysOf } from "@commonfabric/text/utf8";
 
 /**
  * Shared test `LiveEnvironment`: `getCell()` always throws (no test
@@ -2104,6 +2104,18 @@ describe("JsonCodecEngine", () => {
       expect(unknown.state).toEqual({ some: "data" });
     });
 
+    it("round-trips `UnknownValue` with a namespaced tag through encode/decode", () => {
+      const us = new UnknownValue("sys.beep.Boop@1", { some: "data" });
+      expect(toEncodedFormat(us)).toEqual({
+        "/sys.beep.Boop@1": { some: "data" },
+      });
+      const result = roundTrip(us);
+      expect(result).toBeInstanceOf(UnknownValue);
+      const unknown = result as unknown as UnknownValue;
+      expect(unknown.wireTypeTag).toBe("sys.beep.Boop@1");
+      expect(unknown.state).toEqual({ some: "data" });
+    });
+
     it("rejects a `/hole` outside array context rather than calling it unknown", () => {
       // Per spec §9, `UnknownValue` is for a syntactically well-formed tag no
       // codec claims. `hole` is a meta-tag, meaningful only among array
@@ -2112,6 +2124,28 @@ describe("JsonCodecEngine", () => {
       const data = { "/hole": 5 } as JsonCodecValue;
 
       expect(() => fromEncodedFormat(data)).toThrow(/malformed tag/);
+    });
+
+    it("round-trips `UnknownValue` under type tags in any case", () => {
+      for (const tag of ["bytes@1", "Sys.Boop@1", "sys.boop@1"]) {
+        const us = new UnknownValue(tag, { some: "data" });
+        expect(toEncodedFormat(us)).toEqual({ [`/${tag}`]: { some: "data" } });
+        const result = roundTrip(us) as unknown as UnknownValue;
+        expect(result).toBeInstanceOf(UnknownValue);
+        expect(result.wireTypeTag).toBe(tag);
+      }
+    });
+
+    it("round-trips `UnknownValue` under a meta-tag's name with a version", () => {
+      // With a version, each is a type tag like any other, even among array
+      // elements, where a bare `/hole` is a run of holes.
+
+      for (const tag of ["quote@1", "object@1", "hole@1"]) {
+        const us = new UnknownValue(tag, 1);
+        const result = roundTrip([us]) as unknown as UnknownValue[];
+        expect(result[0]).toBeInstanceOf(UnknownValue);
+        expect(result[0]!.wireTypeTag).toBe(tag);
+      }
     });
   });
 

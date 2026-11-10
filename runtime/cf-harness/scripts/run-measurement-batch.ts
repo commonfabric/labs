@@ -44,7 +44,11 @@ import { ensureDir } from "@std/fs";
 import { isAbsolute, join } from "@std/path";
 
 import { debugStr } from "@commonfabric/data-model";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 
 import type { ConsolePolicyReport } from "../console/policy.ts";
 import {
@@ -102,16 +106,6 @@ const SETTLED_TERMINAL_EVENT_KINDS: ReadonlySet<string> = new Set([
 ]);
 
 const CANCEL_EVENT_KIND = "turn_canceled";
-
-/**
- * What went wrong, as a line for a report.
- *
- * One helper rather than the same ternary at every catch: a thrown value is
- * not always an `Error`, and a reader of a report should not be able to tell
- * which catch site produced a reading from how the message is shaped.
- */
-export const describeError = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
 
 /** One task of a suite: an identifier to file it under, and its exact text. */
 export interface MeasurementTask {
@@ -434,7 +428,7 @@ export const readServerMeta = async (
   } catch (error) {
     return {
       error: `the fabric server at ${fabricApiUrl} could not be reached: ${
-        describeError(error)
+        describeFailure(error)
       }`,
     };
   }
@@ -483,7 +477,7 @@ export const readAncestry = async (
     // the report rather than a condition the batch depends on.
     return {
       kind: "unchecked",
-      reason: `git could not be run here: ${describeError(error)}`,
+      reason: `git could not be run here: ${describeFailure(error)}`,
     };
   }
 };
@@ -828,7 +822,7 @@ export class ConsoleClient {
     } catch (error) {
       return {
         kind: "refused",
-        reason: `/api/status could not be read: ${describeError(error)}`,
+        reason: `/api/status could not be read: ${describeFailure(error)}`,
       };
     }
     if (!isObjectOrArray(answer)) {
@@ -873,7 +867,7 @@ export class ConsoleClient {
       answer = await this.#json("/api/policy");
     } catch (error) {
       return {
-        error: `/api/policy could not be read: ${describeError(error)}`,
+        error: `/api/policy could not be read: ${describeFailure(error)}`,
       };
     }
     if (!isObjectOrArray(answer)) {
@@ -931,7 +925,7 @@ export class ConsoleClient {
     } catch (error) {
       return {
         kind: "unread",
-        reason: describeError(error),
+        reason: describeFailure(error),
       };
     }
   }
@@ -956,7 +950,7 @@ export class ConsoleClient {
     } catch (error) {
       return {
         kind: "refused",
-        reason: describeError(error),
+        reason: describeFailure(error),
       };
     }
     const results = (answer as Record<string, unknown>)?.results;
@@ -1101,7 +1095,7 @@ export class ConsoleClient {
             kind: "unwitnessed",
             reason:
               `the event stream faulted without advancing past ${sequenceBefore}: ${
-                describeError(error)
+                describeFailure(error)
               }`,
           };
         }
@@ -1300,7 +1294,7 @@ const readSkillRegistry = async (
     return {
       skillsUnread: error instanceof Deno.errors.NotFound
         ? "the run wrote no skill-registry.json, so it scanned no skills root"
-        : `skill-registry.json could not be read: ${describeError(error)}`,
+        : `skill-registry.json could not be read: ${describeFailure(error)}`,
     };
   }
   const registry = parsed as { skillsRoot?: unknown; skills?: unknown };
@@ -1385,7 +1379,7 @@ const runCandidates = async (
       if (error instanceof Deno.errors.NotFound) continue;
       unread.push(
         `${entry.name}/run-state.json could not be read: ${
-          describeError(error)
+          describeFailure(error)
         }`,
       );
       continue;
@@ -1525,7 +1519,7 @@ export const runTask = async (
     return {
       ...base,
       measurementUnread: `the artifact root could not be listed: ${
-        describeError(error)
+        describeFailure(error)
       }`,
     };
   }
@@ -2319,7 +2313,7 @@ export const main = async (
       "`measure-batch`",
     );
   } catch (error) {
-    log(error instanceof Error ? error.message : String(error));
+    log(describeFailure(error));
     log(usage);
     return 2;
   }

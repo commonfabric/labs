@@ -37,12 +37,9 @@ import type {
 } from "@commonfabric/memory/v2";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import type { AppliedCommit } from "@commonfabric/memory/v2/engine";
-import {
-  getLogger,
-  getLoggerCountsBreakdown,
-} from "@commonfabric/utils/logger";
-import { maxOf } from "@commonfabric/utils/math";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { getLogger, getLoggerCountsBreakdown } from "@commonfabric/logger";
+import { maxOf } from "@commonfabric/collections/math";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import { applyPatch } from "../../memory/v2/patch.ts";
 import {
@@ -50,6 +47,7 @@ import {
   parsePointer,
   pathsOverlap,
 } from "../../memory/v2/path.ts";
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import type {
   IStorageProvider,
   IStorageTransaction,
@@ -1994,7 +1992,10 @@ describe("memory-v2-stacked-commit", () => {
     it("returns the same result for a duplicate `localSeq`, sending it once", async () => {
       const model = new ScriptedServerModel();
       const transport = new ScriptedModelTransport(model);
-      const client = await MemoryV2Client.connect({ transport });
+      const client = await MemoryV2Client.connect({
+        instanceNames: namesInstancesByDefault(),
+        transport,
+      });
       try {
         const session = await client.mount(
           space,

@@ -4,7 +4,7 @@ import { declaresFabricPrimitiveBrand } from "@commonfabric/schema-generator/fab
 import {
   isTrustedBuilder,
   isTrustedDataHelper,
-} from "@commonfabric/utils/sandbox-contract";
+} from "@commonfabric/pattern-contract/sandbox-contract";
 import { preserveSourceMapRange } from "../ast/mod.ts";
 import { HelpersOnlyTransformer, TransformationContext } from "../core/mod.ts";
 import { unwrapExpression } from "../utils/expression.ts";

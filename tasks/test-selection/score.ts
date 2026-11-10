@@ -16,8 +16,11 @@ import type {
   TestIdentity,
 } from "@commonfabric/test-support/records";
 import { testIdentityKey } from "@commonfabric/test-support/records";
-import { minOf } from "@commonfabric/utils/math";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import { minOf } from "@commonfabric/collections/math";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 import {
   BREADTH_SATURATION,
   CHURN_HALF_LIFE_DAYS,

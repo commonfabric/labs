@@ -1,0 +1,26 @@
+{
+  // Dependency guide: ../../docs/development/DEPENDENCIES.md
+  "name": "@commonfabric/collections",
+  "compilerOptions": {
+    "noUncheckedIndexedAccess": true
+  },
+  "tasks": {
+    "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test",
+    // --no-check: this package is type-checked by `deno task check` (tasks/check.sh).
+    "deno-test": "deno test --shuffle=$(deno task -q test-seed) --allow-env=CF_TEST_RECORDS_DIR,CF_TEST_SKIP_LIST --allow-read=src,test --no-check",
+    "bench": {
+      "description": "Run benchmarks",
+      "command": "deno bench"
+    }
+  },
+  "exports": {
+    "./cache": "./src/cache.ts",
+    "./index-tracking-stack": "./src/index-tracking-stack.ts",
+    "./math": "./src/math.ts",
+    "./path-key-map": "./src/path-key-map.ts",
+    "./splice": "./src/splice.ts",
+    "./staged-map": "./src/staged-map.ts",
+    "./string-tuple-key": "./src/string-tuple-key.ts",
+    "./two-level-weak-cache": "./src/two-level-weak-cache.ts"
+  }
+}

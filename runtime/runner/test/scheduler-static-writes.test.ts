@@ -1,7 +1,4 @@
-import {
-  getLogger,
-  getLoggerCountsBreakdown,
-} from "@commonfabric/utils/logger";
+import { getLogger, getLoggerCountsBreakdown } from "@commonfabric/logger";
 import { entityKey } from "../src/scheduler/keys.ts";
 import { forEachOverlappingWriter } from "../src/scheduler/scheduling-writes.ts";
 import type { IMemorySpaceAddress } from "../src/storage/interface.ts";

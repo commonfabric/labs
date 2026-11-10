@@ -32,7 +32,7 @@ import {
   resolveCfcSchemaRefs,
 } from "@commonfabric/runner/cfc";
 import type { PieceCallableListing } from "@commonfabric/piece/verb-listing";
-import { isObjectOrArray, isPlainObject } from "@commonfabric/utils/types";
+import { isObjectOrArray, isPlainObject } from "@commonfabric/js-values/types";
 
 import type { PieceCallablesListing } from "./piece.ts";
 

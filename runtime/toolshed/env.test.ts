@@ -13,6 +13,21 @@ import { assert, assertEquals } from "@std/assert";
 import { expect } from "@std/expect";
 import { EnvSchema } from "@/env.ts";
 
+Deno.test("MEMORY_ACL_DELEGATIONS parses strictly: on by default, off only for 'false'/'0', and any other spelling refuses", () => {
+  const admits = (v: string | undefined) =>
+    EnvSchema.parse(v === undefined ? {} : { MEMORY_ACL_DELEGATIONS: v })
+      .MEMORY_ACL_DELEGATIONS;
+
+  assertEquals(admits(undefined), true);
+  assertEquals(admits("true"), true);
+  assertEquals(admits("1"), true);
+  assertEquals(admits("false"), false);
+  assertEquals(admits("0"), false);
+  // An operator's misspelled disable must not turn the feature on.
+  expect(() => admits("FALSE")).toThrow();
+  expect(() => admits("off")).toThrow();
+});
+
 Deno.test("OTEL_ENABLED parses strictly: only 'true'/'1' enable telemetry", () => {
   // Regression guard for the z.coerce.boolean() footgun: Boolean("false") ===
   // true, which would silently enable telemetry (and, with the all-span
@@ -310,4 +325,20 @@ Deno.test("TOOLSHED_RELEASED_AT refuses a time ahead of the host's clock", () =>
     "TOOLSHED_RELEASED_AT is more than five minutes ahead of this host's " +
       `clock, which no deploy that has happened is: \`${ahead.value}\``,
   );
+});
+
+Deno.test("EXPOSE_GC parses strictly, and only on a development or test server", () => {
+  const expose = (env: Record<string, string>) =>
+    EnvSchema.parse(env).EXPOSE_GC;
+
+  assertEquals(expose({}), false);
+  assertEquals(expose({ EXPOSE_GC: "false" }), false);
+  assertEquals(expose({ EXPOSE_GC: "true" }), true);
+  assertEquals(expose({ EXPOSE_GC: "true", ENV: "test" }), true);
+  for (const ENV of ["production", "staging", "Production", "prod"]) {
+    expect(() => expose({ EXPOSE_GC: "true", ENV })).toThrow(
+      "EXPOSE_GC=true needs ENV=development or ENV=test",
+    );
+    assertEquals(expose({ EXPOSE_GC: "false", ENV }), false);
+  }
 });

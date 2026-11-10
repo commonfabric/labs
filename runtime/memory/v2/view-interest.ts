@@ -1,7 +1,7 @@
 /** Validates session-owned view interests at the Memory protocol boundary. */
 
 import { cloneIfNecessary } from "@commonfabric/data-model";
-import { isPlainObject } from "@commonfabric/utils/types";
+import { isPlainObject } from "@commonfabric/js-values/types";
 
 import {
   DEFAULT_BRANCH,
@@ -48,7 +48,8 @@ export function parseViewInterests(
       view.id.length === 0 ||
       ids.has(view.id) || !Number.isSafeInteger(view.revision) ||
       (view.revision as number) < 0 ||
-      (view.mode !== "render" && view.mode !== "speculate") ||
+      (view.mode !== "render" && view.mode !== "speculate" &&
+        view.mode !== "read") ||
       typeof view.componentContractVersion !== "string"
     ) return null;
     const query = parseViewQuery(view.query);

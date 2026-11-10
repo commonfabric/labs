@@ -20,11 +20,17 @@ import {
   FABRIC_PRIMITIVE_SCHEMA_TYPES,
   isFabricPrimitiveSchemaType,
 } from "@commonfabric/data-model/fabric-primitives";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   isObjectNotArray,
   isObjectOrArray,
   type ReadonlyRecord,
-} from "@commonfabric/utils/types";
+} from "@commonfabric/js-values/types";
+import {
+  type CfcConfClause,
+  clauseAlternatives,
+  isOrClause,
+} from "@commonfabric/memory/v2/cfc-release-authority";
 
 import { FABRIC_SPECIAL_OBJECT_BRAND } from "../fabric-special-object-brand.ts";
 import {
@@ -34,8 +40,6 @@ import {
 } from "../scope.ts";
 import { literalMemberMatches } from "../schema-literal-match.ts";
 import { fabricAwareEqualThroughViews } from "../view-equality.ts";
-import type { CfcConfClause } from "./clause.ts";
-import { clauseAlternatives, isOrClause } from "./clause.ts";
 import {
   DEFAULT_EXCHANGE_FUEL,
   evaluateExchangeRules,
@@ -892,7 +896,7 @@ export const validateSchemaDefinition = (
   try {
     deepFrozenCloneAndInternSchema(schema);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = describeFailure(error);
     return `$: schema cannot be normalized: ${message}`;
   }
   return validateSchemaDefinitionInternal(schema, fullSchema, "$", {

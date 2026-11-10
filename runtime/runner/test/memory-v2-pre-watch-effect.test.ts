@@ -10,14 +10,16 @@ import type { JSONSchemaObj } from "@commonfabric/api";
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
 import { Identity } from "@commonfabric/identity";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
-import {
-  type EntityDocument,
-  type SessionSync,
-  type SessionSyncUpsert,
-  type WatchSpec,
+import type {
+  EntityDocument,
+  SessionSync,
+  SessionSyncUpsert,
+  WatchSpec,
 } from "@commonfabric/memory/v2";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import type { IStorageProvider } from "../src/storage/interface.ts";
+import type { SpaceReplica } from "../src/storage/v2.ts";
 import {
   ScriptedSessionTransport,
   type ScriptedTransportMessage,
@@ -166,6 +168,46 @@ class ReplacingPreWatchEffectTransport extends ScriptedSessionTransport {
   }
 }
 
+/**
+ * Answers a `session.watch.set` with an effect ahead of its response, and
+ * pushes further effects when told to.
+ */
+class FirstWatchSetTransport extends ScriptedSessionTransport {
+  readonly #ahead: SessionSync;
+  readonly #response: SessionSync;
+
+  constructor(space: MemorySpace, ahead: SessionSync, response: SessionSync) {
+    super({
+      name: "first-watch-set",
+      sessionId: "session:first-watch-set",
+      space,
+    });
+    this.#ahead = ahead;
+    this.#response = response;
+  }
+
+  /** Pushes `effect` to the session. */
+  push(effect: SessionSync): void {
+    this.emitSync(effect);
+  }
+
+  protected override ackServerSeq(): number {
+    return this.#response.toSeq;
+  }
+
+  protected override handle(message: ScriptedTransportMessage): void {
+    if (message.type !== "session.watch.set") {
+      throw new Error(`Unhandled scripted message: ${message.type}`);
+    }
+    this.emitSync(this.#ahead);
+    this.respond({
+      type: "response",
+      requestId: message.requestId!,
+      ok: { serverSeq: this.#response.toSeq, sync: this.#response },
+    });
+  }
+}
+
 const watch = (id: URI): WatchSpec => ({
   id,
   kind: "graph",
@@ -230,7 +272,10 @@ describe("memory-v2-pre-watch-effect", () => {
       schemaId,
       schema,
     );
-    const client = await MemoryV2Client.Client.connect({ transport });
+    const client = await MemoryV2Client.Client.connect({
+      instanceNames: namesInstancesByDefault(),
+      transport,
+    });
     const session = await client.mount(
       space,
       {},
@@ -246,6 +291,66 @@ describe("memory-v2-pre-watch-effect", () => {
       expect(result.precedingSyncs).toEqual([]);
     } finally {
       await client.close();
+    }
+  });
+
+  it("applies what a re-delivery that is its session's first watch mutation brings", async () => {
+    const signer = await Identity.fromPassphrase(
+      "memory-v2-pre-watch-effect-heal",
+    );
+    const space = signer.did();
+    const schema: JSONSchemaObj = { type: "string", title: "first-watch-set" };
+    const schemaId = `cid:${internSchemaAsTaggedHashString(schema)}` as URI;
+    const referrerId = "of:first-watch-set-referrer" as URI;
+    const aheadId = "of:first-watch-set-ahead" as URI;
+    const laterId = "of:first-watch-set-later" as URI;
+    const referrer = {
+      value: {
+        carried: {
+          "/": {
+            "link@1": {
+              id: "of:first-watch-set-target",
+              path: [],
+              schema: { $ref: schemaId },
+            },
+          },
+        },
+      },
+    };
+    const transport = new FirstWatchSetTransport(
+      space,
+      sync(0, 1, [upsert(aheadId, 1, { value: "ahead" })]),
+      sync(1, 2, [
+        upsert(schemaId, 2, { value: schema }),
+        upsert(referrerId, 2, referrer),
+      ]),
+    );
+    const storageManager = TestStorageManager.create({
+      as: signer,
+      memoryHost: new URL("memory://runner-v2-first-watch-set"),
+    }, new SingleSessionFactory(transport));
+    try {
+      const provider = storageManager.open(space) as TestProvider;
+      const replica = provider.replica as SpaceReplica;
+      await replica.ensureSession();
+
+      // A quarantine on a session with no watch view yet, as a remounted
+      // session's is: nothing has been asked of it but this re-delivery.
+      replica.accessForTestingOnly.applySessionSync(
+        sync(0, 1, [upsert(referrerId, 1, referrer)]),
+        "integrate",
+      );
+      await replica.inputSynced();
+
+      expect(provider.get(aheadId)?.value).toBe("ahead");
+      expect(provider.get(referrerId)).toEqual(referrer);
+
+      transport.push(sync(2, 3, [upsert(laterId, 3, { value: "later" })]));
+      await replica.framesApplied();
+
+      expect(provider.get(laterId)?.value).toBe("later");
+    } finally {
+      await storageManager.close();
     }
   });
 });

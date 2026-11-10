@@ -11,7 +11,7 @@ import { Runtime } from "../src/runtime.ts";
 import type { createBuilder } from "../src/builder/factory.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 import { setPatternEnvironment } from "../src/env.ts";
-import { defer } from "@commonfabric/utils/defer";
+import { defer } from "@commonfabric/async/defer";
 
 const signer = await Identity.fromPassphrase("test stream-data flag");
 const space = signer.did();

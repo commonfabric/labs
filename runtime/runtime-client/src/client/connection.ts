@@ -1,7 +1,12 @@
+import {
+  bundledBuild,
+  comparePeerBuilds,
+  normalizeBuildMarker,
+} from "@commonfabric/platform/peer-build";
 import { debugStr } from "@commonfabric/data-model";
-import { defer, type Deferred } from "@commonfabric/utils/defer";
-import { getLogger } from "@commonfabric/utils/logger";
-import { unrefTimer } from "@commonfabric/utils/sleep";
+import { defer, type Deferred } from "@commonfabric/async/defer";
+import { getLogger } from "@commonfabric/logger";
+import { unrefTimer } from "@commonfabric/async/sleep";
 import {
   CellRef,
   CellUpdateNotification,
@@ -49,7 +54,7 @@ import {
   VDomMountResponse,
 } from "@/protocol/mod.ts";
 import { assertNoKeyMaterial } from "@/shared/key-material.ts";
-import { RuntimeTransport } from "./transport.ts";
+import type { RuntimeTransport } from "./transport.ts";
 import { EventEmitter } from "./emitter.ts";
 import {
   $onCellRefused,
@@ -188,6 +193,12 @@ export class RuntimeConnection extends EventEmitter<RuntimeConnectionEvents> {
   #pendingRequests = new Map<number, PendingRequest>();
   #nextMsgId = 0;
   #initialized = false;
+  #peerBuild: string | undefined;
+
+  /** Build provenance from the worker handshake; differences are diagnostic. */
+  get buildDiagnostics() {
+    return comparePeerBuilds(bundledBuild, this.#peerBuild);
+  }
 
   /**
    * The connection's lifetime. `dispose()` aborts it; every consumer registers
@@ -324,6 +335,10 @@ export class RuntimeConnection extends EventEmitter<RuntimeConnectionEvents> {
       msgId,
       data,
       sentEpochMs: performance.timeOrigin + performance.now(),
+      ...((data.type === RequestType.Initialize ||
+          data.type === RequestType.Attach) && bundledBuild
+        ? { runtimeBuild: bundledBuild }
+        : {}),
     };
 
     const deferred = defer<CommandResponse<T>, Error>();
@@ -668,6 +683,14 @@ export class RuntimeConnection extends EventEmitter<RuntimeConnectionEvents> {
         );
       }
       return;
+    }
+
+    if (
+      pending.type === RequestType.Initialize ||
+      pending.type === RequestType.Attach
+    ) {
+      this.#peerBuild = normalizeBuildMarker(message.runtimeBuild);
+      ipcLogger.debug("peer-build", () => [this.buildDiagnostics]);
     }
 
     if ("error" in message && message.error) {

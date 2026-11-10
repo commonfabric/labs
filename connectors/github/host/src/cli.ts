@@ -2,6 +2,7 @@ import {
   createGithubGraphqlTransport,
   GithubClient,
 } from "@commonfabric/github-connector/client";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { resolveGithubToken } from "./auth.ts";
 import { CollectionRequestQueue } from "./collection-request-queue.ts";
 import { GITHUB_HOST_USAGE, parseGithubHostCliOptions } from "./cli-options.ts";
@@ -105,9 +106,7 @@ export async function runGithubHostCli(
         );
       } catch (error) {
         dependencies.error(
-          `${reason} GitHub collection failed: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
+          `${reason} GitHub collection failed: ${describeFailure(error)}`,
         );
         if (options.once) throw error;
       } finally {
@@ -160,9 +159,7 @@ export async function runGithubHostCli(
     return 0;
   } catch (error) {
     dependencies.error(
-      `GitHub host failed: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      `GitHub host failed: ${describeFailure(error)}`,
     );
     return 1;
   } finally {

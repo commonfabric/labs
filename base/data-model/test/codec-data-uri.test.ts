@@ -21,7 +21,7 @@ import { expect } from "@std/expect";
 import {
   fromBase64url,
   toUnpaddedBase64url,
-} from "@commonfabric/utils/base64url";
+} from "@commonfabric/bytes/base64url";
 import {
   DATA_URI_MEDIA_TYPE,
   dataUriFromValue,

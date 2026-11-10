@@ -1,11 +1,22 @@
 import type { FabricValue } from "@commonfabric/data-model";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import {
+  type FieldAnchors,
+  operationAnchorsDocId,
+  parseFieldAnchors,
+  scopeOfScopeKey,
+} from "@commonfabric/memory/v2";
 import { parsePointer } from "@commonfabric/memory/v2/path";
 
 import type { SpaceDb } from "./db.ts";
 import { tableNames } from "./db.ts";
 import { decodeStored } from "./decode.ts";
 import { hashEntityValue } from "./fingerprint.ts";
-import { reconstructDocument, selectAtPath } from "./reconstruct.ts";
+import {
+  reconstructDocument,
+  reconstructOutcome,
+  selectAtPath,
+} from "./reconstruct.ts";
 
 const DEFAULT_FIELD_LIMIT = 50;
 const DEFAULT_HISTORY_LIMIT = 100;
@@ -78,6 +89,14 @@ export interface OperationFieldInspection {
   materialized: unknown;
   commitSeq: number;
   retainedFrom: { epoch: number; version: number };
+  /**
+   * The field's anchors, each id's offset as the anchors document holds it.
+   * Empty when the field has no anchors document, or has one that
+   * `consistency.anchorsDocumentValid` reports as holding something else.
+   */
+  anchors: FieldAnchors;
+  /** Id of the field's anchors document in the field's scope. */
+  anchorsDocumentId: string;
   submissions: Array<{
     epoch: number;
     submissionId: string;
@@ -116,6 +135,13 @@ export interface OperationFieldInspection {
     retainedSuffixContiguous: boolean;
     ordinaryMaterializedMatches: boolean | null;
     currentCheckpointMatches: boolean | null;
+    /**
+     * Whether the anchors document's value is what the engine admits as
+     * anchors, which is what an edit to the field maps; `null` when the field
+     * holds no anchors document. An edit reads a document that fails this as
+     * holding no anchors; one that does not decode makes the edit fail.
+     */
+    anchorsDocumentValid: boolean | null;
     healthy: boolean;
   };
 }
@@ -142,7 +168,7 @@ const decode = (value: string): FabricValue => {
     return decodeStored(value);
   } catch (error) {
     return {
-      decodeError: error instanceof Error ? error.message : String(error),
+      decodeError: describeFailure(error),
       stored: value,
     };
   }
@@ -153,6 +179,18 @@ const valuesMatch = (left: FabricValue, right: FabricValue): boolean => {
   const rightHash = hashEntityValue(right);
   return "hash" in leftHash && "hash" in rightHash &&
     leftHash.hash === rightHash.hash;
+};
+
+/**
+ * The anchors `value` holds when it is an anchors document's value, by the
+ * rule the engine holds a write of the document to
+ * (`parseFieldAnchors()`); a document with no value holds none. `undefined`
+ * for anything else.
+ */
+const anchorsOf = (value: unknown): FieldAnchors | undefined => {
+  if (value === undefined) return {};
+  const parsed = parseFieldAnchors(value);
+  return "fault" in parsed ? undefined : parsed.anchors;
 };
 
 /** Inspect durable collaborative operation state without opening a live Engine. */
@@ -212,7 +250,10 @@ export function inspectOperationFields(
 function inspectOperationField(
   space: SpaceDb,
   field: OperationFieldRow,
-  options: { historyLimit: number; submissionAfterSeq: number },
+  options: {
+    historyLimit: number;
+    submissionAfterSeq: number;
+  },
 ): OperationFieldInspection {
   const address = {
     branch: field.branch,
@@ -349,10 +390,35 @@ function inspectOperationField(
   const ordinaryMaterializedMatches = ordinary === null || !ordinary.found
     ? null
     : valuesMatch(materialized, ordinary.value);
+
+  // The document id derives from the scope name, not the scope key: a
+  // per-user field's document is addressed as `user` and resolves to the
+  // field's own key, which is where it is reconstructed from.
+  const anchorsDocumentId = operationAnchorsDocId({
+    id: field.id,
+    scope: scopeOfScopeKey(field.scope_key),
+    path,
+  });
+  const anchorsDocument = reconstructOutcome(space, {
+    id: anchorsDocumentId,
+    scope: field.scope_key,
+    branch: field.branch,
+  });
+  // A deleted document holds no anchors, as one never written does. One that
+  // does not decode holds something, and it is not an anchor map.
+  const documentAnchors = anchorsDocument.status === "present"
+    ? anchorsOf(anchorsDocument.document.value)
+    : undefined;
+  const anchorsDocumentValid = anchorsDocument.status === "present"
+    ? documentAnchors !== undefined
+    : anchorsDocument.status === "undecodable"
+    ? false
+    : null;
   const healthy = pathValid && baselineCheckpointPresent &&
     retainedSuffixContiguous &&
     ordinaryMaterializedMatches !== false &&
-    currentCheckpointMatches !== false;
+    currentCheckpointMatches !== false &&
+    anchorsDocumentValid !== false;
 
   return {
     address: {
@@ -369,6 +435,8 @@ function inspectOperationField(
     materialized,
     commitSeq: field.commit_seq,
     retainedFrom: { epoch: field.epoch, version: retainedVersion },
+    anchors: documentAnchors ?? {},
+    anchorsDocumentId,
     submissions: visibleSubmissions.map((row) => ({
       epoch: row.epoch,
       submissionId: row.submission_id,
@@ -412,6 +480,7 @@ function inspectOperationField(
       retainedSuffixContiguous,
       ordinaryMaterializedMatches,
       currentCheckpointMatches,
+      anchorsDocumentValid,
       healthy,
     },
   };

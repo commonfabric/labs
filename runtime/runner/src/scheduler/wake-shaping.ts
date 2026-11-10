@@ -1,10 +1,10 @@
-import { getLogger } from "@commonfabric/utils/logger";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { getLogger } from "@commonfabric/logger";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import {
   resolveScopeKey,
   type ScopeKeyIdentity,
 } from "@commonfabric/memory/v2";
-import { type NormalizedFullLink } from "../link-utils.ts";
+import type { NormalizedFullLink } from "../link-utils.ts";
 import {
   isRendererTrustedEvent,
   propagateRendererTrustedEvent,

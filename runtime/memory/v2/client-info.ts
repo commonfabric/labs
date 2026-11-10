@@ -4,7 +4,7 @@
  * running code or the physical device.
  */
 
-import { isPlainObject } from "@commonfabric/utils/types";
+import { isPlainObject } from "@commonfabric/js-values/types";
 
 /**
  * Reserved report field emitted for readers that require it. Attribution does

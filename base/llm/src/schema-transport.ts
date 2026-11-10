@@ -1,4 +1,4 @@
-import { findJsonUnfaithfulValues } from "@commonfabric/pure-json";
+import { findJsonUnfaithfulValues } from "@commonfabric/json";
 
 /**
  * Throw if `value` holds anything ordinary JSON serialization would not carry
@@ -15,7 +15,7 @@ import { findJsonUnfaithfulValues } from "@commonfabric/pure-json";
  * (a `generateObject` schema, or a tool's `inputSchema`) may legitimately hold
  * values JSON cannot carry. Those are fine internally. Crossing to a provider,
  * they are not. The generic detection of JSON-unfaithful values lives in
- * `@commonfabric/pure-json`; what is added here is only the provider-framed
+ * `@commonfabric/json`; what is added here is only the provider-framed
  * assertion that refuses such a value at the transport boundary.
  *
  * A minor diagnostic point: the thrown message renders the root pointer as

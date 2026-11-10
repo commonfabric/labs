@@ -1,7 +1,7 @@
 import type { FabricValue, JSONSchema } from "@commonfabric/api";
-import { LRUCache } from "@commonfabric/utils/cache";
-import { getLogger } from "@commonfabric/utils/logger";
-import { StagedMap } from "@commonfabric/utils/staged-map";
+import { LRUCache } from "@commonfabric/collections/cache";
+import { getLogger } from "@commonfabric/logger";
+import { StagedMap } from "@commonfabric/collections/staged-map";
 import { hashStringOf } from "@commonfabric/data-model";
 import {
   hashSchema,
@@ -22,7 +22,6 @@ import {
   coveringSelector,
   createGraphQueryWalkStats,
   createSchemaMemo,
-  forgetSchemaMemoDocuments,
   GraphQueryWalk,
   type GraphQueryWalkStats,
   type IAttestation,
@@ -30,12 +29,11 @@ import {
   type ObjectStorageManager,
   parseCrossingDocKey,
   type SchemaMemo,
-  schemaMemoDocumentPrefix,
   type SchemaPathSelector,
   schemaTrackerCoversSelector,
   schemaTrackerKey,
 } from "@commonfabric/runner/graph-query";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import {
   lookupSchemaDocument,
@@ -152,7 +150,6 @@ export type TrackedGraphState = {
    * `assembleSchemaDocClosures`). */
   entities: Map<QueryDocKey, EntitySnapshot>;
 
-  memo: SchemaMemo;
   manager: EngineObjectManager;
 
   /** Per-version scans of this state's delivered documents for embedded
@@ -718,6 +715,9 @@ export type QueryEvaluationCacheDiagnostics = {
  * bypass it (key-vocabulary.md §5, the identity-bound inventory).
  */
 export type QueryEvaluationCache = {
+  /** Largest entity count admitted before cloning an evaluation. */
+  readonly maxEntryWeight: number;
+
   /** The engine the entries were evaluated against. A sequence number
    * identifies state only within its engine, so a different engine object
    * for the same space rotates the cache exactly as a seq advance does —
@@ -757,7 +757,10 @@ export type QueryEvaluationCache = {
   rotations: number;
 };
 
-export const createQueryEvaluationCache = (): QueryEvaluationCache => ({
+export const createQueryEvaluationCache = (
+  maxEntryWeight = Infinity,
+): QueryEvaluationCache => ({
+  maxEntryWeight,
   engine: null,
   seq: -1,
   entries: new Map(),
@@ -928,12 +931,12 @@ const cloneWithRewrittenResidue = (
 /**
  * Clone for a cache hit: `cloneTrackedGraphState` rebound to the
  * requesting identity. Only scope-pure entries are ever cloned across
- * identities, so every key, entity, memo entry, and manager cache line in
- * the source resolved identically to what this identity's own evaluation
- * would have produced; the rebind exists so the clone's LATER operations —
- * refreshes, extensions — resolve scoped reach against the session that
- * owns it. The cloned memo is a fresh Map, so the identity binding the
- * schema-memo tripwire tracks starts unbound and binds to the new owner.
+ * identities, so every key, entity, and manager cache line in the source
+ * resolved identically to what this identity's own evaluation would have
+ * produced; the rebind exists so the clone's LATER operations — refreshes,
+ * extensions — resolve scoped reach against the session that owns it. Each
+ * of those walks with a schema memo of its own, so no memo crosses from the
+ * source to the clone.
  */
 const cloneTrackedGraphStateForIdentity = (
   engine: Engine.Engine,
@@ -1029,7 +1032,6 @@ export const cloneTrackedGraphState = (
     tracksOf,
     roots: new Map(state.roots),
     entities: new Map(state.entities),
-    memo: new Map(state.memo),
     manager,
     schemaRefs: new Map(state.schemaRefs),
   };
@@ -1063,7 +1065,6 @@ export const stageTrackedGraphState = (
   const tracksOf = new StagedMap(state.tracksOf, (keys) => new Set(keys));
   const roots = new StagedMap(state.roots);
   const entities = new StagedMap(state.entities);
-  const memo = new StagedMap(state.memo);
   const manager = state.manager.stage(engine);
   const schemaRefs = new StagedMap(state.schemaRefs);
   return {
@@ -1081,7 +1082,6 @@ export const stageTrackedGraphState = (
       tracksOf,
       roots,
       entities,
-      memo,
       manager: manager.value,
       schemaRefs,
     },
@@ -1098,7 +1098,6 @@ export const stageTrackedGraphState = (
       tracksOf.commit();
       roots.commit();
       entities.commit();
-      memo.commit();
       manager.commit();
       schemaRefs.commit();
     },
@@ -2035,27 +2034,6 @@ const forgetRetiredFromManager = (
   }
 };
 
-/**
- * Drops what the graph's memo holds for the documents `retirement`
- * retired. A memo entry stands for a walk whose records are gone: a
- * traversal reaching the document would find the entry and record nothing
- * for it. The memo is scanned once for the pass, after its last
- * retirement; the walks of the pass itself answer from a memo of their
- * own, or walk their documents past the memo.
- */
-const forgetRetiredFromMemo = (
-  state: TrackedGraphState,
-  retirement: Retirement,
-): void => {
-  const forgotten = new Set<string>();
-  for (const docKey of retirement.retired) {
-    if (state.tracker.has(docKey)) continue;
-    const { space, id, scope } = fromDocKey(docKey);
-    forgotten.add(schemaMemoDocumentPrefix({ space, scope, id }));
-  }
-  if (forgotten.size > 0) forgetSchemaMemoDocuments(state.memo, forgotten);
-};
-
 /** What a retired document or miss left cached in `state`, forgotten. */
 const forgetRetired = (
   state: TrackedGraphState,
@@ -2063,7 +2041,6 @@ const forgetRetired = (
   changedMisses: ReadonlySet<string>,
 ): void => {
   forgetRetiredFromManager(state.manager, state, retirement, changedMisses);
-  forgetRetiredFromMemo(state, retirement);
 };
 
 /**
@@ -2458,8 +2435,7 @@ export const releaseTrackedRoots = (
     state.roots.delete(referrer);
     releaseTrackedReferrer(state, referrer, retirement);
   }
-  // A memo of this release's own, as a refresh takes: the graph's memo
-  // would answer a re-walk from a traversal that recorded nothing here.
+  // Walks within this release share a memo that ends with the evaluation.
   const sharedMemo = createSchemaMemo();
   const touched = settleRetirement(
     space,
@@ -2742,13 +2718,13 @@ export const trackGraph = (
     tracker: schemaTracker,
     ...missState,
     entities,
-    memo: sharedMemo,
     manager,
     schemaRefs,
   };
   if (
     cache !== undefined && cacheKeys !== undefined &&
-    cache.entries.size < EVALUATION_CACHE_MAX_ENTRIES
+    cache.entries.size < EVALUATION_CACHE_MAX_ENTRIES &&
+    state.entities.size <= cache.maxEntryWeight
   ) {
     // The cache keeps its own clone: the state returned below belongs to
     // the caller's session, whose refreshes and extensions mutate it.
@@ -2786,6 +2762,12 @@ export const extendTrackedGraph = (
   const touched = new Set<QueryDocKey>();
   const changedMisses = new Set<string>();
   const recorders = recordersFor(state, changedMisses);
+  // Walks within this extension share one memo for the evaluation. The
+  // graph keeps none between walks: an entry holds the walked value of its
+  // subtree, so a memo kept for the session's life would grow with everything
+  // the session ever watched, while the tracker's coverage already skips what
+  // an earlier walk recorded.
+  const sharedMemo = createSchemaMemo();
 
   const loaded = manager.captureLoads(() => {
     validateSelectorSchemaRefs(space, manager, state.branch, query.roots);
@@ -2812,7 +2794,7 @@ export const extendTrackedGraph = (
           state.tracker,
           recorders.miss,
           recorders.crossing,
-          state.memo,
+          sharedMemo,
           stats,
           undefined,
           recorders.tracked,
@@ -2836,7 +2818,7 @@ export const extendTrackedGraph = (
     touched,
     touched,
     recorders,
-    state.memo,
+    sharedMemo,
     stats,
     changedMisses,
   );

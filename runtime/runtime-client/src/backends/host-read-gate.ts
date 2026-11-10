@@ -27,7 +27,7 @@ import {
   type RenderPolicy,
 } from "@commonfabric/html/worker";
 import { fabricAwareEqual, type FabricValue } from "@commonfabric/data-model";
-import { isPlainObject } from "@commonfabric/utils/types";
+import { isPlainObject } from "@commonfabric/js-values/types";
 import {
   type Cancel,
   type Cell,

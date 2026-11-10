@@ -92,15 +92,17 @@ jobs:
           mkdir -p bench-results
           deno bench --json -A --v8-flags=--expose-gc \
             runtime/runner/test/*.bench.ts \
-            base/utils/src/cache.bench.ts \
-            base/utils/test/string-tuple-key.bench.ts \
-            base/utils/test/deep-equal.bench.ts \
+            base/collections/src/cache.bench.ts \
+            base/collections/test/string-tuple-key.bench.ts \
+            base/js-values/test/deep-equal.bench.ts \
             runtime/fuse/entity-projection.bench.ts \
             runtime/memory/test/v2-entity-id-list.bench.ts \
             runtime/memory/test/v2-cached-patch-replay.bench.ts \
             runtime/memory/test/v2-engine-read.bench.ts \
             runtime/memory/test/v2-path.bench.ts \
             runtime/memory/test/v2-refresh-schema-closure.bench.ts \
+            runtime/memory/test/v2-query-coverage.bench.ts \
+            runtime/memory/test/v2-query-churn.bench.ts \
             base/data-model/bench/hashing.bench.ts \
             base/data-model/bench/codec-json.bench.ts \
             runtime/piece/test/piece-cold-runtime.bench.ts \

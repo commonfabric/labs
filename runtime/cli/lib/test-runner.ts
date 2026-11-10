@@ -45,6 +45,7 @@ import {
 import { internSchema } from "@commonfabric/data-model-schema";
 import { debugStr, toDebugKindString } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import {
   ACLManager,
@@ -88,7 +89,7 @@ import {
   resetTimingMeasureBudget,
   setTimingMeasuresEnabled,
   TIMING_MEASURE_PREFIX,
-} from "@commonfabric/utils/logger";
+} from "@commonfabric/logger";
 
 import { assertionOutcome } from "./assert-record.ts";
 import { ActionReadReport } from "./action-read-report.ts";
@@ -125,8 +126,13 @@ import {
   unmetRuntimeErrorExpectation,
 } from "./runtime-error-expectation.ts";
 import { collectServedErrors, servedRuntimeErrors } from "./served-errors.ts";
-import { servedConsequences, settleServed } from "./served-settle.ts";
-import { buildActionEvent } from "./trusted-action-event.ts";
+import {
+  servedConsequences,
+  type ServedQuiescence,
+  settleServed,
+} from "./served-settle.ts";
+import { pullActionEvent } from "./test-action-event.ts";
+import { pressRenderedControl, pressTargetOf } from "./test-press.ts";
 
 /**
  * How many idle-then-sync rounds a step's settle performs before it gives up
@@ -230,9 +236,13 @@ type HarnessTestStepMeta = {
   readBudget?: unknown;
   action?: unknown;
   assertion?: unknown;
-  event?: unknown;
   trustedUi?: unknown;
   render?: unknown;
+  // `{ press, control, within? }` clicks a rendered control: `press` is the
+  // view, the other two name the control in it (`test-press.ts`).
+  press?: unknown;
+  control?: string;
+  within?: string;
   skip?: boolean;
   // `{ settle: true }` step: wait for full settlement (scheduler + storage +
   // in-flight async builtin I/O) via `runtime.settled()` before the next step.
@@ -253,13 +263,6 @@ const testStepPeekSchema = internSchema(
     properties: {
       action: { type: "unknown" },
       assertion: { type: "unknown" },
-      // The payload is what the step sends, so it is read as authored: an
-      // object arrives as an object, reaching the handler as a reference into
-      // this step rather than a snapshot of it. `type: "unknown"` marks a
-      // value the traversal must not descend into, which is right for the
-      // fields this schema only tests for presence and wrong here, where it
-      // drops an object payload to `undefined`.
-      event: true,
       trustedUi: {
         type: "object",
         properties: {
@@ -268,6 +271,9 @@ const testStepPeekSchema = internSchema(
         },
       },
       render: { type: "unknown" },
+      press: { type: "unknown" },
+      control: { type: "string" },
+      within: { type: "string" },
       skip: { type: "boolean" },
       readBudget: true,
       settle: { type: "boolean" },
@@ -1227,6 +1233,9 @@ export async function runTestPattern(
   await using servingCleanup = new AsyncDisposableStack();
   // Set on that arm: whether the caller is running the serving loop's work.
   let inServingContext: (() => boolean) | undefined;
+  // Set on that arm too: the wait for the serving loop to finish what it was
+  // set off on, which a settle ends with.
+  let servedQuiescence: ServedQuiescence | undefined;
   // A caller-supplied store is FILE-BACKED, which the default emulation is not:
   // `StorageManager.emulate` runs against `:memory:` and leaves nothing to
   // snapshot. See `TestRunnerOptions.storageHost`.
@@ -1259,6 +1268,7 @@ export async function runTestPattern(
           // which a worker's port does not carry.
           worker: false,
         });
+        servedQuiescence = () => serving.host.host!.whenQuiescent();
         servingCleanup.defer(() =>
           serving.close().catch((error) => {
             console.error(
@@ -1654,7 +1664,7 @@ export async function runTestPattern(
         // updates can arrive after idle() resolves, scheduling more work.
         await storageManager.synced();
         await runtime.idle();
-      }));
+      }, servedQuiescence));
     await initializationBudgetSettlement;
     initializationBudgetSettlement = undefined;
 
@@ -1778,7 +1788,7 @@ export async function runTestPattern(
               ["runTestPattern", "step", stepLabel, "settle", "finalIdle"],
               () => runtime.idle(),
             );
-          }),
+          }, servedQuiescence),
       ).catch((error) => {
         settlementFailed = true;
         throw error;
@@ -1799,7 +1809,7 @@ export async function runTestPattern(
           settleServed(runtime, async () => {
             await runtime.settled();
             await servedConsequences(runtime);
-          }),
+          }, servedQuiescence),
       ).catch((error) => {
         settlementFailed = true;
         throw error;
@@ -1851,8 +1861,10 @@ export async function runTestPattern(
       const stepValue = stepCell.asSchema(testStepPeekSchema)
         .get() as HarnessTestStepMeta;
 
-      // Check which discriminant this step carries.
-      const isAction = Object.hasOwn(stepValue, "action");
+      // Check which discriminant this step carries. A press is an action
+      // whose event a rendered control sends.
+      const isPress = Object.hasOwn(stepValue, "press");
+      const isAction = Object.hasOwn(stepValue, "action") || isPress;
       const isAssertion = Object.hasOwn(stepValue, "assertion");
       const isRender = Object.hasOwn(stepValue, "render");
       const isSettle = Object.hasOwn(stepValue, "settle");
@@ -1916,8 +1928,8 @@ export async function runTestPattern(
 
         if (!isAction && !isAssertion) {
           throw new Error(
-            `Test step at index ${i} must have an 'action', 'assertion', ` +
-              debugStr`'render', 'settle', 'label', or 'await' key. Got: $quote,long${
+            `Test step at index ${i} must have an 'action', 'press', ` +
+              debugStr`'assertion', 'render', 'settle', 'label', or 'await' key. Got: $quote,long${
                 Object.keys(stepCell.get() as object)
               }`,
           );
@@ -1976,22 +1988,38 @@ export async function runTestPattern(
             }
           }
 
-          // Get the action stream via .key()
-          const actionStream = await withPhase(
-            ["runTestPattern", "step", actionName, "stream"],
-            () => actionStreamForStep(stepCell),
-          );
+          if (isPress) {
+            // Click the rendered control, which sends its own event.
+            await withPhase(
+              ["runTestPattern", "step", actionName, "press"],
+              () =>
+                pressRenderedControl(
+                  stepCell.key("press") as Cell<unknown>,
+                  pressTargetOf(stepValue, i),
+                  () => settleRuntime(actionName),
+                ),
+            );
+          } else {
+            // Get the action stream via .key()
+            const actionStream = await withPhase(
+              ["runTestPattern", "step", actionName, "stream"],
+              () => actionStreamForStep(stepCell),
+            );
 
-          // Send the step's event (undefined for plain void actions), wrapped
-          // with renderer-trusted provenance when the step declares `trustedUi`.
-          await withPhase(
-            ["runTestPattern", "step", actionName, "send"],
-            () => {
-              actionStream.send(
-                buildActionEvent(stepValue.event, stepValue.trustedUi),
-              );
-            },
-          );
+            // Send the step's event (undefined for plain void actions),
+            // wrapped with renderer-trusted provenance when the step declares
+            // `trustedUi`.
+            await withPhase(
+              ["runTestPattern", "step", actionName, "send"],
+              async () => {
+                const event = await pullActionEvent(
+                  stepCell.key("event"),
+                  stepValue.trustedUi,
+                );
+                actionStream.send(event);
+              },
+            );
+          }
 
           // Wait for idle, then settle commits and re-idle.
           // Optimistic commits can fail (CAS conflicts), causing rollbacks
@@ -2005,7 +2033,7 @@ export async function runTestPattern(
               name: actionName,
               passed: false,
               afterAction: null,
-              error: err instanceof Error ? err.message : String(err),
+              error: describeFailure(err),
               durationMs: performance.now() - itemStart,
             });
           }
@@ -2170,9 +2198,7 @@ export async function runTestPattern(
             } catch (err) {
               return {
                 passed: false,
-                error: `Error reading assertion: ${
-                  err instanceof Error ? err.message : String(err)
-                }`,
+                error: `Error reading assertion: ${describeFailure(err)}`,
               };
             }
           };
@@ -2198,7 +2224,7 @@ export async function runTestPattern(
             ));
           } catch (err) {
             passed = false;
-            error = err instanceof Error ? err.message : String(err);
+            error = describeFailure(err);
           } finally {
             releaseDemand?.();
           }
@@ -2352,7 +2378,7 @@ export async function runTestPattern(
       servedWarnings,
     };
   } catch (err) {
-    let errorMessage = err instanceof Error ? err.message : String(err);
+    let errorMessage = describeFailure(err);
     if (initializationBudgetPending) {
       try {
         await (initializationBudgetSettlement ?? runtime.settled(Infinity));

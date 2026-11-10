@@ -5,7 +5,7 @@ import { CFC_ATOM_TYPE, type CfcAtom, cfcAtom } from "@commonfabric/api/cfc";
 import type { FabricValue } from "@commonfabric/data-model";
 import { linkProbeSubPath } from "@commonfabric/data-model/cell-rep";
 import { Identity } from "@commonfabric/identity";
-import { maxOf } from "@commonfabric/utils/math";
+import { maxOf } from "@commonfabric/collections/math";
 
 import {
   SEED_ENVELOPE_SCHEMA_HASH,

@@ -107,6 +107,13 @@ export const COMMONFABRIC_RUNTIME_EXPORT_REGISTRY = [
     category: "ignored",
     reactiveOrigin: false,
   },
+  // Reads the principal a cell's value's own cell represents, from its
+  // label, and returns a plain DID. It builds no graph node.
+  {
+    exportName: "writtenPrincipalOf",
+    category: "ignored",
+    reactiveOrigin: false,
+  },
   // Reads which pattern result a cell belongs to, from the runtime's
   // back-link, and returns a plain string. It builds no graph node.
   {
@@ -132,6 +139,13 @@ export const COMMONFABRIC_RUNTIME_EXPORT_REGISTRY = [
   // a reactive value.
   {
     exportName: "isWellFormedDID",
+    category: "ignored",
+    reactiveOrigin: false,
+  },
+  // A parse of its argument alone, returning a plain object or `undefined`
+  // rather than a reactive value.
+  {
+    exportName: "parseDID",
     category: "ignored",
     reactiveOrigin: false,
   },
@@ -302,6 +316,15 @@ export const COMMONFABRIC_RUNTIME_EXPORT_REGISTRY = [
     callKind: "runtime-call",
     reactiveOrigin: true,
   },
+  // anchorsOf(field) returns a link to the field's anchors document, a
+  // Reactive result like navigateTo's: no dedicated CallKind, no schema
+  // injection.
+  {
+    exportName: "anchorsOf",
+    category: "call",
+    callKind: "runtime-call",
+    reactiveOrigin: true,
+  },
   // inspectConfLabel(target, targetPath, query) — the inv-12 Stage 2 bounded
   // label-introspection builtin (CFC spec §4.6.4.1). A plain node-factory
   // call returning a Reactive result, like navigateTo: no dedicated
@@ -365,6 +388,13 @@ export const COMMONFABRIC_RUNTIME_EXPORT_REGISTRY = [
   // computation or handler that makes it.
   {
     exportName: "spaceOf",
+    category: "ignored",
+    reactiveOrigin: false,
+  },
+  // spaceDeleted(target) returns whether a space is deleted, or `undefined`.
+  // It builds no graph node either.
+  {
+    exportName: "spaceDeleted",
     category: "ignored",
     reactiveOrigin: false,
   },

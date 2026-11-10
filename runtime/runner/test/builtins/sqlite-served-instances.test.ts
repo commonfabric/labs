@@ -59,11 +59,11 @@ describe("sqlite-served-instances", () => {
     server = newSharedServer({ subscriptionRefreshDelayMs: 0 });
     const engine = await server.engineForSpace(space);
     const lease = new ExecutionLeaseCycle({
-      engine,
+      leases: engine.executionLeases,
       space,
       holder: executionLeaseHolder(service.did()),
     });
-    expect(lease.acquire()).toBe(true);
+    expect(await lease.acquire()).toBe(true);
     manager = EmulatedStorageManager.connectTo(server, { as: service });
     runtime = new Runtime({
       apiUrl: new URL(import.meta.url),

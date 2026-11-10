@@ -8,7 +8,7 @@ import {
   type MemorySpace,
   type Runtime,
 } from "@commonfabric/runner";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import {
   type CellSelection,
   CellSelectionError,
@@ -21,8 +21,8 @@ import { throwOnSpaceAuthorizationError } from "./utils.ts";
  * The blessed, headless read path for wish targets (CT-1834).
  *
  * A wish target — `#profile`, the profile scalars (`#profileName`,
- * `#profileAvatar`, `#profilePicture`, `#profileBio`, `#profileSpace`), or any
- * other well-known target — is resolved through the SAME runner builtin the
+ * `#profileBio`, `#profileSpace`), or any other well-known target — is
+ * resolved through the SAME runner builtin the
  * runtime uses (`runtime/runner/src/builtins/wish.ts`), driven with
  * `headless: true` so the suggestion/picker UI patterns never spin up. Resolution (default → MRU →
  * first, runtime-enforced labels at read time) lives entirely in that builtin;

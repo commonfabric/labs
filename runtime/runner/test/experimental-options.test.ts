@@ -60,6 +60,7 @@ describe("ExperimentalOptions", () => {
         modernCellRep: false,
         agentBuiltin: false,
         localFold: false,
+        pieceCreatorRecord: false,
         instanceNames: false,
         contentAddressedSchemas: true,
         commitPreconditions: false,
@@ -87,6 +88,7 @@ describe("ExperimentalOptions", () => {
         modernCellRep: true,
         agentBuiltin: true,
         localFold: false,
+        pieceCreatorRecord: false,
         instanceNames: false,
         contentAddressedSchemas: true,
         commitPreconditions: true,
@@ -112,6 +114,7 @@ describe("ExperimentalOptions", () => {
         modernCellRep: false,
         agentBuiltin: true,
         localFold: false,
+        pieceCreatorRecord: false,
         instanceNames: false,
         contentAddressedSchemas: true,
         commitPreconditions: true,
@@ -241,6 +244,28 @@ describe("ExperimentalOptions", () => {
           apiUrl: new URL(import.meta.url),
           storageManager: manager,
           experimental: { sharedMemoryConnection: enabled },
+        });
+        expect(declared).toEqual([enabled]);
+        await runtime.dispose();
+        await sm.close();
+      }
+    });
+
+    it("constructing Runtime declares its naming mode to the storage manager", async () => {
+      // Each open declares the mode, so a manager hears it before any session
+      // opens: at construction, on and off alike.
+      for (const enabled of [true, false]) {
+        const sm = StorageManager.emulate({ as: signer });
+        const declared: boolean[] = [];
+        const manager = Object.assign(sm, {
+          setInstanceNames: (value: boolean) => {
+            declared.push(value);
+          },
+        });
+        const runtime = new Runtime({
+          apiUrl: new URL(import.meta.url),
+          storageManager: manager,
+          experimental: { instanceNames: enabled },
         });
         expect(declared).toEqual([enabled]);
         await runtime.dispose();

@@ -5,7 +5,7 @@ import { Identity } from "@commonfabric/identity";
 import { getServerExecutionConfig } from "@commonfabric/memory/v2";
 import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
-import { type ActiveLogLevel, getLogger } from "@commonfabric/utils/logger";
+import { type ActiveLogLevel, getLogger } from "@commonfabric/logger";
 import { withEnv } from "./utils.ts";
 import { runTestPattern, runTests } from "../lib/test-runner.ts";
 
@@ -95,6 +95,28 @@ describe(
       expect(outcome?.passed).toBe(1);
       expect(outcome?.results[0].results[0].name).toBe("bob/assertion_1");
     });
+
+    // Each of these fixtures holds up a wave past its flush deadline, which
+    // leaves the next link of the cascade for a later wave than the one that
+    // carries the fired event's consequence, and reads the last link's write
+    // once, right after the action.
+    for (
+      const [what, file] of [
+        ["a handler's own events in one space", "own-event"],
+        ["a cascade that crosses into another space", "cross-space"],
+        ["a participant's cascade", "participant-own-event"],
+      ] as const
+    ) {
+      it(`settles through ${what} before the next step reads`, async () => {
+        const root = resolve(FIXTURES, "served-cascade");
+        let outcome: Awaited<ReturnType<typeof runTests>> | undefined;
+        await withEnv("EXPERIMENTAL_SERVER_EXECUTION", "true", async () => {
+          outcome = await runTests(resolve(root, `${file}.test.tsx`), { root });
+        });
+        expect(outcome?.failed).toBe(0);
+        expect(outcome?.passed).toBe(2);
+      });
+    }
 
     it("reports a handler's throw once when both of its runs hit it", async () => {
       // The speculative run's error and the served run's `errored` outcome

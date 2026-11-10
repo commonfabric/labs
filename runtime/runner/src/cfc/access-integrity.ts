@@ -16,11 +16,12 @@
  */
 
 import type { CfcAtom } from "@commonfabric/api/cfc";
-import { deepEqual } from "@commonfabric/utils/deep-equal";
+import { deepEqual } from "@commonfabric/js-values/deep-equal";
+import { uniqueCfcAtoms } from "@commonfabric/memory/v2/cfc-clause-identity";
+import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
 
 import { atomPropagationClass } from "./atom-classes.ts";
-import { uniqueCfcAtoms } from "./atoms.ts";
-import { type CfcConfClause, clausesEqual } from "./clause.ts";
+import { clausesEqual } from "./clause.ts";
 
 /** One location an access consumed, as a release gate reads it. */
 export type ConsumedLocation = {

@@ -8,9 +8,9 @@
 import "core-js/proposals/explicit-resource-management";
 import "core-js/proposals/async-explicit-resource-management";
 
-import { getLogger } from "@commonfabric/utils/logger";
-import { unrefTimer } from "@commonfabric/utils/sleep";
-import { holdWorkerLifetimeLock } from "@commonfabric/utils/worker-lifetime";
+import { getLogger } from "@commonfabric/logger";
+import { unrefTimer } from "@commonfabric/async/sleep";
+import { holdWorkerLifetimeLock } from "@commonfabric/platform/worker-lifetime";
 
 import {
   TransportNotificationType,

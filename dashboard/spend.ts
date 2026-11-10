@@ -15,7 +15,7 @@
  * dry further back than its lag allows.
  */
 
-import { maxOf } from "@commonfabric/utils/math";
+import { maxOf } from "@commonfabric/collections/math";
 import { multiSparkline } from "./lib.ts";
 import { themedChartSeries } from "./theme.ts";
 

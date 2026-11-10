@@ -417,10 +417,18 @@ describe("the repository's gate suites", () => {
     );
     expect(shared).toContain("runner");
     expect(shared).toContain("shell");
-    expect(shared).not.toContain("utils");
+    expect(shared).not.toContain("js-values");
     // A path no group checks makes nothing mandatory, rather than making
     // every group mandatory or throwing.
     expect(typecheck.unitsForChange!(new Set(["README.md"]))).toEqual([]);
+  });
+
+  it("returns a pattern's source as what its compatibility unit runs", () => {
+    const compat = byId("pattern-compat");
+    expect(compat.sourcesOf?.("system/fabrichat/room.tsx")).toEqual([
+      "patterns/system/fabrichat/room.tsx",
+    ]);
+    expect(compat.sourcesOf?.("no/such-pattern.tsx")).toEqual([]);
   });
 
   it("maps a changed path to the patterns whose contract it can change", () => {

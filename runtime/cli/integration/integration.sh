@@ -60,11 +60,11 @@ cf() {
 }
 
 # Delegated scripts (verbs-over-the-cli, verb-session-gaps, and the drills)
-# run cf through $CF_BINARY, falling back to the checkout's deno task when it
-# is unset. Resolve and export it here once, from the same decision cf_impl
-# made, so a child tests the same artifact as the step that invoked it: the
-# external binary on PATH, or unset in local-source mode so the fallback
-# keeps parent and child on the checkout together.
+# run cf through cf-launcher.sh: $CF_BINARY, falling back to the checkout's
+# deno task when it is unset. Resolve and export it here once, from the same
+# decision cf_impl made, so a child tests the same artifact as the step that
+# invoked it: the external binary on PATH, or unset in local-source mode so
+# the fallback keeps parent and child on the checkout together.
 if [ -z "${CF_CLI_INTEGRATION_USE_LOCAL:-}" ] && [ -z "${CF_BINARY:-}" ]; then
   CF_BINARY="$(type -P cf || true)"
 fi
@@ -266,7 +266,7 @@ test_get_only() {
 create_stepped_counter_piece() {
   local value="$1"
 
-  PIECE_ID=$(cf piece new --main-export $CUSTOM_EXPORT $SPACE_ARGS $PATTERN_SRC)
+  PIECE_ID=$(cf piece new --main-export $CUSTOM_EXPORT $SPACE_ARGS "$PATTERN_SRC")
   echo "Created source piece: $PIECE_ID"
 
   printf '{"value":%s}\n' "$value" | cf piece apply $SPACE_ARGS --piece $PIECE_ID
@@ -289,7 +289,7 @@ run_piece_values() {
   local refused
   if refused=$(cf piece new --main-export $CUSTOM_EXPORT \
     --api-url="$API_URL" --identity="$IDENTITY" --space="$fresh_name" \
-    $PATTERN_SRC 2>&1); then
+    "$PATTERN_SRC" 2>&1); then
     error "cf piece new into the fresh name $fresh_name should fail."
   fi
   if ! echo "$refused" | grep -q "No space answers to"; then
@@ -300,12 +300,12 @@ run_piece_values() {
   fi
 
   # Create a new piece using custom default export as input
-  PIECE_ID=$(cf piece new --main-export $CUSTOM_EXPORT $SPACE_ARGS $PATTERN_SRC)
+  PIECE_ID=$(cf piece new --main-export $CUSTOM_EXPORT $SPACE_ARGS "$PATTERN_SRC")
   echo "Created piece: $PIECE_ID"
 
   echo "Fetching piece source to $WORK_DIR"
   # Retrieve the source code for $PIECE_ID to $WORK_DIR
-  cf piece getsrc $SPACE_ARGS --piece $PIECE_ID $WORK_DIR
+  cf piece getsrc $SPACE_ARGS --piece $PIECE_ID "$WORK_DIR"
 
   # Check file was retrieved
   if [ ! -f "$WORK_DIR/main.tsx" ]; then
@@ -319,11 +319,11 @@ run_piece_values() {
 
   # Update the piece's source code
   replace 's/Simple counter:/Simple counter 2:/g' "$WORK_DIR/main.tsx"
-  cf piece setsrc --main-export $CUSTOM_EXPORT $SPACE_ARGS --piece $PIECE_ID $WORK_DIR/main.tsx
+  cf piece setsrc --main-export $CUSTOM_EXPORT $SPACE_ARGS --piece $PIECE_ID "$WORK_DIR/main.tsx"
 
   # (Again) Retrieve the source code for $PIECE_ID to $WORK_DIR
   rm "$WORK_DIR/main.tsx"
-  cf piece getsrc $SPACE_ARGS --piece $PIECE_ID $WORK_DIR
+  cf piece getsrc $SPACE_ARGS --piece $PIECE_ID "$WORK_DIR"
 
   # Check file was retrieved with modifications
   if ! grep -q "Simple counter 2" "$WORK_DIR/main.tsx"; then
@@ -494,7 +494,7 @@ run_piece_links() {
   echo "Successfully listed the slug index."
 
   # Create a second piece from the same pattern
-  PIECE_ID2=$(cf piece new --main-export $CUSTOM_EXPORT $SPACE_ARGS $PATTERN_SRC)
+  PIECE_ID2=$(cf piece new --main-export $CUSTOM_EXPORT $SPACE_ARGS "$PATTERN_SRC")
   echo "Created second piece: $PIECE_ID2"
 
   # Initialize piece2 with value 0 and step so output is computed
@@ -560,7 +560,7 @@ run_piece_links() {
   echo '42' | cf cell set $SPACE_ARGS --piece $INVENTED_ID value
 
   # Create a third piece and link the invented piece's value to its input
-  PIECE_ID3=$(cf piece new --main-export $CUSTOM_EXPORT $SPACE_ARGS $PATTERN_SRC)
+  PIECE_ID3=$(cf piece new --main-export $CUSTOM_EXPORT $SPACE_ARGS "$PATTERN_SRC")
   echo "Created third piece: $PIECE_ID3"
 
   # Linking from invented piece should fail without --allow-non-existing —
@@ -617,7 +617,7 @@ run_piece_call() {
   echo "Testing piece call with schema-derived flags and tools..."
 
   CALLABLE_PATTERN_SRC="$SCRIPT_DIR/pattern/fuse-exec.tsx"
-  CALLABLE_PIECE_ID=$(cf piece new --main-export $CUSTOM_EXPORT $SPACE_ARGS $CALLABLE_PATTERN_SRC)
+  CALLABLE_PIECE_ID=$(cf piece new --main-export $CUSTOM_EXPORT $SPACE_ARGS "$CALLABLE_PATTERN_SRC")
   echo "Created callable piece: $CALLABLE_PIECE_ID"
 
   CALL_HELP=$(cf piece call $SPACE_ARGS --piece $CALLABLE_PIECE_ID search --help)
@@ -670,7 +670,7 @@ run_piece_call() {
   # addressed piece and nothing else: the send starts the root at delivery, and
   # the registry carries the entry when the call returns.
   ROOT_REGISTRAR_PATTERN_SRC="$SCRIPT_DIR/pattern/root-registrar.tsx"
-  ROOT_REGISTRAR_PIECE_ID=$(cf piece new $SPACE_ARGS $ROOT_REGISTRAR_PATTERN_SRC)
+  ROOT_REGISTRAR_PIECE_ID=$(cf piece new $SPACE_ARGS "$ROOT_REGISTRAR_PATTERN_SRC")
   echo "Created root-registrar piece: $ROOT_REGISTRAR_PIECE_ID"
   cf piece call $SPACE_ARGS --piece $ROOT_REGISTRAR_PIECE_ID register --label registered-by-verb
   cf piece ls $SPACE_ARGS | grep -q "Entry registered-by-verb" ||
@@ -1032,7 +1032,7 @@ run_three_topic_fixture() {
   # retry collides on the create-only receipt and says so (`deduplicated`);
   # ON, no receipt precondition exists (events.md §4's subsumption) — the
   # duplicate is skipped at the dedupe horizon, and the retry's readback
-  # resolves the SAME cause-derived receipt the SERVING side wrote for the
+  # resolves the SAME receipt the SERVING side wrote for the
   # original handling (the ruled result carriage, 2026-08-29). The
   # original-result readback below is the witness in both arms.
   if server_execution_on; then

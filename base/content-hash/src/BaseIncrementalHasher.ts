@@ -1,5 +1,5 @@
-import { backtickQuote } from "@commonfabric/utils/markdown";
-import { toUnpaddedBase64url } from "@commonfabric/utils/base64url";
+import { backtickQuote } from "@commonfabric/text/markdown";
+import { toUnpaddedBase64url } from "@commonfabric/bytes/base64url";
 import type { IncrementalHasher } from "@/interface.ts";
 
 /**

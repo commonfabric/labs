@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { PiecePlan, SurveyResult } from "@commonfabric/piece/ops";
-import { decode } from "@commonfabric/utils/encoding";
+import { decode } from "@commonfabric/text/utf8";
 
 import { createSession, Identity } from "@commonfabric/identity";
 import { Runtime, type RuntimeProgram } from "@commonfabric/runner";

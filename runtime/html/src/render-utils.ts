@@ -1,4 +1,4 @@
-import { utf8SortedKeysOf } from "@commonfabric/utils/utf8";
+import { utf8SortedKeysOf } from "@commonfabric/text/utf8";
 
 export type SetPropHandler = <T>(
   target: T,

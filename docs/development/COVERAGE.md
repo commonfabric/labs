@@ -442,14 +442,15 @@ moved — a sibling branch in the same file is the next one to flap.
 follows that line from a group-level `+2` down to the two integration hits that
 covered it in one run and not the next.
 
-What the second party holds need not be a write. A lease row another process
-owns puts a branch in the same position: the server executor's `activate()`
+What the second party holds need not be a write. A lease another holder has
+puts a branch in the same position: the server executor's `activate()`
 reports `lease-unavailable` and returns `false` only when the space's execution
 lease is already held, and the host arm that unregisters the refused space runs
 only behind that. Nothing in the suite asks for a rival holder, so both were
 reached when one case's park happened to chain a re-activation while the rival
-row it had installed for a different purpose still stood. The way out is the
-same one: a lease is a row, so a test writes the row and calls `activate()`. The
+holder it had installed for a different purpose still stood. The way out is the
+same one: a lease is an entry in the memory server's map, so a test acquires it
+under another holder and calls `activate()`. The
 cases are in `runtime/runner/test/executor-space-server.test.ts` and
 `runtime/runner/test/executor-serving-loop.test.ts`, and
 [their investigation record](../history/development/coverage-flake-executor-contention-paths-2026-08-26.md)
@@ -951,7 +952,8 @@ capability-gate controller, and the serving loop the multi-runtime harness hosts
 on the test's thread all inject that cache into every runtime they create. A
 custom runtime in this suite must do the same. A serving loop that
 `SERVER_EXECUTION_WORKER` puts in a worker cannot, since a worker takes no
-closure, and its runtimes compile without the cache. Setting
+closure: its runtimes share a cache the worker builds for itself, which holds
+only what the worker compiled. Setting
 `CF_COMPILE_CACHE_FILE` only tells the test-support cache where to persist its
 bytes; a runtime uses those bytes only when it receives the cache through its
 `moduleByteCache` option.
@@ -984,12 +986,13 @@ that file to the build-artifacts bucket next to the release tarball. The point
 is to give someone working in an IDE a single file that shows coverage for the
 whole repository, instead of one fragment per lane.
 
-Two things happen during the merge. The source paths in each fragment are
-absolute paths rooted at whichever runner produced them, so they are rewritten
-to repository-relative paths that an IDE can map onto a local checkout. Records
-for the same source file are then combined into one, with the per-line hit
-counts added together, so a file exercised by several lanes is reported once
-with its combined coverage.
+Each lane writes its fragments with repository-relative source paths, rewriting
+the absolute paths `deno coverage` and the pattern instrumentation record once
+it has finished converting. The fragments therefore map onto any checkout: the
+`Status` job, which reads them from a different directory than the one the lane
+ran from, and an IDE with a local checkout. The merge combines the records for
+the same source file into one, with the per-line hit counts added together, so a
+file exercised by several lanes is reported once with its combined coverage.
 
 The merged file carries line coverage only. LCOV identifies a function by its
 name, and `deno coverage --lcov` can emit several functions with the same name

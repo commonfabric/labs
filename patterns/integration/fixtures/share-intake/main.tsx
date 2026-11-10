@@ -179,6 +179,7 @@ function envelopeOf(
   kind: string = OFFER_KIND,
 ): OfferEvent {
   const host = new URL(getPatternEnvironment().apiUrl).origin;
+  const from = currentPrincipal();
   return {
     kind,
     id,
@@ -186,7 +187,7 @@ function envelopeOf(
     host,
     ownerOrigin: host,
     title,
-    from: currentPrincipal(),
+    ...(from !== undefined && { from }),
     sharedAt: Date.now(),
   };
 }
@@ -375,8 +376,10 @@ export default pattern<MainInput, MainOutput>((
   const privateInboxRefusal = new Writable<PrivateInboxRefusalHolder>({}).for(
     "privateInboxRefusal",
   );
+  const senderProfile = Writable.of<StandInProfile>({ name: "Sender" });
   const chats = FabriChatManagerCore({
-    myProfile: Writable.of<StandInProfile>({ name: "Sender" }),
+    myProfile: senderProfile,
+    sessionProfile: senderProfile,
     // The sender's own catalog, apart from the one the intake registers in.
     sharedSpaceCatalog: Writable.of<SharedSpaceCatalogStorage>({
       entries: {},
@@ -390,8 +393,10 @@ export default pattern<MainInput, MainOutput>((
     entries: {},
     offers: {},
   }).for("sharedSpaceCatalog");
+  const ownerProfile = firstProfileOf(profiles);
   const ownerChats = FabriChatManagerCore({
-    myProfile: firstProfileOf(profiles),
+    myProfile: ownerProfile,
+    sessionProfile: ownerProfile,
     sharedSpaceCatalog: catalog,
     direct: new Writable<Record<string, ChatIndexEntry>>({}).for(
       "ownerChatDirect",

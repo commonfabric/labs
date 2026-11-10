@@ -40,7 +40,7 @@ import type {
 /**
  * Helper type to recursively remove `readonly` properties from type `T`.
  *
- * (Duplicated from @commonfabric/utils/types.ts, but we want to keep this
+ * (Duplicated from @commonfabric/js-values/types.ts, but we want to keep this
  * independent for now)
  */
 export type Mutable<T> = T extends ReadonlyArray<infer U> ? Mutable<U>[]

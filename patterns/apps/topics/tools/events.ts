@@ -38,18 +38,24 @@ export function changes(
   const events: TopicEvent[] = [];
   for (const topic of after) {
     const was = earlier.get(topic.number);
+    // What a display withholds, its coming and going included, makes no
+    // event.
     if (was === undefined) {
-      events.push({ kind: "filed", topic, at: topic.createdAt || now });
+      if (!topic.withheld) {
+        events.push({ kind: "filed", topic, at: topic.createdAt || now });
+      }
       continue;
     }
-    if (was.title !== topic.title) {
+    const shown = !topic.withheld && !was.withheld;
+    if (shown && was.title !== topic.title) {
       events.push({ kind: "retitled", topic, before: was.title, at: now });
     }
-    if (was.body !== topic.body) {
+    if (shown && was.body !== topic.body) {
       events.push({ kind: "body", topic, before: was.body, at: now });
     }
     for (const [index, comment] of topic.comments.entries()) {
       const old = was.comments[index];
+      if (comment.withheld || old?.withheld) continue;
       if (old === undefined) {
         if (!comment.removed) {
           events.push({
@@ -75,6 +81,7 @@ export function changes(
     }
     for (const [index, link] of topic.links.entries()) {
       const old = was.links[index];
+      if (link.withheld || old?.withheld) continue;
       if (old === undefined) {
         if (!link.removed) {
           events.push({ kind: "link", topic, link, at: link.addedAt ?? now });
@@ -85,7 +92,7 @@ export function changes(
     }
     // A reference counts from when the Topic it names is on the board, so
     // one made before that Topic was read is reported once it is.
-    for (const id of topic.mentions) {
+    for (const id of shown ? topic.mentions : []) {
       const other = namedAfter.get(id);
       if (
         other !== undefined &&
@@ -94,7 +101,7 @@ export function changes(
         events.push({ kind: "mention", topic, other, at: now });
       }
     }
-    for (const id of was.mentions) {
+    for (const id of shown ? was.mentions : []) {
       const other = namedBefore.get(id);
       if (other !== undefined && !topic.mentions.includes(id)) {
         events.push({
@@ -125,20 +132,21 @@ function byReference(topics: readonly Topic[]): Map<string, Topic> {
 
 /**
  * The newest `count` events a single reading of the board still records,
- * Topics filed, comments, and links, by their own timestamps, oldest first.
+ * Topics filed, comments, and links, by their own timestamps, oldest first,
+ * leaving out what is withheld from this display.
  */
 export function history(topics: readonly Topic[], count: number): TopicEvent[] {
   const events: TopicEvent[] = topics.flatMap((topic): TopicEvent[] => [
-    ...(topic.createdAt > 0
+    ...(!topic.withheld && topic.createdAt > 0
       ? [{ kind: "filed" as const, topic, at: topic.createdAt }]
       : []),
     ...topic.comments.flatMap((comment) =>
-      comment.removed || comment.sentAt === 0
+      comment.withheld || comment.removed || comment.sentAt === 0
         ? []
         : [{ kind: "comment" as const, topic, comment, at: comment.sentAt }]
     ),
     ...topic.links.flatMap((link) =>
-      link.removed || link.addedAt === undefined
+      link.withheld || link.removed || link.addedAt === undefined
         ? []
         : [{ kind: "link" as const, topic, link, at: link.addedAt }]
     ),

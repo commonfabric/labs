@@ -1,13 +1,14 @@
 import type { FabricValue } from "@commonfabric/api";
 import type { CfcModulePolicyRefAtom } from "@commonfabric/api/cfc";
 import type { MemorySpace } from "@commonfabric/memory/interface";
-import type { Immutable } from "@commonfabric/utils/types";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
+import type { Immutable } from "@commonfabric/js-values/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import type { CellScope, JSONSchema } from "../builder/types.ts";
+import { normalizeCellScope } from "../scope.ts";
 import type { Metadata } from "../storage/interface.ts";
 import type { ConsumedLocation } from "./access-integrity.ts";
-import type { CfcConfClause } from "./clause.ts";
 import type {
   CfcLabelView,
   IFCLabel,
@@ -509,6 +510,23 @@ export type CfcAddress = Immutable<{
   path: string[];
 }>;
 
+/** A document a CFC decision names: its space, id and scope, with no path. */
+export type CfcDocumentAddress = Immutable<{
+  space: MemorySpace;
+  id: string;
+  scope?: CellScope;
+}>;
+
+/** A piece's result document and the principal recorded as its creator. */
+export type CfcPieceCreatorRecord = Immutable<{
+  piece: CfcDocumentAddress;
+  creator: string;
+}>;
+
+/** The key under which two addresses of one document compare equal. */
+export const cfcDocumentKey = (address: CfcDocumentAddress): string =>
+  `${address.space}\0${address.id}\0${normalizeCellScope(address.scope)}`;
+
 /**
  * The address a prepared-digest record binds, which carries exactly one of
  * two paths: `path`, a payload path relative to `value`, or `metaPath`, a path
@@ -672,6 +690,24 @@ export type WritePolicyInput =
     readonly kind: "release-program";
     readonly target: CfcAddress;
     readonly modules: readonly string[];
+  }
+  | {
+    /**
+     * A piece's result wiring, which setup writes or restates in this
+     * transaction (§8.9.1.3): the references its build places at the slots
+     * of the result document `target` names. The transaction re-mints the
+     * wiring's membership entries whether or not it writes the value, and
+     * where `buildDecided` holds, mints them from what it had read before
+     * `setupBegan`, the journal position the setup began at: the program
+     * chosen by that and the piece's identity fixed every reference the
+     * wiring places. A read the journal holds no position for counts as read
+     * before it, so a transaction with no activity clock stamps from all of
+     * its reads, which over-taints. Authority is the runtime's mark.
+     */
+    readonly kind: "result-wiring";
+    readonly target: CfcAddress;
+    readonly buildDecided: boolean;
+    readonly setupBegan: number;
   }
   | {
     /**
@@ -1179,19 +1215,41 @@ export type CfcTxState = {
     identity?: ImplementationIdentity;
   };
   trustSnapshot?: TrustSnapshot;
-  // Whether a value the runtime initializes in this transaction — a
+  // Whether every value the runtime initializes in this transaction — a
   // constructed cell's seed, the reference exposing it, a new field's
   // default, a pattern's setup projection — is attributed to the acting
-  // principal: true for the transaction of a handler run they invoked, for
-  // one that brings a piece into being outside any scheduled action on their
-  // behalf, and for a start or result pattern deferred from either; false
-  // otherwise. Preparation mints the integrity a schema adds about the
-  // current principal, and binds an owner, for an initialization only when
-  // this is true. Set only through the privileged
+  // principal: true for the transaction of a handler run they invoked and
+  // for a start or result pattern deferred from one; false otherwise.
+  // Preparation mints the integrity a schema adds about the current
+  // principal, and binds an owner, for an initialization only when the
+  // transaction attributes it: through this, or through `attributedPieces`
+  // for the piece the target belongs to. Set only through the privileged
   // `markCfcAttributedInitialization` (runtime authorization); once set it
   // holds for the transaction, so a setup that must not be attributed runs
   // in a transaction of its own.
   attributedInitialization: boolean;
+  // The result documents of the pieces this transaction brings into being on
+  // the acting principal's behalf — outside any scheduled action, as a deploy
+  // or a host creating a piece for them does — and of the pieces a start
+  // deferred from such a transaction runs. What the transaction initializes
+  // in one of these documents, or in a store its setup named for the piece
+  // (`runtime.piece-setup-store`, `runtime.owned-store`), is attributed to
+  // the acting principal; a projection it re-stages for a piece that already
+  // existed is not. Set only through `markCfcAttributedInitialization` with
+  // the piece's result document; `attributedInitialization` covers every
+  // piece.
+  attributedPieces: readonly CfcDocumentAddress[];
+  // The creator records this transaction writes, by the result document each
+  // names: the runtime records one where its setup brings a piece into being,
+  // and preparation admits a write to the `creator` meta field only where a
+  // record here names the document and the same principal. Set only through
+  // `markCfcPieceCreator` (runtime authorization).
+  pieceCreators: readonly CfcPieceCreatorRecord[];
+  // The documents whose `creator` meta field this transaction writes, recorded
+  // at the write chokepoint whatever authorization the write carries, so that
+  // preparation judges those writes (`pieceCreatorRecordReasons`) without
+  // scanning the write log of a transaction that makes none.
+  creatorRecordWrites: readonly CfcDocumentAddress[];
   // Attesting space -> transitive successor -> predecessor writer-authority
   // aliases, snapshotted from the Runtime when the transaction is created and
   // write-once pinned. Authorization consults only the target document's space.

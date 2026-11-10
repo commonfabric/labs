@@ -1,6 +1,6 @@
-import { BuiltInLLMDialogState } from "@commonfabric/api";
+import type { BuiltInLLMDialogState } from "@commonfabric/api";
 import { internSchema } from "@commonfabric/data-model-schema";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import type {
   BuiltInAgentParams,
   BuiltInAgentState,
@@ -16,6 +16,7 @@ import type {
   ConfLabelQuery,
   FetchBinaryResult,
   FetchOptions,
+  FieldAnchors,
   InspectConfLabelResult,
   PatternToolFunction,
   PatternToolResult,
@@ -390,6 +391,23 @@ export const navigateTo = createNodeFactory({
   type: "ref",
   implementation: "navigateTo",
 }) as (cell: Reactive<unknown>) => Reactive<boolean>;
+
+/**
+ * anchorsOf(field) — the anchors of the collaborative string field `field`
+ * names, or `undefined` while it has none. See the api-level
+ * `AnchorsOfFunction` docs for semantics.
+ */
+export function anchorsOf(
+  field: FactoryInput<string>,
+): Reactive<FieldAnchors | undefined> {
+  anchorsOfFactory ||= createNodeFactory({
+    type: "ref",
+    implementation: "anchorsOf",
+  });
+  return anchorsOfFactory({ field }) as Reactive<FieldAnchors | undefined>;
+}
+
+let anchorsOfFactory: NodeFactory<{ field: unknown }, any> | undefined;
 
 // inv-12 Stage 2 (spec §4.6.4.1): the bounded label-introspection surface.
 // `target` rides the node input `asCell` so the builtin receives the

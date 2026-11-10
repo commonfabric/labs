@@ -9,8 +9,10 @@
  *     column arithmetic the editor relies on is preserved.
  *   - "ansi": runs that parse as ANSI color (SGR) sequences are consumed and
  *     their colors override the syntax highlighting of the text that follows,
- *     until the next sequence or a reset. Every other non-printable is shown as
- *     its Control Pictures glyph.
+ *     until the next sequence or a reset. A tab advances to the next display
+ *     column that is a multiple of {@link TAB_STOP}, drawn as one to
+ *     {@link TAB_STOP} blank cells. Every other non-printable is shown as its
+ *     Control Pictures glyph.
  *   - "hidden": runs that parse as ANSI control sequences are dropped entirely.
  *     Each remaining run of non-printables collapses to a single ellipsis.
  *
@@ -19,11 +21,14 @@
  * search ranges — stated in source columns — onto the cells it draws.
  */
 
-import type { Rgb, Style } from "./ansi.ts";
+import { cpLen, type Rgb, type Style } from "./ansi.ts";
 import type { Line } from "./model.ts";
 import { spanStyle } from "./highlight.ts";
 
 export type DisplayMode = "pictures" | "ansi" | "hidden";
+
+/** The spacing of the tab stops in "ansi" mode, in display columns. */
+export const TAB_STOP = 4;
 
 /** The cycle order for the toggle, and the initial mode. */
 export const DISPLAY_MODES: readonly DisplayMode[] = [
@@ -113,8 +118,7 @@ export function sourceColumnOf(
   displayCol: number,
 ): number {
   const at = Math.max(0, displayCol);
-  let sourceWidth = 0;
-  for (const _ of line.text) sourceWidth++;
+  const sourceWidth = cpLen(line.text);
   if (mode === "pictures") return Math.min(at, sourceWidth);
   const cells = displayLine(line, mode);
   if (cells.length === 0) return 0;
@@ -123,6 +127,7 @@ export function sourceColumnOf(
 
 /** Number of cells a line occupies in one display mode. */
 export function displayWidth(line: Line, mode: DisplayMode): number {
+  if (mode === "pictures") return cpLen(line.text);
   let width = 0;
   visitDisplayCellSources(line.text, mode, () => {
     width++;
@@ -132,14 +137,16 @@ export function displayWidth(line: Line, mode: DisplayMode): number {
 }
 
 /**
- * Visit the UTF-16 source range represented by each visible display cell.
- * Returning false from the visitor stops the scan.
+ * Visit the UTF-16 source range represented by each visible display cell, in
+ * display order. A tab in "ansi" mode draws several cells, so its range is
+ * visited once per cell. Returning false from the visitor stops the scan.
  */
 export function visitDisplayCellSources(
   text: string,
   mode: DisplayMode,
   visit: (start: number, end: number) => boolean,
 ): boolean {
+  let width = 0;
   for (let i = 0; i < text.length;) {
     const sequence = mode === "pictures" ? null : matchTextCsi(text, i);
     if (sequence && (mode === "hidden" || sequence.final === "m")) {
@@ -150,7 +157,12 @@ export function visitDisplayCellSources(
     const codePoint = text.codePointAt(i)!;
     const end = i + (codePoint > 0xffff ? 2 : 1);
     if (mode !== "hidden" || !isNonPrintableCode(codePoint)) {
-      if (!visit(i, end)) return false;
+      const cells = mode === "ansi" && codePoint === 0x09
+        ? tabWidthAt(width)
+        : 1;
+      for (let n = 0; n < cells; n++, width++) {
+        if (!visit(i, end)) return false;
+      }
       i = end;
       continue;
     }
@@ -162,9 +174,16 @@ export function visitDisplayCellSources(
       runEnd += next > 0xffff ? 2 : 1;
     }
     if (!visit(i, runEnd)) return false;
+    width++;
     i = runEnd;
   }
   return true;
+}
+
+/** The number of cells a tab occupies when it starts at display column
+ * `col`: enough to reach the next tab stop. */
+function tabWidthAt(col: number): number {
+  return TAB_STOP - col % TAB_STOP;
 }
 
 export function displayLine(
@@ -189,7 +208,8 @@ export function displayLine(
 }
 
 /** ANSI mode: consume SGR color sequences and carry their color forward as an
- * override; show every other non-printable as a Control Pictures glyph. */
+ * override, expand each tab to the next tab stop, and show every other
+ * non-printable as a Control Pictures glyph. */
 function displayAnsi(src: readonly SourcePoint[]): DisplayCell[] {
   const cells: DisplayCell[] = [];
   let active: Style = {};
@@ -202,13 +222,15 @@ function displayAnsi(src: readonly SourcePoint[]): DisplayCell[] {
       continue;
     }
     const s = src[i];
-    cells.push({
-      ch: glyphFor(s.cp),
+    const cell: DisplayCell = {
+      ch: s.cp === "\t" ? " " : glyphFor(s.cp),
       col: s.col,
       sourceEnd: s.col + 1,
       syntax: s.syntax,
       ansi: hasStyle(active) ? active : undefined,
-    });
+    };
+    const count = s.cp === "\t" ? tabWidthAt(cells.length) : 1;
+    for (let n = 0; n < count; n++) cells.push(cell);
     i += 1;
   }
   return cells;

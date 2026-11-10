@@ -1,7 +1,11 @@
 // tree-builder.ts — Convert JSON values to FsTree nodes
 
 import { isLinkRef, type SigilLink } from "@commonfabric/runner/shared";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 
 import type { CfcJsonAnnotationContext } from "./annotations.ts";
 import {
@@ -11,7 +15,7 @@ import {
   transformCallableValues,
 } from "./callables.ts";
 import { encodeFuseComponent } from "./path-codec.ts";
-import { FsTree } from "./tree.ts";
+import type { FsTree } from "./tree.ts";
 
 type JsonPropName = "input" | "result";
 type PendingJsonRootName = ".input.pending" | ".result.pending";
@@ -141,7 +145,7 @@ export function stringifyEntryValue(
   try {
     return safeStringify(value);
   } catch (cause) {
-    const detail = cause instanceof Error ? cause.message : String(cause);
+    const detail = describeFailure(cause);
     throw new Error(
       `Cannot serialize ${
         mountedEntryPath(tree, parentIno, fsName)
@@ -213,7 +217,12 @@ function isFrontmatterPrimitive(val: unknown): boolean {
  * Build a single-file filesystem projection from a [FS] value.
  *
  * - text/markdown  → index.md  (YAML frontmatter + body)
- *   Primitive frontmatter fields go into YAML.
+ *   Primitive frontmatter fields go into YAML. A string is written as a
+ *   JSON-quoted value, which YAML reads as a double-quoted scalar and
+ *   `writeFsFile()` parses back to the same string, so that a title that
+ *   looks like a number or boolean, carries quotes, or spans lines survives
+ *   a save of the unedited file. A number, boolean, or `null` is written
+ *   bare, which the parser reads back as that value.
  *   Complex fields (objects, arrays of entities) become subdirectories
  *   alongside index.md via `buildSubtree`.
  * - application/json → index.json (flat JSON object)
@@ -235,7 +244,12 @@ export function buildFsProjection(
         // Skip entityId if pattern accidentally includes it
         if (key === "entityId") continue;
         if (isFrontmatterPrimitive(val)) {
-          fmLines.push(`${key}: ${String(val ?? "")}`);
+          const text = typeof val === "string"
+            ? JSON.stringify(val)
+            : val === undefined
+            ? ""
+            : String(val);
+          fmLines.push(`${key}: ${text}`);
         } else if (buildSubtree) {
           // Arrays of entities or nested objects can't be expressed in YAML
           // frontmatter — render as a sibling directory instead.

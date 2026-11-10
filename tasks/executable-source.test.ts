@@ -262,7 +262,7 @@ describe("executable-source", () => {
           `--output=${lcovPath}`,
           rawDir,
         ]);
-        coverage = parseLcov(await Deno.readTextFile(lcovPath));
+        coverage = parseLcov(await Deno.readTextFile(lcovPath), root);
       });
 
       afterAll(async () => {

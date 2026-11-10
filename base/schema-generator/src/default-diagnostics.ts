@@ -1,6 +1,6 @@
 /** Reports defaults whose values cannot be recovered during schema generation. */
 
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 import type ts from "typescript";
 
 import type {

@@ -1,5 +1,5 @@
 import type { JSONSchema, JSONSchemaObj } from "@commonfabric/api";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 /**
  * Indicates if the given (nullable) schema is in fact a non-trivial schema. A

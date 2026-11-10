@@ -1,4 +1,5 @@
 import type { MiddlewareHandler } from "@hono/hono";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { verifyFirstPartyHttpRequest } from "@commonfabric/runner/toolshed-http-auth";
 import { trace } from "@opentelemetry/api";
 import type { AppBindings } from "@/lib/types.ts";
@@ -34,7 +35,7 @@ export function requireFirstPartyHttpAuth(
         {
           path: c.req.path,
           method: c.req.method,
-          error: error instanceof Error ? error.message : String(error),
+          error: describeFailure(error),
         },
         "Rejected unauthenticated first-party HTTP request",
       );

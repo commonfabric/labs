@@ -151,7 +151,7 @@ import { describe, it } from "@std/testing/bdd";
 
 import { stringSchema } from "@commonfabric/runner/schemas";
 import type { CellHandle } from "@commonfabric/runtime-client";
-import { spliceAll } from "@commonfabric/utils/arrays";
+import { spliceAll } from "@commonfabric/collections/splice";
 
 import {
   createMockCellHandle,

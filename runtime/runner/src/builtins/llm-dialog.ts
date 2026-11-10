@@ -42,12 +42,14 @@ import {
   resolveScopeKey,
   type ScopeKeyIdentity,
 } from "@commonfabric/memory/v2";
-import { getLogger } from "@commonfabric/utils/logger";
+import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
+import { getLogger } from "@commonfabric/logger";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   isBoolean,
   isObjectNotArray,
   isObjectOrArray,
-} from "@commonfabric/utils/types";
+} from "@commonfabric/js-values/types";
 import type {
   BuiltInLLMMessage,
   BuiltInLLMParams,
@@ -75,7 +77,6 @@ import {
   cfcSchemaToObject,
   resolveCfcSchemaRefs,
 } from "../cfc/schema-refs.ts";
-import type { CfcConfClause } from "../cfc/clause.ts";
 import {
   type CfcLabelView,
   cfcLabelViewForCellFailClosed,
@@ -3001,7 +3002,7 @@ async function executeToolCalls(
       results.push({
         id: part.toolCallId,
         toolName: part.toolName,
-        error: error instanceof Error ? error.message : String(error),
+        error: describeFailure(error),
       });
     }
   }
@@ -5061,9 +5062,7 @@ Some operations (especially \`invoke()\` with patterns) create "Pages" - running
     })
     .catch((error: unknown) => {
       console.error("Error generating data", error);
-      const errorMessageText = error instanceof Error
-        ? error.message
-        : String(error);
+      const errorMessageText = describeFailure(error);
       const errorMessage = {
         role: "assistant",
         content:

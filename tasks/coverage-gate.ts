@@ -37,7 +37,7 @@
 
 import * as path from "@std/path";
 import { walk } from "@std/fs/walk";
-import { utf8Compare } from "@commonfabric/utils/utf8";
+import { utf8Compare } from "@commonfabric/text/utf8";
 import {
   type CoverageFigures,
   type Environment,

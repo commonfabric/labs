@@ -30,9 +30,8 @@ import {
   spaceHostFromFabricAuthority,
 } from "@commonfabric/runner";
 import {
-  entityKindOfIdString,
+  entityUriSchemePrefix,
   stripEntityUriScheme,
-  uriSchemeForEntityKind,
 } from "@commonfabric/runner/entity-kind";
 import {
   parseReleaseTime,
@@ -40,7 +39,8 @@ import {
 } from "@commonfabric/runner/pattern-release-time";
 import { nameSchema } from "@commonfabric/runner/schemas";
 import { HttpProgramResolver } from "@commonfabric/js-compiler/program";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 /**
  * How an origin URL resolves.
@@ -341,11 +341,10 @@ export async function resolvePieceOriginSource(
 /**
  * Whether a stable fabric reference names the entity `pieceId` addresses. The
  * id can arrive as a bare tagged hash or as its schemed URI, so both are
- * reduced to the kind and hash the reference carries.
+ * reduced to the scheme and hash the reference carries.
  */
 function namesEntity(ref: StableFabricRef, pieceId: string): boolean {
-  return uriSchemeForEntityKind(entityKindOfIdString(pieceId)) ===
-      ref.ref.scheme &&
+  return (entityUriSchemePrefix(pieceId) ?? "of:") === `${ref.ref.scheme}:` &&
     stripEntityUriScheme(pieceId) === `fid1:${ref.ref.hash}`;
 }
 
@@ -389,9 +388,7 @@ export function classifyOrigin(
     ref = parseFabricRef(source);
   } catch (cause) {
     throw new PieceOriginError(
-      `${source} is not a usable fabric URL: ${
-        cause instanceof Error ? cause.message : String(cause)
-      }`,
+      `${source} is not a usable fabric URL: ${describeFailure(cause)}`,
     );
   }
   if (ref !== undefined) {

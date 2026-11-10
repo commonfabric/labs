@@ -11,6 +11,7 @@ import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import type { Server as MemoryV2Server } from "@commonfabric/memory/v2/server";
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { createRef } from "../src/create-ref.ts";
@@ -49,6 +50,7 @@ describe("computed-cell id end-to-end (default-on instantiation)", () => {
       throw new Error("Expected a memory/v2 emulated storage manager");
     }
     remoteClient = await MemoryV2Client.connect({
+      instanceNames: namesInstancesByDefault(),
       transport: MemoryV2Client.loopback(candidate.server()),
     });
     remoteSession = await remoteClient.mount(

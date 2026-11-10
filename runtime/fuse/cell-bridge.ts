@@ -28,7 +28,11 @@ import {
 import { cfcLabelViewForCell } from "@commonfabric/runner/cfc";
 import { nameSchema } from "@commonfabric/runner/schemas";
 import { linkRefPayload } from "@commonfabric/runner/shared";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 
 import {
   type CfcLabel,
@@ -146,19 +150,29 @@ function displayCallableInputType(
  * opening `---` line and the next one. A value that parses as a JSON string,
  * number, boolean, or `null` is taken as such, and any other is kept as text.
  * Returns the fields and the body after the closing line, with one blank
- * separator line dropped; text with no frontmatter is all body.
+ * separator line dropped; text with no frontmatter is all body. A leading
+ * byte-order mark is dropped, and the fences and the field lines are found
+ * under LF, CRLF, or CR line endings alike, so an editor that saves either
+ * way still has its frontmatter found. The body is returned as saved, line
+ * endings included.
  */
 function parseFrontmatter(
-  text: string,
+  rawText: string,
 ): { frontmatter: Record<string, unknown>; body: string } {
   const fm: Record<string, unknown> = {};
-  if (!text.startsWith("---\n")) return { frontmatter: fm, body: text };
-  const end = text.indexOf("\n---\n", 4);
-  if (end === -1) return { frontmatter: fm, body: text };
-  const fmText = text.slice(4, end);
-  let body = text.slice(end + 5); // skip "\n---\n"
-  if (body.startsWith("\n")) body = body.slice(1); // strip blank separator line
-  for (const line of fmText.split("\n")) {
+  const text = rawText.replace(/^\uFEFF/, "");
+  const open = /^---(?:\r\n|\r|\n)/.exec(text);
+  if (!open) return { frontmatter: fm, body: text };
+  const closeFence = /(?:\r\n|\r|\n)---(?:\r\n|\r|\n)/g;
+  // The search starts at the opening line's terminator, which doubles as the
+  // line break before the closing fence when the block is empty.
+  closeFence.lastIndex = open[0].length - 1;
+  const close = closeFence.exec(text);
+  if (!close) return { frontmatter: fm, body: text };
+  const fmText = text.slice(open[0].length, close.index);
+  const body = text.slice(close.index + close[0].length)
+    .replace(/^(?:\r\n|\r|\n)/, "");
+  for (const line of fmText.split(/\r\n|\r|\n/)) {
     const colonIdx = line.indexOf(":");
     if (colonIdx === -1) continue;
     const key = line.slice(0, colonIdx).trim();
@@ -2126,16 +2140,14 @@ export class CellBridge {
         } finally {
           await probe.runtime.dispose().catch((e) => {
             console.warn(
-              `[FUSE] Reconnect probe cleanup failed: ${
-                e instanceof Error ? e.message : String(e)
-              }`,
+              `[FUSE] Reconnect probe cleanup failed: ${describeFailure(e)}`,
             );
           });
         }
       } catch (e) {
         console.error(
           `[FUSE] Reconnect probe to ${spaceName} failed: ${
-            e instanceof Error ? e.message : String(e)
+            describeFailure(e)
           }`,
         );
         allSpacesRestored = false;
@@ -2549,9 +2561,7 @@ export class CellBridge {
         await pieces.runtime.dispose().catch((disposeError) => {
           console.warn(
             `[FUSE] Failed space cleanup for ${spaceName}: ${
-              disposeError instanceof Error
-                ? disposeError.message
-                : String(disposeError)
+              describeFailure(disposeError)
             }`,
           );
         });

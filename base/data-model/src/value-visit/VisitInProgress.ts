@@ -1,6 +1,6 @@
-import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
-import { isUnsafeObjectKey } from "@commonfabric/utils/types";
-import { IndexTrackingStack } from "@commonfabric/utils/index-tracking-stack";
+import { isArrayIndexPropertyName } from "@commonfabric/js-values/arrays";
+import { isUnsafeObjectKey } from "@commonfabric/js-values/types";
+import { IndexTrackingStack } from "@commonfabric/collections/index-tracking-stack";
 
 import {
   codecOf,
@@ -26,17 +26,17 @@ import {
 } from "@/types";
 import { debugStr } from "@/value-debug";
 
-import {
-  type MainResultForm,
-  type MapToEntryForm,
-  type MapToForm,
-  type OmitForm,
-  type RecurseForm,
-  type ReplaceForm,
-  type ValueVisitor,
-  type VisitingEntryResult,
-  type VisitingResult,
-  type VisitResult,
+import type {
+  MainResultForm,
+  MapToEntryForm,
+  MapToForm,
+  OmitForm,
+  RecurseForm,
+  ReplaceForm,
+  ValueVisitor,
+  VisitingEntryResult,
+  VisitingResult,
+  VisitResult,
 } from "./interface.ts";
 
 /**

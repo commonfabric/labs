@@ -91,6 +91,12 @@ export {
   joinVisitedRoomOf,
 } from "./join-visited-room.ts";
 export {
+  type DeletionMarkDecision,
+  markDeletedSpaceOf,
+  type ProfileRetirementDecision,
+  retireDeletedProfileOf,
+} from "./mark-deleted-space.ts";
+export {
   type OfferDecision,
   type OfferRefusal,
   ShareIntake,

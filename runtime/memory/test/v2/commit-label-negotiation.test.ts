@@ -4,7 +4,7 @@ import { describe, it } from "@std/testing/bdd";
 import type { FabricPlainObject } from "@commonfabric/api";
 import { deepFreeze, taggedHashStringOf } from "@commonfabric/data-model";
 import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
-import { isPlainObject } from "@commonfabric/utils/types";
+import { isPlainObject } from "@commonfabric/js-values/types";
 
 import {
   type ClientCommit,

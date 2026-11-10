@@ -4,7 +4,7 @@
  */
 
 import { isCanonicalEd25519DID } from "@commonfabric/identity";
-import { isPlainObject } from "@commonfabric/utils/types";
+import { isPlainObject } from "@commonfabric/js-values/types";
 
 import {
   parseRoutedJson,

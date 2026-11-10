@@ -10,15 +10,18 @@ import type { JSONValue } from "@commonfabric/api";
 import { type CfcAtom, cfcAtom } from "@commonfabric/api/cfc";
 import { hashStringOf } from "@commonfabric/data-model";
 import { isDID } from "@commonfabric/identity/did";
-import { deepEqual } from "@commonfabric/utils/deep-equal";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { deepEqual } from "@commonfabric/js-values/deep-equal";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
+import {
+  type CfcConfClause,
+  clauseAlternatives,
+} from "@commonfabric/memory/v2/cfc-release-authority";
 
 import { type Cell, cellRuntime } from "../cell.ts";
 import { parseLink } from "../link-utils.ts";
 import type { NormalizedFullLink } from "../link-utils.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import { internalVerifierRead } from "../storage/reactivity-log.ts";
-import { type CfcConfClause, clauseAlternatives } from "./clause.ts";
 import {
   evidenceHolds,
   isTrustedGestureOn,

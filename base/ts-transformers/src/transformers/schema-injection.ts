@@ -8,7 +8,7 @@ import {
   carriesWriterPolicy,
   holdsWriterPolicy,
 } from "@commonfabric/schema-generator/writer-policy";
-import { FUNCTION_HARDENING_HELPER_NAME } from "@commonfabric/utils/sandbox-contract";
+import { FUNCTION_HARDENING_HELPER_NAME } from "@commonfabric/pattern-contract/sandbox-contract";
 import ts from "typescript";
 
 import {

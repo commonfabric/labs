@@ -23,8 +23,13 @@ import {
   type LocalJobsService,
   startLocalJobs,
 } from "@commonfabric/agent-runner/local-jobs/service";
-import { LOOM_RETRIEVAL_TOOL_IDS } from "@commonfabric/cf-harness/contracts/tool-descriptor";
+import {
+  LOOM_COMMAND_TOOL_IDS,
+  LOOM_RETRIEVAL_TOOL_IDS,
+} from "@commonfabric/cf-harness/contracts/tool-descriptor";
 import { HarnessControlError } from "@commonfabric/cf-harness/control-errors";
+import { commandEndpointUrlProblem } from "@commonfabric/cf-harness/loom-commands";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { type Cell, type Runtime, sendEvent } from "@commonfabric/runner";
 import {
   AGENT_RUN_STATES,
@@ -39,6 +44,7 @@ import {
   cancelAgentRun,
   readAgentRun,
   readAgentRuns,
+  removeAgentRun,
 } from "../lib/agent-inspection.ts";
 import { render } from "../lib/render.ts";
 
@@ -53,6 +59,9 @@ import { absPath } from "../lib/utils.ts";
 /** The Loom retrieval tools a runner offers when it has a Loom configuration. */
 const LOOM_TOOLS = [...LOOM_RETRIEVAL_TOOL_IDS];
 
+/** The command tools a runner offers when it has a command endpoint. */
+const COMMAND_TOOLS = [...LOOM_COMMAND_TOOL_IDS];
+
 /** The harness tools every runner offers, beyond the ones every run reads its inputs through. */
 const BASE_TOOLS = ["web_fetch"];
 
@@ -65,6 +74,8 @@ export interface AgentRunnerCommandOptions {
   apiUrl?: string;
   localApiUrl?: string;
   loomRetrievalConfig?: string;
+  commandsUrl?: string;
+  commandsActor?: string;
   maxConcurrent: number;
   tools?: string;
   workRoot?: string;
@@ -83,7 +94,10 @@ export interface AgentRunnerCommandOptions {
  * every run has them.
  */
 export function resolveRunnerTools(
-  options: Pick<AgentRunnerCommandOptions, "tools" | "loomRetrievalConfig">,
+  options: Pick<
+    AgentRunnerCommandOptions,
+    "tools" | "loomRetrievalConfig" | "commandsUrl"
+  >,
 ): string[] {
   if (options.tools !== undefined) {
     const tools = options.tools.split(",").map((tool) => tool.trim()).filter((
@@ -99,13 +113,22 @@ export function resolveRunnerTools(
         { exitCode: 1 },
       );
     }
+    const commandTool = tools.find((tool) =>
+      (LOOM_COMMAND_TOOL_IDS as ReadonlySet<string>).has(tool)
+    );
+    if (commandTool !== undefined && options.commandsUrl === undefined) {
+      throw new ValidationError(
+        `Tool \`${commandTool}\` requires "--commands-url".`,
+        { exitCode: 1 },
+      );
+    }
     return withAgentInputAccessTools(tools);
   }
-  return withAgentInputAccessTools(
-    options.loomRetrievalConfig !== undefined
-      ? [...LOOM_TOOLS, ...BASE_TOOLS]
-      : BASE_TOOLS,
-  );
+  return withAgentInputAccessTools([
+    ...(options.loomRetrievalConfig !== undefined ? LOOM_TOOLS : []),
+    ...(options.commandsUrl !== undefined ? COMMAND_TOOLS : []),
+    ...BASE_TOOLS,
+  ]);
 }
 
 /** What the flags and environment resolve to. */
@@ -122,6 +145,10 @@ export interface AgentRunnerCommandConfig {
   leaseMs: number;
   workRoot: string;
   loomRetrievalConfigPath?: string;
+
+  /** The host's command endpoint and the actor commands run as. */
+  commands?: { url: string; actor: string };
+
   model?: string;
 }
 
@@ -178,6 +205,34 @@ function originOf(flag: string, value: string): string {
 }
 
 /**
+ * Refuses `--commands-url` and `--commands-actor` given apart, or an
+ * endpoint URL no command request could be sent to.
+ *
+ * @throws ValidationError for either.
+ */
+function checkCommandsFlags(
+  options: Pick<AgentRunnerCommandOptions, "commandsUrl" | "commandsActor">,
+): void {
+  if (
+    (options.commandsUrl === undefined) !==
+      (options.commandsActor === undefined)
+  ) {
+    throw new ValidationError(
+      `"--commands-url" and "--commands-actor" go together.`,
+      { exitCode: 1 },
+    );
+  }
+  const problem = options.commandsUrl === undefined
+    ? undefined
+    : commandEndpointUrlProblem(options.commandsUrl);
+  if (problem !== undefined) {
+    throw new ValidationError(`"--commands-url": ${problem}`, {
+      exitCode: 1,
+    });
+  }
+}
+
+/**
  * Resolves the command's options to a configuration.
  *
  * @throws ValidationError for a missing identity or API URL, a URL that does
@@ -218,6 +273,7 @@ export async function resolveAgentRunnerConfig(
   const runnerHost = options.localApiUrl !== undefined
     ? originOf("--local-api-url", options.localApiUrl)
     : homeHost;
+  checkCommandsFlags(options);
   const identityPath = absPath(options.identity);
   const identity = await deps.loadIdentity(identityPath);
   return {
@@ -238,6 +294,9 @@ export async function resolveAgentRunnerConfig(
     ),
     ...(options.loomRetrievalConfig !== undefined
       ? { loomRetrievalConfigPath: absPath(options.loomRetrievalConfig) }
+      : {}),
+    ...(options.commandsUrl !== undefined && options.commandsActor !== undefined
+      ? { commands: { url: options.commandsUrl, actor: options.commandsActor } }
       : {}),
     ...(options.model !== undefined ? { model: options.model } : {}),
   };
@@ -352,6 +411,7 @@ export async function startAgentRunner(
       runnerHost: config.runnerHost,
       runnerId: `${home}#${crypto.randomUUID()}`,
       tools: config.tools,
+      progress: true,
       maxConcurrent: config.maxConcurrent,
       leaseMs: config.leaseMs,
       runtimeForHost,
@@ -366,6 +426,7 @@ export async function startAgentRunner(
         ...(config.loomRetrievalConfigPath !== undefined
           ? { loomRetrievalConfigPath: config.loomRetrievalConfigPath }
           : {}),
+        ...(config.commands !== undefined ? { commands: config.commands } : {}),
         ...(config.model !== undefined ? { model: config.model } : {}),
         report,
       }),
@@ -388,9 +449,7 @@ export async function startAgentRunner(
     } catch (cleanupError) {
       report(
         `agent runner: startup cleanup failed: ${
-          cleanupError instanceof Error
-            ? cleanupError.message
-            : String(cleanupError)
+          describeFailure(cleanupError)
         }`,
       );
     } finally {
@@ -500,6 +559,9 @@ export async function agentRunnerAction(
   options: AgentRunnerCommandOptions,
   deps: AgentRunnerCommandDeps = defaultAgentRunnerCommandDeps,
 ): Promise<void> {
+  // A malformed command endpoint is the operator's argument error, refused
+  // before either lane starts, as a refused sandbox selection is below.
+  checkCommandsFlags(options);
   const localConfig = resolveLocalJobsConfig(options, deps);
   // Every job of either lane goes to the harness's sandbox. A runtime
   // selection the harness would refuse each of them for refuses the runner
@@ -524,7 +586,7 @@ export async function agentRunnerAction(
     if (options.localOnly) throw error;
     deps.report(
       `agent runner: the local lane did not start, continuing with the Fabric lane: ${
-        error instanceof Error ? error.message : String(error)
+        describeFailure(error)
       }`,
     );
     return await runFabricLane(options, deps);
@@ -555,11 +617,11 @@ export async function agentRunnerAction(
       } catch (error) {
         local.setFabricReadiness({
           state: "refused",
-          reason: error instanceof Error ? error.message : String(error),
+          reason: describeFailure(error),
         });
         deps.report(
           `agent runner: the Fabric lane did not start, so this runner serves local jobs only: ${
-            error instanceof Error ? error.message : String(error)
+            describeFailure(error)
           }`,
         );
       }
@@ -623,6 +685,7 @@ export interface AgentInspectionCommandDeps {
   read: typeof readAgentRuns;
   readOne: typeof readAgentRun;
   cancel: typeof cancelAgentRun;
+  remove: typeof removeAgentRun;
   render: typeof render;
 }
 
@@ -630,6 +693,7 @@ const defaultInspectionDeps: AgentInspectionCommandDeps = {
   read: readAgentRuns,
   readOne: readAgentRun,
   cancel: cancelAgentRun,
+  remove: removeAgentRun,
   render,
 };
 
@@ -674,9 +738,9 @@ export function formatAgentRun(run: AgentRunInspection): string {
   return lines.join("\n");
 }
 
-/** Runs one metadata read or durable cancellation request. */
+/** Runs one metadata read, durable cancellation request, or queue removal. */
 export async function agentInspectionAction(
-  kind: "ls" | "show" | "cancel",
+  kind: "ls" | "show" | "cancel" | "remove",
   options: {
     identity?: string;
     apiUrl?: string;
@@ -716,6 +780,8 @@ export async function agentInspectionAction(
   }
   const run = kind === "cancel"
     ? await deps.cancel(config, identifier)
+    : kind === "remove"
+    ? await deps.remove(config, identifier)
     : await deps.readOne(config, identifier);
   deps.render(options.json ? run : formatAgentRun(run), { json: options.json });
 }
@@ -760,6 +826,14 @@ export const createAgentCommand = (
     .action((options, run) =>
       agentInspectionAction("cancel", options, run, inspectionDeps)
     );
+  const removeCommand = inspectionCommand()
+    .description(
+      "Take a finished run off the home queue. Its record stays where it is.",
+    )
+    .arguments("<run:string>")
+    .action((options, run) =>
+      agentInspectionAction("remove", options, run, inspectionDeps)
+    );
   const runnerCommand = new Command()
     .name("runner")
     .description(runnerDescription)
@@ -790,6 +864,15 @@ export const createAgentCommand = (
     .option(
       "--loom-retrieval-config <path:string>",
       "Host-owned JSON file backing the read-only Loom tools.",
+    )
+    .option(
+      "--commands-url <url:string>",
+      "Base URL of the host's command endpoint behind list_commands and " +
+        "run_command, for Fabric runs.",
+    )
+    .option(
+      "--commands-actor <actor:string>",
+      "The actor a Fabric run's commands run as; goes with --commands-url.",
     )
     .option(
       "--max-concurrent <n:integer>",
@@ -843,7 +926,8 @@ export const createAgentCommand = (
     .command("status", createAgentStatusCommand())
     .command("ls", listCommand)
     .command("show", showCommand)
-    .command("cancel", cancelCommand).reset();
+    .command("cancel", cancelCommand)
+    .command("remove", removeCommand).reset();
 };
 
 export const agent = createAgentCommand();

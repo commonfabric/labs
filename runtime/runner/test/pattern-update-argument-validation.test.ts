@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { FabricEpochNsec } from "@commonfabric/data-model/fabric-primitives";
 import { Identity } from "@commonfabric/identity";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import type { URI } from "@commonfabric/memory/interface";
 
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
@@ -272,7 +273,7 @@ describe("pattern update validates the stored argument", () => {
       });
     } catch (thrown) {
       raised = thrown;
-      error = thrown instanceof Error ? thrown.message : String(thrown);
+      error = describeFailure(thrown);
     }
     // Settle either outcome before returning. A refused setup rejects out of
     // `runSynced` with the dependency loads it started still in flight, and
@@ -557,7 +558,7 @@ describe("pattern update validates the stored argument", () => {
     try {
       await rt.runSynced(cell.withTx(), v2, undefined, {});
     } catch (thrown) {
-      error = thrown instanceof Error ? thrown.message : String(thrown);
+      error = describeFailure(thrown);
     }
     await rt.idle();
     await rt.storageManager.synced();
@@ -644,7 +645,7 @@ describe("pattern update validates the stored argument", () => {
     try {
       await rt.runSynced(cell.withTx(), pattern, undefined, {});
     } catch (thrown) {
-      error = thrown instanceof Error ? thrown.message : String(thrown);
+      error = describeFailure(thrown);
     }
     await rt.idle();
     await rt.storageManager.synced();
@@ -754,7 +755,7 @@ describe("pattern update validates the stored argument", () => {
     try {
       await rt.runSynced(cell.withTx(), pattern, undefined, {});
     } catch (thrown) {
-      error = thrown instanceof Error ? thrown.message : String(thrown);
+      error = describeFailure(thrown);
     }
     await rt.idle();
     await rt.storageManager.synced();
@@ -848,7 +849,7 @@ describe("pattern update validates the stored argument", () => {
     try {
       await rt.runSynced(cell.withTx(), v2, undefined, {});
     } catch (thrown) {
-      error = thrown instanceof Error ? thrown.message : String(thrown);
+      error = describeFailure(thrown);
     }
     await rt.idle();
     await rt.storageManager.synced();
@@ -1664,7 +1665,7 @@ describe("pattern update validates the stored argument", () => {
     try {
       await rt.runSynced(cell.withTx(), pattern, undefined, {});
     } catch (thrown) {
-      error = thrown instanceof Error ? thrown.message : String(thrown);
+      error = describeFailure(thrown);
     }
     await rt.idle();
     await rt.storageManager.synced();
@@ -1733,7 +1734,7 @@ describe("pattern update validates the stored argument", () => {
         expectedPatternIdentity: v2Ref,
       });
     } catch (thrown) {
-      error = thrown instanceof Error ? thrown.message : String(thrown);
+      error = describeFailure(thrown);
     }
     await rt.idle();
     await rt.storageManager.synced();

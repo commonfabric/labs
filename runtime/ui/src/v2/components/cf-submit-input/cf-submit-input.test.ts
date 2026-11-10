@@ -1,7 +1,4 @@
-import {
-  getLogger,
-  getLoggerCountsBreakdown,
-} from "@commonfabric/utils/logger";
+import { getLogger, getLoggerCountsBreakdown } from "@commonfabric/logger";
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import { FakeTime } from "@std/testing/time";

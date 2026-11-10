@@ -4,7 +4,7 @@
  */
 
 import type { Keyboard } from "@astral/astral";
-import { backtickQuote } from "@commonfabric/utils/markdown";
+import { backtickQuote } from "@commonfabric/text/markdown";
 
 import {
   type KeyPress,

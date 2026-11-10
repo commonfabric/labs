@@ -34,7 +34,7 @@ import {
   type IncrementalHasher,
   sha256,
 } from "@commonfabric/content-hash";
-import { toUnpaddedBase64url } from "@commonfabric/utils/base64url";
+import { toUnpaddedBase64url } from "@commonfabric/bytes/base64url";
 
 import type { FabricValue } from "@/interface.ts";
 import { ProblematicStateError, UnknownValue } from "@/codec-common";
@@ -555,6 +555,11 @@ const FIXED_CASES: readonly HashConformanceCase[] = [
     make: () => new FabricHash(new Uint8Array(), "fid1"),
   },
   {
+    name: "hash under the algorithm tag sha256",
+    section: SECTION_HASH,
+    make: () => new FabricHash(new Uint8Array(32).fill(0xab), "sha256"),
+  },
+  {
     name: "hash under an algorithm tag of 65 UTF-8 bytes",
     section: SECTION_HASH,
     make: () => new FabricHash(new Uint8Array([1]), "t".repeat(65)),
@@ -858,6 +863,11 @@ const FIXED_CASES: readonly HashConformanceCase[] = [
     name: "unknown value under a tag of 65 UTF-8 bytes",
     section: SECTION_INSTANCE,
     make: () => new UnknownValue(`${"T".repeat(63)}@1`, null),
+  },
+  {
+    name: "unknown value under a tag with prefixes",
+    section: SECTION_INSTANCE,
+    make: () => new UnknownValue("sys.beep.Boop@1", null),
   },
 
   // Cycles, and sharing.

@@ -6,7 +6,8 @@
  * points without exposing the GitHub request or response.
  */
 
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import {
   defaultHarnessFetch,
   type HarnessFetch,
@@ -130,9 +131,7 @@ const fetchGithubObject = async (
   } catch (error) {
     throw new SkillsShPinResolutionError(
       "request_failed",
-      `GitHub pin resolution could not be reached: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      `GitHub pin resolution could not be reached: ${describeFailure(error)}`,
     );
   }
   if (!response.ok) {

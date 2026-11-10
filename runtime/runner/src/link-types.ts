@@ -8,17 +8,17 @@ import {
 import {
   decodeJsonPointer,
   encodeJsonPointer,
-} from "@commonfabric/utils/json-pointer";
+} from "@commonfabric/json/json-pointer";
 import type { NonDocumentPath } from "@commonfabric/memory/v2";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import { parseCellReference, renderCellReference } from "./cell-reference.ts";
-import {
-  type CellScope,
-  type JSONSchema,
-  type LinkScope,
-  type SchemaScope,
+import type {
+  CellScope,
+  JSONSchema,
+  LinkScope,
+  SchemaScope,
 } from "./builder/types.ts";
-import { type MemorySpace } from "./cell.ts";
+import type { MemorySpace } from "./cell.ts";
 import {
   type CellLinkRefPayload,
   LINK_ADDRESS_KEYS,

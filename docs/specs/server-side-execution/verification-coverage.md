@@ -27,7 +27,7 @@ The status corrections in this register are bounded to the rows below:
 | OW28-createRef | Closed: the compile cache snapshots program content, separates compilation with and without a space, and persists shared compiles into each requested space when CFC is enforced. |
 | OW28-supersession-family / OW28-instance-family | Partial: shared fetch, `fetchProgram`, and direct LLM user/session isolation are covered. Caller-specific lifecycle, initialization, and remaining provider/tool read obligations are detailed below. |
 | OW30 | Stream sibling validation is fixed; the non-Stream counter/container observation remains unresolved. |
-| OW31 residual (vii) | Read-triggered remount is implemented; automatic replay of the entire watch set remains separate. |
+| OW31 residual (vii) | Closed: an ACL notice and authorization termination restore retained watches through fresh server admission, including when no reader pulls again. |
 | OW41 | Partial: a demand pass over unchanged demand, with no warm key captured since the last pass, does no per-row work — the memory server keeps each session's share of the demand set and the SpaceServer reconciles only the keys whose rows changed and the newly captured warm keys (serving-loop.md §7, `demandKeysReconciled`). A session whose demand changes is still rebuilt and compared whole, so a pass after a change costs that session's closure; the first pass of a tenure and the pass after one whose reconcile threw partway reconcile every key. |
 | OW55 | Closed: both runtimes' self-addressed requests are sent to `API_INTERNAL_URL` when set, else to `API_URL`, with every URL unchanged; a set origin must receive the server's own token-bearing probe before any runtime exists, or the server does not start. |
 | OW56 finding 2 | Closed: source following has one owner, the opener. ON upload and instantiate run on the serving runtime; source updates, other client creation paths, and compiled-byte trust remain separate OW56 work. |
@@ -226,16 +226,20 @@ Delta 2026-08-05 — stage F lands (the serving loop; this PR):
   `runtime/memory/test/v2-explicit-read.test.ts` pins
   holder-admitted / non-holder-refused / off-flag-refused on both
   the query and watch paths. The trace/model coverage stands
-  unchanged. One recorded Phase-1 acceptance rides this row
-  (2026-08-05): the landed operand check compares the
-  SERVICE-IDENTITY component of the live holder, not the full
-  per-process DR1 holder, so a second process sharing the service
-  DID would pass on the first process's lease row — no instances
-  exist co-hosted in Phase 1 (one serving process per memory
-  server); the per-process sharpening lands with Phase 5's
-  cross-engine lease lookup design, alongside FP2's widening.
-- serving-loop §2's renew cadence + stop-committing MUST: the
-  serving loop drives them for real; lease-loss and idle-park pinned
+  unchanged. One Phase-1 acceptance rode this row (2026-08-05): the
+  operand check compared the SERVICE-IDENTITY component of the live
+  holder, not the full per-process DR1 holder, so a second process
+  sharing the service DID passed on the first process's lease row.
+  Phase 5 sharpened it to the full holder, and owner routing R3
+  (2026-11-01) closed it by restating the row: the full-holder
+  equality admits the space's own serving session, from the owner's
+  process only (`Connection.inProcess`), and a service-identity
+  session from any process is admitted under the grant-scoped read —
+  the 2026-11-01 delta.
+- serving-loop §2's stop-committing MUST: the serving loop drives it for
+  real. *(The renew cadence and the renew-blip arm below are retired by the
+  lease in memory — the Delta 2026-11-01 stage L entry.)* Lease-loss and
+  idle-park pinned
   end to end in `runtime/runner/test/executor-serving-loop.test.ts`
   (C6/C7's impl witnesses at the loop level) — including the
   renew-blip arm (2026-08-05): when the reacquire SUCCEEDS but a
@@ -804,19 +808,18 @@ extension owed and WHEN it earns its cost:
 - OW1 — forged `firedAt` admission negative: a client-supplied
   `firedAt` disagreeing with the envelope is REJECTED (events §1,
   scopes §5). One C6-style negative.
-- OW2 — a lease renewal is NEVER a commit (serving-loop §2): renew
-  transition asserts zero commit records.
-  Implementation coverage in `executor/activation-lease.test.ts` verifies renewal
-  without commits while the
-  runtime factory and delegated append recovery are held beyond the lease's
-  initial lifetime, then checks the first derived commit's actual wave verdict
-  and stored value. Controlled-clock refusal cases cover takeover before and
-  at renewal, lease-store errors, factory and runtime validation failures,
-  disposal despite observer cleanup errors, and host shutdown waiting for the
-  returning runtime's disposal. A factory read-through control verifies that
-  another user's stored instance becomes unavailable after lease takeover.
+- OW2 — a lease operation is NEVER a commit (serving-loop §2).
+  `v2-execution-lease.test.ts` checks that the stored table stays empty and the
+  commit table takes nothing from an acquire or a release.
+  Implementation coverage in `executor/activation-lease.test.ts` holds the
+  runtime factory and delegated append recovery for a long stretch of controlled
+  time, then checks the first derived commit's actual wave verdict and stored
+  value. Refusal cases cover factory and runtime validation failures, disposal
+  despite observer cleanup errors, and host shutdown waiting for the returning
+  runtime's disposal. A factory read-through control verifies that another user's
+  stored instance becomes unavailable once the tenure has parked.
   Host controls also require fresh-runtime activation and an accepted stored
-  result after initialization lease loss with surviving session, event, or warm
+  result after a failed initialization with surviving session, event, or warm
   demand. They cover warm notices arriving during initialization and cleanup,
   no-demand and rival refusal, closed hosts, and controlled exponential backoff
   whose pending rebuild is canceled by shutdown.
@@ -1182,7 +1185,10 @@ nod, 2026-08-07; recorded in the plan's stage list):**
   question; a lapse is recorded and the first live pass RE-ARMS with a
   full evaluation; the SpaceServer's renew arm reports a survived blip
   (`noteLeaseReacquired`) so that pass runs promptly (protocol.md §3 as
-  amended). Pinned red-first: memory `v2-explicit-read.test.ts` (keyed
+  amended). *(Retired by owner routing R3, 2026-11-01: delivery is the
+  session's for its life, and the lapse, the re-arm, the notice and the
+  tests that pinned them are gone — the 2026-11-01 delta.)* Pinned
+  red-first: memory `v2-explicit-read.test.ts` (keyed
   retraction with the own instance untouched; the re-arm via the notice
   and via the first evaluating pass; the notice inert when nothing
   lapsed), `storage-instance-keying.test.ts` (the replica half),
@@ -1243,11 +1249,8 @@ nod, 2026-08-07; recorded in the plan's stage list):**
   reacquire aborts `lease-lost` and PARKS the space — the "survived
   blip keeps serving" path is reachable only on a space quiet across the
   tick; owner: the P7 renew-blip / wedge arms. (a) CLOSED
-  (2026-09-24): a derived commit the engine refuses while the row no
-  longer names the holder live runs the renew arm, so the tenure ends
-  at the first refused commit and its wave aborts and parks
-  (serving-loop §2); pinned in `executor-serving-loop.test.ts` with
-  both renewal drivers held off.
+  (2026-09-24), and retired with the renew arm by the lease in memory (the
+  Delta 2026-11-01 stage L entry): nothing ends a tenure but its own park.
   **CLOSED — leg 2 of 2 LANDED (fan-out stage B, 2026-08-17; owner
   ruling 2026-08-16 "if a space scoped calculation gets narrowed to
   user, it'll have to run for all users that demand it").** The
@@ -1453,7 +1456,10 @@ nod, 2026-08-07; recorded in the plan's stage list):**
   handover work, whichever lands first. DISCHARGED with Phase 5
   (2026-08-14; the delta below carries the evidence — the re-verify
   and the post-handover tests exist, the half-(ii) mitigation
-  stands).
+  stands). *(Restated by owner routing R3, 2026-11-01: the flag is the
+  session's admission for its life, and the row admits by connection
+  and principal class rather than by a lease that may lapse — the
+  2026-11-01 delta.)*
 - OW23 — unvalidated scope strings reach `resolveScopeKey` with no
   default arm (pre-existing adjacency): the switch covers the three
   `CellScope` members and TypeScript exhaustiveness assumes the
@@ -2534,7 +2540,10 @@ delta):
   keyed-retracted), the exemption still re-verifies on CURRENT
   holdership at every push-path use, a lapse is recorded and re-armed on
   the first live pass; the post-handover tests still hold — a former
-  holder receives no foreign instance — see OW17.)*
+  holder receives no foreign instance — see OW17.)* *(Superseded again
+  by owner routing R3, 2026-11-01: `#currentLeaseHolderExemption`, the
+  lapse and the re-arm are gone, and a session's admission delivers
+  the instances it named for its life — the 2026-11-01 delta.)*
 - OW17 — RE-TAGGED with the Phase-5 posture (flag-don't-fill upheld):
   the trigger anticipated foreign scoped instances making the
   replica's scope-name collapse load-bearing; Phase 5 instead
@@ -3165,18 +3174,21 @@ Delta 2026-08-15 — Phase 6 independent-review fixes (same PR):
   then refused forever by the sink's INV-13 mirror — a fail-closed
   livelock unreachable in sanctioned flows; its watcher signature is
   nonzero `foreignWriteRefusals` naming a HOME space (the review's F3).
-  (vii) CLOSED for read-triggered remount. An admitted ACL change latches
-  `Provider.noteAclChanged`; the next load discards a session terminated by
-  an ACL verdict and reopens through the server's full `session.open`
-  admission. A document load already in flight when the revocation lands
-  fails on the terminated session; that failure consumes the remount, and the
-  load is made once more on the new session. The watched-document tracker is
-  cleared so a previously watched document is fetched again on its next read.
-  `executor-session-remount.test.ts` pins the ACL-change/host path, owner
-  rebinding, denial without widened authority, the in-flight load in both
-  outcomes, and refetch after remount. Automatic replay of the entire dead
-  session's watch set remains a distinct follow-up; read-triggered refetch
-  does not establish that stronger guarantee.
+  (vii) CLOSED for ACL-triggered remount. An admitted ACL change and a
+  session's authorization termination, in either arrival order, discard that
+  session and restore retained watch selectors through the server's full
+  `session.open` admission. A load already in flight can consume the same
+  remount. The input barrier includes watch restoration, so a derivation that
+  read an absent document receives its later creation without another pull.
+  Each selector passes its own scoped-read gate: a refused actor's watch does
+  not block an admitted space-scoped watch. A refused reopen preserves its
+  loads for a later ACL notice and does not retry on its own.
+  `executor-session-remount.test.ts` pins both notice orders, absent-document
+  watches, mixed admitted/refused selectors, recovery after a denied reopen
+  (including a grant arriving before that denial is delivered), the host path,
+  owner rebinding, healthy-session stability, and in-flight loads. The invited-member case in
+  `fabrichat-spaces-multi-runtime.test.ts` opens a room before profile setup
+  and sends its first message after profile selection.
   Acceptance beyond the executor pins rides the PR's CI ON lanes and
   the flip train's live gates (the lunch/served-wish log criteria and
   the store dump), which stay the flip PR's bar; the
@@ -3310,9 +3322,10 @@ Delta 2026-08-15 — Phase 6 independent-review fixes (same PR):
   holds on an admitted instance keeps delivering until the replica next
   pulls it, a derivation that read the instance before the revocation
   keeps its output until another input runs it again, and the memory
-  server's push pass re-keys lease-holder deliveries on CURRENT
-  holdership (`#currentLeaseHolderExemption`) and not on the named
-  actor's current grant. Owed: a per-pass grant re-check on keyed foreign instances, or
+  server's push pass delivers the instances the session was admitted
+  for the session's life (`SessionState.leaseHolderReads`) and
+  re-checks neither the lease nor the named actor's current grant.
+  Owed: a per-pass grant re-check on keyed foreign instances, or
   a retraction of them on the access-list commit, with a test that a
   revoked actor's instance stops arriving at the serving replica
   without a re-pull. (b) DEMAND: a granted read is a service-session
@@ -4047,6 +4060,77 @@ grant):
   ("lets a sender read the offers back and find its own") holds the rows
   a sender reads to be the documents the inbox's owner reads.
 
+Delta 2026-11-01 — owner routing R3 (reads through the owner, and the
+read row; `docs/history/plans/serving-loop-owner-routing.md`):
+
+- protocol.md §2's read row, restated: the space's own serving session
+  — a session from the owner's process (`Connection.inProcess`, set by
+  the in-process transport and the worker's port, never by a socket)
+  whose principal holds the space's live lease — names any instance; a
+  service-identity session from any process names an actor's instance
+  under the actor's READ grant (the grant-scoped read); everyone else
+  naming a key is refused. Retired with it: the co-hosted cross-engine
+  lease lookup (`#liveCoHostedLeaseSpaceFor`), the per-pass live-lease
+  re-check of delivery (`#currentLeaseHolderExemption`), the lapse and
+  its re-arm (`leaseHolderReadsLapsed`), and `noteLeaseReacquired` with
+  its port notice; a session's admission (`leaseHolderReads`) delivers
+  the instances it named for the session's life. The Phase-1
+  acceptance under the stage-F read-row entry is closed: the holder
+  equality is the full per-process holder, checked for the serving
+  session alone, and a second process sharing the service DID is
+  admitted as the service identity under the grant, which is what makes
+  it a peer. → COVERED, impl-gate, red-first.
+  `memory/test/v2-explicit-read.test.ts` (the serving session and a
+  service session admitted, an ordinary client and the off flag
+  refused; a service session from another process admitted under
+  alice's grant holding no lease anywhere, and refused naming an
+  ungranted actor where the in-process serving session is admitted; a
+  lapsed lease still delivers keyed, and a resume carries the update
+  keyed; a serving session's unnamed scoped read of a space it does not
+  serve refused from another process and in process, the space's own
+  serving session and an ordinary client untouched).
+- protocol.md §3's keyed wire: delivery no longer hangs from the lease.
+  The stage-A tests that a lapse withholds and the notice re-delivers,
+  the renew arm's notice test in `executor-space-server.test.ts` and
+  the lapse test in `executor-instance-keyed-replica.test.ts` retire
+  with the mechanism.
+- serving-loop.md's cross-space wake under the route: a serving
+  runtime's session in every space but its home reaches that space's
+  owner (`LoopbackSessionFactory`, routing by `servingHomeSpace`), so
+  the foreign read registers on the owner and the owner's commits wake
+  the home loop from another process.
+  `runner/test/executor-owner-routing.test.ts` ("reads a space owned by
+  another server through its owner …": a home derivation over a
+  foreign doc re-derives on a foreign commit alone, and the sender's
+  server holds no session in the foreign space and activates nothing
+  there; "admits a named scoped read of a foreign instance on the owner
+  …": admitted on the owner under alice's grant, bob's refused before
+  it leaves the sender).
+
+Delta 2026-11-01 — stage L (the lease in memory,
+`docs/history/plans/serving-loop-owner-routing.md`):
+
+- serving-loop §2's map: admission is the one equality against the memory
+  server's map, a released lease matches nobody, and a stored row names nobody.
+  `memory/test/v2-execution-lease.test.ts`. The renew and expiry tests retire
+  with the mechanism, as do the lapse arms that named them: the renew-blip park,
+  the lapse-recovery counter, the commit-refusal renew arm, and the read-through's
+  renew arm.
+- §2's restart and rival rules: `executor/activation-lease.test.ts` ("serves a
+  space at once after a restart …", with a predecessor that never released and
+  a row it left, under stopped time; "refuses a rival ExecutorHost on the same
+  server …"; "keeps its lease through minutes of held-up work …").
+  `executor-cooperative-yield.test.ts` (ii) runs the same property on a real
+  1.8-s settle.
+- §2's watchdog: `executor/serving-worker-recovery.test.ts` ("the watchdog", over
+  a stand-in worker and the fake clock): the six-interval limit, any message
+  restarting the count, no count before the first message, the leases released and counted
+  in `lease.lost` across a successor, a commit left in flight refused at admission,
+  and a close under a stalled host. `executor/serving-worker-watchdog.test.ts`
+  stops a real worker's thread holding a lease and serves the space from its
+  successor; a stand-in cannot show that nothing waits for a stalled thread's
+  teardown, which Deno does not finish.
+
 Delta 2026-08-16 — fan-out stage A (OW17 leg 1: the instance-keyed
 serving replica + wire; the client arrival gate):
 
@@ -4414,15 +4498,13 @@ supply; OW29/OW32/OW34 closed):
     the one primitive that lets due timers fire in deadline order;
     MessageChannel and setImmediate measured to starve them); the OFF arm
     and clients construct no yielder (posture-gated at construction).
-    The SpaceServer installs `Runtime.servingYieldObserver` at
-    activation and renews the lease from it once the tenure has gone
-    TTL/3 without a renewal (`leaseTtlMs` policy knob for tests). Pinned:
-    `executor-cooperative-yield.test.ts` — (i) a 1.2-s synthetic walk
+    *(The mid-wave renew this delta added, on `Runtime.servingYieldObserver`,
+    is retired by the lease in memory — the Delta 2026-11-01 stage L entry.)*
+    Pinned: `executor-cooperative-yield.test.ts` — (i) a 1.2-s synthetic walk
     under a 100-ms deadline commits its first exhausted wave in < 600 ms
     (mutation: yield removed → 1 239 ms, red); (ii) a 45-step, 1.8-s
-    walk outliving a 900-ms TTL twice over commits under a live lease
-    with the timer inert (mutation: renew-on-yield removed → the commit
-    is refused, red); (iii) posture gate; unit. Live (I1, instrumented
+    walk commits under the holder it started with; (iii) posture gate; unit.
+    Live (I1, instrumented
     scratch build): deadline lateness on exhausted cycles p50 **25 ms**,
     p90 152, max 399 ms (was p50 125 / p90 443 / max 1 155 on the note
     run, and seconds on chat event waves); renew gaps p50 **5 020 ms**,
@@ -5050,16 +5132,33 @@ supply; OW29/OW32/OW34 closed):
     coarse over-demand's compute cost is shown to matter (W0's drift was
     not tens of thousands: note union 0 → 1 721 over 20 notes, one
     session, dropping to 3 when the sessions leave).
+  - **flag 4 — the structure load for demanded NON-root docs with
+    pattern meta: BUILT.** The closure surfaces a piece reachable only
+    through a DATA link whose writer is not registered on the server; W0
+    counted the rows: chat 2 / note 19 / lunch 0. Its trigger, a workload
+    where a data-linked piece's value must land server-side, is a FabriChat
+    room's file store: the room's `ensureFileStore` handler creates the
+    store and the room reaches it only through its record's link, so with
+    server execution on the store's `entries` were never computed. The
+    pattern-meta test needs no engine read: the memory server marks a
+    demand row `piece` when the document the session was sent for it is
+    one of a piece's values, a document whose `result` link names a piece
+    (`carriesPieceMeta`), other than the piece's argument, which the
+    `argument` link of a result document the session holds names
+    (`trackedAndPieceKeysFromEntries` in `server-sync.ts`, read in
+    `#buildSessionDemand`). The demand pass structure-loads a marked row
+    as it does a root (`SpaceServer`'s demand pass). A piece's result
+    document is not marked, since it is what a link to the piece names: a
+    read of a list of links is sent it and starts no listed piece. Nor is
+    a document whose `result` names a handling's `receipt:`. Pinned by
+    `patterns/integration/fabrichat-file-store-multi-runtime.test.ts` and
+    `patterns/system/fabrichat/file-store.test.tsx` with server execution
+    on, by `runtime/piece/test/served-handler-child.test.ts` for the list
+    reads that start nothing and the derived value that does, and by
+    `runtime/memory/test/v2-server-demand-set.test.ts` for the marking.
+    A list read whose items are `asCell` is sent each listed piece's
+    stream and derived documents as well, so it still starts each piece.
   - **FUTURE / owed rows the build surfaced (none binding):**
-    - **flag 4 — the structure load for demanded NON-root docs with
-      pattern meta.** The closure surfaces a piece reachable only through
-      a DATA link whose writer is not registered on the server (parity
-      with the walk, which never started pieces either); W0 counted the
-      rows: chat 2 / note 19 / lunch 0. The id-class-filtered
-      `#attemptStructureLoad` per such row is the OPTION; not built (the
-      count is small and the pattern-meta test needs a per-row engine read
-      the pass must not do). Trigger: a workload where a data-linked
-      piece's value must land server-side.
     - **flag 5 — the output-doc-demanders union.** `#demandersFor`
       matches keys by ROOT id; a session whose closure reaches piece P2's
       computed doc but not P2's root supplies no demander to P2's writer →
@@ -8062,11 +8161,11 @@ supply; OW29/OW32/OW34 closed):
     latching at the fail-closed refusal and consuming the latch when
     an admitted commit touches `of:<space>`
     (`#rootEnsureAwaitingOwner`). The session analog: `SpaceReplica`
-    latches an ACL-doc admission (`noteAclChanged`) and consumes it at
-    `#memoizedSessionHandle()` (`#consumeOwedSessionRemount`) — the one place
-    every read and commit reaches a session — dropping a mount that
-    `SessionRevokedError` or `AuthorizationError` terminated so the
-    next load re-opens. `ExecutorHost.#onCommitAdmitted` fans an
+    latches an ACL-doc admission (`noteAclChanged`) and consumes it once
+    `SessionRevokedError` or `AuthorizationError` has terminated the mount.
+    `#restoreWatchesAfterAclChange()` handles either arrival order and
+    restores standing watches; `#memoizedSessionHandle()` and `pull()`
+    consume the same latch for loads. `ExecutorHost.#onCommitAdmitted` fans an
     `of:<space>` write out to EVERY registered space server, because
     the starved session is a CROSS-SPACE replica: the ACL commit and
     the dead session are in different spaces.
@@ -8113,19 +8212,16 @@ supply; OW29/OW32/OW34 closed):
     (the measured ordering-independence proof); remove the tracker
     drop → stale-read only; remove `pull()`'s consume → stale-read
     only.
-    **Residual, FLAGGED not filled:** watches installed on the DEAD
-    session are not replayed on remount. The revocation had already
-    stopped their pushes (the server drops the session from its
-    registry and `terminateSession` clears `#watchSpecs`), and the
-    remount now DROPS the dead mount's selectors from the watch
-    tracker (the Cubic-P1 fix — the earlier claim that "each address
-    re-installs on its next pull" was FALSE for tracker-covered
-    selectors and is retracted), so post-remount reads re-install
-    coverage fresh instead of silently serving pre-revocation state —
-    but a general "replay the watch set on remount" still belongs
-    with the reconnect path's replay. **Also unchanged:** CLIENT runtimes get no host
-    notification, so a browser session revoked this way still stays
-    revoked; out of this seat's scope.
+    **Standing-watch recovery:** an ACL notice and the session's authorization
+    termination, in either order, restore retained root watches through fresh
+    admission, with the work included in the input barrier. Each selector
+    passes its own scoped-read gate, so one refused actor's watch does not
+    block admitted watches. A refused reopen keeps its loads for another ACL
+    notice. `executor-session-remount.test.ts` covers absent-document watches
+    in both notification orders, mixed scoped-read outcomes, and later grant
+    recovery even when an older admission refusal arrives after the grant. Client runtimes receive no executor-host notification; their
+    access retry is driven by the events described in
+    [`authorization-failure-surfacing.md`](../../features/authorization-failure-surfacing.md).
     **The persistent-failure posture is UNCHANGED and still OWED to
     OW54.** A load whose ACL never changes — or whose re-open is
     denied — defers indefinitely, exactly as recorded above. The
@@ -8632,7 +8728,7 @@ supply; OW29/OW32/OW34 closed):
     `closure-replication-await-inflight` lines in the whole log** — that
     warn prints whenever EITHER compile registry is non-empty at a dry
     consult (the pattern-manager logger's default level is "info",
-    the `Logger` constructor's fallback in `base/utils/src/logger.ts`
+    the `Logger` constructor's fallback in `base/logger/src/logger.ts`
     — warn is admitted; the same logger's ERROR printed in
     this very log), so its absence is real: BOTH registries were EMPTY
     at consult — the supplier compile had NOT STARTED. That is 3b's
@@ -10284,13 +10380,15 @@ supply; OW29/OW32/OW34 closed):
     yes: cf-harness is also that shape, and the containment covers
     all three. Residual trigger: any live `schema-doc-quarantine` log
     — each occurrence is evidence that another client absorb/ordering
-    defect remains, not a server-side hole. The LOSS no longer outlives
-    a reconnect: a reconnecting client declares its holdings
-    (memory-v2/04-protocol.md §4.1.2), and a quarantined document is not
-    among them, so the resume's catch-up (or the re-establishing
-    watch.set) re-delivers it with its closure — the diagnostic still
-    names the defect to find; the replica no longer stays incomplete
-    until the session lapses.
+    defect remains, not a server-side hole. The LOSS does not wait for a
+    reconnect: the replica asks for a quarantined document with a
+    `session.watch.set` declaring its holdings
+    (memory-v2/04-protocol.md §4.3.5), among which it is not, so the
+    response re-delivers it with its closure, and a load of it waits for
+    that answer. A reconnect declares holdings too. A copy that answer
+    cannot make applicable is not asked for again: it logs
+    `schema-doc-quarantine-unhealed` and a load of it fails, until a newer
+    copy arrives. The diagnostic still names the defect to find.
     SHIPPING SIDE, current state: the closure pass stages what a
     delivered document's refs name, and the memory package now PINS both
     halves of that guarantee —
@@ -10548,6 +10646,17 @@ supply; OW29/OW32/OW34 closed):
     bounded. The candidate close is the server-assigned source this
     seam exists for: a ceiling keyed by principal (or persisted with
     the event's `firedAt` pair) rather than by a live session.
+
+- **A superseded write over a document left with no value (RULED
+  2026-11-03; serving-loop.md §3d).** The Q1 entry's
+  "the drop re-arms nothing" stands for a commit that wrote a value.
+  Commits that left every document the run lost with no value re-arm
+  the run once the replica has taken them, impl-gate: pinned in
+  `runtime/runner/test/scheduler-wave-withdrawal.test.ts` (the re-run,
+  over a commit this replica held and one it had not taken, and the
+  mixed run that stays down) and
+  `runtime/runner/test/scheduler/supersededOutputsOwed.test.ts` (the
+  verdict, and the wait for the commit that decides it).
 
 ## 4. Standing rule
 

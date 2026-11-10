@@ -66,7 +66,7 @@ import {
   type SigilLink,
 } from "@commonfabric/runner";
 import { type CfcLabelView, linkCfcLabelView } from "@commonfabric/runner/cfc";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import { CellHandle } from "@/cell-handle.ts";
 import { $conn, type RuntimeClient } from "@/runtime-client.ts";

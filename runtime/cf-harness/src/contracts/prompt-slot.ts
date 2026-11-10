@@ -2,7 +2,7 @@ import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import {
   isObjectNotArray,
   type ReadonlyRecord,
-} from "@commonfabric/utils/types";
+} from "@commonfabric/js-values/types";
 
 export type PromptSlotRole = "direct-command" | "context" | "quote";
 

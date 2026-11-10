@@ -305,6 +305,119 @@ describe("view plan publisher", () => {
     expect(fixture.publications.calls).toHaveLength(2);
   });
 
+  describe("a `read` view", () => {
+    const asReadView = () => {
+      fixture.interest.view = { ...fixture.interest.view, mode: "read" };
+    };
+
+    it("publishes nothing until the settlement reports nothing owed", async () => {
+      asReadView();
+
+      await publish();
+
+      expect(fixture.publications.calls).toHaveLength(0);
+    });
+
+    it("publishes a selection marked `settled` that delivers nothing, without walking the view", async () => {
+      asReadView();
+      const reads = fixture.reads.calls.length;
+
+      await fixture.publisher.publish(fixture.runtime, fixture.server, space, {
+        settled: () => true,
+      });
+
+      expect(fixture.reads.calls.length - reads).toBe(0);
+      expect(fixture.publications.calls).toHaveLength(1);
+      expect(fixture.publications.calls[0].args[2]).toEqual({
+        generation: 1,
+        settled: true,
+        delivery: [],
+        eligibleActions: [],
+        pieces: [],
+        inputs: [],
+        producers: [],
+      });
+    });
+
+    it("asks whether a view has settled with the list of views in hand", async () => {
+      asReadView();
+      const order: string[] = [];
+      fixture.interests.restore();
+      fixture.interests = stub(fixture.server, "viewInterestsForSpace", () => {
+        order.push("listed");
+        return [fixture.interest];
+      });
+
+      await fixture.publisher.publish(fixture.runtime, fixture.server, space, {
+        settled: (handle) => {
+          order.push(`asked about ${handle.viewId}`);
+          return false;
+        },
+      });
+
+      expect(order).toEqual(["listed", "asked about screen"]);
+      expect(fixture.publications.calls).toHaveLength(0);
+    });
+
+    it("publishes once for a view however many settlements follow", async () => {
+      asReadView();
+
+      for (let settlement = 0; settlement < 3; settlement++) {
+        await fixture.publisher.publish(
+          fixture.runtime,
+          fixture.server,
+          space,
+          { settled: () => true },
+        );
+      }
+
+      expect(fixture.publications.calls).toHaveLength(1);
+    });
+
+    it("returns `false` for a settled view the server refuses the answer for", async () => {
+      asReadView();
+      fixture.publications.restore();
+      fixture.publications = stub(
+        fixture.server,
+        "setViewSelection",
+        () => Promise.resolve(false),
+      );
+
+      expect(
+        await fixture.publisher.publish(
+          fixture.runtime,
+          fixture.server,
+          space,
+          { settled: () => true },
+        ),
+      ).toBe(false);
+      expect(fixture.publications.calls).toHaveLength(1);
+    });
+
+    it("returns whether a view has not settled yet", async () => {
+      asReadView();
+      const publish = (settled: boolean) =>
+        fixture.publisher.publish(fixture.runtime, fixture.server, space, {
+          settled: () => settled,
+        });
+
+      expect(await publish(false)).toBe(true);
+      expect(await publish(true)).toBe(false);
+      expect(await publish(false)).toBe(false);
+    });
+
+    it("publishes for a view whose component contract differs from the server's", async () => {
+      asReadView();
+      fixture.interest.view.componentContractVersion = "another-build";
+
+      await fixture.publisher.publish(fixture.runtime, fixture.server, space, {
+        settled: () => true,
+      });
+
+      expect(fixture.publications.calls).toHaveLength(1);
+    });
+  });
+
   it("plans a view with no selection yet after a cut wave", async () => {
     await fixture.publisher.publish(fixture.runtime, fixture.server, space, {
       quiescent: false,

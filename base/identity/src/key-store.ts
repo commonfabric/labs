@@ -1,5 +1,5 @@
 import { FabricKeyPair } from "@commonfabric/data-model/fabric-primitives";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import { ED25519_ALG } from "./ed25519/utils.ts";
 import { Identity } from "./identity.ts";

@@ -1,8 +1,8 @@
 import { resolveScopeKey, type ScopeKey } from "@commonfabric/memory/v2";
 import { getAuthoredDebugSource } from "../harness/authored-debug-source.ts";
 import { startReadStats } from "../read-stats.ts";
-import { getLogger } from "@commonfabric/utils/logger";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { getLogger } from "@commonfabric/logger";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import type { CfcRefusalDetail } from "../cfc/refusal-detail.ts";
 import { sortAndCompactPaths } from "../reactive-dependencies.ts";
@@ -77,6 +77,7 @@ import type { NodeRegistry } from "./node-record.ts";
 import { diagnosticPrefix } from "../storage/diagnostics.ts";
 import { txToReactivityLog } from "./reactivity.ts";
 import { RetryImmediately } from "./retry-immediately.ts";
+import { supersededOutputsOwed } from "./superseded-output.ts";
 import { type ActionTimingState, recordActionTime } from "./timing.ts";
 import type {
   Action,
@@ -1489,23 +1490,36 @@ function finalizeReactiveActionCommit(
     owner.pendingWaveRun = token;
     const outcome = await settlement;
     if (owner.pendingWaveRun !== token) return;
+    const canRunAgain = () => {
+      if (
+        node.registrationToken !== registrationToken ||
+        (!state.nodes.isEffect(args.action) &&
+          !state.nodes.isComputation(args.action))
+      ) return false;
+      const record = state.nodes.get(args.action);
+      return fanOutRun === undefined
+        ? record === node
+        : record?.fanOut === fanOutRun.state &&
+          fanOutRun.state.instances.get(
+              keyAtRatchet(fanOutRun.state, fanOutRun.instance.identity) ??
+                fanOutRun.instance.key,
+            ) === instanceRecord;
+    };
+    const superseded = outcome.error?.supersededOutputs;
+    let owed: boolean | Promise<boolean> =
+      outcome.error?.readDependencyWithdrawn === true &&
+      outcome.error?.waveWithdrawalCause === "contribution-dropped";
+    if (!owed && superseded !== undefined && canRunAgain()) {
+      owed = supersededOutputsOwed(state.runtime, superseded);
+    }
+    if (owed instanceof Promise) {
+      owed = await owed;
+      // A newer run sealed during that wait, and its settlement decides.
+      if (owner.pendingWaveRun !== token) return;
+    }
     delete owner.pendingWaveRun;
-    if (
-      node.registrationToken !== registrationToken ||
-      outcome.error?.readDependencyWithdrawn !== true ||
-      outcome.error?.waveWithdrawalCause !== "contribution-dropped" ||
-      (!state.nodes.isEffect(args.action) &&
-        !state.nodes.isComputation(args.action))
-    ) return;
     const record = state.nodes.get(args.action);
-    const current = fanOutRun === undefined
-      ? record === node
-      : record?.fanOut === fanOutRun.state &&
-        fanOutRun.state.instances.get(
-            keyAtRatchet(fanOutRun.state, fanOutRun.instance.identity) ??
-              fanOutRun.instance.key,
-          ) === instanceRecord;
-    if (!current || record === undefined) return;
+    if (!owed || record === undefined || !canRunAgain()) return;
     for (const cause of args.invalidCauses ?? []) {
       addInvalidCause(record, cause);
     }

@@ -203,6 +203,69 @@ async function fixture(publicHost?: string, captureErrors = true) {
 }
 
 describe("space-invites", () => {
+  it("answers each operation on a deleted space with `space-deleted` and 410, after the proof verifies", async () => {
+    const f = await fixture();
+    try {
+      // Nothing the server admits writes a deletion tombstone yet, so the
+      // case writes one through a second connection to the space's store.
+      const engine = await Engine.open({
+        url: resolveSpaceStoreUrl(f.store, f.space),
+      });
+      try {
+        Engine.applyCommit(engine, {
+          space: f.space,
+          sessionId: "deletion-stand-in",
+          commitClass: "system",
+          commit: {
+            localSeq: 1,
+            reads: { confirmed: [], pending: [] },
+            operations: [{
+              op: "set",
+              id: aclDocId(f.space),
+              value: { value: { deleted: { by: f.owner.did() } } },
+            }],
+          },
+        });
+      } finally {
+        Engine.close(engine);
+      }
+      const credentials = createInviteCredentials();
+      for (
+        const [operation, body] of [
+          ["list", {}],
+          ["receipts", {}],
+          ["revoke", { inviteId: credentials.inviteId }],
+          ["redeem", {
+            inviteId: credentials.inviteId,
+            code: credentials.code,
+          }],
+          ["create", {
+            inviteId: credentials.inviteId,
+            codeVerifier: inviteCodeVerifier({
+              host: f.host,
+              space: f.space,
+              ...credentials,
+            }),
+            access: "READ",
+            ttlSeconds: 60,
+          }],
+        ] as const
+      ) {
+        const refused = await f.raw(operation, body);
+        expect({ operation, status: refused.status }).toEqual({
+          operation,
+          status: 410,
+        });
+        expect(await refused.json()).toEqual({ code: "space-deleted" });
+      }
+      const forged = await f.raw("list", {}, f.owner, { forged: true });
+      expect(forged.status).toBe(401);
+      await forged.body?.cancel();
+    } finally {
+      await f.close();
+    }
+  });
+
   it("removes fixture storage when setup fails before listening", async () => {
     const directory = await Deno.makeTempDir();
     using _tempDirectory = stub(

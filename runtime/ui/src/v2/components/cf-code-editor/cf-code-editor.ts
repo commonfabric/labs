@@ -69,6 +69,7 @@ import {
   type PresenceRecord,
   type PresenceRoomHandle,
   type RuntimeClient,
+  sameAnchors,
 } from "@commonfabric/runtime-client";
 import { GFM } from "@lezer/markdown";
 import { consume } from "@lit/context";
@@ -78,7 +79,7 @@ import { property } from "lit/decorators.js";
 import { BaseElement } from "../../core/base-element.ts";
 import { createStringCellController } from "../../core/cell-controller.ts";
 import { valueForDisplay } from "../../core/value-for-display.ts";
-import { type InputTimingOptions } from "../../core/input-timing-controller.ts";
+import type { InputTimingOptions } from "../../core/input-timing-controller.ts";
 import {
   dedupeByDestination,
   labelForToken,
@@ -113,6 +114,18 @@ import {
   createBacklinkDecorationPlugin,
 } from "./features/backlinks.ts";
 import {
+  type EditorHighlight,
+  highlightAnchors,
+  highlightFaults,
+  highlights as highlightsExtension,
+  localAnchors,
+  sameSelection,
+  type SelectionReport,
+  selectionReport,
+  setHighlightAnchorsEffect,
+  setHighlightsEffect,
+} from "./features/highlights.ts";
+import {
   atomicMentionRefRanges,
   createMentionRefDecorationPlugin,
   findRefToken,
@@ -134,6 +147,7 @@ import {
   CodeMirrorReconciliationError,
   codeMirrorRewriteDedupeEffect,
   type CodeMirrorSynchronizationSnapshot,
+  hasConfirmedCursor,
 } from "./codemirror-collaboration.ts";
 import {
   codeMirrorPresence,
@@ -301,6 +315,12 @@ function readUnlessRefused(cell: { get(): unknown }): unknown {
  *   publishes its caret there with `focused` reporting whether it owns focus.
  *   Presence travels over the runtime's memory connection; no endpoint is
  *   configured.
+ * @attr {EditorHighlight[]} highlights - Ranges of the collaborative field's
+ *   text to mark, each `{ id, fromAnchor, toAnchor, kind? }`: the text from
+ *   one of the field's anchors to another, named by anchor id. Memory moves
+ *   each anchor through every edit and the editor draws the mark between
+ *   where Memory says the two are; `id` names the mark and `kind` adds the
+ *   class `cm-highlight-<kind>`. See `docs/highlights.md`.
  *
  * @fires cf-change - Fired when content changes with detail: { value, oldValue, language }
  * @fires cf-focus - Fired on focus
@@ -311,6 +331,17 @@ function readUnlessRefused(cell: { get(): unknown }): unknown {
  *   of document collaboration. Detail contains a safe failure category.
  * @fires cf-presence-join - Fired each time the editor joins its presence room,
  *   including a rejoin after `cf-presence-error`. It carries no detail.
+ * @fires cf-selection-change - Fired when the main selection changes, with
+ *   detail `{ from, to, text, value }`: the range in the editor's document,
+ *   the text that range holds, and the whole document. An empty selection
+ *   reports `from === to` and an empty `value`. A selection held while any
+ *   edit changes the document is reported again, against the new document. A
+ *   new editor's first report is always fired, and says that nothing is
+ *   selected.
+ * @fires cf-highlight-click - Fired when a highlight is clicked, with detail
+ *   `{ id }` naming the highlight: on the release of a primary-button press
+ *   that leaves nothing selected, so a press that drags out a selection fires
+ *   nothing. The caret still lands where the click was.
  * @fires backlink-click - Fired when a backlink is clicked with Cmd/Ctrl+Enter with detail: { text, piece }
  * @fires backlink-create - Fired when a novel backlink is activated (Cmd/Ctrl+Click)
  *   or confirmed with Enter during autocomplete with no matches. Detail:
@@ -361,6 +392,7 @@ export class CFCodeEditor extends BaseElement {
     collaborative: { type: Boolean },
     presenceRoom: { type: String },
     participantName: { type: String },
+    highlights: { type: Array },
   };
 
   declare value: CellHandle<string> | string;
@@ -404,6 +436,14 @@ export class CFCodeEditor extends BaseElement {
   declare collaborative: boolean;
   declare presenceRoom: string;
   declare participantName: string;
+
+  /**
+   * The ranges of the collaborative field's text to draw, each from one of
+   * the field's anchors to another. Memory says where each anchor is; a
+   * highlight naming an anchor the field does not hold, or whose text an edit
+   * deleted, draws nothing.
+   */
+  declare highlights: EditorHighlight[];
 
   @consume({ context: runtimeContext, subscribe: true })
   @property({ attribute: false })
@@ -450,6 +490,29 @@ export class CFCodeEditor extends BaseElement {
   private _refusedShown = false;
   private _collaboration: CodeMirrorCollaborationController | undefined;
   private _collaborationSyncUnsub: (() => void) | undefined;
+  /**
+   * The last `cf-selection-change` detail emitted, or `undefined` when the
+   * editor view has emitted none, so that the view's first report is emitted
+   * whatever it is.
+   */
+  private _lastSelectionReport: SelectionReport | undefined;
+  /**
+   * The anchors last handed to the highlight field and the version they were
+   * stated at, which is `null` for a field with no collaborative edit, or
+   * `undefined` when the highlight field holds none of a collaboration's.
+   */
+  private _shownAnchors:
+    | Pick<CodeMirrorSynchronizationSnapshot, "anchors"> & {
+      cursor: CodeMirrorSynchronizationSnapshot["confirmedCursor"];
+    }
+    | undefined;
+
+  /**
+   * The highlight faults last reported through `cf-error`, so that a fault is
+   * reported once while it lasts rather than on every change to the editor.
+   */
+  #reportedHighlightFaults: ReadonlySet<string> = new Set();
+
   private _presence: PresenceRoomHandle | undefined;
   private _presenceUnsubscribe: (() => void) | undefined;
   private _presenceJoining = false;
@@ -613,6 +676,7 @@ export class CFCodeEditor extends BaseElement {
     this.collaborative = false;
     this.presenceRoom = "";
     this.participantName = "";
+    this.highlights = [];
     this.mentionable = null;
     this.references = null;
     this.fabricHosts = [];
@@ -2000,6 +2064,10 @@ export class CFCodeEditor extends BaseElement {
     if (update.selectionSet && !isCellSync && !isRemote) {
       this._publishPresence();
     }
+    // A report carries the document, so a change to it restates a held
+    // selection, which the change may also have moved without setting one,
+    // as a rename of a reference ahead of it does.
+    if (update.selectionSet || update.docChanged) this._reportSelection();
     if (!update.docChanged || isCellSync) return;
 
     const value = update.state.doc.toString();
@@ -2092,6 +2160,7 @@ export class CFCodeEditor extends BaseElement {
     const generation = ++this._collaborationGeneration;
     this._collaborationSyncUnsub?.();
     this._collaborationSyncUnsub = undefined;
+    this._clearAnchors();
     this._cleanupPresence();
     const previous = this._collaboration;
     this._collaborationFailed = false;
@@ -2234,6 +2303,15 @@ export class CFCodeEditor extends BaseElement {
   ): void {
     if (snapshot === null) {
       this._cleanupPresence();
+      this._clearAnchors();
+      return;
+    }
+    // Anchors are stated against the confirmed text, which a field with no
+    // collaborative edit has as much as one with a version.
+    this._showAnchors(snapshot);
+    // Presence is stated against a version, so a field without one has none.
+    if (!hasConfirmedCursor(snapshot)) {
+      this._cleanupPresence();
       return;
     }
     if (
@@ -2259,11 +2337,86 @@ export class CFCodeEditor extends BaseElement {
   }
 
   /**
+   * Forgets the anchors of a collaboration that has ended or is being
+   * replaced, so no mark is drawn until the next one states its own. A fault
+   * the anchors made goes with them, and is reported again if they return.
+   */
+  private _clearAnchors(): void {
+    this._shownAnchors = undefined;
+    this._editorView?.dispatch({ effects: setHighlightAnchorsEffect.of({}) });
+    this._reportHighlightFaults();
+  }
+
+  /**
+   * Emits `cf-error` for each highlight the host asked for that the editor
+   * cannot draw as asked ({@link highlightFaults}), once while it lasts.
+   */
+  private _reportHighlightFaults(): void {
+    const view = this._editorView;
+    if (!view) return;
+    const faults = highlightFaults(view.state);
+    const reported = this.#reportedHighlightFaults;
+    this.#reportedHighlightFaults = new Set(faults);
+    for (const message of faults) {
+      if (reported.has(message)) continue;
+      this.emit("cf-error", { error: new Error(message), message });
+    }
+  }
+
+  /**
+   * Restates the highlight field's anchors from Memory's when the anchors or
+   * the version they are stated at have changed. Between restatements the
+   * highlight field moves each anchor through each edit by the same rule, so
+   * a restatement usually finds the field holding what it would state, and
+   * then dispatches nothing.
+   */
+  private _showAnchors(snapshot: CodeMirrorSynchronizationSnapshot): void {
+    const view = this._editorView;
+    if (!view) return;
+    const shown = this._shownAnchors;
+    if (
+      shown !== undefined && shown.anchors === snapshot.anchors &&
+      shown.cursor?.epoch === snapshot.confirmedCursor?.epoch &&
+      shown.cursor?.version === snapshot.confirmedCursor?.version
+    ) {
+      return;
+    }
+    const anchors = localAnchors(view.state, snapshot);
+    if (anchors === undefined) return;
+    this._shownAnchors = {
+      anchors: snapshot.anchors,
+      cursor: snapshot.confirmedCursor,
+    };
+    if (sameAnchors(anchors, highlightAnchors(view.state))) return;
+    view.dispatch({ effects: setHighlightAnchorsEffect.of(anchors) });
+    this._reportHighlightFaults();
+  }
+
+  /** Reports the main selection, against the editor's document. */
+  private _reportSelection(): void {
+    const view = this._editorView;
+    if (!view) return;
+    this._emitSelection(selectionReport(view.state));
+  }
+
+  /**
+   * Emits `cf-selection-change` with `report` when it differs from the last
+   * one emitted, or when the editor view has emitted none. Every empty
+   * selection reports the same way, so moving the caret reports nothing.
+   */
+  private _emitSelection(report: SelectionReport): void {
+    const last = this._lastSelectionReport;
+    if (last !== undefined && sameSelection(report, last)) return;
+    this._lastSelectionReport = report;
+    this.emit("cf-selection-change", report);
+  }
+
+  /**
    * Joins the presence room of the collaborative field through the cell's
-   * runtime once collaboration is ready and a participant name is set. A
-   * join already made for the same epoch and room is kept and republished
-   * to; a failure is reported once per configuration, and a `configuration`
-   * failure is not retried until the room or name changes.
+   * runtime once the field has a confirmed version and a participant name is
+   * set. A join already made for the same epoch and room is kept and
+   * republished to; a failure is reported once per configuration, and a
+   * `configuration` failure is not retried until the room or name changes.
    */
   private _setupPresence(
     synchronization = this._collaboration?.synchronizationSnapshot,
@@ -2281,8 +2434,7 @@ export class CFCodeEditor extends BaseElement {
     }
     if (
       !view || !this.collaborative || !controller?.active ||
-      synchronization === null || synchronization === undefined ||
-      !this.participantName
+      !hasConfirmedCursor(synchronization) || !this.participantName
     ) {
       this._cleanupPresence();
       return;
@@ -2391,7 +2543,9 @@ export class CFCodeEditor extends BaseElement {
       this._failPresence(presenceFailureCategory(event.error));
       return;
     }
-    if (!view || !this._presence || !synchronization) return;
+    if (!view || !this._presence || !hasConfirmedCursor(synchronization)) {
+      return;
+    }
     if (event.kind === "snapshot") {
       this._presenceParticipantId = event.participantId;
       this._applyPresenceSnapshot(event.participants);
@@ -2422,7 +2576,7 @@ export class CFCodeEditor extends BaseElement {
   private _applyPresenceSnapshot(records: readonly PresenceRecord[]): void {
     const view = this._editorView;
     const synchronization = this._collaboration?.synchronizationSnapshot;
-    if (!view || !synchronization) return;
+    if (!view || !hasConfirmedCursor(synchronization)) return;
     view.dispatch({
       effects: [
         codeMirrorPresenceClearEffect.of(null),
@@ -2446,9 +2600,7 @@ export class CFCodeEditor extends BaseElement {
     const presence = this._presence;
     const view = this._editorView;
     const synchronization = this._collaboration?.synchronizationSnapshot;
-    if (!presence || !view || synchronization === null || !synchronization) {
-      return;
-    }
+    if (!presence || !view || !hasConfirmedCursor(synchronization)) return;
     const focused = view.hasFocus;
     if (focused) this._presenceHasSelection = true;
     const provisional = synchronization.pendingChanges.length !== 0;
@@ -2695,6 +2847,13 @@ export class CFCodeEditor extends BaseElement {
       changedProperties.has("participantName")
     ) {
       this._setupPresence();
+    }
+
+    if (changedProperties.has("highlights") && this._editorView) {
+      this._editorView.dispatch({
+        effects: setHighlightsEffect.of(this.highlights ?? []),
+      });
+      this._reportHighlightFaults();
     }
 
     // Update language
@@ -3109,6 +3268,7 @@ export class CFCodeEditor extends BaseElement {
       ),
       this._collaborationComp.of([]),
       this._presenceComp.of([]),
+      highlightsExtension((id) => this.emit("cf-highlight-click", { id })),
       this._refusalGate(),
       EditorView.updateListener.of((update) =>
         this._handleEditorUpdate(update)
@@ -3233,11 +3393,14 @@ export class CFCodeEditor extends BaseElement {
     });
 
     // Create editor view
+    // The highlights reach the view from `updated()`, which runs after
+    // `firstUpdated()` with `highlights` among the changed properties.
     this._editorView = new EditorView({
       state,
       parent: editorElement,
     });
     this._refusedShown = this._readsWithheld;
+    this._reportSelection();
   }
 
   override render() {

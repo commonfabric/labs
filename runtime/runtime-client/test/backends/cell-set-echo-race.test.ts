@@ -25,6 +25,7 @@ import {
   realmFromFabricValue,
 } from "@commonfabric/data-model/codecs";
 import { Identity } from "@commonfabric/identity";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
@@ -154,7 +155,7 @@ class InProcessWorkerTransport extends EventEmitter<RuntimeTransportEvents>
           this.outbox.push(
             {
               msgId,
-              error: error instanceof Error ? error.message : String(error),
+              error: describeFailure(error),
             } as IPCRemoteMessage,
           ),
       );

@@ -18,7 +18,7 @@
  * member is assignable to no other, which covers every class with state.
  */
 
-import type { IsUnion, MustBeTrue, Same } from "@commonfabric/utils/types";
+import type { IsUnion, MustBeTrue, Same } from "@commonfabric/js-values/types";
 
 import type * as Api from "@/api.ts";
 

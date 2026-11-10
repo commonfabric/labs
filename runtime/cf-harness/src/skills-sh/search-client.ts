@@ -18,7 +18,8 @@
  *   asked for came back.
  */
 
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import {
   defaultHarnessFetch,
   type HarnessFetch,
@@ -271,9 +272,7 @@ export class SkillsShSearchClient {
     } catch (error) {
       throw new SkillsShSearchError(
         "request_failed",
-        `skills.sh search could not be reached: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        `skills.sh search could not be reached: ${describeFailure(error)}`,
       );
     }
     if (!response.ok) {

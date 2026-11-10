@@ -1,5 +1,8 @@
 import { mainNamesPattern } from "@commonfabric/runner";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 
 /**
  * State a pattern stopped holding on purpose, and therefore no longer owes a

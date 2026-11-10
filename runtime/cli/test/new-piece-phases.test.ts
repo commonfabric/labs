@@ -30,7 +30,6 @@ describe("newPiece()", () => {
           } as never),
         getPinnedProgramFromFile: () =>
           Promise.resolve({ main: "/main.tsx", files: [] }),
-        loadIdentity: () => Promise.resolve({} as never),
         instantiatePieceOnServer: () =>
           Promise.resolve({
             pieceId: "fid1:created",
@@ -51,7 +50,6 @@ describe("newPiece()", () => {
         "newPiece.create.instantiate",
         "newPiece.create.server.instantiate.queue",
         "newPiece.create.server.registration.delivery",
-        "newPiece.create.getPieceCell",
       ]);
     expect(lines).toContain(
       "[cf-phase] 1500ms :: newPiece.create.server.instantiate.queue",

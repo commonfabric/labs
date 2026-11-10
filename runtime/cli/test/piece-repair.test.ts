@@ -12,7 +12,7 @@ import { createSession, Identity } from "@commonfabric/identity";
 import { PiecesController, type RepairReport } from "@commonfabric/piece/ops";
 import { Runtime, type RuntimeProgram } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
-import { decode } from "@commonfabric/utils/encoding";
+import { decode } from "@commonfabric/text/utf8";
 
 import {
   programEntryIdentity,

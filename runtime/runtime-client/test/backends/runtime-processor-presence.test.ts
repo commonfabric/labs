@@ -10,7 +10,7 @@ import type {
   PresenceMembership,
 } from "@commonfabric/memory/v2/client";
 import { presenceRoomForField } from "@commonfabric/memory/v2/presence";
-import { defer } from "@commonfabric/utils/defer";
+import { defer } from "@commonfabric/async/defer";
 
 import type { WorkerClient } from "@/backends/worker-client.ts";
 import { NotificationType, type PresenceWireEvent } from "@/protocol/mod.ts";

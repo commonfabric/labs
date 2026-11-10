@@ -164,10 +164,13 @@ describe("cf agent runner local jobs", () => {
 
   describe("the runner", () => {
     for (
-      const failure of [
-        new TypeError("path must be shorter than SUN_LEN"),
-        "invalid profiles file",
-      ]
+      const [failure, described] of [
+        [
+          new TypeError("path must be shorter than SUN_LEN"),
+          "path must be shorter than SUN_LEN",
+        ],
+        ["invalid profiles file", "invalid profiles file"],
+      ] as const
     ) {
       it(`starts and stops the Fabric lane when local startup fails with ${String(failure)}`, async () => {
         const { deps, events, local, fabric } = stubDeps({
@@ -186,9 +189,7 @@ describe("cf agent runner local jobs", () => {
         expect(local).toHaveLength(1);
         expect(fabric).toHaveLength(1);
         expect(events).toContain(
-          `report:agent runner: the local lane did not start, continuing with the Fabric lane: ${
-            failure instanceof Error ? failure.message : failure
-          }`,
+          `report:agent runner: the local lane did not start, continuing with the Fabric lane: ${described}`,
         );
         expect(events.filter((event) => !event.startsWith("report:"))).toEqual([
           "fabric:start",
@@ -352,6 +353,35 @@ describe("cf agent runner local jobs", () => {
         "wait",
         "local:stop",
       ]);
+    });
+
+    it("refuses a malformed command endpoint before starting either lane", async () => {
+      for (
+        const flags of [
+          ["--commands-url", "http://127.0.0.1:8090/?"],
+          [
+            "--commands-url",
+            "http://127.0.0.1:8090/#",
+            "--commands-actor",
+            "agent:agent-runner",
+          ],
+        ]
+      ) {
+        const { deps, events } = stubDeps();
+
+        await expect(
+          run(deps, [
+            "runner",
+            "-i",
+            "/keys/me.key",
+            "-a",
+            "http://localhost:8100",
+            ...LOCAL,
+            ...flags,
+          ]),
+        ).rejects.toThrow(ValidationError);
+        expect(events).toEqual([]);
+      }
     });
 
     it("stops local jobs and throws when the Fabric lane's flags are wrong", async () => {

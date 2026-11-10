@@ -5,6 +5,8 @@
  * hold these types without the SQLite module behind the host.
  */
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+
 /**
  * One step the serving side timed while running a lifecycle verb: `phase`
  * names it as `<verb>.<step>`, `ms` is its length in whole milliseconds.
@@ -30,7 +32,7 @@ export class LifecycleVerbFailure extends Error {
   readonly #code: string | undefined;
 
   constructor(cause: unknown, timings: readonly LifecyclePhaseTiming[]) {
-    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    super(describeFailure(cause), { cause });
     this.#timings = [...timings];
     this.name = cause instanceof Error ? cause.name : "Error";
     if (cause instanceof Error) this.stack = cause.stack;

@@ -1,7 +1,7 @@
 /** Validates opt-in read limits and compares completed interval measurements. */
 
 import type { RuntimeTelemetryMarker } from "@commonfabric/runner";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 /** Keeps attempt totals separate from reactive-body maxima. */
 export class ReadBudgetMeasurement {

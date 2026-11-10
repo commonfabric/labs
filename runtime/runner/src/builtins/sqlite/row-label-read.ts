@@ -17,10 +17,13 @@ import {
   validateRowLabelSpec,
 } from "@commonfabric/memory/sqlite/row-label";
 import { tableDeclaresRowLabel } from "@commonfabric/memory/v2";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import {
+  type CfcConfClause,
+  clauseAlternatives,
+  isOrClause,
+} from "@commonfabric/memory/v2/cfc-release-authority";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
-import type { CfcConfClause } from "../../cfc/clause.ts";
-import { clauseAlternatives, isOrClause } from "../../cfc/clause.ts";
 import { cfcObservationFitsCeiling } from "../../cfc/observation.ts";
 
 interface ResultColumn {

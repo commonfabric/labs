@@ -1,8 +1,8 @@
 import * as path from "@std/path";
 
 import type { BuilderSourceSitesV1 } from "@commonfabric/ts-transformers/runtime-contract";
-import { getLogger } from "@commonfabric/utils/logger";
-import { yieldToEventLoop } from "@commonfabric/utils/sleep";
+import { getLogger } from "@commonfabric/logger";
+import { yieldToEventLoop } from "@commonfabric/async/sleep";
 import type {
   CompilerHost,
   CompilerOptions,
@@ -17,8 +17,12 @@ import type {
 } from "typescript";
 import ts from "typescript";
 
-import { Program, ProgramResolver, Source } from "../interface.ts";
-import type { SourceMap } from "../interface.ts";
+import type {
+  Program,
+  ProgramResolver,
+  Source,
+  SourceMap,
+} from "../interface.ts";
 import { parseSourceMap } from "../source-map.ts";
 import {
   authoredLocation,
@@ -452,11 +456,13 @@ export class TypeScriptCompiler {
     compileTimingLogger.time(createStart, "phase", "createProgram");
     yield;
 
-    const checker = new Checker(tsProgram, {
-      messageTransformer: inputOptions.diagnosticMessageTransformer,
-      storedSource,
-      authoredSource: inputOptions.authoredSource,
-    });
+    const checkerFor = (target: ts.Program) =>
+      new Checker(target, {
+        messageTransformer: inputOptions.diagnosticMessageTransformer,
+        storedSource,
+        authoredSource: inputOptions.authoredSource,
+      });
+    const checker = checkerFor(tsProgram);
     // Parse and program-level errors are fatal unconditionally — `noCheck`
     // skips type-checking, never parsing, and stored-source mode filters
     // only semantic hygiene codes. On stored-source compiles this gate
@@ -473,14 +479,50 @@ export class TypeScriptCompiler {
       yield;
     }
     if (!noCheck) {
-      const errors = [];
-      for (const sourceFile of checker.checkableSources()) {
-        const typeCheckStart = performance.now();
-        for (const error of checker.collectSemanticErrors(sourceFile)) {
-          errors.push(error);
+      const semanticErrors = function* (
+        of: Checker,
+        phase: string,
+      ): Generator<void, ReturnType<Checker["collectSemanticErrors"]>, void> {
+        const errors: ReturnType<Checker["collectSemanticErrors"]> = [];
+        for (const sourceFile of of.checkableSources()) {
+          const typeCheckStart = performance.now();
+          for (const error of of.collectSemanticErrors(sourceFile)) {
+            errors.push(error);
+          }
+          compileTimingLogger.time(typeCheckStart, "phase", phase);
+          yield;
         }
-        compileTimingLogger.time(typeCheckStart, "phase", "typeCheckFile");
-        yield;
+        return errors;
+      };
+      const errors = yield* semanticErrors(checker, "typeCheckFile");
+      // Stored source admitted before `exactOptionalPropertyTypes` was the
+      // rule may hold an `undefined` written into an optional property, which
+      // the flag refuses, and those bytes cannot be re-authored. Such a
+      // program is admitted if it checks clean without the flag. Neither
+      // rule's language contains the other (an index signature beside an
+      // optional property type-checks only under the flag), so neither check
+      // alone admits every stored program.
+      //
+      // The check without the flag only admits. The program is still emitted
+      // under the flag, so a module compiles to the same output whichever
+      // program includes it, as its identity, a hash of its own source and
+      // what it imports, assumes.
+      if (
+        errors.length > 0 && storedSource &&
+        tsOptions.exactOptionalPropertyTypes === true
+      ) {
+        const inexactChecker = checkerFor(
+          ts.createProgram(
+            sourceNames,
+            { ...tsOptions, exactOptionalPropertyTypes: false },
+            host,
+          ),
+        );
+        const admitted = yield* semanticErrors(
+          inexactChecker,
+          "typeCheckFileInexact",
+        );
+        if (admitted.length === 0) errors.length = 0;
       }
       checker.throwIfErrors(errors);
     }

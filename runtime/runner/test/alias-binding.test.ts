@@ -9,7 +9,7 @@ import {
   resetContentAddressedSchemasConfig,
   setContentAddressedSchemasConfig,
 } from "../src/schema-doc-config.ts";
-import { type Pattern } from "../src/builder/types.ts";
+import type { Pattern } from "../src/builder/types.ts";
 import {
   getDerivedInternalCell,
   isCellLink,

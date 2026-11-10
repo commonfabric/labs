@@ -41,3 +41,14 @@ export function dashboardVersion(
 
 /** The version this process serves, fixed when it starts. */
 export const SERVING_VERSION = dashboardVersion();
+
+/** The response header that names the version a response was served by. */
+export const VERSION_HEADER = "dashboard-version";
+
+/** `response`, naming the version this process serves in `VERSION_HEADER`. */
+export function withVersionHeader(response: Response): Response {
+  const served = new Response(response.body, response);
+  served.headers.set(VERSION_HEADER, SERVING_VERSION);
+  return served;
+}
+

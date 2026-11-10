@@ -1,27 +1,21 @@
-// Server-execution v2 stage C tuning, T3 (serving-loop.md §2/§3): the
-// serving scheduler's cooperative macrotask yield and the mid-wave lease
-// renew, pinned end to end on the ExecutorHost harness (a real memory
-// server, a client session, the SpaceServer's serving runtime).
+// Server-execution v2 stage C tuning, T3 (serving-loop.md §3): the serving
+// scheduler's cooperative macrotask yield, pinned end to end on the
+// ExecutorHost harness (a real memory server, a client session, the
+// SpaceServer's serving runtime).
 //
 // The attribution that motivated it (stage-c-attribution-report §2b/§3):
 // the settle loop ran a whole wave's runs on one microtask chain, so the
 // 100-ms flush deadline fired seconds LATE (`wavesBudgetExhausted` was a
-// symptom, not a bound) and the lease-renew `setInterval` starved for up
-// to 10 s against a 15-s TTL (t2: `wave-commit-rejected` then
-// `lease-lost` on every space within 10 ms).
+// symptom, not a bound).
 //
 // - (i) HONEST DEADLINE: a synthetic 30-step walk (40 ms of synchronous
 //   work per step, 1.2 s total) under a 100-ms deadline commits its first
 //   (exhausted) wave within ~one step of the deadline, not after the whole
 //   walk. Mutation (the yield removed from settle.ts) → the first commit
 //   carries the whole walk → RED.
-// - (ii) MID-WAVE RENEW: a 45-step (1.8-s) walk with a 900-ms lease TTL,
-//   the renew TIMER inert (600 s) and a 5-s deadline — the wave outlives
-//   the TTL twice over and still COMMITS under a live lease, because the
-//   yield observer renewed it mid-wave; `lease.lost` stays 0 and the
-//   lease row's expiry moved during the wave. Mutation (the observer's
-//   renew removed, or the yield removed) → the lease lapses at 900 ms and
-//   the wave's commit is refused at admission → RED.
+// - (ii) A LONG SETTLE KEEPS THE LEASE: a 45-step (1.8-s) walk under a 5-s
+//   deadline commits under the holder it started with, and `lease.lost`
+//   stays 0, since nothing but a park ends a tenure.
 // - (iii) POSTURE GATE: a runtime without `servingPosture` constructs no
 //   yielder — the OFF arm and flag-ON clients keep their settle loops'
 //   exact microtask shape.
@@ -31,7 +25,6 @@ import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import * as Engine from "@commonfabric/memory/v2/engine";
-import { liveExecutionLeaseHolder } from "@commonfabric/memory/v2/execution-lease";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { Runtime } from "../src/runtime.ts";
 import type {
@@ -61,16 +54,7 @@ const burn = (ms: number): void => {
 const WALK_STEPS = 30;
 const STEP_MS = 40;
 
-/** Reads the expiry as a millisecond timestamp through SQLite's REAL accessor. */
-const leaseExpiry = (engine: Engine.Engine): number =>
-  (engine.database.prepare(
-    // The engine's INTEGER accessor truncates to 32 bits; millisecond
-    // timestamps are exactly representable as REAL values.
-    `SELECT CAST(expires_at AS REAL) AS expires_at
-     FROM execution_lease WHERE space = :space`,
-  ).get({ space }) as { expires_at: number } | undefined)?.expires_at ?? 0;
-
-describe("stage C tuning T3: cooperative yield + mid-wave renew", () => {
+describe("stage C tuning T3: cooperative yield", () => {
   let server: MemoryV2Server.Server;
   let host: ExecutorHost | undefined;
   let clientManager: EmulatedStorageManager;
@@ -232,31 +216,16 @@ describe("stage C tuning T3: cooperative yield + mid-wave renew", () => {
     expect(host.stats().lease.lost).toBe(0);
   });
 
-  it("(ii) a wave longer than TTL/3 renews the lease MID-WAVE from the yield observer, with the renew timer inert: a 1.8-s walk outlives a 900-ms TTL twice over and still commits under a live lease; lease.lost stays 0 (mutation: renew-on-yield removed → the lease lapses and the wave's commit is refused)", async () => {
-    // The TTL clock starts at acquire (activation), so the headroom for
-    // activation + boot settle + walk registration is the TTL itself:
-    // 900 ms against a measured 30–100 ms; a slower box has ~9× slack.
-    const ttlMs = 900;
+  it("(ii) a long settle keeps the lease: a 1.8-s walk commits under the holder it started with, and `lease.lost` stays 0", async () => {
     const walkSteps = 45;
-    host = newHost({
-      flushDeadlineMs: 5_000,
-      idleParkMs: 600_000,
-      // The interval timer never fires within the test: every renewal
-      // that lands is the mid-wave belt.
-      renewIntervalMs: 600_000,
-      leaseTtlMs: ttlMs,
-    });
+    host = newHost({ flushDeadlineMs: 5_000, idleParkMs: 600_000 });
     const engine = await activate();
     const spaceServer = host.spaceServer(space)!;
-    const expiryAtStart = leaseExpiry(engine);
-    expect(expiryAtStart).toBeGreaterThan(Date.now());
     const seqBefore = Engine.serverSeq(engine);
     const derivedBefore = host.stats().derivedCommits;
 
     const outIds = registerWalk(walkSteps);
-    // The wave commits — under a lease that would have EXPIRED 900 ms in
-    // without the mid-wave renew (the walk is 1 800 ms; the deadline 5 s,
-    // so it is ONE wave).
+    // The walk is 1 800 ms and the deadline 5 s, so it is ONE wave.
     await awaitAdmitted(
       server,
       () => storedOutCount(engine, outIds) === walkSteps,
@@ -265,9 +234,7 @@ describe("stage C tuning T3: cooperative yield + mid-wave renew", () => {
     expect(host.stats().derivedCommits).toBeGreaterThan(derivedBefore);
     expect(host.stats().lease.lost).toBe(0);
     expect(spaceServer.active).toBe(true);
-    // The row was renewed while the wave ran (no timer could have).
-    expect(leaseExpiry(engine)).toBeGreaterThan(expiryAtStart);
-    expect(liveExecutionLeaseHolder(engine, space)).toBe(spaceServer.holder);
+    expect(engine.executionLeases.holderOf(space)).toBe(spaceServer.holder);
     expect(servingRuntime!.scheduler.servingYield!.yieldCount)
       .toBeGreaterThan(0);
   });

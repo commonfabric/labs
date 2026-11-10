@@ -15,7 +15,21 @@ import {
   SCHEMA_META_MEMBER,
   schemaMetaRefHashes,
 } from "@commonfabric/data-model-schema/schema-refs";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
+import {
+  judgeOwnerReleaseByIntent,
+  OWNER_RELEASE_BY_INTENT_RECORD_PREFIX,
+  parseOwnerReleaseByIntentRecord,
+  type VerifiedOwnerReleaseByIntent,
+} from "./cfc-owner-release-by-intent.ts";
+import {
+  admitsDroppedDeclaredPaths,
+  droppedDeclaredPaths,
+} from "./envelope-admission.ts";
 import { findNumericLabelField } from "./label-metadata-table.ts";
 import { mapLinkSchemas } from "./schema-table-links.ts";
 import {
@@ -39,6 +53,7 @@ import {
 } from "./path.ts";
 import { replaceSchedulerBasisRows } from "./scheduler-basis.ts";
 import { TouchedPathIndex } from "./touched-path-index.ts";
+import { ExecutionLeases } from "./execution-lease.ts";
 import {
   insertExecutionOutboxRows,
   type OutboxAppendRow,
@@ -46,14 +61,17 @@ import {
 import {
   createDefaultOperationCodecRegistry,
   operationBaselineHash,
+  type OperationCodec,
   type OperationCodecRegistry,
+  sameAnchors,
 } from "./operation-codec.ts";
 import {
   containsReservedSchemaRefSubstring,
   containsSyncSchemaRefString,
   findSyncSchemaRef,
 } from "./sync-schema-ref.ts";
-import { aclDocId } from "../acl.ts";
+import { aclDocId, isDeletionTombstone } from "../acl.ts";
+import { deletionTombstoneOf, readAclHeads } from "./acl-heads.ts";
 import {
   type ApplyOpOperation,
   type ApplyOpResolution,
@@ -74,14 +92,19 @@ import {
   type EntityId,
   type EventAppendDecl,
   EventAppendDuplicateError,
+  type FieldAnchors,
   getServerExecutionConfig,
   type IntegratedOperation,
   isEntityDocument,
+  isOperationAnchorsDocId,
   isScopeKey,
   type OpCursor,
   type Operation,
+  operationAnchorsDocId,
+  type OperationFieldAddress,
   type OperationFieldQuery,
   type OperationFieldSnapshot,
+  parseFieldAnchors,
   type PatchOp,
   type PatchOperation,
   ProtocolError,
@@ -231,7 +254,7 @@ CREATE TABLE IF NOT EXISTS "commit" (
   class              TEXT    NOT NULL DEFAULT 'authored',
   -- The producing lease holder, derived-class commits only (protocol.md §7's
   -- closed metadata list: 'holder' — derived only). NULL on every other
-  -- class. Admission verified it against the live execution_lease row before
+  -- class. Admission verified it against the memory server's lease map before
   -- the insert (serving-loop.md §2), so a stored value names the holder that
   -- actually held the lease at admission time.
   holder             TEXT,
@@ -385,17 +408,10 @@ CREATE TABLE IF NOT EXISTS branch (
 INSERT OR IGNORE INTO branch (name, created_seq, head_seq, status)
 VALUES ('', 0, 0, 'active');
 
--- Server-execution v2: the single-deriver lease
--- (docs/specs/server-side-execution/serving-loop.md §2). One row per space,
--- EXACTLY three fields — the v1 branch's richer shape (branch PK,
--- generation/host/on-behalf-of columns, a state enum) is prior art this
--- REDUCES from, not substrate. 'holder' is a per-process identity (service
--- identity + process-instance component, minted at process start — DR1), so
--- the admission equality check itself fences cross-process succession.
--- Acquire/renew are DIRECT table writes on the direct-engine plane
--- (serving-loop.md §1 plane (c)) — a lease renewal is never a commit.
--- Liveness is judged by the memory server's own clock against expires_at;
--- an expired row matches nobody. References nothing; nothing references it.
+-- Unused: the single-deriver lease lives in the memory server's memory
+-- (docs/specs/server-side-execution/serving-loop.md §2). Nothing reads or
+-- writes this table. TODO(seefeld): Drop it once no deployed process writes
+-- its rows.
 CREATE TABLE IF NOT EXISTS execution_lease (
   space       TEXT    NOT NULL PRIMARY KEY,
   holder      TEXT    NOT NULL,
@@ -500,6 +516,19 @@ CREATE TABLE IF NOT EXISTS blob_store (
   data          BLOB    NOT NULL,
   content_type  TEXT    NOT NULL,
   size          INTEGER NOT NULL
+);
+
+-- The instance-naming mark (INV-16, docs/specs/memory-v2/09-invariants.md):
+-- present once the space holds data a runtime that names instances wrote. At
+-- most one row, which the memory server writes in the store transaction of
+-- the first commit it admits from a session declaring instanceNames: true,
+-- and which names that commit. Nothing updates or deletes it, except a reap
+-- of a deleted space (memory/v2/reap.ts), which removes the mark, and the
+-- commit it names unless that commit is the deletion.
+CREATE TABLE IF NOT EXISTS instance_name_mark (
+  singleton   INTEGER NOT NULL PRIMARY KEY CHECK (singleton = 1),
+  commit_seq  INTEGER NOT NULL,
+  FOREIGN KEY (commit_seq) REFERENCES "commit"(seq)
 );
 
 COMMIT;
@@ -816,17 +845,6 @@ ORDER BY r.seq ASC, r.op_index ASC
 LIMIT 1
 `;
 
-// The derived-class admission read (serving-loop.md §2): the space's LIVE
-// lease row, liveness judged by the memory server's own clock (the :now the
-// admission path passes is always this process's Date.now()). An expired row
-// is not returned, so it matches nobody.
-const SELECT_LIVE_EXECUTION_LEASE = `
-SELECT holder
-FROM execution_lease
-WHERE space = :space
-  AND expires_at > :now
-`;
-
 const SELECT_SET_DELETE_CONFLICT = `
 SELECT seq
 FROM revision
@@ -962,6 +980,16 @@ FROM blob_store
 WHERE hash = :hash
 `;
 
+const INSERT_INSTANCE_NAME_MARK = `
+INSERT OR IGNORE INTO instance_name_mark (singleton, commit_seq)
+VALUES (1, :commit_seq)
+`;
+
+const SELECT_INSTANCE_NAME_MARK = `
+SELECT 1 AS marked
+FROM instance_name_mark
+`;
+
 type PreparedStatement = ReturnType<Database["prepare"]>;
 
 interface PreparedStatements {
@@ -969,6 +997,7 @@ interface PreparedStatements {
   insertBlob: PreparedStatement;
   insertBranch: PreparedStatement;
   insertCommit: PreparedStatement;
+  insertInstanceNameMark: PreparedStatement;
   insertInvocation: PreparedStatement;
   insertRevision: PreparedStatement;
   insertSnapshot: PreparedStatement;
@@ -987,11 +1016,11 @@ interface PreparedStatements {
   selectExistingCommit: PreparedStatement;
   selectOldestRevisionAttribution: PreparedStatement;
   selectHead: PreparedStatement;
+  selectInstanceNameMark: PreparedStatement;
   selectLatestBase: PreparedStatement;
   selectLatestSnapshot: PreparedStatement;
   selectLatestSnapshotBelow: PreparedStatement;
   selectRevisionRow: PreparedStatement;
-  selectLiveExecutionLease: PreparedStatement;
   selectNextSeq: PreparedStatement;
   selectPatchConflicts: PreparedStatement;
   selectPatchConflictsExcludingSession: PreparedStatement;
@@ -1118,6 +1147,9 @@ export type Engine = {
   legacyCommitMetadataRefsRequired: boolean;
   operationCodecs: OperationCodecRegistry;
   statements: PreparedStatements;
+
+  /** The lease map derived-class admission checks (serving-loop.md §2). */
+  executionLeases: ExecutionLeases;
 
   /**
    * Documents already decoded, by the revision each one is.
@@ -1350,6 +1382,12 @@ export type OpenOptions = {
   /** The observer every commit decision is reported to; see
    * {@link CommitObserver}. */
   commitObserver?: CommitObserver;
+
+  /**
+   * The lease map derived-class admission checks: the opening `Server`'s, which
+   * all its spaces share. An engine opened without one starts a map of its own.
+   */
+  executionLeases?: ExecutionLeases;
 };
 
 export type InvocationRecord = {
@@ -1401,9 +1439,9 @@ export type ApplyCommitOptions = {
 
   /** The producing lease holder of a `derived`-class commit — the DR1
    *  per-process identity the SpaceServer minted at process start
-   *  (serving-loop.md §2). Admission compares it against the space's live
-   *  `execution_lease` row: one equality check, judged by this process's own
-   *  clock. Server-internal like `commitClass`: `ClientCommit` cannot express
+   *  (serving-loop.md §2). Admission compares it against the holder the
+   *  memory server's lease map names for the space: one equality check.
+   *  Server-internal like `commitClass`: `ClientCommit` cannot express
    *  a holder, and no session-facing path supplies one. Meaningless (and
    *  ignored) on other classes. */
   holder?: string;
@@ -1486,6 +1524,14 @@ export type AppliedRevision = {
   op: SetOperation["op"] | PatchOperation["op"] | DeleteOperation["op"];
   document?: EntityDocument;
   patches?: PatchOp[];
+
+  /**
+   * Present when the engine wrote the revision from another of the commit's
+   * operations, as it rewrites a field's anchors document for an edit to the
+   * field, rather than applying an operation that names the document. The
+   * committing session supplied nothing of such a write.
+   */
+  derived?: true;
 };
 
 export type CommitReadDropReason =
@@ -1771,6 +1817,7 @@ const prepareStatements = (database: Database): PreparedStatements => ({
   insertBlob: database.prepare(INSERT_BLOB),
   insertBranch: database.prepare(INSERT_BRANCH),
   insertCommit: database.prepare(INSERT_COMMIT),
+  insertInstanceNameMark: database.prepare(INSERT_INSTANCE_NAME_MARK),
   insertInvocation: database.prepare(INSERT_INVOCATION),
   insertRevision: database.prepare(INSERT_REVISION),
   insertSnapshot: database.prepare(INSERT_SNAPSHOT),
@@ -1793,11 +1840,11 @@ const prepareStatements = (database: Database): PreparedStatements => ({
     SELECT_OLDEST_REVISION_ATTRIBUTION,
   ),
   selectHead: database.prepare(SELECT_HEAD),
+  selectInstanceNameMark: database.prepare(SELECT_INSTANCE_NAME_MARK),
   selectLatestBase: database.prepare(SELECT_LATEST_BASE),
   selectLatestSnapshot: database.prepare(SELECT_LATEST_SNAPSHOT),
   selectLatestSnapshotBelow: database.prepare(SELECT_LATEST_SNAPSHOT_BELOW),
   selectRevisionRow: database.prepare(SELECT_REVISION_ROW),
-  selectLiveExecutionLease: database.prepare(SELECT_LIVE_EXECUTION_LEASE),
   selectNextSeq: database.prepare(SELECT_NEXT_SEQ),
   selectPatchConflicts: database.prepare(SELECT_PATCH_CONFLICTS),
   selectPatchConflictsExcludingSession: database.prepare(
@@ -2246,6 +2293,7 @@ export const open = async (
     documentCacheMaxEntries = DEFAULT_DOCUMENT_CACHE_MAX_ENTRIES,
     documentCacheCoordinator,
     commitObserver,
+    executionLeases = new ExecutionLeases(),
   }: OpenOptions,
 ): Promise<Engine> => {
   if (
@@ -2284,6 +2332,7 @@ export const open = async (
     legacyCommitMetadataRefsRequired: commitMetadataRefsRequired(database),
     operationCodecs,
     statements: prepareStatements(database),
+    executionLeases,
     documentCache: new Map(),
     documentCacheBytes: 0,
     documentCacheBudgetBytes,
@@ -2543,6 +2592,11 @@ export const queryOperationField = (
     materialized: active
       ? decodeTrustedMemoryBoundary(field.materialized)
       : currentMaterialized,
+    anchors: readFieldAnchors(engine, {
+      branch,
+      field: { id, scope: declaredScope, path },
+      scopeKey,
+    }),
     ...(active
       ? {
         retainedFrom: { epoch: field.epoch, version: retainedVersion },
@@ -2599,7 +2653,7 @@ export const pruneOperationFieldHistory = (
       );
     }
     const checkpoint = txEngine.database.prepare(`
-      SELECT version, materialized
+      SELECT version, materialized, commit_seq
       FROM op_checkpoint
       WHERE branch = :branch AND id = :id AND scope_key = :scope_key
         AND path = :path AND epoch = :epoch AND version <= :version
@@ -2609,7 +2663,13 @@ export const pruneOperationFieldHistory = (
       ...params,
       epoch: field.epoch,
       version: field.version,
-    }) as { version: number; materialized: string } | undefined;
+    }) as
+      | {
+        version: number;
+        materialized: string;
+        commit_seq: number;
+      }
+      | undefined;
     if (!checkpoint || checkpoint.version === 0) {
       throw new OpHistoryUnavailableError(
         "operation field has no compacting checkpoint",
@@ -2970,6 +3030,36 @@ export const headSeq = (
 
 export const serverSeq = (engine: Engine): number => {
   return (engine.statements.selectServerSeq.get() as { seq: number }).seq;
+};
+
+/**
+ * Whether the store holds the instance-naming mark (INV-16): whether a commit
+ * from a session that names instances has been admitted to the space.
+ */
+export const hasInstanceNameMark = (engine: Engine): boolean =>
+  engine.statements.selectInstanceNameMark.get() !== undefined;
+
+/**
+ * Records the instance-naming mark (INV-16) as set by the commit at
+ * `commitSeq`, unless the store already holds it. The mark belongs to the
+ * transaction of that commit, so this throws outside a transaction; a
+ * transaction that rolls back takes the mark with it.
+ *
+ * @returns Whether this call recorded the mark.
+ */
+export const recordInstanceNameMark = (
+  engine: Engine,
+  commitSeq: number,
+): boolean => {
+  if (!engine.database.inTransaction) {
+    throw new Error(
+      "The instance-naming mark is recorded only inside its commit's " +
+        "transaction",
+    );
+  }
+  return engine.statements.insertInstanceNameMark.run({
+    commit_seq: commitSeq,
+  }) > 0;
 };
 
 /** Highest authored commit through a captured head, excluding bookkeeping. */
@@ -4116,6 +4206,78 @@ export class WaveStaleReadError extends Error {
 }
 
 /**
+ * A fresh commit refused because its space is deleted: the space's ACL
+ * document holds a deletion tombstone, and no commit to a deleted space is
+ * admitted on any write path (INV-15 in
+ * `docs/specs/memory-v2/09-invariants.md`). It is the `ProtocolError` naming
+ * the deletion that a `derived` or a delegated commit is refused with; the
+ * memory server gives a session's transact the deleted `AuthorizationError`
+ * in its place.
+ */
+export class SpaceDeletedError extends ProtocolError {
+  readonly #space: string;
+  readonly #aclRevision: number;
+
+  /**
+   * Constructs an instance for `space`, whose deletion tombstone is stored at
+   * `aclRevision`.
+   */
+  constructor(space: string, aclRevision: number) {
+    super(`Space ${space} is deleted`);
+    this.#space = space;
+    this.#aclRevision = aclRevision;
+  }
+
+  /** The deleted space. */
+  get space(): string {
+    return this.#space;
+  }
+
+  /** The `seq` at which the space's deletion tombstone is stored. */
+  get aclRevision(): number {
+    return this.#aclRevision;
+  }
+}
+
+/**
+ * The deletion `engine`'s store records, when its ACL document holds a
+ * deletion tombstone, or `undefined` when it does not: the ACL document of
+ * `space` where the caller names it, else the one ACL document the store
+ * holds, an engine serving one space. `aclRevision` is the `seq` at which the
+ * deletion tombstone is stored (INV-15).
+ */
+export const findSpaceDeletion = (
+  engine: Engine,
+  space?: string,
+): { space: string; aclRevision: number } | undefined => {
+  if (space !== undefined) {
+    const state = readState(engine, { id: aclDocId(space) });
+    return state !== null && isDeletionTombstone(state.document?.value)
+      ? { space, aclRevision: state.seq }
+      : undefined;
+  }
+  for (const head of readAclHeads(engine.database)) {
+    if (deletionTombstoneOf(head) !== undefined) {
+      return { space: head.id.slice("of:".length), aclRevision: head.seq };
+    }
+  }
+  return undefined;
+};
+
+/**
+ * Throws {@link SpaceDeletedError} when {@link findSpaceDeletion} finds a
+ * deletion in `engine`'s store, for `space` where the caller names it. Read
+ * inside a commit's write transaction, it sees a deletion another connection
+ * committed after the memory server's own check (INV-15).
+ */
+export const refuseDeletedSpace = (engine: Engine, space?: string): void => {
+  const deletion = findSpaceDeletion(engine, space);
+  if (deletion !== undefined) {
+    throw new SpaceDeletedError(deletion.space, deletion.aclRevision);
+  }
+};
+
+/**
  * A derived commit carries an operation on its space's ACL document.
  * No derived producer may write that document, in any memory ACL mode: the
  * derived admission checks the lease and nothing of INV-12's shape or of any
@@ -5005,6 +5167,78 @@ const decodedIntegratedOperations = (
 
 const MAX_OPERATION_PAYLOAD_BYTES = 1_000_000;
 const MAX_OPERATION_BATCH_UPDATES = 256;
+
+const requireOperationCodec = (engine: Engine, id: string): OperationCodec => {
+  try {
+    return engine.operationCodecs.require(id);
+  } catch {
+    throw new UnsupportedOpCodecError(`unknown operation codec: ${id}`);
+  }
+};
+
+/**
+ * What the codec `codecId` returned for the anchors `prior`, checked before
+ * the engine stores it: anchors, under the ids `prior` holds and no others.
+ * The next edit to the field reads what is stored here, so a codec's mistake
+ * is refused with the edit that exposed it. The type is what a codec
+ * promises; the check is for one that breaks the promise, since what it
+ * returns is stored and every later edit of the field reads it.
+ *
+ * @throws OpCodecError when `mapped` is anything else.
+ */
+const mappedAnchors = (
+  codecId: string,
+  prior: FieldAnchors,
+  mapped: FieldAnchors,
+): FieldAnchors => {
+  const parsed = parseFieldAnchors(mapped);
+  if ("fault" in parsed) {
+    throw new OpCodecError(
+      `operation codec ${codecId} did not map the field's anchors to anchors: the result ${parsed.fault}`,
+    );
+  }
+  const { anchors } = parsed;
+  const ids = Object.keys(prior);
+  if (
+    ids.length !== Object.keys(anchors).length ||
+    ids.some((id) => !Object.hasOwn(anchors, id))
+  ) {
+    throw new OpCodecError(
+      `operation codec ${codecId} mapped the field's anchors to other ids`,
+    );
+  }
+  return anchors;
+};
+
+/**
+ * The anchors of `field` that an edit maps and a snapshot carries: what its
+ * anchors document holds now. A stored document that does not hold anchors
+ * counts as holding none, and is left as it is. Every write the engine admits
+ * leaves a document that passes ({@link assertAnchorsDocument},
+ * {@link mappedAnchors}), so one that fails was not written through this
+ * engine's checks, and refusing here would refuse every later edit and query
+ * of the field over a document that a write of valid anchors can still
+ * replace.
+ */
+const readFieldAnchors = (
+  engine: Engine,
+  options: {
+    branch: BranchName;
+    field: OperationFieldAddress;
+    scopeKey: string;
+  },
+): FieldAnchors => {
+  const document = readStateForScopeKey(engine, {
+    branch: options.branch,
+    id: operationAnchorsDocId(options.field),
+    scope: normalizeScope(options.field.scope),
+    scopeKey: options.scopeKey,
+  })?.document ?? null;
+  if (document === null || document.value === undefined) return {};
+  const parsed = parseFieldAnchors(document.value);
+  return "fault" in parsed ? {} : parsed.anchors;
+};
+
 const operationValueByteLength = (value: FabricValue): number =>
   new TextEncoder().encode(encodeMemoryBoundary(value)).byteLength;
 
@@ -5122,7 +5356,7 @@ const withStatedBase = (
   if (baselineHash !== undefined) {
     if (typeof baselineHash !== "string" || baselineHash.length === 0) {
       throw new OpFieldBaselineMismatchError(
-        "apply-op baselineHash is malformed",
+        `${operation.op} baselineHash is malformed`,
       );
     }
     if (baselineHash !== currentHash) {
@@ -5179,7 +5413,7 @@ const applyOperation = (
     sessionId: SessionId;
     scopeKeyOverride?: string;
   },
-): { resolution: ApplyOpResolution; revision?: AppliedRevision } => {
+): { resolution: ApplyOpResolution; revisions: AppliedRevision[] } => {
   const { branch, seq, opIndex, operation, principal, sessionId } = options;
   assertDefaultOperationBranch(branch);
   validateApplyOperation(operation);
@@ -5187,6 +5421,11 @@ const applyOperation = (
     throw new ProtocolError(
       "apply-op cannot mutate a stream sidecar document",
     );
+  }
+  if (isOperationAnchorsDocId(operation.id)) {
+    // An operation's result is not checked as a write of the document is,
+    // and anchors are not a codec's field to edit.
+    throw new ProtocolError("apply-op cannot mutate an anchors document");
   }
   const scope = normalizeScope(operation.scope);
   const scopeKey = options.scopeKeyOverride ??
@@ -5238,6 +5477,7 @@ const applyOperation = (
     }
     return {
       resolution: storedOperationResolution(opIndex, address, duplicate, true),
+      revisions: [],
     };
   }
 
@@ -5252,7 +5492,6 @@ const applyOperation = (
     operation.path,
   );
   const activeField = priorField?.active === 1 ? priorField : undefined;
-
   let epoch: number;
   let currentVersion: number;
   let baselineHash: string;
@@ -5340,16 +5579,9 @@ const applyOperation = (
     }
   }
 
+  const codec = requireOperationCodec(engine, operation.codec);
   let result;
   try {
-    let codec;
-    try {
-      codec = engine.operationCodecs.require(operation.codec);
-    } catch {
-      throw new UnsupportedOpCodecError(
-        `unknown operation codec: ${operation.codec}`,
-      );
-    }
     result = codec.integrate({
       materialized: currentMaterialized,
       submitted: operation.payload,
@@ -5359,7 +5591,7 @@ const applyOperation = (
     if (cause instanceof ProtocolError) throw cause;
     throw new OpCodecError(
       `operation codec ${operation.codec} rejected the payload: ${
-        cause instanceof Error ? cause.message : String(cause)
+        describeFailure(cause)
       }`,
     );
   }
@@ -5386,7 +5618,7 @@ const applyOperation = (
     if (cause instanceof ProtocolError) throw cause;
     throw new OpCodecError(
       `operation codec produced an invalid Fabric value: ${
-        cause instanceof Error ? cause.message : String(cause)
+        describeFailure(cause)
       }`,
     );
   }
@@ -5399,24 +5631,37 @@ const applyOperation = (
     );
   }
 
+  // The field's anchors move with the text, in this transaction: the codec
+  // maps what the anchors document holds through the operations it produced
+  // (§7.15).
+  const priorAnchors = readFieldAnchors(engine, {
+    branch,
+    field: operation,
+    scopeKey,
+  });
+  let nextAnchors = priorAnchors;
+  if (
+    Object.keys(priorAnchors).length > 0 && result.operations.length > 0
+  ) {
+    let mapped: FieldAnchors;
+    try {
+      mapped = codec.mapAnchors({
+        anchors: priorAnchors,
+        operations: result.operations,
+      });
+    } catch (cause) {
+      if (cause instanceof ProtocolError) throw cause;
+      throw new OpCodecError(
+        `operation codec ${operation.codec} could not map the field's anchors: ${
+          describeFailure(cause)
+        }`,
+      );
+    }
+    nextAnchors = mappedAnchors(operation.codec, priorAnchors, mapped);
+  }
+
   const nextVersion = currentVersion + result.operations.length;
-  engine.database.prepare(`
-    INSERT INTO op_field_epoch (
-      branch, id, scope_key, path, epoch, codec, version,
-      baseline_hash, materialized, active, commit_seq
-    ) VALUES (
-      :branch, :id, :scope_key, :path, :epoch, :codec, :version,
-      :baseline_hash, :materialized, 1, :commit_seq
-    )
-    ON CONFLICT (branch, id, scope_key, path) DO UPDATE SET
-      epoch = excluded.epoch,
-      codec = excluded.codec,
-      version = excluded.version,
-      baseline_hash = excluded.baseline_hash,
-      materialized = excluded.materialized,
-      active = 1,
-      commit_seq = excluded.commit_seq
-  `).run({
+  upsertOperationFieldHead(engine, {
     ...params,
     epoch,
     codec: operation.codec,
@@ -5490,30 +5735,6 @@ const applyOperation = (
       });
     }
   }
-  engine.database.prepare(`
-    INSERT INTO op_submission (
-      branch, id, scope_key, path, epoch, submission_id, codec,
-      base_version, submitted_payload, integrated_from, integrated_to,
-      integrated_payload, commit_seq, op_index
-    ) VALUES (
-      :branch, :id, :scope_key, :path, :epoch, :submission_id, :codec,
-      :base_version, :submitted_payload, :integrated_from, :integrated_to,
-      :integrated_payload, :commit_seq, :op_index
-    )
-  `).run({
-    ...params,
-    epoch,
-    submission_id: operation.submissionId,
-    codec: operation.codec,
-    base_version: operation.base?.version ?? 0,
-    submitted_payload: encodeMemoryBoundary(operation.payload),
-    integrated_from: currentVersion,
-    integrated_to: nextVersion,
-    integrated_payload: encodeMemoryBoundary(result.operations),
-    commit_seq: seq,
-    op_index: opIndex,
-  });
-
   const submissionRow: OperationSubmissionRow = {
     epoch,
     submission_id: operation.submissionId,
@@ -5524,39 +5745,162 @@ const applyOperation = (
     integrated_to: nextVersion,
     integrated_payload: encodeMemoryBoundary(result.operations),
   };
+  engine.database.prepare(`
+    INSERT INTO op_submission (
+      branch, id, scope_key, path, epoch, submission_id, codec,
+      base_version, submitted_payload, integrated_from, integrated_to,
+      integrated_payload, commit_seq, op_index
+    ) VALUES (
+      :branch, :id, :scope_key, :path, :epoch, :submission_id, :codec,
+      :base_version, :submitted_payload, :integrated_from, :integrated_to,
+      :integrated_payload, :commit_seq, :op_index
+    )
+  `).run({ ...params, ...submissionRow, commit_seq: seq, op_index: opIndex });
+
   const resolution = storedOperationResolution(
     opIndex,
     address,
     submissionRow,
     false,
   );
-  if (result.operations.length === 0) return { resolution };
+  const revisions: AppliedRevision[] = [];
+  if (result.operations.length > 0) {
+    revisions.push(writeOperation(engine, {
+      branch,
+      seq,
+      opIndex,
+      principal,
+      sessionId,
+      scopeKeyOverride: options.scopeKeyOverride,
+      operation: {
+        op: "patch",
+        id: operation.id,
+        ...(operation.scope === undefined ? {} : { scope: operation.scope }),
+        patches: [{
+          op: "replace",
+          path: encodePointer(["value", ...operation.path]),
+          value: result.materialized,
+        }],
+      },
+    }));
+  }
+  if (!sameAnchors(priorAnchors, nextAnchors)) {
+    revisions.push(writeAnchorsDocument(engine, {
+      ...options,
+      field: operation,
+      anchors: nextAnchors,
+    }));
+  }
+  return { resolution, revisions };
+};
 
-  const revision = writeOperation(engine, {
+const upsertOperationFieldHead = (
+  engine: Engine,
+  row: ReturnType<typeof operationFieldParams> & {
+    epoch: number;
+    codec: string;
+    version: number;
+    baseline_hash: string;
+    materialized: string;
+    commit_seq: number;
+  },
+): void => {
+  engine.database.prepare(`
+    INSERT INTO op_field_epoch (
+      branch, id, scope_key, path, epoch, codec, version,
+      baseline_hash, materialized, active, commit_seq
+    ) VALUES (
+      :branch, :id, :scope_key, :path, :epoch, :codec, :version,
+      :baseline_hash, :materialized, 1, :commit_seq
+    )
+    ON CONFLICT (branch, id, scope_key, path) DO UPDATE SET
+      epoch = excluded.epoch,
+      codec = excluded.codec,
+      version = excluded.version,
+      baseline_hash = excluded.baseline_hash,
+      materialized = excluded.materialized,
+      active = 1,
+      commit_seq = excluded.commit_seq
+  `).run(row);
+};
+
+/**
+ * Rewrites the field's anchors document (§7.15) as an edit to the field moved
+ * its anchors. A patch of the document's value alone, so whatever else its
+ * envelope holds, its CFC label among it, stays as its writer left it.
+ * Written in the field's own scope, beside the field's materializing patch.
+ */
+const writeAnchorsDocument = (
+  engine: Engine,
+  options: {
+    branch: BranchName;
+    seq: number;
+    opIndex: number;
+    principal?: string;
+    sessionId: SessionId;
+    scopeKeyOverride?: string;
+    field: OperationFieldAddress;
+    anchors: FieldAnchors;
+  },
+): AppliedRevision => {
+  const { field, anchors, ...write } = options;
+  return {
+    ...writeOperation(engine, {
+      ...write,
+      operation: {
+        op: "patch",
+        id: operationAnchorsDocId(field),
+        ...(field.scope === undefined ? {} : { scope: field.scope }),
+        patches: [{
+          op: "replace",
+          path: encodePointer(["value"]),
+          value: anchors,
+        }],
+      },
+    }),
+    derived: true,
+  };
+};
+
+/**
+ * Checks the anchors document a commit's operation just wrote (§7.8): a
+ * client writes it as it writes any entity, and what it leaves there is what
+ * the next edit to the field maps, so the write is refused unless the
+ * document then holds anchors and nothing else ({@link parseFieldAnchors}).
+ * A deleted document, and one written with no value, hold none.
+ *
+ * @throws ProtocolError naming the operation and what the document holds.
+ */
+const assertAnchorsDocument = (
+  engine: Engine,
+  options: {
+    branch: BranchName;
+    opIndex: number;
+    revision: AppliedRevision;
+  },
+): void => {
+  const { branch, opIndex, revision } = options;
+  const document = readStateForScopeKey(engine, {
     branch,
-    seq,
-    opIndex,
-    principal,
-    sessionId,
-    scopeKeyOverride: options.scopeKeyOverride,
-    operation: {
-      op: "patch",
-      id: operation.id,
-      ...(operation.scope === undefined ? {} : { scope: operation.scope }),
-      patches: [{
-        op: "replace",
-        path: encodePointer(["value", ...operation.path]),
-        value: result.materialized,
-      }],
-    },
-  });
-  return { resolution, revision };
+    id: revision.id,
+    scope: revision.scope,
+    scopeKey: revision.scopeKey,
+  })?.document ?? null;
+  if (document === null || document.value === undefined) return;
+  const parsed = parseFieldAnchors(document.value);
+  if ("fault" in parsed) {
+    throw new ProtocolError(
+      `commit operation ${opIndex}: anchors document ${revision.id} ${parsed.fault}`,
+    );
+  }
 };
 
 const releaseOperationField = (
   engine: Engine,
   options: {
     branch: BranchName;
+    seq: number;
+    opIndex: number;
     operation: ReleaseOpFieldOperation;
     principal?: string;
     sessionId: SessionId;
@@ -5592,6 +5936,9 @@ const releaseOperationField = (
   if (field.codec !== operation.codec) {
     throw new OpCodecError("operation field release codec mismatch");
   }
+  // The field's anchors stay: a release leaves the value as it is, so they
+  // still say where its text is, and whoever replaces the value next reads
+  // them to move them (§7.7.4).
   engine.database.prepare(`
     UPDATE op_field_epoch SET active = 0
     WHERE branch = :branch AND id = :id AND scope_key = :scope_key
@@ -5599,16 +5946,137 @@ const releaseOperationField = (
   `).run(params);
 };
 
+/**
+ * Verifies every release record (`cfc-owner-release-by-intent.ts`, §8.12.7
+ * route 2d) `operations` create, and returns the releases they verify, by the
+ * document released at. A record is created by one `set` at space scope; any
+ * other write to an id under the record scheme, a record the judgment
+ * refuses, and a second release of one document in one commit are refused,
+ * which refuses the commit whole. `documentEnvelope` returns the envelope the
+ * commit leaves a document with at space scope and the one the store holds,
+ * or `undefined` when the commit writes none or deletes the document.
+ *
+ * @throws A {@link ProtocolError} naming the refusal.
+ */
+const verifyOwnerReleasesByIntent = (input: {
+  readonly engine: Engine;
+  readonly branch: BranchName;
+  readonly space: string | undefined;
+  readonly operations: readonly Operation[];
+  readonly elidedOpIndexes: ReadonlySet<number>;
+  readonly storedLabel: (ref: string) => unknown;
+  readonly documentEnvelope: (
+    id: string,
+  ) => { readonly stored: unknown; readonly proposed: unknown } | undefined;
+}): ReadonlyMap<string, readonly VerifiedOwnerReleaseByIntent[]> => {
+  const records = new Map<string, { value: unknown; cfc: unknown }>();
+  const committedLabels = new Map<string, unknown>();
+  for (const [opIndex, operation] of input.operations.entries()) {
+    if (operation.op === "sqlite") continue;
+    if (operation.id.startsWith("cid:")) {
+      if (operation.op === "set" && isEntityDocument(operation.value)) {
+        committedLabels.set(operation.id, operation.value.value);
+      }
+      continue;
+    }
+    if (!operation.id.startsWith(OWNER_RELEASE_BY_INTENT_RECORD_PREFIX)) {
+      continue;
+    }
+    // An elided record is one of an identity commit, whose every operation
+    // leaves the store as it is: the record is already stored with this
+    // content, and the document's envelope is already what the commit
+    // proposes. Such a commit releases nothing, so it uses no request again,
+    // and it is judged as the no-op it is. A commit that would change
+    // anything is not an identity commit, and its record is judged below.
+    if (input.elidedOpIndexes.has(opIndex)) continue;
+    if (
+      operation.op !== "set" || records.has(operation.id) ||
+      normalizeScope(operation.scope) !== DEFAULT_SCOPE ||
+      !isEntityDocument(operation.value)
+    ) {
+      throw new ProtocolError(
+        `memory v2 commit writes release record ${operation.id} other than ` +
+          "by creating it once, at space scope, with one `set`",
+      );
+    }
+    records.set(operation.id, {
+      value: operation.value.value,
+      cfc: operation.value.cfc,
+    });
+  }
+  const verified = new Map<string, VerifiedOwnerReleaseByIntent[]>();
+  if (records.size === 0) return verified;
+  const space = input.space;
+  if (space === undefined) {
+    throw new ProtocolError(
+      "memory v2 commit names no space, and creates a release record",
+    );
+  }
+  const aclState = readState(input.engine, { id: aclDocId(space) });
+  const acl = aclState === null
+    ? { stored: false as const }
+    : { stored: true as const, value: aclState.document?.value };
+  for (const [recordId, { value: record, cfc: recordCfc }] of records) {
+    const document = parseOwnerReleaseByIntentRecord(record)?.document;
+    const judged = judgeOwnerReleaseByIntent({
+      space,
+      recordId,
+      record,
+      recordCfc,
+      recordStored:
+        readState(input.engine, { id: recordId, branch: input.branch }) !==
+          null,
+      acl,
+      document: document === undefined
+        ? undefined
+        : input.documentEnvelope(document),
+      resolveStoredLabel: input.storedLabel,
+      resolveProposedLabel: (ref) =>
+        committedLabels.has(ref)
+          ? committedLabels.get(ref)
+          : input.storedLabel(ref),
+    });
+    if ("refused" in judged) {
+      throw new ProtocolError(
+        `memory v2 commit creates release record ${recordId}, which the ` +
+          `store refuses: ${judged.refused}`,
+      );
+    }
+    const release = judged.verified;
+    if (verified.has(release.document)) {
+      throw new ProtocolError(
+        `memory v2 commit releases document ${release.document} by more ` +
+          "than one request",
+      );
+    }
+    verified.set(release.document, [release]);
+  }
+  return verified;
+};
+
+/**
+ * Releases every active operation field of an entity being deleted. Their
+ * anchors documents stay, as a release of one field leaves its anchors (§7.8):
+ * a writer that deletes the entity and wants them gone deletes them in the
+ * same commit.
+ */
 const releaseEntityOperationFields = (
   engine: Engine,
-  branch: BranchName,
-  id: EntityId,
-  scopeKey: string,
+  options: {
+    branch: BranchName;
+    operation: DeleteOperation;
+    principal?: string;
+    sessionId: SessionId;
+    scopeKeyOverride?: string;
+  },
 ): void => {
+  const { branch, operation, principal, sessionId } = options;
+  const scopeKey = options.scopeKeyOverride ??
+    resolveScopeKey(operation.scope, { principal, sessionId });
   engine.database.prepare(`
     UPDATE op_field_epoch SET active = 0
     WHERE branch = :branch AND id = :id AND scope_key = :scope_key
-  `).run({ branch, id, scope_key: scopeKey });
+  `).run({ branch, id: operation.id, scope_key: scopeKey });
 };
 
 const assertOperationFieldsPreserved = (
@@ -5687,7 +6155,7 @@ const applyCommitTransaction = (
   // The derived-class posture gate (protocol.md §1): off the flag NOTHING
   // may claim the class — retries included — because `derived` names the
   // single-deriver posture and nothing outside EXPERIMENTAL_SERVER_EXECUTION
-  // may claim it. Only this gate precedes replay detection; the LIVE-lease
+  // may claim it. Only this gate precedes replay detection; the lease
   // equality check sits after it below, on the fresh-commit path.
   if (commitClass === "derived" && !getServerExecutionConfig()) {
     throw new ProtocolError(
@@ -5697,14 +6165,14 @@ const applyCommitTransaction = (
   }
   const sessionKey = resolveCommitSessionKey(sessionId, principal);
   // Replay detection FIRST — ahead of every current-authority admission
-  // check, the live-lease equality check included (owner review on #5349,
+  // check, the lease equality check included (owner review on #5349,
   // 2026-08-12): a commit this session already applied returns its stored
   // result without re-validating preconditions — re-checking entity-absent
   // against the state the original application created would wrongly reject
-  // the replay — and without consulting the live `execution_lease`: the
-  // lease authorizes NEW derived commits, and a network retry of an
-  // already-ACCEPTED one must keep its stored answer after the producing
-  // lease was released, expired, or succeeded by a new holder. The stored
+  // the replay — and without consulting the lease map: the lease authorizes
+  // NEW derived commits, and a network retry of an already-ACCEPTED one must
+  // keep its stored answer after the producing lease was released or
+  // succeeded by a new holder. The stored
   // identity spans the payload bytes (sameStoredOriginal) AND the admission
   // envelope (class; for derived, the producing holder): a same-key
   // resubmission differing in either is a DIFFERENT submission and is
@@ -5729,7 +6197,11 @@ const applyCommitTransaction = (
           `${commit.localSeq}: stored class/holder differ from the resubmission`,
       );
     }
-    const replayedRevisions = selectCommitRevisions(engine, existing.seq);
+    const replayedRevisions = selectCommitRevisions(
+      engine,
+      existing.seq,
+      commit.operations,
+    );
     // Re-derive the elision report: an elided operation persisted no
     // revision, so a replayed verdict must name it again or the accept
     // path would classify the unchanged document as dirty.
@@ -5743,7 +6215,9 @@ const applyCommitTransaction = (
     );
     const storedResolution = decodeTrustedMemoryBoundary(existing.resolution) as
       & FabricValue
-      & { operationResolutions?: ApplyOpResolution[] };
+      & {
+        operationResolutions?: ApplyOpResolution[];
+      };
     return {
       seq: existing.seq,
       branch: existing.branch,
@@ -5756,27 +6230,26 @@ const applyCommitTransaction = (
     };
   }
 
+  // No fresh commit is admitted to a deleted space, whatever its class or
+  // path (INV-15). The memory server checks before the write transaction
+  // starts; this repeats the check inside it, where a deletion committed
+  // through another connection in between is visible. An exact replay
+  // already answered from the store above.
+  refuseDeletedSpace(engine, space);
+
   // The derived-class admission rule (serving-loop.md §2, protocol.md §2's
-  // `derived` row): the producer holds the space's live `execution_lease` —
-  // ONE equality check against the row's holder, not admission machinery.
-  // Fresh commits only: an exact replay already answered from the store
-  // above. Liveness is judged by THIS process's clock — the memory
-  // server's own, never the holder's: the select excludes expired rows, so
-  // an expired lease matches nobody and a fresh derived commit under one
-  // is rejected even before any successor acquires.
+  // `derived` row): the producer holds the space's lease — ONE equality check
+  // against the holder the memory server's map names, not admission
+  // machinery. Fresh commits only: an exact replay already answered from the
+  // store above.
   if (commitClass === "derived") {
-    const lease = space === undefined
+    const leaseHolder = space === undefined
       ? undefined
-      : engine.statements.selectLiveExecutionLease.get({
-        space,
-        now: Date.now(),
-      }) as { holder: string } | undefined;
-    if (
-      holder === undefined || lease === undefined || lease.holder !== holder
-    ) {
+      : engine.executionLeases.holderOf(space);
+    if (holder === undefined || leaseHolder !== holder) {
       throw new ProtocolError(
-        "derived-class commit rejected: producer does not hold the live " +
-          "execution_lease for the space (serving-loop.md §2)",
+        "derived-class commit rejected: producer does not hold the " +
+          "execution lease for the space (serving-loop.md §2)",
       );
     }
     // Derived-envelope defense-in-depth (protocol.md §2, RULED 2026-08-05):
@@ -6308,6 +6781,45 @@ const applyCommitTransaction = (
         scopeKey: scopeKeyByOpIndex.get(opIndex),
       })?.document ?? undefined;
   };
+  // The `cfc` member each envelope-replacing operation leaves its document
+  // with, the last one per document winning, and the operation that first
+  // reached the document, whose address reads what is stored. A commit that
+  // leaves the document deleted leaves no member to judge; one that deletes
+  // and then writes it again is judged by what it writes. Judged below by
+  // `droppedDeclaredPaths()`.
+  const envelopeWrites = new Map<
+    string,
+    {
+      readonly opIndex: number;
+      readonly operation: { id: string; scope?: unknown };
+      lastOpIndex: number;
+      cfc: unknown;
+      deleted: boolean;
+    }
+  >();
+  const noteEnvelopeWrite = (
+    opIndex: number,
+    operation: { id: string; scope?: unknown },
+    document: unknown,
+    deleted: boolean,
+  ): void => {
+    const docKey = opDocKey(opIndex, operation);
+    const cfc = (document as { cfc?: unknown } | null | undefined)?.cfc;
+    const known = envelopeWrites.get(docKey);
+    if (known === undefined) {
+      envelopeWrites.set(docKey, {
+        opIndex,
+        operation,
+        lastOpIndex: opIndex,
+        cfc,
+        deleted,
+      });
+    } else {
+      known.lastOpIndex = opIndex;
+      known.cfc = cfc;
+      known.deleted = deleted;
+    }
+  };
   for (const [opIndex, operation] of commit.operations.entries()) {
     if (operation.op === "sqlite") continue;
     if (operation.op === "patch") {
@@ -6326,6 +6838,9 @@ const applyCommitTransaction = (
               operation.patches ?? [],
             );
             stagedMetadataDocs.set(docKey, patched);
+            if (!operation.id.startsWith("cid:")) {
+              noteEnvelopeWrite(opIndex, operation, patched, false);
+            }
             if (patchTouchesMetadata(operation.patches)) {
               requireInlineLabelMetadata(operation.id, patched, () => base);
               collectCfcEnvelopeRef((patched as { cfc?: unknown }).cfc);
@@ -6338,6 +6853,19 @@ const applyCommitTransaction = (
       }
     }
     if (!operation.id.startsWith("cid:")) {
+      // A patch that touches no metadata leaves the `cfc` member as it
+      // found it, which after a delete in this commit is no member at all.
+      if (operation.op === "patch") {
+        const known = envelopeWrites.get(opDocKey(opIndex, operation));
+        if (
+          known?.deleted === true &&
+          !metadataPatchDocKeys.has(opDocKey(opIndex, operation))
+        ) {
+          known.lastOpIndex = opIndex;
+          known.cfc = undefined;
+          known.deleted = false;
+        }
+      }
       if (operation.op === "set") {
         requireInlineLabelMetadata(
           operation.id,
@@ -6349,12 +6877,16 @@ const applyCommitTransaction = (
           (operation.value as { cfc?: unknown } | null)?.cfc,
         );
         collectSchemaMetaRefs(operation.id, operation.value);
+        noteEnvelopeWrite(opIndex, operation, operation.value, false);
         if (metadataPatchDocKeys.size > 0) {
           const docKey = opDocKey(opIndex, operation);
           if (metadataPatchDocKeys.has(docKey)) {
             stagedMetadataDocs.set(docKey, operation.value);
           }
         }
+      }
+      if (operation.op === "delete") {
+        noteEnvelopeWrite(opIndex, operation, undefined, true);
       }
       if (operation.op === "delete" && metadataPatchDocKeys.size > 0) {
         const docKey = opDocKey(opIndex, operation);
@@ -6822,6 +7354,81 @@ const applyCommitTransaction = (
     );
   }
 
+  // A commit may not leave a path whose stored declared CFC label holds a
+  // confidentiality clause with no declared entry, unless it is the owner
+  // release that `admitsDroppedDeclaredPaths()` recognizes
+  // (`envelope-admission.ts`). The stored envelope's label documents were
+  // backed when it was stored, so a reference resolves against the space.
+  // It runs after the read validation, so a commit made against a stale view
+  // of the document is refused as the conflict it is, which its writer
+  // retries, and an operation the validation elided is not judged.
+  const actor = delegated?.actingPrincipal ?? principal;
+  const storedLabel = (ref: string): unknown => {
+    const document = readState(engine, { id: ref, branch })?.document;
+    return document === null || document === undefined
+      ? undefined
+      : document.value;
+  };
+  const storedCfcOf = (
+    write: {
+      readonly opIndex: number;
+      readonly operation: { id: string; scope?: unknown };
+    },
+  ): unknown =>
+    (readState(engine, {
+      id: write.operation.id,
+      branch,
+      scope: write.operation.scope as Parameters<typeof readState>[1]["scope"],
+      principal: scanPrincipal,
+      sessionId: scanSession,
+      scopeKey: scopeKeyByOpIndex.get(write.opIndex),
+    })?.document as { cfc?: unknown } | null | undefined)?.cfc;
+  const releasesByIntent = verifyOwnerReleasesByIntent({
+    engine,
+    branch,
+    space,
+    operations: commit.operations,
+    elidedOpIndexes,
+    storedLabel,
+    // The envelope a commit leaves the request's document with at space
+    // scope, as the drop check below judges it, and what the store holds.
+    documentEnvelope: (id) => {
+      for (const write of envelopeWrites.values()) {
+        if (
+          write.operation.id !== id ||
+          normalizeScope(write.operation.scope as CellScope | undefined) !==
+            DEFAULT_SCOPE
+        ) continue;
+        if (write.deleted || elidedOpIndexes.has(write.lastOpIndex)) {
+          return undefined;
+        }
+        return { stored: storedCfcOf(write), proposed: write.cfc };
+      }
+      return undefined;
+    },
+  });
+  for (const write of envelopeWrites.values()) {
+    if (write.deleted || elidedOpIndexes.has(write.lastOpIndex)) continue;
+    const storedCfc = storedCfcOf(write);
+    if (
+      storedCfc === undefined ||
+      valueEqual(storedCfc as FabricValue, write.cfc as FabricValue)
+    ) continue;
+    const dropped = droppedDeclaredPaths(storedCfc, write.cfc, storedLabel);
+    const releases = normalizeScope(
+        write.operation.scope as CellScope | undefined,
+      ) === DEFAULT_SCOPE
+      ? releasesByIntent.get(write.operation.id) ?? []
+      : [];
+    if (!admitsDroppedDeclaredPaths(dropped, space, actor, releases)) {
+      throw new ProtocolError(
+        `memory v2 commit leaves document ${write.operation.id} with no declared CFC label at ${
+          dropped.map((drop) => JSON.stringify(drop.path)).join(", ")
+        }, where it stores one; only the space's owner, releasing clauses that are theirs alone, may drop a declared label`,
+      );
+    }
+  }
+
   // Event-append admission (Phase 3, events.md §1/§4): the dedupe-horizon
   // CAS, the firedAt validation-or-stamp, and the sidecar write guard.
   // AFTER the replay short-circuit (a replayed append returns its stored
@@ -6938,12 +7545,14 @@ const applyCommitTransaction = (
         scopeKeyOverride,
       });
       operationResolutions.push(applied.resolution);
-      if (applied.revision) revisions.push(applied.revision);
+      for (const revision of applied.revisions) revisions.push(revision);
       continue;
     }
     if (operation.op === "release-op-field") {
       releaseOperationField(engine, {
         branch,
+        seq,
+        opIndex,
         operation,
         principal: scanPrincipal,
         sessionId: scanSession,
@@ -6952,16 +7561,13 @@ const applyCommitTransaction = (
       continue;
     }
     if (operation.op === "delete") {
-      releaseEntityOperationFields(
-        engine,
+      releaseEntityOperationFields(engine, {
         branch,
-        operation.id,
-        scopeKeyByOpIndex.get(opIndex) ??
-          resolveScopeKey(operation.scope, {
-            principal: scanPrincipal,
-            sessionId: scanSession,
-          }),
-      );
+        operation,
+        principal: scanPrincipal,
+        sessionId: scanSession,
+        scopeKeyOverride: scopeKeyByOpIndex.get(opIndex),
+      });
     } else {
       assertOperationFieldsPreserved(engine, {
         branch,
@@ -7013,6 +7619,9 @@ const applyCommitTransaction = (
       scopeKeyOverride: scopeKeyByOpIndex.get(opIndex),
     });
     revisions.push(revision);
+    if (isOperationAnchorsDocId(revision.id)) {
+      assertAnchorsDocument(engine, { branch, opIndex, revision });
+    }
   }
 
   if (operationResolutions.length > 0) {
@@ -7021,7 +7630,7 @@ const applyCommitTransaction = (
       resolution: encodeMemoryBoundary({
         seq,
         ...(resolvedPendingReads.length > 0 ? { resolvedPendingReads } : {}),
-        operationResolutions,
+        ...(operationResolutions.length > 0 ? { operationResolutions } : {}),
       }),
     });
   }
@@ -8139,14 +8748,23 @@ const touchedPathsForPatch = (
 const touchedLeafPathsForPatch = (patch: PatchOp): string[][] =>
   touchedPointerPaths(patch);
 
+/**
+ * The revisions the commit `commitSeq` stored, as applying its `operations`
+ * returned them. A stored revision does not record whether the engine derived
+ * it ({@link AppliedRevision.derived}), so that is read off what the engine
+ * derives: a revision of an anchors document that the operation at its index
+ * does not name.
+ */
 const selectCommitRevisions = (
   engine: Engine,
   commitSeq: number,
+  operations: readonly Operation[],
 ): AppliedRevision[] => {
   const rows = engine.statements.selectCommitRevisions.all({
     commit_seq: commitSeq,
   }) as RevisionRow[];
   return rows.map((row) => {
+    const operation = operations[row.op_index];
     const base = {
       id: row.id,
       scope: scopeOfScopeKey(row.scope_key),
@@ -8156,6 +8774,10 @@ const selectCommitRevisions = (
       opIndex: row.op_index,
       commitSeq: row.commit_seq,
       op: row.op,
+      ...(isOperationAnchorsDocId(row.id) && operation !== undefined &&
+          operation.op !== "sqlite" && operation.id !== row.id
+        ? { derived: true as const }
+        : {}),
     } satisfies Omit<AppliedRevision, "document" | "patches">;
     if (row.op === "set") {
       return {

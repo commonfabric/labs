@@ -114,6 +114,7 @@ export default pattern(() => {
   });
   const manager = FabriChatManagerCore({
     myProfile: profile,
+    sessionProfile: profile,
     sharedSpaceCatalog: catalog,
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests,
@@ -129,7 +130,10 @@ export default pattern(() => {
     );
   });
   // Each entry's revision before the retitles, which they leave as is.
-  const revisions = Writable.of<{ group?: string; direct?: string }>({});
+  const revisions = Writable.of<{
+    group?: string | undefined;
+    direct?: string | undefined;
+  }>({});
   const action_note_revisions = action(() =>
     revisions.set({
       group: catalogEntryOf(catalog, held.key("group").get())?.revision,

@@ -1,4 +1,8 @@
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import { type FabricValue, valueEqual } from "@commonfabric/data-model";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 
 /** The meta fields whose value is a link to another cell. */
 export const META_LINK_FIELDS = Object.freeze(
@@ -59,6 +63,10 @@ export const META_FIELDS = Object.freeze(
     "displacedPattern", // {identity, symbol, displacedAt}: the prior pattern
     // reference recorded when system-pattern auto-update replaces an unloadable
     // sourceless root — the recovery pointer for a displaced custom program
+    "creator", // the DID of the principal the piece was created for, written
+    // once, by the setup that brings the piece into being or by the first
+    // source transition of a piece from before the record, and admitted by no
+    // other write (`cfc/prepare.ts`); a child names its parent's creator
     "internal",
     "instanceChildren", // [{name, child: {space, id, scope}}] a named instance runs
     "instanceName", // the named instance whose child this result cell is
@@ -173,6 +181,46 @@ export function storedMetaFields(envelope: unknown): readonly MetaField[] {
     (carried ??= []).push(field);
   }
   return carried ?? NO_META_FIELDS;
+}
+
+/**
+ * The meta fields a write at `path` carrying `value` changes, against
+ * `stored`, which reads the document root the write lands on.
+ *
+ * A write addressed at a meta field, or at a path inside one, changes it
+ * whatever it carries. A write at the document root replaces the envelope,
+ * so it changes each meta field it carries with a value other than the
+ * stored one, and each stored one it leaves out; carrying a stored field
+ * forward unchanged changes nothing. A field is carried when its value is
+ * defined, as `storedMetaFields()` reads it. `stored` is called only for a
+ * root write.
+ */
+export function metaFieldChanges(
+  path: readonly string[],
+  value: unknown,
+  stored: () => unknown,
+): readonly MetaField[] {
+  if (path.length > 0) {
+    return isMetaField(path[0]) ? [path[0]] : NO_META_FIELDS;
+  }
+  const envelope = isObjectNotArray(value) ? value : undefined;
+  const held = stored();
+  const heldEnvelope = isObjectNotArray(held) ? held : undefined;
+  let changed: MetaField[] | undefined;
+  for (const field of META_FIELDS) {
+    const carried = envelope?.[field];
+    const prior = heldEnvelope?.[field];
+    if (carried === undefined && prior === undefined) continue;
+    // `valueEqual` refuses a function, which is not a `FabricValue`; such a
+    // value is not what the document holds.
+    if (
+      carried !== undefined && prior !== undefined &&
+      typeof carried !== "function" &&
+      valueEqual(carried as FabricValue, prior as FabricValue)
+    ) continue;
+    (changed ??= []).push(field);
+  }
+  return changed ?? NO_META_FIELDS;
 }
 
 function metaFieldsIn(document: unknown): readonly MetaField[] {

@@ -2,7 +2,10 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 
-import { Identity } from "@commonfabric/identity";
+import { Identity, legacySpaceDid } from "@commonfabric/identity";
+import { taggedHashStringOf } from "@commonfabric/data-model";
+import { ROUTED_HOLDINGS_LIMIT } from "@commonfabric/memory/v2/routed-limits";
+import { cfcLabelDocumentHash } from "@commonfabric/runner/cfc";
 import type { MirrorData } from "./mirror.ts";
 import {
   applyDocs,
@@ -12,9 +15,12 @@ import {
   openDocSource,
   refreshMirror,
   saveMirror,
+  sessionDocSource,
+  spaceDid,
 } from "./sync.ts";
 import {
   BOARD,
+  BOARD_DOCS,
   type BoardServer,
   boardServer,
   INPUT_1,
@@ -52,6 +58,47 @@ describe("sync", () => {
   }
 
   describe("refreshMirror()", () => {
+    it("reads a label held by reference, fetched or sent along, on every refresh", async () => {
+      const label = {
+        integrity: [{ kind: "authored-by", subject: "did:key:zAda" }],
+      };
+      const id = `cid:${cfcLabelDocumentHash(label)}`;
+      await board.write({
+        "of:fid1:comment-1": {
+          value: BOARD_DOCS["of:fid1:comment-1"].value,
+          cfc: {
+            version: 2,
+            schemaHash: taggedHashStringOf(true),
+            labelMap: {
+              version: 1,
+              entries: [{ path: [], origin: "declared", label: { $ref: id } }],
+            },
+          },
+        },
+        [id]: { value: label },
+        [`cid:${taggedHashStringOf(true)}`]: { value: true },
+      });
+      const data = empty();
+
+      for (let refreshes = 0; refreshes < 2; refreshes++) {
+        const { topics } = await refresh(data);
+
+        expect(topics[0].comments[0].labels?.authors).toEqual([
+          "did:key:zAda",
+        ]);
+        expect(data.docs[id]?.value).toEqual(label);
+      }
+
+      // A copy holding the label document for its revision alone, as one
+      // pruned holds it, fetches its content again.
+      const pruned = structuredClone(data);
+      pruned.docs[id] = { seq: data.docs[id].seq };
+      const { topics } = await refresh(pruned);
+
+      expect(topics[0].comments[0].labels?.authors).toEqual(["did:key:zAda"]);
+      expect(pruned.docs[id]?.value).toEqual(label);
+    });
+
     it("returns every Topic the board names, following documents that only link onward to a piece", async () => {
       const data = empty();
       const { topics, fetched } = await refresh(data);
@@ -80,19 +127,23 @@ describe("sync", () => {
       expect(data.space).toBe(SPACE);
       expect(data.boardInput).toBe("of:fid1:board-input");
       expect(data.pieces).toEqual({
+        // The alias is a document the piece was reached through, whose
+        // labels restrict what it leads to.
         "of:fid1:topic-alias-1": {
           piece: "of:fid1:topic-piece-1",
           input: "of:fid1:input-1",
+          via: ["of:fid1:topic-alias-1"],
         },
         "of:fid1:topic-piece-2": {
           piece: "of:fid1:topic-piece-2",
           input: "of:fid1:input-2",
+          via: [],
         },
       });
       expect(fetched).toBeGreaterThan(0);
     });
 
-    it("keeps no piece documents, only the documents Topics are read from", async () => {
+    it("keeps the content of no piece, only of the documents Topics are read from or reached through", async () => {
       const data = empty();
       await refresh(data);
       const kept = Object.entries(data.docs).flatMap(([id, doc]) =>
@@ -104,6 +155,97 @@ describe("sync", () => {
         "of:fid1:comment-1",
         "of:fid1:input-1",
         "of:fid1:input-2",
+        "of:fid1:topic-alias-1",
+      ]);
+    });
+
+    it("keeps a piece sent along for its revision, so that the server does not send it again", async () => {
+      const { client, session } = await board.mount();
+      const watch = session.watchSetSync.bind(session);
+      const sent: string[] = [];
+      session.watchSetSync = async (...args: Parameters<typeof watch>) => {
+        const answer = await watch(...args);
+        for (const upsert of answer.sync.upserts) sent.push(upsert.id);
+        return answer;
+      };
+      try {
+        const data = empty();
+        await refreshMirror(data, BOARD, sessionDocSource(session, SPACE));
+
+        expect(sent).toContain("of:fid1:topic-piece-1");
+        expect(data.docs["of:fid1:topic-piece-1"]).toEqual({
+          seq: expect.any(Number),
+        });
+
+        sent.length = 0;
+        await refreshMirror(data, BOARD, sessionDocSource(session, SPACE));
+
+        expect(sent).toEqual([]);
+      } finally {
+        await client.close();
+      }
+    });
+
+    it("keeps the content of a document it reads when the document also rides along with another", async () => {
+      const data = empty();
+      await refresh(data);
+      await board.write({
+        "of:fid1:alias-c": { value: link("of:fid1:comment-1") },
+        "of:fid1:input-1": {
+          value: {
+            ...INPUT_1,
+            comments: [link("of:fid1:comment-1"), link("of:fid1:alias-c")],
+          },
+        },
+      });
+      const { topics, fetched } = await refresh(data);
+
+      expect(topics[0].comments.map((c) => c.body)).toEqual([
+        "Reproduced with cold oil.",
+        "Reproduced with cold oil.",
+      ]);
+      expect(data.docs["of:fid1:comment-1"]?.value).toBeDefined();
+      // The input, the new link, and the comment the link sends along.
+      expect(fetched).toBe(3);
+    });
+
+    it("restricts a Topic by the labels a document it is reached through holds now", async () => {
+      /** The alias to Topic 1, labeled as for `subjects`. */
+      const alias = (...subjects: string[]) => ({
+        "of:fid1:topic-alias-1": {
+          value: BOARD_DOCS["of:fid1:topic-alias-1"].value,
+          cfc: {
+            version: 2,
+            schemaHash: taggedHashStringOf(true),
+            labelMap: {
+              version: 1,
+              entries: [{
+                path: [],
+                origin: "declared",
+                label: {
+                  confidentiality: subjects.map((subject) => ({
+                    type: "https://commonfabric.org/cfc/atom/User",
+                    subject,
+                  })),
+                },
+              }],
+            },
+          },
+        },
+        [`cid:${taggedHashStringOf(true)}`]: { value: true },
+      });
+      await board.write(alias("did:key:zX"));
+      const data = empty();
+      const before = await refresh(data);
+      await board.write(alias("did:key:zX", "did:key:zY"));
+      const after = await refresh(data);
+
+      expect(before.topics[0].labels?.confidentiality).toEqual([
+        ["User(did:key:zX)"],
+      ]);
+      expect(after.topics[0].labels?.confidentiality).toEqual([
+        ["User(did:key:zX)"],
+        ["User(did:key:zY)"],
       ]);
     });
 
@@ -276,6 +418,31 @@ describe("sync", () => {
   });
 
   describe("applyDocs()", () => {
+    it("keeps a document riding along whole where the copy holds its content, and otherwise for its revision", () => {
+      const data: MirrorData = {
+        pieces: {},
+        docs: {
+          "of:held": { seq: 1, value: "old", cfc: null },
+          "of:piece": { seq: 1 },
+        },
+      };
+      const absent = new Set<string>();
+      applyDocs(data, [
+        { id: "of:held", seq: 2, value: "new", cfc: null, riding: true },
+        { id: "of:piece", seq: 2, value: "big", cfc: null, riding: true },
+        { id: "of:stranger", seq: 3, value: "big", cfc: null, riding: true },
+        { id: "of:gone", seq: 4, deleted: true, riding: true },
+      ], absent);
+
+      expect(data.docs).toEqual({
+        "of:held": { seq: 2, value: "new", cfc: null },
+        "of:piece": { seq: 2 },
+        "of:stranger": { seq: 3 },
+        "of:gone": { seq: 4 },
+      });
+      expect(absent).toEqual(new Set());
+    });
+
     it("records each document as the server sent it, a deleted one by its revision alone", () => {
       const data: MirrorData = {
         pieces: {},
@@ -298,10 +465,28 @@ describe("sync", () => {
 
       expect(data.docs["of:b"]).toEqual({ seq: 1, value: "one" });
     });
+
+    it("keeps the label envelope a document stores, and a label document's content when it is sent along without it", () => {
+      const data: MirrorData = {
+        pieces: {},
+        docs: { "cid:label": { seq: 1, value: { integrity: [] } } },
+      };
+      applyDocs(data, [
+        { id: "of:a", seq: 2, value: "a", cfc: { version: 2 } },
+        { id: "cid:label", seq: 3 },
+        { id: "of:b", seq: 4 },
+      ], new Set());
+
+      expect(data.docs).toEqual({
+        "of:a": { seq: 2, value: "a", cfc: { version: 2 } },
+        "cid:label": { seq: 3, value: { integrity: [] } },
+        "of:b": { seq: 4 },
+      });
+    });
   });
 
   describe("fetchedFrom()", () => {
-    it("returns the documents wanted, and the revisions of content-addressed ones riding along", () => {
+    it("returns every document sent, marking those not wanted as riding along", () => {
       const doc = { value: "x" };
       const branch = "";
 
@@ -313,14 +498,39 @@ describe("sync", () => {
           { branch, id: "of:d", seq: 4, deleted: true },
         ], new Set(["of:a", "of:d"])),
       ).toEqual([
-        { id: "of:a", seq: 1, value: "x" },
-        { id: "cid:c", seq: 3 },
+        { id: "of:a", seq: 1, value: "x", cfc: null },
+        { id: "of:b", seq: 2, value: "x", cfc: null, riding: true },
+        { id: "cid:c", seq: 3, value: "x", cfc: null, riding: true },
         { id: "of:d", seq: 4, deleted: true },
       ]);
     });
   });
 
   describe("sessionDocSource()", () => {
+    it("declares no more holdings in one request than the server takes, however many ride along", async () => {
+      const { client, session } = await board.mount();
+      const watch = session.watchSetSync.bind(session);
+      const declared: number[] = [];
+      session.watchSetSync = (...args: Parameters<typeof watch>) => {
+        declared.push(args[1]?.length ?? 0);
+        return watch(...args);
+      };
+      try {
+        const riding = Array.from(
+          { length: ROUTED_HOLDINGS_LIMIT + 100 },
+          (_, index) => ({ id: `of:fid1:riding-${index}`, seq: 1 }),
+        );
+        await sessionDocSource(session, SPACE).fetch(
+          ["of:fid1:input-1"],
+          [{ id: "of:fid1:input-1", seq: 1 }, ...riding],
+        );
+
+        expect(declared).toEqual([ROUTED_HOLDINGS_LIMIT]);
+      } finally {
+        await client.close();
+      }
+    });
+
     it("leaves out a document held at its current revision, and sends one held at an older revision", async () => {
       const source = await board.open();
       try {
@@ -419,6 +629,47 @@ describe("sync", () => {
       }
     });
 
+    describe("on a deployment whose naming mode it is told", () => {
+      // The memory server admits a session by the naming mode it declares
+      // (INV-16): a space a naming runtime wrote refuses a session that
+      // declares none, and a server whose posture names no instances refuses
+      // one that declares it. A session opened in this build's default mode
+      // is therefore refused one of these two boards, whichever the default
+      // is.
+
+      for (const namesInstances of [true, false]) {
+        it(`reads a board whose deployment runs \`instanceNames: ${namesInstances}\``, async () => {
+          const deployed = await boardServer({ namesInstances });
+          try {
+            const identity = join(dir, "identity.key");
+            await Deno.writeFile(identity, await Identity.generatePkcs8());
+            const source = await openDocSource(
+              { apiUrl: "http://localhost:1", space: SPACE, identity },
+              {
+                settings: () =>
+                  Promise.resolve({
+                    experimental: { instanceNames: namesInstances },
+                    memoryHost: new URL("https://memory.example"),
+                  }),
+                Sessions: deployed.Sessions,
+              },
+            );
+            try {
+              expect(
+                (await source.fetch(["of:fid1:topic-piece-2"], [])).map((
+                  doc,
+                ) => doc.id),
+              ).toEqual(["of:fid1:topic-piece-2"]);
+            } finally {
+              await source.close();
+            }
+          } finally {
+            await deployed.close();
+          }
+        });
+      }
+    });
+
     it("throws, naming the keyfile, when it cannot be read", async () => {
       const identity = join(dir, "missing.key");
 
@@ -435,6 +686,16 @@ describe("sync", () => {
           },
         ),
       ).rejects.toThrow(`The identity keyfile \`${identity}\` cannot be read`);
+    });
+  });
+
+  describe("spaceDid()", () => {
+    it("returns a space named by its DID as it is, and one named by its name as its DID", async () => {
+      expect(await spaceDid(SPACE)).toBe(SPACE);
+      expect(await spaceDid("topics-dev")).toBe(
+        await legacySpaceDid("topics-dev"),
+      );
+      expect(await spaceDid("topics-dev")).toMatch(/^did:key:/);
     });
   });
 
@@ -491,6 +752,15 @@ describe("sync", () => {
       );
     });
 
+    it("returns what `browse` remembers under `XDG_STATE_HOME`, apart for each viewer", () => {
+      expect(boardFile({ browse: "did:key:zA" }, "https://h", "s", "b", env))
+        .toBe("/state/commonfabric/topics/h/s/b.did%3Akey%3AzA.browse.json");
+      expect(boardFile({ browse: "did:key:zB" }, "https://h", "s", "b", env))
+        .not.toBe(
+          boardFile({ browse: "did:key:zA" }, "https://h", "s", "b", env),
+        );
+    });
+
     it("falls back to `~/.cache` and `~/.local/state`", () => {
       expect(boardFile("copy", "https://h", "s", "b", home)).toBe(
         "/home/ada/.cache/commonfabric/topics/h/s/b.json",
@@ -502,7 +772,7 @@ describe("sync", () => {
   });
 
   describe("loadMirror()", () => {
-    it("returns what `saveMirror()` wrote", async () => {
+    it("returns what `saveMirror()` wrote, to a file only its owner reads", async () => {
       const path = join(dir, "nested", "copy.json");
       const data: MirrorData = {
         space: SPACE,
@@ -511,18 +781,38 @@ describe("sync", () => {
           "of:fid1:a": {
             piece: "of:fid1:p",
             input: "of:fid1:i",
+            via: ["of:fid1:a"],
           },
         },
         docs: {
-          "of:fid1:i": { seq: 3, value: { title: "T" } },
+          "of:fid1:i": { seq: 3, value: { title: "T" }, cfc: null },
           "cid:x": { seq: 1 },
         },
       };
       await saveMirror(path, data);
 
+      expect((await Deno.stat(path)).mode! & 0o777).toBe(0o600);
+
       expect(await loadMirror(path)).toEqual(data);
       expect([...Deno.readDirSync(join(dir, "nested"))].map((e) => e.name))
         .toEqual(["copy.json"]);
+    });
+
+    it("lets go of a document read before the copy kept label envelopes, so that it is read again", async () => {
+      const path = join(dir, "old.json");
+      await saveMirror(path, {
+        pieces: {},
+        docs: {
+          "of:fid1:old": { seq: 3, value: { title: "T" } },
+          "of:fid1:new": { seq: 4, value: { title: "U" }, cfc: null },
+          "cid:x": { seq: 1, value: { integrity: [] } },
+        },
+      });
+
+      expect(Object.keys((await loadMirror(path)).docs).sort()).toEqual([
+        "cid:x",
+        "of:fid1:new",
+      ]);
     });
 
     it("returns an empty copy for a missing file, a malformed one, or one of another shape", async () => {

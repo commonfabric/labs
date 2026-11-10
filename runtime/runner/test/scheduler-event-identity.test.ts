@@ -5,6 +5,7 @@ import type { NormalizedFullLink } from "../src/link-utils.ts";
 import type { Runtime } from "../src/runtime.ts";
 import {
   deriveEventKey,
+  handlingReceiptId,
   mintEventId,
   scopeCallerEventId,
 } from "../src/scheduler/event-identity.ts";
@@ -502,5 +503,41 @@ describe("scheduler event identity", () => {
         "evt:barrier-lt1",
       ]);
     }
+  });
+
+  describe("handlingReceiptId()", () => {
+    it("names the receipt under the reserved `receipt:` scheme, over a tagged hash", () => {
+      expect(handlingReceiptId("evt:1", eventLink)).toMatch(
+        /^receipt:fid1:[A-Za-z0-9_-]+$/,
+      );
+    });
+
+    it("returns one id for one event on one stream, on every call", () => {
+      expect(handlingReceiptId("evt:1", eventLink)).toBe(
+        handlingReceiptId("evt:1", { ...eventLink, path: [] }),
+      );
+    });
+
+    it("returns different ids for different events", () => {
+      expect(handlingReceiptId("evt:1", eventLink)).not.toBe(
+        handlingReceiptId("evt:2", eventLink),
+      );
+    });
+
+    it("returns a different id for one event id on any other stream", () => {
+      // A durable id is visible to anyone who can read the stream, and a client
+      // can append it to another one. That handling has to land somewhere else,
+      // or it would take this receipt.
+      const receipt = handlingReceiptId("evt:1", eventLink);
+      const others: NormalizedFullLink[] = [
+        { ...eventLink, id: "of:another-stream" },
+        { ...eventLink, path: ["nested"] },
+        { ...eventLink, scope: "user" },
+        { ...eventLink, space: "did:key:z6MkAnotherSpace" as MemorySpace },
+      ];
+      for (const other of others) {
+        expect(handlingReceiptId("evt:1", other)).not.toBe(receipt);
+      }
+    });
   });
 });

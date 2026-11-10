@@ -3,7 +3,7 @@ import {
   hashSchema,
   internSchema,
 } from "@commonfabric/data-model-schema";
-import { LRUCache } from "@commonfabric/utils/cache";
+import { LRUCache } from "@commonfabric/collections/cache";
 import { type JSONSchema, UI } from "../builder/types.ts";
 import { snapshotQueryResult } from "../query-result-proxy.ts";
 import { isCellScope } from "../scope.ts";

@@ -1,5 +1,5 @@
-import { getLogger } from "@commonfabric/utils/logger";
-import {
+import { getLogger } from "@commonfabric/logger";
+import type {
   IStorageNotification,
   IStorageNotificationCapability,
   IStorageSubscription,

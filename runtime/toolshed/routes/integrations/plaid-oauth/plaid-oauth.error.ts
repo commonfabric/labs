@@ -1,5 +1,5 @@
 import type { PlaidError } from "plaid";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 /**
  * The Plaid error document carried by a failed SDK call, or `undefined` when

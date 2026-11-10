@@ -121,7 +121,7 @@ describe("package-layout", () => {
 
   describe("dependencyLayerOf()", () => {
     it("returns an earlier layer for a package that others depend on", () => {
-      expect(dependencyLayerOf("base/utils")).toBeLessThan(
+      expect(dependencyLayerOf("base/js-values")).toBeLessThan(
         dependencyLayerOf("dashboard"),
       );
       expect(dependencyLayerOf("base/api")).toBeLessThan(

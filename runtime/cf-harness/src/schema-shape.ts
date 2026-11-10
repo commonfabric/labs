@@ -33,7 +33,7 @@
 import type { JSONSchema, JSONSchemaTypes } from "@commonfabric/api";
 import { FABRIC_PRIMITIVE_SCHEMA_TYPES } from "@commonfabric/data-model/fabric-primitives";
 import { isSchemaScope } from "@commonfabric/runner/scope";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 /**
  * The `type` vocabulary passed through. A closed set, so a `type` cannot be

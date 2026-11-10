@@ -5,8 +5,9 @@
  * spend is known before collection starts.
  */
 
-import { isObjectOrArray } from "@commonfabric/utils/types";
-import { dashboardCacheFile } from "./history-files.ts";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
+import { CacheFile, dashboardCacheFile } from "./history-files.ts";
 
 export const GITHUB_RATE_LIMIT_FRACTION = 0.8;
 export const GITHUB_REST_POINTS_PER_MINUTE = 900;
@@ -197,7 +198,7 @@ export class GitHubRateLimitBudget {
   #fraction: number;
   #restPointsPerMinute: number;
   #now: () => number;
-  #file: string | null;
+  #file: CacheFile | null;
   #openLedgerLock: (file: string) => Promise<GitHubRateLimitLedgerLock>;
   #states = new Map<string, GitHubRateLimitState>();
   #probes = new Map<string, Promise<void>>();
@@ -221,7 +222,7 @@ export class GitHubRateLimitBudget {
     this.#fraction = fraction;
     this.#restPointsPerMinute = restPoints;
     this.#now = options.now ?? Date.now;
-    this.#file = options.file ?? null;
+    this.#file = options.file ? new CacheFile(options.file) : null;
     this.#openLedgerLock = options.openLedgerLock ??
       ((file) =>
         Deno.open(file, {
@@ -308,9 +309,7 @@ export class GitHubRateLimitBudget {
         try {
           primary = await probe();
         } catch (error) {
-          const message = error instanceof Error
-            ? error.message
-            : String(error);
+          const message = describeFailure(error);
           throw new GitHubRateLimitBudgetError(
             `GitHub rate limit status could not be read: ${message}`,
           );
@@ -368,12 +367,12 @@ export class GitHubRateLimitBudget {
   async #readLedger(): Promise<StoredRateLimitLedger> {
     let parsed: unknown;
     try {
-      parsed = JSON.parse(await Deno.readTextFile(this.#file!));
+      parsed = JSON.parse(await Deno.readTextFile(this.#file!.path));
     } catch (error) {
       if (error instanceof Deno.errors.NotFound) {
         return { version: LEDGER_VERSION, tokens: [] };
       }
-      const message = error instanceof Error ? error.message : String(error);
+      const message = describeFailure(error);
       throw new GitHubRateLimitBudgetError(
         `GitHub rate limit ledger could not be read: ${message}`,
       );
@@ -394,24 +393,9 @@ export class GitHubRateLimitBudget {
     return ledger;
   }
 
-  async #writeLedger(ledger: StoredRateLimitLedger): Promise<void> {
-    const temporary = `${this.#file!}.${crypto.randomUUID()}.tmp`;
-    try {
-      await Deno.writeTextFile(temporary, JSON.stringify(ledger));
-      await Deno.rename(temporary, this.#file!);
-    } catch (error) {
-      try {
-        await Deno.remove(temporary);
-      } catch {
-        // Ignore cleanup when no temporary file remains.
-      }
-      throw error;
-    }
-  }
-
   #ledgerError(error: unknown): GitHubRateLimitBudgetError {
     if (error instanceof GitHubRateLimitBudgetError) return error;
-    const message = error instanceof Error ? error.message : String(error);
+    const message = describeFailure(error);
     return new GitHubRateLimitBudgetError(
       `GitHub rate limit ledger could not be updated: ${message}`,
     );
@@ -420,19 +404,20 @@ export class GitHubRateLimitBudget {
   async #withLedger<T>(
     update: (ledger: StoredRateLimitLedger) => T | Promise<T>,
   ): Promise<T> {
-    return await withGitHubRateLimitLedgerTurn(this.#file!, async () => {
+    return await withGitHubRateLimitLedgerTurn(this.#file!.path, async () => {
       let lock: GitHubRateLimitLedgerLock | undefined;
       let locked = false;
       let result: T | undefined;
       let failed = false;
       let failure: unknown;
       try {
-        lock = await this.#openLedgerLock(`${this.#file!}.lock`);
+        lock = await this.#openLedgerLock(`${this.#file!.path}.lock`);
         await lock.lock(true);
         locked = true;
+        await this.#file!.removeLeftoverTemporaries();
         const ledger = await this.#readLedger();
         result = await update(ledger);
-        await this.#writeLedger(ledger);
+        await this.#file!.write(JSON.stringify(ledger));
       } catch (error) {
         failed = true;
         failure = error;
@@ -473,7 +458,7 @@ export class GitHubRateLimitBudget {
   }
 
   #reservationLease(id: string): string {
-    return `${this.#file!}.${id}.reservation.lock`;
+    return `${this.#file!.path}.${id}.reservation.lock`;
   }
 
   async #openReservationLease(id: string): Promise<Deno.FsFile> {
@@ -638,9 +623,7 @@ export class GitHubRateLimitBudget {
           primary = this.#normalizeProbe(await probe());
         } catch (error) {
           if (error instanceof GitHubRateLimitBudgetError) throw error;
-          const message = error instanceof Error
-            ? error.message
-            : String(error);
+          const message = describeFailure(error);
           throw new GitHubRateLimitBudgetError(
             `GitHub rate limit status could not be read: ${message}`,
           );

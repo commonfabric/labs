@@ -31,16 +31,19 @@ they do not turn every Cell read into an operation-log read.
   snapshots.
 - Support multiple trusted, versioned editor codecs without embedding one
   editor's operation types in the Memory wire protocol.
-- Provide stable operation identifiers that future anchored annotations and
-  range-level provenance can reference.
+- Carry anchors, points of a field keyed by id, through every integrated
+  operation in the transaction that integrates it, so an annotation references
+  anchors and never a position it must keep current itself.
+- Provide stable operation identifiers that range-level provenance can
+  reference.
 
 ## 7.2 Non-Goals
 
 - Presence, collaborator lists, selections, and cursors are ephemeral product
   concerns and are not part of durable `apply-op` history.
 - Clients cannot upload executable codecs or choose untrusted transform logic.
-- The first CodeMirror slice does not implement branch merging, range-level CFC
-  labels, or anchored annotation mutation.
+- The first CodeMirror slice does not implement branch merging or range-level
+  CFC labels.
 - Graph traversal remains materialized-only. Operation projections address one
   field directly.
 - There is no universal operation intermediate representation. Each codec owns
@@ -135,7 +138,13 @@ decode stored integrated payload
 rebase submitted operations over an integrated suffix
 apply canonical operations to the materialized value
 encode canonical operations and the new materialized value
+map anchors through canonical operations
 ```
+
+Anchor mapping is codec-defined because an anchor's position is: a text codec
+maps code-unit offsets, a structured codec would map node positions. The
+engine asks the codec to map the anchors the field's anchors document holds
+whenever operations integrate (§7.7.4).
 
 Codec execution is part of the trusted commit engine and must be:
 
@@ -169,6 +178,16 @@ rebasing semantics from `@codemirror/collab`.
   across the suppressed change.
 - Empty canonical changes may be omitted; only stored integrated operations
   advance the field version.
+- An anchor is an offset in UTF-16 code units, from 0 to the length of the
+  value. It is mapped through each canonical update in order, as a CodeMirror
+  editor maps a cursor, with association -1: text inserted at the anchor lands
+  after it, text inserted before it moves it, and an anchor inside deleted
+  text lands where the deletion began. An offset past the end of the value the
+  update was made over maps as the end.
+- A range of the value is two anchors mapped by that one rule. Text inserted
+  at its start falls inside the range and text inserted at its end falls
+  outside; a replacement of exactly the range stays inside it; a deletion
+  covering the range brings both anchors to one offset.
 
 A future rich-text codec may use a JSON document and editor-native steps or
 transactions. It must satisfy the same deterministic contract and cursor
@@ -213,9 +232,9 @@ Within an active epoch:
 - a submission id is unique within the epoch
 
 An explicit `release-op-field` operation deactivates the field without changing
-its materialized value. A later `apply-op` starts a new epoch from the then
-current value. Deleting the owning entity releases all its active collaborative
-fields in the same transaction.
+its materialized value or its anchors (§7.7.4). A later `apply-op` starts a new
+epoch from the then current value. Deleting the owning entity releases all its
+active collaborative fields in the same transaction.
 
 Ordinary `set` or `patch` operations may coexist with collaborative fields only
 when their resulting value preserves every active field they overlap. A write
@@ -268,13 +287,15 @@ For an active field, the engine performs the following inside
 3. Check durable submission-id idempotency.
 4. Reject a future version; load integrated ops after a stale base version.
 5. Ask the codec to validate and rebase the submitted batch.
-6. Apply the canonical operations to the current materialized field value.
+6. Apply the canonical operations to the current materialized field value, and
+   map the anchors the field's anchors document holds through them (§7.7.4).
 7. Insert the submitted record and canonical integrated rows.
 8. If the canonical batch is non-empty, insert an ordinary patch revision
    replacing the field value.
 9. Advance the field cursor by the number of canonical operations and store the
    operation resolution. A canonically empty batch does neither.
-10. Commit all rows or none.
+10. Rewrite the anchors document when an anchor moved (§7.8).
+11. Commit all rows or none.
 
 Multiple operations in one commit are processed in operation-index order. A
 later operation observes the earlier operation's result. Applying operations to
@@ -356,6 +377,40 @@ cursor.
 Commit replay reconstructs these resolutions from stored commit resolution
 data. It never reruns a codec against newer state.
 
+### 7.7.4 Anchors through an operation
+
+A field's anchors are points of its value keyed by ids their writers choose.
+They live in the field's anchors document (§7.8) and nowhere else: a client
+changes them by writing that document, and the engine changes them only by
+mapping them through an integrated operation.
+
+Within the apply steps of §7.7.1:
+
+1. The engine reads the anchors document as the transaction holds it, which
+   includes a write of it earlier in the same commit. An absent document holds
+   no anchors, whether or not the field is active, so a client may write
+   anchors on a field before its first collaborative edit, and the edit that
+   activates the field maps them.
+2. The codec maps every anchor through the canonical operations the
+   submission integrated (§7.5), in order. A submission that integrates
+   nothing maps nothing.
+3. Where an anchor moved, the engine replaces the document's value with the
+   mapped anchors, under the same ids, as a `patch` of the value alone. Whatever else the document's envelope holds, a CFC label among
+   it, is left as its writer wrote it. Where no anchor moved, the document is
+   not written.
+
+Anchors are not operations: they enter no submitted or integrated row and
+advance no version. A commit that writes the anchors document and also applies
+an operation to the field has its operations processed in index order, as any
+commit does (§7.7.1), so anchors written ahead of an edit in the same commit
+are stated against the value before that edit and are mapped through it.
+
+A client that changes anchors does so in an ordinary transaction (§7.10): it
+reads the field and the anchors document, writes the document, and commits
+with both reads. The commit is refused when an operation has integrated into
+the field since, or the anchors document has been written since, and the
+client runs again against what they hold.
+
 ---
 
 ## 7.8 Storage Model
@@ -380,8 +435,8 @@ commit_seq
 
 Releasing a field keeps this row and marks it inactive; reopening replaces its
 current-state fields with the next epoch. Per-epoch history remains in the
-submission, integrated, and checkpoint tables. `path_key` is the canonical JSON
-Pointer encoding of the value-relative path.
+submission, integrated, and checkpoint tables. `path_key` is the canonical
+JSON Pointer encoding of the value-relative path.
 
 ### `op_submission`
 
@@ -438,6 +493,48 @@ The materialized entity revision remains the authority for ordinary reads.
 `op_checkpoint.materialized` exists for operation replay and compaction and
 must equal the field value at its cursor.
 
+### The anchors document
+
+A field's anchors are the value of its anchors document, an ordinary entity:
+
+```text
+id:     "of:op-anchors:" + hash of { id, scope, path } of the field
+scope:  the field's own scope
+value:  { [anchorId: string]: number }   // each anchor's offset
+```
+
+The id is derived from the field's address with no scope key in it, so every
+runtime that addresses the document, a served handler's and a client's alike,
+computes it with no coordination; in the field's scope, a per-user field's
+anchors are per-user. A pattern never sees the id: it reaches the document
+through `anchorsOf()`, which computes the id for it.
+The id is a hash, so the engine cannot tell from a write of the document which
+field it belongs to; an operation on the field finds the document, never the
+reverse.
+
+A client writes the document with `set`, `patch` or `delete`, as it writes any
+entity, under the space's WRITE authorization. After each such operation the
+engine checks what the document then holds and refuses the commit unless it is
+a map of at most 1024 anchors, each under a non-empty id of at most 256
+characters, at a non-negative integer offset. An absent document holds no
+anchors. The engine does not check an offset against the field's value, which
+it cannot find; the codec takes an offset past the end as the end (§7.5).
+
+The engine itself writes the document only to map its anchors through an
+integrated operation (§7.7.4), and never deletes it. Releasing a field leaves
+the document as it is, and so does deleting the field's entity, which
+releases its fields: a writer that deletes the entity and wants the anchors
+gone deletes their documents in the same commit. The
+released value still holds the text the anchors refer to, and an ordinary
+write may replace it from then on, as it may the value of a field that was
+never active. Such a write moves no anchor, so the writer that replaces the
+value reads the anchors and writes them where the new value puts them, in the
+same commit.
+
+Because the document is an ordinary entity, graph queries, materialized
+watches, point-in-time reads, and server-executed handlers read anchors with no
+collaborative special case, exactly as §7.10 says of the materialized value.
+
 ---
 
 ## 7.9 Query and Subscription Protocol
@@ -448,9 +545,16 @@ field-local cursors.
 
 An `op.query` request identifies a field and an optional `after` cursor. The
 integrated projection is exposed through one `OperationFieldSnapshot` envelope
-containing the current materialized value, baseline hash, current cursor, and
-the integrated suffix after the supplied cursor. Submitted-history queries are
-deferred to operator tooling.
+containing the current materialized value, baseline hash, current cursor, the
+field's anchors, and the integrated suffix after the supplied cursor.
+Submitted-history queries are deferred to operator tooling.
+
+The anchors are the whole map the anchors document holds, which is stated
+against the materialized value, and empty where there is no document. A write
+of the anchors document changes them without advancing the cursor, so a
+snapshot can carry different anchors at a cursor the client has already
+applied; a client takes the anchors of every snapshot it receives, and
+deduplicates only the operations by cursor.
 
 An inactive-field response contains a null cursor, the current materialized
 value, its baseline hash, and no operations. It gives a client exactly the
@@ -523,6 +627,13 @@ revision at the field path. Consequently:
 - confirmed reads overlapping the field conflict exactly as they do for an
   equivalent patch
 - scheduler dirty-path computation uses the derived materialization patch
+- an operation that moves the field's anchors rewrites the anchors document
+  as an ordinary `patch` revision of its own entity, in the same commit, so a
+  reader of the document is dirtied and synced as for any entity, and a
+  confirmed read of the document conflicts with it
+- a client's write of the anchors document is an ordinary revision too, so a
+  commit that read the field and the document before writing the document is
+  refused when either has a later revision
 
 The committing runtime cannot extrapolate a server-rebased result from its
 submitted payload. Server dirty-origin handling therefore treats `apply-op`
@@ -554,7 +665,9 @@ storage-owned checkpoints at deterministic committed cursors. Automatic
 compaction retains one checkpoint of overlap. Explicit maintenance may prune
 through the latest checkpoint only after replaying every later integrated
 operation through the registered codec and verifying that the result equals
-both the field head and the ordinary materialized value.
+both the field head and the ordinary materialized value. Anchors take no part
+in it: they are not derived from the operation history, so a checkpoint holds
+none and pruning leaves the anchors document as it is.
 
 The lowest remaining contiguous cursor is the epoch's retained-version floor.
 Readers behind it receive a reset snapshot; writers behind it receive
@@ -572,11 +685,15 @@ checkpoint or claim that it corresponds to an operation cursor.
   `release-op-field`; READ authorization applies to operation queries and
   watches.
 - The server validates scope exactly as for entity operations.
-- Clients cannot submit integrated operations, checkpoints, label side-data, or
-  operation ids.
+- Clients cannot submit integrated operations, checkpoints, label side-data,
+  or operation ids.
+- A client writes a field's anchors document under WRITE authorization, and
+  the engine refuses a write that leaves it holding anything but anchors
+  (§7.8).
 - Codec ids must be registered locally and version-pinned.
 - The engine bounds submitted bytes, operations per batch, and materialized
-  document size before accepting a commit.
+  document size before accepting a commit, and bounds a field's anchors: at
+  most 1024 anchors per field, each id at most 256 characters.
 - The server imposes protocol-wide limits before invoking codec-specific
   parsing.
 - Errors disclose no field content beyond what the authenticated session may
@@ -606,19 +723,26 @@ The first CodeMirror implementation does not define or store range-label
 side-data. A future checkpoint schema extension may add it with the required
 label validation contract.
 
-## 7.15 User-Level Anchored Annotations
+## 7.15 Anchors and User-Level Annotations
 
 Comments, instructions, bookmarks, and highlights remain ordinary application
-entities. Their anchors reference a collaborative field address, epoch, and
-codec-defined position or range.
+entities. Each references anchors of a collaborative field by their ids, two
+for a range of the field and one for a point, and the field's anchors document
+(§7.8) says where each id is now: Memory maps every anchor through every
+integrated operation, in the transaction that integrates it, so an annotation
+never stores a position of its own and no client keeps one current. An
+annotation's writer writes its anchors into the anchors document, in the same
+commit as the annotation when it likes, having read the field the offsets
+refer to, and removes them the same way when the annotation goes.
 
-The codec may later provide deterministic anchor mapping through integrated
-operations. Annotation payloads do not enter the system-owned label plane, and
-annotation writes remain normal Memory transactions.
+Anchors are codec-defined positions with an id, and nothing else: the
+annotation payload stays in the application entity, outside the field and
+outside the system-owned label plane. Annotation writes remain normal Memory
+transactions. A range whose text an edit deleted has both anchors at one
+offset, which the annotation's reader shows as text no longer in the field.
 
-Stable integrated operation ids and epochs are part of this first design so
-adding anchor mapping does not require replacing the collaboration history
-identity model.
+Stable integrated operation ids and epochs remain part of the design:
+range-level provenance (§7.14) can reference the history they name.
 
 ---
 
@@ -645,12 +769,29 @@ identity model.
    output cursor; an epoch mismatch or unavailable cursor returns an explicit
    canonical reset snapshot.
 10. **No client authority over derived data:** clients never supply canonical
-    op ids, integrated payloads, checkpoints, or storage-owned label side-data.
+    op ids, integrated payloads, checkpoints, or storage-owned label
+    side-data.
+11. **Anchors move with the text:** every integration maps the anchors the
+    field's anchors document holds through its canonical operations in the
+    same transaction, by the codec's deterministic rule, so after an
+    integration the document states its anchors against the value the
+    integration left. An ordinary write of an inactive field's value maps
+    none (§7.8).
+12. **The anchors document holds only anchors:** every write of it, a client's
+    or the engine's, leaves a map from anchor id to offset within the bounds
+    of §7.8, or the commit is refused.
 
 ## 7.17 Deferred Decisions
 
 - The representation and algebra for range-level CFC side-data.
-- Codec-specific anchor formats and annotation mapping APIs.
+- The CFC label of what the engine derives into a field's anchors document.
+  The engine rewrites the offsets from the field's edits and leaves the
+  document's label as its writers left it. Anchors written by a transaction
+  that read the field carry the field's confidentiality by ordinary flow;
+  anchors written by one that did not carry none of it, though their offsets
+  then follow the field's edits, and a reader of them learns where the field
+  was edited without the field's taint. §7.14's label mapper is where the
+  label covering the field's path would be joined onto the document.
 - Collaborative branch merge semantics.
 - Retention durations for submitted audit payloads.
 - Whether mature deployments move codec execution into a more isolated

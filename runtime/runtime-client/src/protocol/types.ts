@@ -10,7 +10,7 @@ import type {
   FabricKeyPair,
 } from "@commonfabric/data-model/fabric-primitives";
 import type { DID } from "@commonfabric/identity";
-import { type Program } from "@commonfabric/js-compiler/interface";
+import type { Program } from "@commonfabric/js-compiler/interface";
 import type { JoinVisitDecision } from "@commonfabric/piece/ops";
 import type {
   ApplyOpResolution,
@@ -337,9 +337,20 @@ export enum RequestType {
    * Asks the memory server once more for a space it refused this runtime,
    * and is done once the server has admitted or refused it again. It is for a
    * host that has word the runtime's principal was granted access, and does
-   * nothing for a space the runtime has not opened or was not refused.
+   * nothing for a space the runtime has not opened or was not refused. A space
+   * whose first connection never completed a handshake counts as refused: the
+   * retry dials it once more, for a host with reason to think it is reachable
+   * now, and rejects if it still is not.
    */
   RetrySpaceAccess = "runtime:retrySpaceAccess",
+
+  /**
+   * Asks again, as `RetrySpaceAccess` does, for every space whose first
+   * connection never completed a handshake, and is done once each retry has
+   * settled. It is for a host that learns the network changed, and does
+   * nothing where no space is out of reach.
+   */
+  RetryUnreachableSpaces = "runtime:retryUnreachableSpaces",
 
   /** Waits for the pattern manager's compile-cache writes to land. */
   FlushCompileCacheWrites = "runtime:flushCompileCacheWrites",
@@ -352,6 +363,7 @@ export enum RequestType {
    * round trip covering all four.
    */
   GetLoggerCounts = "runtime:getLoggerCounts",
+  GetLoggerErrorMessages = "runtime:getLoggerErrorMessages",
 
   /** Snapshot storage work without waiting for the durability barrier. */
   GetStorageDiagnostics = "runtime:getStorageDiagnostics",
@@ -692,6 +704,9 @@ export type IPCClientMessage = {
    */
   msgId: MessageId;
 
+  /** Loaded peer commit, for diagnostics only; never an admission rule. */
+  runtimeBuild?: string;
+
   /**
    * The request itself.
    */
@@ -729,6 +744,13 @@ export enum RuntimeErrorCode {
    * space answers to the address, and to offer to create one.
    */
   SpaceNotFound = "space-not-found",
+
+  /**
+   * The request named a deleted space, which the memory server refuses to
+   * everyone for good. No retry admits anyone, so the client's remedy is to
+   * tell the reader that the space was deleted.
+   */
+  SpaceDeleted = "space-deleted",
 }
 
 /**
@@ -742,6 +764,9 @@ export type IPCRemoteResponse = {
    */
   msgId: MessageId;
 
+  /** Loaded peer commit, for diagnostics only; never an admission rule. */
+  runtimeBuild?: string;
+
   /**
    * What the handler returned, absent where it returned nothing.
    */
@@ -751,6 +776,9 @@ export type IPCRemoteResponse = {
    * The request this answers.
    */
   msgId: MessageId;
+
+  /** Loaded peer commit, for diagnostics only; never an admission rule. */
+  runtimeBuild?: string;
 
   /**
    * What went wrong, as text. Its presence is what makes this the
@@ -1365,6 +1393,22 @@ export type CellResolveAsCellRequest = BaseRequest & {
    * The cell whose aliases to follow.
    */
   cell: CellRef;
+
+  /**
+   * Whether to answer also with where a write to the cell lands, read
+   * together with the cell its links lead to: write redirects are followed,
+   * and a link stored as the value there is not.
+   */
+  withWriteTarget?: true;
+};
+
+/** The {@link RequestType.CellResolveAsCell} response. */
+export type CellResolveAsCellResponse = CellResponse & {
+  /**
+   * Where a write to the cell lands, when the request asked for it, read
+   * with {@link CellResponse.cell}.
+   */
+  writeTarget?: CellRef;
 };
 
 /** The {@link RequestType.CellGetCfcLabel} request. */
@@ -2055,6 +2099,11 @@ export type RegisterSpaceHostDetailedRequest = BaseRequest & {
   host: string;
 };
 
+/** The {@link RequestType.RetryUnreachableSpaces} request. */
+export type RetryUnreachableSpacesRequest = BaseRequest & {
+  type: RequestType.RetryUnreachableSpaces;
+};
+
 /** The {@link RequestType.RetrySpaceAccess} request. */
 export type RetrySpaceAccessRequest = BaseRequest & {
   type: RequestType.RetrySpaceAccess;
@@ -2097,6 +2146,14 @@ export type StorageDiagnosticsResponse = {
 /** The {@link RequestType.GetLoggerCounts} request, which carries no payload. */
 export type GetLoggerCountsRequest = BaseRequest & {
   type: RequestType.GetLoggerCounts;
+};
+
+/**
+ * The {@link RequestType.GetLoggerErrorMessages} request, which carries no
+ * payload.
+ */
+export type GetLoggerErrorMessagesRequest = BaseRequest & {
+  type: RequestType.GetLoggerErrorMessages;
 };
 
 /**
@@ -2469,7 +2526,7 @@ export type UploadBlobResponse = {
 /**
  * How many messages were recorded at each level, with `total` alongside so
  * a reader need not sum the four. Mirrors the shape
- * `@commonfabric/utils/logger` uses, this being that data on the wire.
+ * `@commonfabric/logger` uses, this being that data on the wire.
  */
 export type LogCounts = {
   /**
@@ -2543,7 +2600,7 @@ export type LoggerMetadata = Record<string, LoggerInfo>;
 /**
  * One point of a cumulative distribution: a latency, and the fraction of
  * samples at or below it. Mirrors the shape
- * `@commonfabric/utils/logger` uses.
+ * `@commonfabric/logger` uses.
  */
 export type CDFPoint = {
   /**
@@ -2559,7 +2616,7 @@ export type CDFPoint = {
 
 /**
  * One of the slowest measurements of a timed operation. Mirrors the shape
- * `@commonfabric/utils/logger` uses.
+ * `@commonfabric/logger` uses.
  */
 export type SlowTiming = {
   /**
@@ -2671,6 +2728,12 @@ export type LoggerFlagsData = Record<
   string,
   Record<string, Record<string, FabricPlainObject | null>>
 >;
+
+/**
+ * The earliest messages each logger logged at `error`, by logger name and
+ * message key, as text.
+ */
+export type LoggerErrorMessagesData = Record<string, Record<string, string[]>>;
 
 /**
  * The {@link RequestType.PieceCreate} request. `source` names a URL or a
@@ -2968,6 +3031,7 @@ export type PiecePatternRefView = {
 export type PieceReconciliationOutcome =
   | "followed"
   | "unreachable"
+  | "unapplied"
   | "refused";
 
 /**
@@ -3493,6 +3557,7 @@ export type IPCClientRequest =
   | GetGraphSnapshotRequest
   | GetStorageDiagnosticsRequest
   | GetLoggerCountsRequest
+  | GetLoggerErrorMessagesRequest
   | GetPatternCoverageRequest
   | SetLoggerLevelRequest
   | SetLoggerEnabledRequest
@@ -3534,6 +3599,7 @@ export type IPCClientRequest =
   | RegisterSpaceHostRequest
   | RegisterSpaceHostDetailedRequest
   | RetrySpaceAccessRequest
+  | RetryUnreachableSpacesRequest
   | VDomMountRequest
   | VDomUnmountRequest
   | DetectNonIdempotentRequest
@@ -3884,6 +3950,18 @@ export type GraphSnapshotResponse = {
 };
 
 /**
+ * The messages behind a logger's `error` counts. It is a request of its own,
+ * rather than part of the counts, because this text can quote a value and the
+ * counts are read by tools that write what they read into their own output.
+ */
+export type LoggerErrorMessagesResponse = {
+  /**
+   * The messages, by logger and message key.
+   */
+  messages: LoggerErrorMessagesData;
+};
+
+/**
  * Everything the logger diagnostics read returns: counts, per-logger
  * metadata, timings, active flags, the runtime's CFC counters, the pattern
  * manager's compile-cache counters, and the sizes of the runtime's live
@@ -4124,6 +4202,12 @@ export type EventIntentOutcomeNotification = EventIntentOutcomeNotice & {
 export type SpaceAccessLostNotification = {
   type: NotificationType.SpaceAccessLost;
   space: DID;
+
+  /**
+   * Present when the space is deleted: the memory server refuses it to every
+   * principal for good, so no retry can admit anyone.
+   */
+  deleted?: true;
 };
 
 /**
@@ -4411,6 +4495,7 @@ export type RemoteResponse =
   | GraphSnapshotResponse
   | StorageDiagnosticsResponse
   | LoggerCountsResponse
+  | LoggerErrorMessagesResponse
   | PatternCoverageResponse
   | SettleStatsResponse
   | SettleStatsHistoryResponse
@@ -4526,6 +4611,10 @@ export type Commands = {
     request: GetLoggerCountsRequest;
     response: LoggerCountsResponse;
   };
+  [RequestType.GetLoggerErrorMessages]: {
+    request: GetLoggerErrorMessagesRequest;
+    response: LoggerErrorMessagesResponse;
+  };
   [RequestType.GetPatternCoverage]: {
     request: GetPatternCoverageRequest;
     response: PatternCoverageResponse;
@@ -4633,7 +4722,7 @@ export type Commands = {
   };
   [RequestType.CellResolveAsCell]: {
     request: CellResolveAsCellRequest;
-    response: CellResponse;
+    response: CellResolveAsCellResponse;
   };
   [RequestType.CellGetCfcLabel]: {
     request: CellGetCfcLabelRequest;
@@ -4750,6 +4839,10 @@ export type Commands = {
   };
   [RequestType.RetrySpaceAccess]: {
     request: RetrySpaceAccessRequest;
+    response: EmptyResponse;
+  };
+  [RequestType.RetryUnreachableSpaces]: {
+    request: RetryUnreachableSpacesRequest;
     response: EmptyResponse;
   };
   [RequestType.PieceGet]: {

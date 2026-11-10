@@ -3,8 +3,9 @@ import { linkRefPayload } from "@commonfabric/data-model/cell-rep";
 import { deepFreeze } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
-import { yieldToEventLoop } from "@commonfabric/utils/sleep";
+import { yieldToEventLoop } from "@commonfabric/async/sleep";
 import { convertCellsToLinks } from "../src/cell.ts";
+import { portableSnapshotId } from "../src/data-uri.ts";
 import { immutableCellsFor, immutableSnapshot } from "../src/immutable-cell.ts";
 import { createSigilLinkFromParsedLink, parseLink } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -101,6 +102,30 @@ function failedReaderSchema() {
 }
 const failedSchema = failedReaderSchema();
 const explicitId = store.create({ held: "explicit" }).id;
+// An immutable cell's snapshot lives as long as a cell or link naming it does,
+// and an id string taken from it does not keep it.
+function droppedImmutableCell(value: unknown) {
+  const id = runtime.getImmutableCell(signer.did(), value)
+    .getAsNormalizedFullLink().id;
+  return { id, weak: new WeakRef(immutableSnapshot(id)) };
+}
+const droppedCell = droppedImmutableCell({ owned: "dropped" });
+const droppedPrimitive = droppedImmutableCell(42);
+const heldImmutableCell = runtime.getImmutableCell(signer.did(), {
+  owned: "held",
+});
+const portableId = portableSnapshotId(
+  runtime.getImmutableCell(signer.did(), { owned: "portable" })
+    .getAsNormalizedFullLink().id,
+);
+function expired(id: string): boolean {
+  try {
+    immutableSnapshot(id as `snapshot:${string}`);
+    return false;
+  } catch {
+    return true;
+  }
+}
 sources.length = 0;
 // WeakRef targets survive the job that created them; collection follows a turn.
 await yieldToEventLoop();
@@ -120,6 +145,13 @@ const report = {
   failedSchemaRetained: failedSchema.deref() !== undefined,
   queued: runtime.getCellFromLink(queued.link).getRaw(),
   explicit: immutableSnapshot(explicitId).value,
+  immutableCell: {
+    dropped: droppedCell.weak.deref() === undefined && expired(droppedCell.id),
+    droppedPrimitive: droppedPrimitive.weak.deref() === undefined &&
+      expired(droppedPrimitive.id),
+    held: heldImmutableCell.getRaw(),
+    portable: runtime.getCellFromLink({ ...base, id: portableId }).getRaw(),
+  },
 };
 // Keep both the runtime and source keys live through the collection above.
 if (relative.handle === undefined) throw new Error("Lost relative handle");

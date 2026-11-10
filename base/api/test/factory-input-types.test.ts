@@ -18,7 +18,7 @@ import type {
 // the assertions below rest on.
 import * as schemaModule from "@commonfabric/api/schema";
 import type { Schema, SchemaWithoutCell } from "@commonfabric/api/schema";
-import type { MustBeTrue } from "@commonfabric/utils/types";
+import type { MustBeTrue } from "@commonfabric/js-values/types";
 type AssertAssignable<T, U> = [T] extends [U] ? true : never;
 type AssertNotAssignable<T, U> = [T] extends [U] ? never : true;
 

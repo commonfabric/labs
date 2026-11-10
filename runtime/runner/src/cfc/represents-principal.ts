@@ -12,12 +12,12 @@
  * main thread and the HTML renderer's text integrity boundary in the worker.
  * The module
  * depends on nothing but types from `@commonfabric/api` and the label view,
- * `@commonfabric/utils`, and `@commonfabric/identity/did`, so that either can
- * import it without the rest of the CFC machinery.
+ * `@commonfabric/js-values`, and `@commonfabric/identity/did`, so that either
+ * can import it without the rest of the CFC machinery.
  */
 import type { DID, PrincipalClaimKind } from "@commonfabric/api";
 import { isWellFormedDID } from "@commonfabric/identity/did";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import type { CfcLabelView } from "./label-view-core.ts";
 
 export type { PrincipalClaimKind };
@@ -149,6 +149,21 @@ export const authorPrincipalCandidates = (
 ];
 
 /**
+ * The principal a label says its value belongs to: the one DID
+ * `authorPrincipalCandidates` finds in the `represents-principal` atoms of
+ * the entries it reads. `nameWritten` says whether the value holds a name its
+ * owner wrote: then the root and `name` count, and otherwise every entry the
+ * label holds does. `undefined` when those name no principal or more than one.
+ */
+export const ownerPrincipalFromLabel = (
+  view: CfcLabelView | undefined,
+  nameWritten: boolean,
+): string | undefined => {
+  const candidates = authorPrincipalCandidates(view, nameWritten);
+  return candidates.length === 1 ? candidates[0] : undefined;
+};
+
+/**
  * The entries of `view` a principal claim is read from: those at the root and
  * on top-level fields, where a profile's owner-protected fields carry their
  * owner's atom. Entries deeper down come from documents the value links, and
@@ -266,6 +281,34 @@ export const exactPrincipalAttestations = (
     ];
   }
   return mintedPrincipals(view, kind, principalClaimEntries(view));
+};
+
+/**
+ * The one principal `view` names as the one the value it labels represents,
+ * or `undefined` when it names none or more than one. The claims on the root
+ * entry, not carried by a link from another document, must name that
+ * principal alone, so that a claim a link carries, or one on a field, credits
+ * no one; and so must every claim `view` holds, so that a claim anywhere else
+ * that names someone else refuses. Each claim is read in the form a runtime
+ * mints, as {@link mintedProfilePrincipals} reads one, and a claim in another
+ * form refuses. A value stored without a label names no one. Like every claim,
+ * it binds honest runtimes only.
+ */
+// SPEC-PENDING https://github.com/commonfabric/specs/pull/75
+export const soleRepresentedPrincipal = (
+  view: CfcLabelView | undefined,
+): DID | undefined => {
+  if (view === undefined) return undefined;
+  const sole = (entries: CfcLabelView["entries"]) => {
+    const attested = mintedPrincipals(view, REPRESENTS_PRINCIPAL, entries);
+    return attested?.length === 1 ? attested[0] : undefined;
+  };
+  const own = sole(
+    view.entries.filter((entry) =>
+      entry.path.length === 0 && entry.observes !== "followRef"
+    ),
+  );
+  return own !== undefined && own === sole(view.entries) ? own : undefined;
 };
 
 /**

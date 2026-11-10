@@ -134,12 +134,11 @@ decide what is the viewer's at the leaf. See
 `docs/common/patterns/multi-user-patterns.md#keep-the-viewer-out-of-shared-derivations`
 and `docs/common/components/COMPONENTS.md#identity-components`.
 
-When working in a Pattern Factory Build workspace, also read:
-
-- `docs/common/ai/pattern-factory-build-guide.md`
-
-That guide defines the top-level build contract, verification posture, and
-documentation discipline for Pattern Factory runs.
+**What the pattern holds, as text:** a pattern whose result is a document, a
+list, a schedule or a board returns `[FS]`, a `text/markdown` projection
+computed from its state (`docs/specs/fuse-filesystem/8-fs-projections.md`). The
+filesystem view and any host that finds a pattern by what it holds read that
+text, not the UI, so a pattern without it is known by its `[NAME]` alone.
 
 When you're unsure whether a reactive expression site lowers the way you expect,
 inspect the emitted source directly with:
@@ -247,9 +246,7 @@ Runtime notes:
 
 ### Claude Code
 
-Interactive labs sessions only. In a Pattern Factory workspace, the factory
-orchestrator owns delegation, critique, and finalization — do not Task these
-subagents, run a separate critic pass, or offer commits there.
+Interactive labs sessions only.
 
 - Use `EnterPlanMode` before building.
 - Scale the plan to the problem:
@@ -289,7 +286,6 @@ Task({
 
 Phase skills consult as needed:
 
-- Pattern Factory Build: `docs/common/ai/pattern-factory-build-guide.md`
 - Reactivity and local cells: `docs/common/concepts/reactivity.md`,
   `docs/common/patterns/new-cells.md`
 - Types: `docs/common/concepts/types-and-schemas/`

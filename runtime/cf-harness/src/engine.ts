@@ -25,6 +25,10 @@ import type {
   RunCommandOutput,
 } from "./tools/loom-commands.ts";
 import type {
+  ReportProgressInput,
+  ReportProgressOutput,
+} from "./tools/report-progress.ts";
+import type {
   SubmitResultInput,
   SubmitResultOutput,
 } from "./tools/submit-result.ts";
@@ -46,9 +50,10 @@ import {
   mergeCfcLabelViews,
 } from "@commonfabric/runner/cfc";
 import { mergeLabel } from "@commonfabric/runner/cfc/label-view-core";
-import { deepEqual } from "@commonfabric/utils/deep-equal";
-import { maxOf } from "@commonfabric/utils/math";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { deepEqual } from "@commonfabric/js-values/deep-equal";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { maxOf } from "@commonfabric/collections/math";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import {
   createFileSystemHarnessArtifactStore,
@@ -120,13 +125,11 @@ import type {
   HarnessSkillScriptExecution,
 } from "./contracts/skill.ts";
 import type {
+  DelegateTaskToolInput,
+  DelegateTaskToolOutput,
   HarnessRunLineage,
   HarnessSubagentResumeContext,
   HarnessSubagentRunRef,
-} from "./contracts/subagent.ts";
-import {
-  type DelegateTaskToolInput,
-  type DelegateTaskToolOutput,
 } from "./contracts/subagent.ts";
 import type { BuiltinToolId } from "./contracts/tool-descriptor.ts";
 import {
@@ -256,30 +259,27 @@ import {
   ACQUIRED_SKILL_MOUNT_PATH,
   AcquiredSkillDirectoryReadableError,
 } from "./skills/acquired-skill-mount.ts";
-import { type BashToolInput, type BashToolOutput } from "./tools/bash.ts";
+import type { BashToolInput, BashToolOutput } from "./tools/bash.ts";
 import type {
   AcquireSkillToolInput,
   AcquireSkillToolOutput,
 } from "./tools/acquire-skill.ts";
-import {
-  type BrowserToolInput,
-  type BrowserToolOutput,
-} from "./tools/browser.ts";
-import {
-  type CallVerbToolInput,
-  type CallVerbToolOutput,
+import type { BrowserToolInput, BrowserToolOutput } from "./tools/browser.ts";
+import type {
+  CallVerbToolInput,
+  CallVerbToolOutput,
 } from "./tools/call-verb.ts";
 import type {
   ReadValueToolInput,
   ReadValueToolOutput,
 } from "./tools/read-value.ts";
-import {
-  type DescribeHandleToolInput,
-  type DescribeHandleToolOutput,
+import type {
+  DescribeHandleToolInput,
+  DescribeHandleToolOutput,
 } from "./tools/describe-handle.ts";
-import {
-  type EditFileToolInput,
-  type EditFileToolOutput,
+import type {
+  EditFileToolInput,
+  EditFileToolOutput,
 } from "./tools/edit-file.ts";
 import type { FinishTaskInput, FinishTaskOutput } from "./tools/finish-task.ts";
 import type {
@@ -287,13 +287,13 @@ import type {
   WeaverActionOutput,
 } from "./tools/weaver-action.ts";
 import type { HarnessClientActionRequester } from "./client-actions/coordinator.ts";
-import {
-  type ReadFileToolInput,
-  type ReadFileToolOutput,
+import type {
+  ReadFileToolInput,
+  ReadFileToolOutput,
 } from "./tools/read-file.ts";
-import {
-  type ReadSkillResourceToolInput,
-  type ReadSkillResourceToolOutput,
+import type {
+  ReadSkillResourceToolInput,
+  ReadSkillResourceToolOutput,
 } from "./tools/read-skill-resource.ts";
 import type {
   RecordFeedbackToolInput,
@@ -306,17 +306,17 @@ import type {
   RevisePieceToolInput,
   RevisePieceToolOutput,
 } from "./tools/piece-source.ts";
-import {
-  type RunPatternToolInput,
-  type RunPatternToolOutput,
+import type {
+  RunPatternToolInput,
+  RunPatternToolOutput,
 } from "./tools/run-pattern.ts";
 import type {
   AssignSlugToolInput,
   AssignSlugToolOutput,
 } from "./tools/assign-slug.ts";
-import {
-  type RunSkillScriptToolInput,
-  type RunSkillScriptToolOutput,
+import type {
+  RunSkillScriptToolInput,
+  RunSkillScriptToolOutput,
 } from "./tools/run-skill-script.ts";
 import type {
   SearchPatternsToolInput,
@@ -326,21 +326,21 @@ import type {
   SearchSkillsToolInput,
   SearchSkillsToolOutput,
 } from "./tools/search-skills.ts";
-import {
-  type ResearchToolInput,
-  type ResearchToolOutput,
+import type {
+  ResearchToolInput,
+  ResearchToolOutput,
 } from "./tools/research.ts";
-import {
-  type ViewImageToolInput,
-  type ViewImageToolOutput,
+import type {
+  ViewImageToolInput,
+  ViewImageToolOutput,
 } from "./tools/view-image.ts";
-import {
-  type WebFetchToolInput,
-  type WebFetchToolOutput,
+import type {
+  WebFetchToolInput,
+  WebFetchToolOutput,
 } from "./tools/web-fetch.ts";
-import {
-  type WriteFileToolInput,
-  type WriteFileToolOutput,
+import type {
+  WriteFileToolInput,
+  WriteFileToolOutput,
 } from "./tools/write-file.ts";
 
 export interface BuiltinToolInputMap {
@@ -382,7 +382,7 @@ export interface BuiltinToolInputMap {
   loom_profile: LoomProfileInput;
   list_commands: ListCommandsInput;
   run_command: RunCommandInput;
-  run_read_command: RunCommandInput;
+  report_progress: ReportProgressInput;
   submit_result: SubmitResultInput;
 }
 
@@ -425,7 +425,7 @@ export interface BuiltinToolOutputMap {
   loom_profile: LoomRetrievalToolOutput;
   list_commands: ListCommandsOutput;
   run_command: RunCommandOutput;
-  run_read_command: RunCommandOutput;
+  report_progress: ReportProgressOutput;
   submit_result: SubmitResultOutput;
 }
 
@@ -478,6 +478,8 @@ export interface CreateHarnessEngineOptions
   sandboxRunscUnshare?: string;
   /** runsc runtime: the `setpriv` that ties what pasta runs to pasta. */
   sandboxRunscSetpriv?: string;
+  /** runsc runtime: the host ports a container under pasta reaches. */
+  sandboxRunscForwardedHostPorts?: readonly number[];
 
   /**
    * runsc runtime: the platform whose driver defaults apply, as
@@ -615,6 +617,12 @@ export interface CreateHarnessEngineOptions
    */
   structuredResult?: HarnessStructuredResultTarget;
 
+  /** Publishes a milestone with observed handles; false means publication failed. */
+  reportProgress?: (
+    message: string,
+    table: HarnessHandleTable | undefined,
+  ) => Promise<void | boolean>;
+
   /**
    * Host-supplied attachments or session-retained targets to mint handles for
    * at run start; see `establishInputCells`. Requires a fabric session — the
@@ -748,6 +756,7 @@ export class CfHarnessEngine {
   #researchRunner?: HarnessResearchRunner;
   #patternIndexLedger?: PatternIndexLedger;
   readonly #taskText?: string;
+  readonly #reportProgress?: CreateHarnessEngineOptions["reportProgress"];
   readonly #structuredResult?: HarnessStructuredResultTarget;
   #structuredResultRecorded = false;
   readonly #inputCells: readonly HarnessInputCellSpec[];
@@ -995,6 +1004,10 @@ export class CfHarnessEngine {
         "resumed run structured-result configuration does not match the recorded configuration",
       );
     }
+    this.#reportProgress = options.lineage?.role === "subagent" ||
+        options.runState?.lineage?.role === "subagent"
+      ? undefined
+      : options.reportProgress;
     this.#structuredResult = options.lineage?.role !== "subagent" &&
         options.runState?.lineage?.role !== "subagent"
       ? structuredClone(recordedStructuredResult ?? options.structuredResult)
@@ -1027,6 +1040,7 @@ export class CfHarnessEngine {
         ...(options.sandboxRunscSetpriv !== undefined
           ? { setpriv: options.sandboxRunscSetpriv }
           : {}),
+        forwardedHostPorts: options.sandboxRunscForwardedHostPorts,
         additionalMounts: options.additionalMounts,
         runId,
         ...(options.sandboxPlatform !== undefined
@@ -1646,9 +1660,7 @@ export class CfHarnessEngine {
       await this.sandbox.close?.();
     } catch (error) {
       console.error(
-        `cf-harness: sandbox close failed: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        `cf-harness: sandbox close failed: ${describeFailure(error)}`,
       );
     }
   }
@@ -1885,6 +1897,11 @@ export class CfHarnessEngine {
     );
     await this.recordHandleTable(minted.table);
     return minted.token;
+  }
+
+  /** Whether this run can return interim milestones. */
+  get progressAvailable(): boolean {
+    return this.#reportProgress !== undefined;
   }
 
   /** Whether this run was configured with a structured-result schema. */
@@ -2490,9 +2507,7 @@ export class CfHarnessEngine {
         createHarnessFailureRecord({
           kind: "harness_error",
           source: "cell_labels",
-          detail: `cell label snapshot failed: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
+          detail: `cell label snapshot failed: ${describeFailure(error)}`,
           at: now,
         }),
         now,
@@ -2583,6 +2598,18 @@ export class CfHarnessEngine {
       );
     }
     return this.getRunState();
+  }
+
+  /** Resolves a call's effect from its inputs and host metadata. */
+  async builtinToolEffectClass(
+    toolId: BuiltinToolId,
+    input: Record<string, unknown>,
+    signal?: AbortSignal,
+  ) {
+    const tool = getBuiltinTool(toolId);
+    if (tool === undefined) throw new Error(`unknown builtin tool: ${toolId}`);
+    return await tool.effectClassOf?.(input, this.#createToolContext(signal)) ??
+      tool.descriptor.effectClass;
   }
 
   /**
@@ -3044,6 +3071,10 @@ export class CfHarnessEngine {
         ? { browserHost: this.#browserHost }
         : {}),
       handleValueOrigins: this.config.handleValueOrigins,
+      ...(this.#reportProgress === undefined ? {} : {
+        reportProgress: (message: string) =>
+          this.#reportProgress!(message, this.handleTable),
+      }),
       handleTable: this.handleTable,
       ...(this.#fabricSessionFactory !== undefined
         ? { getFabricSession: this.#fabricSessionFactory }
@@ -3123,10 +3154,7 @@ export class CfHarnessEngine {
       ...(this.config.loomCommands !== undefined
         ? {
           loomCommandCatalog: this.#loomCommandCatalog ??=
-            createLoomCommandCatalogSource(
-              this.config.loomCommands,
-              this.hostProcessRunner,
-            ),
+            createLoomCommandCatalogSource(this.config.loomCommands),
         }
         : {}),
       mintReferentHandle: (referent: HarnessDocumentReferentDraft) =>

@@ -19,6 +19,13 @@ const repository = fromFileUrl(new URL("../../../", import.meta.url));
 const patterns = `${repository}patterns`;
 const MOVES = Object.entries(MOVED_PATTERN_KEYS);
 
+// The targets of moves whose pattern was deleted after the move. The table
+// keeps their entries, since stored programs can still name the old keys.
+const DELETED_TARGETS = new Set([
+  "system/profile-look/profile-look.test.ts",
+  "system/profile-look/profile-look.ts",
+]);
+
 describe("pattern-key-moves", () => {
   describe("currentPatternKey()", () => {
     it("returns the new key of a file the table names", () => {
@@ -163,12 +170,15 @@ describe("pattern-key-moves", () => {
     });
   });
   describe("the table", () => {
-    it("names no key the patterns tree holds, and only targets it holds", () => {
+    it("names no key the patterns tree holds, and only targets it holds or that were deleted", () => {
       for (const [from, to] of MOVES) {
         expect({ from, exists: existsSync(`${patterns}/${from}`) })
           .toEqual({ from, exists: false });
         expect({ to, exists: existsSync(`${patterns}/${to}`) })
-          .toEqual({ to, exists: true });
+          .toEqual({ to, exists: !DELETED_TARGETS.has(to) });
+      }
+      for (const to of DELETED_TARGETS) {
+        expect(MOVES.some(([, target]) => target === to)).toBe(true);
       }
     });
 
@@ -182,16 +192,23 @@ describe("pattern-key-moves", () => {
 
     it("maps each bare-key line of the test-identity aliases to its target", async () => {
       // A bare-key line renames a key that a gate's item names without the
-      // `patterns/` prefix.
+      // `patterns/` prefix. Every other line names a repository path, which
+      // starts with one of the repository's top-level directories.
       const lines = (await Deno.readTextFile(
         `${repository}tasks/test-identity-aliases/moved-paths.jsonl`,
       )).split("\n").filter((line) => line.length > 0).map((line) =>
         JSON.parse(line)
       ).filter(({ from }) =>
         typeof from.p === "string" &&
-        !["packages/", "patterns/", "tools/"].some((prefix) =>
-          from.p.startsWith(prefix)
-        )
+        ![
+          "base/",
+          "connectors/",
+          "dashboard/",
+          "packages/",
+          "patterns/",
+          "runtime/",
+          "tools/",
+        ].some((prefix) => from.p.startsWith(prefix))
       );
       expect(lines.length).toBeGreaterThan(0);
       for (const { from, to } of lines) {

@@ -783,7 +783,7 @@ Deno.test("a recording leaf is given the preload and the permissions it needs", 
   // A member that cannot read the tree is granted the repository's
   // marker as well, since climbing to it is what names the file each
   // test in the name map belongs to.
-  assertEquals(recording.get("./base/utils"), [
+  assertEquals(recording.get("./base/text"), [
     preload,
     marker,
     "--allow-write=/spool",
@@ -808,7 +808,7 @@ Deno.test("a leaf that cannot read is granted the skip list the run names", asyn
   const marker = path.join(await Deno.realPath(rootUrl), ".git");
   // A member reading nothing of its own is granted the list beside the
   // marker, and one already reading everything is granted no list.
-  assertEquals(recording.get("./base/utils"), [
+  assertEquals(recording.get("./base/text"), [
     preloadArgument(),
     `--allow-read=${marker},/lists/skip.json`,
     "--allow-write=/spool",
@@ -851,7 +851,7 @@ Deno.test("assertMemberTestTasksDefined names every member defining no test task
     // rule, so the message carries the entry to add and where to copy it
     // from.
     assertStringIncludes(error.message, "echo 'No tests defined.'");
-    assertStringIncludes(error.message, "base/utils/deno.jsonc");
+    assertStringIncludes(error.message, "base/text/deno.jsonc");
     // Creating the other manifest is the way out that costs the member its
     // `imports`, so the message has to warn against it where it is met.
     assertStringIncludes(error.message, "ignores the other whole");

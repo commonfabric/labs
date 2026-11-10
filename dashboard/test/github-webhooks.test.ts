@@ -1,14 +1,13 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { FakeTime } from "@std/testing/time";
+import type { GitHubDelivery } from "@commonfabric/github-webhooks/relay";
 import {
   Freshness,
-  type GitHubDelivery,
   GitHubWebhooks,
   pushOf,
   RELAY_QUIET_MS,
   RELAY_VOUCH_MS,
-  relayAddress,
   workflowRunOf,
 } from "../github-webhooks.ts";
 import type { GitHubRun } from "../github-runs.ts";
@@ -321,22 +320,6 @@ describe("github-webhooks", () => {
           expect(webhooks.stream).toBeUndefined();
         });
       });
-    });
-  });
-
-  describe("relayAddress()", () => {
-    it("turns the relay off for an empty address", () => {
-      expect(relayAddress("")).toBeUndefined();
-    });
-
-    it("fails each connection to an address with no port", async () => {
-      await expect(relayAddress("relay.example")?.()).rejects.toThrow(
-        "names no port",
-      );
-    });
-
-    it("accepts a host and port", () => {
-      expect(relayAddress("relay.example:8081")).toBeInstanceOf(Function);
     });
   });
 

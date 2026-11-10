@@ -888,8 +888,6 @@ export function wishTargetCandidates(): ProviderResult {
   return values([
     { value: "#profile", description: "the viewer's active profile object" },
     { value: "#profileName", description: "its live display name" },
-    { value: "#profileAvatar", description: "its avatar text" },
-    { value: "#profilePicture", description: "its picture, as image bytes" },
     { value: "#profileBio", description: "its owner-authored bio" },
     { value: "#profileSpace", description: "its own space cell" },
     { value: "#favorites", description: "space-relative" },
@@ -1043,6 +1041,9 @@ const OPTION_VALUE_PROVIDERS: Readonly<Record<string, OptionProvider>> = {
   // `--remote` takes what `--api-url` takes: the toolshed to read from.
   remote: () => Promise.resolve(apiUrlCandidates()),
   identity: () => Promise.resolve(directive({ kind: "files", glob: "*.key" })),
+  // A delegation chain file, as `cf delegation issue --out` writes one.
+  delegations: () =>
+    Promise.resolve(directive({ kind: "files", glob: "*.json" })),
   // `cf agent runner`: the toolshed it sits beside, the host-owned Loom tool
   // configuration it reads, and the directory its runs' workspaces go under.
   "local-api-url": () => Promise.resolve(apiUrlCandidates()),
@@ -1123,6 +1124,11 @@ const OPTION_VALUE_PROVIDERS: Readonly<Record<string, OptionProvider>> = {
     ["space compact"],
     () => Promise.resolve(directive({ kind: "files", glob: "*.sqlite" })),
   ),
+  // `cf space reap --dry-run --live` names the space's live store file.
+  live: onlyOn(
+    ["space reap"],
+    () => Promise.resolve(directive({ kind: "files", glob: "*.sqlite" })),
+  ),
 };
 
 /** The scope kinds `cf space compact --scope` restricts a selection to. */
@@ -1136,6 +1142,7 @@ const SCOPE_KIND_CANDIDATES: readonly Candidate[] = [
 const ID_PREFIX_CANDIDATES: readonly Candidate[] = [
   { value: "of:", description: "entity documents" },
   { value: "computed:", description: "computed cells" },
+  { value: "receipt:", description: "handling receipts" },
   { value: "cid:", description: "content-addressed label documents" },
 ];
 
@@ -1183,8 +1190,10 @@ const ARGUMENT_PROVIDERS: Readonly<
 > = {
   "agent show:run": agentRunCandidates,
   "agent cancel:run": agentRunCandidates,
+  "agent remove:run": agentRunCandidates,
   "cell get-label:path": cellPathCandidates,
   "cell set-label:path": cellPathCandidates,
+  "cell release-by-intent:path": cellPathCandidates,
   "piece call:callable": callableCandidates,
   // The first positional of `cf cell get`/`cf cell set` is a cell path unless the caller
   // writes a canonical address there, and an address is pasted rather than
@@ -1218,6 +1227,8 @@ const ARGUMENT_PROVIDERS: Readonly<
     Promise.resolve(directive({ kind: "files", glob: "*.key" })),
   "piece getsrc:outpath": () => Promise.resolve(directive({ kind: "files" })),
   "deps update:file": () => Promise.resolve(directive({ kind: "files" })),
+  "delegation show:file": () =>
+    Promise.resolve(directive({ kind: "files", glob: "*.json" })),
   "fuse mount:mountpoint": () => Promise.resolve(directive({ kind: "dirs" })),
   "fuse unmount:mountpoint": () => Promise.resolve(directive({ kind: "dirs" })),
   "wish:target": () => Promise.resolve(wishTargetCandidates()),
@@ -1232,8 +1243,10 @@ const ARGUMENT_PROVIDERS: Readonly<
   // candidates.
   "space clone:space": () => spaceCandidates(),
   "space fingerprint:space": () => spaceCandidates(),
-  // `compact` takes a store file by path, never a space name.
+  // `compact` and `reap` take a store file by path, never a space name.
   "space compact:store": () =>
+    Promise.resolve(directive({ kind: "files", glob: "*.sqlite" })),
+  "space reap:store": () =>
     Promise.resolve(directive({ kind: "files", glob: "*.sqlite" })),
   // `verify`/`reset` take a clone directory built by `space clone`.
   "space verify:dir": () => Promise.resolve(directive({ kind: "dirs" })),

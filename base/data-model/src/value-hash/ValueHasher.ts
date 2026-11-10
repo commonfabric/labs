@@ -10,12 +10,12 @@ import {
   type IncrementalHasher,
   sha256,
 } from "@commonfabric/content-hash";
-import { encodeULEB128 } from "@commonfabric/leb128";
-import { bigintToMinimalTwosComplement } from "@commonfabric/utils/bigint";
-import { LRUCache } from "@commonfabric/utils/cache";
-import { IndexTrackingStack } from "@commonfabric/utils/index-tracking-stack";
-import { utf8SortedKeysOf } from "@commonfabric/utils/utf8";
-import { encodeWtf8 } from "@commonfabric/utils/wtf8";
+import { encodeULEB128 } from "@commonfabric/bytes/leb128";
+import { bigintToMinimalTwosComplement } from "@commonfabric/bytes/bigint";
+import { LRUCache } from "@commonfabric/collections/cache";
+import { IndexTrackingStack } from "@commonfabric/collections/index-tracking-stack";
+import { utf8SortedKeysOf } from "@commonfabric/text/utf8";
+import { encodeWtf8 } from "@commonfabric/text/wtf8";
 
 import type {
   FabricArray,
@@ -26,7 +26,7 @@ import type {
 } from "@/interface.ts";
 import { tagOfFabricValueElseNull, VALUE_TAGS } from "@/types";
 import { debugStr } from "@/value-debug";
-import { BaseFabricInstance } from "@/fabric-bases";
+import type { BaseFabricInstance } from "@/fabric-bases";
 import { codecOf, NULL_LIVE_ENVIRONMENT } from "@/codec-common";
 import {
   FabricBytes,
@@ -180,9 +180,9 @@ function getStringRep(value: string) {
  * so it serves exactly one hash: it is made, fed a value, and asked for a
  * digest.
  *
- * What it feeds is a value's type-tagged bytes, in the format of the byte-level
- * spec, into a single SHA-256 context; Section 6 of the formal spec has the
- * whole algorithm.
+ * What it feeds is a value's type-tagged bytes into a single SHA-256 context.
+ * Section 4 of `2-hash-byte-format.md` gives the byte stream, and Section 6 of
+ * `1-fabric-values.md` the properties it has.
  */
 export class ValueHasher {
   /** Hasher which receives the value's bytes. */

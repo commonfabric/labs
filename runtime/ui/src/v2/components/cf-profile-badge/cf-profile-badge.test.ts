@@ -1,13 +1,14 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
-import { NAME } from "@commonfabric/runtime-client";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { type CellHandle, NAME } from "@commonfabric/runtime-client";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import {
   CFProfileBadge,
   profileDisplayFromValue,
   profileTooltipFromValue,
 } from "./index.ts";
+import { profileSpaceOf } from "./cf-profile-badge.ts";
 import { identitySeal } from "./identity-seal.ts";
 
 const OWNER_DID = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
@@ -85,6 +86,7 @@ function resolvedInSpace(
       },
     }),
     asSchema: () => ({
+      key: () => faceField(undefined),
       subscribe: (cb: (val: unknown, label?: unknown) => void) => {
         cb({ name: "Ada" }, representsPrincipalLabel(OWNER_DID));
         delivered.resolve();
@@ -127,6 +129,52 @@ function runtimeWithOtherRoot() {
   };
 }
 
+/**
+ * A runtime in which each space of `roots` links the document named there as
+ * its root, counting the times a space cell is opened. Opening one fails with
+ * `failure` while `failing` is set.
+ */
+function countingRuntime(roots: Record<string, string>, failure?: Error) {
+  let opened = 0;
+  let failing = failure !== undefined;
+  return {
+    signal: new AbortController().signal,
+    getCell: (space: string) => {
+      opened++;
+      if (failing) return Promise.reject(failure);
+      return Promise.resolve({
+        sync: () => Promise.resolve(),
+        key: () => ({
+          resolveAsCell: () =>
+            Promise.resolve({
+              ref: () => ({ path: [] }),
+              space: () => space,
+              id: () => roots[space],
+            }),
+        }),
+      });
+    },
+
+    /** How many times a space cell has been opened. */
+    opened: () => opened,
+
+    /** Lets the space cells open from here on. */
+    recover: () => {
+      failing = false;
+    },
+  };
+}
+
+/** The root cell `id` of `space`, read through `runtime`. */
+function rootCell(runtime: unknown, space: string, id: string): CellHandle {
+  return {
+    ref: () => ({ path: [] }),
+    space: () => space,
+    id: () => id,
+    runtime: () => runtime,
+  } as unknown as CellHandle;
+}
+
 function markConnected(element: CFProfileBadge, isConnected = true): void {
   Object.defineProperty(element, "isConnected", {
     configurable: true,
@@ -148,12 +196,54 @@ function navResolvedCell(
     id: () => opts.id ?? "fid1:piece",
     runtime: runtimeWithOtherRoot,
     asSchema: () => ({
+      key: () => faceField(undefined),
       subscribe: (cb: (val: unknown) => void) => {
         cb({ name: "Ada" });
         return () => {};
       },
     }),
     getCfcLabel: () => Promise.resolve(undefined),
+  };
+}
+
+/**
+ * A handle on the cell holding one field of a profile's face: it resolves to
+ * itself, and its subscription delivers `value` with `label`. `id` tells two
+ * fields apart, and `delivered` resolves once the subscription has delivered.
+ */
+function faceField(value: unknown, label?: unknown, id = "of:face") {
+  const delivered = deferred<void>();
+  const cell = {
+    ref: () => ({ space: "did:key:zSpace", id, path: [] }),
+    space: () => "did:key:zSpace",
+    id: () => id,
+    runtime: runtimeWithOtherRoot,
+    resolveAsCellWithWriteTarget: () =>
+      Promise.resolve({ cell, writeTarget: cell }),
+    subscribe: (
+      cb: (
+        val: unknown,
+        label?: unknown,
+        delivery?: { cfcLabelCurrent: boolean },
+      ) => void,
+    ) => {
+      cb(value, label, { cfcLabelCurrent: true });
+      delivered.resolve();
+      return () => {};
+    },
+    delivered: delivered.promise,
+  };
+  return cell;
+}
+
+/** The label a write of a face field by `subject` stores on its cell. */
+function writtenBy(subject: string) {
+  return {
+    version: 1,
+    entries: [{
+      path: [],
+      label: { integrity: [{ kind: "represents-principal", subject }] },
+    }],
   };
 }
 
@@ -369,6 +459,7 @@ describe("CFProfileBadge", () => {
       const resolvedCell = {
         ref: () => ({ path: [] }),
         asSchema: () => ({
+          key: () => faceField(undefined),
           subscribe: () => {
             subscribeCount++;
             return () => {};
@@ -409,6 +500,7 @@ describe("CFProfileBadge", () => {
         id: () => "fid1:piece",
         runtime: runtimeWithOtherRoot,
         asSchema: () => ({
+          key: () => faceField(undefined),
           subscribe: (cb: (val: unknown) => void) => {
             subscribeCount++;
             cb({ name: "Ada", avatar: undefined });
@@ -438,6 +530,65 @@ describe("CFProfileBadge", () => {
       el.disconnectedCallback();
       expect(unsubscribeCount).toBe(1);
       expect(el._unsubscribe).toBeUndefined();
+    });
+
+    describe("an update that reports the profile changed", () => {
+      /** A profile binding that counts the times it is resolved. */
+      const countingProfile = () => {
+        let resolutions = 0;
+        return {
+          cell: {
+            resolveAsCell: () => {
+              resolutions++;
+              return Promise.resolve(navResolvedCell({ path: [] }));
+            },
+          } as unknown as CFProfileBadge["profile"],
+          resolutions: () => resolutions,
+        };
+      };
+      const profileChanged = new Map([["profile", undefined]]);
+
+      it("resolves the profile once when it was bound before the element connected", async () => {
+        const profile = countingProfile();
+        const badge = new CFProfileBadge();
+        markConnected(badge, true);
+        badge.profile = profile.cell;
+
+        // Connecting resolves the profile, and the first update after it
+        // reports the profile changed.
+        const resolving = badge.accessForTestingOnly.resolve();
+        badge.accessForTestingOnly.willUpdate(profileChanged);
+        await resolving;
+
+        expect(profile.resolutions()).toBe(1);
+      });
+
+      it("resolves a profile bound in place of the one resolved", async () => {
+        const first = countingProfile();
+        const second = countingProfile();
+        const badge = new CFProfileBadge();
+        markConnected(badge, true);
+        badge.profile = first.cell;
+        await badge.accessForTestingOnly.resolve();
+
+        badge.profile = second.cell;
+        badge.accessForTestingOnly.willUpdate(profileChanged);
+
+        expect(second.resolutions()).toBe(1);
+      });
+
+      it("resolves the same profile again after a disconnection", async () => {
+        const profile = countingProfile();
+        const badge = new CFProfileBadge();
+        markConnected(badge, true);
+        badge.profile = profile.cell;
+        await badge.accessForTestingOnly.resolve();
+
+        badge.disconnectedCallback();
+        badge.accessForTestingOnly.willUpdate(profileChanged);
+
+        expect(profile.resolutions()).toBe(2);
+      });
     });
   });
 
@@ -472,6 +623,7 @@ describe("CFProfileBadge", () => {
         id: () => "fid1:piece",
         runtime: runtimeWithOtherRoot,
         asSchema: () => ({
+          key: () => faceField(undefined),
           subscribe: (cb: (val: unknown, label?: unknown) => void) => {
             deliver = cb;
             return () => {};
@@ -522,6 +674,7 @@ describe("CFProfileBadge", () => {
         id: () => "fid1:piece",
         runtime: runtimeWithOtherRoot,
         asSchema: () => ({
+          key: () => faceField(undefined),
           subscribe: (cb: (val: unknown, label?: unknown) => void) => {
             deliver = cb;
             return () => {};
@@ -1016,9 +1169,196 @@ describe("CFProfileBadge", () => {
     });
   });
 
-  describe("profileDisplayFromValue", () => {
+  describe("profileSpaceOf()", () => {
+    const SPACE = "did:key:z6MkiTBz1ymuepAQ4HEHYSF1H8quG5GLVVQR3djdX3mDooWp";
+    const OTHER_SPACE =
+      "did:key:z6MkjchhfUsD6mmvni8mCdXHw216Xrm9bQe2mBH1P5RDjVJG";
+
+    it("reads a space's root once for calls that overlap", async () => {
+      const runtime = countingRuntime({ [SPACE]: "of:profile" });
+
+      const spaces = await Promise.all([
+        profileSpaceOf(rootCell(runtime, SPACE, "of:profile")),
+        profileSpaceOf(rootCell(runtime, SPACE, "of:roster-entry")),
+        profileSpaceOf(rootCell(runtime, SPACE, "of:profile")),
+      ]);
+
+      expect(spaces).toEqual([SPACE, undefined, SPACE]);
+      expect(runtime.opened()).toBe(1);
+    });
+
+    it("reads a space's root again for a call made after a read has finished", async () => {
+      const runtime = countingRuntime({ [SPACE]: "of:profile" });
+
+      await profileSpaceOf(rootCell(runtime, SPACE, "of:profile"));
+      const space = await profileSpaceOf(
+        rootCell(runtime, SPACE, "of:profile"),
+      );
+
+      expect(space).toBe(SPACE);
+      expect(runtime.opened()).toBe(2);
+    });
+
+    it("reads each space's root for overlapping calls about different spaces", async () => {
+      const runtime = countingRuntime({
+        [SPACE]: "of:profile",
+        [OTHER_SPACE]: "of:room",
+      });
+
+      const spaces = await Promise.all([
+        profileSpaceOf(rootCell(runtime, SPACE, "of:profile")),
+        profileSpaceOf(rootCell(runtime, OTHER_SPACE, "of:profile")),
+      ]);
+
+      expect(spaces).toEqual([SPACE, undefined]);
+      expect(runtime.opened()).toBe(2);
+    });
+
+    it("reads a space's root through each runtime that asks", async () => {
+      const first = countingRuntime({ [SPACE]: "of:profile" });
+      const second = countingRuntime({ [SPACE]: "of:room" });
+
+      const spaces = await Promise.all([
+        profileSpaceOf(rootCell(first, SPACE, "of:profile")),
+        profileSpaceOf(rootCell(second, SPACE, "of:profile")),
+      ]);
+
+      expect(spaces).toEqual([SPACE, undefined]);
+      expect(first.opened()).toBe(1);
+      expect(second.opened()).toBe(1);
+    });
+
+    it("rejects every overlapping call when the root cannot be read, and reads again for a later call", async () => {
+      const failure = new Error("the space's root cannot be read");
+      const runtime = countingRuntime({ [SPACE]: "of:profile" }, failure);
+
+      const outcomes = await Promise.allSettled([
+        profileSpaceOf(rootCell(runtime, SPACE, "of:profile")),
+        profileSpaceOf(rootCell(runtime, SPACE, "of:profile")),
+      ]);
+      runtime.recover();
+      const space = await profileSpaceOf(
+        rootCell(runtime, SPACE, "of:profile"),
+      );
+
+      expect(outcomes).toEqual([
+        { status: "rejected", reason: failure },
+        { status: "rejected", reason: failure },
+      ]);
+      expect(space).toBe(SPACE);
+      expect(runtime.opened()).toBe(2);
+    });
+
+    it("returns `undefined` for a cell below a document's root, reading nothing", async () => {
+      const runtime = countingRuntime({ [SPACE]: "of:profile" });
+      const field = {
+        ...rootCell(runtime, SPACE, "of:profile"),
+        ref: () => ({ path: ["name"] }),
+      } as unknown as CellHandle;
+
+      expect(await profileSpaceOf(field)).toBeUndefined();
+      expect(runtime.opened()).toBe(0);
+    });
+  });
+
+  describe("face", () => {
+    const VISITOR_DID =
+      "did:key:z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH";
     const picture = new FabricBytes(new Uint8Array([0x89, 0x50, 0x4e, 0x47]));
 
+    /**
+     * The face a badge draws for a profile whose label names `owner`, and
+     * whose picture and avatar cells hold what `fields` says, each as its
+     * value and the label of its cell. The profile's label is the one the
+     * worker read with its value only when `current`.
+     */
+    async function faceOf(
+      owner: string | undefined,
+      fields: Record<"picture" | "avatar", [unknown, unknown]>,
+      current = true,
+    ) {
+      const cells = {
+        picture: faceField(...fields.picture, "of:picture"),
+        avatar: faceField(...fields.avatar, "of:avatar"),
+      };
+      const badge = badgeOver({
+        ref: () => ({ path: [] }),
+        space: () => "did:key:zSpace",
+        id: () => "fid1:piece",
+        runtime: runtimeWithOtherRoot,
+        asSchema: () => ({
+          key: (field: "picture" | "avatar") => cells[field],
+          subscribe: (
+            cb: (
+              val: unknown,
+              label?: unknown,
+              delivery?: { cfcLabelCurrent: boolean },
+            ) => void,
+          ) => {
+            cb(
+              { name: "Ada" },
+              owner === undefined ? undefined : representsPrincipalLabel(owner),
+              { cfcLabelCurrent: current },
+            );
+            return () => {};
+          },
+        }),
+      });
+      await badge.accessForTestingOnly.resolve();
+      await Promise.all([cells.picture.delivered, cells.avatar.delivered]);
+      // The fakes answer through settled promises, so one zero-delay turn
+      // finishes every resolve the face observation started.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      return badge.accessForTestingOnly.face;
+    }
+
+    it("draws the picture its owner set", async () => {
+      expect(
+        await faceOf(OWNER_DID, {
+          picture: [picture, writtenBy(OWNER_DID)],
+          avatar: ["🦊", writtenBy(OWNER_DID)],
+        }),
+      ).toEqual({ picture, avatar: undefined });
+    });
+
+    it("draws the owner's avatar in place of a picture someone else set", async () => {
+      expect(
+        await faceOf(OWNER_DID, {
+          picture: [picture, writtenBy(VISITOR_DID)],
+          avatar: [" 🦊 ", writtenBy(OWNER_DID)],
+        }),
+      ).toEqual({ picture: undefined, avatar: "🦊" });
+    });
+
+    it("draws neither a picture stored without a label nor an avatar someone else set", async () => {
+      expect(
+        await faceOf(OWNER_DID, {
+          picture: [picture, undefined],
+          avatar: ["🦊", writtenBy(VISITOR_DID)],
+        }),
+      ).toEqual({ picture: undefined, avatar: undefined });
+    });
+
+    it("draws no face while the profile's label is not the one the worker read with its value", async () => {
+      expect(
+        await faceOf(OWNER_DID, {
+          picture: [picture, writtenBy(OWNER_DID)],
+          avatar: ["🦊", writtenBy(OWNER_DID)],
+        }, false),
+      ).toEqual({ picture: undefined, avatar: undefined });
+    });
+
+    it("draws no face for a profile whose label names no one", async () => {
+      expect(
+        await faceOf(undefined, {
+          picture: [picture, writtenBy(OWNER_DID)],
+          avatar: ["🦊", writtenBy(OWNER_DID)],
+        }),
+      ).toEqual({ picture: undefined, avatar: undefined });
+    });
+  });
+
+  describe("profileDisplayFromValue", () => {
     it("prefers the profile's name field over the cell [NAME]", () => {
       // On main, profile-home's [NAME] is the static placeholder "Profile"
       // (profile-home.tsx:303); the editable `name` field is the real name.
@@ -1027,47 +1367,16 @@ describe("CFProfileBadge", () => {
         name: "Ben",
         avatar: "https://example.com/ben.png",
       };
-      expect(profileDisplayFromValue(val)).toEqual({
-        name: "Ben",
-        picture: undefined,
-        avatar: "https://example.com/ben.png",
-      });
+      expect(profileDisplayFromValue(val)).toEqual({ name: "Ben" });
     });
 
     it("falls back to the cell [NAME] when the name field is blank", () => {
       const val = { [NAME]: "Ada Lovelace", name: "  ", avatar: "🦊" };
-      expect(profileDisplayFromValue(val)).toEqual({
-        name: "Ada Lovelace",
-        picture: undefined,
-        avatar: "🦊",
-      });
-    });
-
-    it("returns the picture's bytes beside the avatar text", () => {
-      const val = { name: "Ada", picture, avatar: "🦊" };
-      expect(profileDisplayFromValue(val)).toEqual({
-        name: "Ada",
-        picture,
-        avatar: "🦊",
-      });
-    });
-
-    it("returns no picture for empty bytes or a value that is not bytes", () => {
-      for (
-        const notAPicture of [
-          new FabricBytes(new Uint8Array()),
-          "data:image/png;base64,iVBORw0KGgo=",
-          { length: 4 },
-        ]
-      ) {
-        expect(
-          profileDisplayFromValue({ name: "Ada", picture: notAPicture }),
-        ).toEqual({ name: "Ada", picture: undefined, avatar: undefined });
-      }
+      expect(profileDisplayFromValue(val)).toEqual({ name: "Ada Lovelace" });
     });
 
     it("returns undefined fields for empty / non-object input", () => {
-      const none = { name: undefined, picture: undefined, avatar: undefined };
+      const none = { name: undefined };
       expect(profileDisplayFromValue(undefined)).toEqual(none);
       expect(profileDisplayFromValue("nope")).toEqual(none);
       expect(profileDisplayFromValue({})).toEqual(none);

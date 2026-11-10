@@ -20,8 +20,8 @@ import {
   readObject,
   testIdentityKey,
 } from "@commonfabric/test-support/records";
-import { isObjectOrArray } from "@commonfabric/utils/types";
-import { dashboardCacheFile } from "./history-files.ts";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
+import { CacheFile, dashboardCacheFile } from "./history-files.ts";
 
 export const TEST_RECORDS_BUCKET = "cf-ci-metadata";
 export const TEST_RECORDS_CI_PREFIX = "labs/test-records/submissions/ci";
@@ -203,18 +203,18 @@ export interface TestSeries {
 }
 
 export class TestRecordsHistoryStore {
-  #file: string;
+  #file: CacheFile;
   #days = new Map<string, DayAggregate[]>();
 
   constructor(file: string = dashboardCacheFile("test-records-history.json")) {
-    this.#file = file;
+    this.#file = new CacheFile(file);
   }
 
   /** Loads the cache, ignoring a missing or invalid file. */
   async load(): Promise<void> {
     let parsed: unknown;
     try {
-      parsed = JSON.parse(await Deno.readTextFile(this.#file));
+      parsed = JSON.parse(await Deno.readTextFile(this.#file.path));
     } catch {
       return;
     }
@@ -228,9 +228,7 @@ export class TestRecordsHistoryStore {
       days[day] = aggregates;
     }
     const stored: StoredHistory = { version: 2, days };
-    const temporary = `${this.#file}.tmp-${crypto.randomUUID()}`;
-    await Deno.writeTextFile(temporary, JSON.stringify(stored));
-    await Deno.rename(temporary, this.#file);
+    await this.#file.locked(() => this.#file.write(JSON.stringify(stored)));
   }
 
   /** Days the cache holds. */

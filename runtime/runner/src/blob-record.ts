@@ -9,7 +9,7 @@
 
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import type { URI } from "@commonfabric/memory/interface";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 /** The most bytes a blob's file name may take as UTF-8. */
 export const MAX_BLOB_FILE_NAME_BYTES = 1024;

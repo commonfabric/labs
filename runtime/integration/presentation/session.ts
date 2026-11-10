@@ -1,6 +1,7 @@
 import { basename, join } from "@std/path";
 
-import { maxOf, minOf } from "@commonfabric/utils/math";
+import { maxOf, minOf } from "@commonfabric/collections/math";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 
 import type { Page } from "../page.ts";
 import type { PresentationConfig, PresentationParticipant } from "./config.ts";
@@ -130,9 +131,7 @@ export class PresentationSession {
       }
     } catch (cause) {
       state.manifest = state.recorder.manifest();
-      state.manifest.error = cause instanceof Error
-        ? cause.message
-        : String(cause);
+      state.manifest.error = describeFailure(cause);
       this.#manifest.status = "capture-failed";
       this.#manifest.error ??= state.manifest.error;
     } finally {
@@ -168,9 +167,7 @@ export class PresentationSession {
     } catch (cause) {
       step.failed = true;
       this.#manifest.status = "test-failed";
-      this.#manifest.error ??= cause instanceof Error
-        ? cause.message
-        : String(cause);
+      this.#manifest.error ??= describeFailure(cause);
       throw cause;
     } finally {
       step.endedAtMs = this.now();
@@ -249,9 +246,7 @@ export class PresentationSession {
       console.log(`Demo video: ${outputPath}`);
     } catch (cause) {
       this.#manifest.status = "encode-failed";
-      this.#manifest.error = cause instanceof Error
-        ? cause.message
-        : String(cause);
+      this.#manifest.error = describeFailure(cause);
       await this.writeManifest();
       throw cause;
     }

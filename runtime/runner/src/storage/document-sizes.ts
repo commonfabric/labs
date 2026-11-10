@@ -31,7 +31,7 @@ import type { EntityDocument } from "@commonfabric/memory/v2";
 import {
   approximateJsonSize,
   type InstanceMeasure,
-} from "@commonfabric/utils/approximate-json-size";
+} from "@commonfabric/json/approximate-json-size";
 
 /** One space's share of the documents a storage manager holds. */
 export type SpaceDocumentSizes = {

@@ -3,8 +3,8 @@ import { CompilerError, TransformerError } from "@commonfabric/js-compiler";
 import { SlugAssignedError } from "@commonfabric/piece";
 import { SlugResolutionError } from "@commonfabric/runner";
 import { ValidationError } from "@cliffy/command";
+import { renderCliError } from "../lib/cli-error.ts";
 import { IdentityKeyfileError } from "../lib/identity.ts";
-import { renderCliError } from "../mod.ts";
 
 Deno.test("renderCliError prints a TransformerError's message, not its stack", () => {
   const e = new TransformerError([], new Map());

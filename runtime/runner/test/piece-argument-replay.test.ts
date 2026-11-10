@@ -28,7 +28,7 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { FabricValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 
 import {
   type PieceAddress,
@@ -196,8 +196,18 @@ const runChanged = async (
   runtime: Runtime,
   cell: Awaited<ReturnType<typeof startedPiece>>["cell"],
   files: { name: string; contents: string }[],
+  { releaseWhileRestarting = false } = {},
 ) => {
   runtime.runner.stop(cell);
+  // The release the stop asks for, and a second pass after it, land while
+  // the program compiles and the piece starts again: what the piece read
+  // before it stopped is dropped, and its start loads it again.
+  const releases = releaseWhileRestarting
+    ? runtime.releaseUnreadDocuments().then(async () => {
+      await runtime.scheduler.idle();
+      await runtime.storageManager.releaseUnreadDocuments?.();
+    })
+    : Promise.resolve();
   const tx = runtime.edit();
   const pattern = await compiledParent(runtime, files, tx);
   const running = runtime.run(tx, pattern, undefined, cell);
@@ -205,6 +215,8 @@ const runChanged = async (
   await running.pull();
   await runtime.idle();
   await cell.pull();
+  await releases;
+  await runtime.idle();
 };
 
 /** The piece a `setup-stored-slot-dropped` warning names, in `space`. */
@@ -386,6 +398,31 @@ describe("piece argument replay", () => {
 
           expect(cell.key("kept").get()).toBe(0);
           expect(cell.key("label").get()).toBe("mine");
+        });
+      });
+
+      it("sets the changed code up once when what the piece read is released while it restarts", async () => {
+        await withRuntime(async (runtime) => {
+          const { cell } = await startedPiece(
+            runtime,
+            parentProgram,
+            "child-input-narrowed-released",
+          );
+
+          const warnings = await warningsDuring(
+            "setup-stored-slot-dropped",
+            () =>
+              runChanged(
+                runtime,
+                cell,
+                changedFiles(narrowedChild, narrowedParent),
+                { releaseWhileRestarting: true },
+              ),
+          );
+
+          expect(warnings.length).toBe(1);
+          expect(warnings[0]).toContain("does not match type number");
+          expect(cell.key("kept").get()).toBe(0);
         });
       });
 

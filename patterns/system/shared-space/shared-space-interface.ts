@@ -9,6 +9,8 @@ import {
   isSharedSpaceCatalog,
   isSharedSpaceProfileRecord,
   isSharedSpaceProfileStorage,
+  type SharedSpaceDeletionMark,
+  type SharedSpaceDeletionResult,
   type SharedSpaceEntry,
   type SharedSpaceMembershipChange,
   type SharedSpaceMembershipResult,
@@ -17,15 +19,24 @@ import {
   type SharedSpaceRegistrationResult,
   type SharedSpaceRemoval,
   type SharedSpaceRemovalResult,
+  type SharedSpaceRetitle,
+  type SharedSpaceRetitleResult,
 } from "./shared-space-catalog.ts";
 
-/** Commands for admitting a vetted space and choosing its membership. */
+/**
+ * Commands for admitting a vetted space, choosing its membership, and
+ * recording that its space is deleted.
+ */
 export interface SharedSpaceCommands {
   register: Stream<SharedSpaceRegistration, SharedSpaceRegistrationResult>;
   changeMembership: Stream<
     SharedSpaceMembershipChange,
     SharedSpaceMembershipResult
   >;
+  /** Absent from a Home older than this stream. */
+  retitle?: Stream<SharedSpaceRetitle, SharedSpaceRetitleResult>;
+  /** Absent from a Home older than this stream. */
+  markDeleted?: Stream<SharedSpaceDeletionMark, SharedSpaceDeletionResult>;
 }
 
 /** An application's undo of its own import, under the removal contract. */
@@ -33,10 +44,16 @@ export interface SharedSpaceImportCommands {
   remove: Stream<SharedSpaceRemoval, SharedSpaceRemovalResult>;
 }
 
-/** Membership partitions for one kind, including unfamiliar stored states. */
+/**
+ * Membership partitions for one kind: the saved and archived entries, those
+ * whose space is deleted, and those in a stored state this reader does not
+ * know. `deleted` is absent from a view a Home older than the list produced,
+ * so a reader takes its absence as empty.
+ */
 export interface SharedSpaceKindView {
   saved: SharedSpaceEntry[];
   archived: SharedSpaceEntry[];
+  deleted?: SharedSpaceEntry[];
   other: SharedSpaceEntry[];
 }
 
@@ -56,6 +73,7 @@ export type SharedSpaceCollectionView = SharedSpaceUnavailable | {
   entries: Record<string, SharedSpaceEntry>;
   saved: SharedSpaceEntry[];
   archived: SharedSpaceEntry[];
+  deleted?: SharedSpaceEntry[];
   other: SharedSpaceEntry[];
   byKind: Record<string, SharedSpaceKindView>;
 };
@@ -116,8 +134,10 @@ function partition(entries: SharedSpaceEntry[]): SharedSpaceKindView {
   return {
     saved: entries.filter((entry) => entry.state === "saved"),
     archived: entries.filter((entry) => entry.state === "archived"),
+    deleted: entries.filter((entry) => entry.state === "deleted"),
     other: entries.filter((entry) =>
-      entry.state !== "saved" && entry.state !== "archived"
+      entry.state !== "saved" && entry.state !== "archived" &&
+      entry.state !== "deleted"
     ),
   };
 }
@@ -126,15 +146,18 @@ function partition(entries: SharedSpaceEntry[]): SharedSpaceKindView {
 function byKind(
   entries: SharedSpaceEntry[],
 ): Record<string, SharedSpaceKindView> {
-  const groups = new Map<string, SharedSpaceKindView>();
+  // Every group this reader makes has all four lists.
+  const groups = new Map<string, Required<SharedSpaceKindView>>();
   for (const entry of entries) {
     const group = groups.get(entry.kind) ??
-      { saved: [], archived: [], other: [] };
+      { saved: [], archived: [], deleted: [], other: [] };
     groups.set(entry.kind, group);
     const list = entry.state === "saved"
       ? group.saved
       : entry.state === "archived"
       ? group.archived
+      : entry.state === "deleted"
+      ? group.deleted
       : group.other;
     list.push(entry);
   }

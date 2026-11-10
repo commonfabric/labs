@@ -23,14 +23,14 @@ import { isLink } from "@commonfabric/runner";
 import { describeSinkReleaseRefusal } from "@commonfabric/runner/cfc";
 import { localRefTarget } from "@commonfabric/runner/cfc/schema-sanitization";
 import { createLLMFriendlyLink } from "@commonfabric/runner/shared";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import {
   HANDLE_TOKEN_PATTERN,
   REFERENT_TOKEN_PATTERN,
 } from "../contracts/handle-table.ts";
 import { handleRefAddressKey, resolveHandleRef } from "../handle-table.ts";
 import type { HarnessToolDescriptor } from "../contracts/tool-descriptor.ts";
-import { errorMessage } from "../error-message.ts";
 import { scrubBareFabricIdentifiers } from "../fabric-identifier-scrub.ts";
 import { schemaShapeOnly } from "../schema-shape.ts";
 import {
@@ -430,7 +430,7 @@ export const callVerbTool: HarnessToolDefinition<
             [],
           ) !== undefined;
     } catch (error) {
-      return unreadable(errorMessage(error));
+      return unreadable(describeFailure(error));
     } finally {
       releaseTx.abort("call_verb release measurement");
     }
@@ -486,7 +486,7 @@ export const callVerbTool: HarnessToolDefinition<
         resultRef,
       };
     } catch (error) {
-      return unreadable(errorMessage(error));
+      return unreadable(describeFailure(error));
     }
   },
 };

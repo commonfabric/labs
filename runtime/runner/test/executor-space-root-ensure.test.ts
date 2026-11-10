@@ -32,7 +32,7 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 import type { FabricValue, JSONSchema } from "@commonfabric/api";
 import type { Signer, URI } from "@commonfabric/memory/interface";
 import {
@@ -81,6 +81,7 @@ import {
   getPatternSource,
   resolveEntryIdentity,
 } from "../src/index.ts";
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import { newSharedServer, TestStorageManager } from "./memory-v2-test-utils.ts";
 
 const spaceSigner = await Identity.fromPassphrase("space root ensure space");
@@ -135,6 +136,7 @@ class CidDroppingSessionFactory implements SessionFactory {
   ) {
     const client = await MemoryV2Client.connect({
       transport: this.#transport(),
+      instanceNames: namesInstancesByDefault(),
     });
     const session = await client.mount(
       space,
@@ -362,6 +364,42 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
     await runtime.storageManager.synced();
   };
 
+  /** Seed a genesis that grants the space's own DID OWNER and declares
+   * `spaceKind`, as a profile's creation does
+   * (docs/specs/profile-delegation.md). ACLManager declares no kind, so
+   * the space identity commits the genesis over a session of its own. */
+  const seedSelfOwnedKind = async (spaceKind: string): Promise<void> => {
+    const client = await MemoryV2Client.connect({
+      transport: MemoryV2Client.loopback(server),
+      instanceNames: namesInstancesByDefault(),
+    });
+    try {
+      const session = await client.mount(
+        space,
+        { spaceKind },
+        (_space, _session, context) => ({
+          invocation: {
+            aud: context.audience,
+            challenge: context.challenge.value,
+          },
+          authorization: { principal: space },
+        }),
+      );
+      await session.transact({
+        spaceKind,
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [{
+          op: "set",
+          id: `of:${space}`,
+          value: { value: { [space]: "OWNER" } },
+        }],
+      });
+    } finally {
+      await client.close();
+    }
+  };
+
   const newSpaceServer = (
     policyOverride?: Partial<
       NonNullable<ConstructorParameters<typeof SpaceServer>[0]["policy"]>
@@ -458,6 +496,26 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
     expect(stats.rootEnsure.created).toBe(1);
     expect(stats.rootEnsure.skippedNoOwner).toBe(0);
     expect(stats.rootEnsure.failures).toBe(0);
+  });
+
+  it("activation of a self-owned space declaring a kind materializes the root from the default-app source under the space's own trust snapshot", async () => {
+    // A profile owns itself, so its owner is its own DID; declaring a kind
+    // is what keeps it from being taken for a home.
+
+    await seedSelfOwnedKind("profile");
+    const created = newSpaceServer();
+    expect(await created.activate()).toBe(true);
+
+    expect(await ensures.matching(() => true)).toBe("created");
+    const reader = clientRuntime(readerSigner);
+    const root = await resolveRootAfterEnsure(reader);
+    expect(getPatternSource(root)).toBe(DEFAULT_APP_PATTERN_SOURCE);
+    const creations = ensureTxs();
+    expect(creations.length).toBeGreaterThan(0);
+    for (const tx of creations) {
+      expect(tx.getCfcState().trustSnapshot?.actingPrincipal).toBe(space);
+    }
+    expect(stats.rootEnsure.skippedNoOwner).toBe(0);
   });
 
   it("park/re-activate converges on ONE root and leaves its source alone", async () => {
@@ -687,9 +745,11 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
     expect(await created.activate()).toBe(true);
     await resolveRootAfterEnsure(clientRuntime(readerSigner));
 
+    // The ensure brings the root into being outside any action, so its start
+    // attributes the root's own initializations: the mark names the root.
     const starts = mintedTxs.filter((tx) =>
       waveRunContextOf(tx)?.actionId?.startsWith("piece-start/") === true &&
-      tx.getCfcState().attributedInitialization
+      tx.getCfcState().attributedPieces.length > 0
     );
     expect(starts.length).toBeGreaterThan(0);
     for (const tx of starts) {
@@ -794,7 +854,7 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
     const resumedWave = Promise.withResolvers<void>();
     let demandReads = 0;
     const facade = new Proxy(server, {
-      get(target, property, receiver) {
+      get(target, property) {
         if (property === "demandForSpace") {
           return (...args: Parameters<typeof server.demandForSpace>) => {
             demandReads++;
@@ -807,7 +867,7 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
             resumedWave.resolve();
           };
         }
-        const value = Reflect.get(target, property, receiver);
+        const value = Reflect.get(target, property);
         return typeof value === "function" ? value.bind(target) : value;
       },
     });

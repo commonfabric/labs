@@ -9,6 +9,7 @@
  * to the branch has been delivered since it was last read.
  */
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { GREEN_BRANCHES } from "./config.ts";
 import {
   Freshness,
@@ -143,7 +144,7 @@ export class GreenBranch {
     } catch (error) {
       console.error(
         `updates of ${this.#repo} ${this.#branch} failed:`,
-        error instanceof Error ? error.message : String(error),
+        describeFailure(error),
       );
       return;
     }

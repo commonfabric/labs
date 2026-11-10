@@ -12,7 +12,10 @@
 
 import type { CfcLabelViewEntry } from "@commonfabric/runner/cfc";
 import { matchLLMFriendlyLink } from "@commonfabric/runner/shared";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 import { parseConsoleReference } from "./reference.ts";
 import {
   HANDLE_TOKEN_PATTERN,

@@ -14,7 +14,8 @@ import {
   fabricFromRealmValue,
   realmFromFabricValue,
 } from "@commonfabric/data-model/codecs";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import {
   BRIDGE_PROTOCOL,
@@ -455,7 +456,7 @@ export class RemoteCell<T = FabricValue> {
       ? error
       : new FabricBridgeError({
         code: "operation-failed",
-        message: error instanceof Error ? error.message : String(error),
+        message: describeFailure(error),
         resource: "resource" in this.#target
           ? this.#target.resource
           : undefined,
@@ -835,7 +836,7 @@ export class RemotePresence {
       ? cause
       : new FabricBridgeError({
         code: "operation-failed",
-        message: cause instanceof Error ? cause.message : String(cause),
+        message: describeFailure(cause),
         resource: this.#name,
       });
     // The room is reset before anyone hears of its end, so a listener that

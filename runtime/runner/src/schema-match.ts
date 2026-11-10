@@ -11,7 +11,7 @@
  * matchers differ exactly there ($defs threading vs fail-closed policy refs).
  */
 
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import type { JSONSchema, JSONSchemaObj } from "./builder/types.ts";
 
 export const arrayMatchesPositionally = (

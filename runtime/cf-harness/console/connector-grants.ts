@@ -25,8 +25,9 @@ import {
   validateRowLabelSpec,
 } from "@commonfabric/memory/sqlite/row-label";
 import { renderCellReference } from "@commonfabric/runner/shared";
-import { deepEqual } from "@commonfabric/utils/deep-equal";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { deepEqual } from "@commonfabric/js-values/deep-equal";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import { parseHandleRef } from "../src/handle-table.ts";
 import type { HarnessConnectorGrantSpec } from "../src/contracts/well-known-grants.ts";
@@ -308,9 +309,7 @@ const sourcesByHandle = (
     parsed = JSON.parse(piecesJson);
   } catch (error) {
     throw new Error(
-      `\`${piecesJsonPath}\` is not valid JSON: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      `\`${piecesJsonPath}\` is not valid JSON: ${describeFailure(error)}`,
     );
   }
   const pieces = asRecord(parsed)?.pieces;
@@ -370,7 +369,7 @@ export const resolveConnectorGrants = (
   } catch (error) {
     throw new Error(
       `\`${records.handlesJsonPath}\` is not valid JSON: ${
-        error instanceof Error ? error.message : String(error)
+        describeFailure(error)
       }`,
     );
   }
@@ -528,7 +527,7 @@ export const resolveConnectorGrants = (
       checkConnectorGrantSpec(grant);
     } catch (error) {
       skip(
-        error instanceof Error ? error.message : String(error),
+        describeFailure(error),
         "Correct the connection name, companion key, or CFC class in Loom, then restart the console.",
       );
       continue;
@@ -590,7 +589,7 @@ export const parseConnectorGrants = (
   } catch (error) {
     throw new Error(
       `\`CF_HARNESS_CONNECTOR_GRANTS\` is not valid JSON: ${
-        error instanceof Error ? error.message : String(error)
+        describeFailure(error)
       }`,
     );
   }
@@ -658,9 +657,7 @@ export const parseConnectorGrants = (
     } catch (error) {
       throw new Error(
         `\`CF_HARNESS_CONNECTOR_GRANTS\` grant \`${name}\` names a reference ` +
-          `that does not parse: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
+          `that does not parse: ${describeFailure(error)}`,
       );
     }
     return grant;

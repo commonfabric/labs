@@ -15,7 +15,7 @@ import {
   meetCfcObservationCeilings,
 } from "@commonfabric/runner/cfc";
 import type { JSONObject, JSONSchema, JSONValue } from "@commonfabric/api";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import {
   cfcLabelAtomTypes,

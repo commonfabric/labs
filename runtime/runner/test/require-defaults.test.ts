@@ -11,7 +11,7 @@ import { describe, it } from "@std/testing/bdd";
 
 import type { DeepDefault, Default } from "@commonfabric/api";
 import type { Cell } from "@commonfabric/runner";
-import type { MustBeTrue } from "@commonfabric/utils/types";
+import type { MustBeTrue } from "@commonfabric/js-values/types";
 
 import type {
   RequireDefaults,

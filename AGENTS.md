@@ -156,9 +156,13 @@ is the procedure: how to classify a change as host arrangement, conforming
 implementation, or semantic gap, how a gap is filed as a specs pull request, and
 what to do without access to the private specs repository. It governs
 `runtime/runner/src/cfc/` and `runtime/runner/src/cfc.ts`, the CFC tests under
-`runtime/runner/test/`, the render boundaries in
-`runtime/html/src/worker/reconciler.ts` and
-`runtime/html/src/worker/display-fit.ts`, the harness's CFC enforcement in
+`runtime/runner/test/`, the memory package's CFC sources
+(`runtime/memory/v2/cfc-*.ts` and `runtime/memory/v2/envelope-admission.ts`) and
+their tests (`runtime/memory/test/v2-cfc-*.test.ts` and
+`runtime/memory/test/v2-envelope-admission.test.ts`), the render boundaries in
+`runtime/html/src/worker/reconciler.ts`,
+`runtime/html/src/worker/display-fit.ts` and
+`runtime/html/src/worker/display-fit-atoms.ts`, the harness's CFC enforcement in
 `runtime/cf-harness/src/` (`cfc-*.ts`, `contracts/cfc-*.ts`,
 `sandbox/runsc-cfc-result.ts`), the harness console's display ceiling in
 `runtime/cf-harness/console/display-ceiling.ts`, and every
@@ -194,10 +198,11 @@ harness reports whether your session is sandboxed: if it is, request unsandboxed
 execution rather than trying the command there first. The browser-launching
 commands are the root `deno task test`; the unfiltered root
 `deno task integration`; unfiltered integration runs for `shell`, `patterns`, or
-`patterns-reload`; `deno task demo`; `deno-web-test`; and focused or filtered
-tests whose setup launches Chrome through Astral or `ShellIntegration`. Deno's
-`-A` flag does not escape the outer sandbox, and a browser startup failure
-caused by that sandbox is not test evidence. The complete rule is in
+`patterns-reload`; `deno task demo`; `deno task test-gap` when what it chose
+includes browser tests; `deno-web-test`; and focused or filtered tests whose
+setup launches Chrome through Astral or `ShellIntegration`. Deno's `-A` flag
+does not escape the outer sandbox, and a browser startup failure caused by that
+sandbox is not test evidence. The complete rule is in
 [`docs/development/TESTING.md`](docs/development/TESTING.md#browser-tests-in-agent-sandboxes).
 
 #### Starting Chrome without the launcher
@@ -212,11 +217,15 @@ show the developer a keychain password dialog
 
 Before committing, squashing, or otherwise getting a branch ready to be reviewed
 or landed: Execute repo-wide `deno fmt --check`, `deno lint` and
-`deno task check`, and run all relevant tests. The type check is its own step: a
-package's `test` task runs its tests, and whatever those happen to type-check on
-the way is no substitute for checking the workspace. Patterns are the exception
-`deno task check` does not own: `deno task cfcheck` is the authoritative pattern
-type-check.
+`deno task check`, and run all relevant tests. A pull request's continuous
+integration runs only part of the suite. `deno task test-gap` runs, within a
+ten-minute budget, the tests the change reaches through its imports that the
+pull request will not run; prefer it to choosing tests by hand
+(`docs/development/TESTING.md`, "Running what a pull request leaves out"). The
+type check is its own step: a package's `test` task runs its tests, and whatever
+those happen to type-check on the way is no substitute for checking the
+workspace. Patterns are the exception `deno task check` does not own:
+`deno task cfcheck` is the authoritative pattern type-check.
 
 When babysitting a PR through CI, look for review comments in addition to failed
 CI jobs. Cubic reviews nearly every PR here, and its review lands a few minutes

@@ -34,13 +34,28 @@ const ended = (store: LocalJobStore, id: string) =>
 const conversation = async () => {
   const dir = await Deno.makeTempDir();
   const store = LocalJobStore.open(":memory:");
-  const configPath = join(dir, "commands.json");
-  await Deno.writeTextFile(
-    configPath,
-    JSON.stringify({
-      cliPath: "/trusted/loom",
-      transport: { kind: "broker", queuePath: "/trusted/queue" },
-    }),
+  // The host's command endpoint, which records each command it is asked to
+  // run and the run id the request carried.
+  const commandCalls: { runId: string | null; id: unknown }[] = [];
+  const host = Deno.serve(
+    { hostname: "127.0.0.1", port: 0, onListen: () => {} },
+    async (request) => {
+      if (request.method === "GET") {
+        return Response.json({
+          commands: ["command.prior", "command.current"].map((id) => ({
+            id,
+            scope: "global",
+            inputs: { type: "object" },
+          })),
+        });
+      }
+      const body = await request.json();
+      commandCalls.push({
+        runId: request.headers.get("X-Loom-Agent-Run-Id"),
+        id: body.id,
+      });
+      return Response.json({ ok: true });
+    },
   );
   const script = scriptedJob((_request, index) => {
     if (index === 0) {
@@ -57,29 +72,16 @@ const conversation = async () => {
     }
     return answerReply(index === 2 ? "predecessor" : "follow-up");
   });
+  // A host process started for a command would be the `loom` CLI.
+  const hostProcesses: string[] = [];
   const createLoop = script.deps.createPromptLoop!;
-  const commandCalls: string[][] = [];
   script.deps.createPromptLoop = (options) =>
     createLoop({
       ...options,
       processRunner: {
         run(request) {
-          commandCalls.push(request.args);
-          return Promise.resolve({
-            stdout: JSON.stringify(
-              request.args[1] === "list"
-                ? {
-                  commands: ["command.prior", "command.current"].map((id) => ({
-                    id,
-                    scope: "global",
-                    inputs: { type: "object" },
-                  })),
-                }
-                : { ok: true },
-            ),
-            stderr: "",
-            exitCode: 0,
-          });
+          hostProcesses.push(request.command);
+          return Promise.reject(new Error("no host process may start"));
         },
       },
     });
@@ -91,7 +93,10 @@ const conversation = async () => {
       taskRole: "direct-command",
       retry: "never",
       model: "scripted",
-      loomCommandsConfig: configPath,
+      commands: {
+        url: `http://127.0.0.1:${host.addr.port}`,
+        actor: "agent:agent-runner",
+      },
     }]]),
     maxConcurrent: 1,
     workRoot: join(dir, "runs"),
@@ -144,9 +149,11 @@ const conversation = async () => {
       next,
       events: store.events(next.id),
       commandCalls,
+      hostProcesses,
     };
   } finally {
     await lane.stop();
+    await host.shutdown();
     store.close();
     await Deno.remove(dir, { recursive: true });
   }
@@ -171,9 +178,19 @@ describe("local-jobs/lane continuation", () => {
         event.body.tool
       ),
     ).toEqual(["run_command", "run_command", "submit_result", "submit_result"]);
-    expect(
-      commandCalls.filter((args) => args[1] === "run").map((args) => args[2]),
-    ).toEqual(["command.prior", "command.current"]);
+    expect(commandCalls.map((call) => call.id)).toEqual([
+      "command.prior",
+      "command.current",
+    ]);
+  });
+
+  it("runs each job's commands over the host endpoint with that job's id, starting no host process", async () => {
+    const { first, next, commandCalls, hostProcesses } = await conversation();
+    expect(commandCalls).toEqual([
+      { runId: first.id, id: "command.prior" },
+      { runId: next.id, id: "command.current" },
+    ]);
+    expect(hostProcesses).toEqual([]);
   });
 
   it("numbers follow-up steps from its own first delivered turn without changing ordinary jobs", async () => {

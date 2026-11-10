@@ -417,12 +417,13 @@ not spec debt; Phases 1–5 meet them wherever scoped state appears.
   RULED (S1; ledger LD5 ratified by the owner 2026-08-03 as the
   read half of the transaction identity model, protocol.md §1):
   reads may name an explicit
-  `entity_scope_key`, admissible only for a live lease holder on
-  the co-hosted memory server — its own space's lease; FP2 (RULED
-  2026-08-03) widened the original this-space-only condition so
-  cross-space scoped reads can name their foreign instance
-  (protocol.md §2's read row) — the same trust argument and
-  the same one equality check as derived writes. Without it a
+  `entity_scope_key`, admissible for the space's own serving session
+  — the same trust argument and the same one equality check as
+  derived writes — and, since owner routing R3 (2026-11-01), for a
+  session of the deployment's service identity from any process under
+  the named actor's READ grant on the space (protocol.md §2's read row
+  and its grant-scoped read), so a cross-space scoped read names its
+  foreign instance through the space's owner. Without it a
   SpaceServer read under its service envelope resolves
   `user:<serviceDID>` and returns an EMPTY instance silently:
   `resolveScopeKey` (`runtime/memory/v2.ts`) throws
@@ -501,8 +502,9 @@ machinery), and the M3 write path (§7 M3 — R-Q6b: explicit
 stays the lease check). Closed 2026-08-02 by S1, ratified by the
 owner 2026-08-03 (ledger LD5; the transaction identity model,
 protocol.md §1): the
-READ side — reads may name an explicit `entity_scope_key`, lease
-holder only (§7 M1, protocol.md §2) — and run identity for
+READ side — reads may name an explicit `entity_scope_key`, the
+space's serving session or the service identity under a grant (§7 M1,
+protocol.md §2) — and run identity for
 non-handler runs (§5). Still open (numbering stable — external
 citations use it):
 

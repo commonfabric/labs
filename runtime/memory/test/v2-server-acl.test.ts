@@ -20,6 +20,7 @@ import { readGenesisRoot, readSpaceKind } from "../v2/genesis-root.ts";
 import { getSlowQueries, Server, SessionRegistry } from "../v2/server.ts";
 import { resolveSpaceStoreUrl } from "../v2/storage-path.ts";
 import { sameAcl } from "../acl.ts";
+import { SpaceInviteError } from "../space-invites.ts";
 import {
   encodeMemoryBoundary,
   getMemoryProtocolFlags,
@@ -242,6 +243,40 @@ const initializeSpaceAcl = async (
     1,
   );
   expectExists(initialized.ok, "space identity should initialize the ACL");
+};
+
+/**
+ * Writes `space`'s deletion tombstone, naming `by`, through a second
+ * connection to its store, and returns the `seq` it is stored at. With
+ * `value`, writes that as the ACL document's value instead.
+ */
+const deleteElsewhere = async (
+  store: URL,
+  space: string,
+  by: string,
+  value: unknown = { deleted: { by } },
+): Promise<number> => {
+  const other = await Engine.open({
+    url: resolveSpaceStoreUrl(store, space as `did:${string}:${string}`),
+  });
+  try {
+    return Engine.applyCommit(other, {
+      sessionId: "deletion-stand-in",
+      space,
+      commitClass: "system",
+      commit: {
+        localSeq: Engine.serverSeq(other) + 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [{
+          op: "set",
+          id: `of:${space}`,
+          value: { value },
+        } as Operation],
+      },
+    }).seq;
+  } finally {
+    Engine.close(other);
+  }
 };
 
 describe("v2-server-acl", () => {
@@ -3060,6 +3095,73 @@ describe("v2-server-acl", () => {
     // principal and cannot initialize a genesis.
 
     describe("`enforce` mode", () => {
+      it("resolves no acting user for a self-owned space declaring a kind, and the space itself for one declaring none", async () => {
+        const server = createAclServer("memory://acl-ow31-self-owned-kind", {
+          mode: "enforce",
+          delegatingDids: [SERVICE],
+        });
+        // A self-owned space: its own DID is its one owner, as a profile
+        // space's is (docs/specs/profile-delegation.md), or a home space's.
+        const createSelfOwned = async (space: string, spaceKind?: string) => {
+          const authority = await connect(server);
+          const opened = await openSession(
+            authority,
+            space,
+            space,
+            spaceKind === undefined ? {} : { spaceKind },
+          );
+          expectExists(opened.ok);
+          await authority.connection.receive(encodeMemoryBoundary({
+            type: "transact",
+            requestId: nextRequestId("self-owned-genesis"),
+            space,
+            sessionId: opened.ok.sessionId,
+            commit: {
+              localSeq: 1,
+              reads: { confirmed: [], pending: [] },
+              ...(spaceKind === undefined ? {} : { spaceKind }),
+              operations: [{
+                op: "set" as const,
+                id: `of:${space}`,
+                value: { value: { [space]: "OWNER" } },
+              }],
+            },
+          }));
+          expect(nextResponse(authority.messages).error).toBeUndefined();
+        };
+        const profile = "did:key:z6Mk-acl-ow31-profile-space";
+        const home = "did:key:z6Mk-acl-ow31-home-space";
+        try {
+          await createSelfOwned(profile, "profile");
+          await createSelfOwned(home);
+          // The binding resolves nothing for the kinded space: its DID is no
+          // user to act as, so the envelope's own capability applies, and
+          // the serving identity holds none.
+          const kinded = await openSession(
+            await connect(server),
+            profile,
+            SERVICE,
+            {
+              actingAs: "space-owner",
+            },
+          );
+          expect(kinded.error?.name).toBe("AuthorizationError");
+          // The unkinded self-owned space is a home: the binding resolves
+          // its DID, and the open is admitted.
+          const unkinded = await openSession(
+            await connect(server),
+            home,
+            SERVICE,
+            {
+              actingAs: "space-owner",
+            },
+          );
+          expectExists(unkinded.ok, unkinded.error?.message);
+        } finally {
+          await server.close();
+        }
+      });
+
       it("admits a delegating principal acting as space-owner to read an owner-only space, and refuses its writes and ACL-document writes", async () => {
         const server = createAclServer("memory://acl-ow31-binding", {
           mode: "enforce",
@@ -3709,6 +3811,39 @@ describe("v2-server-acl", () => {
       }
     });
 
+    it("refuses an `OWNER`'s change to a deleted space, in `off` mode too", async () => {
+      for (const mode of ["off", "enforce"] as const) {
+        const directory = await Deno.makeTempDir({
+          prefix: `memory-served-acl-deleted-${mode}-`,
+        });
+        const store = toFileUrl(`${directory}/`);
+        const server = await servedAclServer(
+          "deleted",
+          mode,
+          { e1: ALICE },
+          store,
+        );
+        try {
+          const seq = await deleteElsewhere(store, space, ALICE);
+          const refusal = {
+            refused: `Space ${space} is deleted`,
+            deleted: true,
+          };
+          const change = served(ALICE, "e1", { [CAROL]: "WRITE" });
+
+          expect(await server.checkServedAclChange(change)).toEqual(refusal);
+          expect(
+            await server.commitServedAclChange({ ...change, ...envelope(1) }),
+          ).toEqual(refusal);
+          const engine = await server.engineForSpace(space);
+          expect(Engine.serverSeq(engine)).toBe(seq);
+        } finally {
+          await server.close();
+          await Deno.remove(directory, { recursive: true });
+        }
+      }
+    });
+
     it("admits a member's removal of its own entry and nothing else", async () => {
       const server = await servedAclServer("self-removal", "enforce", {
         e1: BOB,
@@ -4185,6 +4320,802 @@ describe("v2-server-acl", () => {
         await server.close();
         await Deno.remove(directory, { recursive: true });
       }
+    });
+  });
+
+  describe("an ACL refusal's `aclRevision`", () => {
+    it("names the `seq` at which the ACL document is stored, not the server's current sequence, and moves only with the document", async () => {
+      const server = createAclServer("memory://acl-revision-document-seq", {
+        mode: "enforce",
+      });
+      const space = "did:key:z6Mk-acl-revision-space";
+      try {
+        await initializeSpaceAcl(server, space, { [ALICE]: "OWNER" });
+        const alice = await connect(server);
+        const aliceSession = await openSession(alice, space, ALICE);
+        expectExists(aliceSession.ok);
+        const aliceId = aliceSession.ok.sessionId;
+        // The genesis ACL is the space's first commit.
+        const genesisSeq = 1;
+        let localSeq = 0;
+        for (const n of [1, 2, 3]) {
+          const write = await transactSet(
+            alice,
+            space,
+            aliceId,
+            `of:doc:${n}`,
+            { n },
+            ++localSeq,
+          );
+          expectExists(write.ok);
+        }
+
+        const bob = await connect(server);
+        const refused = await openSession(bob, space, BOB);
+        expect(refused.error).toMatchObject({
+          name: "AuthorizationError",
+          permanentEvidence: true,
+          aclRevision: genesisSeq,
+        });
+
+        const changed = await transactSet(
+          alice,
+          space,
+          aliceId,
+          `of:${space}`,
+          { [ALICE]: "OWNER", [CAROL]: "READ" },
+          ++localSeq,
+        );
+        expectExists(changed.ok);
+        const later = await transactSet(
+          alice,
+          space,
+          aliceId,
+          "of:doc:later",
+          { later: true },
+          ++localSeq,
+        );
+        expectExists(later.ok);
+        expect(later.ok.seq).toBeGreaterThan(changed.ok.seq);
+
+        const refusedAgain = await openSession(
+          await connect(server),
+          space,
+          BOB,
+        );
+        expect(refusedAgain.error).toMatchObject({
+          name: "AuthorizationError",
+          permanentEvidence: true,
+          aclRevision: changed.ok.seq,
+        });
+      } finally {
+        await server.close();
+      }
+    });
+
+    it("is 0 for a space whose store holds no ACL document, whatever its history", async () => {
+      const directory = await Deno.makeTempDir({
+        prefix: "memory-acl-revision-none-",
+      });
+      const store = toFileUrl(`${directory}/`);
+      const space = "did:key:z6Mk-acl-revision-no-acl";
+      try {
+        const seedServer = createAclServer(store, { mode: "off" });
+        try {
+          const seed = await connect(seedServer);
+          const opened = await openSession(seed, space, ALICE);
+          expectExists(opened.ok);
+          for (const n of [1, 2]) {
+            const write = await transactSet(
+              seed,
+              space,
+              opened.ok.sessionId,
+              `of:doc:${n}`,
+              { n },
+              n,
+            );
+            expectExists(write.ok);
+          }
+        } finally {
+          await seedServer.close();
+        }
+
+        const server = createAclServer(store, { mode: "enforce" });
+        try {
+          // A space without an ACL admits authenticated principals only, so
+          // an anonymous open is refused by its ACL state.
+          const { connection, messages, sessionOpen } = await connect(server);
+          await connection.receive(encodeMemoryBoundary({
+            type: "session.open",
+            requestId: nextRequestId("open"),
+            space,
+            session: {},
+            invocation: {
+              aud: sessionOpen.audience,
+              challenge: sessionOpen.challenge.value,
+            },
+          }));
+          const refused = nextResponse<SessionOpenResult>(messages);
+          expect(refused.error).toMatchObject({
+            name: "AuthorizationError",
+            permanentEvidence: true,
+            aclRevision: 0,
+          });
+        } finally {
+          await server.close();
+        }
+      } finally {
+        await Deno.remove(directory, { recursive: true });
+      }
+    });
+  });
+
+  describe("a deleted space", () => {
+    // Nothing the server admits writes a deletion tombstone yet, so each case
+    // writes one as another process would: through a second connection to
+    // the space's store file, which the server learns nothing of in-process.
+
+    /**
+     * Runs `body` with a file store holding `space`, whose access list makes
+     * `ALICE` its owner, served by a server in `mode`, with `serviceDids`.
+     */
+    const withSpace = async (
+      name: string,
+      mode: "off" | "observe" | "enforce",
+      body: (context: {
+        server: Server;
+        store: URL;
+        space: string;
+      }) => Promise<void>,
+    ): Promise<void> => {
+      const directory = await Deno.makeTempDir({
+        prefix: `memory-acl-deleted-${name}-`,
+      });
+      const store = toFileUrl(`${directory}/`);
+      const space = `did:key:z6Mk-acl-deleted-${name}`;
+      const server = createAclServer(store, {
+        mode,
+        serviceDids: [SERVICE],
+      });
+      try {
+        await initializeSpaceAcl(server, space, { [ALICE]: "OWNER" });
+        await body({ server, store, space });
+      } finally {
+        await server.close();
+        await Deno.remove(directory, { recursive: true });
+      }
+    };
+
+    /** The refusal of every command to deleted `space`, stored at `seq`. */
+    const deletedRefusal = (space: string, seq: number) => ({
+      name: "AuthorizationError",
+      message: `Space ${space} is deleted`,
+      deleted: true,
+      permanentEvidence: true,
+      aclRevision: seq,
+    });
+
+    for (const mode of ["off", "observe", "enforce"] as const) {
+      it(`refuses a \`session.open\` with the deleted \`AuthorizationError\`, in \`${mode}\` mode`, async () => {
+        await withSpace(
+          `open-${mode}`,
+          mode,
+          async ({ server, store, space }) => {
+            const seq = await deleteElsewhere(store, space, ALICE);
+            const opened = await openSession(
+              await connect(server),
+              space,
+              ALICE,
+            );
+            expect(opened.ok).toBeUndefined();
+            expect(opened.error).toEqual(deletedRefusal(space, seq));
+          },
+        );
+      });
+    }
+
+    it("refuses an open carrying an invitation before redeeming it", async () => {
+      await withSpace(
+        "invited",
+        "enforce",
+        async ({ server, store, space }) => {
+          const seq = await deleteElsewhere(store, space, ALICE);
+          const opened = await openSession(await connect(server), space, BOB, {
+            invite: { inviteId: "invite-to-deleted", code: "c".repeat(43) },
+          });
+          expect(opened.error).toEqual(deletedRefusal(space, seq));
+        },
+      );
+    });
+
+    it("refuses a service identity's open, which no other ACL state refuses", async () => {
+      await withSpace(
+        "service",
+        "enforce",
+        async ({ server, store, space }) => {
+          const seq = await deleteElsewhere(store, space, ALICE);
+          const opened = await openSession(
+            await connect(server),
+            space,
+            SERVICE,
+          );
+          expect(opened.error).toEqual(deletedRefusal(space, seq));
+        },
+      );
+    });
+
+    /** Each command a session can send, as the session on `space` sends it. */
+    const commands: ReadonlyArray<{
+      label: string;
+      send: (
+        harness: Harness,
+        space: string,
+        sessionId: string,
+      ) => Promise<ResponseMessage<unknown>>;
+    }> = [
+      {
+        // A patch of the ACL document is a shape violation on a live space.
+        label: "a malformed ACL transact",
+        send: (harness, space, sessionId) =>
+          transactOperation(
+            harness,
+            space,
+            sessionId,
+            { op: "patch", id: `of:${space}`, patches: [] },
+            1,
+          ),
+      },
+      {
+        label: "an ordinary transact",
+        send: (harness, space, sessionId) =>
+          transactSet(
+            harness,
+            space,
+            sessionId,
+            "of:doc:after",
+            { after: true },
+            1,
+          ),
+      },
+      {
+        label: "a graph query",
+        send: (harness, space, sessionId) =>
+          graphQuery(harness, space, sessionId, "of:doc:after"),
+      },
+      // A report and a presence update are answered as they are handed over.
+      {
+        label: "a session report",
+        send: async (harness, space, sessionId) => {
+          await harness.connection.receive(encodeMemoryBoundary({
+            type: "session.report",
+            requestId: nextRequestId("deleted-report"),
+            space,
+            sessionId,
+            report: {
+              kind: "echo-breaker",
+              event: "trip",
+              document: { id: "of:doc:after", scopeKey: "space" },
+              action: "cf:module/abc:__cfLift_1:xyz",
+            },
+          }));
+          return nextResponse(harness.messages);
+        },
+      },
+      {
+        label: "a presence join",
+        send: async (harness, space, sessionId) => {
+          await harness.connection.receive(encodeMemoryBoundary({
+            type: "presence.join",
+            requestId: nextRequestId("deleted-presence"),
+            space,
+            sessionId,
+            room: "room-0123456789abcdefghijklmnop",
+          }));
+          return nextResponse(harness.messages);
+        },
+      },
+    ];
+
+    for (const mode of ["off", "enforce"] as const) {
+      for (const command of commands) {
+        it(`refuses ${command.label} on a session opened before the deletion, ahead of its own checks, then revokes every session on the space as \`deleted\`, in \`${mode}\` mode`, async () => {
+          await withSpace(
+            `${command.label.replaceAll(" ", "-")}-${mode}`,
+            mode,
+            async ({ server, store, space }) => {
+              const alice = await connect(server);
+              const opened = await openSession(alice, space, ALICE);
+              expectExists(opened.ok);
+              const other = await connect(server);
+              const otherOpened = await openSession(other, space, ALICE);
+              expectExists(otherOpened.ok);
+              const seq = await deleteElsewhere(store, space, ALICE);
+
+              const response = await command.send(
+                alice,
+                space,
+                opened.ok.sessionId,
+              );
+              expect(response.error).toEqual(deletedRefusal(space, seq));
+              // The command is answered first, and then every session the
+              // space has is revoked, this one and another connection's.
+              expect(shiftMessage(alice.messages)).toMatchObject({
+                type: "session/revoked",
+                sessionId: opened.ok.sessionId,
+                reason: "deleted",
+              });
+              expect(
+                other.messages.filter((message) =>
+                  message.type === "session/revoked"
+                ),
+              ).toEqual([expect.objectContaining({
+                sessionId: otherOpened.ok.sessionId,
+                reason: "deleted",
+              })]);
+              expect(server.accessForTestingOnly.sessionsForSpace(space))
+                .toEqual([]);
+            },
+          );
+        });
+      }
+    }
+
+    it("revokes every session still open on a space deleted through another connection when an open finds it deleted", async () => {
+      await withSpace(
+        "open-notices",
+        "enforce",
+        async ({ server, store, space }) => {
+          const alice = await connect(server);
+          const opened = await openSession(alice, space, ALICE);
+          expectExists(opened.ok);
+          const seq = await deleteElsewhere(store, space, ALICE);
+
+          expect(
+            (await openSession(await connect(server), space, ALICE)).error,
+          ).toEqual(deletedRefusal(space, seq));
+          expect(
+            alice.messages.filter((message) =>
+              message.type === "session/revoked"
+            ),
+          ).toEqual([expect.objectContaining({
+            sessionId: opened.ok.sessionId,
+            reason: "deleted",
+          })]);
+        },
+      );
+    });
+
+    it("revokes the space's sessions when a transact finds a deletion that landed after the command's own check", async () => {
+      await withSpace(
+        "late-deletion",
+        "enforce",
+        async ({ server, store, space }) => {
+          const alice = await connect(server);
+          const opened = await openSession(alice, space, ALICE);
+          expectExists(opened.ok);
+          // The command's own check opens the engine first; the deletion lands
+          // through another connection as the transact opens it next.
+          let opens = 0;
+          let seq = 0;
+          server.accessForTestingOnly.engineOpener = async (
+            requestedSpace,
+            open,
+          ) => {
+            if (requestedSpace === space && ++opens === 2) {
+              seq = await deleteElsewhere(store, space, ALICE);
+            }
+            return await open(requestedSpace);
+          };
+          try {
+            const write = await transactSet(
+              alice,
+              space,
+              opened.ok.sessionId,
+              "of:doc:late",
+              { late: true },
+              1,
+            );
+            expect(write.error).toEqual(deletedRefusal(space, seq));
+            expect(shiftMessage(alice.messages)).toMatchObject({
+              type: "session/revoked",
+              sessionId: opened.ok.sessionId,
+              reason: "deleted",
+            });
+          } finally {
+            server.accessForTestingOnly.engineOpener = undefined;
+          }
+        },
+      );
+    });
+
+    /** A transact by `harness`'s session writing `value` as the ACL. */
+    const writeAcl = (
+      harness: Harness,
+      space: string,
+      sessionId: string,
+      value: unknown,
+      localSeq = 1,
+    ) => transactSet(harness, space, sessionId, `of:${space}`, value, localSeq);
+
+    for (const mode of ["off", "observe", "enforce"] as const) {
+      it(`admits its sole OWNER's deletion, answers it, then revokes every session on the space as \`deleted\`, in \`${mode}\` mode`, async () => {
+        await withSpace(`admit-${mode}`, mode, async ({ server, space }) => {
+          const alice = await connect(server);
+          const opened = await openSession(alice, space, ALICE);
+          expectExists(opened.ok);
+          const other = await connect(server);
+          const otherOpened = await openSession(other, space, ALICE);
+          expectExists(otherOpened.ok);
+
+          const deleted = await writeAcl(alice, space, opened.ok.sessionId, {
+            deleted: { by: ALICE },
+          });
+          expectExists(deleted.ok, deleted.error?.message);
+          // The transact's response came first; its own session's
+          // revocation follows it.
+          expect(shiftMessage(alice.messages)).toMatchObject({
+            type: "session/revoked",
+            sessionId: opened.ok.sessionId,
+            reason: "deleted",
+          });
+          expect(other.messages.map((message) => message.type)).not
+            .toContain("session/admissible");
+          expect(
+            other.messages.filter((message) =>
+              message.type === "session/revoked"
+            ),
+          ).toEqual([expect.objectContaining({
+            sessionId: otherOpened.ok.sessionId,
+            reason: "deleted",
+          })]);
+          expect(server.accessForTestingOnly.sessionsForSpace(space))
+            .toEqual([]);
+          expect(
+            (await openSession(await connect(server), space, ALICE)).error,
+          ).toEqual(deletedRefusal(space, deleted.ok.seq));
+        });
+      });
+    }
+
+    for (const mode of ["off", "enforce"] as const) {
+      it(`refuses a deletion tombstone that names anyone but its committer, or holds anything more, in \`${mode}\` mode`, async () => {
+        await withSpace(
+          `tombstone-${mode}`,
+          mode,
+          async ({ server, space }) => {
+            const alice = await connect(server);
+            const opened = await openSession(alice, space, ALICE);
+            expectExists(opened.ok);
+            for (
+              const [index, value] of [
+                { deleted: { by: BOB } },
+                { deleted: { by: ALICE, reason: "tidy" } },
+                { deleted: { by: ALICE }, [ALICE]: "OWNER" },
+              ].entries()
+            ) {
+              expect(
+                (await writeAcl(
+                  alice,
+                  space,
+                  opened.ok.sessionId,
+                  value,
+                  index + 1,
+                ))
+                  .error,
+              ).toEqual({
+                name: "ProtocolError",
+                message:
+                  "A deletion tombstone must name the deleting principal and nothing else",
+              });
+            }
+            expect((await server.readDocument(space, `of:${space}`))?.value)
+              .toEqual({ [ALICE]: "OWNER" });
+          },
+        );
+      });
+
+      it(`refuses the deletion of a space whose list names another member, in \`${mode}\` mode`, async () => {
+        await withSpace(`members-${mode}`, mode, async ({ server, space }) => {
+          const alice = await connect(server);
+          const opened = await openSession(alice, space, ALICE);
+          expectExists(opened.ok);
+          expectExists(
+            (await writeAcl(alice, space, opened.ok.sessionId, {
+              [ALICE]: "OWNER",
+              [BOB]: "READ",
+            })).ok,
+          );
+          expect(
+            (await writeAcl(alice, space, opened.ok.sessionId, {
+              deleted: { by: ALICE },
+            }, 2)).error,
+          ).toEqual({
+            name: "AuthorizationError",
+            message: `Only the sole member of ${space} may delete it`,
+          });
+        });
+      });
+
+      it(`refuses the deletion of a Home, a space whose list grants its own DID OWNER and that declares no kind, in \`${mode}\` mode`, async () => {
+        await withSpace(`home-${mode}`, mode, async ({ server, space }) => {
+          const alice = await connect(server);
+          const opened = await openSession(alice, space, ALICE);
+          expectExists(opened.ok);
+          expectExists(
+            (await writeAcl(alice, space, opened.ok.sessionId, {
+              [space]: "OWNER",
+            })).ok,
+          );
+          const home = await connect(server);
+          const homeOpened = await openSession(home, space, space);
+          expectExists(homeOpened.ok);
+          expect(
+            (await writeAcl(home, space, homeOpened.ok.sessionId, {
+              deleted: { by: space },
+            })).error,
+          ).toEqual({
+            name: "AuthorizationError",
+            message: "A Home space cannot be deleted",
+          });
+        });
+      });
+    }
+
+    it("refuses a service identity's deletion, whose implicit OWNER the list does not name", async () => {
+      await withSpace(
+        "service-delete",
+        "enforce",
+        async ({ server, space }) => {
+          const service = await connect(server);
+          const opened = await openSession(service, space, SERVICE);
+          expectExists(opened.ok);
+          expect(
+            (await writeAcl(service, space, opened.ok.sessionId, {
+              deleted: { by: SERVICE },
+            })).error,
+          ).toEqual({
+            name: "AuthorizationError",
+            message: `Only the sole member of ${space} may delete it`,
+          });
+        },
+      );
+    });
+
+    it("refuses, in `off` mode, a patch that would leave the ACL document a deletion tombstone", async () => {
+      await withSpace("patch-delete", "off", async ({ server, space }) => {
+        const alice = await connect(server);
+        const opened = await openSession(alice, space, ALICE);
+        expectExists(opened.ok);
+        expect(
+          (await transactOperation(alice, space, opened.ok.sessionId, {
+            op: "patch",
+            id: `of:${space}`,
+            patches: [{
+              op: "replace",
+              path: "/value",
+              value: { deleted: { by: ALICE } },
+            }],
+          }, 1)).error,
+        ).toEqual({
+          name: "ProtocolError",
+          message: "ACL mutations must replace the space-scoped ACL document",
+        });
+        expect((await server.readDocument(space, `of:${space}`))?.value)
+          .toEqual({ [ALICE]: "OWNER" });
+      });
+    });
+
+    it("refuses an operator's direct write of a deletion tombstone, in `off` mode too", async () => {
+      await withSpace("direct-delete", "off", async ({ server, space }) => {
+        await expect(
+          server.writeDocument(space, `of:${space}`, {
+            deleted: { by: ALICE },
+          }),
+        ).rejects.toThrow("direct writes may not delete a space");
+        expect((await server.readDocument(space, `of:${space}`))?.value)
+          .toEqual({ [ALICE]: "OWNER" });
+      });
+    });
+
+    it("refuses a command whose routed authority has ended as routed, ahead of the deletion", async () => {
+      // The deletion check comes once the command is routed to a space this
+      // server serves, so an ended routed authority is what a command meets
+      // first, deleted space or not, and the session is revoked for it.
+      const directory = await Deno.makeTempDir({
+        prefix: "memory-acl-deleted-routed-",
+      });
+      const store = toFileUrl(`${directory}/`);
+      const space = "did:key:z6Mk-acl-deleted-routed";
+      const server = new Server({
+        store,
+        subscriptionRefreshDelayMs: 0,
+        authorizeSessionOpen: (message) => {
+          const iss = message.invocation?.iss;
+          return typeof iss === "string" ? iss : undefined;
+        },
+        sessionOpenAuth: { audience: TEST_AUDIENCE },
+        acl: { mode: "enforce", serviceDids: [SERVICE] },
+        ownsSpace: (target) => target === space,
+      });
+      let owns = true;
+      const messages: ServerMessage[] = [];
+      const connection = server.connectRouted(
+        (message) => messages.push(message),
+        (target) => owns && target === space,
+      );
+      try {
+        await initializeSpaceAcl(server, space, { [ALICE]: "OWNER" });
+        await connection.receive(encodeMemoryBoundary(HELLO));
+        shiftMessage(messages);
+        connection.admitRoutedPrincipal(ALICE, server.nowSeconds() + 600);
+        await connection.receive(encodeMemoryBoundary({
+          type: "session.open",
+          requestId: nextRequestId("routed-open"),
+          space,
+          principal: ALICE,
+          session: {},
+        }));
+        const opened = nextResponse<SessionOpenResult>(messages);
+        expectExists(opened.ok);
+        await deleteElsewhere(store, space, ALICE);
+
+        owns = false;
+        await connection.receive(encodeMemoryBoundary({
+          type: "graph.query",
+          requestId: nextRequestId("routed-query"),
+          space,
+          sessionId: opened.ok.sessionId,
+          query: { roots: [] },
+        }));
+        expect(messages.map((message) => message.type)).toEqual([
+          "session/revoked",
+          "response",
+        ]);
+        expect(messages[0]).toMatchObject({ reason: "unauthorized" });
+        expect((messages[1] as ResponseMessage<unknown>).error).toEqual({
+          name: "SessionRevokedError",
+          message: "Routed memory authority ended",
+        });
+        expect(connection.hasSession(space, opened.ok.sessionId)).toBe(false);
+      } finally {
+        connection.close();
+        await server.close();
+        await Deno.remove(directory, { recursive: true });
+      }
+    });
+
+    for (const mode of ["off", "enforce"] as const) {
+      it(`refuses an operator's direct write, in \`${mode}\` mode`, async () => {
+        await withSpace(
+          `direct-${mode}`,
+          mode,
+          async ({ server, store, space }) => {
+            const seq = await deleteElsewhere(store, space, ALICE);
+            const refused = await server.writeDocument(space, "of:doc:direct", {
+              direct: true,
+            }).then(() => undefined, (error: unknown) => error);
+            expect(refused).toBeInstanceOf(Engine.SpaceDeletedError);
+            expect(refused).toMatchObject({
+              message: `Space ${space} is deleted`,
+              aclRevision: seq,
+            });
+          },
+        );
+      });
+    }
+
+    it("refuses an invitation operation with `space-deleted`", async () => {
+      await withSpace("invite", "enforce", async ({ server, store, space }) => {
+        await deleteElsewhere(store, space, ALICE);
+        const refused = await server.invite({
+          operation: "list",
+          body: {},
+          host: "https://invites.example",
+          space,
+          principal: ALICE,
+          now: Date.now(),
+        }).then(() => undefined, (error: unknown) => error);
+        expect(refused).toBeInstanceOf(SpaceInviteError);
+        expect((refused as SpaceInviteError).code).toBe("space-deleted");
+      });
+    });
+
+    it("refuses the serving plane's foreign read and write grants, marked `deleted`", async () => {
+      await withSpace(
+        "foreign",
+        "enforce",
+        async ({ server, store, space }) => {
+          await deleteElsewhere(store, space, ALICE);
+          const refusal = {
+            granted: false,
+            reason: `Space ${space} is deleted`,
+            deleted: true,
+          };
+          expect(await server.foreignReadAuthorityFor(space, ALICE)).toEqual(
+            refusal,
+          );
+          expect(await server.foreignWriteAuthorityFor(space, ALICE)).toEqual(
+            refusal,
+          );
+        },
+      );
+    });
+
+    it("refuses a fresh commit inside the engine's write transaction, and answers an exact replay from the store", async () => {
+      await withSpace("engine", "enforce", async ({ store, space }) => {
+        const engine = await Engine.open({
+          url: resolveSpaceStoreUrl(store, space as `did:${string}:${string}`),
+        });
+        try {
+          const commit = {
+            localSeq: 1,
+            reads: { confirmed: [], pending: [] },
+            operations: [{
+              op: "set",
+              id: "of:doc:before",
+              value: { value: { before: true } },
+            } as Operation],
+          };
+          const before = Engine.applyCommit(engine, {
+            sessionId: "engine-writer",
+            space,
+            commit,
+          });
+          const seq = await deleteElsewhere(store, space, ALICE);
+
+          for (const named of [space, undefined]) {
+            let refused: unknown;
+            try {
+              Engine.applyCommit(engine, {
+                sessionId: "engine-writer",
+                ...(named === undefined ? {} : { space: named }),
+                commit: { ...commit, localSeq: 2 },
+              });
+            } catch (error) {
+              refused = error;
+            }
+            expect(refused).toBeInstanceOf(Engine.SpaceDeletedError);
+            expect(refused).toMatchObject({ space, aclRevision: seq });
+          }
+          const replay = Engine.applyCommit(engine, {
+            sessionId: "engine-writer",
+            space,
+            commit,
+          });
+          expect(replay.replayed).toBe(true);
+          expect(replay.seq).toBe(before.seq);
+        } finally {
+          Engine.close(engine);
+        }
+      });
+    });
+
+    it("refuses a space whose ACL document is a malformed tombstone as a malformed ACL, unmarked", async () => {
+      await withSpace(
+        "malformed",
+        "enforce",
+        async ({ server, store, space }) => {
+          await deleteElsewhere(store, space, ALICE, {
+            deleted: { by: ALICE, at: 1 },
+          });
+          const opened = await openSession(await connect(server), space, ALICE);
+          expect(opened.error?.name).toBe("AuthorizationError");
+          expect(opened.error?.message).toBe(
+            `Space ${space} has a malformed, ownerless, or retracted ACL`,
+          );
+          expect(Object.hasOwn(opened.error!, "deleted")).toBe(false);
+        },
+      );
+    });
+
+    it("refuses nothing as deleted in a live space", async () => {
+      await withSpace("live", "enforce", async ({ server, space }) => {
+        const opened = await openSession(await connect(server), space, ALICE);
+        expectExists(opened.ok);
+        expect(await server.foreignReadAuthorityFor(space, ALICE)).toEqual({
+          granted: true,
+        });
+      });
     });
   });
 

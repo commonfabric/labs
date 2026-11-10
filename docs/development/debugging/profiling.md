@@ -302,9 +302,11 @@ it answers with the process's own loggers, and with the loop off it answers
 The memory server emits `memory/refresh/batch` for each space processed by a
 flush, with its dirty instance keys, derived-key count, and connection count.
 `memory/refresh/session/{touched,untouched}` details identify the session,
-sequence interval, dirty count, graph count, and tracked-document count. A flush
-can process multiple batches; a touched session can refresh multiple graphs.
-Count these boundaries separately before dividing traversal counts by them.
+sequence interval, dirty count, graph count, and tracked-document count. A
+touched row whose frame carries documents includes sending that frame, since the
+frame goes out in the step that records its documents as delivered. A flush can
+process multiple batches; a touched session can refresh multiple graphs. Count
+these boundaries separately before dividing traversal counts by them.
 
 `memory/refresh/walk/total` details identify the graph's scope identity, affected
 and missed document keys, root-evaluation count, manager reads, updates, and
@@ -326,7 +328,7 @@ events and batches do not have a one-to-one relationship.
 
 Occurrence details are JSON in the measure's detail suffix, leaving aggregate
 keys fixed. The logger computes them lazily for emitted measures and retained
-slowest samples. Use `detailOfMeasure` from `utils/logger` to decode the suffix,
+slowest samples. Use `detailOfMeasure` from `@commonfabric/logger` to decode the suffix,
 then group by individual fields when `--detail` is too specific. No document
 values are included. Timing measures remain opt-in with `CF_TIMING_MEASURES=1`.
 For causal scheduler data, enable both `setTriggerTraceEnabled(true)` and
@@ -634,8 +636,21 @@ process:
   loop's worker included; `heapTotal`, `heapUsed` and `external` cover the thread
   that answers the request, so they leave a worker's heap out. Reading `rss`
   here measures the server at the address queried, however many other servers
-  the machine runs; `runtime/runner/integration/derive_array_leak.test.ts`
-  measures its server this way.
+  the machine runs. `rss` also moves with when the collector last ran and with
+  which pages the operating system has compressed, by hundreds of megabytes on
+  a busy server, so a growth in it smaller than that says nothing about a
+  leak. For a reading that a leak moves and collection timing does not, a
+  server started with `EXPOSE_GC=true` answers `/api/health/collected-memory`.
+  That route runs a full garbage collection of the thread that answers, and of
+  the serving loop's worker where the loop runs in one, then reports
+  `heapUsed` and `external` for each, as `mainThread` and
+  `servingLoopWorker`. Collecting pauses each thread, so the route answers 404
+  on a server started without the variable; local development servers and the
+  servers CI starts set it. Two readings differ by what the server retained
+  between them, give or take a few megabytes of bounded structures still
+  filling. `runtime/runner/integration/derive_array_leak.test.ts` reads its
+  server this way, and its own isolate the same way, through
+  `runtime/runner/src/collected-memory.ts`.
 - `documentCaches` — the memory server's decoded-document cache, one entry per
   open space (`Engine.documentCache` in `runtime/memory/v2/engine.ts`) under
   the server's `totalBudgetBytes` (beside it the total `bytes`, and
@@ -796,8 +811,10 @@ a client's push waits at least the refresh delay plus these two — and reach fo
 
 `memory/watchAdd/total` covers each `session.watch.add` handler from admission
 through completion, including duplicate or empty additions, rejected requests,
-and failures. It ends before outbound schema preparation and transport.
-`slowQueries` records successful additions over its threshold, measured from
+and failures. An addition whose response carries documents sends that response
+in the step that records them, so the row includes its outbound schema
+preparation, encoding, and hand-off to the transport; any other response goes
+out after the row closes. `slowQueries` records successful additions over its threshold, measured from
 evaluation through response assembly. `memory/response/prepareSchemas` against
 `memory/response/sendRaw` splits each outbound message, response or effect, into
 schema-table compression and the hand-off to the transport;

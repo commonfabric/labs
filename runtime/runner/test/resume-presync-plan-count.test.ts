@@ -58,6 +58,28 @@ const TREE_PROGRAM: RuntimeProgram = {
   }],
 };
 
+// A piece holding one pattern node, `badge`, whose inputs name only a value
+// the piece derives, so planning it reads nothing of the piece's argument.
+const DERIVED_INPUT_PROGRAM: RuntimeProgram = {
+  main: "/main.tsx",
+  files: [{
+    name: "/main.tsx",
+    contents: [
+      "import { computed, pattern } from 'commonfabric';",
+      "type Item = { n: number };",
+      "export const badge = pattern<{ item: Item }, { label: string }>(",
+      "  ({ item }) => ({ label: computed(() => `b:${item.n}`) }),",
+      ");",
+      "export default pattern<{ n?: number }, { badge: { label: string } }>(",
+      "  () => {",
+      "    const item = computed(() => ({ n: 1 }));",
+      "    return { badge: badge({ item }) };",
+      "  },",
+      ");",
+    ].join("\n"),
+  }],
+};
+
 // The same tree, its root handed the rows' `hint` by its caller rather than
 // deriving it: the argument of every row links to whatever the caller
 // supplied.
@@ -384,6 +406,118 @@ describe("resume-presync-plan-count", () => {
     expect(author.runner.accessForTestingOnly.heldNodeBindings).toBe(
       treePairs(compiled),
     );
+  });
+
+  it("holds no binding for a tree once it stops", async () => {
+    // A stopped piece's nodes are planned again only by a restart, which
+    // binds them again; the bindings of the instances it ran, its rows'
+    // among them, are dropped when it stops.
+    const author = replica();
+    const compiled = await author.patternManager.compilePattern(TREE_PROGRAM, {
+      space,
+    });
+    const tx = author.edit();
+    const result = author.getCell<{ rows: { value: number }[] }>(
+      space,
+      "stopped-tree-bindings",
+      compiled.resultSchema,
+      tx,
+    );
+    author.run(tx, compiled, { items: ITEMS }, result);
+    await tx.commit().settled;
+    await result.pull();
+    await author.settled();
+    expect(author.runner.accessForTestingOnly.heldNodeBindings).toBe(
+      treePairs(compiled),
+    );
+
+    author.runner.stop(result);
+    await author.settled();
+    expect(author.runner.accessForTestingOnly.heldNodeBindings).toBe(0);
+  });
+
+  describe("a pattern node's binding", () => {
+    // A plan binds a pattern node against the argument of the instance
+    // holding it. Before that instance has an argument to read, a binding
+    // against none is not held, since a later plan binds against the
+    // argument the instance has by then.
+
+    /** Plans every node of `compiled` on `result` twice, counting binds. */
+    function bindsOverTwoPlans(
+      runtime: Runtime,
+      compiled: Pattern,
+      result: ReturnType<Runtime["getCell"]>,
+    ): { patternNode: number; others: number } {
+      const counts = { patternNode: 0, others: 0 };
+      runtime.runner.accessForTestingOnly.nodeBindingRecorder = (_, node) => {
+        if (
+          isPattern(
+            (node.module as { implementation?: unknown })
+              .implementation,
+          )
+        ) {
+          counts.patternNode += 1;
+        } else {
+          counts.others += 1;
+        }
+      };
+      for (let pass = 0; pass < 2; pass++) {
+        const tx = runtime.edit();
+        for (const node of compiled.nodes) {
+          runtime.runner.accessForTestingOnly.nodePlan(
+            tx,
+            node,
+            result.withTx(tx),
+            compiled,
+          );
+        }
+        tx.abort();
+      }
+      runtime.runner.accessForTestingOnly.nodeBindingRecorder = undefined;
+      return counts;
+    }
+
+    it("is computed again for an instance with no argument yet", async () => {
+      const runtime = replica();
+      const compiled = await runtime.patternManager.compilePattern(
+        DERIVED_INPUT_PROGRAM,
+        { space },
+      );
+      const result = runtime.getCell<unknown>(
+        space,
+        "pattern-node-binding-before-argument",
+      );
+
+      expect(bindsOverTwoPlans(runtime, compiled, result)).toEqual({
+        patternNode: 2,
+        others: 1,
+      });
+    });
+
+    it("is held for an instance whose argument is stored", async () => {
+      const runtime = replica();
+      const compiled = await runtime.patternManager.compilePattern(
+        DERIVED_INPUT_PROGRAM,
+        { space },
+      );
+      const tx = runtime.edit();
+      const result = runtime.getCell<{ badge: { label: string } }>(
+        space,
+        "pattern-node-binding-after-argument",
+        compiled.resultSchema,
+        tx,
+      );
+      runtime.run(tx, compiled, { n: 1 }, result);
+      await tx.commit().settled;
+      await result.pull();
+      await runtime.settled();
+      runtime.runner.accessForTestingOnly.forgetNodeBindings();
+
+      expect(bindsOverTwoPlans(runtime, compiled, result)).toEqual({
+        patternNode: 1,
+        others: 1,
+      });
+    });
   });
 
   it("binds a node once for a plan made after its instantiation", async () => {

@@ -71,7 +71,7 @@ entry is the one Deno resolves: a `deno.json` beside a `deno.jsonc` is taken
 whole and the other file ignored, so a `test` task written in the ignored one
 counts for nothing.
 
-`base/utils/deno.jsonc` is a correct minimal example.
+`base/text/deno.jsonc` is a correct minimal example.
 
 ## A new package is three edits
 

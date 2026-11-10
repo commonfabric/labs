@@ -26,6 +26,7 @@
  */
 
 import { isDID } from "@commonfabric/identity/did";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { type MemorySpace, validateSlug } from "@commonfabric/runner";
 import { AGENT_INPUT_NAME_PATTERN } from "@commonfabric/runner/agent-run";
 import {
@@ -195,7 +196,7 @@ export const checkInputCellSpec = (
   } catch (error) {
     throw new Error(
       `--input-cell \`${spec.name}\` reference does not parse: ${
-        error instanceof Error ? error.message : String(error)
+        describeFailure(error)
       }`,
     );
   }
@@ -204,9 +205,7 @@ export const checkInputCellSpec = (
       checkNamedPieceAddressSpace(address, space, spaceName);
     } catch (error) {
       throw new Error(
-        `--input-cell \`${spec.name}\` ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        `--input-cell \`${spec.name}\` ${describeFailure(error)}`,
       );
     }
     return;
@@ -217,7 +216,7 @@ export const checkInputCellSpec = (
   } catch (error) {
     throw new Error(
       `--input-cell \`${spec.name}\` reference does not parse: ${
-        error instanceof Error ? error.message : String(error)
+        describeFailure(error)
       }`,
     );
   }
@@ -342,7 +341,7 @@ const resolvedInputCellRef = async (
   } catch (error) {
     throw new Error(
       `--input-cell \`${spec.name}\` names the piece \`${address.slug}\`, which this space does not hold: ${
-        error instanceof Error ? error.message : String(error)
+        describeFailure(error)
       }`,
     );
   }
@@ -405,7 +404,7 @@ export const inputCellsContextMessage = (
   inputCells: readonly HarnessInputCell[],
 ): string => {
   if (inputCells.length === 0) {
-    return "No input cells are attached for this run. A piece unambiguously selected in the conversation can still be the target; granted registry or connector references are not attachments.";
+    return "No input cells are attached for this run. Granted registry or connector references are not attachments.";
   }
   return [
     "Input cells for this run:",

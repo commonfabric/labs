@@ -192,12 +192,3 @@ export const DEFAULT_OUTPUT: IframeOutputData = {
   accentColor: "#f4b860",
   bookmarks: {},
 };
-
-export const IFRAME_PATTERN = {
-  name: "IframeOrbitalSalvageYard",
-  displayName: "Orbital Salvage Yard",
-  stateScope: "space",
-  outputScope: "user",
-  frameHeight: "100vh",
-  databases: {},
-} as const;

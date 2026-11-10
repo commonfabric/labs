@@ -1,6 +1,7 @@
 import { entityRefToString } from "@commonfabric/data-model/cell-rep";
 import { Identity } from "@commonfabric/identity";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
+import type { MemorySpace } from "@commonfabric/memory/interface";
 import {
   cellTx,
   markRuntimeInjectedEventKeys,
@@ -8,7 +9,10 @@ import {
   sendEvent,
 } from "../src/cell.ts";
 import { resolveLink } from "../src/link-resolution.ts";
-import { scopeCallerEventId } from "../src/scheduler/event-identity.ts";
+import {
+  handlingReceiptId,
+  scopeCallerEventId,
+} from "../src/scheduler/event-identity.ts";
 import { dispatchQueuedEvent } from "../src/scheduler/events.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import {
@@ -175,22 +179,26 @@ function permanentRejection(
   return (marker as { permanentRejection?: string }).permanentRejection;
 }
 
-function receiptCellForEvent<T>(
-  runtime: Runtime,
-  eventId: string,
-): Cell<T> {
-  return runtime.getCell<T>(
-    space,
-    { resultFor: { $ctx: {}, $event: eventId } },
-  );
-}
-
 function resolvedStreamLink(streamCell: Cell<unknown>, runtime: Runtime) {
   return resolveLink(
     runtime,
     runtime.readTx(),
     streamCell.getAsNormalizedFullLink(),
   );
+}
+
+function receiptCellForEvent<T>(
+  runtime: Runtime,
+  eventId: string,
+  streamCell: Cell<unknown>,
+  receiptSpace: MemorySpace = space,
+): Cell<T> {
+  return runtime.getCellFromLink<T>({
+    id: handlingReceiptId(eventId, resolvedStreamLink(streamCell, runtime)),
+    path: [],
+    space: receiptSpace,
+    scope: "space",
+  });
 }
 
 async function processNextQueuedEvent(runtime: Runtime): Promise<void> {
@@ -348,6 +356,7 @@ describe("scheduler event receipts", () => {
       const resultCell = receiptCellForEvent<{ value: number }>(
         runtime,
         eventId,
+        root.key("stream"),
       );
       await waitForSchedulerCondition(
         runtime,
@@ -571,7 +580,7 @@ describe("scheduler event receipts", () => {
       const resultCell = receiptCellForEvent<{
         state: { value: number };
         doubled: number;
-      }>(runtime, eventId);
+      }>(runtime, eventId, root.key("stream"));
       cancelDoubled = resultCell.key("doubled").withTx(tx).sink(() => {});
       await runtime.idle();
       expect(resultCell.key("doubled").get()).toBe(2);
@@ -668,11 +677,17 @@ describe("scheduler event receipts", () => {
       );
       await runtime.storageManager.synced();
 
-      const canonicalResult = receiptCellForEvent<unknown>(runtime, eventId);
+      const canonicalResult = receiptCellForEvent<unknown>(
+        runtime,
+        eventId,
+        root.key("stream"),
+      );
       await canonicalResult.sync();
-      const duplicateChildWrapper = runtime.getCell<unknown>(
+      const duplicateChildWrapper = receiptCellForEvent<unknown>(
+        runtime,
+        eventId,
+        root.key("stream"),
         targetSpace,
-        { resultFor: { $ctx: {}, $event: eventId } },
       );
       await duplicateChildWrapper.sync();
 
@@ -1062,6 +1077,7 @@ describe("scheduler event receipts", () => {
         session,
         resolvedStreamLink(streamCell, runtime),
       ),
+      streamCell,
     ).getAsNormalizedFullLink();
 
     expect(outcomes[0].status).toBe("done");
@@ -1283,6 +1299,7 @@ describe("scheduler event receipts", () => {
     const resultCell = receiptCellForEvent<Record<string, never>>(
       runtime,
       eventId,
+      root.key("stream"),
     );
     await resultCell.pull();
 
@@ -1357,6 +1374,7 @@ describe("scheduler event receipts", () => {
     const plainReceipt = receiptCellForEvent<Record<string, unknown>>(
       runtime,
       plainEventId,
+      root.key("plain"),
     );
     await plainReceipt.pull();
     expect(plainReceipt.get()).toEqual({ ok: true, n: 42 });
@@ -1387,6 +1405,7 @@ describe("scheduler event receipts", () => {
     const emptyReceipt = receiptCellForEvent<Record<string, never>>(
       runtime,
       emptyEventId,
+      root.key("empty"),
     );
     await emptyReceipt.pull();
     expect(emptyReceipt.get()).toEqual({});
@@ -1441,6 +1460,7 @@ describe("scheduler event receipts", () => {
     const receipt = receiptCellForEvent<Record<string, never>>(
       runtime,
       eventId,
+      root.key("stream"),
     );
     await receipt.pull();
     expect(receipt.get()).toEqual({});
@@ -1574,6 +1594,7 @@ describe("scheduler event receipts", () => {
     const receipt = receiptCellForEvent<Record<string, unknown>>(
       runtime,
       eventId,
+      root.key("stream"),
     );
     await receipt.pull();
     expect(receipt.get()).toEqual({});
@@ -1665,6 +1686,7 @@ describe("scheduler event receipts", () => {
       const receipt = receiptCellForEvent<Record<string, unknown>>(
         runtime,
         eventId,
+        root.key("stream"),
       );
       await receipt.pull();
       expect(receipt.get()).toBeUndefined();
@@ -1697,6 +1719,7 @@ describe("scheduler event receipts", () => {
       const receipt = receiptCellForEvent<Record<string, unknown>>(
         runtime,
         eventId,
+        root.key("stream"),
       );
       await receipt.pull();
       expect(receipt.get()).toEqual({});
@@ -1736,6 +1759,7 @@ describe("scheduler event receipts", () => {
       const receipt = receiptCellForEvent<Record<string, unknown>>(
         runtime,
         eventId,
+        root.key("stream"),
       );
       await receipt.pull();
       expect(receipt.get()).toEqual({});
@@ -1772,6 +1796,7 @@ describe("scheduler event receipts", () => {
       const receipt = receiptCellForEvent<Record<string, unknown>>(
         runtime,
         eventId,
+        root.key("stream"),
       );
       await receipt.pull();
       expect(receipt.get()).toEqual({});
@@ -2000,6 +2025,7 @@ describe("scheduler event receipts", () => {
       const receipt = receiptCellForEvent<Record<string, unknown>>(
         runtime,
         eventId,
+        root.key("stream"),
       );
       await receipt.pull();
       expect(receipt.get()).toEqual({});

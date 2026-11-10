@@ -13,8 +13,8 @@ import {
   isValidFabricPlainObject,
   isValidFabricValue,
 } from "@commonfabric/data-model";
-import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
-import { isPlainObject } from "@commonfabric/utils/types";
+import { isArrayIndexPropertyName } from "@commonfabric/js-values/arrays";
+import { isPlainObject } from "@commonfabric/js-values/types";
 
 import { encodeMemoryBoundary } from "../v2.ts";
 import { findSyncSchemaRef } from "./sync-schema-ref.ts";

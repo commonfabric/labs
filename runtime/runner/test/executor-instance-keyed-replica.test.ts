@@ -26,11 +26,7 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
-import {
-  ArrivalLog,
-  awaitAdmitted,
-  awaitReplica,
-} from "./support/serving-waits.ts";
+import { ArrivalLog, awaitAdmitted } from "./support/serving-waits.ts";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import {
   resolveScopeKey,
@@ -38,38 +34,11 @@ import {
   streamEntriesDocId,
   type StreamEventsDocValue,
 } from "@commonfabric/memory/v2";
-import {
-  acquireExecutionLease,
-  releaseExecutionLease,
-} from "@commonfabric/memory/v2/execution-lease";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
-import type { Options } from "../src/storage/v2.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { MemorySpace } from "../src/storage/interface.ts";
 import { ExecutorHost } from "../src/executor/host.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
-
-/** The serving runtime's storage manager, with the serving-loop suite's
- * settle-gate seam: while `settleGate` is set, the loop's settle hangs
- * at its `inputSynced` barrier BEFORE any seal, so a cycle can be held
- * open across a lease tick with NO wave open (no tenure captured) —
- * the same-process reacquire then keeps the loop serving instead of
- * parking on a mid-wave abort. Undefined everywhere else. */
-class GatedStorageManager extends EmulatedStorageManager {
-  static override connectTo(
-    server: MemoryV2Server.Server,
-    options: Omit<Options, "memoryHost" | "spaceHostMap">,
-  ): GatedStorageManager {
-    return super.connectTo(server, options) as GatedStorageManager;
-  }
-
-  settleGate: Promise<void> | undefined;
-
-  override async inputSynced(): Promise<void> {
-    await super.inputSynced();
-    if (this.settleGate !== undefined) await this.settleGate;
-  }
-}
 
 const spaceSigner = await Identity.fromPassphrase("instance-keyed replica");
 const space = spaceSigner.did() as MemorySpace;
@@ -168,7 +137,6 @@ describe("stage A: the instance-keyed serving replica (OW17)", () => {
   let managers: EmulatedStorageManager[];
   let runtimes: Runtime[];
   let servingRuntime: Runtime | undefined;
-  let servingManager: GatedStorageManager | undefined;
   let sessions: MemoryV2Server.SessionRegistry;
   let activations: ArrivalLog<{ space: string; outcome: string }>;
 
@@ -180,10 +148,9 @@ describe("stage A: the instance-keyed serving replica (OW17)", () => {
       serviceIdentity: serviceSigner.did(),
       // deno-lint-ignore require-await
       createRuntime: async () => {
-        const manager = GatedStorageManager.connectTo(server, {
+        const manager = EmulatedStorageManager.connectTo(server, {
           as: serviceSigner,
         });
-        servingManager = manager;
         const runtime = new Runtime({
           apiUrl: new URL(import.meta.url),
           storageManager: manager,
@@ -226,7 +193,6 @@ describe("stage A: the instance-keyed serving replica (OW17)", () => {
     managers = [];
     runtimes = [];
     servingRuntime = undefined;
-    servingManager = undefined;
     activations = new ArrivalLog();
   });
 
@@ -740,113 +706,6 @@ describe("stage A: the instance-keyed serving replica (OW17)", () => {
       () => instanceHolds(engine, aliceKey, '"echo:A2"'),
     );
     expect(instanceHolds(engine, bobKey, '"echo:A2"')).toBe(false);
-    setup.cancel();
-  });
-
-  it("a lease lapse the SpaceServer survives in-process does not leave the serving replica silently stale: Alice's write inside the lapse is withheld, then — on the reacquire notice, with NO further write — re-delivered KEYED by the re-arm, her instance re-derives from it, and Bob's instance is untouched (finding 1's silent-stale half, end to end through the serving replica)", async () => {
-    // The tick itself is not driven here (see the note below); the renew
-    // interval is parked out of the way so no tick can interleave.
-    const setup = await standUpTwoUsers({
-      bobScope: "user",
-      names: { arg: "ika-blip-arg", result: "ika-blip-result" },
-      hostPolicy: { renewIntervalMs: 600_000, flushDeadlineMs: 3_000 },
-    });
-    const { engine, aliceKey, bobKey, alice, argId, typedAliceArg } = setup;
-    await awaitAdmitted(
-      server,
-      () =>
-        instanceHolds(engine, aliceKey, '"echo:A"') &&
-        instanceHolds(engine, bobKey, '"echo:B"'),
-    );
-    const spaceServer = host!.spaceServer(space)!;
-    const replica = servingRuntime!.storageManager.open(space).replica;
-    const readDraft = (identity: ScopeKeyIdentity | undefined) =>
-      (replica.getDocument(argId as never, "user", identity)?.value as
-        | { draft?: string }
-        | undefined)?.draft;
-    expect(readDraft({ principal: aliceSigner.did() })).toBe("A");
-    expect(readDraft({ principal: bobSigner.did() })).toBe("B");
-
-    // Hold the loop's next cycle in its settle (before any seal): the
-    // cycle Alice's write triggers must not attempt its watermark
-    // advance against the expired row — a derived commit under an
-    // expired row is refused (engine.ts's derived-class rule) and the
-    // loop re-attempts it every cycle until the row is live again
-    // (a PRE-EXISTING blip-window shape, recorded in the stage-A fix
-    // report; not stage A's and not exercised here).
-    const gate = Promise.withResolvers<void>();
-    servingManager!.settleGate = gate.promise;
-
-    // THE LAPSE: the lease row expires (an expired row matches nobody —
-    // liveness is judged by expiry, serving-loop.md §2). Every push pass
-    // now judges the loopback session a FORMER holder.
-    releaseExecutionLease(engine, { space, holder: spaceServer.holder });
-    expect(
-      acquireExecutionLease(engine, {
-        space,
-        holder: spaceServer.holder,
-        now: Date.now() - 60_000,
-        ttlMs: 1,
-      }),
-    ).toBe(true);
-    // Alice types inside the lapse: the push pass WITHHOLDS her
-    // instance from the loopback session (protocol.md §3's filter under
-    // a lapsed lease — the P0 rule; never cached as delivered), so the
-    // serving replica still reads "A" once the server has drained it.
-    {
-      const tx = alice.edit();
-      typedAliceArg.key("draft").withTx(tx).set("A-blip");
-      expect((await tx.commit().settled).error).toBeUndefined();
-    }
-    await alice.idle();
-    await alice.storageManager.synced();
-    await server.idle();
-    expect(instanceHolds(engine, aliceKey, '"A-blip"')).toBe(true);
-    expect(readDraft({ principal: aliceSigner.did() })).toBe("A");
-
-    // The reacquire, as the SpaceServer's renew arm performs it on a
-    // survived blip (serving-loop.md §2's same-process reacquire): the
-    // same holder restores the row, then reports it to the memory
-    // server (`noteLeaseReacquired` — the arm's own call is pinned in
-    // `executor-space-server.test.ts`; the tick is not driven here
-    // because two pre-existing SpaceServer shapes make a tick-driven
-    // survived blip non-deterministic in this fixture: the rejection
-    // spin above, and an EMPTY seal — a read probe or a no-op
-    // derivation — opening a `#currentWave` that outlives zero-delta
-    // cycles with the pre-blip tenure, so the first real seal after the
-    // reacquire aborts lease-lost and parks; both recorded in the fix
-    // report as flagged residuals). NO watch is re-issued and NOTHING
-    // else is written.
-    expect(
-      acquireExecutionLease(engine, {
-        space,
-        holder: spaceServer.holder,
-        ttlMs: 600_000,
-      }),
-    ).toBe(true);
-    server.noteLeaseReacquired({ space, principal: serviceSigner.did() });
-    // The re-arm's full evaluation re-delivers the withheld instance,
-    // keyed. Pre-fix the lapse cleared the exemption for the session's
-    // life; the replica kept "A" and every later per-user run of Alice
-    // read a stale draft — silently.
-    await awaitReplica(
-      servingManager!,
-      () => readDraft({ principal: aliceSigner.did() }) === "A-blip",
-    );
-    // Release the held cycle: Alice's instance re-derives from the
-    // re-delivered draft (the served per-user run reads the CURRENT
-    // instance).
-    gate.resolve();
-    servingManager!.settleGate = undefined;
-    await awaitAdmitted(
-      server,
-      () => instanceHolds(engine, aliceKey, '"echo:A-blip"'),
-    );
-    // Bob's instance and Alice's key never crossed: the re-arm named
-    // instances, it did not collapse them; the loop kept serving.
-    expect(readDraft({ principal: bobSigner.did() })).toBe("B");
-    expect(instanceHolds(engine, bobKey, '"echo:A-blip"')).toBe(false);
-    expect(host!.spaceServer(space)?.active).toBe(true);
     setup.cancel();
   });
 

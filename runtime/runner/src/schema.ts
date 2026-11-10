@@ -1,7 +1,7 @@
-import {
+import type {
   AnyCellWrapping,
-  type JSONSchemaObj,
-  type JSONValue,
+  JSONSchemaObj,
+  JSONValue,
 } from "@commonfabric/api";
 import {
   cloneIfNecessary,
@@ -22,14 +22,18 @@ import {
 } from "@commonfabric/data-model-schema";
 import { hasInlineCellScheme, pinImmutableCell } from "./immutable-cell.ts";
 import { readStatsActive, recordLinkResolution } from "./read-stats.ts";
-import { getLogger } from "@commonfabric/utils/logger";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import { getLogger } from "@commonfabric/logger";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 
 import { schemaForSpaceCrossing, toMemorySpaceAddress } from "./link-utils.ts";
 import { opaqueReference, toCell } from "./back-to-cell.ts";
 import { literalMemberMatches } from "./schema-literal-match.ts";
-import { type JSONSchema, type SchemaScope } from "./builder/types.ts";
-import { createCell, isCell } from "./cell.ts";
+import type { JSONSchema, SchemaScope } from "./builder/types.ts";
+import { createCell, isCell, isStream } from "./cell.ts";
+import { isWithdrawnVerb } from "./withdrawn-verb.ts";
 import {
   ContextualFlowControl,
   resolveExternalRootRefForStructure,
@@ -82,7 +86,10 @@ import {
   UnresolvedInputError,
 } from "./schema-view.ts";
 import { canFollowScopedLink, isCellScope } from "./scope.ts";
-import { getTransactionForChildCells } from "./storage/extended-storage-transaction.ts";
+import {
+  getTransactionForChildCells,
+  markSingleReadTx,
+} from "./storage/extended-storage-transaction.ts";
 import type { IExtendedStorageTransaction } from "./storage/interface.ts";
 import { usesLocalReads } from "./storage/local-read-policy.ts";
 import {
@@ -678,7 +685,7 @@ export function processDefaultValue(
       return createCell(
         runtime,
         { ...link, schema: resolvedSchema },
-        tx,
+        getTransactionForChildCells(tx),
         synced,
         "stream",
         cfcLabelView,
@@ -699,7 +706,7 @@ export function processDefaultValue(
           link.space,
           resolvedSchema.default,
           resolvedSchema,
-          tx,
+          getTransactionForChildCells(tx),
           cfcLabelView,
         );
       } else {
@@ -1160,6 +1167,20 @@ export interface ValidateAndTransformOptions {
   truthinessOnly?: boolean;
 }
 
+/**
+ * Returns the transaction a read through `tx` uses: `tx` while it is open, and
+ * otherwise a read transaction for this one read, which the cells the read hands
+ * out do not bind to (see `markSingleReadTx()`).
+ */
+export function singleReadTx(
+  runtime: Runtime,
+  tx: IExtendedStorageTransaction | undefined,
+): IExtendedStorageTransaction {
+  const read = runtime.readTx(tx);
+  if (read !== tx) markSingleReadTx(read);
+  return read;
+}
+
 export function validateAndTransform(
   runtime: Runtime,
   tx: IExtendedStorageTransaction | undefined,
@@ -1175,7 +1196,7 @@ export function validateAndTransform(
   // a view reads the state ITS transaction saw, and swapping a finished one for
   // a fresh read would read newer state where the view's contract is to
   // refuse. The refusal comes from the marked transaction's own guard below.
-  if (tx?.isLazyMaterialize() !== true) tx = runtime.readTx(tx);
+  if (tx?.isLazyMaterialize() !== true) tx = singleReadTx(runtime, tx);
 
   // Reconstruct doc, path, schema from link and runtime
   let link = isCellViewRef(sourceRef) ? sourceRef.link : sourceRef;
@@ -2037,6 +2058,13 @@ class TransformObjectCreator
       this.#synced,
       this.#labelViewFor(link),
     ) as AnyCellWrapping<FabricValue>;
+  }
+
+  isWithdrawnVerb(
+    slot: NormalizedFullLink,
+    value: AnyCellWrapping<FabricValue>,
+  ): boolean {
+    return isStream(value) && isWithdrawnVerb(this.#runtime, this.#tx, slot);
   }
 
   /**

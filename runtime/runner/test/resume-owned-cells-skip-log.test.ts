@@ -4,7 +4,7 @@ import { join } from "@std/path";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 import type { Pattern } from "../src/builder/types.ts";
 import { Runtime } from "../src/runtime.ts";
 import { trustExecutable } from "./support/trusted-builder.ts";

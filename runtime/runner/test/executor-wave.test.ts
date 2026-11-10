@@ -27,7 +27,7 @@
 //   (protocol.md §1), and basis rows land per (action, instance) in the
 //   same store transaction (serving-loop.md §3b);
 // - DR1/§2: a lease lost mid-wave aborts the wave commit — work sealed
-//   under a lapsed tenure never commits;
+//   under an ended tenure never commits;
 // - protocol.md §2b: multi-space seals commit foreign-first, and a
 //   foreign failure withholds the home commit;
 // - protocol.md §2b, the F1b fix: a foreign space whose engine cannot be
@@ -42,7 +42,6 @@ import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import {
-  EXECUTION_LEASE_TTL_MS,
   ExecutionLeaseCycle,
   executionLeaseHolder,
 } from "@commonfabric/memory/v2/execution-lease";
@@ -56,6 +55,7 @@ import {
   type SessionEffectsDocValue,
   streamEntriesDocId,
 } from "@commonfabric/memory/v2";
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import {
@@ -320,13 +320,13 @@ describe("stage D seal-into-wave", () => {
     });
   };
 
-  const liveLease = (): ExecutionLeaseCycle => {
+  const liveLease = async (): Promise<ExecutionLeaseCycle> => {
     const cycle = new ExecutionLeaseCycle({
-      engine,
+      leases: engine.executionLeases,
       space,
       holder: executionLeaseHolder(`service:${space}`),
     });
-    if (!cycle.acquire()) throw new Error("test lease acquire failed");
+    if (!await cycle.acquire()) throw new Error("test lease acquire failed");
     return cycle;
   };
 
@@ -565,7 +565,7 @@ describe("stage D seal-into-wave", () => {
     });
 
     it("refuses a home batch writing the document at the engine, naming the operation", async () => {
-      const lease = liveLease();
+      const lease = await liveLease();
       seedGenesisAcl(engine, space);
       const seqBefore = Engine.serverSeq(engine);
       const refused = await newSink().commitWave({
@@ -646,7 +646,7 @@ describe("stage D seal-into-wave", () => {
         eventId: string,
         streamEntry?: { sidecarId: string; index: number; seq: number },
       ) => {
-        const lease = liveLease();
+        const lease = await liveLease();
         const wave = newWave({ lease });
         runtime.installSealDestination({
           seal: async (tx) => {
@@ -824,7 +824,9 @@ describe("stage D seal-into-wave", () => {
     /** A sink whose access-list hook records each change and returns `verdict`. */
     const accessSink = (
       holder: string,
-      verdict: { refused: string } | { admitted: true; seq?: number },
+      verdict:
+        | { refused: string; deleted?: true }
+        | { admitted: true; seq?: number },
       committed: string[],
     ) =>
       new EngineWaveCommitSink({
@@ -837,7 +839,7 @@ describe("stage D seal-into-wave", () => {
       });
 
     it("holds a change-only contribution's settlement until the wave commits the change", async () => {
-      const lease = liveLease();
+      const lease = await liveLease();
       const wave = newWave({
         lease,
         spaceAccessAuthority: () => Promise.resolve({ admitted: true }),
@@ -865,13 +867,13 @@ describe("stage D seal-into-wave", () => {
       // A settlement that needed no wave would have resolved by the end of
       // this turn.
       await flushMicrotasks();
+      expect(settledBeforeCommit).toBe(false);
       const committed: string[] = [];
 
       const outcome = await wave.commitWave(
         accessSink(lease.holder, { admitted: true, seq: 7 }, committed),
       );
 
-      expect(settledBeforeCommit).toBe(false);
       expect(committed).toEqual(["event-consequence:e-change-only"]);
       expect(outcome.dispositions).toEqual([
         { kind: "committed" },
@@ -881,7 +883,7 @@ describe("stage D seal-into-wave", () => {
     });
 
     it("requeues the event of a change the commit refuses, and commits none of the run's writes", async () => {
-      const lease = liveLease();
+      const lease = await liveLease();
       const wave = newWave({
         lease,
         spaceAccessAuthority: () => Promise.resolve({ admitted: true }),
@@ -911,6 +913,41 @@ describe("stage D seal-into-wave", () => {
       expect(committed).toEqual(["event-consequence:e-refused"]);
       expect(outcome.dispositions).toEqual([{ kind: "requeued" }]);
       expect(outcome.requeuedEventIds).toEqual(["e-refused"]);
+      expect(
+        Engine.read(engine, { id: doc.getAsNormalizedFullLink().id }),
+      ).toBeNull();
+    });
+
+    it("aborts the wave as `space-deleted` when the commit refuses a change to its own space's list for the deletion", async () => {
+      const lease = await liveLease();
+      const wave = newWave({
+        lease,
+        spaceAccessAuthority: () => Promise.resolve({ admitted: true }),
+      });
+      runtime.installSealDestination(wave);
+      const doc = runtime.getCell<{ n: number }>(
+        space,
+        "wave-access-deleted",
+        undefined,
+      );
+      const tx = runtime.edit();
+      stageGrant(tx, "e-deleted");
+      doc.withTx(tx).set({ n: 1 });
+      expect((await tx.commit().settled).error).toBeUndefined();
+      runtime.clearSealDestination();
+      const committed: string[] = [];
+
+      const outcome = await wave.commitWave(
+        accessSink(
+          lease.holder,
+          { refused: `Space ${space} is deleted`, deleted: true },
+          committed,
+        ),
+      );
+      await wave.settled();
+
+      expect(outcome.aborted).toBe("space-deleted");
+      expect(outcome.dispositions).toEqual([{ kind: "requeued" }]);
       expect(
         Engine.read(engine, { id: doc.getAsNormalizedFullLink().id }),
       ).toBeNull();
@@ -952,7 +989,7 @@ describe("stage D seal-into-wave", () => {
   });
 
   it("keeps a durable wave successful when its admission readback fails", async () => {
-    const lease = liveLease();
+    const lease = await liveLease();
     const wave = newWave({ lease });
     runtime.installSealDestination(wave);
     const cell = runtime.getCell<{ value: number }>(
@@ -999,7 +1036,7 @@ describe("stage D seal-into-wave", () => {
   });
 
   it("seals into the wave instead of committing; later txs read the layered view; the wave commits once", async () => {
-    const lease = liveLease();
+    const lease = await liveLease();
     const leasedWave = newWave({ lease });
     runtime.installSealDestination(leasedWave);
 
@@ -1051,7 +1088,7 @@ describe("stage D seal-into-wave", () => {
   });
 
   it("drops superseded pure writes (C8a) and the derivations that read them; the authored value survives", async () => {
-    const lease = liveLease();
+    const lease = await liveLease();
     const wave = newWave({ lease });
     runtime.installSealDestination(wave);
 
@@ -1117,7 +1154,7 @@ describe("stage D seal-into-wave", () => {
   });
 
   it("warns for each dropped reader with the chain of withdrawn writes it read, back to the superseded write", async () => {
-    const lease = liveLease();
+    const lease = await liveLease();
     const wave = newWave({ lease });
     runtime.installSealDestination(wave);
 
@@ -1188,7 +1225,7 @@ describe("stage D seal-into-wave", () => {
   });
 
   it("warns for a reader of a requeued event's write with that event's id", async () => {
-    const lease = liveLease();
+    const lease = await liveLease();
     const wave = newWave({ lease });
     runtime.installSealDestination(wave);
 
@@ -1282,7 +1319,7 @@ describe("stage D seal-into-wave", () => {
         }],
       },
     });
-    const lease = liveLease();
+    const lease = await liveLease();
     const wave = newWave({ lease });
     expect(
       Engine.selectDocHead(engine, { id: wLink.id, scopeKey: "space" }),
@@ -1324,7 +1361,7 @@ describe("stage D seal-into-wave", () => {
     // check off that question stalls every re-derivation after a tenure
     // restarts.
 
-    const lease = liveLease();
+    const lease = await liveLease();
     const w = runtime.getCell<{ value: number }>(
       space,
       "wave-own-move",
@@ -1380,7 +1417,7 @@ describe("stage D seal-into-wave", () => {
     // the commit applied, the other read y before the replica took it,
     // and the replica's claim check at its commit refuses it ahead of the
     // wave — a stale read never seals.
-    const lease = liveLease();
+    const lease = await liveLease();
     const wave = newWave({ lease });
     runtime.installSealDestination(wave);
     const x = runtime.getCell<{ value: number }>(
@@ -1473,7 +1510,7 @@ describe("stage D seal-into-wave", () => {
     cellName: string,
     noted: boolean,
   ): Promise<{ outcome: WaveCommitOutcome; xId: string }> => {
-    const lease = liveLease();
+    const lease = await liveLease();
     const wave = newWave({ lease });
     const x = runtime.getCell<{ value: number }>(space, cellName, undefined);
     const xLink = x.getAsNormalizedFullLink();
@@ -1553,7 +1590,7 @@ describe("stage D seal-into-wave", () => {
     // next run's memo guard reads "inputs changed" and destroys the
     // just-served value. The pin: after the drop, the ENGINE's hash
     // matches the served result.
-    const lease = liveLease();
+    const lease = await liveLease();
     const wave = newWave({ lease });
     const sink = newSink();
     const holder = executionLeaseHolder(`service:${space}`);
@@ -1686,11 +1723,11 @@ describe("stage D seal-into-wave", () => {
     // And the replica's visible state agrees with the engine after the
     // drop rolled the overlay back — no stale-hash flip for later reads.
     expect(internalDoc.get()).toEqual({ inputHash: "new" });
-    lease.release();
+    await lease.release();
   });
 
   it("requeues a raced consequence (C8b) — never lost, never doubled across waves — and annotates + records its basis when it lands", async () => {
-    const lease = liveLease();
+    const lease = await liveLease();
 
     const y = runtime.getCell<{ value: number }>(space, "wave-y", undefined);
     const seed = runtime.getCell<{ value: number }>(
@@ -1809,7 +1846,7 @@ describe("stage D seal-into-wave", () => {
     // (Red-first: without the per-event fold in resolveConflicts, the
     // intent survives — dispositions [requeued, committed] — and the
     // second wave's re-run double-issues nothing only by luck.)
-    const lease = liveLease();
+    const lease = await liveLease();
     const y = runtime.getCell<{ value: number }>(
       space,
       "wave-nav-y",
@@ -1935,7 +1972,7 @@ describe("stage D seal-into-wave", () => {
   });
 
   it("rebases a commuting consequence instead of requeueing (field-level merge)", async () => {
-    const lease = liveLease();
+    const lease = await liveLease();
 
     // Seed a structured doc, then patch disjoint fields concurrently.
     const doc = runtime.getCell<{ a: number; b: number }>(
@@ -2024,7 +2061,7 @@ describe("stage D seal-into-wave", () => {
       path: [],
     }).sync();
 
-    const lease = liveLease();
+    const lease = await liveLease();
     const wave = newWave({ lease });
     runtime.installSealDestination(wave);
     const tx = runtime.edit();
@@ -2156,7 +2193,7 @@ describe("stage D seal-into-wave", () => {
     const typed: Draft = { name: "Grace", bio: "Admiral" };
 
     it("drops the consequence's write to a doc the firing session overwrote before the wave opened, and commits the rest of it", async () => {
-      const lease = liveLease();
+      const lease = await liveLease();
       const docs = await seedDocs();
       overwriteDraft(docs, firing.session, "/value", typed);
       await takeFromStore(docs.draft);
@@ -2177,7 +2214,7 @@ describe("stage D seal-into-wave", () => {
     });
 
     it("requeues the consequence when the firing session overwrote a doc it read mid-wave, and drops that write when the replay lands", async () => {
-      const lease = liveLease();
+      const lease = await liveLease();
       const docs = await seedDocs();
 
       const wave = newWave({ lease });
@@ -2208,7 +2245,7 @@ describe("stage D seal-into-wave", () => {
     });
 
     it("commits the consequence over a doc another session overwrote after the event", async () => {
-      const lease = liveLease();
+      const lease = await liveLease();
       const docs = await seedDocs();
       overwriteDraft(docs, "sess-other", "/value", typed);
       await takeFromStore(docs.draft);
@@ -2226,7 +2263,7 @@ describe("stage D seal-into-wave", () => {
     });
 
     it("drops only the patches of the consequence the firing session overwrote, and commits its other patches to the doc", async () => {
-      const lease = liveLease();
+      const lease = await liveLease();
       const docs = await seedDocs();
       overwriteDraft(docs, firing.session, "/value/name", "Grace");
       await takeFromStore(docs.draft);
@@ -2248,7 +2285,7 @@ describe("stage D seal-into-wave", () => {
     });
 
     it("requeues the consequence when the firing session overwrote one of its paths mid-wave, and drops only that patch when the replay lands", async () => {
-      const lease = liveLease();
+      const lease = await liveLease();
       const docs = await seedDocs();
 
       const wave = newWave({ lease });
@@ -2280,7 +2317,7 @@ describe("stage D seal-into-wave", () => {
     });
 
     it("drops the consequence's writes to both paths of a value the firing session moved", async () => {
-      const lease = liveLease();
+      const lease = await liveLease();
       const docs = await seedDocs();
       Engine.applyCommit(engine, {
         sessionId: firing.session,
@@ -2308,7 +2345,7 @@ describe("stage D seal-into-wave", () => {
     });
 
     it("commits a consequence write to a path above the one the firing session overwrote", async () => {
-      const lease = liveLease();
+      const lease = await liveLease();
       const docs = await seedDocs();
       overwriteDraft(docs, firing.session, "/value/name", "Grace");
 
@@ -2336,15 +2373,13 @@ describe("stage D seal-into-wave", () => {
     });
   });
 
-  it("aborts the wave commit when the lease tenure lapsed (work sealed under a lapsed tenure never commits)", async () => {
-    let now = 1_000_000;
+  it("aborts the wave commit when the lease tenure ended (work sealed under an ended tenure never commits)", async () => {
     const cycle = new ExecutionLeaseCycle({
-      engine,
+      leases: engine.executionLeases,
       space,
       holder: executionLeaseHolder(`service:${space}`),
-      now: () => now,
     });
-    expect(cycle.acquire()).toBe(true);
+    expect(await cycle.acquire()).toBe(true);
 
     const wave = newWave({ lease: cycle });
     runtime.installSealDestination(wave);
@@ -2363,12 +2398,11 @@ describe("stage D seal-into-wave", () => {
     expect((await tx.commit().settled).error).toBeUndefined();
     runtime.clearSealDestination();
 
-    // The lease expires (a pause outlived the TTL) and the same process
-    // reacquires: a NEW tenure. The renewal failure is the
-    // stop-committing signal; the in-flight wave aborts (§2's MUST).
-    now += EXECUTION_LEASE_TTL_MS + 1;
-    expect(cycle.renew()).toBe(false);
-    expect(cycle.acquire()).toBe(true);
+    // A park releases the lease and the same process reacquires: a NEW
+    // tenure. The release is the stop-committing signal; the in-flight wave
+    // aborts (§2's MUST).
+    await cycle.release();
+    expect(await cycle.acquire()).toBe(true);
 
     const seqBefore = Engine.serverSeq(engine);
     const outcome = await wave.commitWave(newSink());
@@ -2384,7 +2418,7 @@ describe("stage D seal-into-wave", () => {
     const foreign = foreignSigner.did() as MemorySpace;
     const foreignEngine = await server.engineForSpace(foreign);
     seedGenesisAcl(foreignEngine, foreign);
-    const lease = liveLease();
+    const lease = await liveLease();
 
     const engines = new Map<MemorySpace, Engine.Engine>([
       [space, engine],
@@ -2508,7 +2542,7 @@ describe("stage D seal-into-wave", () => {
     const foreign = foreignSigner.did() as MemorySpace;
     const foreignEngine = await server.engineForSpace(foreign);
     seedGenesisAcl(foreignEngine, foreign);
-    const lease = liveLease();
+    const lease = await liveLease();
 
     const wave = newWave({ lease });
     runtime.installSealDestination(wave);
@@ -2660,7 +2694,7 @@ describe("stage D seal-into-wave", () => {
       "wave foreign refusal",
     );
     const foreign = foreignSigner.did() as MemorySpace;
-    const lease = liveLease();
+    const lease = await liveLease();
     const refusals: { space: MemorySpace; actionId?: string }[] = [];
     const wave = new WaveAccumulator({
       space,
@@ -2732,7 +2766,7 @@ describe("stage D seal-into-wave", () => {
       "wave foreign refusal multi",
     );
     const foreign = foreignSigner.did() as MemorySpace;
-    const lease = liveLease();
+    const lease = await liveLease();
     const wave = new WaveAccumulator({
       space,
       basisSeq: Engine.serverSeq(engine),
@@ -2801,7 +2835,7 @@ describe("stage D seal-into-wave", () => {
     const foreignSigner = await Identity.fromPassphrase("wave foreign closure");
     const foreign = foreignSigner.did() as MemorySpace;
     const foreignEngine = await server.engineForSpace(foreign);
-    const lease = liveLease();
+    const lease = await liveLease();
     const engines = new Map<MemorySpace, Engine.Engine>([
       [space, engine],
       [foreign, foreignEngine],
@@ -2918,7 +2952,7 @@ describe("stage D seal-into-wave", () => {
   });
 
   it("disposes each contribution's writes to a conflicted doc independently: one handler's rebase never absolves a derivation's superseded write", async () => {
-    const lease = liveLease();
+    const lease = await liveLease();
 
     const doc = runtime.getCell<{ a: number; b: number }>(
       space,
@@ -3009,7 +3043,7 @@ describe("stage D seal-into-wave", () => {
   });
 
   it("requeues a second handler whose patch overlaps the concurrent write, while the first handler's disjoint patch rebases", async () => {
-    const lease = liveLease();
+    const lease = await liveLease();
 
     const doc = runtime.getCell<{ a: number; b: number }>(
       space,
@@ -3077,7 +3111,7 @@ describe("stage D seal-into-wave", () => {
    * requeue); the child writes its own doc and reads NOTHING of the
    * parent's, so only the cascade closure ties their fates. */
   const runCascadeRequeueScenario = async () => {
-    const lease = liveLease();
+    const lease = await liveLease();
     const parentDoc = runtime.getCell<{ value: number }>(
       space,
       "wave-cascade-parent",
@@ -3174,7 +3208,7 @@ describe("stage D seal-into-wave", () => {
     // append mechanics, classified with the machinery-read boundary
     // (`ignoreReadForScheduling` + `mergeableOpRead`, the Cell.push
     // precedent).
-    const lease = liveLease();
+    const lease = await liveLease();
     const servingManager = EmulatedStorageManager.connectTo(server, {
       as: signer,
     });
@@ -3280,7 +3314,7 @@ describe("stage D seal-into-wave", () => {
       expect(typeof sidecar?.entries?.[0].seq).toBe("number");
       expect(sidecar?.entries?.[0].firedAt?.session).toBe("server");
     } finally {
-      lease.release();
+      await lease.release();
       await servingRuntime.dispose();
       await servingManager.close();
     }
@@ -3293,7 +3327,7 @@ describe("stage D seal-into-wave", () => {
     // `structuredClone` over the whole sidecar op: a valid symbol
     // payload threw `DataCloneError` mid-assembly and the
     // event-and-consequence commit aborted.
-    const lease = liveLease();
+    const lease = await liveLease();
     const servingManager = EmulatedStorageManager.connectTo(server, {
       as: signer,
     });
@@ -3347,14 +3381,14 @@ describe("stage D seal-into-wave", () => {
       expect(sidecar?.entries?.length).toBe(1);
       expect(typeof sidecar?.entries?.[0].seq).toBe("number");
     } finally {
-      lease.release();
+      await lease.release();
       await servingRuntime.dispose();
       await servingManager.close();
     }
   });
 
   it("drops a derivation that read a requeued handler's sealed write (nothing derived from withdrawn state commits)", async () => {
-    const lease = liveLease();
+    const lease = await liveLease();
     const consequence = runtime.getCell<{ value: number }>(
       space,
       "wave-requeued-consequence",
@@ -3429,7 +3463,7 @@ describe("stage D seal-into-wave", () => {
   });
 
   it("re-resolves when the sink's in-transaction re-verification names a doc that moved after the head query", async () => {
-    const lease = liveLease();
+    const lease = await liveLease();
     const wave = newWave({ lease });
     runtime.installSealDestination(wave);
 
@@ -3506,7 +3540,7 @@ describe("stage D seal-into-wave", () => {
   });
 
   it("resolves a sink-reported precondition failure per owning contribution, never whole-wave", async () => {
-    const lease = liveLease();
+    const lease = await liveLease();
     const guarded = runtime.getCell<{ value: number }>(
       space,
       "wave-guarded-out",
@@ -3592,7 +3626,7 @@ describe("stage D seal-into-wave", () => {
   });
 
   it("resolves a failed value pin per owning contribution, never whole-wave", async () => {
-    const lease = liveLease();
+    const lease = await liveLease();
     const guarded = runtime.getCell<{ value: number }>(
       space,
       "wave-pinned-out",
@@ -3677,7 +3711,7 @@ describe("stage D seal-into-wave", () => {
   });
 
   it("validates a preconditions-only wave instead of short-circuiting (a violated gate must not resolve committed)", async () => {
-    const lease = liveLease();
+    const lease = await liveLease();
     const takenId = "of:wave-preconditions-only-taken";
     Engine.applyCommit(engine, {
       sessionId: "rival-session",
@@ -3721,7 +3755,7 @@ describe("stage D seal-into-wave", () => {
   });
 
   it("attaches the explicit scope_key on a scoped write at seal time, and the engine keys the row by it", async () => {
-    const lease = liveLease();
+    const lease = await liveLease();
     const wave = newWave({ lease });
     runtime.installSealDestination(wave);
 
@@ -3768,7 +3802,7 @@ describe("stage D seal-into-wave", () => {
   });
 
   it("replaces a same-instance action's basis rows with the LAST run's set within one wave", async () => {
-    const lease = liveLease();
+    const lease = await liveLease();
 
     const seedA = runtime.getCell<{ value: number }>(
       space,
@@ -3828,7 +3862,7 @@ describe("stage D seal-into-wave", () => {
   });
 
   it("isolates a failed seal to its own action (an aborted tx discards only its own writes)", async () => {
-    const lease = liveLease();
+    const lease = await liveLease();
     const wave = newWave({ lease });
     runtime.installSealDestination(wave);
 
@@ -3875,7 +3909,7 @@ describe("stage D seal-into-wave", () => {
     const foreign = foreignSigner.did() as MemorySpace;
     const foreignEngine = await server.engineForSpace(foreign);
     seedGenesisAcl(foreignEngine, foreign);
-    const lease = liveLease();
+    const lease = await liveLease();
     const engines = new Map<MemorySpace, Engine.Engine>([
       [space, engine],
       [foreign, foreignEngine],
@@ -4113,6 +4147,7 @@ describe("stage D seal-into-wave", () => {
       ) {
         this.principals.push(sessionSigner?.did() ?? "<anonymous>");
         const client = await MemoryV2Client.connect({
+          instanceNames: namesInstancesByDefault(),
           transport: MemoryV2Client.loopback(this.#server),
         });
         const session = await client.mount(
@@ -4151,7 +4186,7 @@ describe("stage D seal-into-wave", () => {
     );
     const provisioned = await servingManager.createSpace({ [alice]: "OWNER" });
 
-    const lease = liveLease();
+    const lease = await liveLease();
     const provisionWave = (): WaveAccumulator =>
       new WaveAccumulator({
         space,
@@ -4413,7 +4448,7 @@ describe("stage D seal-into-wave", () => {
     );
     const foreign = foreignSigner.did() as MemorySpace;
     const foreignEngine = await server.engineForSpace(foreign);
-    const lease = liveLease();
+    const lease = await liveLease();
     const engines = new Map<MemorySpace, Engine.Engine>([
       [space, engine],
       [foreign, foreignEngine],
@@ -4509,7 +4544,7 @@ describe("stage D seal-into-wave", () => {
     );
     const foreign = foreignSigner.did() as MemorySpace;
     const foreignEngine = await server.engineForSpace(foreign);
-    const lease = liveLease();
+    const lease = await liveLease();
     const engines = new Map<MemorySpace, Engine.Engine>([
       [space, engine],
       [foreign, foreignEngine],
@@ -4608,7 +4643,7 @@ describe("stage D seal-into-wave", () => {
   });
 
   it("stage F: a bookkeeping contribution rebases commuting patches and carries derivedThrough; a semantic conflict drops it whole (Q4's sanctioned internal stamp kind)", async () => {
-    const lease = liveLease();
+    const lease = await liveLease();
     const wave = newWave({ lease });
     runtime.installSealDestination(wave);
 
@@ -4672,7 +4707,7 @@ describe("stage D seal-into-wave", () => {
   });
 
   it("stage F+2: one wave batch holds TWO instances of ONE doc — the sink/engine fold at cardinality 2 (M1's write half)", async () => {
-    const lease = liveLease();
+    const lease = await liveLease();
     const aliceKey = resolveScopeKey("user", {
       principal: "did:key:fan-alice",
       sessionId: "alice-s1",
@@ -4716,11 +4751,11 @@ describe("stage D seal-into-wave", () => {
     expect(rows.map((r) => r.scope_key)).toEqual(
       [aliceKey, bobKey].sort(),
     );
-    lease.release();
+    await lease.release();
   });
 
   it("stage F+2: two stamped runs with two demanded identities fold into one wave — per-run keys on writes and basis rows (M1 at cardinality 2)", async () => {
-    const lease = liveLease();
+    const lease = await liveLease();
 
     // A shared space-scoped doc BOTH runs read, so each run's basis
     // rows have real content to pin per (action, instance).
@@ -4807,7 +4842,7 @@ describe("stage D seal-into-wave", () => {
   });
 
   it("stage F: M1 — a run's per-run scopeKeyIdentity keys its scoped writes and basis rows (the demand-supplied instance)", async () => {
-    const lease = liveLease();
+    const lease = await liveLease();
 
     // Seed a doc the run READS, so its basis rows have content to pin.
     const seed = runtime.getCell<{ value: number }>(
@@ -4885,7 +4920,7 @@ describe("stage D seal-into-wave", () => {
     // actionId, one demand stamp `user:bob`) discovers a different scope
     // in successive waves, and each wave must clear the rows the previous
     // one left under the key that is now stranded.
-    const lease = liveLease();
+    const lease = await liveLease();
     // One sink for the whole test: the engine's replay guard keys on the
     // sink's (session, localSeq), so per-wave sinks would collide.
     const sink = newSink();
@@ -5050,7 +5085,7 @@ describe("stage D seal-into-wave", () => {
   });
 
   it("stage F: a bookkeeping PATCH racing a DISJOINT authored patch REBASES and commits (the live rebase arm)", async () => {
-    const lease = liveLease();
+    const lease = await liveLease();
 
     // Materialize the doc first so later writes are patches.
     const doc = runtime.getCell<{ seq: number; other?: number }>(
@@ -5833,7 +5868,7 @@ describe("stage D seal-into-wave", () => {
       "wave-piece-instantiate-recovery",
     );
     const { cell } = witness;
-    const lease = liveLease();
+    const lease = await liveLease();
     const firstWave = newWave({ lease });
     const recoveryWave = newWave({ lease });
     const route = routePieceInstantiationWaves(firstWave, recoveryWave);
@@ -5884,14 +5919,14 @@ describe("stage D seal-into-wave", () => {
     // belonging to its third raw-module instantiation ran.
     expect(witness.instantiations()).toBe(3);
     expect(witness.lastRunInstantiation()).toBe(3);
-    lease.release();
+    await lease.release();
   });
 
   it("tears down after a second dropped piece-instantiation contribution instead of retrying again", async () => {
     const witness = await stoppedWitnessPiece(
       "wave-piece-instantiate-second-drop",
     );
-    const lease = liveLease();
+    const lease = await liveLease();
     const firstWave = newWave({ lease });
     const recoveryWave = newWave({ lease });
     const route = routePieceInstantiationWaves(firstWave, recoveryWave);
@@ -5919,7 +5954,7 @@ describe("stage D seal-into-wave", () => {
     await runtime.idle();
     await runtime.runner.idlePieceInstantiationSettlements();
     expect(witness.instantiations()).toBe(4);
-    lease.release();
+    await lease.release();
   });
 
   it("surfaces a synchronous reinstantiation failure and tears down the registration", async () => {
@@ -5927,7 +5962,7 @@ describe("stage D seal-into-wave", () => {
       "wave-piece-instantiate-retry-throws",
       { throwOnInstantiation: 3 },
     );
-    const lease = liveLease();
+    const lease = await liveLease();
     const firstWave = newWave({ lease });
     const recoveryWave = newWave({ lease });
     const route = routePieceInstantiationWaves(firstWave, recoveryWave);
@@ -5962,7 +5997,7 @@ describe("stage D seal-into-wave", () => {
     await runtime.idle();
     await runtime.runner.idlePieceInstantiationSettlements();
     expect(witness.instantiations()).toBe(4);
-    lease.release();
+    await lease.release();
   });
 
   it("surfaces a rejected piece-instantiation commit and tears down the registration", async () => {
@@ -6011,7 +6046,7 @@ describe("stage D seal-into-wave", () => {
     const { cell } = await stoppedWitnessPiece(
       "wave-piece-instantiate-stop",
     );
-    const lease = liveLease();
+    const lease = await liveLease();
     const firstWave = newWave({ lease });
     const recoveryWave = newWave({ lease });
     const route = routePieceInstantiationWaves(firstWave, recoveryWave);
@@ -6052,14 +6087,14 @@ describe("stage D seal-into-wave", () => {
     runtime.clearSealDestination();
     recoveryWave.abandon("test cleanup");
     heldReadiness.resolve();
-    lease.release();
+    await lease.release();
   });
 
   it("does not retry an abandoned piece-instantiation wave in place", async () => {
     const witness = await stoppedWitnessPiece(
       "wave-piece-instantiate-abandon",
     );
-    const lease = liveLease();
+    const lease = await liveLease();
     const firstWave = newWave({ lease });
     const recoveryWave = newWave({ lease });
     const route = routePieceInstantiationWaves(firstWave, recoveryWave);
@@ -6091,7 +6126,7 @@ describe("stage D seal-into-wave", () => {
     await runtime.runner.idlePieceInstantiationSettlements();
     expect(witness.instantiations()).toBe(3);
     recoveryWave.abandon("test cleanup");
-    lease.release();
+    await lease.release();
   });
 });
 
@@ -6122,8 +6157,12 @@ describe("stage F fix round: foreign-batch settle sequences and shallow reads", 
 
   it("waveSettlementOf: a sealed tx's settlement resolves ok on the wave commit and error on withdrawal (the durable-acceptance primitive the pattern swap gates on — thread r3731191444)", async () => {
     const holder = executionLeaseHolder(`service:${space}`);
-    const cycle = new ExecutionLeaseCycle({ engine, space, holder });
-    if (!cycle.acquire()) throw new Error("test lease acquire failed");
+    const cycle = new ExecutionLeaseCycle({
+      leases: engine.executionLeases,
+      space,
+      holder,
+    });
+    if (!await cycle.acquire()) throw new Error("test lease acquire failed");
 
     // Committed arm.
     const wave1 = new WaveAccumulator({
@@ -6384,8 +6423,12 @@ describe("stage F fix round: foreign-batch settle sequences and shallow reads", 
     const foreign = foreignSigner.did() as MemorySpace;
     const foreignEngine = await server.engineForSpace(foreign);
     const holder = executionLeaseHolder(`service:${space}`);
-    const cycle = new ExecutionLeaseCycle({ engine, space, holder });
-    if (!cycle.acquire()) throw new Error("test lease acquire failed");
+    const cycle = new ExecutionLeaseCycle({
+      leases: engine.executionLeases,
+      space,
+      holder,
+    });
+    if (!await cycle.acquire()) throw new Error("test lease acquire failed");
     const engines = new Map<MemorySpace, Engine.Engine>([
       [space, engine],
       [foreign, foreignEngine],

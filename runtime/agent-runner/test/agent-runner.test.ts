@@ -16,7 +16,10 @@ import { join } from "@std/path";
 
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import type { CfcConfClause } from "@commonfabric/runner/cfc";
+import type { CfHarnessEngine } from "@commonfabric/cf-harness/engine";
 import type { HarnessPromptLoopResult } from "@commonfabric/cf-harness/prompt-loop";
+import { getBuiltinTool } from "@commonfabric/cf-harness/tools";
+import { createToolOutputId } from "@commonfabric/cf-harness/contracts/tool-result";
 import { hashStringOf } from "@commonfabric/data-model";
 import {
   createHarnessHandleTable,
@@ -80,7 +83,13 @@ describe("agent runner", () => {
   let requests: number;
 
   /** A runtime of its own on the toolshed at `host`, as the requester. */
-  const connect = (host: string, options: { agentBuiltin?: boolean } = {}) => {
+  const connect = (
+    host: string,
+    options: {
+      agentBuiltin?: boolean;
+      readCeiling?: readonly CfcConfClause[];
+    } = {},
+  ) => {
     const storageManager = EmulatedStorageManager.connectTo(servers[host], {
       as: signer,
     });
@@ -88,6 +97,12 @@ describe("agent runner", () => {
       apiUrl: new URL(host),
       storageManager,
       ...(options.agentBuiltin ? { experimental: { agentBuiltin: true } } : {}),
+      ...(options.readCeiling !== undefined
+        ? {
+          cfcReadMaxConfidentiality: options.readCeiling,
+          cfcEnforcementMode: "enforce-strict" as const,
+        }
+        : {}),
     });
     managers.push(storageManager);
     runtimes.push(runtime);
@@ -1332,6 +1347,28 @@ describe("agent runner", () => {
     expect(recordOf(result).get()?.state).toBe("queued");
   });
 
+  it("reports unsupported progress once while leaving the request queued", async () => {
+    const result = await submit({ progress: true });
+    const reports: string[] = [];
+    const runner = await startRunner(
+      () => Promise.resolve({ outcome: "refused" }),
+      {
+        report: (message) => reports.push(message),
+      },
+    );
+    await runner.idle();
+    expect(recordOf(result).get()?.state).toBe("queued");
+    const other = await submit();
+    await waitForState(other, "refused");
+    await runner.idle();
+    expect(recordOf(result).get()?.state).toBe("queued");
+    expect(
+      reports.filter((message) =>
+        message.includes("does not support progress")
+      ),
+    ).toHaveLength(1);
+  });
+
   it("leaves a research request queued on the default runner surface", async () => {
     const result = await submit({ tools: ["research"] });
     const runner = await startRunner(
@@ -1488,7 +1525,10 @@ describe("agent runner", () => {
     };
 
     for (
-      const cleanupFailure of [new Error("cleanup error"), "cleanup string"]
+      const [cleanupFailure, described] of [
+        [new Error("cleanup error"), "cleanup error"],
+        ["cleanup string", "cleanup string"],
+      ] as const
     ) {
       const registrations: unknown[] = [];
       const reports: string[] = [];
@@ -1518,11 +1558,7 @@ describe("agent runner", () => {
       expect(registrations[0]).not.toBeUndefined();
       expect(registrations[1]).toBeUndefined();
       expect(reports).toContain(
-        `agent runner: could not clear a failed registration: ${
-          cleanupFailure instanceof Error
-            ? cleanupFailure.message
-            : cleanupFailure
-        }`,
+        `agent runner: could not clear a failed registration: ${described}`,
       );
     }
   });
@@ -1592,6 +1628,142 @@ describe("agent runner", () => {
     expect(cloudRecord.get()?.state).toBe("queued");
   });
 
+  it("reads later progress within its ceiling after intermediate reports were hidden", async () => {
+    const admitted = { type: CFC_ATOM_TYPE.User, subject: home };
+    const hidden = {
+      type: CFC_ATOM_TYPE.User,
+      subject: (await Identity.generate()).did(),
+    };
+    const started = defer<ClaimedAgentRun>();
+    const finished = defer<AgentRunExecution>();
+    await startRunner((run) => {
+      started.resolve(run);
+      return finished.promise;
+    }, { progress: true });
+    const result = await submit({ progress: true });
+    const run = await started.promise;
+    const reader = connect(CLOUD, { readCeiling: [admitted] });
+    const visible = reader.getCellFromLink(result.getAsNormalizedFullLink());
+    const message = visible.key("progress").key("message");
+    const reports: [Cell<unknown>, string, boolean][] = [];
+    try {
+      for (
+        const [sequence, clauses, text, readable] of [
+          [1, [admitted], "Started", true],
+          [2, [admitted, hidden], "Private intermediate result", false],
+          [3, [hidden], "Another private intermediate result", false],
+          [4, [admitted], "Finished checking", true],
+          [5, [], "Done", true],
+        ] as const
+      ) {
+        // Each report is independently labeled; replacing the current link
+        // must not carry a hidden predecessor's label into its successor.
+        const milestone = patternSide.getCell(
+          home,
+          `ceiling-progress-${sequence}`,
+          {
+            type: "object",
+            properties: {
+              message: { type: "string" },
+              sequence: { type: "integer" },
+            },
+            ifc: { confidentiality: [...clauses] },
+          },
+        );
+        await patternSide.editWithRetry((tx) => {
+          milestone.withTx(tx).set({ message: text, sequence });
+        });
+        reports.push([milestone, text, readable]);
+        expect(await run.publishProgress!(milestone.getAsNormalizedFullLink()))
+          .toBe(true);
+        await waitForCellValue<{ sequence?: number }>(
+          patternSide,
+          result.key("progress"),
+          (value) => value?.sequence === sequence,
+        );
+        await visible.sync();
+        if (readable) {
+          expect(await message.pull()).toBe(text);
+          expect(message.get()).toBe(text);
+        } else {
+          await expect(message.pull()).rejects.toThrow(/read ceiling/);
+          expect(() => message.get()).toThrow(/read ceiling/);
+        }
+      }
+    } finally {
+      finished.resolve({ outcome: "refused" });
+    }
+    await waitForState(result, "refused");
+    await visible.sync();
+    expect(message.get()).toBe("Done");
+    for (const [report, text, readable] of reports) {
+      expect((await report.pull() as { message: string }).message).toBe(text);
+      const original = reader.getCellFromLink(report.getAsNormalizedFullLink())
+        .key("message");
+      if (readable) {
+        expect(await original.pull()).toBe(text);
+      } else {
+        await expect(original.pull()).rejects.toThrow(/read ceiling/);
+      }
+    }
+  });
+
+  it("rejects a progress callback after the record moves to a later attempt", async () => {
+    const started = defer<ClaimedAgentRun>();
+    const finished = defer<AgentRunExecution>();
+    await startRunner((run) => {
+      started.resolve(run);
+      return finished.promise;
+    }, { progress: true });
+    const result = await submit({ progress: true });
+    const run = await started.promise;
+    const milestone = patternSide.getCell(home, "stale-attempt-progress", {
+      type: "string",
+    });
+    await patternSide.editWithRetry((tx) => {
+      milestone.withTx(tx).set("Stale");
+      recordOf(result).withTx(tx).key("attempts").set(2);
+    });
+    try {
+      expect(await run.publishProgress!(milestone.getAsNormalizedFullLink()))
+        .toBe(false);
+      expect(recordOf(result).key("progress").getRaw()).toBeUndefined();
+    } finally {
+      finished.resolve({ outcome: "refused" });
+    }
+    await waitForState(result, "refused");
+  });
+
+  it("rejects progress after cancellation and after a terminal outcome", async () => {
+    const started = defer<ClaimedAgentRun>();
+    const finished = defer<AgentRunExecution>();
+    await startRunner((run) => {
+      started.resolve(run);
+      return finished.promise;
+    }, { progress: true });
+    const result = await submit({ progress: true });
+    const run = await started.promise;
+    const milestone = patternSide.getCell(home, "late-progress", {
+      type: "string",
+    });
+    await patternSide.editWithRetry((tx) => {
+      milestone.withTx(tx).set("Working");
+      recordOf(result).withTx(tx).key("cancelRequestedAt").set(
+        clock.toISOString(),
+      );
+    });
+    try {
+      expect(await run.publishProgress!(milestone.getAsNormalizedFullLink()))
+        .toBe(false);
+    } finally {
+      finished.resolve({ outcome: "refused" });
+    }
+    await waitForState(result, "cancelled");
+    expect(await run.publishProgress!(milestone.getAsNormalizedFullLink()))
+      .toBe(false);
+    expect(recordOf(result).key("progress").getRaw()).toBeUndefined();
+  });
+
   describe("with the harness executor over a scripted prompt loop", () => {
     let workRoot: string;
 
@@ -1627,12 +1799,19 @@ describe("agent runner", () => {
     const startHarnessRunner = async (
       script: (context: {
         resultPath: string;
+        engine: CfHarnessEngine;
         signal?: AbortSignal;
         emit: () => Promise<void>;
+        loomCommands?: unknown;
       }) => Promise<HarnessPromptLoopResult>,
       options: {
         report?: (message: string) => void;
         omitHarnessArgs?: boolean;
+        failFirstProgressSession?: boolean;
+
+        /** The command endpoint the runner hands its runs, and the tools it offers. */
+        commands?: { url: string; actor: string };
+        runnerTools?: string[];
 
         /**
          * The platform the harness runs as and the home it finds, for a run
@@ -1656,6 +1835,7 @@ describe("agent runner", () => {
         observationCeiling?: unknown;
         workspaces: string[];
       } = { workspaces: [] };
+      let sessionRequests = 0;
       const execute = createHarnessAgentRunExecutor({
         identityKeyPath: join(workRoot, "unused.key"),
         requester: home,
@@ -1666,6 +1846,9 @@ describe("agent runner", () => {
         report: options.report ??
           ((m) => Deno.env.get("AGENT_TEST_DEBUG") && console.log(m)),
         ...(options.omitHarnessArgs ? {} : { model: "scripted" }),
+        ...(options.commands !== undefined
+          ? { commands: options.commands }
+          : {}),
         harnessDeps: {
           env: {
             CF_HARNESS_MODEL_PROVIDER: "openai-compatible-gateway",
@@ -1676,6 +1859,8 @@ describe("agent runner", () => {
             ...(options.unnamedSandbox !== undefined
               ? { HOME: options.unnamedSandbox.home }
               : {
+                CF_HARNESS_RUNSC_CFC_POLICY:
+                  "/nonexistent/agent-runner-test/policy.json",
                 CF_HARNESS_SANDBOX_RUNTIME: "runsc",
                 CF_HARNESS_RUNSC_BINARY: "/nonexistent/agent-runner-test/runsc",
                 CF_HARNESS_SANDBOX_ROOTFS:
@@ -1685,7 +1870,13 @@ describe("agent runner", () => {
           ...(options.unnamedSandbox !== undefined
             ? { platform: options.unnamedSandbox.platform, arch: "aarch64" }
             : {}),
-          fabricSessionFactory: () => Promise.resolve({ pieces }),
+          fabricSessionFactory: () => {
+            sessionRequests++;
+            if (options.failFirstProgressSession && sessionRequests === 2) {
+              return Promise.reject(new Error("progress storage unavailable"));
+            }
+            return Promise.resolve({ pieces });
+          },
           createPromptLoop: (options) => ({
             runPrompt: (prompt) => {
               seen = {
@@ -1702,9 +1893,13 @@ describe("agent runner", () => {
                   ?.cfcReadMaxConfidentiality,
               };
               return script({
+                engine: options.engine!,
                 resultPath:
                   options.engine!.getRunState().structuredResult!.path,
                 signal: prompt.signal,
+                ...(options.loomCommands !== undefined
+                  ? { loomCommands: options.loomCommands }
+                  : {}),
                 emit: async () => {
                   const message = {
                     role: "assistant" as const,
@@ -1721,9 +1916,113 @@ describe("agent runner", () => {
           }),
         },
       });
-      await startRunner(execute, { tools: ["describe_handle", "web_fetch"] });
+      await startRunner(execute, {
+        tools: options.runnerTools ?? ["describe_handle", "web_fetch"],
+        progress: true,
+      });
       return () => seen;
     };
+
+    it("completes after an interim publication fails and accepts later progress", async () => {
+      const reports: string[] = [];
+      await startHarnessRunner(async ({ engine, resultPath }) => {
+        await engine.invokeBuiltinTool("report_progress", {
+          message: "First milestone",
+        });
+        await engine.invokeBuiltinTool("report_progress", {
+          message: "Recovered milestone",
+        });
+        await Deno.writeTextFile(
+          resultPath,
+          JSON.stringify({ answer: "Hyperion" }),
+        );
+        return loopResult("recovered-progress");
+      }, {
+        failFirstProgressSession: true,
+        report: (message) => reports.push(message),
+      });
+      const result = await submit({ progress: true });
+      await waitForState(result, "completed");
+      expect(
+        reports.some((message) =>
+          message.includes("progress storage unavailable")
+        ),
+      ).toBe(true);
+      const settled = await waitForCellValue<
+        { progress?: { message: string; sequence: number } }
+      >(
+        patternSide,
+        result,
+        (value) => value?.progress?.sequence === 2,
+      );
+      expect(settled.progress?.message).toBe("Recovered milestone");
+    });
+
+    it("delivers successive labeled progress links while the result is pending", async () => {
+      const start = defer<void>();
+      const advance = defer<void>();
+      const finish = defer<void>();
+      await startHarnessRunner(async ({ engine, resultPath }) => {
+        await start.promise;
+        await engine.invokeBuiltinTool("report_progress", {
+          message: "Found candidates",
+        });
+        await advance.promise;
+        await engine.invokeBuiltinTool("report_progress", {
+          message: "Checked candidates",
+        });
+        await finish.promise;
+        await Deno.writeTextFile(
+          resultPath,
+          JSON.stringify({ answer: "Hyperion" }),
+        );
+        return loopResult("progress-run");
+      });
+      try {
+        const result = await submit({ progress: true });
+        start.resolve();
+        const first = await waitForCellValue<
+          {
+            progress?: { message: string; sequence: number };
+            pending?: boolean;
+          }
+        >(
+          patternSide,
+          result,
+          (value) =>
+            value?.progress?.sequence === 1 || value?.pending === false,
+        );
+        expect(first.progress?.message).toBe("Found candidates");
+        expect(first.pending).toBe(true);
+        const firstLink = recordOf(result).key("progress").resolveAsCell()
+          .getAsNormalizedFullLink();
+        advance.resolve();
+        const second = await waitForCellValue<
+          {
+            progress?: { message: string; sequence: number };
+            pending?: boolean;
+          }
+        >(
+          patternSide,
+          result,
+          (value) =>
+            value?.progress?.sequence === 2 || value?.pending === false,
+        );
+        expect(second.progress?.message).toBe("Checked candidates");
+        expect(second.pending).toBe(true);
+        expect(
+          recordOf(result).key("progress").resolveAsCell()
+            .getAsNormalizedFullLink(),
+        ).not.toEqual(firstLink);
+        finish.resolve();
+        await waitForState(result, "completed");
+        expect(result.key("progress").get()).toMatchObject({ sequence: 2 });
+      } finally {
+        start.resolve();
+        advance.resolve();
+        finish.resolve();
+      }
+    });
 
     it("writes the structured result and the run's usage, turns, and artifact reference", async () => {
       const seen = await startHarnessRunner(async ({ resultPath, emit }) => {
@@ -1760,6 +2059,60 @@ describe("agent runner", () => {
       expect(
         (seen().argv as { name: string }[]).map((cell) => cell.name),
       ).toEqual(["finished"]);
+    });
+
+    it("hands a run the command endpoint, with an id of its own, so its list_commands reads the host's commands", async () => {
+      const received: (string | null)[] = [];
+      await using host = (() => {
+        const server = Deno.serve(
+          { hostname: "127.0.0.1", port: 0, onListen: () => {} },
+          (request) => {
+            received.push(request.headers.get("X-Loom-Agent-Run-Id"));
+            return Response.json({
+              commands: [{ id: "wants.recent", inputs: { type: "object" } }],
+            });
+          },
+        );
+        return {
+          url: `http://127.0.0.1:${server.addr.port}`,
+          [Symbol.asyncDispose]: () => server.shutdown(),
+        };
+      })();
+      let listing: unknown;
+      const seen = await startHarnessRunner(
+        async ({ resultPath, loomCommands }) => {
+          let outputs = 0;
+          listing = await getBuiltinTool("list_commands")!.invoke(
+            {
+              nextOutputId: (toolId: string) =>
+                createToolOutputId("fabric-commands", toolId, ++outputs),
+              loomCommands,
+            } as never,
+            {},
+          );
+          await Deno.writeTextFile(
+            resultPath,
+            JSON.stringify({ answer: "Listed." }),
+          );
+          return loopResult("run-commands");
+        },
+        {
+          commands: { url: host.url, actor: "agent:agent-runner" },
+          runnerTools: ["describe_handle", "list_commands", "run_command"],
+        },
+      );
+      const result = await submit({ tools: ["list_commands"] });
+
+      await waitForState(result, "completed");
+
+      expect(seen().slotRole).toBe("context");
+      expect(seen().allowedTools).toContain("list_commands");
+      expect(listing).toMatchObject({
+        status: "ok",
+        entries: [{ name: "wants.recent" }],
+      });
+      expect(received).toHaveLength(1);
+      expect(received[0]).toMatch(/^agent-run-/);
     });
 
     it("reports the harness's refusal, naming the variable alone, for a run on macOS with no native runtime", async () => {
@@ -2129,14 +2482,17 @@ describe("agent runner", () => {
       expect(ended.result).toBeUndefined();
     });
 
-    it("uses distinct workspaces for distinct records with one request hash", async () => {
-      const first = await submit({ task: "the same task" });
-      const second = await submit({ task: "the same task" });
+    it("isolates workspaces and progress for distinct records with one request hash", async () => {
+      const first = await submit({ task: "the same task", progress: true });
+      const second = await submit({ task: "the same task", progress: true });
       const requestHash = recordOf(first).get()!.requestHash;
       await patternSide.editWithRetry((tx) => {
         recordOf(second).withTx(tx).key("requestHash").set(requestHash);
       });
-      const seen = await startHarnessRunner(async ({ resultPath }) => {
+      const seen = await startHarnessRunner(async ({ resultPath, engine }) => {
+        await engine.invokeBuiltinTool("report_progress", {
+          message: resultPath,
+        });
         await Deno.writeTextFile(
           resultPath,
           JSON.stringify({ answer: "Hyperion" }),
@@ -2151,6 +2507,12 @@ describe("agent runner", () => {
         recordOf(second).get()?.requestHash,
       );
       expect(new Set(seen().workspaces).size).toBe(2);
+      const firstProgress = recordOf(first).key("progress").resolveAsCell();
+      const secondProgress = recordOf(second).key("progress").resolveAsCell();
+      expect(firstProgress.getAsNormalizedFullLink()).not.toEqual(
+        secondProgress.getAsNormalizedFullLink(),
+      );
+      expect(firstProgress.get()).not.toEqual(secondProgress.get());
     });
 
     it("fails when the validated result file disappears before the writer reads it", async () => {

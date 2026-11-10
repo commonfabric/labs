@@ -15,8 +15,10 @@ export {
   type DurableRead,
   readConfirmed,
   readDurable,
+  speculationSettledFor,
 } from "./confirmed-read.ts";
 export { handlingCommittedBy } from "./handling-commit.ts";
+export { pullFromServer } from "./served-read.ts";
 export { ensureSESLockdown } from "./sandbox/ses-runtime.ts";
 export {
   fabricAuthorityMatchesSpaceHost,
@@ -149,7 +151,9 @@ export {
   isCell,
   isReadableCell,
   isStream,
+  pullProjected,
   readProjected,
+  resolveWriteTarget,
   sendEvent,
   setCell,
   sinkProjected,
@@ -248,6 +252,7 @@ export {
   profileOwnership,
 } from "./profile-order.ts";
 export { loadProfileOwnerDocuments, profileOwnerAt } from "./profile-owner.ts";
+export { writtenPrincipalAt } from "./written-principal.ts";
 export {
   classifyPieceOriginString,
   type PieceOriginKind as PieceOriginClassification,
@@ -384,7 +389,7 @@ export {
   ContextualFlowControl,
   resolveExternalRootRefForStructure,
 } from "./cfc.ts";
-export type { Mutable } from "@commonfabric/utils/types";
+export type { Mutable } from "@commonfabric/js-values/types";
 export {
   type ActionReadStats,
   RuntimeTelemetry,
@@ -409,11 +414,11 @@ export type {
 
 // Utility functions (split from utils.ts)
 export { createJsonSchema } from "./builder/create-json-schema.ts";
-export { deepEqual } from "@commonfabric/utils/deep-equal";
+export { deepEqual } from "@commonfabric/js-values/deep-equal";
 export { getValueAtPath, setValueAtPath } from "./path-utils.ts";
 export { schemaToTypeString } from "./schema-format.ts";
 export type { SchemaFormatOptions } from "./schema-format.ts";
-export { ACLManager } from "./acl-manager.ts";
+export { ACLManager, SpaceMembersRemainError } from "./acl-manager.ts";
 export {
   cellEntityIdString,
   type CellPath,

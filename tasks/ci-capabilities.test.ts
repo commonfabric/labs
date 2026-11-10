@@ -1,5 +1,10 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import {
+  BACKGROUND_LOG_ENV,
+  READY_MARKER,
+} from "../runtime/toolshed/background.ts";
 import { BUILD_HOST_VARIABLES } from "./build-binaries.ts";
 import {
   BINARY_CACHE_DIR,
@@ -10,9 +15,12 @@ import {
   type CapabilityId,
   COMPILE_CACHE_FILE,
   type ExecOptions,
+  METRIC_EXPORT_INTERVAL_MS,
   openCapabilities,
-  pidOfBackgroundLaunch,
   resolveCapabilities,
+  run,
+  type Spawn,
+  type SpawnedProcess,
   takeGithubToken,
 } from "./ci-capabilities.ts";
 import {
@@ -223,6 +231,34 @@ describe("ci capabilities", () => {
     expect(closed).toEqual(["cf"]);
   });
 
+  it("names both failures when an earlier capability fails to close after a later one fails to open", async () => {
+    // The failure to open is the answer the caller asked for, and the
+    // failure to close is still a failure the caller has to be told about.
+    const registry = new Map(CAPABILITIES);
+    registry.set("cf", {
+      id: "cf",
+      description: "a capability that cannot be closed",
+      open: () =>
+        Promise.resolve({
+          env: {},
+          close: () => Promise.reject(new Error("stuck")),
+        }),
+    });
+    registry.set("jq", {
+      id: "jq",
+      description: "a capability that cannot open",
+      open: () => Promise.reject(new Error("no jq here")),
+    });
+    const refused = openCapabilities(["cf", "jq"], {
+      root: Deno.cwd(),
+      dryRun: true,
+      workDir: "/nonexistent",
+    }, registry);
+    await expect(refused).rejects.toThrow(
+      "no jq here\ncf failed to close: stuck",
+    );
+  });
+
   it("keeps what it caches where the workflow's one cache step looks", () => {
     // The lane's own working directory is made fresh every run, so
     // anything kept there would be rebuilt every time however well the
@@ -366,7 +402,8 @@ describe("ci capabilities", () => {
       dryRun: true,
       workDir: "/nonexistent",
     }, registry);
-    await opened.close();
+    // The failure still reaches the caller, once the rest are closed.
+    await expect(opened.close()).rejects.toThrow("jq failed to close: stuck");
     expect(closed).toEqual(["deno"]);
   });
 
@@ -395,41 +432,175 @@ describe("ci capabilities", () => {
     await Deno.remove(repo, { recursive: true });
     await Deno.remove(empty, { recursive: true });
   });
+});
 
-  it("reads the process a background launch detached", () => {
-    expect(
-      pidOfBackgroundLaunch(
-        "Toolshed is listening; the server is running in the background " +
-          "(pid 4213). Logs: /tmp/toolshed.log",
-      ),
-    ).toBe(4213);
-    expect(pidOfBackgroundLaunch("no process here")).toBeUndefined();
+describe("run()", () => {
+  it("returns once a command writing to the job's log exits, whatever it left running", async () => {
+    // A process left holding the command's output is what would hold a call
+    // that reads that output to its end. The process is still there to kill
+    // only if this returned without waiting for it.
+    const dir = await Deno.makeTempDir({ prefix: "run-" });
+    try {
+      const pidFile = `${dir}/pid`;
+      expect(
+        await run(
+          "sh",
+          ["-c", 'sleep 30 & echo $! > "$1"', "sh", pidFile],
+          { inheritOutput: true },
+        ),
+      ).toBe("");
+      Deno.kill(Number(await Deno.readTextFile(pidFile)), "SIGKILL");
+    } finally {
+      await Deno.remove(dir, { recursive: true });
+    }
+  });
+
+  it("throws naming the exit code of a command writing to the job's log", async () => {
+    await expect(
+      run("sh", ["-c", "exit 124"], { inheritOutput: true }),
+    ).rejects.toThrow("sh -c exit 124 exited 124");
+  });
+});
+
+describe("opening what it can", () => {
+  /** Opens `requested` with `jq` refusing, noting what opened and closed. */
+  async function withJqRefusing(requested: CapabilityId[]) {
+    const events: string[] = [];
+    const opening = (id: CapabilityId, needs?: CapabilityId[]): Capability => ({
+      id,
+      description: `the capability ${id}`,
+      ...(needs === undefined ? {} : { needs }),
+      open: () => {
+        events.push(`opened ${id}`);
+        return Promise.resolve({
+          env: { [id]: "1" },
+          close: () => {
+            events.push(`closed ${id}`);
+            return Promise.resolve();
+          },
+        });
+      },
+    });
+    const registry = new Map<CapabilityId, Capability>([
+      ["cf", opening("cf")],
+      ["fuse", opening("fuse", ["jq"])],
+      ["jq", {
+        id: "jq",
+        description: "a capability that cannot open",
+        open: () => Promise.reject(new Error("no jq here")),
+      }],
+      ["deno", opening("deno")],
+    ]);
+    const said: string[] = [];
+    const opened = await openCapabilities(
+      requested,
+      {
+        root: Deno.cwd(),
+        dryRun: true,
+        workDir: "/nonexistent",
+        report: (line) => said.push(line),
+      },
+      registry,
+      { partial: true },
+    );
+    return { opened, events, said };
+  }
+
+  it("opens what comes after one that fails, and says why that one did not open", async () => {
+    const { opened, events, said } = await withJqRefusing(["jq", "deno", "cf"]);
+    expect(events).toEqual(["opened cf", "opened deno"]);
+    expect(said).toContain("ci-lane: could not open jq: no jq here");
+    expect(opened.timings.map(({ capability }) => capability)).toEqual([
+      "cf",
+      "deno",
+    ]);
+    expect(said.some((line) => line.includes("opened jq"))).toBe(false);
+    await opened.close();
+  });
+
+  it("refuses what is built on one that fails, without trying to open it", async () => {
+    const { opened, events } = await withJqRefusing(["fuse", "cf"]);
+    expect(events).toEqual(["opened cf"]);
+    expect(opened.refusalsFor(["fuse"])).toEqual([
+      { capability: "jq", why: "no jq here" },
+      {
+        capability: "fuse",
+        why: "it is built on jq, which did not open",
+      },
+    ]);
+    await opened.close();
+  });
+
+  it("returns no refusals for what opened, and closes what opened", async () => {
+    const { opened, events } = await withJqRefusing(["jq", "cf"]);
+    expect(opened.refusalsFor(["cf"])).toEqual([]);
+    expect(opened.envFor(["cf"])).toEqual({ cf: "1" });
+    await opened.close();
+    expect(events).toEqual(["opened cf", "closed cf"]);
   });
 });
 
 describe("opening a capability on a machine that answers", () => {
-  /** What a capability asked the machine, and what it was told. */
+  /** What a server half writes once it has bound its port. */
+  const LISTENING = `${READY_MARKER}\n`;
+
+  /**
+   * What a capability asked the machine, what it was told, and the signals
+   * the processes it started were sent.
+   *
+   * Each command is given the first answer whose key the command line
+   * contains. A command a capability runs to completion returns that
+   * answer, and fails where the answer starts with `!`. A process a
+   * capability starts writes the answer to its standard output. One that
+   * wrote `LISTENING` runs until it is sent a signal and then exits with
+   * code 0. Any other has already exited with code 1.
+   */
   function machine(answers: Record<string, string> = {}) {
     const asked: string[] = [];
     const given: Array<ExecOptions | undefined> = [];
+    const signaled: Deno.Signal[] = [];
+    const ask = (
+      command: string,
+      args: readonly string[],
+      options?: ExecOptions,
+    ): string => {
+      const line = [command, ...args].join(" ");
+      asked.push(line);
+      given.push(options);
+      return Object.entries(answers).find(([match]) => line.includes(match))
+        ?.[1] ?? "";
+    };
     const exec = (
       command: string,
       args: readonly string[],
       options?: ExecOptions,
     ): Promise<string> => {
-      const line = [command, ...args].join(" ");
-      asked.push(line);
-      given.push(options);
-      for (const [match, answer] of Object.entries(answers)) {
-        if (line.includes(match)) {
-          return answer.startsWith("!")
-            ? Promise.reject(new Error(answer.slice(1)))
-            : Promise.resolve(answer);
-        }
-      }
-      return Promise.resolve("");
+      const answer = ask(command, args, options);
+      return answer.startsWith("!")
+        ? Promise.reject(new Error(answer.slice(1)))
+        : Promise.resolve(answer);
     };
-    return { asked, given, exec };
+    const spawn = (
+      command: string,
+      args: readonly string[],
+      options?: ExecOptions,
+    ): SpawnedProcess => {
+      const answer = ask(command, args, options);
+      const exit = Promise.withResolvers<Deno.CommandStatus>();
+      let exited = answer !== LISTENING;
+      if (exited) exit.resolve({ success: false, code: 1, signal: null });
+      return {
+        stdout: ReadableStream.from([new TextEncoder().encode(answer)]),
+        status: exit.promise,
+        kill: (signal) => {
+          if (exited) throw new TypeError("the process has already exited");
+          exited = true;
+          signaled.push(signal);
+          exit.resolve({ success: true, code: 0, signal: null });
+        },
+      };
+    };
+    return { asked, given, signaled, exec, spawn };
   }
 
   /** The message `work` rejects with; fails the test if it resolves. */
@@ -437,7 +608,7 @@ describe("opening a capability on a machine that answers", () => {
     try {
       await work;
     } catch (error) {
-      return error instanceof Error ? error.message : String(error);
+      return describeFailure(error);
     }
     throw new Error("Expected the call to throw, and it returned instead.");
   }
@@ -463,10 +634,7 @@ describe("opening a capability on a machine that answers", () => {
     const lane = serverExecutionCiLane(role);
     const bodies: Record<string, unknown> = {
       "/api/meta": {
-        experimental: {
-          serverExecution: lane.enabled,
-          ...(lane.enabled ? { webViewScopedReplication: true } : {}),
-        },
+        experimental: { serverExecution: lane.enabled },
         shellServerExecutionDefine: lane.experimentalValue ?? null,
       },
       "/api/health/stats": { servingLoop: lane.enabled ? 1 : null },
@@ -489,6 +657,7 @@ describe("opening a capability on a machine that answers", () => {
         dryRun: false,
         workDir: root,
         exec: m.exec,
+        spawn: m.spawn,
         fetch: serving(role),
       }, CAPABILITIES);
       await opened.close();
@@ -518,7 +687,7 @@ describe("opening a capability on a machine that answers", () => {
       });
       await opened.close();
     } catch (error) {
-      said.push(`threw ${error instanceof Error ? error.message : error}`);
+      said.push(`threw ${describeFailure(error)}`);
     } finally {
       await Deno.remove(root, { recursive: true });
     }
@@ -528,7 +697,8 @@ describe("opening a capability on a machine that answers", () => {
   it("says what it is about to open and run before it does", async () => {
     // A command that never finishes leaves only what was said before it
     // in the log, so each line has to come ahead of the work it names.
-    const install = "sudo apt-get install -y --no-install-recommends " +
+    const bounded = "sudo timeout --kill-after=30 300 apt-get";
+    const install = `${bounded} install -y --no-install-recommends ` +
       "pkg-config gcc libfuse3-dev fuse3";
     expect(await narrate("fuse", machine({ "command -v gcc": "!absent" })))
       .toEqual([
@@ -540,8 +710,8 @@ describe("opening a capability on a machine that answers", () => {
         "ran sh -c command -v fusermount3",
         "ci-lane: running pkg-config --exists fuse3",
         "ran pkg-config --exists fuse3",
-        "ci-lane: running sudo apt-get update",
-        "ran sudo apt-get update",
+        `ci-lane: running ${bounded} update`,
+        `ran ${bounded} update`,
         `ci-lane: running ${install}`,
         `ran ${install}`,
         "ci-lane: running sudo chmod 666 /dev/fuse",
@@ -563,14 +733,38 @@ describe("opening a capability on a machine that answers", () => {
       "ran sh -c command -v fusermount3",
       "ci-lane: running pkg-config --exists fuse3",
       "ran pkg-config --exists fuse3",
-      "ci-lane: running sudo apt-get update",
-      "ran sudo apt-get update",
-      "threw offline",
+      "ci-lane: running sudo timeout --kill-after=30 300 apt-get update",
+      "ran sudo timeout --kill-after=30 300 apt-get update",
+      "threw could not install pkg-config, gcc, libfuse3-dev, fuse3: " +
+      "`apt-get update` failed or took more than 300s, and what it said is " +
+      "in the log above: offline",
+    ]);
+  });
+
+  it("gives `apt-get` the job's log to write to, and nothing else it runs", async () => {
+    const m = machine({ "command -v gcc": "!absent" });
+    const root = await Deno.makeTempDir({ prefix: "capability-" });
+    try {
+      const opened = await openCapabilities(["fuse"], {
+        root,
+        dryRun: false,
+        workDir: root,
+        exec: m.exec,
+      });
+      await opened.close();
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+    const showing = m.asked.filter((_, i) => m.given[i]?.inheritOutput);
+    expect(showing).toEqual([
+      "sudo timeout --kill-after=30 300 apt-get update",
+      "sudo timeout --kill-after=30 300 apt-get install -y " +
+      "--no-install-recommends pkg-config gcc libfuse3-dev fuse3",
     ]);
   });
 
   it("names the log its server writes, so a failed lane can print it", async () => {
-    const m = machine({ toolshed: "listening (pid 999999). Logs: x\n" });
+    const m = machine({ "index.ts": LISTENING });
     const root = await Deno.makeTempDir({ prefix: "capability-" });
     try {
       const opened = await openCapabilities(["toolshed"], {
@@ -578,14 +772,15 @@ describe("opening a capability on a machine that answers", () => {
         dryRun: false,
         workDir: root,
         exec: m.exec,
+        spawn: m.spawn,
         fetch: serving("default"),
       }, CAPABILITIES);
       await opened.close();
 
-      // The one the launch was told to write, and the one the lane would
+      // The one the server was told to write, and the one the lane would
       // have nothing of once its work directory goes.
-      const told = m.asked.find((line) => line.includes("--log-file="))!;
-      const wanted = /--log-file=(\S+)/.exec(told)![1];
+      const wanted = optionsOf(m, "index.ts")?.env?.[BACKGROUND_LOG_ENV];
+      expect(wanted?.startsWith(`${root}/`)).toBe(true);
       expect(opened.logs).toEqual([{ capability: "toolshed", path: wanted }]);
     } finally {
       await Deno.remove(root, { recursive: true }).catch(() => {});
@@ -596,7 +791,7 @@ describe("opening a capability on a machine that answers", () => {
     // The capability never opens, so nothing downstream is holding the
     // path: the log leaves in the throw or it goes with the work directory
     // unread. The probe is what fails, the server having started.
-    const m = machine({ toolshed: "listening (pid 999999). Logs: x\n" });
+    const m = machine({ "index.ts": LISTENING });
     const root = await Deno.makeTempDir({ prefix: "capability-" });
     try {
       const refused = await rejectionMessage(
@@ -604,22 +799,24 @@ describe("opening a capability on a machine that answers", () => {
           root,
           dryRun: false,
           workDir: root,
-          exec: async (command, args, options) => {
-            const line = [command, ...args].join(" ");
-            const wrote = /--log-file=(\S+)/.exec(line);
+          exec: m.exec,
+          spawn: (command, args, options) => {
             // What the server would have written before the posture went
-            // wrong, at the path the launch was told to write it to.
-            if (wrote) {
-              await Deno.writeTextFile(wrote[1], "a line the log holds\n");
-            }
-            return await m.exec(command, args, options);
+            // wrong, at the path it was told to write it to.
+            Deno.writeTextFileSync(
+              options!.env![BACKGROUND_LOG_ENV]!,
+              "a line the log holds\n",
+            );
+            return m.spawn(command, args, options);
           },
           // A server on the arm this lane did not ask for.
           fetch: serving("opposite"),
         }, CAPABILITIES),
       );
+      expect(refused).toContain("default lane publishes serverExecution");
       expect(refused).toContain("toolshed log:");
       expect(refused).toContain("a line the log holds");
+      expect(m.signaled).toEqual(["SIGTERM"]);
     } finally {
       await Deno.remove(root, { recursive: true }).catch(() => {});
     }
@@ -662,6 +859,58 @@ describe("opening a capability on a machine that answers", () => {
     ).toBe(true);
   });
 
+  it("says what a machine lacks of what each runner-preparing capability provides, and nothing where it has it", async () => {
+    const missing = (
+      id: CapabilityId,
+      m: ReturnType<typeof machine>,
+      os: typeof Deno.build.os = "linux",
+    ) =>
+      CAPABILITIES.get(id)?.missing?.({ root: Deno.cwd(), exec: m.exec }, os);
+    expect(await missing("jq", machine())).toBeUndefined();
+    expect(await missing("jq", machine({ "command -v jq": "!absent" })))
+      .toBe("jq is not on the path");
+    expect(await missing("fuse", machine())).toBeUndefined();
+    expect(await missing("fuse", machine({ "libfuse3": "!absent" })))
+      .toBe("libfuse3 is not where the FUSE bindings look for it");
+    expect(await missing("fuse", machine({ "fusermount3": "!absent" })))
+      .toBe("fusermount3 is not on the path");
+    expect(await missing("fuse", machine({ "/dev/fuse": "!closed" })))
+      .toBe("/dev/fuse is not open to this user");
+    expect(await missing("fuse", machine(), "darwin")).toBeUndefined();
+    expect(
+      await missing("fuse", machine({ "libfuse": "!absent" }), "darwin"),
+    ).toBe("neither FUSE-T nor macFUSE is installed");
+    expect(await missing("browser", machine())).toBeUndefined();
+    expect(await missing("browser", machine({ "apparmor": "!restricted" })))
+      .toMatch(/AppArmor restricts/);
+    expect(
+      await missing("git-history", machine({ "is-shallow": "true\n" })),
+    ).toBe("the checkout is shallow");
+    expect(
+      await missing("git-history", machine({ "is-shallow": "false\n" })),
+    ).toBeUndefined();
+  });
+
+  it("changes nothing on the machine when asking what it lacks", async () => {
+    for (const answer of ["", "!absent"]) {
+      const m = machine({
+        "command -v": answer,
+        "test ": answer,
+        "for at": answer,
+        "is-shallow": answer === "" ? "true\n" : "false\n",
+      });
+      for (const capability of CAPABILITIES.values()) {
+        for (const os of ["linux", "darwin"] as const) {
+          await capability.missing?.({ root: Deno.cwd(), exec: m.exec }, os);
+        }
+      }
+      expect(
+        m.asked.filter((line) => /sudo|apt-get|tee|chmod|fetch/.test(line)),
+      ).toEqual([]);
+      expect(m.asked.length).toBeGreaterThan(0);
+    }
+  });
+
   it("unshallows a checkout only where it is shallow", async () => {
     const shallow = machine({ "is-shallow-repository": "true\n" });
     await open("git-history", shallow);
@@ -693,7 +942,7 @@ describe("opening a capability on a machine that answers", () => {
   });
 
   it("starts a server on a port of its own and kills what it started", async () => {
-    const m = machine({ "index.ts": "listening (pid 999999). Logs: x\n" });
+    const m = machine({ "index.ts": LISTENING });
     const { opened } = await open("toolshed", m);
     const served = opened.envFor(["toolshed"]);
     const port = Number(served.TOOLSHED_PORT);
@@ -702,17 +951,19 @@ describe("opening a capability on a machine that answers", () => {
     // the Deno suites add a slash of their own when they need one.
     expect(served.API_URL).toBe(`http://localhost:${port}`);
     expect(m.asked.some((line) => line.includes(`--port=${port}`))).toBe(true);
-    expect(m.asked.some((line) => line.includes("--background"))).toBe(true);
-    // Closing is what `open` already did; killing a process this test
-    // invented would be worse than not checking, and what matters is
-    // that it does not throw.
+    // Started as the server half itself, so that this process is the
+    // one its exit is reported to.
+    expect(envOf(m, "index.ts")?.[BACKGROUND_LOG_ENV]).toBeDefined();
+    expect(m.asked.some((line) => line.includes("--background"))).toBe(false);
+    // Closing is what `open` already did.
+    expect(m.signaled).toEqual(["SIGTERM"]);
   });
 
   it("holds a server it started to the arm it started it for", async () => {
     // A server on the other arm answers every request the suites make
     // and passes, so the run reports that the arm it named works when
     // nothing exercised it.
-    const answers = { "index.ts": "listening (pid 999999). Logs: x\n" };
+    const answers = { "index.ts": LISTENING };
     await open("toolshed", machine(answers), "default");
 
     const wrong = machine(answers);
@@ -728,8 +979,6 @@ describe("opening a capability on a machine that answers", () => {
     // the value for the opposite arm, and none at all for the default.
     const opposite = serverExecutionCiLane("opposite");
     const named = opposite.experimentalValue;
-    // The ON arm's web view-scoped replication, set on that arm alone.
-    const viewScoped = opposite.enabled ? "true" : undefined;
     const before = Deno.env.get("EXPERIMENTAL_SERVER_EXECUTION");
     const beforeViewScoped = Deno.env.get(
       "EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION",
@@ -738,17 +987,19 @@ describe("opening a capability on a machine that answers", () => {
       "EXPERIMENTAL_SERVER_EXECUTION",
       named === "true" ? "false" : "true",
     );
+    // The posture check reads this too, so an ambient value would put an ON
+    // lane on a posture its role does not name.
     Deno.env.set("EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION", "false");
     try {
       const source = machine({
-        "index.ts": "listening (pid 999999). Logs: x\n",
+        "index.ts": LISTENING,
       });
       await open("toolshed", source);
       expect(envOf(source, "index.ts")?.EXPERIMENTAL_SERVER_EXECUTION)
         .toBeUndefined();
       expect(
         envOf(source, "index.ts")?.EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION,
-      ).toBe(serverExecutionCiLane("default").enabled ? "true" : undefined);
+      ).toBeUndefined();
 
       const baked = await openBaked(
         "toolshed-baked",
@@ -777,7 +1028,7 @@ describe("opening a capability on a machine that answers", () => {
         expect(
           envOf(oppositeServer, step)?.EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION,
           step,
-        ).toBe(viewScoped);
+        ).toBeUndefined();
       }
     } finally {
       if (before === undefined) {
@@ -837,11 +1088,88 @@ describe("opening a capability on a machine that answers", () => {
     }
   });
 
-  it("refuses a launch that names no process to kill later", async () => {
-    // A server nobody can kill outlives the lane and holds its port
-    // against the next one.
+  it("rejects with the exit code and log of a server that exits before it binds its port", async () => {
     const m = machine({ "index.ts": "started somehow\n" });
-    await expect(open("toolshed", m)).rejects.toThrow("named no process");
+    const refused = await rejectionMessage(open("toolshed", m));
+    expect(refused).toContain(
+      "the toolshed server exited with code 1 before it bound its port",
+    );
+    expect(refused).toContain("toolshed log:");
+  });
+
+  describe("closing a server it started", () => {
+    /**
+     * Starts, in place of the server, a Deno process that does what a
+     * server half does at either end of its life: it writes the readiness
+     * marker once it is listening, and on SIGTERM it writes a line to its
+     * log and exits with `code`. It is given the environment the
+     * capability built, without the coverage directory, since it is not
+     * code under test.
+     */
+    function standIn(code: number): Spawn {
+      const script = `
+        const log = Deno.env.get(${JSON.stringify(BACKGROUND_LOG_ENV)});
+        const listener = Deno.listen({ hostname: "127.0.0.1", port: 0 });
+        Deno.addSignalListener("SIGTERM", async () => {
+          await Deno.writeTextFile(log, "shut down\\n", { append: true });
+          Deno.exit(${code});
+        });
+        console.log(${JSON.stringify(READY_MARKER)});
+        for await (const connection of listener) connection.close();
+      `;
+      return (_command, _args, options) => {
+        const env = { ...options?.env };
+        delete env.DENO_COVERAGE_DIR;
+        return new Deno.Command(Deno.execPath(), {
+          args: ["eval", script],
+          env,
+          clearEnv: true,
+          stdin: "null",
+          stdout: "piped",
+          stderr: "inherit",
+        }).spawn();
+      };
+    }
+
+    /** Opens `toolshed` on a stand-in that exits with `code`. */
+    function openStandIn(code: number, workDir: string) {
+      return openCapabilities(["toolshed"], {
+        root: workDir,
+        dryRun: false,
+        workDir,
+        spawn: standIn(code),
+        fetch: serving("default"),
+      });
+    }
+
+    it("settles once the server has exited, with its shutdown logged", async () => {
+      const workDir = await Deno.makeTempDir({ prefix: "capability-" });
+      try {
+        const opened = await openStandIn(0, workDir);
+        await opened.close();
+        // Written by the server after it was signaled and before it exited.
+        expect(await Deno.readTextFile(opened.logs[0]!.path)).toBe(
+          "shut down\n",
+        );
+      } finally {
+        // Nothing can still be writing into the directory, so its removal
+        // must succeed.
+        await Deno.remove(workDir, { recursive: true });
+      }
+    });
+
+    it("rejects with the exit code and log path of a server that exits uncleanly on SIGTERM", async () => {
+      const workDir = await Deno.makeTempDir({ prefix: "capability-" });
+      try {
+        const opened = await openStandIn(1, workDir);
+        await expect(opened.close()).rejects.toThrow(
+          "toolshed failed to close: the toolshed server exited with code 1; " +
+            `its log is \`${opened.logs[0]!.path}\``,
+        );
+      } finally {
+        await Deno.remove(workDir, { recursive: true });
+      }
+    });
   });
 
   /** Opens a baked capability against a root that has no binary yet. */
@@ -850,7 +1178,7 @@ describe("opening a capability on a machine that answers", () => {
     binaryName: string,
     role: ServerExecutionCiRole,
   ) {
-    const m = machine({ [binaryName]: "listening (pid 999999). Logs: x\n" });
+    const m = machine({ [binaryName]: LISTENING });
     const root = await Deno.makeTempDir({ prefix: "capability-" });
     try {
       // What a build leaves behind, so the copy into the cache has
@@ -862,6 +1190,7 @@ describe("opening a capability on a machine that answers", () => {
         dryRun: false,
         workDir: root,
         exec: m.exec,
+        spawn: m.spawn,
         fetch: serving(role),
       }, CAPABILITIES);
       await opened.close();
@@ -874,7 +1203,7 @@ describe("opening a capability on a machine that answers", () => {
   it("builds the server-execution binary only when none was restored", async () => {
     const binaryName = "toolshed-baked-opposite";
     const answers = {
-      [binaryName]: "listening (pid 999999). Logs: x\n",
+      [binaryName]: LISTENING,
     };
     const openOpposite = async (restored: boolean) => {
       const m = machine(answers);
@@ -895,6 +1224,7 @@ describe("opening a capability on a machine that answers", () => {
         dryRun: false,
         workDir: root,
         exec: m.exec,
+        spawn: m.spawn,
         fetch: serving("opposite"),
       }, CAPABILITIES);
       await opened.close();
@@ -905,6 +1235,92 @@ describe("opening a capability on a machine that answers", () => {
     // between forty seconds and seventeen on every lane that needs it.
     expect(await openOpposite(false)).toBe(true);
     expect(await openOpposite(true)).toBe(false);
+  });
+
+  it("builds in and runs from the tree it is told to build from, whatever the root's cache holds", async () => {
+    const binaryName = "toolshed-baked-opposite";
+    const m = machine({ [binaryName]: LISTENING });
+    const root = await Deno.makeTempDir({ prefix: "capability-" });
+    const tree = await Deno.makeTempDir({ prefix: "capability-tree-" });
+    try {
+      await Deno.mkdir(`${root}/${BINARY_CACHE_DIR}`, { recursive: true });
+      await Deno.writeTextFile(`${root}/${BINARY_CACHE_DIR}/${binaryName}`, "");
+      await Deno.mkdir(`${tree}/dist`, { recursive: true });
+      await Deno.writeTextFile(`${tree}/dist/toolshed`, "");
+      const opened = await openCapabilities([binaryName], {
+        root,
+        dryRun: false,
+        workDir: root,
+        buildFrom: tree,
+        exec: m.exec,
+        spawn: m.spawn,
+        fetch: serving("opposite"),
+      }, CAPABILITIES);
+      await opened.close();
+      expect(optionsOf(m, "build-binaries toolshed")?.cwd).toBe(tree);
+      expect(
+        m.asked.some((line) =>
+          line.startsWith(`${tree}/${BINARY_CACHE_DIR}/${binaryName} `)
+        ),
+      ).toBe(true);
+      expect(m.asked.some((line) => line.startsWith(root))).toBe(false);
+    } finally {
+      await Deno.remove(root, { recursive: true });
+      await Deno.remove(tree, { recursive: true });
+    }
+  });
+
+  it("keeps each server's spaces and caches in the lane's work directory, and tells the suites where", async () => {
+    const m = machine({ "index.ts": LISTENING });
+    const served = (await open("toolshed", m)).opened.envFor(["toolshed"]);
+    const env = envOf(m, "index.ts");
+    expect(env?.DB_PATH).toBe("");
+    expect(env?.MEMORY_DIR).toMatch(
+      /^file:\/\/.*capability-[^/]*\/toolshed-\d+\/memory\/$/,
+    );
+    expect(env?.CACHE_DIR).toMatch(/capability-[^/]*\/toolshed-\d+\/cache$/);
+    expect(served.MEMORY_DIR).toBe(env?.MEMORY_DIR);
+    expect(served.DB_PATH).toBe("");
+  });
+
+  it("starts every server with a metric export interval no lane outlives", async () => {
+    // A compiled server that exports metrics while its main thread is busy
+    // with its shutdown never exits, so no export may fall due in a lane.
+    expect(METRIC_EXPORT_INTERVAL_MS).toBeGreaterThanOrEqual(
+      24 * 60 * 60 * 1000,
+    );
+    const interval = `${METRIC_EXPORT_INTERVAL_MS}`;
+    const source = machine({ "index.ts": LISTENING });
+    await open("toolshed", source);
+    expect(envOf(source, "index.ts")?.OTEL_METRIC_EXPORT_INTERVAL)
+      .toBe(interval);
+    for (const role of ["default", "opposite"] as const) {
+      const id = role === "default"
+        ? "toolshed-baked"
+        : "toolshed-baked-opposite";
+      const binary = `toolshed-baked-${role}`;
+      const baked = await openBaked(id, binary, role);
+      expect(envOf(baked, binary)?.OTEL_METRIC_EXPORT_INTERVAL)
+        .toBe(interval);
+    }
+  });
+
+  it("gives the suites of a baked server a store beside the server's rather than its own", async () => {
+    const m = await openBaked(
+      "toolshed-baked-opposite",
+      "toolshed-baked-opposite",
+      "opposite",
+    );
+    expect(envOf(m, "toolshed-baked-opposite")?.MEMORY_DIR).toMatch(
+      /\/toolshed-\d+\/memory\/$/,
+    );
+    const suites = (await openCapabilities(["toolshed-baked-opposite"], {
+      root: Deno.cwd(),
+      dryRun: true,
+      workDir: "/work",
+    }, CAPABILITIES)).envFor(["toolshed-baked-opposite"]);
+    expect(suites.MEMORY_DIR).toBe("file:///work/toolshed-8000/suites-memory/");
+    expect(suites.DB_PATH).toBe("");
   });
 
   it("reports a cached binary it cannot look for rather than building one", async () => {
@@ -921,6 +1337,7 @@ describe("opening a capability on a machine that answers", () => {
           dryRun: false,
           workDir: root,
           exec: m.exec,
+          spawn: m.spawn,
         }, CAPABILITIES),
       ).rejects.toThrow(Deno.errors.NotADirectory);
       expect(m.asked.some((line) => line.includes("build-binaries")))
@@ -942,19 +1359,15 @@ describe("the binaries a lane caches", () => {
     }
   });
 
-  it("bakes each role's arm, and on the ON arm the flags it runs with besides", () => {
+  it("bakes each role's arm and no other flag", () => {
     for (const [on, off] of [[true, false], [false, true]]) {
       expect(cachedBinaries(on)["toolshed-baked-opposite"].bakes)
         .toEqual({
           EXPERIMENTAL_SERVER_EXECUTION: `${off}`,
-          ...(off ? { EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION: "true" } : {}),
           CF_COMPILE_CACHE_VERSION: "inputs",
         });
       expect(cachedBinaries(on)["toolshed-baked-default"].bakes)
-        .toEqual({
-          ...(on ? { EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION: "true" } : {}),
-          CF_COMPILE_CACHE_VERSION: "inputs",
-        });
+        .toEqual({ CF_COMPILE_CACHE_VERSION: "inputs" });
     }
   });
 });

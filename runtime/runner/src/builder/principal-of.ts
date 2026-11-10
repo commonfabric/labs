@@ -1,6 +1,6 @@
 import type { DID } from "@commonfabric/api";
 import { debugStr } from "@commonfabric/data-model";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import { labelMetadataFieldIsProtected } from "../cfc/label-metadata-population.ts";
 import { cfcLabelViewFromMetadata } from "../cfc/label-view-state.ts";
@@ -15,6 +15,7 @@ import {
   PROFILE_NAME_FIELD,
 } from "../cfc/represents-principal.ts";
 import type { Runtime } from "../runtime.ts";
+import { writtenPrincipalAt } from "../written-principal.ts";
 import { withdrawHandlerWhileLoading } from "../scheduler/handler-load-wait.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import { internalVerifierRead } from "../storage/reactivity-log.ts";
@@ -130,6 +131,68 @@ export function principalsOf(
 }
 
 /**
+ * Returns the principal `target`'s value's own cell represents, by the rule
+ * `cfc/written-principal.ts` states (`writtenPrincipalAt()`): the one
+ * principal the label of the cell a write to `target` lands in names, when
+ * the value is the whole of that cell and no link stored there leads
+ * elsewhere, or `undefined` otherwise, and for a `target` passed as
+ * `undefined`. In a reactive computation the result updates when the label
+ * or the links change; in a handler, a document still loading withdraws the
+ * handler, which runs again once it arrives.
+ *
+ * @throws If called outside a handler or a reactive computation, with a
+ *   `target` that is neither a cell nor `undefined`, if a `represents-principal`
+ *   claim's subject is classified as anything but public, or when the label
+ *   is stored in a form this build cannot interpret or a read of it fails.
+ */
+export function writtenPrincipalOf(target: unknown): DID | undefined {
+  const name = "writtenPrincipalOf(target)";
+  const { frame, runtime, tx } = readingFrame(name);
+  if (
+    labelMetadataFieldIsProtected({ kind: "represents-principal" }, "subject")
+  ) {
+    throw new Error(
+      `\`${name}\` cannot carry a label for the subject of a \`represents-principal\` claim, which is not classified public.`,
+    );
+  }
+  if (target === undefined) return undefined;
+  return writtenPrincipalAt(
+    tx,
+    cellOfTarget(target, name),
+    frame.frameKind === "handler"
+      ? (document) =>
+        withdrawHandlerWhileLoading(
+          runtime,
+          tx,
+          document,
+          `the label of \`${document.id}\` was read while its document was still loading`,
+        )
+      : undefined,
+  );
+}
+
+/**
+ * Helper for `principalOf()`, `principalsOf()` and `writtenPrincipalOf()`,
+ * which returns the frame of the handler or reactive computation the caller
+ * `name` runs in, with its runtime and transaction.
+ *
+ * @throws If there is none, or it holds no runtime or transaction.
+ */
+function readingFrame(name: string) {
+  const frame = topFrame();
+  if (frame?.frameKind !== "lift" && frame?.frameKind !== "handler") {
+    throw new Error(
+      `\`${name}\` can only be called from a handler or a reactive computation.`,
+    );
+  }
+  const { runtime, tx } = frame;
+  if (runtime === undefined || tx === undefined) {
+    throw new Error(`\`${name}\` requires an executing runtime.`);
+  }
+  return { frame, runtime, tx };
+}
+
+/**
  * Helper for `principalOf()` and `principalsOf()`, which checks the calling
  * frame and `kind`, then reads the claims of `kind` on `target`'s label as
  * `exactPrincipalAttestations()` reads them. `name` is the caller, as its
@@ -141,16 +204,7 @@ function attestedPrincipals(
   kind: unknown,
   options: unknown,
 ): DID[] | undefined {
-  const frame = topFrame();
-  if (frame?.frameKind !== "lift" && frame?.frameKind !== "handler") {
-    throw new Error(
-      `\`${name}\` can only be called from a handler or a reactive computation.`,
-    );
-  }
-  const { runtime, tx } = frame;
-  if (runtime === undefined || tx === undefined) {
-    throw new Error(`\`${name}\` requires an executing runtime.`);
-  }
+  const { frame, runtime, tx } = readingFrame(name);
   if (typeof kind !== "string" || !PRINCIPAL_CLAIM_KINDS.has(kind)) {
     throw new Error(
       debugStr`\`${name}\` takes a \`kind\` of \`authored-by\` or \`represents-principal\`, not $quote${kind}`,

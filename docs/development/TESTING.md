@@ -31,15 +31,15 @@ covers trees no package's own check reaches.
 
 ### What a run ends with
 
-The root `deno task test`, `deno task integration`, and every
-continuous-integration lane end with a block headed `test summary`, built by
-`tasks/test-summary.ts`. A passing run's block is one line of counts. A failing
-run's block gives, for each of its first twenty failing tests, its name, its
-file, a command that runs it again where its kind of test has one, and the first
-lines of its error, and counts the rest. For a command that failed
-without a failing test to explain it, the block quotes the end of that
-command's output. The block ends with where the full logs are, so reading the
-end of the output is enough to know what failed and what to run next.
+The root `deno task test`, `deno task integration`, a `deno task test-gap` that
+runs tests, and every continuous-integration lane end with a block headed `test summary`, built
+by `tasks/test-summary.ts`. A passing run's block is one line of counts. A
+failing run's block gives, for each of its first twenty failing tests, its name,
+its file, a command that runs it again where its kind of test has one, and the
+first lines of its error, and counts the rest. For a command that failed without
+a failing test to explain it, the block quotes the end of that command's output.
+The block ends with where the full logs are, so reading the end of the output is
+enough to know what failed and what to run next.
 
 The root `deno task test` writes each package's output to a log file rather
 than to the console. A failing run keeps the directory of logs and names it in
@@ -93,6 +93,33 @@ source says.
 A test's name is also its identity in the run-record store, so a renamed test
 must be listed in `tasks/test-identity-aliases/` to keep its recorded
 history joined to its new name.
+
+### Running what a pull request leaves out
+
+A pull request's continuous-integration run does not run every test. It runs
+the test files the change edits and a fixed budget of others chosen by their
+history (`DISCRETIONARY_SECONDS`), as [test selection](test-selection.md)
+describes. A test that imports a changed module can therefore go unrun until
+the default branch runs everything. Before opening a pull request, run those
+tests rather than tests the pull request will run anyway:
+
+```bash
+deno task test-gap --dry-run   # what would run, and what it is projected to cost
+deno task test-gap             # run it
+```
+
+It finds the test files the change reaches through their imports, takes away
+every test the pull request's default selection runs, and runs the rest,
+choosing them nearest the change first and passing over any that would take
+the run past ten minutes of work as the selection's cost model prices it. `--seconds` sets
+another budget, and `--base` the ref the change is measured against. A run that
+runs tests ends with the block described in
+[What a run ends with](#what-a-run-ends-with).
+After it come anything the run could not clean up, the failing tests that
+pull requests hold back as too flaky, which do not fail the run, and the test
+units left out, among them any this machine lacks something for.
+[Running locally what a pull request leaves out](test-selection.md#running-locally-what-a-pull-request-leaves-out)
+has the detail.
 
 ### Every test has to pass on its own
 
@@ -243,15 +270,33 @@ changed. The Tomorrow's Test Order workflow,
 ahead, so that such a test can be found and fixed before the day it would
 break.
 
-The workflow runs at 11:00 UTC every day. That is 04:00 in the Pacific zone in
-summer and 03:00 in winter, early on a Pacific day either way. It asks
-`deno task -q test-seed --tomorrow` for the seed of the next Pacific day, and
-calls the CI workflow at the head of `main` with that seed, which runs every CI
-test suite under it. When a test fails, the run fails. The run's checks on the
-commit are listed under "Tomorrow's order", apart from the checks of the
-commit's own run. When another workflow calls the CI workflow, it skips
-`Status`, which holds the coverage and topology checks. It also skips the build,
-attestation and deploy jobs. The records relay follows the workflow, and its
+The workflow runs the suites once for each seed, the first time it finds that
+the CI workflow passed on the head of `main`. A head that CI has not passed on
+would fail the run for reasons unrelated to the order. The workflow starts each
+time the CI workflow finishes on `main`, and a run goes on to decide only when
+that CI passed on a push. It also starts at 11:17 UTC every day, for a day when
+nothing lands. That is 04:17 in the Pacific zone in summer and 03:17 in winter,
+early on a Pacific day either way, so a scheduled run that GitHub starts hours
+late still asks for the same seed.
+
+Each run asks `deno task -q test-seed --tomorrow` for the seed of the next
+Pacific day. `tasks/test-order-tomorrow.ts` then decides whether to run the
+suites. It says yes when CI passed on the head of `main` and no other run has
+run that seed, whatever came of that run. A run checks out the head of `main`
+as it stood when the event that started the run fired, which is not always the
+commit whose CI run just finished. The runs that decide wait for one another,
+so that each sees what the run before it did. A run dispatched by hand runs the
+suites without asking, which is how to run a seed again, and it counts as
+having run the seed.
+
+A run that goes ahead calls the CI workflow at the head of `main` with the
+seed, which runs every CI test suite under it. When a test fails, the run
+fails. The run's checks on the commit are listed under "Tomorrow's order"
+followed by the seed, apart from the checks of the commit's own run. That
+name is how `tasks/test-order-tomorrow.ts` finds the runs of a seed. When
+another workflow calls the CI workflow, it skips `Status`, which holds the
+coverage and topology checks. It also skips the build, attestation and deploy
+jobs. The records relay follows the workflow, and its
 records carry the seed they ran under, so [test selection](test-selection.md)
 keeps them apart from the commit's own runs. Test selection reads them as runs
 on the default branch, since they ran its own head.
@@ -329,6 +374,26 @@ the checkout, prints the seed on standard output and the line naming it on
 standard error. `deno task check-test-shuffle` fails when a command that
 starts a test runner does not carry a seed, and lists the runners this
 repository owns along with the ones whose order is the test.
+
+A `deno test` that TypeScript starts is built as an array of arguments, and
+the seed goes into that array as it is written:
+`["deno", "test", "--no-check", shuffleFlag(shuffleSeed()), ...files]`, with
+both functions from `@commonfabric/test-support/shuffle`. In a runner that has
+called `pinShuffleSeed()`, `shuffleSeed()` returns the seed that call settled.
+The processes the runner starts inherit that seed through the environment.
+
+The check reads every tracked TypeScript file except test files and the
+implementation of a runner that forwards its caller's flags. In those files it
+looks at two kinds of array: one that starts `"deno", "test"` or
+`Deno.execPath(), "test"`, and the `args` array of a `new Deno.Command()`
+whose program is `deno`, when that array starts with `"test"`. Such an array
+passes when one of its elements is a string writing `--shuffle=` and a seed, or
+a call to `shuffleFlag()`. A spread element never counts, because the check
+cannot see what it holds. An array that starts with `"deno"` or `Deno.execPath()` and goes
+on with anything other than a plain string, such as `["deno", ...args]`, may
+run `deno test`, so it is held to the same rule; write a `deno test` command as
+one array.
+
 `base/test-support/src/shuffle.ts` holds the seed and the permutation.
 `tasks/test-topology.test.ts` fails on a `deno test` that a manifest, a
 workflow, or a shell script writes without `--no-check`; a lane passes the flag
@@ -372,6 +437,8 @@ The following repository commands and test paths launch a browser:
   package name associated with browser tests does not by itself establish that
   a filtered test launches one.
 - The `deno task demo` command.
+- The `deno task test-gap` command, whenever what it chose to run includes
+  browser tests; its dry run lists the units it would run, with their suites.
 - Tests that run `deno-web-test`, call `Browser.launch()`, or bind a
   `ShellIntegration` lifecycle.
 
@@ -428,6 +495,23 @@ them. Detached crash handlers can outlive the group and remain covered by the
 EOF wait. When investigating a teardown stall, capture every holder of the
 pipe, including renderers and detached updater processes, and record assertion
 completion separately from suite and process completion.
+
+A browser also ends with the process that launched it, whether or not anything
+closed it. An `afterAll` does not run after an uncaught error ends a test file,
+and nothing runs after `SIGKILL`, so this cannot be left to the test process.
+`spawnBrowserProcess()` in `runtime/integration/browser-process.ts` starts
+Chrome through a short shell program, which leaves one background job in the
+browser's process group. The job blocks reading a pipe that only the launching
+process holds open. The kernel closes that pipe however the process ends, and
+the job then sends `SIGKILL` to the group. The profile directory stays behind in
+that case, because removing it is `Browser.close()`'s work.
+
+On macOS, a running test's browser and a leftover one differ in their parent and
+their output pipes. A running test's browser has the test process as its parent,
+and `lsof` shows a peer on its standard output and standard error. A leftover
+browser has PID 1 as its parent and no peer on either pipe, and nothing can give
+it back a reader. Stop a leftover browser by its PID, since other test runs on
+the machine may be using browsers that look the same by name.
 
 Browser tests require macOS or Linux. The launcher rejects other platforms
 before it starts a browser.
@@ -517,7 +601,7 @@ TOOLSHED_PORT=58848 SHELL_PORT=5263 EXPERIMENTAL_SERVER_EXECUTION=false deno tas
 After the shell reports that it is listening, run the browser test:
 
 ```bash
-API_URL=http://127.0.0.1:8089 FRONTEND_URL=http://127.0.0.1:5263/ EXPERIMENTAL_SERVER_EXECUTION=false CF_ROW_RECONNECT_CONTROL_URL=http://127.0.0.1:58849/ CF_ROW_REPRO_ARTIFACT_DIR=/tmp/row-reconnect deno test --no-check -A patterns/integration/reactive-vote-rows-browser.test.ts
+API_URL=http://127.0.0.1:8089 FRONTEND_URL=http://127.0.0.1:5263/ EXPERIMENTAL_SERVER_EXECUTION=false CF_ROW_RECONNECT_CONTROL_URL=http://127.0.0.1:58849/ CF_ROW_REPRO_ARTIFACT_DIR=/tmp/row-reconnect deno test --shuffle=$(deno task -q test-seed) --no-check -A patterns/integration/reactive-vote-rows-browser.test.ts
 ```
 
 Each outage asserts that the relay closed live socket endpoints before the
@@ -537,11 +621,10 @@ current value. CI keeps stable `default` and
 `opposite` roles; `tasks/server-execution-ci.ts` derives their actual ON/OFF
 posture from the first-party default constant. The opposite toolshed binary is
 built with an explicit inverse so its browser shell, server, and test processes
-stay aligned. Whichever role resolves ON also runs with
-`EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION=true` on its Toolshed servers, its
-baked shell, and the test processes of its package-integration and
-pattern-integration suites, so the ON arm's browsers receive only what their
-views need, and its posture probe checks that the toolshed publishes it.
+stay aligned. Web view-scoped replication is on by default under server
+execution, so the ON arm's browsers receive only what their views need without
+a variable of their own, and the ON arm's posture probe checks that the
+toolshed does not publish it off.
 [EXPERIMENTAL_OPTIONS.md](EXPERIMENTAL_OPTIONS.md#serverexecution) covers the
 flag itself.
 
@@ -550,17 +633,15 @@ test spans, not only the one `deno test` starts. A pattern integration test
 drives a runtime in the test process and commits through a toolshed, and the
 per-class commit admission rows are enforced by the memory server under the
 flag, so a test process on the ON arm talking to a toolshed on the OFF arm is
-on neither arm. Start the servers with it too. CI's ON arm also runs with web
-view-scoped replication, so reproducing one of its failures takes that flag on
-the same processes:
+on neither arm. Start the servers with it too:
 
 ```bash
-EXPERIMENTAL_SERVER_EXECUTION=true EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION=true \
-  ./scripts/start-local-dev.sh
+EXPERIMENTAL_SERVER_EXECUTION=true ./scripts/start-local-dev.sh
 cd patterns
-EXPERIMENTAL_SERVER_EXECUTION=true EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION=true \
+EXPERIMENTAL_SERVER_EXECUTION=true \
   API_URL=http://localhost:8000/ \
-  deno test --no-check -A ./integration/<name>.test.ts
+  deno test --shuffle=$(deno task -q test-seed) --no-check -A \
+  ./integration/<name>.test.ts
 ```
 
 Then ask the server what posture it is in, rather than trusting the command
@@ -574,9 +655,7 @@ curl -fsS http://localhost:8000/api/health/stats | jq -e '.servingLoop != null'
 this check against every Toolshed server its capabilities start, through
 `verifyServerExecutionPosture()` in `tasks/server-execution-ci.ts`. That
 function also checks the shell half of server execution, the define baked into
-the shell, which `/api/meta` reports as `shellServerExecutionDefine`. The web
-view-scoped define the ON arm's shell bakes is not reported; the bake table in
-`cachedBinaries()` sets it, and the binary cache key covers that table.
+the shell, which `/api/meta` reports as `shellServerExecutionDefine`.
 
 The toolshed log records the same thing, but it accumulates NUL bytes, so
 `grep` can decide it is binary and print nothing rather than the line that is
@@ -607,11 +686,11 @@ these two harnesses while preserving the other inherited flags, so both run
 the OFF arm in every lane. Server-backed targets receive the supplied
 server-execution setting.
 
-For view-scoped replication, run the complete default integration suite with:
+View-scoped replication is on by default under server execution, so the
+complete default integration suite exercises it with:
 
 ```bash
-EXPERIMENTAL_SERVER_EXECUTION=true \
-EXPERIMENTAL_VIEW_SCOPED_REPLICATION=true deno task integration
+EXPERIMENTAL_SERVER_EXECUTION=true deno task integration
 ```
 
 The browser regression `shell/integration/view-scoped-replication.test.ts`
@@ -639,10 +718,26 @@ the test's `fetchMocks`, and a multi-user test's participants to
 `listenServingMemoryServer()`, with no access list, as on the OFF arm. Each
 settle also waits until every event the runtime fired has its consequence
 back at the runtime, which `runtime.idle()` and `storageManager.synced()` do
-not cover, so an assertion after an action reads what the served handler
-wrote, and a multi-user marker is announced after it. An event a served
-handler fires on its own account is no client's, and nothing waits for it.
-A run against a caller-supplied `storageHost` is refused on the ON arm,
+not cover, and then until the serving loop has finished what that set off, so
+an assertion after an action reads what the served handler wrote, and a
+multi-user marker is announced after it. An event a served handler fires on
+its own account is no client's, and its consequence can land a wave or more
+after the event that fired it, or in another space.
+`ExecutorHost.whenQuiescent()` reports the end of all of that. A settle asks for
+it once its own runtime is done, makes a round trip on each connection to
+receive what the loop wrote, settles again, and asks again, and returns once two
+of its results are equal, which says the reactions gave the loop nothing further
+to do.
+A multi-user participant asks the orchestrator, which holds the loop, over its
+worker's message channel.
+
+Quiescence is a statement about what the loop can do on its own. An event stays
+pending through it when what it waits for lies outside the loop, such as a
+program closure another runtime has yet to write, or recovery evidence for a
+delivery in its failed state, and a time gate's trailing wake is not waited
+for. A cascade that never ends leaves the settle waiting, as a client's own
+non-converging graph leaves `runtime.idle()` waiting on the OFF arm. A run
+against a caller-supplied `storageHost` is refused on the ON arm,
 since the store is the caller's and there is no memory server to host a loop
 beside.
 
@@ -686,7 +781,9 @@ It comes in two shapes, by how the test's clients reach it:
   which also lists the service identity as the server's delegating
   principal, as a toolshed running server execution lists its own.
 
-Both return a handle that `await using` closes, serving loop first. The host
+Both return a handle that `await using` closes, serving loop first. With the
+loop on the test's thread, `host.host.whenQuiescent()` is the wait described
+above; a loop in a worker has no such wait. The host
 keeps the process's ambient server-execution flag on while it lives, so a
 runtime in the same realm that asks for the OFF arm runs ON beside it. The
 serving loop's own options pass through: `policy`, the `on*` diagnostic hooks,
@@ -696,8 +793,8 @@ runtime's storage manager before the runtime is built, which is where a stub on
 one of its providers goes.
 
 Either shape runs its loop in a Worker of the test's process when
-`SERVER_EXECUTION_WORKER` is `true` in the environment, as a toolshed does under
-that variable
+`SERVER_EXECUTION_WORKER` is `true` in the environment, where a toolshed over a
+file store runs it in a worker unless that variable is `false`
 ([`EXPERIMENTAL_OPTIONS.md`](EXPERIMENTAL_OPTIONS.md#server_execution_worker)),
 unless its `worker` option says otherwise, over a store in a temporary
 directory, since a worker cannot open a non-persistent one. `serving.host` is
@@ -838,7 +935,7 @@ exits before that write finishes loses the worker's profiles or leaves one
 truncated. A `Worker` object gives no signal when its shutdown is done, but in
 Deno a Web Lock that a web worker holds is released only when the worker's
 runtime is torn down, which comes after that write.
-`@commonfabric/utils/worker-lifetime` is built on that. The worker calls
+`@commonfabric/platform/worker-lifetime` is built on that. The worker calls
 `holdWorkerLifetimeLock()` and posts the name it returns no later than the
 first reply its creator waits for, and the creator ends the worker with
 `terminateWorker()`, which settles once the worker has been torn down. Where the

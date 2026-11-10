@@ -166,11 +166,15 @@ ordered **default first, then by MRU, then list order**:
 // Shown at module scope.
 wish({ query: "#profile" }) // the single current profile; see [UI] below
 wish({ query: "#profileName" }) // default profile's initialNameApplied
-wish({ query: "#profileAvatar" }) // default profile's avatar text
-wish({ query: "#profilePicture" }) // default profile's picture, as image bytes
 wish({ query: "#profileBio" }) // default profile's bio (free-text description)
 wish({ query: "#profileSpace" }) // default profile's space cell
 ```
+
+No target answers with a profile's picture or avatar text. Anyone can write a
+profile's picture, so a pattern reads the face from the profile `#profile`
+resolves, with `profileFace()` from
+`patterns/system/profile-face/profile-face.ts`, which shows only a face the
+profile's owner set ([`principal-of.md`](../../features/principal-of.md)).
 
 Once profile data is loaded and at least one profile exists,
 `wish({ query: "#profile" }).result` is **the single current profile** —
@@ -345,13 +349,15 @@ for one of these resolves to nothing, with no result and no error, and a
 one of these hands out a cell through the empty slot, where a read finds
 nothing. A write beneath the empty slot is refused with a
 `SpaceRootMissingError` rather than landing in the space cell itself. When the
-write is a handler's on a client runtime, and the refusal escapes the handler,
-the root is created and the handler runs again, so the write lands under the
-root. None of these creates one, and each leaves the slot empty: a handler that
-only reads beneath the empty slot, a handler that catches the refusal itself, a
-write outside a handler, and any write on a serving runtime. A root whose
-creation fails leaves the handler's refusal standing, with the failure as its
-cause. A slot that already holds something is resolved through as it stands.
+write is a handler's, the slot is that of the user the handler acts for, and
+the refusal escapes the handler, the handler runs again once the root exists,
+so the write lands under the root. A client runtime creates the root first. A
+serving runtime creates none: it waits until the server of the home space
+itself links one, which it does once that space is active. None of these
+creates one, and each leaves the slot empty: a handler that only reads beneath
+the empty slot, a handler that catches the refusal itself, and a write outside
+a handler. A root whose creation fails leaves the handler's refusal standing,
+with the failure as its cause. A slot that already holds something is resolved through as it stands.
 The other `#profile*` targets only read the profile roster through the slot as
 it stands, so for them an empty slot reads as no profiles. `#chatManager` only reads the home
 pattern too, and reports an error, naming the remedies, when there is no home
@@ -367,7 +373,6 @@ The `scope` parameter can redirect or fan the others out across other spaces.
 | `#default`          | Default pattern of the current space                    |
 | `#mentionable`      | Mentionable pieces in the current space                 |
 | `#pieceRegistry`    | All pieces registered in the current space              |
-| `#suggestions`      | Suggestion history of the current space                 |
 | `#summaryIndex`     | Summary index of the current space                      |
 | `#knowledgeGraph`   | Knowledge graph of the current space                    |
 | `#now`              | Piece's first-ever load time, durable — never advances  |
@@ -381,8 +386,6 @@ The `scope` parameter can redirect or fan the others out across other spaces.
 | `#chatManager`      | User's FabriChat manager: their chat rooms (home space) |
 | `#profile`          | User's current profile piece                            |
 | `#profileName`      | User's profile display name                             |
-| `#profileAvatar`    | User's profile avatar text                              |
-| `#profilePicture`   | User's profile picture, as image bytes                  |
 | `#profileSpace`     | User's profile space cell                               |
 
 The `#profile*` targets are detailed under

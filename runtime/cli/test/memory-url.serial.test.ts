@@ -6,9 +6,12 @@
 
 import { assertEquals, assertRejects } from "@std/assert";
 import { stub } from "@std/testing/mock";
+import { FakeTime } from "@std/testing/time";
 import { Identity } from "@commonfabric/identity";
+import { getLogger } from "@commonfabric/logger";
 import { PiecesController } from "@commonfabric/piece/ops";
 import { Runtime } from "@commonfabric/runner";
+import { DEPLOYMENT_RESPONSE_BOUND_MS } from "@commonfabric/runner/deployment-meta";
 import {
   type Options as StorageOptions,
   StorageManager as WorkerStorageManager,
@@ -23,7 +26,8 @@ import { resetProcessDeployment } from "../lib/process-deployment.ts";
  * Runs `body` against a deployment at `http://api.test:8000` whose meta
  * document publishes `memoryUrl`, with storage emulated and the health check
  * returning `healthy`. Hands `body` the hosts storage was opened on, the
- * runtimes built, and every URL fetched.
+ * runtimes built, and every URL fetched. Given `respond`, the deployment
+ * responds through it instead, to the health check's own requests too.
  */
 async function withDeployment(
   memoryUrl: string | null,
@@ -33,6 +37,7 @@ async function withDeployment(
     keyPath: string,
     identity: Identity,
   ) => Promise<void>,
+  respond?: (url: string, init?: RequestInit) => Promise<Response>,
 ): Promise<void> {
   const identity = await Identity.fromPassphrase("cli memory url", {
     implementation: "noble",
@@ -53,13 +58,19 @@ async function withDeployment(
   // host through the Deno one.
   const open = stub(WorkerStorageManager, "open", opened);
   const openDeno = stub(StorageManager, "open", opened);
-  const fetchMeta = stub(globalThis, "fetch", (input) => {
-    observed.fetched.push(String(input instanceof Request ? input.url : input));
-    return Promise.resolve(Response.json({ experimental: {}, memoryUrl }));
+  const fetchMeta = stub(globalThis, "fetch", (input, init) => {
+    const url = String(input instanceof Request ? input.url : input);
+    observed.fetched.push(url);
+    return respond !== undefined
+      ? respond(url, init)
+      : Promise.resolve(Response.json({ experimental: {}, memoryUrl }));
   });
-  const health = stub(Runtime.prototype, "healthCheck", function () {
+  const realHealthCheck = Runtime.prototype.healthCheck;
+  const health = stub(Runtime.prototype, "healthCheck", function (signal) {
     observed.runtimes.push(this);
-    return Promise.resolve(healthy);
+    return respond !== undefined
+      ? realHealthCheck.call(this, signal)
+      : Promise.resolve(healthy);
   });
   const session = stub(
     PiecesController.prototype,
@@ -81,6 +92,54 @@ async function withDeployment(
     resetProcessDeployment();
   }
 }
+
+Deno.test("loadPieces fails with `Could not connect` at the bounds when the server says nothing", async () => {
+  const metaAsked = Promise.withResolvers<void>();
+  const healthAsked = Promise.withResolvers<void>();
+  const logger = getLogger("deployment-meta");
+  const unreadBefore = logger.countsByKey["posture-unread"]?.error ?? 0;
+  using _warn = stub(console, "warn");
+  using _error = stub(console, "error");
+  await withDeployment(
+    null,
+    true,
+    async (observed, keyPath, identity) => {
+      using time = new FakeTime();
+      const failed = assertRejects(
+        () =>
+          loadPieces({
+            apiUrl: "http://api.test:8000",
+            space: identity.did(),
+            identity: keyPath,
+          }),
+        Error,
+        'Could not connect to "http://api.test:8000"',
+      );
+      await metaAsked.promise;
+      await time.tickAsync(DEPLOYMENT_RESPONSE_BOUND_MS);
+      await healthAsked.promise;
+      assertEquals(
+        logger.countsByKey["posture-unread"]?.error,
+        unreadBefore + 1,
+      );
+      await time.tickAsync(DEPLOYMENT_RESPONSE_BOUND_MS);
+      await failed;
+      assertEquals(observed.fetched, [
+        "http://api.test:8000/api/meta",
+        "http://api.test:8000/_health",
+      ]);
+    },
+    (url, init) => {
+      (url.endsWith("/_health") ? healthAsked : metaAsked).resolve();
+      return new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener(
+          "abort",
+          () => reject(init.signal!.reason),
+        );
+      });
+    },
+  );
+});
 
 Deno.test("loadPieces opens Memory on the published memory URL and the rest on the API URL", async () => {
   await withDeployment(

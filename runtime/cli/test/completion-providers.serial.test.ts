@@ -277,6 +277,10 @@ Deno.test("live candidates: unmapped slots ask for nothing", async () => {
 const DIRECTIVE_CASES: Array<[string, string, string | undefined]> = [
   ["cf piece ls -i ", "files", "*.key"],
   ["cf id did ", "files", "*.key"],
+  // A delegation chain file, wherever the identity holds one and where
+  // `cf delegation show` reads one.
+  ["cf piece ls --delegations ", "files", "*.json"],
+  ["cf delegation show ", "files", "*.json"],
   // Every command whose `--root` is the directory its sources resolve
   // against. The set is hand-maintained, so it is asserted whole.
   ["cf piece new --root ", "dirs", undefined],
@@ -300,6 +304,8 @@ const DIRECTIVE_CASES: Array<[string, string, string | undefined]> = [
   ["cf space verify ", "dirs", undefined],
   ["cf space compact ", "files", "*.sqlite"],
   ["cf space compact x --against ", "files", "*.sqlite"],
+  ["cf space reap ", "files", "*.sqlite"],
+  ["cf space reap x --live ", "files", "*.sqlite"],
   ["cf space reset ", "dirs", undefined],
   ["cf inspect spaces --dir ", "dirs", undefined],
   ["cf profile repair-root --from-snapshot ", "dirs", undefined],
@@ -1529,7 +1535,7 @@ Deno.test("live candidates preserve qualified space, user scope, and nested path
 Deno.test("space compact: --scope and --documents offer the store's vocabulary", async () => {
   // `--scope` means a scope KIND here and a search scope on `wish`; the same
   // option name answers differently by command, which is what the provider's
-  // command scoping is for. `--documents` offers the three id namespaces a
+  // command scoping is for. `--documents` offers the four id namespaces a
   // store holds; a longer prefix is typed past them.
   assertEquals(
     (await liveCandidates(lineFor("cf space compact x --scope ")))
@@ -1539,7 +1545,7 @@ Deno.test("space compact: --scope and --documents offer the store's vocabulary",
   assertEquals(
     (await liveCandidates(lineFor("cf space compact x --documents ")))
       .candidates.map((candidate) => candidate.value).sort(),
-    ["cid:", "computed:", "of:"],
+    ["cid:", "computed:", "of:", "receipt:"],
   );
   const wish = (await liveCandidates(lineFor("cf wish --scope ")))
     .candidates.map((candidate) => candidate.value);
