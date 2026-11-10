@@ -117,7 +117,8 @@ stream, and `key(name).send()`. The bare id is an internal address.
 
 ### Measured
 
-Two probes, run against `ddb47bfaa`, become the tests stage 1 pins:
+Two probes, run against `ddb47bfaa`, become pinned tests, the first in stage 1
+and the second in stage 2:
 
 - A cell whose schema declares `bump` a stream, with `{ count: 0 }` written and
   nothing at `bump`. `key("bump")` reads as a stream; a handler registered on
@@ -281,94 +282,123 @@ The address is minted in one place, `getDerivedInternalCellLink`: from the
 owner's id and the result path for a verb, from the owner's hash and the hashed
 cause for a view handler. Two mints for one kind coexisting behind a flag would
 put one stream at two addresses with two entries documents, which is the
-compatibility problem this repository has been removing. The change is a cutover
-for both kinds; its cost is stated under stage 3.
+compatibility problem this repository has been removing. The change is a
+cutover, one kind at a time: verbs in stage 1 and view handlers in stage 2, each
+kind entirely at once, with the cost stated in its stage.
 
 ## Stages
 
-### Stage 1 — Address and materialization
+Three PRs, one kind of stream at a time. Stage 1 moves verbs and stands on its
+own: it needs no new id scheme, and a verb's auto-start already works from the
+result document its address names. If the plan stops there, view handlers keep
+their documents and their minted ids, and the sibling plan's owner walk serves
+their bare addresses. Stage 2 moves view handlers under `stream:`, and stage 3
+deletes what no stream needs once neither kind has a document. Each stage moves
+its kind entirely, so no stream is ever at two addresses (decision 5).
+
+### Stage 1 — Verbs as positions on their owner
+
+- [ ] The builder marks each verb's descriptor with its result path under
+      decision 2; a view handler's descriptor is unchanged.
+- [ ] `getDerivedInternalCellLink` returns `(owner id, result path)` for a
+      verb's descriptor, with the declared schema on the link. View handlers,
+      value-holding internal cells, and a computed cell that forwards another
+      piece's stream are unchanged.
+- [ ] `#materializeDerivedInternalCells` writes a verb's manifest entry, naming
+      its position, and nothing else: no document, no default, no back-link.
+- [ ] The result projection omits a verb at its own position and stores a
+      link at any second position.
+- [ ] The `$event` sigil names a verb's position. `#handlerStreamLink`
+      (`runner.ts:13620`) parses it as it does now; the dispatch assertion the
+      sibling plan's stage 3 adds reads the same link's schema.
+- [ ] Readers that meet a verb: `ensurePieceRunning` needs no change, since it
+      strips the path and lands on the result document, which carries the
+      pattern pointer; the llm-dialog builtin's second way of typing an
+      address, the result schema at the path, answers for a bare verb address;
+      the state inspector classifies a verb as a position on a piece, from the
+      piece's result schema; the CLI's ownership tests are pinned over a verb
+      position, which is `path.length > 0` and is reported as a cell inside a
+      piece; the runtime client needs no change, since its entries-document ids
+      derive from the link.
+- [ ] Cutover for verbs. Every verb's entries-document id changes with its
+      address. Before a served space cuts over, its verbs' entries documents
+      drain; an entry still in flight afterward names a stream nothing fires
+      at. Pieces set up before the cutover heal by running — setup re-emits
+      every stream's links on a pattern update, a same-pattern restart, and a
+      fresh session — so there is no migration pass. The sibling plan's stage 3
+      records the same choice for its own cutover.
+- [ ] Tests: the first measured case, pinned; a send through the result key
+      with nothing stored reaches the handler and writes nothing into the
+      owner; a verb's entries-document id derives from its position; a
+      redirect-flagged link and a plain link to one position match in the
+      handler table, which `areNormalizedLinksSame` compares by id, space,
+      scope, and path (`runtime/memory/v2.ts:412`); a pending entry whose link
+      is `(result, path)` starts the piece; a nested piece whose argument holds
+      its parent's verb starts the parent as an input source; a stream a
+      pattern returns from a nested piece stays a computed forwarder and starts
+      the nested piece; a bare verb address types through the llm-dialog
+      builtin's result-schema path.
+- [ ] `when`, `unless`, `ifElse`, and `.map` into a nested pattern forward a
+      link that names a verb's position; `stream-declaration.test.ts` passes
+      with its verb addresses updated.
+- [ ] Documents: the specs listed under stage 3 say that a verb has no document
+      and is addressed as its result path, and that a view handler keeps its
+      document until stage 2.
+
+### Stage 2 — View handlers under `stream:`
 
 - [ ] `stream` joins `EntityKind` and `ENTITY_URI_SCHEMES` in
       `entity-kind.ts`, with `entityKindOfIdString` and
       `uriSchemeForEntityKind` extended; `hashStringForEntityAddress` refuses
       it as it refuses `computed:`, since a view handler is not addressable by
       bare hash.
-- [ ] The builder marks each verb's descriptor with its result path under
-      decision 2; a view handler's descriptor is unchanged.
-- [ ] `getDerivedInternalCellLink` returns `(owner id, result path)` for a
-      verb's descriptor and `(stream: over the owner's hash,
-      [hashStringOf(cause)])` for a view handler's, with the declared schema
-      on the link; value-holding internal cells, and a computed cell that
-      forwards another piece's stream, are unchanged. The descriptor's `kind`
-      is not assigned to a stream the pattern owns.
-- [ ] `#materializeDerivedInternalCells` writes a stream's manifest entry,
-      naming the position, and nothing else: no document, no default, no
-      back-link.
-- [ ] The result projection omits a verb at its own position and stores a
-      link at any second position.
-- [ ] The `$event` sigil names the position for either kind.
-      `#handlerStreamLink` (`runner.ts:13620`) parses it as it does now; the
-      dispatch assertion the sibling plan's stage 3 adds reads the same link's
-      schema.
-- [ ] Tests: the two measured cases above, as pinned tests, the second over a
-      `stream:` id; a send through the result key with nothing stored reaches
-      the handler and writes nothing into the owner; a send through a `stream:`
-      position with the declaration on the link does the same; a verb's
-      entries-document id derives from its position and a view handler's from
-      its `stream:` id and segment; a redirect-flagged link and a plain link to
-      one position match in the handler table, which `areNormalizedLinksSame`
-      compares by id, space, scope, and path (`runtime/memory/v2.ts:412`); a
-      `stream:` address round-trips through `parseCellReference`; a segment
-      naming no manifest entry resolves to nothing.
-- [ ] `when`, `unless`, `ifElse`, and `.map` into a nested pattern forward a
-      link that names a position; `stream-declaration.test.ts` passes with its
-      addresses updated.
+- [ ] `getDerivedInternalCellLink` returns `(stream: over the owner's hash,
+      [hashStringOf(cause)])` for a view handler's descriptor, with the
+      declared schema on the link. The descriptor's `kind` is not assigned to
+      a stream the pattern owns.
+- [ ] `#materializeDerivedInternalCells` writes a view handler's manifest
+      entry, naming its position, and nothing else, as stage 1 does for a verb.
+      The `$event` sigil names the position.
+- [ ] `ensurePieceRunning` reaches a view handler's owner in zero hops: a
+      `stream:` id names its owner as its `of:` sibling. The walk maps a
+      `stream:` id to that sibling before it reads any meta, and
+      `inputSourcesOf` does the same for each link in an argument, so neither
+      ends at a documentless id with `no-pattern-meta`. The back-link chain
+      stays for a nested piece's result document, which is a derived internal
+      cell of its parent, and for a computed forwarder. The serving loop's
+      never-a-piece exclusion, `neverAPieceRootId`
+      (`runtime/runner/src/executor/space-server.ts:726`), names `stream:` and
+      maps it to the owner rather than excluding it.
+- [ ] Cutover for view handlers, under the same terms as stage 1's: their
+      entries documents drain first, and pieces heal by running.
+- [ ] Tests: the second measured case, pinned over a `stream:` id; a send
+      through a `stream:` position with the declaration on the link reaches the
+      handler and writes nothing; a view handler's entries-document id derives
+      from its `stream:` id and segment; a `stream:` address round-trips
+      through `parseCellReference`; a segment naming no manifest entry resolves
+      to nothing; a pending entry naming a `stream:` id starts the piece with no
+      client watching it; one on a nested piece's result still starts the
+      root; a nested piece whose argument holds its parent's view handler
+      starts the parent as an input source; a served event on a `stream:` id
+      spends none of the deferral budget on its way to starting the piece.
+- [ ] `when`, `unless`, `ifElse`, and `.map` forward a link that names a view
+      handler's position; `stream-declaration.test.ts` passes with its
+      remaining addresses updated.
 
-### Stage 2 — Readers
+### Stage 3 — No stream document
 
-- [ ] `ensurePieceRunning` reaches either kind's owner in zero hops: a verb's
-      link id is the result document, and a view handler's `stream:` id names
-      its owner as its `of:` sibling. The walk maps a `stream:` id to that
-      sibling before it reads any meta, and `inputSourcesOf` does the same for
-      each link in an argument, so neither ends at a documentless id with
-      `no-pattern-meta`. The back-link chain stays for a nested piece's result
-      document, which is a derived internal cell of its parent, and for a
-      computed forwarder. The serving loop's never-a-piece exclusion,
-      `neverAPieceRootId` (`runtime/runner/src/executor/space-server.ts:726`),
-      names `stream:` and maps it to the owner rather than excluding it. Test: a
-      pending entry whose link is `(result, path)` starts the piece; one naming
-      a `stream:` id starts the piece with no client watching it; one on a
-      nested piece's result still starts the root; a nested piece whose argument
-      holds its parent's view handler starts the parent as an input source; a
-      served event on a `stream:` id spends none of the deferral budget on its
-      way to starting the piece.
 - [ ] Delete `ownerStreamSchema`, `streamDeclarationOf`, the inspector detail
       view's manifest reading, and the llm-dialog builtin's third way of
       typing an address; its second way — the result schema at the path —
       becomes the one that answers for a bare address. The sibling plan's
       stage 3 wiring of the owner walk into `Cell.isStream` and the proxy is
-      withdrawn.
-- [ ] The state inspector classifies a stream as a position on a piece, from
-      the piece's result schema; the `stream` entity kind stops naming a
-      document. `entities.test.ts` and `html.test.ts` rewrite their stream
-      fixtures.
+      withdrawn, if it landed (Ordering).
+- [ ] The state inspector classifies every stream as a position, from the
+      piece's result schema or the `stream:` scheme; the `stream` entity kind
+      stops naming a document. `entities.test.ts` and `html.test.ts` rewrite
+      their stream fixtures.
 - [ ] The sibling plan's deferred FUSE item — the `entities/` projection of a
       bare stream document — closes as moot.
-- [ ] The CLI's ownership tests are pinned over a stream position: a position
-      is `path.length > 0` and is reported as a cell inside a piece, which is
-      the right answer.
-- [ ] The runtime client needs no change; its entries-document ids derive from
-      the link.
-
-### Stage 3 — Identity cutover and documents
-
-- [ ] Every stream's entries-document id changes with its address. Before a
-      served space cuts over, its entries documents drain; an entry still in
-      flight afterward names a stream nothing fires at. Pieces set up before the
-      cutover heal by running — setup re-emits every stream's links on a pattern
-      update, a same-pattern restart, and a fresh session — so there is no
-      migration pass. The sibling plan's stage 3 records the same choice for its
-      own cutover.
 - [ ] Documents: the streams section and the unification note of
       `docs/specs/space-model/2-storage-format.md`; the stream cells section of
       `docs/specs/space-model/4-cells.md`, which locates a stream's identity in
@@ -433,7 +463,8 @@ for both kinds; its cost is stated under stage 3.
   pending under the old position names a stream nothing registers, and is
   dropped by the no-handler predicate as one under a renumbered cause is.
 - **Entries in flight at the cutover.** An entries document keyed on the old
-  address is orphaned; the drain condition in stage 3 is what prevents it.
+  address is orphaned; the drain condition in each stage's cutover is what
+  prevents it.
 - **Auto-start needs the owner in the address.** When an event finds no
   handler registered, `queueEvent` reserves the event's queue slot and calls
   `ensurePieceRunningVerdict` on the event link to start the piece
@@ -490,11 +521,14 @@ for both kinds; its cost is stated under stage 3.
 
 ## Ordering
 
-The sibling plan's stage 3 lands first, without the wiring of the owner walk
-into `Cell.isStream` and the proxy: the value-branch deletion, the dispatch
-assertion, `detectCallableKind`, and the fixture rewrites are all needed here
-and are cheaper to land on their own. This plan then removes the walk that
-stage built the reading for.
+The sibling plan's stage 3 lands before stage 1 here: the value-branch
+deletion, the dispatch assertion, `detectCallableKind`, and the fixture
+rewrites are all needed here and are cheaper to land on their own. Whether it
+also wires the owner walk into `Cell.isStream` and the proxy depends on what is
+committed to here. If stages 2 and 3 are, it lands without that item, and stage
+3 here deletes the walk that stage built the reading for. If this plan stops
+after stage 1, view handlers keep their documents, their bare addresses still
+need the walk, and it lands as the sibling plan has it.
 
 ## Not in scope
 

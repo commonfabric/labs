@@ -254,9 +254,9 @@ replaces the value read there.
 ## Stages
 
 Three PRs. The first keeps the value fallback so nothing that still holds a
-sentinel breaks; the last removes it. Stage 1 landed as #7583, and stage 2 is
-open as #7589. A checked item is done in that PR; an unchecked item under
-stage 2 is still owed there. Where a stage does something other
+sentinel breaks; the last removes it. Stage 1 landed as #7583, and stage 2 as
+#7589. A checked item is done in that PR; an unchecked item under stage 2 is
+still owed. Where a stage does something other
 than what the list first said, the item says what it does now and why.
 
 ### Stage 1 — Runner: stop writing, stop needing (#7583)
@@ -553,8 +553,10 @@ further than recovering the owner from the id: a stream its owner exposes in
 its result is addressed as a path on the owner's result document, one it does
 not is addressed by a `stream:` id over the owner's hash, neither has a
 document of its own, every stream re-materializes under its new address, and
-the owner walk stage 3 adds is deleted with it. Its stage 2 withdraws the wiring of that walk into
-`Cell.isStream` and the proxy, so stage 3 here lands without that item.
+the owner walk stage 3 adds is deleted with it. Its first stage moves only
+the streams an owner exposes and needs none of this plan's walk; whether stage
+3 here wires the walk into `Cell.isStream` and the proxy depends on whether its
+later stages are committed to, as its Ordering section says.
 
 What this plan does in anticipation: stream-ness decisions key on the link
 schema and the handle kind, both of which survive an address change; the owner

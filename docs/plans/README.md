@@ -165,7 +165,8 @@ a record: archive it to `docs/history/plans/` following the procedure in
   addressed as its result path on its owner's result document, a view handler
   by a `stream:` id over the owner's hash at the hash of its cause, and
   everything that carries an event is already keyed on a link's id and path.
-  It deletes the walk from a stream's document to its owner, and carries the
+  Its first stage moves verbs alone, which needs no new id scheme. It deletes
+  the walk from a stream's document to its owner, and carries the
   measurements that no part of delivery needs the document and that auto-start
   needs the owner.
 - [Cutting the resume pre-sync's cost](resume-presync-cost.md) removes what
