@@ -4,8 +4,9 @@
 [compiled pattern language](README.md). It lists every built-in and every
 factory that an author or the transformer can call, states what each one does
 as implemented, and says what each becomes in the compiled design. The
-classifications are proposals. The decisions that belong to the project owner
-are collected under [Open questions](#open-questions).
+project owner's rulings on the classification are listed under
+[Decisions](#decisions), and what remains undecided under
+[Open questions](#open-questions).
 
 Two sibling documents specify the neighboring parts. This document refers to
 them by file name and does not define their content:
@@ -950,22 +951,27 @@ These facts hold for every registered built-in and are not repeated per entry.
   home-space targets resolve against the demanding identity, and sidecars
   are instantiated by the server and only referenced by a client.
   Computation, debounced by 50 ms; not replayable.
-- **New design:** it splits, and the overview's placement of the whole of
-  `wish` among the effectful operations holds only for parts of it.
-  - Path and well-known-target resolution is class A: a reference whose
-    identity depends on the query and, for home targets, on the acting
-    user.
-  - Hashtag search is class A in mechanism, a filter over a collection that
-    lives in another instance, with a label rule that names every candidate.
-  - The clock is class B: time is an external input that arrives as a cause.
-  - Sidecars are pattern instantiation of three system patterns, which the
-    reactive tier can express directly.
+- **New design:** class A. `wish` is not an effect. Everything it creates is
+  created idempotently under an identifier derived from its cause, so a
+  reader cannot tell a target the wish created from one that already
+  existed. Its parts read as follows.
+  - Path and well-known-target resolution is a reference whose identity
+    depends on the query and, for home targets, on the acting user.
+  - Hashtag search is a filter over a collection that lives in another
+    instance, with a label rule that names every candidate.
+  - A sidecar is the instantiation of one of three system patterns with a
+    deterministic identity, which the reactive tier expresses directly.
+  - The clock is the one part with an external input. The wish resolves to
+    a reference to a clock cell and does not read it; the runtime writes
+    that cell, and each tick arrives as a cause like any other change from
+    storage. The one-shot timestamp is a state cell written once when
+    empty, so concurrent first writers converge on one value.
 - **Label rule:** for path resolution, the reference's identity depends on
   the value of the query and path. For search, the membership of the
   candidates depends on the name and schema of every candidate considered.
-  For the clock, the value carries no input label and its granularity is
-  the declared rule. State to store: the one-shot timestamp and whatever the
-  sidecars keep.
+  A clock value carries no input label, and its granularity is fixed by the
+  target. State to store: the one-shot timestamp and whatever the sidecars
+  keep.
 
 ## Declarations that produce cells
 
@@ -1048,7 +1054,7 @@ Three facts about the builder explain most of the entries.
 | Name | Today | New design |
 | --- | --- | --- |
 | `pattern(fn)` | Runs `fn` eagerly to build a graph and returns a `PatternFactory` (`builder/pattern.ts`). | C. The callback is the reactive tier. |
-| `PatternFactory.asScope(scope)`, `.inSpace(space, options)` | Derived copies of a pattern factory that set the instance's scope, or its target space with grants (`noteDerivedCopy`). | C, as modifiers of an instantiation. See open question 7. |
+| `PatternFactory.asScope(scope)`, `.inSpace(space, options)` | Derived copies of a pattern factory that set the instance's scope, or its target space with grants (`noteDerivedCopy`). | C, as modifiers of an instantiation. |
 | `handler(fn)` | Mints a `javascript` module with `wrapper: "handler"` (`handlerInternal` in `builder/module.ts`). Applying the factory to its state creates a stream and a node, and returns the stream. | C. Binding a handler to state is a construct of the reactive tier. |
 | `action(fn)` | Throws at run time. The transformer lowers it to `handler(fn)(captures)` (`base/ts-transformers/src/closures/utils/capture-scaffold.ts`). | C. A handler whose state is its captures. |
 | `computed(fn)` | The transformer lowers it to `lift(fn)(captures)` (`base/ts-transformers/src/lift/transformer.ts`). | C. Promoted to the reactive tier when its body is a pure expression. |
@@ -1094,11 +1100,14 @@ export it and the pattern corpus does not call it.
   always passes.
 - **New design:** class C. A cell declaration in the reactive tier is a state
   cell of the plan with the identifier the overview specifies. Creating a
-  cell in a function body is one of the three calls that remain legal. The
-  overview says such a cell receives a causal identifier; the inventory
-  finds two regimes for that identifier today (a counter in handlers, a
-  required explicit cause in lifts), and the compiled design needs one.
-  See open question 6.
+  cell in a function body is one of the calls that remain legal, and the two
+  regimes stay:
+  - A handler invocation is a new frame for each event, so every cell it
+    creates is new. An identifier from the event and a per-invocation
+    counter is sufficient, and a handler needs no explicit cause.
+  - A pattern body and a lift are re-evaluated, so their cells need
+    identifiers that are the same on every evaluation: the variable name in
+    a pattern body, and an explicit cause in a lift.
 
 ### Cell methods that create nodes
 
@@ -1130,13 +1139,13 @@ throws outside the frames named.
 | `spaceOf`, `spaceAccess`, `spaceAccessOf`, `spaceMembers`, `spaceDeleted` | lift, handler | A space's identity and access list (`builder/space-access.ts`). |
 | `getPatternEnvironment()` | anywhere | A frozen `{ apiUrl }` (`builder/env.ts`). |
 
-- **New design:** these are a fourth kind of call inside a function body,
-  beside the three the overview names: a read of context that is not a cell
-  read. Each needs an entry in the body's footprint so that its label is
-  accounted for. `principalOf` and its siblings observe label metadata, the
-  same observation class as `inspectConfLabel`. The space functions read
+- **New design:** context reads are a fourth kind of call that is legal
+  inside a function body, beside the three the overview names. Each has an
+  entry in the body's footprint so that its label is accounted for.
+  `principalOf` and its siblings observe label metadata, the same
+  observation class as `inspectConfLabel`. The space functions read
   access-list state. `eventKey` and `currentPrincipal` are properties of the
-  cause. See open question 3.
+  cause.
 
 ### Staged changes
 
@@ -1146,10 +1155,12 @@ throws outside the frames named.
 | `nameBlob(target, blobId, name)` | handler | Names a blob (`builder/blob-name.ts`). |
 
 - **New design:** class B. Each is an effect requested from a handler whose
-  result the handler does not read. They are missing from the overview's
-  list of effectful operations. Unlike the other effects they commit
-  *before* the handler's own transaction, which the one-transaction-per-cause
-  model has to accommodate.
+  result the handler does not read. The access changes exist as a separate
+  commit because a transaction covers one space and an access list belongs
+  to a space of its own. Two shapes are possible: keep the separate commit
+  ahead of the handler's transaction, or make it one case of a general
+  two-step commit across spaces, which instantiation with `inSpace` also
+  needs. See open question 3.
 
 ### Tool and factory helpers
 
@@ -1230,16 +1241,16 @@ below are for source files unless a row says otherwise.
 | Call | Sites | Enclosing bodies | Legal under the rule | Rewrite |
 | --- | --- | --- | --- | --- |
 | Pattern instantiation `P({...})` | 121 | 64 in one computed, 28 in handlers, 28 in actions, 1 in an inline JSX handler | Yes | None in syntax; see below for timing |
-| `P.inSpace(space, options)({...})` | 3 (plus 21 in fixtures and 8 in tests) | handlers | Open | The modifier must be part of the instantiation syntax |
-| `P.asScope("user")({...})` | 2 | computeds | Open | Move to the reactive tier |
+| `P.inSpace(space, options)({...})` | 3 (plus 21 in fixtures and 8 in tests) | handlers | Yes | None in syntax; a cross-space request |
+| `P.asScope("user")({...})` | 2 | computeds | Not in a computed | Move to the reactive tier |
 | `navigateTo(target)` | 48 | 33 in handlers, 13 in actions, 2 in inline JSX handlers | Yes, an effect request | None |
 | Handler binding `h({ state })` | 16 | computeds | No | Move the JSX out of the computed |
-| `new Writable(value)` | 3, plus 4 through helpers | handlers | Yes | Needs a causal identifier |
+| `new Writable(value)` | 3, plus 4 through helpers | handlers | Yes | None |
 | `Cell.for(cause)`, `Writable.for(cause)` | 9, plus 1 through a helper | lifts | Yes | None |
 | `.map(fn)` on a cell | 2 found | handlers | No | Read the value first, then map the array |
-| `grantSpaceAccess`, `revokeSpaceAccess` | 4 | handlers | Not listed by the overview | Classify as effect requests |
-| `nameBlob` | 2 | handlers | Not listed | Classify as an effect request |
-| Context reads | `equals` 108, `spaceOf` 28, `profileOwnerOf` 11, `eventKey` 9, `resultOwnerOf` 9, `spaceAccess` 6, `linksOf` 6, `currentPrincipal` 5, `principalOf` 3, `spaceDeleted` 3, `spaceMembers` 1 | handlers, lifts, computeds | Not listed | Classify as context reads |
+| `grantSpaceAccess`, `revokeSpaceAccess` | 4 | handlers | Yes, effect requests | None |
+| `nameBlob` | 2 | handlers | Yes, an effect request | None |
+| Context reads | `equals` 108, `spaceOf` 28, `profileOwnerOf` 11, `eventKey` 9, `resultOwnerOf` 9, `spaceAccess` 6, `linksOf` 6, `currentPrincipal` 5, `principalOf` 3, `spaceDeleted` 3, `spaceMembers` 1 | handlers, lifts, computeds | Yes, context reads | None |
 
 Everything else is absent. No body in the sources, tests, or fixtures calls
 `computed`, `lift`, `handler`, `action`, `ifElse`, `when`, `unless`, `str`,
@@ -1252,9 +1263,8 @@ never uses `unless`, `llm`, `streamData`, `byRef`, `uiVariant`, or `cell`.
 Two conclusions follow.
 
 - The rule fits the corpus. Removing the reactive constructs from function
-  bodies requires rewriting 18 sites (16 handler bindings and 2 cell maps),
-  and three computeds that instantiate patterns if open question 4 is
-  decided as assumed.
+  bodies requires rewriting 18 sites (16 handler bindings and 2 cell maps)
+  and the three computeds that instantiate patterns.
 - The third legal kind, requesting an effectful built-in from a body, has no
   precedent in the corpus except `navigateTo` and the staged changes. Its
   semantics can therefore be designed without a compatibility constraint, but
@@ -1289,24 +1299,26 @@ The rewrites, by case:
 - **Handler and action sites (57).** The syntax is unchanged. The semantics
   change from result-as-pattern, where the runner sweeps the frame after the
   body returns, to a recorded request with a causal identifier that returns
-  a link at once. Writing the link into state, which every one of these
-  sites does, is what the overview says makes the instance an instantiated
-  pattern. The 12 sites that only navigate write the link nowhere, so under
-  the overview's keep-set rule the instance has no result cell. Navigation
-  must count as assigning a result cell, or these sites must also store the
-  link. See open question 5.
-- **The causal identifier.** Today the identity comes from the event's
-  receipt cell and the instance's position in the synthesized pattern. The
-  four `.for(tag)` sites show authors already supplying an identifier when
-  they need a stable one. The design needs a default (the event and the call
-  site) and an explicit form.
+  a link at once. Writing the link into state, which most of these sites
+  do, is what the overview says makes the instance an instantiated pattern.
+  The 12 sites that only navigate write the link nowhere. `navigateTo`
+  requires a result cell, so passing a link to it also assigns the instance
+  one.
+- **The causal identifier.** Each handler invocation is a new frame, so the
+  event and the order of requests within the invocation identify an
+  instance, as they do today. The four `.for(tag)` sites show the explicit
+  form, for an author who wants the same instance from different events.
+- **Modifiers.** `P.asScope(scope)` and `P.inSpace(space, options)` are
+  legal callees. `inSpace` makes the request a cross-space one: the new
+  instance, and often its space, are created by a commit to another space.
 - **Reading from a fresh instance in the same run.** `createRoom` in
   `patterns/system/fabrichat/manager.tsx` instantiates a room in a new space
   and reads `spaceOf(room)` from the returned link in the same handler run.
   Today the first run finds the space pending, is discarded, and runs again.
   With instantiation performed at commit, the space's identity has to be
   derivable from the request's causal identifier before the commit, or the
-  dependent sends have to move to a later cause.
+  dependent sends have to move to a later cause. This is part of open
+  question 3.
 - **Nested instances.** `patterns/dev/gideon-tests/notebook-nest-bug/main.tsx`
   builds twelve instances in one action and passes inner ones as inputs of
   outer ones. Each request needs its own identifier, and a link to an
@@ -1314,14 +1326,14 @@ The rewrites, by case:
 - **Instantiation in a computed (66 sites, 3 computeds).** One computed in
   `patterns/dev/catalog/ui/story-renderer.tsx` selects one of 64 patterns in
   a `switch` and returns the instance. Two computeds in
-  `patterns/apps/recommend-a-book/` return an `asScope("user")` instance.
-  The overview describes instantiation from a handler and from the reactive
-  tier, and does not say what it means in a computation that reruns. The
-  rewrite that needs no new rule is to select in the reactive tier: a
-  conditional expression, or an index into a record of sub-patterns. If
-  instantiation from a computation is kept, its causal identifier is the
-  computation and the call site, and a rerun that selects a different
-  pattern replaces the instance. See open question 4.
+  `patterns/apps/recommend-a-book/` return an `asScope("user")` instance. A
+  `computed` or `lift` body does not instantiate. These sites move to the
+  reactive tier: a conditional expression, or an index into a record of
+  sub-patterns. In all three the instance is part of the enclosing
+  pattern's result, so it is reachable from the result cell and is kept;
+  whether it is then an instantiated pattern with a result cell of its own
+  or an inline sub-pattern whose kept outputs are stored makes no
+  difference to the author.
 - **No lift returns a pattern.** The 72 lift bodies in the sources contain
   no instantiation.
 
@@ -1343,7 +1355,8 @@ diagnostic otherwise; `language-subset.md` decides.
   `patterns/apps/base/contacts.tsx`, `patterns/system/loom/admission.tsx`,
   and through helpers `patterns/apps/shared-note/main.tsx` and `sendInto` in
   `patterns/system/fabrichat/room-records.tsx`. Their identifiers come from
-  the frame's counter.
+  the frame's counter, which is sufficient because each invocation is a new
+  frame.
 - Lifts create cells with an explicit cause and write them at once,
   `Cell.for(input.id).set(...)`:
   `patterns/examples/cfc-spec-gallery/main.tsx`,
@@ -1370,13 +1383,12 @@ times, and `wish` 8 times. They use no `lift`, `ifElse`, `when`, `unless`,
   in `patterns/system/fabrichat/manager.tsx`. Neither is in a function body.
   Under the compiled design these 15 `map` calls are where the saving lands:
   a row is a cone keyed by element identity, with no sub-pattern instance.
-  The `asScope` modifier inside a `map` body needs a reading in the reactive
-  tier, where the overview says an instantiation is an anonymous sub-pattern
-  without a result cell.
+  The `asScope` modifier inside a `map` body is a modifier of the anonymous
+  sub-pattern: it sets the scope of the state the sub-pattern declares.
 - **One instantiation in a body.** `createRoom`, described above.
 - **One cell created in a body.** `sendInto` creates the reactions list of a
-  message with `new Writable([])` before pushing the message that links it,
-  with no explicit cause.
+  message with `new Writable([])` before pushing the message that links it.
+  It needs no explicit cause, being created in a handler.
 - **The send gate is declared in types and attributes, not by a call.** The
   stored message type `SentMessage` in
   `patterns/system/fabrichat/room-records.tsx` wraps the record type in
@@ -1392,9 +1404,9 @@ times, and `wish` 8 times. They use no `lift`, `ifElse`, `when`, `unless`,
   compiler's label annotations must be able to name a handler, and the plan
   must give each handler an identity the gate can be checked against on the
   client and on the server.
-- **Calls that need classifying.** `grantSpaceAccess` in `commitAddMember`
-  (`patterns/system/fabrichat/room.tsx`), and `eventKey` and
-  `currentPrincipal` in several handlers.
+- **Other calls in bodies.** `grantSpaceAccess` in `commitAddMember`
+  (`patterns/system/fabrichat/room.tsx`), an effect request, and the context
+  reads `eventKey` and `currentPrincipal` in several handlers.
 
 ## Factory values
 
@@ -1459,15 +1471,14 @@ in a body. The options, from narrowest to widest:
    function value does not, while requiring the footprint analysis to treat
    the call as opaque.
 
-**Recommendation: option 2.** Pattern factory values are the unit of
+**Decision: option 2.** Pattern factory values are the unit of
 instantiation everywhere else in the design, they are what the factory plan
 needs for tools, and they keep function bodies free of graph construction.
 Handler factories stay bindable in the reactive tier only. Module factories
 stop being values that cross a boundary: an imported function is called as a
 function. Built-ins are not factory values at all in the compiled design;
 an effect request names its built-in statically, so that the compiler knows
-the boundary's declared label rule. The decision is the project owner's
-(open question 8).
+the boundary's declared label rule.
 
 ## Summary
 
@@ -1508,7 +1519,7 @@ with two letters splits.
 | `navigateTo` | B (client-enacted) | effect | server computes, client enacts | latch, intent |
 | `compileAndRun` | B + instantiation | computation | server only | request hash, phase, child instance |
 | `cellFromUrl` | A + B | computation | not placed | pending flag, link |
-| `wish` | A + B + instantiation | computation, debounced | structural with exceptions | state store, sidecars, clock |
+| `wish` | A | computation, debounced | structural with exceptions | state store, sidecars, clock |
 
 The table has one row per `addModuleByRef` call in `registerBuiltins`, 31 in
 all.
@@ -1525,17 +1536,40 @@ all.
 | `reduce`, `findIndex` on a cell | D |
 | `db.query` | B |
 | `SqliteDb.exec` | a cell write |
-| `eventKey`, `currentPrincipal`, `principalOf`, `principalsOf`, `profileOwnerOf`, `resultOwnerOf`, `linksOf`, `spaceOf`, `spaceAccess`, `spaceAccessOf`, `spaceMembers`, `spaceDeleted`, `getPatternEnvironment` | context reads (new kind) |
+| `eventKey`, `currentPrincipal`, `principalOf`, `principalsOf`, `profileOwnerOf`, `resultOwnerOf`, `linksOf`, `spaceOf`, `spaceAccess`, `spaceAccessOf`, `spaceMembers`, `spaceDeleted`, `getPatternEnvironment` | context reads |
 | `grantSpaceAccess`, `revokeSpaceAccess`, `nameBlob` | B |
 | `patternTool`, `byRef`, `nameInstance`, `cell` | D |
 | Every transformer-emitted form | D |
 
 ### Counts
 
-Of the 31 registered built-ins: 11 are class A, 12 are class B, 1 is class
-C, 5 are class D, and 2 split across classes (`cellFromUrl` and `wish`;
+Of the 31 registered built-ins: 12 are class A, 12 are class B, 1 is class
+C, 5 are class D, and 1 splits across classes (`cellFromUrl`).
 `compileAndRun` is counted in B, with its instantiation half an ordinary
-instantiation).
+instantiation.
+
+## Decisions
+
+The project owner has decided the following. The entries above already
+reflect them.
+
+- **Calls in function bodies.** Four kinds are legal: instantiating a
+  pattern, creating a cell, requesting an effectful built-in, and a context
+  read. Staged access changes and `nameBlob` are effect requests.
+- **Factory values.** A function body may call pattern factory values and
+  no other kind.
+- **`wish` is structural.** What it creates, it creates idempotently, and
+  the result reads as if the data had already existed.
+- **`streamData` and `llm` are removed.**
+- **A `computed` or `lift` body does not instantiate a pattern.** Selection
+  among patterns happens in the reactive tier.
+- **`navigateTo` requires a result cell,** so an instance that is only
+  navigated to is an instantiated pattern.
+- **Identifiers.** Cells and instances created in a handler need no stable
+  identifier beyond the invocation, since each invocation is a new frame.
+  Patterns and lifts need identifiers that are the same on every evaluation.
+- **`asScope` and `inSpace`** are part of the instantiation syntax.
+- **Migration is out of scope** for this document.
 
 ## Open questions
 
@@ -1549,87 +1583,53 @@ Each question states the assumption this document made.
    labels). *Assumed:* `plan-and-label-templates.md` either adds classes or
    maps each onto an existing one, and truthiness maps onto a value
    observation of the root path only.
-2. **`wish` does not fit one group.** The overview lists `wish` as
-   effectful. Its path resolution and search are structural, its clock is
-   an external input, and its sidecars are pattern instantiation. *Assumed:*
-   it splits as its entry describes. Whether the split is visible to authors
-   as separate constructs, or `wish` stays one name with a compiler that
-   dispatches on a constant query, is undecided.
-3. **A fourth kind of call in function bodies.** Context reads
-   (`eventKey`, `currentPrincipal`, `spaceOf`, `principalOf`, and the rest)
-   and staged changes (`grantSpaceAccess`, `revokeSpaceAccess`, `nameBlob`)
-   are called in bodies throughout the corpus and are in neither of the
-   overview's lists. *Assumed:* context reads are a fourth legal kind, with
-   a footprint entry each, and staged changes are effect requests. The
-   staged access changes commit ahead of the handler's transaction today,
-   which one transaction per cause must either keep as a second commit or
-   fold in.
-4. **Instantiation from a computation.** The overview defines instantiation
-   in a handler and in the reactive tier. Three computeds in the corpus
-   instantiate patterns. *Assumed:* these move to the reactive tier, and a
-   `computed` or `lift` body may not instantiate.
-5. **Navigation and the keep set.** Twelve handler sites instantiate a
-   pattern and pass it only to `navigateTo`. *Assumed:* an effect request
-   that takes a link counts as assigning the instance a result cell.
-6. **Causal identifiers for cells and instances created in handlers.**
-   Today a handler-created cell is numbered by a counter on the frame and an
-   instance is identified by its position in the synthesized result pattern.
-   Both depend on creation order. *Assumed:* the compiler derives the
-   default identifier from the cause and the call site, with the element key
-   inside loops left to the author through an explicit `.for(...)`, and
-   existing handler-created documents need no migration because each event
-   creates new ones.
-7. **`asScope` and `inSpace`.** The overview's callee list does not include
-   a pattern modified by `asScope` or `inSpace`. The corpus has 34 such
-   calls in bodies, 29 of them in tests and fixtures, and FabriChat creates
-   rooms this way. *Assumed:* both are modifiers of an instantiation that
-   the compiler recognizes, and `inSpace` makes the instantiation a request
-   whose causal identifier determines the new space's identity.
-8. **Factory values.** Which kinds a function body may call. *Recommended:*
-   pattern factory values only (option 2 above).
-9. **`streamData` and `llm`.** *Recommended:* remove both. `streamData` is
-   already disabled under server execution and `llm` is already deprecated.
-10. **Effect requests from bodies.** No pattern requests a fetch, a
-    language-model call, or a query from a function body today. Whether the
-    compiled design should allow all class B built-ins there, or only the
-    ones with a use (navigation and the staged changes), is undecided.
-    *Assumed:* all are allowed, since the overview says so, and a request
-    returns a link to the boundary's result, which is pending in the
-    requesting transaction.
-11. **Tool calls as instantiation.** A model tool call instantiates a
-    pattern with a result cell whose cause is an identifier the model
-    supplies, and the dialog's built-in tools let a model read, invoke, and
-    write whatever it can name by link. *Assumed:* out of scope for the
-    language, and specified with the model boundary's declared rule. The
-    identifier should derive from the turn and the call's position.
-12. **Label rules that become tighter.** `flatMap` and a promoted template
-    literal get per-element and per-path labels where the runtime computes
-    one label today. The overview's staging rule allows tighter labels. The
-    comparison in stage 3 must expect a difference for these operations.
-13. **`sqliteDatabase` identity.** Its handle is keyed on the whole cause,
-    including the inputs document, so changing the table declarations names
-    a different handle today. *Assumed:* as a state cell it takes the
-    identifier of the variable it is assigned to, and migration maps the
-    old identifier.
-14. **Migration of built-in stores.** Conditional stores, list containers,
-    per-element instance documents, aggregate tree nodes, and index
-    documents exist in stored instances. The overview's migration question
-    asks whether anything besides state cells keeps its identifier.
-    *Finding:* removed list elements, superseded aggregate nodes, and
-    removed index members are released and not deleted today, so stored
-    spaces already hold unreferenced documents of these kinds. Handlers
-    bound inside a `map` body, and cells declared there, derive their
-    identifiers from the per-element instance, so the element key
-    (`listElementKeys`) is part of what must be preserved.
-15. **Document inconsistencies found.** They do not affect the design and
-    are recorded for correction where the documents are owned:
-    - the server-execution documents call the fetch family `fetchData`,
-      which is not an exported name;
-    - [built-in contracts](../server-side-execution/builtins.md) §2 says
-      the SQLite built-in enqueues its effect by hand, and the code uses the
-      sink-request seam;
-    - neither server-execution document places `str`, `aggregate`, the
-      collection-index family, `anchorsOf`, `cellFromUrl`, or
-      `sqliteDatabase`;
-    - `cancelGeneration` is declared on the state types of the one-shot
-      model built-ins in `base/api/index.ts` and is not implemented by them.
+2. **How `wish` is spelled.** `wish` stays one structural operation.
+   Whether the compiler requires a constant query, so that it can tell a
+   path from a search from a clock at compile time and give each its label
+   rule, is undecided. *Assumed:* a constant query gets the precise rule,
+   and a computed query gets the join of all of them.
+3. **Commits that span spaces.** A transaction covers one space. Two things
+   a handler does reach another space: a staged access change, which today
+   commits ahead of the handler's transaction, and an `inSpace`
+   instantiation, whose space may not exist until the request is performed.
+   One mechanism could serve both: a two-step commit across spaces. Its
+   design decides what a handler can read from a cross-space request in the
+   same invocation, which `createRoom` in FabriChat does today by being
+   discarded and run again. *Assumed:* the space's identity derives from
+   the request's causal identifier and is available before the commit, and
+   the access change keeps committing first until the two-step commit is
+   specified.
+4. **Effect requests from bodies.** No pattern requests a fetch, a
+   language-model call, or a query from a function body today. *Assumed:*
+   all class B built-ins are allowed there, since the overview says so, and
+   a request returns a link to the boundary's result, which is pending in
+   the requesting transaction.
+5. **Tool calls as instantiation.** A model tool call instantiates a
+   pattern with a result cell whose cause is an identifier the model
+   supplies, and the dialog's built-in tools let a model read, invoke, and
+   write whatever it can name by link. *Assumed:* out of scope for the
+   language, and specified with the model boundary's declared rule. The
+   identifier should derive from the turn and the call's position.
+6. **Label rules that become tighter.** `flatMap` and a promoted template
+   literal get per-element and per-path labels where the runtime computes
+   one label today. The overview's staging rule allows tighter labels. The
+   comparison in stage 3 must expect a difference for these operations.
+7. **`sqliteDatabase` identity.** Its handle is keyed on the whole cause,
+   including the inputs document, so changing the table declarations names
+   a different handle today. *Assumed:* as a state cell it takes the
+   identifier of the variable it is assigned to.
+8. **Document inconsistencies found.** They do not affect the design and
+   are recorded for correction where the documents are owned:
+   - the overview lists `wish` among the effectful operations and names
+     three kinds of call in function bodies, and this document governs on
+     both;
+   - the server-execution documents call the fetch family `fetchData`,
+     which is not an exported name;
+   - [built-in contracts](../server-side-execution/builtins.md) §2 says
+     the SQLite built-in enqueues its effect by hand, and the code uses the
+     sink-request seam;
+   - neither server-execution document places `str`, `aggregate`, the
+     collection-index family, `anchorsOf`, `cellFromUrl`, or
+     `sqliteDatabase`;
+   - `cancelGeneration` is declared on the state types of the one-shot
+     model built-ins in `base/api/index.ts` and is not implemented by them.
