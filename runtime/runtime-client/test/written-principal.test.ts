@@ -402,17 +402,29 @@ describe("written-principal", () => {
       expect(owners).toEqual([undefined, undefined]);
     });
 
-    it("reports no principal until the label the worker read has arrived, and none after a write through the handle", () => {
+    it("reports nothing until the label the worker read has arrived, no principal after a write through the handle, and the principal again once the worker delivers the label", () => {
       const profile = fakeCell("of:profile", [undefined, undefined], [], false);
       const owners = observeOwner(profile);
-      expect(owners).toEqual([undefined]);
+      expect(owners).toEqual([]);
 
       profile.deliver([{ name: "Bob" }, representing(OWNER)]);
-      expect(owners).toEqual([undefined, OWNER]);
+      expect(owners).toEqual([OWNER]);
 
       profile.writeLocally({ name: "Robert" });
+      expect(owners).toEqual([OWNER, undefined]);
 
-      expect(owners).toEqual([undefined, OWNER, undefined]);
+      profile.deliver([{ name: "Robert" }, representing(OWNER)]);
+
+      expect(owners).toEqual([OWNER, undefined, OWNER]);
+    });
+
+    it("reports no principal for a cell the worker refuses before its label arrives", () => {
+      const profile = fakeCell("of:profile", [undefined, undefined], [], false);
+      const owners = observeOwner(profile);
+
+      profile.refuse();
+
+      expect(owners).toEqual([undefined]);
     });
   });
 });
