@@ -9,6 +9,8 @@ import { setModernCellRepConfig } from "@commonfabric/data-model/cell-rep";
 import { getMemoryProtocolFlags } from "../v2.ts";
 import {
   connect,
+  connectionDeliveryOf,
+  isNotSentError,
   RESTORE_CONCURRENCY,
   type SessionPrincipal,
   settleBounded,
@@ -273,6 +275,26 @@ const commit = (localSeq: number) => ({
 });
 
 /** Waits until `ready` holds, polling the event loop. */
+/**
+ * Makes `made` on `session` as a caller keeping the client's contract does:
+ * a commit that fails before the session can take it, or with the connection
+ * that carried it, is made again once its `readyToRetry()` says the session
+ * can take it.
+ */
+async function transactOnceReady(
+  session: SpaceSession,
+  made: ReturnType<typeof commit>,
+) {
+  for (;;) {
+    try {
+      return await session.transact(made);
+    } catch (error) {
+      if (connectionDeliveryOf(error) === undefined) throw error;
+      await (error as { readyToRetry: () => Promise<void> }).readyToRetry();
+    }
+  }
+}
+
 async function until(ready: () => boolean, ms = 5000): Promise<void> {
   const end = Date.now() + ms;
   while (!ready()) {
@@ -344,17 +366,21 @@ Deno.test("a retriable reopen denial holds only that session on a shared connect
     const a: SpaceSession = await client.mount(SPACE_A, {}, principal());
     const b: SpaceSession = await client.mount(SPACE_B, {}, principal());
     peer.drop();
-    await until(() => (peer.opens.get(SPACE_A) ?? 0) >= 2);
-    const pendingA = a.transact(commit(1));
-    const doneA = settled(pendingA);
-    // B restores and commits while A is held, and a new mount proceeds.
     await client.restoreConnection();
+    // A is held: a commit made on it now fails at once, ready to be made
+    // again once the hold ends.
+    const failedA = await a.transact(commit(1)).catch((e) => e);
+    assertEquals(isNotSentError(failedA), true);
+    const readyA = settled(failedA.readyToRetry());
+    // B restores and commits while A is held, and a new mount proceeds.
     assertEquals((await b.transact(commit(1))).seq > 0, true);
     await client.mount(SPACE_C, {}, principal());
-    assertEquals(doneA(), false);
-    // A's held reopen succeeds on the same connection, and its commit lands.
-    assert((await pendingA).seq > 0);
+    assertEquals(readyA(), false);
+    // A's held reopen succeeds on the same connection, and the commit made
+    // again lands.
+    await failedA.readyToRetry();
     assertEquals(a.held, false);
+    assert((await a.transact(commit(1))).seq > 0);
     assertEquals(peer.opens.get(SPACE_A), 4);
     assertEquals(peer.opens.get(SPACE_B), 2);
     assertEquals(peer.hellos, 2);
@@ -443,7 +469,7 @@ Deno.test("a capacity refusal during a restore holds the session and reports no 
       a.subscribeTermination((error) => lost.push(error));
       peer.drop();
       await until(() => a.held);
-      assert((await within(a.transact(commit(1)))).seq > 0, step);
+      assert((await within(transactOnceReady(a, commit(1)))).seq > 0, step);
       assertEquals(lost, [], step);
       assertEquals(a.held, false, step);
       // The refused step was sent again.
@@ -506,7 +532,7 @@ Deno.test("a signed open's retriable denial still reconnects the client", async 
   try {
     const a = await client.mount(SPACE_A, {}, () => undefined);
     peer.drop();
-    assert((await within(a.transact(commit(1)))).seq > 0);
+    assert((await within(transactOnceReady(a, commit(1)))).seq > 0);
     assertEquals(a.held, false);
     assertEquals(peer.hellos, 3);
   } finally {
@@ -784,7 +810,7 @@ Deno.test("a principal's retriable denial against a direct peer still reconnects
   try {
     const a = await client.mount(SPACE_A, {}, signingPrincipal());
     peer.drop();
-    assert((await within(a.transact(commit(1)))).seq > 0);
+    assert((await within(transactOnceReady(a, commit(1)))).seq > 0);
     assertEquals(a.held, false);
     assertEquals(peer.hellos, 3);
   } finally {
@@ -811,7 +837,7 @@ Deno.test("a held restore failing where the transport cannot restart fails the s
     peer.drop();
     await until(() => a.held);
     await assertRejects(
-      () => within(a.transact(commit(1))),
+      () => within(transactOnceReady(a, commit(1))),
       Error,
       "Session restore failed",
     );
@@ -864,7 +890,7 @@ Deno.test("a drop while a session is held hands it to the reconnect", async () =
     assertEquals(a.held, false);
     peer.helloGate = undefined;
     gate.resolve();
-    assert((await within(a.transact(commit(1)))).seq > 0);
+    assert((await within(transactOnceReady(a, commit(1)))).seq > 0);
     assertEquals(peer.opens.get(SPACE_A), 3);
   } finally {
     timers.restore();
@@ -979,17 +1005,39 @@ Deno.test("a denial while re-establishing the watch set holds the session and se
     }]);
     peer.drop();
     await until(() => a.held);
-    // Held, the session sends no commit until it is restored.
-    const pendingA = a.transact(commit(1));
-    await pause(5);
+    // Held, the session takes no commit: one made now fails at once, and is
+    // made again once the session is restored.
+    const failedA = await a.transact(commit(1)).catch((e) => e);
+    assertEquals(isNotSentError(failedA), true);
     assertEquals(peer.transacts.get(SPACE_A), undefined);
-    assert((await within(pendingA)).seq > 0);
+    assert((await within(transactOnceReady(a, commit(1)))).seq > 0);
     assertEquals(peer.watchSets.get(SPACE_A), 2);
     assertEquals(peer.transacts.get(SPACE_A), 1);
     // Sent, the watch set is owed no more: a resumed reopen sends none.
     peer.drop();
     await within(client.restoreConnection());
     assertEquals(peer.watchSets.get(SPACE_A), 2);
+  } finally {
+    await client.close();
+  }
+});
+
+Deno.test("whenRestored waits while a session is held, and resolves once its held reopen succeeds", async () => {
+  const peer = new RoutedPeer((space, open) =>
+    space === SPACE_A && open === 2 ? "retriable" : "ok"
+  );
+  const client = await connect({ transport: peer });
+  try {
+    const a = await client.mount(SPACE_A, {}, principal());
+    peer.drop();
+    await until(() => a.held);
+    const restored = a.whenRestored();
+    const done = settled(restored);
+    await Promise.resolve();
+    await Promise.resolve();
+    assertEquals(done(), false);
+    await within(restored);
+    assertEquals(a.held, false);
   } finally {
     await client.close();
   }
@@ -1036,9 +1084,14 @@ Deno.test("closing the client while a session is held leaves no retry running", 
     const a = await client.mount(SPACE_A, {}, principal());
     peer.drop();
     await until(() => (peer.opens.get(SPACE_A) ?? 0) >= 3);
-    const pendingA = a.transact(commit(1));
+    // Held, the session takes no commit, and closing the client ends the
+    // wait to make it again.
+    const failedA = await a.transact(commit(1)).catch((e) => e);
+    assertEquals(isNotSentError(failedA), true);
+    const ready = failedA.readyToRetry();
+    ready.catch(() => {});
     await client.close();
-    await assertRejects(() => pendingA, Error, "memory session closed");
+    await assertRejects(() => ready, Error, "memory session closed");
     assertEquals(timers.live(), 0);
   } finally {
     timers.restore();
@@ -1158,7 +1211,7 @@ Deno.test("a drop while a held retry reopens leaves the session to the reconnect
     peer.drop();
     await until(() => peer.held.length === 1);
     peer.drop();
-    assert((await within(a.transact(commit(1)))).seq > 0);
+    assert((await within(transactOnceReady(a, commit(1)))).seq > 0);
     // The retry's failure is the drop's, so it neither discards the
     // connection the reconnect opened nor restarts it.
     await pause(100);

@@ -4207,8 +4207,13 @@ export class SpaceSession {
       if (
         this.#client.isConnected() && this.#invalidDelivery === invalidDelivery
       ) this.#invalidDelivery = undefined;
-      this.#restoreComplete?.resolve();
-      this.#restoreComplete = undefined;
+      // An earlier restore finishing leaves the wait to the latest one, so
+      // that nothing is sent before this session is open as that one makes
+      // it.
+      if (run === this.#restoreRun) {
+        this.#restoreComplete?.resolve();
+        this.#restoreComplete = undefined;
+      }
       this.#heldRestores = 0;
       if (wasHeld) this.#client.noteHoldEnded();
     } catch (error) {
@@ -5104,9 +5109,11 @@ export class SpaceSession {
 
   /**
    * Returns `error`, attaching to a `notSentError()` or `unacknowledgedError()`
-   * a `readyToRetry()` that resolves once this session is open on a later
-   * connection than the one the request was made on (`madeOn`, as the client
-   * and this session stood then), so that a caller can send
+   * a `readyToRetry()` that resolves once this session can take the request
+   * again: once it is open on the connection that is up, and, for an
+   * unacknowledged request, on one later than the request was sent on, which
+   * is gone (`madeOn`, as the client and this session stood when it was made),
+   * so that a caller can send
    * the request again then: a commit under its own `localSeq`, which the
    * server answers from its record if it landed. It rejects with the session's
    * close error, or with a `SessionReplacedError` when the server opened a new
@@ -5118,8 +5125,9 @@ export class SpaceSession {
   ): Error {
     const failure = error instanceof Error ? error : new Error(String(error));
     if (connectionDeliveryOf(failure) === undefined) return failure;
+    const laterThan = isUnacknowledgedError(failure) ? madeOn.epoch : -1;
     return Object.assign(failure, {
-      readyToRetry: () => this.#reopenedSince(madeOn.epoch, madeOn.sessionId),
+      readyToRetry: () => this.#reopenedSince(laterThan, madeOn.sessionId),
     });
   }
 
