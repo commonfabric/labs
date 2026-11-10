@@ -368,9 +368,9 @@ label rule.
   and `findIndex` are reactive constructs too, and the callback of `reduce`
   is restricted to an expression. `some`, `every`, and `find` are reactive
   constructs as well. The label of `findIndex` joins the elements up to and
-  including the first match, and not the ones after it. `wish` is structural because what it
-  creates, it creates idempotently: its result reads as if the data had
-  already existed.
+  including the first match, and not the ones after it. `wish` is structural
+  because what it creates, it creates idempotently: its result reads as if
+  the data had already existed.
 - **Effectful operations** stay durable boundaries with declared label rules
   and their own transactions: the fetch family, `generateText`,
   `generateObject`, `llmDialog`, `agent`, `sqliteQuery`, `navigateTo`,
