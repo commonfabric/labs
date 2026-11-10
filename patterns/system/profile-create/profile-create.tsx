@@ -5,6 +5,7 @@ import {
   equals,
   type FabricBytes,
   handler,
+  type HandlerFactory,
   ifElse,
   linksOf,
   NAME,
@@ -14,6 +15,7 @@ import {
   spaceDeleted,
   spaceOf,
   Stream,
+  type TrustedActionWrite,
   UI,
   type VNode,
   Writable,
@@ -34,6 +36,7 @@ import ProfileHome, {
 // default profile and stamping most-recently-used (MRU).
 export const TRUSTED_PROFILE_CREATE_SURFACE = "ProfileCreateSurface";
 export const TRUSTED_PROFILE_CREATE_ACTION = "CreateProfile";
+export const TRUSTED_PROFILE_CREATE_PICTURE_ACTION = "ChooseProfilePicture";
 export const TRUSTED_PROFILE_PICKER_SURFACE = "ProfilePickerSurface";
 export const TRUSTED_PROFILE_SET_DEFAULT_ACTION = "SetDefaultProfile";
 export const TRUSTED_PROFILE_SET_MRU_ACTION = "SetMruProfile";
@@ -88,6 +91,24 @@ export type ProfileSuggestion = {
   picture?: FabricBytes;
 };
 
+/**
+ * The user's own decision about the picture the profile the surface creates
+ * starts with: `picture` holds the one they chose, and an empty choice means
+ * they removed it. Until they decide, the slot is `undefined` and the
+ * suggested picture stands.
+ */
+export type PictureChoice = { picture?: FabricBytes };
+
+/** The picture the profile takes: the user's choice, else the suggestion's. */
+function pictureToApply(
+  choice: PictureChoice | undefined,
+  suggestion: ProfileSuggestion | undefined,
+): FabricBytes | undefined {
+  const picture = choice === undefined ? suggestion?.picture : choice.picture;
+  // An empty picture is none: the seed step and `setPicture` take only bytes.
+  return picture?.length ? picture : undefined;
+}
+
 // Stores the creation name in the new profile's `name` cell, through
 // `setName` — the cell's owner-protected writer — so every `#profile` reader
 // (Topics, `cf profile show`, the loom lobby), which reads the stored `name`
@@ -114,17 +135,18 @@ export type ProfileSuggestion = {
 // written: a re-delivery of this event, or the same profile seeded
 // elsewhere, is left alone.
 //
-// The picture a host's profile suggestion still holds is set here too,
-// through the profile's `setPicture`, which this runtime runs as the
-// profile's creator, so the picture's label names the owner as the face
+// The picture the user chose on the surface, or else the one a host's
+// profile suggestion holds, is set here too, through the profile's
+// `setPicture`, which this runtime runs as the profile's creator, so the picture's label names the owner as the face
 // readers require.
 export const seedProfileName = handler<
   SeedProfileNameEvent,
   {
     privateInbox?: ProfileInbox;
     profileSuggestion?: Writable<ProfileSuggestion | undefined>;
+    pictureChoice?: Writable<PictureChoice | undefined>;
   }
->((event, { privateInbox, profileSuggestion }) => {
+>((event, { privateInbox, profileSuggestion, pictureChoice }) => {
   if (event === undefined) {
     throw new Error(
       "Cannot seed a profile's name: the event lacks a name or a profile, " +
@@ -143,41 +165,55 @@ export const seedProfileName = handler<
   // otherwise wait for the next worker.
   pointAtInboxIfUnset(target, privateInbox);
   target.setName.send({ name });
-  const picture = profileSuggestion?.get()?.picture;
-  if (picture?.length) target.setPicture?.send({ picture });
+  const picture = pictureToApply(
+    pictureChoice?.get(),
+    profileSuggestion?.get(),
+  );
+  if (picture) target.setPicture?.send({ picture });
 });
 
-// Removes the suggested picture, so the profile the surface creates has none.
-// The picture is the user's own suggestion, so removing it changes nothing
-// anyone else holds.
-export const removeSuggestedPicture = handler<
-  void,
-  { profileSuggestion?: Writable<ProfileSuggestion | undefined> }
->((_event, { profileSuggestion }) => {
-  const suggestion = profileSuggestion?.get();
-  if (suggestion?.picture === undefined) return;
-  const { picture: _, ...rest } = suggestion;
-  profileSuggestion!.set(rest);
-});
+/**
+ * The surface's picture choice, which only `choosePicture`, triggered by a
+ * gesture on the trusted create surface, may write: the seed step gives the
+ * profile this picture as its owner's face, so a pattern that reaches the
+ * surface's streams must not be able to choose it.
+ */
+export type TrustedPictureChoice = TrustedActionWrite<
+  PictureChoice | undefined,
+  typeof choosePicture,
+  typeof TRUSTED_PROFILE_CREATE_PICTURE_ACTION,
+  typeof TRUSTED_PROFILE_CREATE_SURFACE
+>;
 
-// Sets the picture the profile the surface creates starts with, from the
-// user's own pick, keeping the suggested name. It goes where a host's
-// suggested picture goes, so the seed step applies it the same way, written
-// by the profile's creator; picking replaces a suggested picture, and
-// "Remove picture" drops it again. An event without bytes changes nothing.
-// The stored suggestion always has a name (`profile-suggestion.ts`), so a
-// pick with nothing suggested stores an empty one, which suggests no name.
-export const chooseSuggestedPicture = handler<
+// The choice's cell has no default, so setup writes nothing to it and its
+// document stores no policy until the first write. That write is checked
+// against the schema the writer brings, the handler's state, so the state
+// carries the whole contract (as `setPicture`'s does in profile-home); a
+// contract only on the pattern's `new Writable` would never be enforced. The
+// explicit `HandlerFactory` type lets the state name the handler as its own
+// writer.
+export type ChoosePictureState = {
+  pictureChoice: Writable<TrustedPictureChoice>;
+  remove?: boolean;
+};
+
+// Records the user's picture decision on the trusted create surface: the
+// image they chose (`cf-avatar-input`'s change), or, bound with `remove`, no
+// picture at all. A host's suggestion is left as the host stored it. A change
+// without bytes decides nothing.
+export const choosePicture: HandlerFactory<
   SetProfilePictureEvent,
-  { profileSuggestion?: Writable<ProfileSuggestion | undefined> }
->((event, { profileSuggestion }) => {
-  const picture = event.picture ?? event.detail?.bytes;
-  if (!picture?.length || profileSuggestion === undefined) return;
-  profileSuggestion.set({
-    name: profileSuggestion.get()?.name ?? "",
-    picture,
-  });
-});
+  ChoosePictureState
+> = handler<SetProfilePictureEvent, ChoosePictureState>(
+  (event, { pictureChoice, remove }) => {
+    if (remove) {
+      pictureChoice.set({});
+      return;
+    }
+    const picture = event?.picture ?? event?.detail?.bytes;
+    if (picture?.length) pictureChoice.set({ picture });
+  },
+);
 
 // Appends a freshly-created profile (its own `inSpace` space) to the home
 // `profiles` list. The cross-space `inSpace` child materializes during the push;
@@ -687,12 +723,11 @@ export type ProfileCreateInput = {
    * The profile the user's host suggests, which the `#profile` wish hands
    * over. Its name starts the field in place of `defaultName`; its picture is
    * shown, with a control that removes it, and the profile created takes the
-   * picture still shown. The user may also choose a picture of their own,
-   * which replaces the suggested one there. Removing or choosing a picture
-   * changes the stored suggestion; creating a profile leaves the suggestion
-   * stored for the host to replace, and the wish shows this surface only
-   * while the user has no profile. A surface handed none keeps a chosen
-   * picture in this input of its own.
+   * picture still shown. The user may remove it or choose their own, which
+   * the surface records for itself and leaves this suggestion as the host
+   * stored it; creating a profile leaves the suggestion stored for the host
+   * to replace, and the wish shows this surface only while the user has no
+   * profile.
    */
   profileSuggestion?: Writable<ProfileSuggestion | undefined>;
 };
@@ -701,28 +736,48 @@ export type ProfileCreateOutput = {
   [NAME]: string;
   [UI]: VNode;
   createProfile: Stream<CreateProfileEvent>;
+
+  /** The picture the created profile will start with, if any. */
+  picture?: FabricBytes;
+
+  /** Chooses that picture; only a gesture on the surface is admitted. */
+  choosePicture: Stream<SetProfilePictureEvent>;
+
+  /**
+   * Removes that picture; only a gesture on the surface is admitted. The
+   * event's content is ignored.
+   */
+  removePicture: Stream<SetProfilePictureEvent>;
 };
 
 export default pattern<ProfileCreateInput, ProfileCreateOutput>(
   ({ profiles, inputId, defaultName, privateInbox, profileSuggestion }) => {
-    const seedName = seedProfileName({ privateInbox, profileSuggestion });
+    const pictureChoice = new Writable<TrustedPictureChoice>(undefined).for(
+      "pictureChoice",
+    );
+    const seedName = seedProfileName({
+      privateInbox,
+      profileSuggestion,
+      pictureChoice,
+    });
     const createProfile = submitProfileCreation({
       profiles,
       seedName,
     });
-    // An empty suggested name suggests none, as a picture chosen with nothing
-    // suggested stores it.
     const startingName = computed(() =>
-      profileSuggestion?.get()?.name || defaultName || ""
+      profileSuggestion?.get()?.name ?? defaultName ?? ""
     );
-    // An empty picture is none: the seed step and `setPicture` take only bytes.
-    const suggestedPicture = computed(() => {
-      const picture = profileSuggestion?.get()?.picture;
-      return picture?.length ? picture : undefined;
-    });
+    const shownPicture = computed(() =>
+      pictureToApply(pictureChoice.get(), profileSuggestion?.get())
+    );
+    const chooseOwnPicture = choosePicture({ pictureChoice });
+    const removePicture = choosePicture({ pictureChoice, remove: true });
     return {
       [NAME]: "Create Profile",
       createProfile,
+      picture: shownPicture,
+      choosePicture: chooseOwnPicture,
+      removePicture,
       [UI]: (
         <cf-vstack
           id="profile-create-surface"
@@ -738,37 +793,43 @@ export default pattern<ProfileCreateInput, ProfileCreateOutput>(
               uncontrolled copy inside cf-submit-input) — it does not touch the
               trusted-click path. */
           }
-          {ifElse(
-            suggestedPicture,
-            <cf-hstack
-              gap="2"
-              align="center"
-              data-ui-region="profile-create-suggested-picture"
-            >
+          {
+            /* The picture the profile will start with. Choosing and removing
+              it are gestures on this trusted surface, as the create is: the
+              seed step sets it as the owner's face. */
+          }
+          <cf-hstack
+            gap="2"
+            align="center"
+            data-ui-region="profile-create-picture"
+          >
+            {ifElse(
+              shownPicture,
               <cf-avatar
-                bytes={suggestedPicture}
+                bytes={shownPicture}
                 name={startingName}
                 size="lg"
-              />
+                data-ui-region="profile-create-suggested-picture"
+              />,
+              null,
+            )}
+            <cf-avatar-input
+              data-ui-action={TRUSTED_PROFILE_CREATE_PICTURE_ACTION}
+              oncf-change={chooseOwnPicture}
+            />
+            {ifElse(
+              shownPicture,
               <cf-button
                 id="profile-create-remove-picture"
                 variant="ghost"
                 size="sm"
-                onClick={removeSuggestedPicture({ profileSuggestion })}
+                data-ui-action={TRUSTED_PROFILE_CREATE_PICTURE_ACTION}
+                onClick={removePicture}
               >
                 Remove picture
-              </cf-button>
-            </cf-hstack>,
-            null,
-          )}
-          <cf-hstack
-            gap="2"
-            align="center"
-            data-ui-region="profile-create-choose-picture"
-          >
-            <cf-avatar-input
-              oncf-change={chooseSuggestedPicture({ profileSuggestion })}
-            />
+              </cf-button>,
+              null,
+            )}
           </cf-hstack>
           <cf-submit-input
             inputId={inputId ?? "profile-name-input"}

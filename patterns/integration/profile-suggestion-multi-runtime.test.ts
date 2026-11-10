@@ -106,11 +106,13 @@ describe("profile-suggestion-multi-runtime", () => {
                 piece: surface,
               }) === "Sam Lee";
         });
-        // The surface's first child is the picture's `ifElse`, a cell of its
-        // own, which shows the picture's region while the suggestion holds one.
-        const shown = await session.readRaw(["$UI", "children", 0], {
-          piece: surface,
-        }) as { props?: Record<string, FabricValue> } | undefined;
+        // The surface's first child is the picture row, whose first child is
+        // the picture's `ifElse`, a cell of its own, which shows the
+        // picture's region while the suggestion holds one.
+        const shown = await session.readRaw(
+          ["$UI", "children", 0, "children", 0],
+          { piece: surface },
+        ) as { props?: Record<string, FabricValue> } | undefined;
         expect(shown?.props?.["data-ui-region"]).toBe(
           "profile-create-suggested-picture",
         );
