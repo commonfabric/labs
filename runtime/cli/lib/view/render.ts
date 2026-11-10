@@ -31,6 +31,7 @@ import {
   glyphFor,
 } from "./display.ts";
 import { overlaySpanStyle, spanStyle } from "./highlight.ts";
+import { firstShown } from "./lineedit.ts";
 import { lineBg, styleFor, ui } from "./theme.ts";
 import {
   buildWrapPlan,
@@ -346,16 +347,18 @@ function layout(
 }
 
 /**
- * 1-based terminal (row, col) for the text cursor, or null when there is no
- * cursor, it is scrolled off screen, or an overlay or dialog covers the content.
- * Mirrors the layout `renderFrame` uses, including a wrapped continuation's
- * screen row and display-column offset.
+ * 1-based terminal (row, col) for the text cursor: the one in a dialog's
+ * focused input line while a dialog is up, and otherwise the one in the
+ * content. Null when there is no cursor, it is scrolled off screen, or an
+ * overlay covers the content. Mirrors the layout `renderFrame` uses, including
+ * a wrapped continuation's screen row and display-column offset.
  */
 export function cursorScreenPos(
   doc: Document,
   view: ViewState,
 ): { row: number; col: number } | null {
-  if (!view.cursor || view.overlay || view.dialog) return null;
+  if (view.dialog) return dialogCursorPos(view, view.dialog);
+  if (!view.cursor || view.overlay) return null;
   const { line, col } = view.cursor;
   if (line < 0 || line >= doc.lines.length) return null;
   const { gutterWidth, guideWidth, contentWidth } = layout(doc, view);
@@ -433,7 +436,47 @@ export interface DialogState {
   /** Index of a button drawn mid-press: shifted one column right with its
    * shadow hidden, for the brief animation after it is activated. */
   readonly pushed?: number;
+
+  /** Controls drawn under the body, each after a blank row. Tab visits them
+   * before the buttons. */
+  readonly fields?: readonly DialogField[];
+
+  /** Index of the focused field, or -1 when none is. */
+  readonly fieldFocus?: number;
 }
+
+/** A check box, drawn as Turbo Vision draws one: `[X]` when it is checked
+ * and `[ ]` when it is not, then its label, whose first letter matching
+ * {@link hotkey} is drawn highlighted. */
+export interface DialogCheckBox {
+  readonly kind: "checkBox";
+  readonly label: string;
+  readonly hotkey: string;
+  readonly checked: boolean;
+}
+
+/** A field that one line of text is typed into, under a label whose first
+ * letter matching {@link hotkey} is drawn highlighted. The field shows
+ * `value` from the character at `scroll`, moved on as far as it takes to
+ * show the cursor, and an arrow at either end says the text runs on past
+ * it. Selected text is drawn highlighted. */
+export interface DialogInputLine {
+  readonly kind: "inputLine";
+  readonly label: string;
+  readonly hotkey: string;
+  readonly value: string;
+
+  /** How many characters precede the cursor. */
+  readonly cursor: number;
+
+  readonly scroll: number;
+
+  /** Whether the whole of `value` is selected. */
+  readonly selected: boolean;
+}
+
+/** A control in a dialog other than a button. */
+export type DialogField = DialogCheckBox | DialogInputLine;
 
 interface Cell {
   ch: string;
@@ -1478,17 +1521,23 @@ export function dialogBox(
 ): DialogBox {
   const titleW = cpLen(dialog.title) + 4; // the padding spaces and some fill
   const bodyW = dialog.width ??
-    dialog.body.reduce((m, l) => Math.max(m, cpLen(l)), 0);
+    [...dialog.body, ...(dialog.fields ?? []).map(fieldText)].reduce(
+      (m, l) => Math.max(m, cpLen(l)),
+      0,
+    );
   const btnW = buttonsWidth(dialog.buttons);
   const contentW = Math.max(titleW, bodyW, btnW);
   // The margin columns each side, then the two borders.
-  // Inner rows: a blank under the title, the body, a blank, the buttons, and the
-  // buttons' shadow.
+  // Inner rows: a blank under the title, the body and fields, a blank, the
+  // buttons, and the buttons' shadow.
   const boxW = Math.max(
     0,
     Math.min(contentW + 2 * DIALOG_HMARGIN + 2, view.width - 2),
   );
-  const boxH = Math.max(0, Math.min(dialog.body.length + 6, view.height - 1));
+  const boxH = Math.max(
+    0,
+    Math.min(contentRows(dialog) + 6, view.height - 1),
+  );
   return {
     x: Math.max(0, Math.floor((view.width - boxW) / 2)),
     y: Math.max(0, Math.floor((view.height - boxH) / 2)),
@@ -1533,36 +1582,173 @@ function layoutButtons(
  */
 function buttonRowOf(dialog: DialogState, innerH: number): number {
   const row = innerH - 2; // the buttons' shadow takes the last row
-  return row > dialog.body.length ? row : -1;
+  return row > contentRows(dialog) ? row : -1;
+}
+
+/** The text of a field's widest row: a check box's mark and label, or an
+ * input line's label. */
+function fieldText(field: DialogField): string {
+  return field.kind === "checkBox" ? `[X] ${field.label}` : field.label;
+}
+
+/** The rows a field takes: a check box's one, or an input line's label and
+ * the line under it. */
+function fieldHeight(field: DialogField): number {
+  return field.kind === "checkBox" ? 1 : 2;
 }
 
 /**
- * Returns the index of the button drawn at the zero-based screen cell `x`, `y`,
- * at rest or pushed one column right, or -1 when no button is drawn there.
+ * Returns the inner row of a dialog box that each of its fields starts on.
+ * One blank row sits under the title, and another before each field that
+ * follows the body or another field.
  */
-export function dialogButtonAt(
+function fieldRows(dialog: DialogState): number[] {
+  const rows: number[] = [];
+  let row = 1 + dialog.body.length;
+  for (const field of dialog.fields ?? []) {
+    if (row > 1) row++;
+    rows.push(row);
+    row += fieldHeight(field);
+  }
+  return rows;
+}
+
+/** How many rows the body and fields of a dialog take together. */
+function contentRows(dialog: DialogState): number {
+  const fields = dialog.fields ?? [];
+  const last = fields.length - 1;
+  const start = fieldRows(dialog)[last];
+  return start === undefined
+    ? dialog.body.length
+    : start + fieldHeight(fields[last]) - 1;
+}
+
+/**
+ * Returns the first character of `field`'s value that its line shows when
+ * it is `width` columns wide, the cursor showing in the columns between the
+ * arrows.
+ */
+function inputLineStart(field: DialogInputLine, width: number): number {
+  return firstShown(
+    field.scroll,
+    field.cursor,
+    width - 2,
+    [...field.value].length,
+  );
+}
+
+/**
+ * Returns where in the box of `dialog` each field is drawn, as the box's
+ * inner row it starts on, or null for a field the box is too short to show
+ * whole above its buttons.
+ */
+function shownFieldRows(
+  dialog: DialogState,
+  innerH: number,
+): Array<number | null> {
+  const buttonRow = buttonRowOf(dialog, innerH);
+  const bottom = buttonRow < 0 ? innerH : buttonRow;
+  const fields = dialog.fields ?? [];
+  return fieldRows(dialog).map((row, i) =>
+    row + fieldHeight(fields[i]) <= bottom ? row : null
+  );
+}
+
+/**
+ * Returns the 1-based terminal row and column of the cursor in a dialog's
+ * focused input line, or null when no input line is focused or the box is
+ * too small to show it.
+ */
+function dialogCursorPos(
+  view: Pick<ViewState, "width" | "height">,
+  dialog: DialogState,
+): { row: number; col: number } | null {
+  const index = dialog.fieldFocus ?? -1;
+  const field = dialog.fields?.[index];
+  const box = dialogBox(view, dialog);
+  const row = shownFieldRows(dialog, box.innerH)[index];
+  const width = box.innerW - 2 * DIALOG_HMARGIN;
+  if (field?.kind !== "inputLine" || row == null || width < 3) return null;
+  const col = DIALOG_HMARGIN + 1 + field.cursor - inputLineStart(field, width);
+  return { row: box.y + row + 3, col: box.x + col + 2 };
+}
+
+/**
+ * Returns the index of the control drawn at the zero-based screen cell `x`,
+ * `y`, counting the fields first and then the buttons, or -1 when none is
+ * drawn there. A button counts at rest or pushed one column right, and a
+ * field anywhere on its rows.
+ */
+export function dialogControlAt(
   view: Pick<ViewState, "width" | "height">,
   dialog: DialogState,
   x: number,
   y: number,
 ): number {
   const box = dialogBox(view, dialog);
-  const buttonRow = buttonRowOf(dialog, box.innerH);
+  const row = y - box.y - 1;
   const col = x - box.x - 1;
-  if (
-    box.boxW < 2 || buttonRow < 0 || y !== box.y + 1 + buttonRow ||
-    col >= box.innerW
-  ) return -1;
-  return layoutButtons(dialog.buttons, box.innerW).findIndex((
+  if (box.boxW < 2 || col < 0 || col >= box.innerW) return -1;
+  const fields = dialog.fields ?? [];
+  const field = shownFieldRows(dialog, box.innerH).findIndex((start, i) =>
+    start !== null && row >= start && row < start + fieldHeight(fields[i])
+  );
+  const buttonRow = buttonRowOf(dialog, box.innerH);
+  if (field >= 0) return field;
+  if (buttonRow < 0 || row !== buttonRow) return -1;
+  const button = layoutButtons(dialog.buttons, box.innerW).findIndex((
     { start, faceW },
   ) => col >= start && col <= start + faceW);
+  return button < 0 ? -1 : fields.length + button;
+}
+
+/** Returns how many characters an input line of `dialog` shows, between the
+ * arrows at its ends. */
+export function inputLineColumns(
+  view: Pick<ViewState, "width" | "height">,
+  dialog: DialogState,
+): number {
+  return Math.max(1, dialogBox(view, dialog).innerW - 2 * DIALOG_HMARGIN - 2);
+}
+
+/**
+ * Returns the index of the character of input line `index` of `dialog` drawn
+ * at the zero-based screen cell `x`, `y`, which is where a click there puts
+ * the cursor: the start of the text left of it, and its end right of it. Returns
+ * null when `y` is not the row the line is drawn on, and throws when field
+ * `index` is not an input line.
+ */
+export function inputLineIndexAt(
+  view: Pick<ViewState, "width" | "height">,
+  dialog: DialogState,
+  index: number,
+  x: number,
+  y: number,
+): number | null {
+  const field = dialog.fields?.[index];
+  if (field?.kind !== "inputLine") {
+    throw new Error(`field ${index} of the dialog is not an input line`);
+  }
+  const box = dialogBox(view, dialog);
+  const row = shownFieldRows(dialog, box.innerH)[index];
+  if (row == null || y !== box.y + 1 + row + 1) return null;
+  const columns = inputLineColumns(view, dialog);
+  const column = x - box.x - 1 - DIALOG_HMARGIN - 1;
+  return inputLineStart(field, columns + 2) +
+    Math.max(0, Math.min(column, columns - 1));
+}
+
+/** The index in `label` of the highlighted shortcut letter, its first that
+ * matches `hotkey` in either case, or -1 when none does. */
+function hotkeyIndex(label: string, hotkey: string): number {
+  const hk = hotkey.toLowerCase();
+  return [...label].findIndex((c) => c.toLowerCase() === hk);
 }
 
 /** The face index of the highlighted shortcut letter, or -1 if the hotkey does
  * not appear in the label. Offset by one for the leading pad space. */
 function hotkeyFaceIndex(b: DialogButton): number {
-  const hk = b.hotkey.toLowerCase();
-  const idx = [...b.label].findIndex((c) => c.toLowerCase() === hk);
+  const idx = hotkeyIndex(b.label, b.hotkey);
   return idx < 0 ? -1 : idx + 1;
 }
 
@@ -1596,12 +1782,27 @@ function applyDialog(
   const focusIdx = dialog.focus ??
     dialog.buttons.findIndex((b) => b.kind === "default");
   const pushedIdx = dialog.pushed ?? -1;
+  const starts = shownFieldRows(dialog, innerH);
   for (let i = 0; i < innerH; i++) {
     const cells: Cell[] = new Array(innerW);
     for (let c = 0; c < innerW; c++) cells[c] = { ch: " ", style: panelBg };
     const bodyIdx = i - 1; // one blank row sits under the title
+    const fieldIdx = starts.findLastIndex((start) =>
+      start !== null && start <= i
+    );
+    const field = dialog.fields?.[fieldIdx];
+    const fieldRow = i - (starts[fieldIdx] ?? 0);
     if (bodyIdx >= 0 && bodyIdx < dialog.body.length) {
       placeText(cells, dialog.body[bodyIdx], textStyle, dialog.output);
+    } else if (field && fieldRow < fieldHeight(field)) {
+      placeField(
+        cells,
+        field,
+        fieldRow,
+        fieldIdx === dialog.fieldFocus,
+        view.color,
+        textStyle,
+      );
     } else if (i === buttonRow) {
       placeButtonFaces(cells, layout, view.color, panelBg, focusIdx, pushedIdx);
     } else if (buttonRow >= 0 && i === buttonRow + 1 && view.color) {
@@ -1632,6 +1833,55 @@ function placeText(
     const col = start + j;
     if (col >= 1 && col <= innerW - 2) cells[col] = { ch: chars[j], style };
   }
+}
+
+/**
+ * Draws row `row` of `field` in `cells`, after the dialog's margin: a check
+ * box's mark and label, or an input line's label and then its line. The
+ * focused check box is drawn highlighted, as is the label of the focused
+ * input line.
+ */
+function placeField(
+  cells: Cell[],
+  field: DialogField,
+  row: number,
+  focused: boolean,
+  color: boolean,
+  textStyle: Style,
+): void {
+  const width = cells.length - 2 * DIALOG_HMARGIN;
+  const put = (at: number, ch: string, style: Style) => {
+    const col = DIALOG_HMARGIN + at;
+    if (at < width) cells[col] = { ch, style: color ? style : EMPTY_STYLE };
+  };
+  const labelStyle = focused ? ui.fieldFocus : textStyle;
+  const keyStyle = { ...ui.fieldKey, bg: labelStyle.bg ?? textStyle.bg };
+  const label = (from: number) => {
+    const key = hotkeyIndex(field.label, field.hotkey);
+    [...field.label].forEach((ch, j) =>
+      put(from + j, ch, j === key ? keyStyle : labelStyle)
+    );
+  };
+  if (field.kind === "checkBox") {
+    [..."[", field.checked ? "X" : " ", ..."] "].forEach((ch, j) =>
+      put(j, ch, labelStyle)
+    );
+    label(4);
+    return;
+  }
+  if (row === 0) {
+    label(0);
+    return;
+  }
+  const chars = [...field.value];
+  const start = inputLineStart(field, width);
+  for (let j = 0; j < width; j++) put(j, " ", ui.inputLine);
+  if (start > 0) put(0, "◄", ui.inputArrow);
+  const valueStyle = field.selected ? ui.inputSelection : ui.inputLine;
+  chars.slice(start, start + width - 2).forEach((ch, j) =>
+    put(1 + j, showControls(ch), valueStyle)
+  );
+  if (chars.length > start + width - 2) put(width - 1, "►", ui.inputArrow);
 }
 
 function placeButtonFaces(

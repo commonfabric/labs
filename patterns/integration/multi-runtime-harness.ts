@@ -652,6 +652,22 @@ export class MultiRuntimeSession {
   }
 
   /**
+   * Removes `user`, a principal's DID or `*`, from the access list of `space`,
+   * as an OWNER of it, by this session's identity.
+   */
+  async removeFromAccessList(space: string, user: string): Promise<void> {
+    await this.#client.call("removeFromAccessList", { space, user });
+  }
+
+  /**
+   * Deletes `space`, whose sole member this session's identity is. The memory
+   * server refuses the space to everyone from then on.
+   */
+  async deleteSpace(space: string): Promise<void> {
+    await this.#client.call("deleteSpace", { space });
+  }
+
+  /**
    * Whether this runtime retains a refusal of `space`, asked without opening
    * the space, so the answer is the runtime's own and no retry of this
    * call's.
@@ -695,6 +711,17 @@ export class MultiRuntimeSession {
       value?: FabricValue;
       error?: string;
     };
+  }
+
+  /**
+   * Raw write of a whole document at an explicit storage address, in a commit
+   * nothing prepares, for a test to store what no pattern here writes.
+   */
+  async rawWrite(
+    address: { id: string; space: string; scope?: FabricValue },
+    value: FabricValue,
+  ): Promise<void> {
+    await this.#client.call("rawWrite", { ...address, value });
   }
 
   async idle(): Promise<void> {

@@ -577,8 +577,6 @@ Add these explicit profile targets:
 wish({ query: "#profile" })            // homeDefault.profile
 wish({ query: "#profileSpace" })       // the profile space cell, derived from the profile link
 wish({ query: "#profileName" })        // default profile's initialNameApplied (no `profileName` mirror field post-#3830)
-wish({ query: "#profileAvatar" })      // homeDefault.profile.avatar
-wish({ query: "#profilePicture" })     // homeDefault.profile.picture (image bytes)
 wish({ query: "#profileBio" })         // homeDefault.profile.bio (CT-1648)
 ```
 

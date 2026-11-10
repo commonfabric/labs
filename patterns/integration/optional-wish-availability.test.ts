@@ -14,12 +14,14 @@ import {
 } from "@commonfabric/data-model/availability";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { Identity } from "@commonfabric/identity";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import {
   type Cell,
   isCell,
   raw,
   Runtime,
   sendEvent,
+  systemPatternSource,
 } from "@commonfabric/runner";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
@@ -37,6 +39,33 @@ function textOf(value: unknown): string {
   if (typeof value !== "object" || value === null) return "";
   const node = value as Record<string, unknown>;
   return textOf(node.$UI) + textOf(node.children);
+}
+
+/** Finds rendered elements without importing authored pattern modules. */
+function elementsOf(
+  value: unknown,
+  name: string,
+): Readonly<Record<string, unknown>>[] {
+  if (isCell(value)) return elementsOf(value.get(), name);
+  if (Array.isArray(value)) {
+    return value.flatMap((child) => elementsOf(child, name));
+  }
+  if (!isObjectNotArray(value)) return [];
+  return [
+    ...(value.name === name ? [value] : []),
+    ...elementsOf(value.$UI, name),
+    ...elementsOf(value.children, name),
+  ];
+}
+
+/** Reads an element's cell-backed prop as the renderer would. */
+function propOf(
+  node: Readonly<Record<string, unknown>>,
+  name: string,
+): unknown {
+  const props = isCell(node.props) ? node.props.get() : node.props;
+  if (!isObjectNotArray(props)) throw new Error("Expected element props.");
+  return isCell(props[name]) ? props[name].get() : props[name];
 }
 
 describe("optional-wish-availability", () => {
@@ -113,6 +142,7 @@ describe("optional-wish-availability", () => {
     path: string,
     input: Record<string, unknown> = {},
     mainExport?: string,
+    sourceOrigin?: string,
   ) {
     const program = await resolveLocalProgram(
       (resolver) => runtime.harness.resolve(resolver),
@@ -134,6 +164,7 @@ describe("optional-wish-availability", () => {
       pattern,
       input,
       runtime.getCell(space, path, undefined, tx),
+      sourceOrigin === undefined ? {} : { sourceOrigin },
     );
     runtime.prepareTxForCommit(tx);
     expect((await tx.commit().settled).error).toBeUndefined();
@@ -253,11 +284,18 @@ describe("optional-wish-availability", () => {
 
   it("does not queue a comment against a transient profile picture and attributes a fresh submit after recovery", async () => {
     const profile = runtime.getCell(space, "topic viewer profile");
+    const ownedProfile = await instantiate(
+      "system/profile-home/profile-home.tsx",
+      { initialName: "Ada" },
+      undefined,
+      systemPatternSource("system/profile-home/profile-home.tsx"),
+    );
     const firstPicture = new FabricBytes(new Uint8Array([1, 2]));
     const nextPicture = new FabricBytes(new Uint8Array([3, 4]));
-    await runtime.editWithRetry((tx) =>
-      profile.withTx(tx).set({ name: "Ada", picture: firstPicture })
-    );
+    sendEvent(ownedProfile.key("setName"), { name: "Ada" });
+    sendEvent(ownedProfile.key("setPicture"), { picture: firstPicture });
+    await runtime.idle();
+    await runtime.editWithRetry((tx) => profile.withTx(tx).set(ownedProfile));
     controlled.set("#profile", profile);
     const topic = await instantiate("apps/topics/topic.tsx", {
       title: "Donuts",
@@ -274,9 +312,10 @@ describe("optional-wish-availability", () => {
       expect(topic.key("comments").get()).toEqual([]);
       expect(topic.key("commentDraft").get()).toBe("Keep this draft");
     }
-    await runtime.editWithRetry((tx) =>
-      profile.withTx(tx).set({ name: "Grace", picture: nextPicture })
-    );
+    sendEvent(ownedProfile.key("setName"), { name: "Grace" });
+    sendEvent(ownedProfile.key("setPicture"), { picture: nextPicture });
+    await runtime.idle();
+    await runtime.editWithRetry((tx) => profile.withTx(tx).set(ownedProfile));
     await runtime.idle();
     await runtime.storageManager.synced();
     expect(topic.key("comments").get()).toEqual([]);
@@ -292,6 +331,65 @@ describe("optional-wish-availability", () => {
     expect(comments[0].body).toBe("Keep this draft");
     expect(comments[0].author.picture.slice()).toEqual(nextPicture.slice());
     expect(topic.key("commentDraft").get()).toBe("");
+  });
+
+  it("keeps the shared-note editor and text verbs usable while the viewer's profile is pending", async () => {
+    const profile = runtime.getCell(space, "note viewer profile");
+    const name = runtime.getCell(space, "note viewer name");
+    await runtime.editWithRetry((tx) => {
+      profile.withTx(tx).setRaw(UNAVAILABLE_PENDING);
+      name.withTx(tx).setRaw(UNAVAILABLE_PENDING);
+    });
+    controlled.set("#profile", profile);
+    controlled.set("#profileName", name);
+    const note = await instantiate("apps/shared-note/main.tsx", {
+      title: "Donuts",
+      content: "Glaze",
+    });
+    expect(textOf(note.key("$UI"))).toContain("Profile setup");
+    expect(elementsOf(note.key("$UI"), "cf-code-editor")).toHaveLength(1);
+    sendEvent(note.key("appendLine"), { text: "Sprinkles" });
+    await runtime.idle();
+    expect(note.key("content").get()).toBe("Glaze\nSprinkles");
+    expect(note.key("comments").get()).toEqual([]);
+  });
+
+  it("renders a manual parking reporter's initials without an available profile face", async () => {
+    const profile = runtime.getCell(space, "parking viewer profile");
+    const name = runtime.getCell(space, "parking viewer name");
+    await runtime.editWithRetry((tx) => {
+      profile.withTx(tx).setRaw(UNAVAILABLE_PENDING);
+      name.withTx(tx).setRaw(UNAVAILABLE_PENDING);
+    });
+    controlled.set("#profile", profile);
+    controlled.set("#profileName", name);
+    const lot = await instantiate("dev/factory-outputs/lot-watch/main.tsx");
+    sendEvent(lot.key("setReporterName"), { name: "Manual reporter" });
+    await runtime.idle();
+    const avatars = elementsOf(lot.key("$UI"), "cf-avatar");
+    expect(avatars).toHaveLength(1);
+    expect(propOf(avatars[0], "name")).toBe("Manual reporter");
+    expect(propOf(avatars[0], "bytes")).toBeUndefined();
+    expect(propOf(avatars[0], "src")).toBe("");
+  });
+
+  it("disables joining a roster with a retired profile even when its name remains available", async () => {
+    const profile = runtime.getCell(space, "roster viewer profile");
+    const name = runtime.getCell(space, "roster viewer name");
+    await runtime.editWithRetry((tx) => {
+      profile.withTx(tx).setRaw(unavailableObsolete("Choose a new profile."));
+      name.withTx(tx).set("Ada");
+    });
+    controlled.set("#profile", profile);
+    controlled.set("#profileName", name);
+    const roster = await instantiate("examples/shared-profile-roster/main.tsx");
+    const buttons = elementsOf(roster.key("$UI"), "cf-button");
+    expect(buttons).toHaveLength(1);
+    expect(propOf(buttons[0], "disabled")).toBe(true);
+    sendEvent(roster.key("join"), undefined);
+    await runtime.idle();
+    expect(roster.key("roster").key("participants").get()).toEqual([]);
+    expect(roster.key("viewer").key("joined").get()).not.toBe(true);
   });
 
   it("keeps the GitHub fallback renderable after fetch or summary failure", async () => {

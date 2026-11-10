@@ -62,6 +62,7 @@ import {
 } from "./cfc/label-view-state.ts";
 
 import { declareStreamSchema, type NormalizedFullLink } from "./link-utils.ts";
+import { isWithdrawnVerb } from "./withdrawn-verb.ts";
 import type { Runtime } from "./runtime.ts";
 import {
   createOpaqueReference,
@@ -625,6 +626,18 @@ function createObjectView(
         );
       }
       return undefined;
+    }
+    // An optional verb its producer no longer publishes reads as absent, the
+    // way the eager read leaves it out.
+    if (
+      !required.has(key) && ContextualFlowControl.declaresStream(narrowed) &&
+      isWithdrawnVerb(runtime, tx, {
+        ...link,
+        path: [...link.path, key],
+        schema: undefined,
+      })
+    ) {
+      return ABSENT;
     }
     const defaultSchema = getPropertyDefaultSchema(schema, key);
     const applyDefault = () =>

@@ -1057,7 +1057,7 @@ export const tellManagerJoined = handler<JoinedEvent, ManagerJoinState>(
     if (joinRoom === undefined) return;
     joinRoom.send({
       room: self,
-      container,
+      ...(container !== undefined && { container }),
       ...(event?.messageAct === true ? { messageAct: true } : {}),
     });
   },

@@ -5,15 +5,16 @@ import {
   type AddIntegrity,
   computed,
   Default,
-  type FabricBytes,
   generateObject,
   handler,
   hasError,
   hasSchemaMismatch,
   ImageData,
+  isObsolete,
   isPending,
   isSyncing,
   NAME,
+  observeAvailability,
   pattern,
   type PerSpace,
   type RequiresIntegrity,
@@ -25,6 +26,10 @@ import {
   Writable,
   type WriteAuthorizedBy,
 } from "commonfabric";
+import {
+  profileFace,
+  type ProfileFaceFields,
+} from "../../../system/profile-face/profile-face.ts";
 import {
   adminRegistryEntries,
   type EmptyAdminRegistryValue,
@@ -532,46 +537,35 @@ export default pattern<LotWatchInput, LotWatchOutput>(
     // headless callers set it via the `setReporterName` stream.
     const reporterName = new Writable.perUser("");
 
-    const profileWish = wish<{ name?: string; avatar?: string }>({
+    const profileWish = wish<Writable<{ name?: string } & ProfileFaceFields>>({
       query: "#profile",
     });
     const profileNameWish = wish<string>({ query: "#profileName" });
-    const profilePictureWish = wish<FabricBytes>({ query: "#profilePicture" });
-    const profileAvatarWish = wish<string>({ query: "#profileAvatar" });
+    const observedProfile = observeAvailability(profileWish.result);
     const resolvedProfileName = hasError(profileNameWish.result) ||
         isPending(profileNameWish.result) ||
         isSyncing(profileNameWish.result) ||
-        hasSchemaMismatch(profileNameWish.result)
+        hasSchemaMismatch(profileNameWish.result) ||
+        isObsolete(profileNameWish.result)
       ? ""
       : resultOf(profileNameWish.result);
-    const resolvedProfileAvatar = hasError(profileAvatarWish.result) ||
-        isPending(profileAvatarWish.result) ||
-        isSyncing(profileAvatarWish.result) ||
-        hasSchemaMismatch(profileAvatarWish.result)
-      ? ""
-      : resultOf(profileAvatarWish.result);
     const profileName = computed(() => resolvedProfileName.trim());
-    const profileAvatar = computed(() => resolvedProfileAvatar.trim());
     const hasProfile = computed(() => resolvedProfileName.trim() !== "");
-    const profilePicture = computed(() =>
-      hasError(profilePictureWish.result)
-        ? undefined
-        : resultOf(profilePictureWish.result)
-    );
     const reporterLabel = computed(() => (reporterName.get() || "").trim());
     const hasReporter = computed(() => reporterLabel !== "");
-    // Show the profile picture, or else its avatar text, only while the
-    // reporter IS the profile (an explicit setReporterName override keeps
-    // initials-only rendering).
-    const reporterIsProfile = computed(() =>
-      reporterLabel !== "" && reporterLabel === profileName
-    );
-    const reporterPicture = computed(() =>
-      reporterIsProfile ? profilePicture : undefined
-    );
-    const reporterAvatar = computed(() =>
-      reporterIsProfile ? profileAvatar : ""
-    );
+    // Show the profile's face, its picture or else its avatar text as its
+    // owner set them, only while the reporter IS the profile (an explicit
+    // setReporterName override keeps initials-only rendering).
+    const reporterFace = computed(() => {
+      if (
+        hasError(observedProfile) || hasSchemaMismatch(observedProfile) ||
+        isObsolete(observedProfile) || isPending(observedProfile) ||
+        isSyncing(observedProfile)
+      ) return {};
+      return reporterLabel !== "" && reporterLabel === profileName
+        ? profileFace(resultOf(observedProfile))
+        : {};
+    });
 
     // PerSession: tab navigation
     const selectedTab = new Writable.perSession<
@@ -1071,7 +1065,7 @@ export default pattern<LotWatchInput, LotWatchOutput>(
           updated.push({
             ...kv,
             category,
-            name: name ?? kv.name,
+            ...(name !== undefined && { name }),
             org: org ?? kv.org,
             label: label ?? kv.label,
           });
@@ -1577,8 +1571,8 @@ export default pattern<LotWatchInput, LotWatchOutput>(
                           ? (
                             <cf-hstack gap="2" align="center">
                               <cf-avatar
-                                bytes={reporterPicture}
-                                src={reporterAvatar}
+                                bytes={reporterFace.picture}
+                                src={reporterFace.avatar ?? ""}
                                 name={reporterLabel}
                                 size="xs"
                               />

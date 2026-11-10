@@ -515,6 +515,62 @@ Deno.test("buildFsProjection - application/json writes index.json", () => {
   );
 });
 
+Deno.test("buildFsProjection - text/markdown quotes strings and writes other primitives bare", () => {
+  const tree = new FsTree();
+  const fsValue: FsValue = {
+    type: "text/markdown",
+    frontmatter: {
+      title: 'Say "hi"',
+      year: "2026",
+      count: 7,
+      published: false,
+      note: null,
+    },
+    content: "Body",
+  };
+
+  buildFsProjection(tree, tree.rootIno, fsValue, "of:entity-1");
+
+  assertEquals(
+    getFileContent(tree, tree.rootIno, "index.md"),
+    [
+      "---",
+      "entityId: of:entity-1",
+      'title: "Say \\"hi\\""',
+      'year: "2026"',
+      "count: 7",
+      "published: false",
+      "note: null",
+      "---",
+      "",
+      "Body",
+    ].join("\n"),
+  );
+});
+
+Deno.test("buildFsProjection - text/markdown keeps a multi-line string on one frontmatter line", () => {
+  const tree = new FsTree();
+  const fsValue: FsValue = {
+    type: "text/markdown",
+    frontmatter: { title: "Line one\nkey: value\n---\nline four" },
+    content: "Body",
+  };
+
+  buildFsProjection(tree, tree.rootIno, fsValue, "of:entity-1");
+
+  assertEquals(
+    getFileContent(tree, tree.rootIno, "index.md"),
+    [
+      "---",
+      "entityId: of:entity-1",
+      'title: "Line one\\nkey: value\\n---\\nline four"',
+      "---",
+      "",
+      "Body",
+    ].join("\n"),
+  );
+});
+
 Deno.test("buildFsProjection - a pattern cannot overwrite entityId", () => {
   const tree = new FsTree();
   const fsValue = {
@@ -1137,9 +1193,8 @@ Deno.test("callable scripts begin with a cf exec shebang and shell fallback", ()
   assertEquals(node?.kind, "callable");
   if (node?.kind === "callable") {
     const [firstLine, secondLine] = decoder.decode(node.script).split("\n");
-    assertEquals(firstLine.startsWith("#!"), true);
-    assertEquals(firstLine.includes(" exec"), true);
-    assertEquals(secondLine.includes(' exec "$0" "$@"'), true);
+    assertEquals(firstLine, "#!/bin/sh");
+    assertEquals(secondLine, `exec '/tmp/cf-exec' exec "$0" "$@"`);
   }
 });
 

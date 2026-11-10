@@ -83,6 +83,7 @@ import {
   type CellAliasResolver,
   moduleToEncodableForm,
   moduleWithAliasBindings,
+  moduleWithReusedGraphBindings,
   patternToEncodableForm,
   withAliasBindings,
 } from "./to-encodable-form.ts";
@@ -254,6 +255,7 @@ export function patternFromFrame<T, R>(
     resultSchema,
     inputs,
     outputs,
+    true,
   );
 }
 
@@ -299,6 +301,7 @@ function factoryFromPattern<T, R>(
   resultSchemaArg: JSONSchema | undefined,
   inputs: Reactive<RequireDefaults<T>>,
   outputs: FactoryInput<R>,
+  reusesClosedGraphs: boolean = false,
 ): PatternFactory<T, R> {
   // Capture selfRef before collectCellsAndNodes transforms inputs from Reactive to Cell
   // (collectCellsAndNodes replaces Reactive proxies with their underlying Cells,
@@ -691,7 +694,9 @@ function factoryFromPattern<T, R>(
     // is: a graph for a pattern, an alias for a reactive. The serialized
     // `Node.module` type does not yet say so, hence the assertion.
     const module = (isInertPlainObject(node.module) && isModule(node.module))
-      ? moduleWithAliasBindings(node.module, resolveCellAlias, false)
+      ? (reusesClosedGraphs
+        ? moduleWithReusedGraphBindings(node.module, resolveCellAlias)
+        : moduleWithAliasBindings(node.module, resolveCellAlias, false))
       : withAliasBindings(
         node.module,
         resolveCellAlias,

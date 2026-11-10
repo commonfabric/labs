@@ -63,6 +63,7 @@ import {
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
 import { isCfcEnforcementRejection } from "../src/storage/rejection.ts";
 import { refuseAtCommitBoundary } from "./refused-commit.ts";
+import { prepareStatusAtSettlement } from "./prepare-status-at-settlement.ts";
 import { labelsReached } from "./support/reached-labels.ts";
 import type { FabricValue } from "@commonfabric/data-model";
 import {
@@ -1184,8 +1185,9 @@ describe("ExtendedStorageTransaction CFC gate", () => {
         path: [],
       }, { ok: true });
 
+      const statusAtSettlement = prepareStatusAtSettlement(tx);
       expect((await tx.commit().settled).error).toBeUndefined();
-      expect(tx.getCfcState().prepare.status).toBe("prepared");
+      expect(statusAtSettlement()).toBe("prepared");
     } finally {
       await runtime.dispose();
       await storageManager.close();
@@ -1275,9 +1277,10 @@ describe("ExtendedStorageTransaction CFC gate", () => {
         path: [],
       }, { ok: true });
 
+      const statusAtSettlement = prepareStatusAtSettlement(tx);
       const result = await tx.commit().settled;
       expect(result.ok).toBeDefined();
-      expect(tx.getCfcState().prepare.status).toBe("prepared");
+      expect(statusAtSettlement()).toBe("prepared");
     } finally {
       await runtime.dispose();
       await storageManager.close();

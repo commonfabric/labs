@@ -602,11 +602,28 @@ Ctrl-F / Ctrl-B also page down / up. Pages follow the dialog's visible height,
 with one row of overlap. While browsing, `j` / `k` and `J` / `K` move down / up,
 Space and `b` / `B` page down / up, and `g` / `G` jump to the top / bottom.
 Ctrl-N / Ctrl-P move down / up, and Ctrl-D / Ctrl-U move half a page.
-Confirmation prompts use navigation keys to move button focus; Space activates
-the focused button. Pressing the primary mouse button on a button pushes it, and
-releasing it over the same button activates that button. Releasing it anywhere
-else, or pressing a key first, lets go of the button without activating it.
-Printable keys enter text while a filter is active.
+Confirmation prompts use navigation keys to move the focus among their controls,
+except while an input line has it; Space activates the focused button. Pressing
+the primary mouse button on a button pushes it, and releasing it over the same
+button activates that button. Releasing it anywhere else, or pressing a key
+first, lets go of the button without activating it. Printable keys enter text
+while a filter is active.
+
+Some dialogs also hold check boxes and input lines, drawn as Turbo Vision draws
+them. Tab and Shift-Tab, like the navigation keys, move the focus through those
+first and then through the buttons. Space toggles the focused check box, and so
+does a click on it. Moving the focus to an input line selects its text, so that
+typing replaces it. While an input line is focused, every key but Tab,
+Shift-Tab, Enter, Escape, and Alt with a letter goes to it: typed text goes in,
+Backspace and Delete (or Ctrl-D) delete a character, Alt-Backspace deletes the
+word before the cursor, and Left, Right, Home, and End (or Ctrl-B, Ctrl-F,
+Ctrl-A, and Ctrl-E) move its cursor. A click on an input line puts its cursor
+where the click lands, and a click on its label selects its text. An arrow at
+either end of the line says that its text runs on past that end. A check box's
+highlighted letter toggles it, an input line's moves the focus to it, and a
+button's activates it; while an input line is focused, Alt with the letter does.
+Enter activates the default button wherever the focus is, unless it is on
+another button.
 
 Press `i` in a diff to open its file and commit list. The list starts in browse
 mode. Press `/` to filter it by file name, commit hash, or commit subject. In
@@ -668,6 +685,34 @@ program `SSH_ASKPASS` names, and fails when it names none. `P` refuses to push
 (`git remote set-head origin --auto` finds it). It also refuses a checkout not
 on a branch, and refuses when git started the viewer as its pager for a
 different repository.
+
+Press `O` to open the settings dialog. Its check box, "Quit when the pushed
+branch's pull request opens", has the viewer watch the GitHub webhook relay
+while the push dialog is up. The relay passes on each delivery of the
+organization's GitHub webhook as it arrives, and keeps none for a subscriber
+that was not connected; `github-webhook-relay/README.md` in the infra repository
+describes it. The dialog's input line holds the `host:port` of the relay's
+subscriber listener. When the push succeeds and the server offers a page for
+creating a pull request, the viewer connects to the relay, and opens the page
+once it has connected or failed to. While it connects, Abort, or an interrupt,
+gives up on the connection and opens the page. When a delivery reports that a
+pull request was opened from the pushed branch, at the pushed commit, in the
+GitHub repository that `origin` names, the viewer closes the push dialog and
+quits as Quit does. Once the screen is restored, it prints the pull request's
+address on the terminal. The address is printed only when the viewer quit for
+it, so a quit after cancelling the save prompt it raised prints nothing. With
+the check box on, the push dialog says under git's output whether the viewer is
+connecting or watching, or why it is not watching: no relay is set, `origin` is
+not on GitHub, or the connection failed or ended. Closing the push dialog stops
+the watch.
+
+The viewer keeps these settings in git's configuration, as the boolean
+`cf-view.quitOnPullRequest` and the string `cf-view.webhookRelay`, so the
+`git config` command can set them too. OK saves each setting that differs from
+what the dialog opened showing. It saves it in the configuration file that git
+read the setting's value from, which may be a file another one includes, so that
+git then reads the new value. A value read from the machine's own configuration
+file, or set nowhere, is saved in the user's global configuration file instead.
 
 In the main view, `b` shows or hides the blame column in place of paging up;
 Page Up and Ctrl-B still page up there. The column takes the right 20 columns of
@@ -1015,7 +1060,8 @@ see whether the write committed.
 ## Cell references
 
 `cf cell` holds the commands that act on a cell: `get` and `set` for its value,
-`get-label` and `set-label` for the CFC label on it. Each takes a reference.
+`get-label`, `set-label` and `release-by-intent` for the CFC label on it. Each
+takes a reference.
 
 A reference names a cell, and one grammar covers every part of the name:
 
@@ -1847,6 +1893,76 @@ identity alone, recording the clauses removed, the paths they were removed at,
 and digests of the stored metadata before and after. Reads served before the
 lowering keep the label they were served under.
 
+`cf cell release-by-intent` is the owner's release of clauses that are not
+theirs alone, such as the stamps an earlier setup left on a result's membership
+naming other principals whose data the result does not hold. A lowering with
+`set-label` refuses those; this command releases them on a request the space's
+owner signs. That is the owner release by intent (§8.12.7 route 2d) proposed in
+[specs#90](https://github.com/commonfabric/specs/pull/90), which this runtime
+implements ahead of its ruling. Without `--clause` it only lists the
+confidentiality clauses the label map stores at the path, each with its
+canonical clause digest and the labels holding it (component and observation
+class), and the space's owner, and changes nothing. A clause's plaintext and
+committed spellings are two clauses, each with its own digest. The space's owner
+is the owner its access list names; where the space stores no access list, it is
+the identity whose DID is the space's, as for a home space; and a stored list
+naming no valid concrete owner gives the space no owner, so no release by intent
+is possible there:
+
+```bash
+cf cell release-by-intent --cell ID
+```
+
+Each `--clause` names a clause to release by its digest, or by a prefix of it
+that begins no other stored clause's digest; an ambiguous prefix is refused,
+naming the digests it begins. A named clause comes off every label stored at the
+path, whoever it stands for: the declared label and the stored schema's
+declaration, the labels derived from what was written there (the existence entry
+and the membership entries included), and a link's own label. Labels at other
+paths, an ancestor's included, the value, and integrity labels are not changed.
+A clause the stored schema declares is declared again by the next write through
+that schema.
+
+```bash
+cf cell release-by-intent --cell ID --clause 3gYWzS --clause oYjOtO
+```
+
+The path names one stored position. The links it crosses are followed to the
+document it lands in, and a link stored at the path is not, so a link slot's own
+label is what it releases. A `*` segment names the wildcard position stored
+there, such as the per-element templates a list's membership is stamped on, and
+none of the elements or fields it covers. A clause stamped across a container is
+usually stored at several positions, the container's own path and its `*`
+position among them, so the listing names, beside the clauses at the path, the
+document's other positions holding any of them; each is a release of its own,
+and a release reaches none of them.
+
+```bash
+cf cell release-by-intent --cell ID '*' --clause 3gYWzS --clause oYjOtO
+```
+
+Before anything is signed, the command shows the document, the path, the signer,
+each clause that comes off and each that stays, and the other positions still
+holding a clause it releases, and asks for the word `release` to be typed. Only
+then does it sign the request with the identity and commit the release together
+with its record, a create-only document in the space holding the signed request,
+the owner, the document and path, the released clauses' digests, and digests of
+the stored labels before and after; the record is readable by the owner. With
+`--clause`, the command runs only with standard input and standard error at a
+terminal, so what it shows reaches the owner who confirms it, and refuses before
+it builds or signs anything otherwise; it refuses as well when the identity is
+not the space's owner. No option skips the confirmation: the signature stands
+for the owner's own decision, made in person, which is the one thing the store
+cannot check.
+
+The store checks the rest at the commit: that the signature verifies, that the
+signer is the space's owner, that the request names the space, document and path
+the commit changes, that every clause it names is stored there, that the stored
+labels are still the ones the request was made against, and that the request has
+not been used before. Any failure refuses the release whole. A request is used
+once: running the command again builds a new request against the labels as they
+are then. Reads served before the release keep the label they were served under.
+
 ## Invocation sessions
 
 An invocation id is the caller's own word for one call, and another caller can
@@ -2573,7 +2689,7 @@ cf piece call --cell ID listTopics -- --filter '.status == "open"'
 `wish` writes them beside the target it resolves:
 
 ```bash
-cf wish '#profile' -i ./claude.key --select name,avatar
+cf wish '#profile' -i ./claude.key --select name,bio
 cf wish '#mentionable' -i ./claude.key -s my-space --filter '.status == "open"'
 ```
 

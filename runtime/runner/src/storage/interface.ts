@@ -71,6 +71,8 @@ import type { Cancel } from "../cancel.ts";
 import type { Cell } from "../cell.ts";
 import type {
   CfcConfidentialityRelease,
+  CfcConfidentialityReleaseByIntent,
+  CfcConfidentialityReleaseByIntentInput,
   CfcConfidentialityReleaseInput,
 } from "../cfc/confidentiality-release-plan.ts";
 import type {
@@ -632,6 +634,17 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
   inputSynced?(): Promise<void>;
 
   /**
+   * Resolves once every frame the connection has handed over has been dealt
+   * with: applied and its subscribers notified, so that a synchronous read of
+   * the scheduler's state afterward sees the work the frame set off, or dropped
+   * as failing to apply, which the replica logs as an error and which leaves it
+   * behind on that frame's documents. Unlike `inputSynced()`, this rests on an
+   * application that nothing parks behind: a frame's novelty can stay shadowed
+   * by a sealed commit, but its application finishes.
+   */
+  framesApplied?(): Promise<void>;
+
+  /**
    * Issue an ordered-after round trip on every open space connection, so that
    * any subscription fan-out the server has already sent has been received and
    * applied before this resolves. Unlike `synced()`, which waits only on this
@@ -743,7 +756,8 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * `spaceSessionError()` reports from then on: for example a takeover, an
    * authorization denial, or a client that gives up reconnecting. The space's
    * documents receive no further updates unless a reopen after an access
-   * change (see `subscribeSpaceAccessChange()`) replaces the session, after
+   * change (see `subscribeSpaceAccessChange()`), or a `retrySpaceAccess()` of
+   * a space that never connected, replaces the session, after
    * which `spaceSessionError()` returns undefined again. An authorization
    * denial also reaches `subscribeSpaceAccessLoss()` observers. Ordinary
    * reconnects, normal closure, and spaces whose reads an authoritative local
@@ -888,9 +902,11 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * the previous call began keeps its watch through this one. A later read
    * of a dropped document loads it again. A space whose server does not
    * advertise `watchRemoveV1` keeps every watch. Resolves once every space's
-   * session has answered.
+   * session has answered, to whether some root was kept only for having been
+   * loaded or read since the previous call began, which a later call may
+   * release.
    */
-  releaseUnreadDocuments?(): Promise<void>;
+  releaseUnreadDocuments?(): Promise<boolean>;
 
   /**
    * How many documents this manager has dropped. A cell loaded before the
@@ -1060,8 +1076,26 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * or of a repeated load, rejects, and a later call repeats the loads that
    * have not yet succeeded. Does nothing for a space this manager has not
    * opened, or one it holds no refusal for.
+   *
+   * A space whose first connection never completed a handshake, such as one
+   * on a host that was down or out of the network's reach, counts as refused
+   * here: its `spaceSessionError()` stays that failure, and its loads fail
+   * with it at once without dialing again, until this call makes one more
+   * round of connection attempts. An ACL notice does not. The loads that
+   * failed in the meantime are made again once it connects.
+   * A host calls it when it has reason to think the host is reachable now,
+   * such as a person asking to try again or a change of network. A dial that
+   * fails again rejects with the new failure and leaves the space as it was.
    */
   retrySpaceAccess?(space: MemorySpace): Promise<void>;
+
+  /**
+   * The spaces this manager has opened whose first connection never
+   * completed a handshake, which `retrySpaceAccess()` would dial again. For a
+   * host that learns the network changed and cannot know which spaces were
+   * out of its reach. Opens nothing.
+   */
+  unreachableSpaces?(): MemorySpace[];
 
   /**
    * Load cell from storage. Will also subscribe to new changes.
@@ -1251,6 +1285,17 @@ export interface IStorageProvider {
   inputSynced?(): Promise<void>;
 
   /**
+   * Resolves once every frame the connection has handed over has been dealt
+   * with: applied and its subscribers notified, so that a synchronous read of
+   * the scheduler's state afterward sees the work the frame set off, or dropped
+   * as failing to apply, which the replica logs as an error and which leaves it
+   * behind on that frame's documents. Unlike `inputSynced()`, this rests on an
+   * application that nothing parks behind: a frame's novelty can stay shadowed
+   * by a sealed commit, but its application finishes.
+   */
+  framesApplied?(): Promise<void>;
+
+  /**
    * Destroy the storage provider. Used for tests only.
    *
    * @returns Promise that resolves when the storage provider is destroyed.
@@ -1337,6 +1382,12 @@ export interface IOperationStorageCapability {
     query: Omit<OperationFieldQuery, "principal" | "sessionId">,
   ): Promise<OperationFieldSnapshot>;
 
+  /**
+   * Applies an operation and waits for its covering frame while a subscription
+   * and the server's verdict catch-up markers are available. Without that
+   * channel, or when it closes, returns the accepted result without waiting
+   * for delivery.
+   */
   applyOperation(operation: ApplyOpOperation): Promise<ApplyOpResolution>;
 
   releaseOperationField(operation: ReleaseOpFieldOperation): Promise<void>;
@@ -1764,7 +1815,9 @@ export interface IStorageTransaction {
   /**
    * Check scheduling dependencies before accepting an empty commit or seal.
    * Set by reactive computations, whose subscriptions must cover changes since
-   * their reads. Event handlers retain ordinary empty-commit behavior.
+   * their reads, and direct bookkeeping commits, whose verdict validates the
+   * guarded snapshot even when every write is elided. Event handlers retain
+   * ordinary empty-commit behavior.
    */
   validateReactiveReads?: boolean;
 
@@ -3097,6 +3150,29 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
   ): CfcConfidentialityRelease;
 
   /**
+   * The trusted writer path for an owner's release by intent of the
+   * confidentiality stored at one path of a document (§8.12.7 route 2d,
+   * `cfc/confidentiality-release-plan.ts`). Requires the transaction's
+   * current implementation identity to be the `cfc-owner-release-by-intent`
+   * builtin. Verifies the signed request first: its signature, that its
+   * signer is the space's owner by the access list it reads, which the caller
+   * loads from the store first (`releaseAccessListOf()`),
+   * that the document's stored envelope is the one it names, and that its
+   * record does not exist yet. Then removes the clauses it names from every
+   * component of the label at its path and from the stored schema, re-derives
+   * the envelope's label-metadata templates, and writes the envelope inside
+   * the privileged system-write scope. The record is the caller's to write,
+   * at the returned id, in the same transaction; the store refuses the
+   * release without it.
+   *
+   * @throws On any of the requirements above, on an unreadable envelope, and
+   *   on everything `planConfidentialityReleaseByIntent()` refuses.
+   */
+  releaseCfcConfidentialityByIntent(
+    input: CfcConfidentialityReleaseByIntentInput,
+  ): CfcConfidentialityReleaseByIntent;
+
+  /**
    * Surfaces a post-commit sink-request release rejection (the effect is fail-
    * closed and not sent) to CFC diagnostics and runtime stats, instead of only
    * logging it (audit W3.23).
@@ -3824,6 +3900,28 @@ export interface ISpaceReplica extends ISpace {
   ): number | undefined;
 
   /**
+   * Whether a quarantine holds back a copy of the document the server holds, so
+   * that an earlier finding of its absence no longer stands.
+   */
+  isQuarantined?(
+    id: URI,
+    scope?: CellScope,
+    identity?: ScopeKeyIdentity,
+  ): boolean;
+
+  /**
+   * Waits for any re-delivery of the document a quarantine holds back, and
+   * returns the failure if the replica still cannot apply it and has no value
+   * to read: the refusal that ended the re-delivery, if one did. `undefined`
+   * otherwise, which says nothing of whether the document exists.
+   */
+  quarantineFailure?(
+    id: URI,
+    scope?: CellScope,
+    instance?: ScopeKey,
+  ): Promise<Error | PullError | undefined>;
+
+  /**
    * Whether the replica holds a known stored version of the document, with
    * no pending local write, refused local fold, or incomplete wave promotion.
    * A watched delivery establishes it, including absence; a newer own write
@@ -4172,6 +4270,13 @@ export type PullError =
  * `connection` failure. */
 export interface IForeignScopedReadRefusedError extends IStorageError {
   readonly name: "ForeignScopedReadRefusedError";
+
+  /**
+   * Whether the read named no instance at all, leaving the runtime's own
+   * identity as the only thing it could resolve against. A read naming a key,
+   * whether or not the key names an actor, is not one of these.
+   */
+  readonly unnamed: boolean;
 }
 
 /**

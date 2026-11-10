@@ -139,9 +139,13 @@ most-recently-used (MRU) ordering:
   profile, `#profile` reports an error rather than opening profile creation
   ([`wish.md`](wish.md)). Retiring it records the deletion: a retired profile
   is skipped before it is read, so once it is retired and no live profile is
-  left, the roster is empty and `#profile` opens profile creation. The picker
-  sends `retireProfile` for a profile `profiles` lists whose
-  `spaceDeleted(space)` returns `true`. `setProfileRetired` admits such a
+  left, the roster is empty and `#profile` opens profile creation. The
+  runtime that holds the person's Home sends `retireProfile` for a profile
+  `profiles` lists when it is refused that profile's space with the `deleted`
+  marker, as it sends the catalog's `markDeleted`
+  ([`shared-space-catalog.md`](../../features/shared-space-catalog.md#deleted-spaces)),
+  through the same `PiecesController.markDeletedSpace`
+  (`retireDeletedProfileOf()`). `setProfileRetired` admits such a
   profile in place of the ownership test it can no longer pass: its link is in
   `profiles` and `spaceDeleted(space)` returns `true` in the handler, asked by
   the handler itself, so an event naming a profile that is not deleted is held
@@ -151,10 +155,9 @@ most-recently-used (MRU) ordering:
   space, the handler runs again once it has, under the conditions
   [`shared-space-catalog.md`](../../features/shared-space-catalog.md#deleted-spaces)
   gives for `markDeleted`. The picker lists a deleted profile apart, by its
-  link and marked deleted, with no Restore. It shows no name, since a
+  space and marked deleted, with no control. It shows no name, since a
   profile's name is kept in its own space, which is gone. `restoreProfile`
-  refuses a deleted profile. Retiring a deleted profile, and the picker's
-  handling of one, are not implemented yet.
+  refuses a deleted profile.
 
 Each profile lives in its own space, created with the anonymous
 `PatternFactory.inSpace()` — one allocation per creation, each a new space with
@@ -193,14 +196,30 @@ profile created with the field, and no one on a profile that gained the field
 in a later release, since a source update is no principal's act. The value
 cell's own label is minted by the write that stored the value. Only the second
 says whose word the value is, so a reader that relies on who a field
-represents, such as a host showing a member's picture as their face, reads the
-value cell's label and takes the field as the owner's only when that label
-names the owner alone. A pattern reads it in a handler or a reactive
-computation, since the call throws in a pattern body, with
+represents reads the value cell's label and takes the field as the owner's only
+when that label names the owner alone. A pattern reads it in a handler or a
+reactive computation, since the call throws in a pattern body, with
 `principalOf(profile.key(field), "represents-principal")`; a host reads it with
 `cfcLabelViewForResolvedTarget()`. Like every claim, it binds honest runtimes
 only: the memory server does not check a claim against the session that
 committed it ([`principal-of.md`](../../features/principal-of.md)).
+
+A profile's face is its `picture`, or else its legacy `avatar` text, when that
+value's own cell represents its owner. The runtime decides whom a value's own
+cell represents by one rule (`runtime/runner/src/cfc/written-principal.ts`):
+the one principal the label of the cell a write to the field lands in names,
+when the value is the whole of that cell and no link stored there leads
+elsewhere. That label says nothing of who pointed the field at the cell; a
+profile's owner-protected fields keep their write redirects from being
+repointed. A pattern asks
+with `writtenPrincipalOf()`, a host holding a runtime with
+`writtenPrincipalAt()`, and a host holding cell handles with
+`observeWrittenPrincipal()` from `@commonfabric/runtime-client`. Patterns read
+a face with `profileFace()` from
+`patterns/system/profile-face/profile-face.ts`, which compares that principal
+with `profileOwnerOf()`; `cf-profile-badge` compares it with the principal its
+seal shows. So a picture a visitor set, or one stored before pictures were
+labeled, is not shown as the owner's face.
 
 A field's writes are checked only once a write stores its policy in the value
 cell. A field with a default, such as `name` or `bio`, has its owner-protected

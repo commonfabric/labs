@@ -10,6 +10,10 @@
  * {@link realPagerDeps} supplies the genuine Deno calls.
  */
 
+import {
+  relayAddress,
+  type RelayConnect,
+} from "@commonfabric/github-webhooks/relay";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { CSI, term } from "./ansi.ts";
 import { type BlameRunner, blameRunner } from "./blame.ts";
@@ -22,7 +26,9 @@ import { onGrammarLoad, type Semantics } from "./languages/language.ts";
 import type { EditableSource } from "./editsource.ts";
 import { realFileGateway } from "./filegateway.ts";
 import { ViewError } from "./errors.ts";
-import { pushBranch, type PushIo, realPushIo } from "./push.ts";
+import { pushedHead, watchForPullRequest } from "./pullrequest.ts";
+import { type GitQuery, pushBranch, type PushIo, realPushIo } from "./push.ts";
+import { readSettings, saveSettings } from "./settings.ts";
 
 const encoder = new TextEncoder();
 
@@ -86,6 +92,14 @@ export interface PagerDeps {
    * `signal` aborts. */
   pushIo(write: (text: string) => void, signal: AbortSignal): PushIo;
 
+  /** Runs git in the repository the viewer is running in, for its standard
+   * output, or returns null when git fails. Nothing is shown. */
+  git: GitQuery;
+
+  /** Returns the way to connect to the GitHub webhook relay at `address`, as
+   * `host:port`, or undefined for an empty address. */
+  relay(address: string): RelayConnect | undefined;
+
   /** Attribute each line of a file with `git blame`, rejecting with git's
    * message when it cannot, and stopping git when `signal` aborts. */
   blame: BlameRunner;
@@ -93,6 +107,7 @@ export interface PagerDeps {
 
 /** The real terminal and process operations. */
 export function realPagerDeps(): PagerDeps {
+  let git: GitQuery | undefined;
   return {
     openTty: () => Deno.openSync("/dev/tty", { read: true }),
     write: (text) => {
@@ -110,6 +125,8 @@ export function realPagerDeps(): PagerDeps {
     delay: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     onGrammarLoad,
     pushIo: (write, signal) => realPushIo({ write, signal }),
+    git: (args) => (git ??= realPushIo({ write: () => {} }).query)(args),
+    relay: relayAddress,
     blame: blameRunner(),
   };
 }
@@ -286,11 +303,26 @@ export async function runPager(
   // viewer ends, a push still running stops.
   let branchPushController: AbortController | undefined;
 
+  // While the push dialog is up, the viewer can watch the webhook relay for
+  // the pushed branch's pull request to open, and stops watching once the
+  // dialog closes. When the pull request opening quits the viewer, the viewer
+  // prints the pull request's address as it closes.
+  let watchController: AbortController | undefined;
+  const stopWatching = () => {
+    watchController?.abort();
+    watchController = undefined;
+  };
+
+  // Something other than a key, such as the pull request opening, can quit
+  // the viewer while it waits for a key.
+  const quitting = Promise.withResolvers<null>();
+
   let cleanedUp = false;
   const cleanup = () => {
     if (cleanedUp) return;
     cleanedUp = true;
     branchPushController?.abort();
+    stopWatching();
     blameController.abort();
     try {
       tty.setRaw(false);
@@ -298,7 +330,8 @@ export async function runPager(
     try {
       deps.write(
         `${term.disableMouse}${CSI}?7h${term.showCursor}` +
-          (padBg ? term.resetDefaultBg : "") + term.leaveAltScreen,
+          (padBg ? term.resetDefaultBg : "") + term.leaveAltScreen +
+          (session.exitMessage === null ? "" : `${session.exitMessage}\n`),
       );
     } catch { /* ignore */ }
     try {
@@ -353,8 +386,101 @@ export async function runPager(
   const buf = new Uint8Array(4096);
   let leftover: Uint8Array = new Uint8Array(0);
 
+  // The push dialog quits the viewer from outside the key loop when the pull
+  // request opens, or when a push ends after it opened.
+  const drawOrQuit = () => {
+    if (session.quit) quitting.resolve(null);
+    else draw();
+  };
+
+  const notWatching = (reason: string) =>
+    session.setPullRequestWatch(
+      `Not watching for the pull request: ${reason}.`,
+    );
+
+  // A watch that cannot start says why in the push dialog, and leaves the
+  // push it follows to be reported as it went. The relay keeps nothing for a
+  // subscriber that is not connected, so the page for creating the pull
+  // request opens once the connection is open or has failed, or once `push`,
+  // the push's own signal, aborts, which abandons the connection.
+  const startWatching = async (branch: string, push: AbortSignal) => {
+    try {
+      const settings = readSettings(deps.git);
+      if (!settings.quitOnPullRequest) return;
+      const connect = deps.relay(settings.webhookRelay);
+      if (connect === undefined) {
+        notWatching("no webhook relay is set in the settings");
+        return;
+      }
+      const head = pushedHead(deps.git, branch);
+      if (head === null) {
+        notWatching("origin is not a GitHub repository");
+        return;
+      }
+      if (push.aborted) {
+        notWatching("the watch was aborted");
+        return;
+      }
+      const controller = new AbortController();
+      watchController = controller;
+      const ready = Promise.withResolvers<void>();
+      // What aborts the push draws the dialog itself.
+      const abandon = () => {
+        controller.abort();
+        notWatching("the watch was aborted");
+        ready.resolve();
+      };
+      push.addEventListener("abort", abandon, { once: true });
+      session.setPullRequestWatch("Connecting to the webhook relay.");
+      draw();
+      watchForPullRequest(connect, head, controller.signal, () => {
+        push.removeEventListener("abort", abandon);
+        session.setPullRequestWatch("Quitting when the pull request opens.");
+        draw();
+        ready.resolve();
+      }).then((url) => {
+        if (controller.signal.aborted) return;
+        session.quitForPullRequest(url);
+        drawOrQuit();
+      }, (error) => {
+        push.removeEventListener("abort", abandon);
+        ready.resolve();
+        if (controller.signal.aborted) return;
+        notWatching(describeFailure(error));
+        draw();
+      });
+      await ready.promise;
+    } catch (error) {
+      notWatching(describeFailure(error));
+    }
+  };
+
+  // The settings dialog shows git's configuration as it stands when the
+  // dialog opens, and OK saves what it shows there.
+  const serviceSettings = () => {
+    try {
+      if (session.settingsRequested) {
+        session.settingsRequested = false;
+        session.openSettings(readSettings(deps.git));
+      }
+      const save = session.settingsToSave;
+      if (save) {
+        session.settingsToSave = null;
+        session.showMessage(
+          saveSettings(deps.git, save.shown, save.settings)
+            ? "Settings saved."
+            : "Git could not save the settings.",
+        );
+      }
+    } catch (error) {
+      session.showMessage(`Git failed: ${describeFailure(error)}`);
+    }
+  };
+
   const startBranchPush = async () => {
     session.branchPushRequested = false;
+    // A watch is for the push whose dialog it outlived.
+    stopWatching();
     const controller = new AbortController();
     branchPushController = controller;
     session.beginBranchPush(() => controller.abort());
@@ -364,12 +490,16 @@ export async function runPager(
         session.appendPushOutput(text);
         draw();
       }, controller.signal);
-      summary = await pushBranch(io, controller.signal);
+      summary = await pushBranch(
+        io,
+        controller.signal,
+        (branch) => startWatching(branch, controller.signal),
+      );
     } catch (error) {
       summary = `Push failed: ${describeFailure(error)}`;
     }
     session.finishBranchPush(summary);
-    draw();
+    drawOrQuit();
   };
   try {
     tty.setRaw(true);
@@ -383,7 +513,9 @@ export async function runPager(
     // does not pay the one-time build cost on the interactive path.
     if (semantics) deps.setTimer(() => semantics.prewarm(), 0);
     while (!session.quit) {
-      const n = await tty.read(buf);
+      // A read that quitting interrupts is left unfinished, for the viewer is
+      // closing.
+      const n = await Promise.race([tty.read(buf), quitting.promise]);
       if (n === null) {
         break;
       }
@@ -407,6 +539,7 @@ export async function runPager(
           // button visibly depressed for the duration of the work.
           pushStarted = startPush();
         });
+        serviceSettings();
         if (session.quit) break;
       }
       if (session.quit) {
@@ -422,6 +555,7 @@ export async function runPager(
         break;
       }
       if (session.branchPushRequested) startBranchPush();
+      if (!session.pushDialogUp) stopWatching();
       // A reveal or a button press draws its own frames, ending on the finished
       // one; otherwise draw the new state now.
       if (!startReveal() && !pushStarted) {

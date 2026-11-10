@@ -343,18 +343,13 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.crossrefs[].refsOut",
       "result.mentionable[].addLink",
       "result.mentionable[].body",
-      "result.mentionable[].bodyUpdatedAt",
-      "result.mentionable[].bodyUpdatedBy",
       "result.mentionable[].commentCount",
       "result.mentionable[].comments",
       "result.mentionable[].createdAt",
-      "result.mentionable[].createdBy",
       "result.mentionable[].createdByName",
       "result.mentionable[].lastActivityAt",
       "result.mentionable[].setBody",
       "result.topics[].addLink",
-      "result.topics[].bodyUpdatedAt",
-      "result.topics[].bodyUpdatedBy",
       "result.topics[].comments",
       "result.topics[].createdByName",
       "result.topics[].setBody",
@@ -363,7 +358,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.index[].commentCount",
       "result.index[].lastActivityAt",
       "result.crossrefs[].createdAt",
-      "result.crossrefs[].createdBy",
       "result.crossrefs[].lastActivityAt",
       "result.crossrefs[].referencedByLinks",
       "result.crossrefs[].refsOutLinks",
@@ -409,7 +403,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       // recorded change each one comes from.
       "result.mentionable[].commentCount",
       "result.mentionable[].createdAt",
-      "result.mentionable[].createdBy",
       "result.mentionable[].lastActivityAt",
     ],
     reason:
@@ -2374,9 +2367,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     ],
     paths: [
       "result.$VIEWS.chat.recentActivity",
-      "result.$VIEWS.chat.messages.windows",
-      "result.room.recentActivity",
-      "result.room.messages.windows",
       // The reader's answers, per session again, which
       // `fabrichat-room-viewer-per-session-reland.md` records.
       "argument.room.canSend",
@@ -2402,11 +2392,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     ],
     paths: [
       "result.$VIEWS.chat.recentActivity",
-      "result.$VIEWS.chat.messages.windows",
       "result.placement.$VIEWS.chat.recentActivity",
-      "result.placement.$VIEWS.chat.messages.windows",
-      "result.placement.room.recentActivity",
-      "result.placement.room.messages.windows",
       // The reader's answers, per session again, which
       // `fabrichat-room-viewer-per-session-reland.md` records.
       "argument.placement.$VIEWS.chat.canSend",

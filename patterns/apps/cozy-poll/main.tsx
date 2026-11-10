@@ -393,7 +393,7 @@ export default pattern<CozyPollInput, CozyPollOutput>(
     // covers the whole lifecycle: a create surface when the viewer has no
     // profile, a link when they have one, and a picker (with inline create)
     // when they have several. `#profileName` gives the snapshot name.
-    const profileWish = wish<{ name?: string; avatar?: string }>({
+    const profileWish = wish<{ name?: string }>({
       query: "#profile",
     });
     const profileNameWish = wish<string>({ query: "#profileName" });

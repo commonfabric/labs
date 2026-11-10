@@ -13,6 +13,7 @@ import ts from "typescript";
 import { AGENT_RUN_ERROR_CODES } from "../src/agent-error-codes.ts";
 import {
   AGENT_RUN_STATES,
+  AGENT_RUN_TERMINAL_STATES,
   AgentQueueIndexSchema,
   AgentRunRecordSchema,
 } from "../src/builtins/agent-schemas.ts";
@@ -20,15 +21,18 @@ import {
 const read = (path: string): string =>
   Deno.readTextFileSync(new URL(path, import.meta.url));
 
-/** Finds a named exported type alias through TypeScript's TSX parser. */
-const typeAlias = (source: string, name: string): ts.TypeAliasDeclaration => {
-  const file = ts.createSourceFile(
+const parse = (source: string): ts.SourceFile =>
+  ts.createSourceFile(
     "pattern.tsx",
     source,
     ts.ScriptTarget.Latest,
     true,
     ts.ScriptKind.TSX,
   );
+
+/** Finds a named exported type alias through TypeScript's TSX parser. */
+const typeAlias = (source: string, name: string): ts.TypeAliasDeclaration => {
+  const file = parse(source);
   const declaration = file.statements.find((statement) =>
     ts.isTypeAliasDeclaration(statement) && statement.name.text === name &&
     statement.modifiers?.some((modifier) =>
@@ -70,6 +74,29 @@ const stringLiteralsIn = (declaration: ts.TypeAliasDeclaration): string[] => {
   }).toSorted();
 };
 
+/** The strings in the array literal a top-level `const` named `name` holds. */
+const stringArrayIn = (source: string, name: string): string[] => {
+  const declaration = parse(source).statements
+    .flatMap((statement) =>
+      ts.isVariableStatement(statement)
+        ? statement.declarationList.declarations
+        : []
+    )
+    .find((candidate) =>
+      ts.isIdentifier(candidate.name) && candidate.name.text === name
+    );
+  const initializer = declaration?.initializer;
+  if (initializer === undefined || !ts.isArrayLiteralExpression(initializer)) {
+    throw new Error(`Array constant ${name} was not found`);
+  }
+  return initializer.elements.map((element) => {
+    if (!ts.isStringLiteral(element)) {
+      throw new Error(`${name} holds an element that is not a string`);
+    }
+    return element.text;
+  }).toSorted();
+};
+
 const propertiesOf = (schema: unknown): Record<string, unknown> =>
   (schema as { properties: Record<string, unknown> }).properties;
 
@@ -92,6 +119,13 @@ describe("agent schemas parity", () => {
       .toEqual(AGENT_RUN_STATES.toSorted());
     expect(stringLiteralsIn(typeAlias(agentRun, "AgentRunErrorCode")))
       .toEqual(AGENT_RUN_ERROR_CODES.toSorted());
+  });
+
+  // The queue's page offers Remove for these states and `cf agent remove`
+  // accepts these, so both take a run off the queue only once it has ended.
+  it("names the runtime's terminal states as the pattern's terminal states", () => {
+    expect(stringArrayIn(agentRun, "TERMINAL_STATES"))
+      .toEqual([...AGENT_RUN_TERMINAL_STATES].toSorted());
   });
 
   it("names every queue property in the pattern-facing queue types", () => {
@@ -127,5 +161,22 @@ describe("agent schemas parity", () => {
       "one",
       "two",
     ]);
+  });
+
+  it("reads an array constant and refuses one holding anything but strings", () => {
+    const source = `
+      const Listed: readonly string[] = [
+        "beta", 'alpha',
+      ];
+      const Mixed = ["one", 2];
+    `;
+
+    expect(stringArrayIn(source, "Listed")).toEqual(["alpha", "beta"]);
+    expect(() => stringArrayIn(source, "Mixed")).toThrow(
+      "Mixed holds an element that is not a string",
+    );
+    expect(() => stringArrayIn(source, "Absent")).toThrow(
+      "Array constant Absent was not found",
+    );
   });
 });

@@ -127,6 +127,127 @@ editing a document several people type in at once may run more than once
 before it lands. A write that must not wait on the typing belongs in a field of
 its own.
 
+## Anchoring text: `anchorsOf`
+
+A comment, highlight or bookmark on a string field says which text it is
+about with **anchors**: points in the field, each stored under an id the
+pattern chooses. The runtime moves every anchor of a field through every
+edit made in an editor or through `.applyChanges()`, whoever makes it, so the
+pattern stores its anchors' ids and never a position of its own. A pattern
+that replaces the text with `.set()` instead is responsible for updating the
+anchors itself. A range of text is two anchors, one where it starts and one
+where it ends.
+
+`anchorsOf(field)` returns the field's anchors as a cell. Its value is a map
+from anchor id to offset, counted in UTF-16 code units as string indexes are,
+or `undefined` until something writes it. A handler changes the anchors by
+writing that cell, as it writes any other:
+
+```typescript
+// Shown at module scope.
+interface Comment {
+  id: string;
+  text: string;
+}
+
+type Anchors = Writable<FieldAnchors | undefined>;
+
+// `from`, `to` and `value` are an editor's selection, as `cf-selection-change`
+// reports it.
+const addComment = handler<
+  { id: string; text: string; from: number; to: number; value: string },
+  {
+    content: Writable<string>;
+    anchors: Anchors;
+    comments: Writable<Comment[]>;
+  }
+>(({ id, text, from, to, value }, { content, anchors, comments }) => {
+  if (content.get() !== value) {
+    throw new Error("The text changed under the selection.");
+  }
+  anchors.set({ ...anchors.get(), [`${id}:from`]: from, [`${id}:to`]: to });
+  comments.push({ id, text });
+});
+
+const deleteComment = handler<
+  { id: string },
+  { anchors: Anchors; comments: Writable<Comment[]> }
+>(({ id }, { anchors, comments }) => {
+  const { [`${id}:from`]: _from, [`${id}:to`]: _to, ...others } =
+    anchors.get() ?? {};
+  anchors.set(others);
+  comments.set(comments.get().filter((c) => c.id !== id));
+});
+
+export default pattern<
+  { content: Writable<string>; comments: Writable<Comment[]> }
+>(({ content, comments }) => {
+  const anchors = anchorsOf(content);
+  const quoted = computed(() =>
+    comments.get().map(({ id }) => ({
+      id,
+      quote: content.get().slice(
+        anchors?.[`${id}:from`] ?? 0,
+        anchors?.[`${id}:to`] ?? 0,
+      ),
+    }))
+  );
+  return {
+    quoted,
+    addComment: addComment({ content, anchors, comments }),
+    deleteComment: deleteComment({ anchors, comments }),
+  };
+});
+```
+
+A handler that places an anchor reads the field and the anchors, then writes
+the anchors. Its commit lands only while the field and the anchors are still
+what it read. Where someone has edited the field since, or another handler has
+changed the anchors, the commit is refused and the handler runs again against
+what they hold now, so an offset a handler computed from the text it read is
+never applied to different text.
+
+An offset that comes from outside the handler needs a check of its own. A
+range taken from an editor's selection refers to the text the editor showed,
+which may differ from what the field holds by the time the handler runs. The
+selection carries that whole text as `value`, and the handler compares it with
+the whole field, as `addComment` does above, before it anchors the range.
+Comparing only the text at the range is not enough: where an edit leaves the
+same text at the same offsets, such as a repeated word deleted just ahead of
+the selection, the anchors would land on the other copy.
+
+Every anchor moves the way a cursor does. Text inserted at an anchor lands
+after it, and an anchor inside deleted text lands where the deletion began. So
+a range from one anchor to another takes in text inserted at its start, leaves
+out text inserted at its end, and stays over a replacement of exactly its
+text. When an edit deletes the text of a range, both anchors land on the same
+offset; show that as a comment on text no longer in the field.
+
+Anchors move only with edits made in an editor or through `.applyChanges()`.
+A handler that edits a field with `.applyChanges()` and also writes its
+anchors writes the anchors first, against the text it read; Memory moves them
+through the edit. A commit that writes the anchors after the edit is refused,
+because within the handler the anchors have not yet moved with its edit, so
+offsets written against the edited text would be moved through it again.
+Anchors meant for the edited text go in a commit of their own.
+A `.set()` of a field that is not open for collaboration, because no editor
+has edited it or because it has been released, replaces the text and moves no
+anchor. A handler that rewrites the text that way, as an agent rewording a
+note does, reads the anchors and writes each one where the new text puts it,
+in the same handler.
+
+What a reader of the anchors may learn is decided as for any other cell, by
+the label of what was written to it. A handler that reads the field before
+writing the anchors writes them under the field's confidentiality. One that
+writes anchors without reading the field does not, and their offsets follow
+the field's edits from then on all the same, so for a confidential field every
+handler that writes its anchors reads it first. The field's write policy does
+not cover the anchors; a pattern that wants only certain handlers to move them
+declares a write policy on the anchors cell's type.
+
+[Collaborative fields](../../../features/collaborative-fields.md#anchors)
+describes how anchors are stored and moved.
+
 ## Addressing one array element: `elementById`
 
 `array.elementById(idKey)` returns a cell for the array element identified by a

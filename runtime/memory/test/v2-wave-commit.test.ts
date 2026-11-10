@@ -19,17 +19,22 @@
 //   overwrite-in-place unit — appending is the evidence log's signature).
 
 import { assert, assertEquals, assertThrows } from "@std/assert";
+import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
+import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { Database } from "@db/sqlite";
 import {
   applyCommit,
   applyWaveCommit,
   close,
+  ConflictError,
   type Engine,
   open,
   ProtocolError,
+  read,
   selectDocHead,
   selectWritePathsSince,
+  serverSeq,
   WaveCommitConflictError,
   WavePreconditionError,
   WaveStaleReadError,
@@ -48,7 +53,9 @@ import {
   commitPreconditionValueHash,
   decodeMemoryBoundary,
   resetServerExecutionConfig,
+  resolveScopeKey,
   setServerExecutionConfig,
+  toDocumentPath,
 } from "../v2.ts";
 
 const SPACE = "did:key:z6Mk-wave-test-space";
@@ -1138,5 +1145,215 @@ Deno.test("wave replay does not re-insert durable outbox rows: the stored result
   } finally {
     resetServerExecutionConfig();
     close(engine);
+  }
+});
+
+describe("applyWaveCommit dependency scope identity", () => {
+  let engine: Engine;
+  let holder: string;
+  let localSeq: number;
+  const identity = { principal: "did:key:alice", sessionId: "alice-session" };
+
+  beforeEach(async () => {
+    setServerExecutionConfig(true);
+    engine = await open({
+      url: new URL(`memory://dependency-scope-${crypto.randomUUID()}`),
+    });
+    holder = withLiveLease(engine);
+    localSeq = 0;
+  });
+
+  afterEach(() => {
+    close(engine);
+    resetServerExecutionConfig();
+  });
+
+  const options = (commit: ClientCommit) => ({
+    sessionId: holder,
+    space: SPACE,
+    commit,
+    commitClass: "derived" as const,
+    holder,
+    dependencyScopeIdentity: identity,
+    waveBasis: { basisSeq: serverSeq(engine), rebasedHeads: [] },
+  });
+
+  for (const scope of ["user", "session"] as const) {
+    describe(scope, () => {
+      const seed = (n: number) =>
+        applyWaveCommit(engine, {
+          ...options(setCommit(++localSeq, [{ id: "of:input", scope, n }])),
+          annotations: [{ op: 0, scopeKey: resolveScopeKey(scope, identity) }],
+        });
+
+      it("resolves confirmed dependencies without recording an acting identity", () => {
+        const initial = seed(1);
+        const applied = applyWaveCommit(engine, {
+          ...options({
+            ...setCommit(++localSeq, [{ id: "of:output", scope }]),
+            reads: {
+              confirmed: [{
+                id: "of:input",
+                scope,
+                path: toDocumentPath(["value"]),
+                seq: initial.seq,
+              }],
+              pending: [],
+            },
+          }),
+          annotations: [{ op: 0, scopeKey: resolveScopeKey(scope, identity) }],
+        });
+
+        expect(read(engine, { id: "of:output", scope, ...identity })?.value)
+          .toEqual({ n: 2 });
+        const row = engine.database.prepare(
+          `SELECT session_id, acting_principal, acting_session, annotations
+           FROM "commit" WHERE seq = :seq`,
+        ).get<{
+          session_id: string;
+          acting_principal: string | null;
+          acting_session: string | null;
+          annotations: string;
+        }>({ seq: applied.seq });
+        assert(row);
+        expect(row.session_id).toBe(holder);
+        expect(row.acting_principal).toBeNull();
+        expect(row.acting_session).toBeNull();
+        expect(decodeMemoryBoundary(row.annotations)).toEqual([
+          { op: 0, scopeKey: resolveScopeKey(scope, identity) },
+        ]);
+      });
+
+      it("rejects a stale confirmed dependency changed by the same holder", () => {
+        const initial = seed(1);
+        seed(2);
+        const head = serverSeq(engine);
+
+        expect(() =>
+          applyWaveCommit(
+            engine,
+            options({
+              ...setCommit(++localSeq, [{ id: "of:output" }]),
+              reads: {
+                confirmed: [{
+                  id: "of:input",
+                  scope,
+                  path: toDocumentPath(["value"]),
+                  seq: initial.seq,
+                }],
+                pending: [],
+              },
+            }),
+          )
+        ).toThrow(ConflictError);
+        expect(serverSeq(engine)).toBe(head);
+        expect(read(engine, { id: "of:output" })).toBeNull();
+        expect(read(engine, { id: "of:input", scope, ...identity })?.value)
+          .toEqual({ n: 2 });
+      });
+
+      it("checks absence and value preconditions in the addressed instance", () => {
+        seed(1);
+        const applied = applyWaveCommit(
+          engine,
+          options({
+            ...setCommit(++localSeq, [{ id: "of:output" }]),
+            preconditions: [
+              { kind: "entity-absent", id: "of:free", scope },
+              {
+                kind: "entity-value-hash",
+                id: "of:input",
+                scope,
+                valueHash: commitPreconditionValueHash({ n: 1 }),
+              },
+            ],
+          }),
+        );
+        expect(applied.seq).toBe(2);
+        expect(read(engine, { id: "of:output" })?.value).toEqual({ n: 2 });
+
+        seed(3);
+        const head = serverSeq(engine);
+        let error: unknown;
+        try {
+          applyWaveCommit(
+            engine,
+            options({
+              ...setCommit(++localSeq, [{ id: "of:refused-output" }]),
+              preconditions: [
+                { kind: "entity-absent", id: "of:input", scope },
+                {
+                  kind: "entity-value-hash",
+                  id: "of:input",
+                  scope,
+                  valueHash: commitPreconditionValueHash({ n: 1 }),
+                },
+              ],
+            }),
+          );
+        } catch (caught) {
+          error = caught;
+        }
+        expect(error).toBeInstanceOf(WavePreconditionError);
+        assert(error instanceof WavePreconditionError);
+        expect(error.failedPreconditions).toEqual([
+          0,
+          1,
+        ]);
+        expect(serverSeq(engine)).toBe(head);
+        expect(read(engine, { id: "of:refused-output" })).toBeNull();
+      });
+
+      it("rejects a scoped write annotated for a different instance", () => {
+        const other = { principal: "did:key:bob", sessionId: "bob-session" };
+        expect(() =>
+          applyWaveCommit(engine, {
+            ...options(setCommit(++localSeq, [{ id: "of:output", scope }])),
+            annotations: [{ op: 0, scopeKey: resolveScopeKey(scope, other) }],
+          })
+        ).toThrow(ProtocolError);
+        expect(serverSeq(engine)).toBe(0);
+        expect(read(engine, { id: "of:output", scope, ...identity }))
+          .toBeNull();
+        expect(read(engine, { id: "of:output", scope, ...other })).toBeNull();
+      });
+    });
+  }
+
+  it("rejects pending dependencies under an override", () => {
+    const initial = applyWaveCommit(
+      engine,
+      options(setCommit(++localSeq, [{ id: "of:pending" }])),
+    );
+    const pending = options({
+      ...setCommit(++localSeq, [{ id: "of:output" }]),
+      reads: {
+        confirmed: [],
+        pending: [{
+          id: "of:pending",
+          path: toDocumentPath(["value"]),
+          localSeq: 1,
+        }],
+      },
+    });
+    expect(() => applyWaveCommit(engine, pending)).toThrow(ProtocolError);
+    expect(serverSeq(engine)).toBe(initial.seq);
+    expect(read(engine, { id: "of:output" })).toBeNull();
+
+    // The dependency belongs to the producing session and is otherwise valid.
+    applyWaveCommit(engine, { ...pending, dependencyScopeIdentity: undefined });
+    expect(read(engine, { id: "of:output" })?.value).toEqual({ n: 2 });
+  });
+
+  for (const commitClass of ["authored", "system"] as const) {
+    it(`rejects an addressing override for ${commitClass} admission`, () => {
+      expect(() =>
+        applyWaveCommit(engine, {
+          ...options(setCommit(++localSeq, [{ id: "of:output" }])),
+          commitClass,
+        })
+      ).toThrow(ProtocolError);
+      expect(serverSeq(engine)).toBe(0);
+    });
   }
 });

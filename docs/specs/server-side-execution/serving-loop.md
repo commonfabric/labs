@@ -217,6 +217,23 @@ notice at all, so a subscribed client saw them only on its next own
 sync. Beneficial (staleness removed), never load-bearing: no client in
 the ruled flows subscribes to setup docs before activation.
 
+**A piece a handler starts.** A handler's result pattern runs on the serving
+runtime so that its setup stages into the wave, and each pattern it starts
+registers its nodes there. Nothing demands those nodes, so once the handler's
+transaction commits the result is released (`#releaseServedHandlerResult` in
+`runner.ts`), and what remains is what the store holds, with the basis rows of
+any of its actions that ran. A demand for one of its values, or an event to one
+of its streams, starts the piece as either starts a piece on a fresh runtime.
+A session demands one of its values when it is sent a document the piece's
+setup wrote, other than its argument, which holds inputs current without it. A
+read that stops at a link to the piece is sent only its result document, and
+starts nothing (`carriesPieceMeta` in `runtime/memory/v2/server-sync.ts`). A
+piece whose document a client session tracks at that commit keeps running,
+because that session's demand has already made its attempt to load it. The result
+pattern's index entry goes with the release, and so do the watches of the
+documents only the stopped pieces read: the release asks for the pass a stop
+asks for (`docs/features/document-release.md`).
+
 **Parking.** A park releases the lease and stops the loop. A park for a
 failed loop, a failed initialization or a closing host disposes the runtime. An IDLE park (§3's "on idle") that abandoned no
 open wave and left no effect unretired in its outbox (§4: an effect
@@ -520,7 +537,11 @@ successor tenure could have it admitted.
   whose commit the host does not see.
 - A tenure serving another space that holds a session on the deleted one, as a
   cross-space replica, learns of the deletion from that session's `deleted`
-  revocation. It goes on serving its own space.
+  revocation. It goes on serving its own space. From then on its loads of the
+  deleted space's documents settle as absences, as do those of a tenure whose
+  open of the space is refused, so an event of its own space whose run reaches
+  one dispatches and reads it as absent
+  ([events.md §5](events.md#5-failure-semantics)).
 - An outbox row whose target space is deleted is refused at delivery like any
   other deterministic admission refusal (§5), and is deleted with the
   source-side notice written first.
@@ -1991,12 +2012,18 @@ the durable rows of §5 carry APPENDS, never effect state).
   [owner routing](#2-the-lease-single-deriver-operationally)),
   which the owner admits exactly as its own host's delegated
   append; the host keeps one such session per target space for as
-  long as a tenure uses it. A host given no route delivers the row
-  as a delegated append on its own memory server. The
-  owner's `refused` answer is LT4's deterministic rejection, which
-  writes the failure notice in the source; `unavailable`,
-  `internal` and a transport failure are transient, and the row is
-  kept for the next attempt. The pattern-lifecycle handler's
+  long as a tenure uses it, and replaces one the owner ends, so a
+  session an access-list change revokes is opened again for the
+  next attempt and admitted against the list as it then stands. A
+  host given no route delivers the row as a delegated append on its
+  own memory server. The owner's `refused` answer is LT4's
+  deterministic rejection, which writes the failure notice in the
+  source, and so is a deleted target, whether the owner refuses the
+  session's open for it or revokes the open session with it;
+  `unavailable`, `internal`, a transport failure, the close of a
+  session revoked for any other reason, and a refusal of the open
+  under the target's access list, which a later grant can lift, are
+  transient, and the row is kept for the next attempt. The pattern-lifecycle handler's
   registration delivery into a space the verb did not run in takes
   the same path, and watches the stream document on that session
   for the event's outcome where it watched its own server's

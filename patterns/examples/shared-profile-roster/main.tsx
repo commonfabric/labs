@@ -7,6 +7,7 @@ import {
   handler,
   hasError,
   hasSchemaMismatch,
+  isObsolete,
   isPending,
   isSyncing,
   NAME,
@@ -21,7 +22,10 @@ import {
   wish,
   Writable,
 } from "commonfabric";
-import { profileLook } from "../../system/profile-look/profile-look.ts";
+import {
+  profileFace,
+  type ProfileFaceFields,
+} from "../../system/profile-face/profile-face.ts";
 
 /**
  * Shared-profile participant roster (CT-1649).
@@ -55,7 +59,9 @@ import { profileLook } from "../../system/profile-look/profile-look.ts";
  * idiom for cell identity. Only the renderable fields are surfaced; identity
  * comparison never depends on the value shape.
  */
-export type ParticipantProfileCell = Cell<{ name?: string; avatar?: string }>;
+export type ParticipantProfileCell = Cell<
+  { name?: string } & ProfileFaceFields
+>;
 
 /** One participant's contribution to the shared roster (a profile snapshot). */
 export interface Participant {
@@ -107,13 +113,13 @@ type ViewerCell = Writable<ViewerState | Default<typeof EMPTY_VIEWER>>;
 // tasks/pattern-compat-accepted-breaks.ts.
 export type JoinEvent = void;
 
-// The current viewer's name, picture, avatar text and live profile cell are
-// resolved from their shared profile in the pattern body (via wish). The handler
-// appends a snapshot to the shared roster and records that this viewer has
-// joined. Identity is keyed on the `profile` CELL — never the display name,
+// The current viewer's name and live profile cell are resolved from their
+// shared profile in the pattern body (via wish). The handler appends a snapshot
+// to the shared roster, the face read from the profile as its owner set it
+// (`profileFace()`), and records that this viewer has joined. Identity is keyed on the `profile` CELL — never the display name,
 // which is mutable and may collide between distinct users.
 //
-// `name`/`picture`/`avatar` arrive as plain values (named `computed` values
+// `name` arrives as a plain value (named `computed` values
 // auto-unwrap as handler state — do not call `.get()` on them). `profile` is a
 // live cell reference: it round-trips through `push` as a link and is compared
 // with `equals()`, the pattern idiom for cell identity (see profile-group-chat
@@ -124,12 +130,10 @@ const join = handler<JoinEvent, {
   profile: ParticipantProfileCell;
   profileAvailable: boolean;
   name: string;
-  picture?: FabricBytes;
-  avatar?: string;
 }>(
   (
     _event,
-    { roster, viewer, profile, profileAvailable, name, picture, avatar },
+    { roster, viewer, profile, profileAvailable, name },
   ) => {
     const trimmed = (name ?? "").trim();
     if (!trimmed) return; // No resolved profile name yet — nothing to contribute.
@@ -150,7 +154,7 @@ const join = handler<JoinEvent, {
         name: trimmed,
         // Drawn with the picture, or else the avatar text.
         avatar: "",
-        ...profileLook(picture, avatar),
+        ...profileFace(availableProfile),
         joinedAt: Date.now(),
       });
     }
@@ -179,56 +183,41 @@ export default pattern<RosterDemoInput, RosterDemoOutput>(
   ({ roster, viewer }) => {
     // Resolve THIS viewer's shared profile. `#profile` yields the viewer's own
     // profile cell (the default profile / picker result under PR #3830). The
-    // cell itself is the stable identity used to dedupe the roster; the
-    // convenience targets give just the values for the snapshot.
-    const profileWish = wish<{ name?: string; avatar?: string }>({
+    // cell itself is the stable identity used to dedupe the roster, and the
+    // join handler reads the face for the snapshot from it.
+    const profileWish = wish<{ name?: string }>({
       query: "#profile",
     });
     const profileNameWish = wish<string>({ query: "#profileName" });
-    const profilePictureWish = wish<FabricBytes>({ query: "#profilePicture" });
-    const profileAvatarWish = wish<string>({ query: "#profileAvatar" });
     const observedProfileName = observeAvailability(profileNameWish.result);
-    const observedProfileAvatar = observeAvailability(
-      profileAvatarWish.result,
-    );
     const observedProfile = observeAvailability(profileWish.result);
 
     const myName = computed(() => {
       if (
         hasError(observedProfileName) || isPending(observedProfileName) ||
         isSyncing(observedProfileName) ||
-        hasSchemaMismatch(observedProfileName)
+        hasSchemaMismatch(observedProfileName) ||
+        isObsolete(observedProfileName)
       ) return "";
       return resultOf(observedProfileName);
-    });
-    const myAvatar = computed(() => {
-      if (
-        hasError(observedProfileAvatar) || isPending(observedProfileAvatar) ||
-        isSyncing(observedProfileAvatar) ||
-        hasSchemaMismatch(observedProfileAvatar)
-      ) return "";
-      return resultOf(observedProfileAvatar);
     });
     const myProfile = computed(() => {
       if (
         hasError(observedProfile) || isPending(observedProfile) ||
-        isSyncing(observedProfile) || hasSchemaMismatch(observedProfile)
+        isSyncing(observedProfile) || hasSchemaMismatch(observedProfile) ||
+        isObsolete(observedProfile)
       ) return {};
       return resultOf(observedProfile);
     });
     const profileAvailable = computed(() =>
       !hasError(observedProfile) && !isPending(observedProfile) &&
-      !isSyncing(observedProfile) && !hasSchemaMismatch(observedProfile)
+      !isSyncing(observedProfile) && !hasSchemaMismatch(observedProfile) &&
+      !isObsolete(observedProfile)
     );
     // Keep the badge in static JSX. A VNode-producing computed that captures
     // the unavailable profile path is blocked before its fallback can run.
     const currentProfileBadge = (
       <cf-profile-badge $profile={myProfile} size="md" />
-    );
-    const myPicture = computed(() =>
-      hasError(profilePictureWish.result)
-        ? undefined
-        : resultOf(profilePictureWish.result)
     );
 
     const participants = roster.participants;
@@ -246,8 +235,6 @@ export default pattern<RosterDemoInput, RosterDemoOutput>(
       profile: myProfile,
       profileAvailable,
       name: myName,
-      picture: myPicture,
-      avatar: myAvatar,
     });
 
     return {

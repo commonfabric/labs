@@ -291,9 +291,9 @@ function schemaMemoAddressKey(address: IMemorySpaceAddress): string {
  * The part every memo key for the document `address` names opens with,
  * whatever type, path and schema the key goes on to name: the space, the
  * scope and the id, each length-prefixed, through the `t` that starts the
- * type. `forgetSchemaMemoDocuments()` matches memo keys by it.
+ * type.
  */
-export function schemaMemoDocumentPrefix(
+function schemaMemoDocumentPrefix(
   address: { space: string; scope?: IMemorySpaceAddress["scope"]; id: string },
 ): string {
   return `s${keyComponent(address.space)}c${
@@ -303,32 +303,6 @@ export function schemaMemoDocumentPrefix(
       ? memoIdComponent(address.id)
       : `i${keyComponent(address.id)}`
   }t`;
-}
-
-/** The `schemaMemoDocumentPrefix()` a memo key opens with. */
-function schemaMemoKeyDocumentPrefix(key: string): string {
-  let at = 0;
-  for (let component = 0; component < 3; component++) {
-    const colon = key.indexOf(":", at + 1);
-    at = colon + 1 + Number(key.slice(at + 1, colon));
-  }
-  return key.slice(0, at + 1);
-}
-
-/**
- * Drops every entry of `memo` for the documents `prefixes` name, each a
- * `schemaMemoDocumentPrefix()`. An entry stands for a traversal that
- * recorded the document's reads and tracker entries; once those records
- * are gone, a traversal that found the entry would skip the document and
- * record nothing in their place.
- */
-export function forgetSchemaMemoDocuments(
-  memo: SchemaMemo,
-  prefixes: ReadonlySet<string>,
-): void {
-  for (const key of memo.keys()) {
-    if (prefixes.has(schemaMemoKeyDocumentPrefix(key))) memo.delete(key);
-  }
 }
 
 /**
@@ -2069,6 +2043,15 @@ export interface IObjectCreator<T> {
    * leaves this unimplemented and keeps projecting `undefined`.
    */
   createOpaquePresence?(link: NormalizedFullLink): T;
+
+  /**
+   * Whether the property at `slot`, which the traversal read as `value`, is a
+   * verb its producer no longer publishes. An object leaves such a property
+   * out where the schema does not require it, as it leaves out an optional
+   * field the producer stopped publishing. Query traversal leaves this
+   * unimplemented and keeps every handle.
+   */
+  isWithdrawnVerb?(slot: NormalizedFullLink, value: T): boolean;
 
   /**
    * Creates a value whose schema has already been proven to contain only exact
@@ -4173,11 +4156,10 @@ export function createSchemaMemo(): SchemaMemo {
 // under ONE identity — schema narrowing memoized under one principal's
 // traversal would otherwise leak into another's (value-bleed). Every
 // sharing scope today is single-identity by construction
-// (`TrackedGraphState.memo` is bound to its manager; the query path's
-// sharedMemo instances are per call); this guard is what keeps a future
-// sharing change from silently becoming value-bleed rather than a loud
-// error. Bindings live in a side table so the memo type stays a plain
-// Map.
+// (the query path shares a memo only within one evaluation); this guard
+// is what keeps a future sharing change from silently becoming value-bleed
+// rather than a loud error. Bindings live in a side table so the memo type
+// stays a plain Map.
 const schemaMemoIdentityBindings = new WeakMap<SchemaMemo, string>();
 
 const schemaMemoIdentityKey = (identity: ScopeKeyIdentity): string =>
@@ -6130,6 +6112,8 @@ export class SchemaObjectTraverser<V extends FabricValue>
       }
     }
 
+    this.#omitWithdrawnVerbs(doc, schema, filteredObj);
+
     // Check that all required fields are present
     if (isObjectOrArray(schema) && "required" in schema) {
       const required = schema["required"] as string[];
@@ -6154,6 +6138,39 @@ export class SchemaObjectTraverser<V extends FabricValue>
       }
     }
     return filteredObj;
+  }
+
+  /**
+   * Leaves out of `filteredObj` each property the schema declares as a stream
+   * and does not require, whose value is a verb its producer no longer
+   * publishes. A required position keeps its handle: its producer cannot drop
+   * it through an update, so its absence is a deletion or an unfinished setup,
+   * not a contract the holder was built to read.
+   */
+  #omitWithdrawnVerbs(
+    doc: IMemorySpaceValueAttestation,
+    schema: JSONSchemaObj,
+    filteredObj: Record<string, FabricValue>,
+  ): void {
+    const creator = this.objectCreator;
+    if (
+      creator.isWithdrawnVerb === undefined ||
+      !isObjectNotArray(schema.properties)
+    ) return;
+    const required = Array.isArray(schema.required) ? schema.required : [];
+    for (const propKey of Object.keys(schema.properties)) {
+      if (
+        required.includes(propKey) || !Object.hasOwn(filteredObj, propKey) ||
+        !propertyDeclaresStream(schema, propKey)
+      ) continue;
+      const slot = getNormalizedLink(
+        { ...doc.address, path: appendToPath(doc.address.path, propKey) },
+        undefined,
+      );
+      if (creator.isWithdrawnVerb(slot, filteredObj[propKey])) {
+        delete filteredObj[propKey];
+      }
+    }
   }
 
   /**

@@ -244,6 +244,18 @@ describe("FabricHash", () => {
           const cid = new FabricHash(SAMPLE_HASH, "fid1");
           expect(Object.isFrozen(codec.encode(cid, env))).toBe(true);
         });
+
+        it("throws given a hash whose algorithm tag is outside the tag syntax", () => {
+          // An instance holds any string as its tag, but one carried in an
+          // interchange format is a tag.
+
+          for (const tag of ["", "fid-1", "sys.sha256"]) {
+            const cid = new FabricHash(SAMPLE_HASH, tag);
+            expect(() => codec.encode(cid, env)).toThrow(
+              /not in the tag syntax/,
+            );
+          }
+        });
       });
 
       describe("canDecode()", () => {
@@ -261,6 +273,18 @@ describe("FabricHash", () => {
 
         it("returns `false` for a record with a non-string field", () => {
           expect(codec.canDecode({ tag: "fid1", hash: 7 })).toBe(false);
+        });
+
+        it("returns `false` for an algorithm tag outside the tag syntax", () => {
+          for (const tag of ["", "fid-1", "sys.sha256", "1sha"]) {
+            expect(codec.canDecode({ tag, hash: "AQID" })).toBe(false);
+          }
+        });
+
+        it("returns `true` for an algorithm tag in any case or with a version", () => {
+          for (const tag of ["sha256", "SHA256", "sys.sha@2"]) {
+            expect(codec.canDecode({ tag, hash: "AQID" })).toBe(true);
+          }
         });
 
         it("returns `false` for a field that is inherited rather than own", () => {
@@ -323,6 +347,23 @@ describe("FabricHash", () => {
         it("returns a frozen record", () => {
           const cid = new FabricHash(SAMPLE_HASH, "fid1");
           expect(Object.isFrozen(codec.encode(cid, env))).toBe(true);
+        });
+
+        it("throws given a hash whose algorithm tag is outside the tag syntax", () => {
+          const cid = new FabricHash(SAMPLE_HASH, "fid-1");
+          expect(() => codec.encode(cid, env)).toThrow(
+            /not in the tag syntax/,
+          );
+        });
+      });
+
+      describe("canDecode()", () => {
+        it("returns `false` for an algorithm tag outside the tag syntax", () => {
+          const hash = new ArrayBuffer(1);
+          for (const tag of ["", "fid-1", "sys.sha256"]) {
+            expect(codec.canDecode({ tag, hash })).toBe(false);
+          }
+          expect(codec.canDecode({ tag: "sha256", hash })).toBe(true);
         });
       });
     });

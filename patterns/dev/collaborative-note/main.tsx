@@ -43,7 +43,7 @@ export default pattern<CollaborativeNoteInput, CollaborativeNoteOutput>(
   ({ note }) => {
     // `#profile` owns the create/pick UI and live profile identity. The field
     // wish is the profile-backed plain-text label expected by cf-code-editor.
-    const profileWish = wish<{ name?: string; avatar?: string }>({
+    const profileWish = wish<{ name?: string }>({
       query: "#profile",
     });
     const profileNameWish = wish<string>({ query: "#profileName" });

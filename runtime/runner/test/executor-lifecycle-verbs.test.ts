@@ -480,6 +480,180 @@ describe("ExecutorHost.runLifecycleVerb", () => {
       ");",
     ].join("\n");
 
+    for (const withOtherWrite of [false, true]) {
+      for (const restorePendingValue of [false, true]) {
+        it(`refuses a ${restorePendingValue ? "net-zero" : "same-value"} write over pending state ${withOtherWrite ? "beside another write" : "on its own"}`, async () => {
+          host = newHost();
+          const other = (runtime: Runtime) =>
+            runtime.getCell<string>(space, "direct-elision-other", undefined);
+          const verdicts: boolean[] = [];
+          const outcome = await host.runLifecycleVerb(space, {
+            name: "reuse-pending-marker",
+            run: async (runtime) => {
+              expect((await writeMarker(runtime, "pending")).error)
+                .toBeUndefined();
+              const tx = runtime.edit();
+              runtime.stampServerRun(tx, {
+                actionId: "test-verb/reuse-pending-marker",
+                kind: "bookkeeping",
+                directCommit: true,
+              });
+              if (restorePendingValue) {
+                marker(runtime).withTx(tx).set({ marker: "intermediate" });
+              }
+              marker(runtime).withTx(tx).set({ marker: "pending" });
+              if (withOtherWrite) other(runtime).withTx(tx).set("direct");
+              tx.addVerdictCallback((_tx, verdict) => {
+                verdicts.push(verdict.error === undefined);
+              });
+              runtime.prepareTxForCommit(tx);
+              return await tx.commit().settled;
+            },
+          });
+          expect(outcome.error?.message).toContain(
+            "read state the wave has not committed",
+          );
+          expect(verdicts).toEqual([false]);
+          const reader = clientRuntime();
+          await other(reader).sync();
+          expect(other(reader).get()).toBeUndefined();
+        });
+      }
+    }
+
+    it("refuses a write beneath a parent that only the pending wave created", async () => {
+      host = newHost();
+      const nested = (runtime: Runtime) =>
+        runtime.getCell<{ parent: { held: string; next?: string } }>(
+          space,
+          "direct-pending-parent",
+          undefined,
+        );
+      const outcome = await host.runLifecycleVerb(space, {
+        name: "extend-pending-parent",
+        run: async (runtime) => {
+          expect(
+            (await runtime.editWithRetry((tx) => {
+              runtime.stampServerRun(tx, {
+                actionId: "test-verb/create-pending-parent",
+                kind: "bookkeeping",
+              });
+              nested(runtime).withTx(tx).set({ parent: { held: "pending" } });
+            })).error,
+          ).toBeUndefined();
+          const tx = runtime.edit();
+          runtime.stampServerRun(tx, {
+            actionId: "test-verb/extend-pending-parent",
+            kind: "bookkeeping",
+            directCommit: true,
+          });
+          nested(runtime).withTx(tx).key("parent").key("next").set("direct");
+          marker(runtime).withTx(tx).set({ marker: "direct" });
+          runtime.prepareTxForCommit(tx);
+          return await tx.commit().settled;
+        },
+      });
+      expect(outcome.error?.message).toContain(
+        "read state the wave has not committed",
+      );
+      const reader = clientRuntime();
+      await Promise.all([nested(reader).sync(), marker(reader).sync()]);
+      expect(nested(reader).get()).toEqual({ parent: { held: "pending" } });
+      expect(marker(reader).get()).toBeUndefined();
+    });
+
+    it("accepts a transaction with no writes or dependencies", async () => {
+      host = newHost();
+      const verdicts: boolean[] = [];
+      const outcome = await host.runLifecycleVerb(space, {
+        name: "empty-direct-commit",
+        run: async (runtime) => {
+          const tx = runtime.edit();
+          runtime.stampServerRun(tx, {
+            actionId: "test-verb/empty-direct-commit",
+            kind: "bookkeeping",
+            directCommit: true,
+          });
+          tx.addVerdictCallback((_tx, verdict) => {
+            verdicts.push(verdict.error === undefined);
+          });
+          runtime.prepareTxForCommit(tx);
+          return await tx.commit().settled;
+        },
+      });
+      expect(outcome.error).toBeUndefined();
+      expect(verdicts).toEqual([true]);
+    });
+
+    it("accepts an unchanged write when its confirmed value still holds", async () => {
+      host = newHost();
+      await host.runLifecycleVerb(space, {
+        name: "seed-unchanged-marker",
+        run: async (runtime) => {
+          expect((await writeMarker(runtime, "original")).error)
+            .toBeUndefined();
+        },
+      });
+      const verdicts: boolean[] = [];
+      const outcome = await host.runLifecycleVerb(space, {
+        name: "restate-unchanged-marker",
+        run: async (runtime) => {
+          const tx = runtime.edit();
+          runtime.stampServerRun(tx, {
+            actionId: "test-verb/restate-unchanged-marker",
+            kind: "bookkeeping",
+            directCommit: true,
+          });
+          marker(runtime).withTx(tx).set({ marker: "original" });
+          tx.addVerdictCallback((_tx, verdict) => {
+            verdicts.push(verdict.error === undefined);
+          });
+          runtime.prepareTxForCommit(tx);
+          return await tx.commit().settled;
+        },
+      });
+      expect(outcome.error).toBeUndefined();
+      expect(verdicts).toEqual([true]);
+      const reader = clientRuntime();
+      await marker(reader).sync();
+      expect(marker(reader).get()).toEqual({ marker: "original" });
+    });
+
+    it("refuses an unchanged write when its confirmed value changes before the verdict", async () => {
+      host = newHost();
+      await host.runLifecycleVerb(space, {
+        name: "seed-marker",
+        run: async (runtime) => {
+          expect((await writeMarker(runtime, "original")).error)
+            .toBeUndefined();
+        },
+      });
+      const outcome = await host.runLifecycleVerb(space, {
+        name: "restate-marker",
+        run: async (runtime) => {
+          const tx = runtime.edit();
+          runtime.stampServerRun(tx, {
+            actionId: "test-verb/restate-marker",
+            kind: "bookkeeping",
+            directCommit: true,
+          });
+          marker(runtime).withTx(tx).set({ marker: "original" });
+          const client = clientRuntime();
+          expect(
+            (await client.editWithRetry((clientTx) => {
+              marker(client).withTx(clientTx).set({ marker: "changed" });
+            })).error,
+          ).toBeUndefined();
+          runtime.prepareTxForCommit(tx);
+          return await tx.commit().settled;
+        },
+      });
+      expect(outcome.error).toBeDefined();
+      const reader = clientRuntime();
+      await marker(reader).sync();
+      expect(marker(reader).get()).toEqual({ marker: "changed" });
+    });
+
     /** Stage a piece of `pattern` with a direct commit, in one verb. */
     const stageDirectly = (
       runtime: Runtime,

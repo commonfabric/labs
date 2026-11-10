@@ -31,6 +31,7 @@ import {
   resolveScopeKey,
   type ScopeKeyIdentity,
 } from "@commonfabric/memory/v2";
+import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
 import { getLogger } from "@commonfabric/logger";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
@@ -40,7 +41,6 @@ import {
 
 import type { CellScope, JSONSchema } from "../builder/types.ts";
 import { type Cell, isCell } from "../cell.ts";
-import type { CfcConfClause } from "../cfc/clause.ts";
 import { cfcLabelViewForCellFailClosed } from "../cfc/label-view.ts";
 import { uniqueCfcAtoms } from "../cfc/observation.ts";
 import { createFrozenRequestSnapshot } from "../cfc/request-snapshot.ts";

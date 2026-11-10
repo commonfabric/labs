@@ -2041,7 +2041,8 @@ export default pattern<ParkingCoordinatorInput, ParkingCoordinatorOutput>(
                             disabled={!rowCanManageAdmins || !rowClaimed}
                             onClick={() =>
                               togglePersonAdmin.send({
-                                profile: rowProfile,
+                                ...(rowProfile !== undefined &&
+                                  { profile: rowProfile }),
                                 displayName: rowName,
                               })}
                           >

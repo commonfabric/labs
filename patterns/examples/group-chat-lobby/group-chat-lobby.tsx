@@ -2,7 +2,6 @@ import {
   computed,
   Default,
   equals,
-  type FabricBytes,
   handler,
   hasError,
   ifElse,
@@ -15,7 +14,7 @@ import {
   wish,
   Writable,
 } from "commonfabric";
-import { profileLook } from "../../system/profile-look/profile-look.ts";
+import { profileFace } from "../../system/profile-face/profile-face.ts";
 import GroupChatRoom, {
   Message,
   ParticipantProfileCell,
@@ -71,9 +70,9 @@ const resetLobby = handler<
   );
 });
 
-// Handler for joining the chat. `name`/`picture`/`avatar` arrive as plain
-// values resolved from the viewer's shared profile (named `computed` values
-// auto-unwrap as handler state); `profile` is the live profile cell — the
+// Handler for joining the chat. `name` arrives as a plain value resolved from
+// the viewer's shared profile (named `computed` values auto-unwrap as handler
+// state); `profile` is the live profile cell, which the face is read from — the
 // STABLE identity key. Display names are mutable and not unique across users
 // (two profiles can both be "Alex"), so re-join detection compares profile
 // cells with `equals()`, never names.
@@ -86,10 +85,8 @@ const joinChat = handler<
     // May be undefined until the viewer's `#profile` wish resolves.
     profile: ParticipantProfileCell | undefined;
     name: string;
-    picture?: FabricBytes;
-    avatar?: string;
   }
->((_event, { messages, users, sessionId, profile, name, picture, avatar }) => {
+>((_event, { messages, users, sessionId, profile, name }) => {
   const trimmed = (name ?? "").trim();
   if (!trimmed || !profile) {
     console.log("[joinChat] No resolved profile yet, returning");
@@ -127,8 +124,9 @@ const joinChat = handler<
     users.push({
       name: displayName,
       joinedAt: Date.now(),
-      // The user is drawn with their picture, or else their avatar text.
-      ...profileLook(picture, avatar),
+      // The user is drawn with their picture, or else their avatar text, as
+      // their profile holds it for its owner.
+      ...profileFace(profile),
       profile,
     });
     console.log("[joinChat] User added:", displayName);
@@ -166,29 +164,17 @@ export default pattern<LobbyInput, LobbyOutput>(
     // Resolve THIS viewer's shared profile. The `#profile` wish's built-in UI
     // covers the whole lifecycle: a create surface when the viewer has no
     // profile, a link when they have one, and a picker (with inline create)
-    // when they have several. The field targets give the snapshot values.
-    const profileWish = wish<{ name?: string; avatar?: string }>({
+    // when they have several. Joining reads the face for the snapshot from it.
+    const profileWish = wish<{ name?: string }>({
       query: "#profile",
     });
     const profileNameWish = wish<string>({ query: "#profileName" });
-    const profilePictureWish = wish<FabricBytes>({ query: "#profilePicture" });
-    const profileAvatarWish = wish<string>({ query: "#profileAvatar" });
 
     const profile = computed(() =>
       hasError(profileWish.result) ? undefined : resultOf(profileWish.result)
     );
     const myName = computed(() =>
       hasError(profileNameWish.result) ? "" : resultOf(profileNameWish.result)
-    );
-    const myPicture = computed(() =>
-      hasError(profilePictureWish.result)
-        ? undefined
-        : resultOf(profilePictureWish.result)
-    );
-    const myAvatar = computed(() =>
-      hasError(profileAvatarWish.result)
-        ? undefined
-        : resultOf(profileAvatarWish.result)
     );
     const hasProfile = computed(() => myName.trim() !== "");
     const joinLabel = computed(() =>
@@ -203,8 +189,6 @@ export default pattern<LobbyInput, LobbyOutput>(
       sessionId,
       profile,
       name: myName,
-      picture: myPicture,
-      avatar: myAvatar,
     });
 
     return {

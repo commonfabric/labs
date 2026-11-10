@@ -141,7 +141,9 @@ revoked space once more, and the status reads "Retrying…" until the answer
 comes; an
 admission restores the content. Content of a deleted space is replaced by a
 placeholder reading "Deleted", marked `data-space-deleted`, with no Retry
-button.
+button. A page opened on a deleted space has no content to replace, and the
+shell says instead that the space was deleted
+([`space-access.md`](space-access.md#a-deleted-space)).
 
 A `cf-render` or `cf-picker` bound to content of a revoked space shows the same
 placeholder as revoked content shown directly, while its binding is withheld,
@@ -254,6 +256,13 @@ Two properties follow from terminating rather than looping:
   challenge race, a transport blip — can heal on a fresh connection when the
   transport supports reset. Classification as retriable does not supply that
   transport capability.
+
+  A serving host also reports admitted ACL changes to already-open providers.
+  When that notice and an authorization termination have both arrived, the
+  provider opens through server admission and restores its retained watches,
+  including watches that previously confirmed a document absent. The input
+  barrier includes that restoration. A refused reopen retains its failed
+  loads for a later ACL notice; it starts no retry loop.
 - **A wedged-but-reachable backend still waits.** With no wall-clock guard, a
   backend that completes the handshake but then never answers the authenticated
   sync (and never closes the transport) leaves `synced()` waiting with no event

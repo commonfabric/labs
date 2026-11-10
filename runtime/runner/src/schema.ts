@@ -33,7 +33,8 @@ import { schemaForSpaceCrossing, toMemorySpaceAddress } from "./link-utils.ts";
 import { opaqueReference, toCell } from "./back-to-cell.ts";
 import { literalMemberMatches } from "./schema-literal-match.ts";
 import type { JSONSchema, SchemaScope } from "./builder/types.ts";
-import { createCell, isCell } from "./cell.ts";
+import { createCell, isCell, isStream } from "./cell.ts";
+import { isWithdrawnVerb } from "./withdrawn-verb.ts";
 import {
   ContextualFlowControl,
   resolveExternalRootRefForStructure,
@@ -2174,6 +2175,13 @@ class TransformObjectCreator
       this.#synced,
       this.#labelViewFor(link),
     ) as AnyCellWrapping<FabricValue>;
+  }
+
+  isWithdrawnVerb(
+    slot: NormalizedFullLink,
+    value: AnyCellWrapping<FabricValue>,
+  ): boolean {
+    return isStream(value) && isWithdrawnVerb(this.#runtime, this.#tx, slot);
   }
 
   /**

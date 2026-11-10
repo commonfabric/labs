@@ -153,7 +153,7 @@ function formatSize(bytes: number): string {
 
 export default pattern<FileShareInput, FileShareOutput>(
   ({ files, viewer }) => {
-    const profileWish = wish<UploaderProfileCell>({
+    const profileWish = wish<Cell<{ name?: string }>>({
       query: "#profile",
     });
 

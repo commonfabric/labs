@@ -12,6 +12,7 @@ import {
   lift,
   NAME,
   pattern,
+  profileOwnerOf,
   RepresentsCurrentUser,
   RequiresIntegrity,
   SELF,
@@ -21,6 +22,7 @@ import {
   wish,
   Writable,
   WriteAuthorizedBy,
+  writtenPrincipalOf,
 } from "commonfabric";
 
 export const TRUSTED_PROFILE_HOME_SURFACE = "ProfileHome";
@@ -305,8 +307,8 @@ export type ProfileHomeOutput = {
   // The profile picture: the bytes of a raster image in any format an `<img>`
   // decodes, the format being sniffed from the bytes. Absent until someone
   // sets one. The picture's own label names the principal who set it, so a
-  // reader showing it as the owner's face reads that label (`principalOf` on
-  // the field), not the profile's label at `picture`.
+  // reader showing it as the owner's face reads it through `writtenPrincipalOf()`,
+  // which reads that label, not the profile's label at `picture`.
   picture?: OwnerProtectedProfileWrite<FabricBytes, typeof setPicture>;
   // A short, human-authored free-text description of the profile owner
   // (CT-1648). Owner-protected like name/avatar; the canonical shared-profile
@@ -1011,6 +1013,30 @@ const toggleProfileEditing = handler<void, { editing: Writable<boolean> }>(
   },
 );
 
+// The face the edit form shows: the picture, or else the avatar text, only as
+// the owner set them, by the rule `profileFace()` in
+// `../profile-face/profile-face.ts` states for every pattern.
+const faceOf = lift<
+  { profile: Cell<ProfileHomeOutput> },
+  { picture?: FabricBytes; avatar?: string }
+>(({ profile }) => {
+  const owner = profileOwnerOf(profile);
+  if (owner === undefined) return {};
+  const picture = profile.key("picture");
+  const bytes = picture.get();
+  if (
+    bytes !== undefined && bytes.length > 0 &&
+    writtenPrincipalOf(picture) === owner
+  ) {
+    return { picture: bytes };
+  }
+  const avatar = profile.key("avatar");
+  const text = (avatar.get() ?? "").trim();
+  return text !== "" && writtenPrincipalOf(avatar) === owner
+    ? { avatar: text }
+    : {};
+});
+
 const applyInitialName = lift<
   { initialName?: string; name: Writable<string> },
   string
@@ -1105,6 +1131,7 @@ export default pattern<ProfileHomeInput, ProfileHomeOutput>(
       ) === true;
       return editing.get() === true && owner;
     });
+    const face = faceOf({ profile: self });
     // Whether a non-empty bio has been authored — drives the presentation-mode
     // bio block (CT-1648).
     const hasBio = computed(() => (bio.get() ?? "").trim().length > 0);
@@ -1330,8 +1357,8 @@ export default pattern<ProfileHomeInput, ProfileHomeOutput>(
                 <cf-vstack gap="2">
                   <label>Picture</label>
                   <cf-avatar
-                    bytes={picture}
-                    src={avatar}
+                    bytes={face.picture}
+                    src={face.avatar ?? ""}
                     name={name}
                     size="xl"
                   />

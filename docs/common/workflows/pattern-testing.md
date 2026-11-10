@@ -159,9 +159,12 @@ return {
 };
 ```
 
-Each step is either `{ action: Stream<void> }` or `{ assertion }`, where the
+Each step is most often `{ action: Stream<void> }` or `{ assertion }`, where the
 assertion is the record `assert()` produces — see
-[Write assertions with `assert()`](#write-assertions-with-assert) below.
+[Write assertions with `assert()`](#write-assertions-with-assert) below. A
+`{ press, control, within? }` step clicks a control the view renders, as
+[Firing a handler the pattern does not export](#firing-a-handler-the-pattern-does-not-export)
+describes, and `docs/specs/PATTERN_TESTING_SPEC.md` lists every kind of step.
 
 ## Walking the Rendered Tree
 
@@ -227,7 +230,37 @@ const action_setup_game = action(() => {
 ### Firing a handler the pattern does not export
 
 A handler bound only in JSX can still be fired, so a pattern that keeps its
-behavior behind a button does not have to change to be tested. The prop carries
+behavior behind a button does not have to change to be tested.
+
+The way that holds wherever the test's actions run is a press step, which
+clicks the control in the rendered view as a person does:
+
+```tsx
+// Shown for illustration only.
+// `room` is the pattern under test, and `listed` reads its attachment rows.
+return {
+  [TESTS]: [
+    // The "Remove" in the row that shows "slow.txt".
+    { press: room[UI], control: "Remove", within: "slow.txt" },
+    { assertion: assert(() => listed(room[UI]).length === 0) },
+  ],
+};
+```
+
+The runner renders the view as a browser does, finds the one element whose text
+is `control`, and clicks it, so the handler bound there receives the click with
+the provenance the control's rendered markers give it; a reviewed control needs
+no `trustedUi`. `within` picks one row out of several that show the same
+control. `patterns/system/fabrichat/composer-attach.test.tsx` removes an
+attachment this way.
+
+Prefer it to walking the tree in an `action`, below, when the control is bound
+per row or per session. With server execution on, an `action` runs on the
+serving loop, whose rendering of the view lacks what only the test's session
+shows, such as the rows of that session's own draft, so the walk there finds no
+control. A press finds the control in the test's own rendering.
+
+The tree walk reads the control's stream in an `action` and sends to it. The prop carries
 a stream whether the handler was written inline or bound from module scope. Walk
 the rendered tree to the node, read the prop, and send it an event:
 

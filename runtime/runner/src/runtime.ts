@@ -112,7 +112,10 @@ import {
 import { isRendererTrustedEvent } from "./cfc/ui-contract.ts";
 import { collectConsumedLabel, deriveFlowJoin } from "./cfc/prepare.ts";
 import { createRef, EntityId } from "./create-ref.ts";
-import { memoryHostForForeignOrigin } from "./deployment-meta.ts";
+import {
+  DEPLOYMENT_RESPONSE_BOUND_MS,
+  memoryHostForForeignOrigin,
+} from "./deployment-meta.ts";
 import { DerivedInternalCellIds } from "./derived-internal-cell-ids.ts";
 import {
   type DelegatedCarriage,
@@ -1485,8 +1488,14 @@ export type CommitRetryPullFailure = {
 export class Runtime {
   #tearingDownWrites = false;
 
-  /** The release pass waiting for the scheduler to go idle, if any. */
+  /**
+   * The release pass not yet under way, if any: waiting for the one under
+   * way to finish, or for the scheduler to go idle.
+   */
   #documentRelease: Promise<void> | undefined;
+
+  /** The release pass under way, if any, settled whether or not it failed. */
+  #documentReleaseRunning: Promise<void> | undefined;
 
   /** Undoes what `#installDocumentRelease()` registered. */
   readonly #documentReleaseCancels: Cancel[] = [];
@@ -2537,6 +2546,11 @@ export class Runtime {
     tracked.finally(() => this.#pendingAsyncWork.delete(tracked));
   }
 
+  /** Whether an operation `trackAsyncWork()` was given is still in flight. */
+  get hasAsyncWorkPending(): boolean {
+    return this.#pendingAsyncWork.size > 0;
+  }
+
   /**
    * Wait until the runtime is fully settled: the scheduler is idle, storage is
    * synced, AND every in-flight async builtin operation (`trackAsyncWork`) has
@@ -3464,18 +3478,43 @@ export class Runtime {
    * (`IStorageManager.releaseUnreadDocuments()`), and resolves when that
    * pass has run. Stopping a piece asks for one. A host asks for one when
    * something that read documents through this runtime has gone, such as a
-   * client whose subscriptions it cancelled. Calls made while a pass waits
-   * for the scheduler share it.
+   * client whose subscriptions it cancelled. Calls made before a pass begins
+   * share it. A call made while a pass is under way is answered by the next
+   * one, which waits for that one to finish and then for the scheduler. So at
+   * most one pass waits at a time, however many calls are made.
+   *
+   * A pass keeps a document loaded or read since the previous pass began, so
+   * that a read still under way finishes with it. Where it kept one for that
+   * reason alone, a second pass runs once the scheduler is next idle, and the
+   * call resolves when that has run too: the documents a stopped piece read
+   * are released by the pass after the one its stop asked for, which nothing
+   * else may ever ask for. The second pass asks for no third.
    */
   releaseUnreadDocuments(): Promise<void> {
     this.#documentRelease ??= (async () => {
       try {
+        // The pass under way may have begun before what this call is about
+        // let go of its documents, so it cannot answer the call.
+        await this.#documentReleaseRunning;
         await this.scheduler.idle();
       } finally {
         // A request made from here on asks for a pass of its own.
         this.#documentRelease = undefined;
       }
-      await this.storageManager.releaseUnreadDocuments?.();
+      const running = (async () => {
+        const deferred = await this.storageManager.releaseUnreadDocuments?.();
+        if (deferred !== true) return;
+        await this.scheduler.idle();
+        await this.storageManager.releaseUnreadDocuments?.();
+      })();
+      const settled = running.catch(() => {});
+      this.#documentReleaseRunning = settled;
+      settled.then(() => {
+        if (this.#documentReleaseRunning === settled) {
+          this.#documentReleaseRunning = undefined;
+        }
+      });
+      await running;
     })().catch((error) => {
       documentReleaseLogger.warn("release-failed", () => [
         "releasing the documents nothing reads failed:",
@@ -5169,15 +5208,21 @@ export class Runtime {
     const provider = this.storageManager.open(space);
     const aclUri = aclDocId(space) as URI;
     const spaceCell = this.getSpaceCell(space);
+    const spaceId = spaceCell.getAsNormalizedFullLink().id;
     const loads = await Promise.all([
       provider.sync(aclUri),
-      provider.sync(spaceCell.getAsNormalizedFullLink().id),
+      provider.sync(spaceId),
     ]);
     const denied = this.storageManager.spaceAccessError?.(space) ??
       this.storageManager.authorizationError?.(space);
     if (denied !== undefined) return true;
     for (const { error } of loads) {
       if (error !== undefined) throw error;
+    }
+    // Neither reads as absent while a quarantine holds it back.
+    for (const id of [aclUri, spaceId]) {
+      const failure = await provider.replica.quarantineFailure?.(id);
+      if (failure !== undefined) throw failure;
     }
     const tx = this.edit();
     try {
@@ -5371,6 +5416,24 @@ export class Runtime {
     } finally {
       this.#inSpaceResolutions.delete(creationKey);
     }
+  }
+
+  /**
+   * Returns the space that `space`'s allocation record names for the
+   * `PatternFactory.inSpace(name)` target `name`, once the record has loaded,
+   * or `undefined` when `space` records none, as before any run asked for
+   * that name. Reads only: unlike {@link resolveInSpaceName}, it creates no
+   * space and writes no record, so a caller can ask which space a name
+   * stands for without bringing it into being.
+   */
+  async recordedInSpaceName(
+    space: MemorySpace,
+    name: string,
+  ): Promise<MemorySpace | undefined> {
+    const record = this.#inSpaceAllocationCell(space, name);
+    await record.sync();
+    const recorded = record.get()?.did;
+    return isDID(recorded) ? recorded : undefined;
   }
 
   #inSpaceAllocationCell(
@@ -5783,7 +5846,9 @@ export class Runtime {
   /**
    * True iff the default host AND every distinct mapped host are
    * reachable — one runtime can span hosts, so health is the
-   * conjunction over all of them. The optional signal cancels the requests.
+   * conjunction over all of them. A host with no response within
+   * {@link DEPLOYMENT_RESPONSE_BOUND_MS} counts as unreachable. The optional
+   * signal cancels the requests.
    */
   async healthCheck(signal?: AbortSignal): Promise<boolean> {
     // Overlapping calls each capture into their own generation; only the
@@ -5805,9 +5870,19 @@ export class Runtime {
         return false; // a malformed mapped host is unhealthy by definition
       }
     }
+    const deadline = new AbortController();
+    const timer = setTimeout(
+      () => deadline.abort(new DOMException("timed out", "TimeoutError")),
+      DEPLOYMENT_RESPONSE_BOUND_MS,
+    );
+    const requestSignal = signal === undefined
+      ? deadline.signal
+      : AbortSignal.any([signal, deadline.signal]);
     const checks = [...hosts].map(async (host) => {
       try {
-        const res = await fetch(new URL("/_health", host), { signal });
+        const res = await fetch(new URL("/_health", host), {
+          signal: requestSignal,
+        });
         if (
           host === defaultHost && generation === this.#healthCheckGeneration
         ) {
@@ -5820,6 +5895,10 @@ export class Runtime {
         return false;
       }
     });
-    return (await Promise.all(checks)).every(Boolean);
+    try {
+      return (await Promise.all(checks)).every(Boolean);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 }

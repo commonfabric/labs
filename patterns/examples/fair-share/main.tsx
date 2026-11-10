@@ -38,7 +38,11 @@ import {
   wish,
   Writable,
 } from "commonfabric";
-import { profileLook } from "../../system/profile-look/profile-look.ts";
+import {
+  type ProfileFace,
+  profileFace,
+  type ProfileFaceFields,
+} from "../../system/profile-face/profile-face.ts";
 
 // ============ TYPES ============
 
@@ -131,7 +135,7 @@ const computeSettlements = (balances: Balance[]): Settlement[] => {
 };
 
 // Snapshot the current viewer's shared profile (name + picture, or avatar text
-// when it has no picture) into the shared
+// when it has no picture, as `profileFace()` reads its face) into the shared
 // `people` ledger and select them as "you". This is the participant/roster
 // idiom: each viewer contributes their own #profile snapshot on join, rather
 // than the app querying everyone's private profile state (see
@@ -143,13 +147,12 @@ export const joinWithProfile = handler<
     people: Writable<Person[]>;
     myName: Writable<string>;
     name: string;
-    picture?: FabricBytes;
-    avatar?: string;
+    face?: ProfileFace;
   }
->((_event, { people, myName, name, picture, avatar }) => {
+>((_event, { people, myName, name, face }) => {
   const n = (name ?? "").trim();
   if (!n) return;
-  const look = profileLook(picture, avatar);
+  const look = face ?? {};
   const cur = people.get();
   const idx = cur.findIndex((p) => p.name === n);
   if (idx < 0) {
@@ -181,15 +184,13 @@ export default pattern<State>(({ people, expenses, myName }) => {
   const me = (myName ?? "").trim();
 
   // The current viewer's *shared profile* (resolved via wish). `#profile` is the
-  // live cell bound to <cf-profile-badge>; the field targets give the name/picture
-  // we snapshot into the ledger on "join". Profile-count-agnostic: resolves the
-  // viewer's default profile.
-  const profileWish = wish<{ name?: string; avatar?: string }>({
+  // live cell bound to <cf-profile-badge>, and the face we snapshot into the
+  // ledger on "join" is read from it; `#profileName` gives the name.
+  // Profile-count-agnostic: resolves the viewer's default profile.
+  const profileWish = wish<Writable<{ name?: string } & ProfileFaceFields>>({
     query: "#profile",
   });
   const profileNameWish = wish<string>({ query: "#profileName" });
-  const profilePictureWish = wish<FabricBytes>({ query: "#profilePicture" });
-  const profileAvatarWish = wish<string>({ query: "#profileAvatar" });
   const profile = hasError(profileWish.result) ||
       isPending(profileWish.result) ||
       isSyncing(profileWish.result) ||
@@ -202,20 +203,9 @@ export default pattern<State>(({ people, expenses, myName }) => {
       hasSchemaMismatch(profileNameWish.result)
     ? ""
     : resultOf(profileNameWish.result);
-  const profileAvatar = hasError(profileAvatarWish.result) ||
-      isPending(profileAvatarWish.result) ||
-      isSyncing(profileAvatarWish.result) ||
-      hasSchemaMismatch(profileAvatarWish.result)
-    ? ""
-    : resultOf(profileAvatarWish.result);
   const myProfileName = computed(() => profileName.trim());
-  const myProfileAvatar = computed(() => profileAvatar.trim());
+  const myProfileFace = computed(() => profileFace(profile));
   const hasProfile = computed(() => profileName.trim() !== "");
-  const myProfilePicture = computed(() =>
-    hasError(profilePictureWish.result)
-      ? undefined
-      : resultOf(profilePictureWish.result)
-  );
 
   // --- Derived data ---
   const peopleOptions = computed(() =>
@@ -257,7 +247,7 @@ export default pattern<State>(({ people, expenses, myName }) => {
       const share = (shareCents.get(p.name) ?? 0) / 100;
       return {
         name: p.name,
-        picture: p.picture,
+        ...(p.picture !== undefined && { picture: p.picture }),
         avatar: p.avatar ?? "",
         paid,
         share,
@@ -311,8 +301,7 @@ export default pattern<State>(({ people, expenses, myName }) => {
                   people,
                   myName,
                   name: myProfileName,
-                  picture: myProfilePicture,
-                  avatar: myProfileAvatar,
+                  face: myProfileFace,
                 })}
               >
                 Join with your profile

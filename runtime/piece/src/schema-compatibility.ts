@@ -88,6 +88,28 @@ interface CompatibilityContext {
   verbEvent?: boolean;
 
   /**
+   * The result property names that lead to the object being proved, from the
+   * result's root, each one the name a named-property comparison descended
+   * by. A path through anything else (a list's items, a record's values, a
+   * union's branch) leaves the names behind, and `verbRemovable` sees the
+   * readable path disagree with them.
+   */
+  resultPropertyNames?: readonly string[];
+
+  /**
+   * Whether the verbs the result field `names` reaches may go with it,
+   * judged from what the previous pattern binds there (`verbRemovalJudge`).
+   * `path` is the proof's readable path to the field, `schema` the field's
+   * previous contract under `root`. Unset, no verb may be removed.
+   */
+  verbRemovable?: (
+    names: readonly string[],
+    path: string,
+    schema: JSONSchema,
+    root: JSONSchema,
+  ) => boolean;
+
+  /**
    * Whether the proof goes on past the first issue it finds, to report every
    * one, as {@link schemaSubsetIssues} describes. Unset, it stops at the first.
    */
@@ -173,8 +195,11 @@ const DESCRIPTIVE_ANNOTATION_KEYS: ReadonlySet<string> = new Set([
  * treats as a constraint. `$comment` is not one: the runner reads a few
  * reserved values as traversal markers, as
  * {@link sourceAlternativeAcceptedBy} describes.
+ *
+ * Exported so that another reader comparing schemas classifies keywords by
+ * this list rather than by a copy of it.
  */
-const isInertAnnotationKey = (key: string): boolean =>
+export const isInertAnnotationKey = (key: string): boolean =>
   key !== "$comment" && DESCRIPTIVE_ANNOTATION_KEYS.has(key);
 
 /**
@@ -266,12 +291,17 @@ const SUBSCHEMA_LIST_KEYS: ReadonlySet<string> = new Set<string>(
   ARRAY_SUBSCHEMA_KEYS,
 );
 
+/** The keywords that hold a table of schemas only a `$ref` reaches. */
+const REFERENCE_TABLE_KEYS: ReadonlySet<string> = new Set<string>([
+  ...DEFS_KEYS,
+  "definitions",
+]);
+
 /** The keywords whose value is a record of nested schemas. */
 const SUBSCHEMA_MAP_KEYS: ReadonlySet<string> = new Set<string>([
   ...RECORD_SUBSCHEMA_KEYS,
   ...UNUSED_RECORD_SUBSCHEMA_KEYS,
-  ...DEFS_KEYS,
-  "definitions",
+  ...REFERENCE_TABLE_KEYS,
 ]);
 
 /** Whether a keyword leads to a nested schema, in any of the three shapes. */
@@ -784,6 +814,8 @@ export function patternSchemaIncompatibilities(
       sourceRoot: candidate.resultSchema,
       targetRoot: previousResultSchema,
       role: "result",
+      resultPropertyNames: [],
+      verbRemovable: verbRemovalJudge(previous),
       activePairs: new WeakMap(),
       sourceUnionSplitDepth: 0,
       allowEvolutionPolicy: true,
@@ -1300,20 +1332,101 @@ function objectSubsetIssues(
     ? source.patternProperties
     : target.patternProperties;
 
-  // A result's named fields are the contract consumers read, so evolution
-  // preserves every one of them even when the candidate object is otherwise
-  // open. An argument's are not: dropping one gives up a demand, which leaves a
-  // writer's value unread rather than breaking a reader. What the stored
-  // argument still needs — that the candidate can hold the value the piece
-  // already carries — the named-property proof below decides per field,
-  // accepting it under an open candidate and reporting it under a closed one. A
-  // durable-link subset proof reaches that same proof from the other side: a
-  // source may name additional fields that an open target accepts through
-  // patternProperties/additionalProperties, and treating those as "removed"
-  // rejects valid Fabric projections such as $FS.
+  // A result's required fields are a guarantee its readers were given, so
+  // evolution keeps every one of them. An optional field promised nothing of
+  // the kind: every reader of it already handles its absence, and a durable
+  // link to it was proved with that absence admitted, so the candidate may
+  // stop publishing it. Its old value is then outside the proof altogether,
+  // which is why a later update can name the field again with any shape the
+  // object's `patternProperties` and `additionalProperties` then admit — an
+  // open object admits any, a closed one none.
+  //
+  // Four things narrow that allowance. It is evolution policy, so it holds
+  // only at a whole contract boundary: inside a conjunct proof, a field one
+  // fragment does not name may be one another fragment does, and a
+  // whole-object constraint such as `dependentRequired` can name it too.
+  // A candidate that still constrains the name, through a matching pattern
+  // or a typed index signature, still publishes a value there, which must
+  // hold to every contract the previous object gave the name. An optional
+  // verb, and a field holding one at any depth, may go where the previous
+  // pattern bound each verb to a handler's stream: a holder's object read then
+  // reads the verb as absent (`runtime/runner/src/withdrawn-verb.ts`). One the
+  // previous pattern bound any other way is refused, a builtin's key or a verb
+  // forwarded through another node, since what it stands for may record no
+  // owner a read could consult (`verbRemovalJudge`), and so is any verb
+  // removal where the previous pattern carries no binding to judge by, as a
+  // recorded baseline does not. And a verb's event refuses it outright: a caller still sends a field the event
+  // stops declaring, and an event strips undeclared fields before any handler
+  // runs, so the caller's value would be dropped without a refusal.
+  //
+  // An argument's named fields are not held either way: dropping one gives up
+  // a demand, which leaves a writer's value unread rather than breaking a
+  // reader. What the stored argument still needs — that the candidate can hold
+  // the value the piece already carries — the named-property proof below
+  // decides per field, accepting it under an open candidate and reporting it
+  // under a closed one. A durable-link subset proof reaches that same proof
+  // from the other side: a source may name additional fields that an open
+  // target accepts through patternProperties/additionalProperties, and treating
+  // those as "removed" rejects valid Fabric projections such as $FS.
+  const allowEvolutionPolicy = context.allowEvolutionPolicy &&
+    !hasComplexSameInstanceConstraints(source) &&
+    !hasComplexSameInstanceConstraints(target);
+  const removed = new Set<string>();
   if (context.defaultComparison === "evolution" && context.role === "result") {
+    const previousRequired = new Set(target.required ?? []);
     for (const property of Object.keys(previousProperties)) {
       if (Object.hasOwn(candidateProperties, property)) continue;
+      if (
+        allowEvolutionPolicy && !context.verbEvent &&
+        !previousRequired.has(property) &&
+        (!publishesVerb(targetProperties[property], context.targetRoot) ||
+          (context.resultPropertyNames !== undefined &&
+            context.verbRemovable?.(
+                [...context.resultPropertyNames, property],
+                `${path}.${property}`,
+                targetProperties[property],
+                context.targetRoot,
+              ) === true))
+      ) {
+        removed.add(property);
+        const candidatePatterns = matchingPatternPropertySchemas(
+          source.patternProperties,
+          property,
+        );
+        const published = (candidatePatterns.length > 0
+          ? candidatePatterns
+          : [additionalPropertiesOf(source)]).filter((contract) =>
+            typeof contract !== "boolean"
+          );
+        const previousContracts = [
+          targetProperties[property],
+          ...matchingPatternPropertySchemas(target.patternProperties, property),
+        ];
+        for (const candidateContract of published) {
+          for (const previousContract of previousContracts) {
+            if (
+              report(
+                property,
+                schemaSubsetIssues(
+                  candidateContract,
+                  previousContract,
+                  `${path}.${property}`,
+                  { ...context, allowEvolutionPolicy: false },
+                ),
+              )
+            ) {
+              return issues;
+            }
+            if (failed.has(property)) {
+              break;
+            }
+          }
+          if (failed.has(property)) {
+            break;
+          }
+        }
+        continue;
+      }
       if (
         report(property, [
           issueAt(`${path}.${property}`, `existing result field was removed`),
@@ -1324,9 +1437,6 @@ function objectSubsetIssues(
 
   const sourceRequired = new Set(source.required ?? []);
   const targetRequired = new Set(target.required ?? []);
-  const allowEvolutionPolicy = context.allowEvolutionPolicy &&
-    !hasComplexSameInstanceConstraints(source) &&
-    !hasComplexSameInstanceConstraints(target);
   const allowEvolutionDefaults = allowEvolutionPolicy &&
     context.allowEvolutionDefaults;
   if (context.role === "argument") {
@@ -1518,7 +1628,7 @@ function objectSubsetIssues(
   }
 
   for (const property of Object.keys(previousProperties)) {
-    if (failed.has(property)) continue;
+    if (failed.has(property) || removed.has(property)) continue;
     const propertyPath = `${path}.${property}`;
     const sourceDirect = sourceProperties[property];
     const sourceContracts = [
@@ -1535,7 +1645,10 @@ function objectSubsetIssues(
         sourceDirect,
         targetProperties[property],
         propertyPath,
-        context,
+        context.resultPropertyNames === undefined ? context : {
+          ...context,
+          resultPropertyNames: [...context.resultPropertyNames, property],
+        },
       );
       if (
         directIssues.length > 0 &&
@@ -1715,6 +1828,152 @@ function matchingPatternPropertySchemas(
     if (pattern.test(property)) matches.push(schema);
   }
   return matches;
+}
+
+/**
+ * Whether `schema`, a field's contract under `root`, publishes a verb anywhere
+ * in what it holds: a stream marker on its own node, on a node nested below it,
+ * or on what a reference along the way names. A field that only holds a verb,
+ * as `ui` holds `ui.tick`, takes that verb with it when it goes.
+ *
+ * Reference tables are not searched as such, since a definition no reference
+ * reaches publishes nothing; each reference is followed instead, once.
+ */
+function publishesVerb(schema: JSONSchema, root: JSONSchema): boolean {
+  const seen = new Set<object>();
+  const visit = (node: unknown, nodeRoot: JSONSchema): boolean => {
+    if (!isObjectNotArray(node) || seen.has(node)) return false;
+    seen.add(node);
+    if (declaresVerbStream(node as JSONSchema)) return true;
+    if (typeof (node as SchemaObject).$ref === "string") {
+      const resolved = resolveSchema(node as JSONSchema, nodeRoot);
+      if (
+        resolved.schema !== undefined && visit(resolved.schema, resolved.root)
+      ) return true;
+    }
+    return subschemaChildren(node, REFERENCE_TABLE_KEYS).some((child) =>
+      visit(child, nodeRoot)
+    );
+  };
+  return visit(schema, root);
+}
+
+/**
+ * Judges, from the bindings in `previous`'s graph, whether the verbs a result
+ * field holds may be removed with it. A holder reads a removed verb as absent
+ * when the verb listened at the root of its own stream's document, which is
+ * where a pattern's handler listens. So each place the field's previous
+ * contract declares a verb has to be bound straight to one of the pattern's
+ * own handler streams: an alias, at no path, to the cell a handler node of the
+ * graph takes as its `$event`, and that no node produces as an output. A
+ * stream marker on a cell says what its value is, not that a handler listens
+ * there: a computation returning a builtin's verb is minted a stream-marked
+ * cell of its own. A verb forwarded through anything else, a builtin, a
+ * computation, a sub-pattern or an input, may stand for a builtin's key, which
+ * records no owner a read could consult, and keeps the field. So
+ * does a verb below a binding the walk cannot see into, and a field whose
+ * names disagree with the readable path, as they do past a list or a record.
+ * Data the field holds beside its verbs is not judged.
+ */
+function verbRemovalJudge(previous: Pattern): (
+  names: readonly string[],
+  path: string,
+  schema: JSONSchema,
+  root: JSONSchema,
+) => boolean {
+  const handlerEvents: unknown[] = [];
+  const produced: unknown[] = [];
+  for (const node of previous.nodes ?? []) {
+    for (const alias of aliasesIn(node.outputs)) {
+      produced.push(alias.partialCause);
+    }
+    if (node.module?.wrapper !== "handler") continue;
+    const event = aliasOf(
+      isObjectNotArray(node.inputs)
+        ? (node.inputs as Record<string, unknown>).$event
+        : undefined,
+    );
+    if (
+      event !== undefined && event.cell === undefined && event.path.length === 0
+    ) handlerEvents.push(event.partialCause);
+  }
+  const names = (causes: unknown[], cause: unknown): boolean =>
+    causes.some((each) => fabricAwareEqual(each as never, cause as never));
+  const isHandlerStream = (binding: unknown): boolean => {
+    const alias = aliasOf(binding);
+    return alias !== undefined && alias.cell === undefined &&
+      alias.path.length === 0 &&
+      names(handlerEvents, alias.partialCause) &&
+      !names(produced, alias.partialCause);
+  };
+  const verbsBound = (
+    schema: JSONSchema,
+    root: JSONSchema,
+    binding: unknown,
+  ): boolean => {
+    if (!publishesVerb(schema, root)) return true;
+    const { schema: node, root: nodeRoot } = resolveSchema(schema, root);
+    if (!isObjectNotArray(node)) return false;
+    if (declaresVerbStream(node)) return isHandlerStream(binding);
+    if (aliasOf(binding) !== undefined || !isObjectNotArray(binding)) {
+      return false;
+    }
+    const properties = isObjectNotArray((node as SchemaObject).properties)
+      ? (node as SchemaObject).properties as Record<string, JSONSchema>
+      : {};
+    const named = new Set<unknown>(Object.values(properties));
+    const elsewhere = subschemaChildren(node, REFERENCE_TABLE_KEYS).some(
+      (child) =>
+        !named.has(child) && publishesVerb(child as JSONSchema, nodeRoot),
+    );
+    if (elsewhere) return false;
+    return Object.entries(properties).every(([name, property]) =>
+      verbsBound(
+        property,
+        nodeRoot,
+        Object.hasOwn(binding, name)
+          ? (binding as Record<string, unknown>)[name]
+          : undefined,
+      )
+    );
+  };
+  return (names, path, schema, root) => {
+    if (["result", ...names].join(".") !== path) return false;
+    let binding: unknown = previous.result;
+    for (const name of names) {
+      if (aliasOf(binding) !== undefined || !isObjectNotArray(binding)) {
+        return false;
+      }
+      if (!Object.hasOwn(binding, name)) return false;
+      binding = (binding as Record<string, unknown>)[name];
+    }
+    return verbsBound(schema, root, binding);
+  };
+}
+
+/** The target of a graph's `$alias` binding, which names a cell. */
+interface AliasTarget {
+  readonly path: readonly unknown[];
+  readonly partialCause?: unknown;
+  readonly cell?: unknown;
+}
+
+/** Every alias in a graph binding, not looking past one into its target. */
+function aliasesIn(value: unknown): AliasTarget[] {
+  const alias = aliasOf(value);
+  if (alias !== undefined) return [alias];
+  if (Array.isArray(value)) return value.flatMap(aliasesIn);
+  if (isObjectNotArray(value)) return Object.values(value).flatMap(aliasesIn);
+  return [];
+}
+
+function aliasOf(value: unknown): AliasTarget | undefined {
+  if (!isObjectNotArray(value)) return undefined;
+  const target = (value as { $alias?: unknown }).$alias;
+  return isObjectNotArray(target) &&
+      Array.isArray((target as { path?: unknown }).path)
+    ? target as unknown as AliasTarget
+    : undefined;
 }
 
 function declaresVerbStream(schema: JSONSchema): boolean {
@@ -2556,8 +2815,7 @@ export const DEFAULT_INERT_SUBSCHEMA_KEYS: ReadonlySet<string> = new Set([
   // Hold definitions nothing reads directly. A definition a value takes is
   // reached through the `$ref` that names it, and `resolveSchema` follows every
   // `$ref` this walk passes.
-  ...DEFS_KEYS,
-  "definitions",
+  ...REFERENCE_TABLE_KEYS,
   // Apply to the value once their condition holds.
   "if",
   "then",

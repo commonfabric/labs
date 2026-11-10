@@ -4,14 +4,17 @@ import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 import { hashStringOf } from "@commonfabric/data-model";
+import { uniqueCfcAtoms } from "@commonfabric/memory/v2/cfc-clause-identity";
+import {
+  type CfcConfClause,
+  clauseAlternatives,
+  commitmentAwareEquals,
+} from "@commonfabric/memory/v2/cfc-release-authority";
 import {
   cfcLabelPathPrefixMatches,
   type CfcLabelView,
 } from "./label-view-core.ts";
-import {
-  cfcCommitmentNormalForm,
-  commitmentAwareEquals,
-} from "./label-representation.ts";
+import { cfcCommitmentNormalForm } from "./label-representation.ts";
 import {
   atomEntails,
   type AtomPattern,
@@ -19,13 +22,7 @@ import {
   matchAtomPattern,
 } from "./atom-pattern.ts";
 import type { TrustResolver } from "./trust.ts";
-import { uniqueCfcAtoms } from "./atoms.ts";
-import {
-  type CfcConfClause,
-  clauseAlternatives,
-  clauseSubsumes,
-  normalizeClause,
-} from "./clause.ts";
+import { clauseSubsumes, normalizeClause } from "./clause.ts";
 
 export type CfcObservedConfidentiality = readonly CfcConfClause[];
 export type CfcObservationMaxConfidentiality =
@@ -67,9 +64,12 @@ export interface CfcObservationResult<T = unknown> {
   observedConfidentiality: CfcObservedConfidentiality;
 }
 
-// Re-exported so existing importers of `observation.ts` keep working; the
-// definitions live in `atoms.ts`, below `clause.ts`.
-export { compareByCanonicalHash, uniqueCfcAtoms } from "./atoms.ts";
+// Re-exported so importers of `observation.ts` reach them here; the
+// definitions live in the memory package, below the runner.
+export {
+  compareByCanonicalHash,
+  uniqueCfcAtoms,
+} from "@commonfabric/memory/v2/cfc-clause-identity";
 
 export const joinCfcObservedConfidentiality = (
   parts: Iterable<readonly unknown[] | undefined>,

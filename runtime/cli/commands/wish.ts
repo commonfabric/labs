@@ -162,8 +162,6 @@ caches demoting to witness/echo, agents, and scripts.
 PROFILE TARGETS (resolve against the IDENTITY's home space; '--space' optional):
   #profile         The viewer's active profile object (default → MRU → first)
   #profileName     Its live display name
-  #profileAvatar   Its avatar text
-  #profilePicture  Its picture, as image bytes
   #profileBio      Its owner-authored bio
   #profileSpace    Its own space cell
 
@@ -247,7 +245,7 @@ export const wish = new Command()
     "Read a space-relative target (needs an explicit --space).",
   )
   .example(
-    cliText(`cf wish '#profile' -i ./claude.key --select name,avatar`),
+    cliText(`cf wish '#profile' -i ./claude.key --select name,bio`),
     "Project the resolved target to selected fields.",
   )
   .example(

@@ -24,6 +24,7 @@ import type {
   FetchProgramResult,
   FetchState,
   FetchTextFunction,
+  FieldAnchors,
   GenerateObjectFunction,
   GenerateObjectStreamFunction,
   GenerateTextFunction,
@@ -476,6 +477,23 @@ export const navigateTo = createNodeFactory({
   type: "ref",
   implementation: "navigateTo",
 }) as (cell: Reactive<unknown>) => Reactive<boolean>;
+
+/**
+ * anchorsOf(field) — the anchors of the collaborative string field `field`
+ * names, or `undefined` while it has none. See the api-level
+ * `AnchorsOfFunction` docs for semantics.
+ */
+export function anchorsOf(
+  field: FactoryInput<string>,
+): Reactive<FieldAnchors | undefined> {
+  anchorsOfFactory ||= createNodeFactory({
+    type: "ref",
+    implementation: "anchorsOf",
+  });
+  return anchorsOfFactory({ field }) as Reactive<FieldAnchors | undefined>;
+}
+
+let anchorsOfFactory: NodeFactory<{ field: unknown }, any> | undefined;
 
 // inv-12 Stage 2 (spec §4.6.4.1): the bounded label-introspection surface.
 // `target` rides the node input `asCell` so the builtin receives the

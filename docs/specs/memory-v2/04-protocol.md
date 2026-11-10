@@ -562,6 +562,8 @@ interface SessionOpenInvocation {
 }
 
 interface SessionOpenResult {
+  // Baked commit of the serving Toolshed process; diagnostic only.
+  serverBuild?: string;
   sessionId: SessionId;
   sessionToken: string;
   serverSeq: number;
@@ -590,6 +592,14 @@ interface SessionOpenResult {
   };
 }
 ```
+
+`serverBuild` optionally identifies the serving Toolshed process by its baked
+40-character lowercase Git commit. It does not identify the router answering
+`hello` or a separately launched execution worker. A client compares it with its
+loaded bundle for diagnostics and refreshes it on every successful session
+reopen; an absent or malformed marker clears previously recorded provenance.
+Missing or different builds do not refuse admission or imply incompatibility;
+protocol capabilities determine which operations the peers support.
 
 `session.client` is optional, bounded, self-reported runtime provenance. The
 application is 1–64 printable ASCII characters; the SHA is a full lowercase
@@ -1694,6 +1704,14 @@ Semantics:
   the changed document (section 4.6.3)
 - watch mutations are applied in order per session; clients must serialize
   `session.watch.set`, `session.watch.add` and `session.watch.remove`
+- a session's frames reach the wire in the order the server records their
+  documents as delivered: a response to a watch mutation or a resume and a
+  `session/effect` each go out in the step that records them, so a frame that
+  leaves out a `cid:` document because the session holds it never precedes the
+  frame carrying that document. A session's own accepted write is the one
+  document no frame carries, and the marker covering it can follow a frame that
+  leaves it out, so a client resolves such a frame's references through its own
+  pending writes
 
 ### 4.3.7 `session.close` — End One Session
 

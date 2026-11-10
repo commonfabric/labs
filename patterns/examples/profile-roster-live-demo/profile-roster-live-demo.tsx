@@ -114,7 +114,7 @@ const headerLabel = {
 
 export default pattern<ProfileRosterLiveInput, ProfileRosterLiveOutput>(
   ({ roster, viewer }) => {
-    const profileWish = wish<{ name?: string; avatar?: string }>({
+    const profileWish = wish<{ name?: string }>({
       query: "#profile",
     });
     const profileNameWish = wish<string>({ query: "#profileName" });

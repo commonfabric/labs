@@ -12,6 +12,7 @@ import { WebSocket } from "ws";
 import { instancePartialCause } from "./builder/instance-name.ts";
 import { freezePartialCauses } from "./builder/pattern.ts";
 import type { JSONObject, Pattern } from "./builder/types.ts";
+import { ExtendedStorageTransaction } from "./storage/extended-storage-transaction.ts";
 
 /**
  * The `ws` class behind every memory socket a runtime opens under Deno, for a
@@ -21,6 +22,17 @@ import type { JSONObject, Pattern } from "./builder/types.ts";
  * copy, whose prototype no memory socket uses.
  */
 export const MemoryWebSocketForTestingOnly = WebSocket;
+
+/**
+ * The class of every transaction `Runtime.edit()` makes, for a test in another
+ * package that narrows one to reach its `accessForTestingOnly` getter: a
+ * fixture writing a stored `cfc` label map in a shape no derivation produces
+ * needs the runtime's own authority, which no public surface hands out, since
+ * a write changing a document's reserved members from anywhere else is
+ * recorded or refused.
+ */
+export const ExtendedStorageTransactionForTestingOnly =
+  ExtendedStorageTransaction;
 
 /**
  * Returns `pattern`, a pattern a test writes out as an object literal rather

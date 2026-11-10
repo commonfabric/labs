@@ -46,6 +46,7 @@ import {
   resolveScopeKey,
   type ScopeKeyIdentity,
 } from "@commonfabric/memory/v2";
+import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
 import { getLogger } from "@commonfabric/logger";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
@@ -80,7 +81,6 @@ import {
   cfcSchemaToObject,
   resolveCfcSchemaRefs,
 } from "../cfc/schema-refs.ts";
-import type { CfcConfClause } from "../cfc/clause.ts";
 import {
   type CfcLabelView,
   cfcLabelViewForCellFailClosed,

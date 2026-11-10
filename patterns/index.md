@@ -1105,8 +1105,17 @@ field as its cursor label. The same compact view serves as `UI` and `TILE_UI`,
 so the note embeds in other surfaces, and editing or live-cursor failures show
 as notices above the editor.
 
+A panel beside the editor holds comments on ranges of the body, with replies and
+a resolved state. Each comment names two anchors of the body, points that Memory
+moves through every edit, which the pattern reads and writes as a cell through
+`anchorsOf()`; the editor draws the text between each open comment's anchors as
+a highlight. Comments and replies are labeled `authored-by` their writer through
+`AuthoredByCurrentUser`, and shown through `cf-cfc-authorship`. Verbs let an
+agent comment on text it quotes, reply, resolve, reopen, and delete.
+
 **Keywords:** multiplayer, collaborative editor, note, Markdown, profile, wish,
-co-presence, CodeMirror
+co-presence, CodeMirror, comments, annotations, anchors, anchorsOf,
+AuthoredByCurrentUser
 
 ### Input Schema
 
@@ -1114,6 +1123,7 @@ co-presence, CodeMirror
 interface SharedNoteInput {
   title?: PerSpace<string | Default<"Untitled note">>;
   content?: PerSpace<string | Default<"">>;
+  comments?: PerSpace<StoredComment[] | Default<[]>>;
 }
 ```
 
@@ -1123,7 +1133,17 @@ interface SharedNoteInput {
 interface SharedNoteOutput {
   title: PerSpace<string>;
   content: PerSpace<string>;
+  comments: PerSpace<StoredComment[]>;
   participantName: PerUser<string>;
+  commentAnchors: FieldAnchors | undefined;
+  appendLine: Stream<LineEvent>;
+  prependLine: Stream<LineEvent>;
+  replaceText: Stream<ReplaceTextEvent>;
+  addComment: Stream<AddCommentEvent>;
+  replyToComment: Stream<CommentReplyEvent>;
+  resolveComment: Stream<CommentIdEvent>;
+  reopenComment: Stream<CommentIdEvent>;
+  deleteComment: Stream<CommentIdEvent>;
 }
 ```
 

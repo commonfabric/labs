@@ -10,6 +10,7 @@ import { raw } from "../module.ts";
 import type { Runtime } from "../runtime.ts";
 import { agent } from "./agent.ts";
 import { aggregate, aggregateNode } from "./aggregate.ts";
+import { anchorsOf } from "./anchors-of.ts";
 import { cellFromUrl } from "./cell-from-url.ts";
 import { collectionIndex } from "./collection-index.ts";
 import { collectionIndexKeys } from "./collection-index-keys.ts";
@@ -152,6 +153,12 @@ export function registerBuiltins(runtime: Runtime) {
   // Pure read/derive/write — not an effect; reactivity comes from its
   // journaled input + envelope reads.
   moduleRegistry.addModuleByRef("inspectConfLabel", raw(inspectConfLabel));
+  // The anchors document of a collaborative field, as a cell a pattern
+  // reads and writes.
+  moduleRegistry.addModuleByRef(
+    "anchorsOf",
+    raw(anchorsOf),
+  );
   moduleRegistry.addModuleByRef(
     "wish",
     raw(wish, { debounce: WISH_DEBOUNCE_MS }),

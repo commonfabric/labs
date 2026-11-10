@@ -4,6 +4,7 @@ import {
   resolveScopeKey,
   type ScopeKeyIdentity,
 } from "@commonfabric/memory/v2";
+import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
 import type { CfcAtom } from "@commonfabric/api/cfc";
 import {
   assertValidFabricValueLayer,
@@ -35,7 +36,6 @@ import {
 } from "./cell.ts";
 import { ContextualFlowControl } from "./cfc.ts";
 import { canonicalizeLogicalPath } from "./cfc/canonical.ts";
-import type { CfcConfClause } from "./cfc/clause.ts";
 import {
   type CfcLabelView,
   cloneCfcLabelView,

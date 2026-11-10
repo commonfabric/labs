@@ -37,6 +37,7 @@
  * reads nothing.
  */
 
+import type { GitHubDelivery } from "@commonfabric/github-webhooks/relay";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 import {
@@ -76,7 +77,6 @@ import { CI_HISTORY_SOURCES, GANTT_MAX_RUNS } from "../ci-job-history.ts";
 import { greenStar } from "../green-star.ts";
 import {
   Freshness,
-  type GitHubDelivery,
   type GitHubWebhooks,
   githubWebhooks,
   pushOf,

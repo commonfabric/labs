@@ -91,7 +91,7 @@ const registerSharedSpace = handler<
 
 const accept = handler<
   Acceptance,
-  { accepted: Writable<{ space?: string; keepArchived?: boolean }[]> }
+  { accepted: Writable<{ space?: string | undefined; keepArchived?: boolean | undefined }[]> }
 >((event, { accepted }) => {
   accepted.push({
     space: spaceOf(event.room),
@@ -106,7 +106,7 @@ export default pattern(() => {
   const sharedSpaceCatalog = new Writable<Catalog>({ entries: {}, offers: {} })
     .for("sharedSpaceCatalog");
   const registered = new Writable<Registration[]>([]).for("registered");
-  const accepted = new Writable<{ space?: string; keepArchived?: boolean }[]>(
+  const accepted = new Writable<{ space?: string | undefined; keepArchived?: boolean | undefined }[]>(
     [],
   ).for("accepted");
   return {
@@ -1428,6 +1428,24 @@ describe("share-intake", () => {
   });
 
   describe("an offer that is refused", () => {
+    it("is refused when its space is deleted, and stays out of the catalog", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      const acl = new ACLManager(runtime, space);
+      await acl.remove(sender);
+      await acl.delete(identity.did());
+      const intake = start();
+
+      const rows = await deliverThenBarrier(
+        offerOf(space, "of a deleted room"),
+      );
+
+      expect(registeredIds(rows)).toEqual(["barrier"]);
+      expect(
+        intake.accessForTestingOnly.decisionsFor(sender, "of a deleted room"),
+      )
+        .toEqual(["recipient-access-refused"]);
+    });
+
     // Each case delivers the refused offer ahead of one that passes, and
     // reads what was registered once the second is: the intake decides an
     // inbox's offers in order, so the first was decided by then.

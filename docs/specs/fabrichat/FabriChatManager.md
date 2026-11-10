@@ -276,6 +276,8 @@ That is why step 3 hands a notice for each member offered nothing to a client
 through `outgoingNotices` (see
 [`ChatManagerOutput`](ChatManagerOutput.md#delivering-notices)). A profile
 pointing at no inbox gets a notice too, decided by the event that reads the
-pointer. A member sent an offer gets no notice, and nothing tells the sender
-whether the offer arrived. Once offers deliver end to end, the manager can
-deliver notices itself.
+pointer, and so does one whose pointer leads to nothing the event can send to
+(see [`ChatManagerOutput`](ChatManagerOutput.md#offers)), which leaves the
+offers to the request's other members standing. A member sent an offer gets no
+notice, and nothing tells the sender whether the offer arrived. Once offers
+deliver end to end, the manager can deliver notices itself.

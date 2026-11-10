@@ -19,11 +19,6 @@ a record: archive it to `docs/history/plans/` following the procedure in
   and correspondence manifest checked in CI and a §18.6.4 conformance
   statement, to a kernel of same-named pure functions the pseudocode is the
   source of.
-- [Anchors on collaborative fields](collaborative-field-anchors.md) carries
-  what is left to build on Memory's anchors, ranges of a collaborative field
-  mapped through every integrated operation: the runner's `addAnchor()`,
-  `removeAnchor()` and `anchorsOf()`, the editor drawing highlights at the
-  field's anchors as a view, and the shared-note comments on top.
 - [Unify Weaver Ask and CF harness](weaver-ask-console.md) sequences typed
   callbacks, a cohesive handles module, one session UI for both command aliases,
   and hands-on demo validation across labs, Weaver, and Loom.
@@ -32,6 +27,10 @@ a record: archive it to `docs/history/plans/` following the procedure in
   the memory server's per-session walk and encode on the main thread, the
   four measurements that decide which change to make, the recipes for taking
   them, and how the overlapped commit is validated.
+- [What a create leaves on a serving worker's heap](serving-worker-heap.md)
+  carries the work on what a piece a handler starts keeps alive on a serving
+  worker: what has been released, what is left, and the process for finding the
+  next holder from heap snapshots.
 - [The serving loop off the request thread](serving-loop-worker.md) moves the
   server-execution host into a Web Worker of the toolshed process: the worker
   reads the store on its own SQLite connections, sends wave commits and

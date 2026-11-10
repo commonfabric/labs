@@ -8,11 +8,18 @@
     ".": "./src/index.ts",
     // The DID vocabulary alone, free of key material and of any dependency, so
     // a package can decide whether a string is a DID without loading crypto.
-    "./did": "./src/did.ts"
+    "./did": "./src/did.ts",
+    // The deterministic DAG-CBOR subset, for a caller that signs or verifies
+    // bytes of its own format.
+    "./dag-cbor": "./src/dag-cbor.ts",
+    // Synchronous signature verification, for a caller deciding inside a
+    // synchronous transaction; it loads a pure-JS SHA-512 the rest does not.
+    "./verify-sync": "./src/ed25519/verify-sync.ts"
   },
   "imports": {
     // Dependency guide: ../../docs/development/DEPENDENCIES.md
     "@noble/ed25519": "npm:@noble/ed25519@^3.1.0",
+    "@noble/hashes": "npm:@noble/hashes@^2.2.0",
     "@scure/bip39": "npm:@scure/bip39@^2.2.0"
   }
 }

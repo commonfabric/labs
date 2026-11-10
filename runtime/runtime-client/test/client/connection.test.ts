@@ -47,6 +47,7 @@ class FakeTransport extends EventEmitter<RuntimeTransportEvents>
   implements RuntimeTransport {
   readonly sent: Array<IPCClientMessage | IPCClientNotification> = [];
   disposeCalls = 0;
+  runtimeBuild: string | undefined;
 
   #holdTypes: RequestType[];
   #answers: Partial<Record<RequestType, Record<string, unknown>>>;
@@ -78,6 +79,7 @@ class FakeTransport extends EventEmitter<RuntimeTransportEvents>
     queueMicrotask(() => {
       this.emit("message", {
         msgId: message.msgId,
+        ...(this.runtimeBuild ? { runtimeBuild: this.runtimeBuild } : {}),
         data: this.#answers[message.data.type],
       });
     });
@@ -93,7 +95,11 @@ async function initializedConnection(
   transport: FakeTransport,
 ): Promise<RuntimeConnection> {
   const connection = new RuntimeConnection(transport);
-  await connection.initialize({} as InitializationData);
+  await connection.initialize(
+    {
+      clientBuild: { application: "test", gitSha: "f".repeat(40) },
+    } as InitializationData,
+  );
   return connection;
 }
 
@@ -128,6 +134,26 @@ class ThrowingTransport extends EventEmitter<RuntimeTransportEvents>
 }
 
 describe("connection", () => {
+  it("records optional handshake provenance without gating requests", async () => {
+    for (const marker of [undefined, "a".repeat(40), "malformed"]) {
+      const transport = new FakeTransport();
+      transport.runtimeBuild = marker;
+      const connection = await initializedConnection(transport);
+      try {
+        expect(connection.buildDiagnostics.peer).toBe(
+          marker === "malformed" ? undefined : marker,
+        );
+        expect(connection.buildDiagnostics.relation).toBe("unknown");
+        const first = transport.sent[0];
+        expect(first && "msgId" in first ? first.runtimeBuild : "missing")
+          .toBeUndefined();
+        await connection.request({ type: RequestType.Idle });
+      } finally {
+        await connection.dispose();
+      }
+    }
+  });
+
   it("records an abandoned request exactly once even if its reply arrives late", async () => {
     // Disposal ends the wait; the worker knows nothing of that and answers
     // later. The late reply finds no pending entry, and must not record a
@@ -255,7 +281,7 @@ describe("connection", () => {
         cursor: null,
         baselineHash: "baseline",
         materialized: "value",
-        anchors: [],
+        anchors: {},
         operations: [],
       },
     };
@@ -1438,6 +1464,20 @@ describe("RuntimeConnection.attach()", () => {
     apiUrl: "http://connection.test/",
     spaceDid: "did:key:z6Mk-connection-attach" as DID,
   };
+
+  it("records attached-worker provenance and remains usable", async () => {
+    const transport = new FakeTransport();
+    transport.runtimeBuild = "b".repeat(40);
+    const conn = new RuntimeConnection(transport);
+    try {
+      await conn.attach(context);
+      expect(conn.buildDiagnostics.peer).toBe(transport.runtimeBuild);
+      expect(conn.buildDiagnostics.relation).toBe("unknown");
+      await conn.request({ type: RequestType.Idle });
+    } finally {
+      await conn.dispose();
+    }
+  });
 
   it("sends the asserted context and marks the connection usable", async () => {
     const transport = new FakeTransport();

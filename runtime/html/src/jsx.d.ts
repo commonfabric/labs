@@ -1436,12 +1436,20 @@ declare namespace CFDOM {
     extends AllHTMLAttributes<T>, ClassAttributes<T> {
   }
 
+  // An optional attribute given `undefined` is one left unset: the renderer
+  // clears the property or removes the attribute. So it admits `undefined` as
+  // well as being absent, which `exactOptionalPropertyTypes` keeps apart.
   export type DetailedHTMLProps<E extends HTMLAttributes<T>, T> =
     & ClassAttributes<T>
     & {
-      [K in keyof E]: E[K] extends { [CELL_LIKE]: unknown } ? E[K]
-        : (E[K] | CellLike<E[K]>);
+      [K in keyof E]:
+        | (E[K] extends { [CELL_LIKE]: unknown } ? E[K]
+          : (E[K] | CellLike<E[K]>))
+        | UnsetAttribute<E, K>;
     };
+
+  type UnsetAttribute<E, K extends keyof E> = {} extends Pick<E, K> ? undefined
+    : never;
 
   // All the WAI-ARIA 1.1 attributes from https://www.w3.org/TR/wai-aria-1.1/
   interface AriaAttributes {
@@ -4073,6 +4081,20 @@ interface CFCodeEditorAttributes<T> extends CFHTMLAttributes<T> {
   "collaborative"?: boolean;
   "presenceRoom"?: string;
   "participantName"?: string;
+
+  /**
+   * Ranges of the collaborative field's text to mark. Each runs from the
+   * anchor `fromAnchor` to the anchor `toAnchor`, both ids in the field's
+   * anchors, which `anchorsOf()` names. `id` names the mark, and is what
+   * `cf-highlight-click` reports; `kind` adds the class `cm-highlight-<kind>`.
+   */
+  "highlights"?: {
+    id: string;
+    fromAnchor: string;
+    toAnchor: string;
+    kind?: string;
+  }[];
+
   "placeholder"?: string;
   "timingStrategy"?: string;
   "timingDelay"?: number;
@@ -4101,6 +4123,26 @@ interface CFCodeEditorAttributes<T> extends CFHTMLAttributes<T> {
   "oncf-collaboration-reconcile"?: any;
   "oncf-presence-error"?: any;
   "oncf-presence-join"?: any;
+
+  /**
+   * The main selection as a range of the editor's text, with the text that
+   * range holds and the whole of the editor's text, `value`. The range is
+   * right for the field only while the field holds `value`. Nothing selected
+   * is `from === to`, with an empty `value`.
+   */
+  "oncf-selection-change"?: EventHandler<{
+    from: number;
+    to: number;
+    text: string;
+    value: string;
+  }>;
+
+  /**
+   * A click on a highlight that selects no text, with the `id` its
+   * `highlights` entry gave it.
+   */
+  "oncf-highlight-click"?: EventHandler<{ id: string }>;
+
   "onbacklink-click"?: any;
   "onbacklink-create"?: any;
   "onmention-ref-label-changed"?: any;
@@ -4383,6 +4425,8 @@ interface CFShareSnapshotAttributes<T> extends CFHTMLAttributes<T> {
   "$received"?: CellLike<unknown>;
   /** Matches the element property; JSX props are assigned as properties. */
   audienceKind?: "user" | "space";
+  /** Text of the button that opens the review; the dialog never shows it. */
+  buttonText?: string;
   "oncf-shared"?: EventHandler<{}>;
 }
 
@@ -4546,12 +4590,16 @@ interface CFResizablePanelAttributes<T> extends CFHTMLAttributes<T> {
   "defaultSize"?: number | CellLike<number>;
   "maxSize"?: number | CellLike<number>;
   "collapsible"?: boolean | CellLike<boolean>;
+  /** While the group is stacked (narrower than its `stackBelow`), this panel
+   * and the handles beside it are not drawn, and the other panels share its
+   * room. */
+  "hideWhenStacked"?: boolean | CellLike<boolean>;
 }
 
 interface CFResizablePanelGroupAttributes<T> extends CFHTMLAttributes<T> {
   "direction"?: "horizontal" | "vertical" | CellLike<"horizontal" | "vertical">;
-  /** Below this width (px) of the group itself, its panels lie vertically
-   * whatever `direction` says. */
+  /** Below this width (px) of a horizontal group itself, its panels lie
+   * vertically (the group is stacked). A vertical group never stacks. */
   "stackBelow"?: number | CellLike<number>;
 }
 

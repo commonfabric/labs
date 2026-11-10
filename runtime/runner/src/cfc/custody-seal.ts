@@ -39,6 +39,12 @@ import {
   hasConcreteOwner,
   isACL,
 } from "@commonfabric/memory/acl";
+import {
+  type CfcConfClause,
+  clauseAlternatives,
+  hasExactKeys,
+  isActorOwnedAlternative,
+} from "@commonfabric/memory/v2/cfc-release-authority";
 import { toUnpaddedBase64url } from "@commonfabric/bytes/base64url";
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
@@ -58,11 +64,7 @@ import { normalizeCellScope } from "../scope.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import { internalVerifierRead } from "../storage/reactivity-log.ts";
 import { matchAtomPattern } from "./atom-pattern.ts";
-import {
-  type CfcConfClause,
-  clauseAlternatives,
-  clausesEqual,
-} from "./clause.ts";
+import { clausesEqual } from "./clause.ts";
 import {
   evaluateExchangeRules,
   modulePolicyRecordId,
@@ -71,8 +73,6 @@ import {
   canonicalJson,
   containsAtomPatternVariable,
   evidenceHolds,
-  hasExactKeys,
-  isActorOwnedAlternative,
   isTrustedGestureOn,
   type ReadEvidence,
   readEvidence,

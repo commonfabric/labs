@@ -303,3 +303,201 @@ Deno.test("a stackBelow that is not a positive width is refused, and a removed o
   expect(page.group.orientation).toBe("horizontal");
   expect(page.first.style.width).toBe("36%");
 });
+
+Deno.test("a panel marked hideWhenStacked steps aside while the group is stacked, with its handle, and the others take its room", async () => {
+  using page = built("horizontal");
+  page.group.stackBelow = 300;
+  page.second.hideWhenStacked = true;
+  document.body.append(page.group);
+  await laidOut(page.group);
+  // Side by side, it is drawn as any other panel.
+  expect(page.second.style.display).toBe("");
+  expect(page.handle.style.display).toBe("");
+  expect(page.first.style.width).toBe("36%");
+
+  page.group.style.width = "200px";
+  await laidOut(page.group);
+  expect(page.group.stacked).toBe(true);
+  expect(page.second.style.display).toBe("none");
+  expect(page.handle.style.display).toBe("none");
+  expect(page.first.style.height).toBe("100%");
+  expect(page.first.getBoundingClientRect().height).toBe(400);
+  // An unmarked panel is never hidden.
+  expect(page.first.style.display).toBe("");
+
+  // Widened again, the split it had comes back.
+  page.group.style.width = "400px";
+  await laidOut(page.group);
+  expect(page.second.style.display).toBe("");
+  expect(page.handle.style.display).toBe("");
+  expect(page.first.style.width).toBe("36%");
+  expect(page.second.style.width).toBe("64%");
+});
+
+Deno.test("hideWhenStacked assigned or cleared while stacked takes effect at once", async () => {
+  using page = built("horizontal");
+  page.group.stackBelow = 500;
+  document.body.append(page.group);
+  await laidOut(page.group);
+  expect(page.group.stacked).toBe(true);
+  expect(page.second.style.display).toBe("");
+  expect(page.first.style.height).toBe("36%");
+
+  page.second.hideWhenStacked = true;
+  await page.second.updateComplete;
+  expect(page.second.style.display).toBe("none");
+  expect(page.handle.style.display).toBe("none");
+  expect(page.first.style.height).toBe("100%");
+
+  page.second.hideWhenStacked = false;
+  await page.second.updateComplete;
+  expect(page.second.style.display).toBe("");
+  expect(page.handle.style.display).toBe("");
+  expect(page.first.style.height).toBe("36%");
+});
+
+Deno.test("a group that is vertical by its direction is not stacked, and hides nothing", async () => {
+  using page = built("vertical");
+  page.group.stackBelow = 500;
+  page.second.hideWhenStacked = true;
+  document.body.append(page.group);
+  await laidOut(page.group);
+  expect(page.group.stacked).toBe(false);
+  expect(page.second.style.display).toBe("");
+  expect(page.first.style.height).toBe("36%");
+});
+
+Deno.test("when every panel is marked hideWhenStacked, every panel is drawn", async () => {
+  using page = built("horizontal");
+  page.group.stackBelow = 500;
+  page.first.hideWhenStacked = true;
+  page.second.hideWhenStacked = true;
+  document.body.append(page.group);
+  await laidOut(page.group);
+  expect(page.first.style.display).toBe("");
+  expect(page.second.style.display).toBe("");
+  expect(page.first.style.height).toBe("36%");
+});
+
+Deno.test("a display the host set on a panel is left alone", async () => {
+  using page = built("horizontal");
+  page.group.stackBelow = 300;
+  page.first.style.display = "flex";
+  page.second.hideWhenStacked = true;
+  document.body.append(page.group);
+  page.group.style.width = "200px";
+  await laidOut(page.group);
+  expect(page.first.style.display).toBe("flex");
+});
+
+Deno.test("with a panel hidden, a handle between two drawn panels moves as far as the pointer and the keys say", async () => {
+  using page = built("horizontal");
+  page.group.stackBelow = 500;
+  for (const panel of [page.first, page.second]) {
+    panel.setAttribute("default-size", "30");
+    panel.setAttribute("min-size", "10");
+  }
+  const third = new CFResizablePanel();
+  third.setAttribute("default-size", "40");
+  third.hideWhenStacked = true;
+  const handle2 = new CFResizableHandle();
+  page.group.append(handle2, third);
+  document.body.append(page.group);
+  await laidOut(page.group);
+  expect(third.style.display).toBe("none");
+  expect(handle2.style.display).toBe("none");
+  expect(page.handle.style.display).toBe("");
+  expect(parseFloat(page.first.style.height)).toBeCloseTo(50);
+
+  page.handle.focus();
+  await pressKey("ArrowDown");
+  expect(parseFloat(page.first.style.height)).toBeCloseTo(51);
+  expect(parseFloat(page.second.style.height)).toBeCloseTo(49);
+
+  const top = page.handle.getBoundingClientRect().top;
+  page.handle.dispatchEvent(
+    new MouseEvent("mousedown", { bubbles: true, clientX: 10, clientY: top }),
+  );
+  document.dispatchEvent(
+    new MouseEvent("mousemove", { clientX: 10, clientY: top + 40 }),
+  );
+  document.dispatchEvent(new MouseEvent("mouseup"));
+  // 40px of a 400px group is 10 points of the drawn length.
+  expect(parseFloat(page.first.style.height)).toBeCloseTo(61);
+});
+
+Deno.test("a hidden panel gets back the display the host gave it", async () => {
+  using page = built("horizontal");
+  page.group.stackBelow = 300;
+  page.second.style.display = "flex";
+  page.second.hideWhenStacked = true;
+  document.body.append(page.group);
+  await laidOut(page.group);
+  page.group.style.width = "200px";
+  await laidOut(page.group);
+  expect(page.second.style.display).toBe("none");
+  page.group.style.width = "400px";
+  await laidOut(page.group);
+  expect(page.second.style.display).toBe("flex");
+});
+
+Deno.test("marking a panel while the group is side by side hides nothing", async () => {
+  using page = await mounted("horizontal");
+  page.group.stackBelow = 300;
+  await laidOut(page.group);
+  page.second.hideWhenStacked = true;
+  await page.second.updateComplete;
+  expect(page.second.style.display).toBe("");
+  expect(page.handle.style.display).toBe("");
+  expect(page.first.style.width).toBe("36%");
+});
+
+Deno.test("marking a panel leaves a drag in progress alone", async () => {
+  using page = await mounted("horizontal");
+  page.handle.dispatchEvent(
+    new MouseEvent("mousedown", { bubbles: true, clientX: 144, clientY: 10 }),
+  );
+  page.second.hideWhenStacked = true;
+  await page.second.updateComplete;
+  expect(page.group.classList.contains("resizing")).toBe(true);
+  document.dispatchEvent(new MouseEvent("mouseup"));
+});
+
+Deno.test("a panel taken out of the group while hidden is drawn again", async () => {
+  using page = built("horizontal");
+  page.group.stackBelow = 500;
+  page.second.hideWhenStacked = true;
+  document.body.append(page.group);
+  await laidOut(page.group);
+  expect(page.second.style.display).toBe("none");
+  page.second.remove();
+  page.handle.remove();
+  await laidOut(page.group);
+  expect(page.second.style.display).toBe("");
+  expect(page.handle.style.display).toBe("");
+});
+
+Deno.test("a stacked group taken out of the page draws its hidden panel and handle again", async () => {
+  const page = built("horizontal");
+  page.group.stackBelow = 500;
+  page.second.hideWhenStacked = true;
+  document.body.append(page.group);
+  await laidOut(page.group);
+  expect(page.second.style.display).toBe("none");
+  page.group.remove();
+  expect(page.second.style.display).toBe("");
+  expect(page.handle.style.display).toBe("");
+});
+
+Deno.test("a panel marked in the same turn the group starts stacking still turns the handles", async () => {
+  using page = await mounted("horizontal");
+  await laidOut(page.group);
+  // The panel updates before the group does.
+  page.first.hideWhenStacked = true;
+  page.group.stackBelow = 500;
+  await page.first.updateComplete;
+  await page.group.updateComplete;
+  expect(page.group.stacked).toBe(true);
+  expect(page.handle.dataset.orientation).toBe("vertical");
+  expect(page.first.style.display).toBe("none");
+});

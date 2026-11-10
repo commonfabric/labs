@@ -3,7 +3,6 @@ import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
 
 import { createCfHarnessCliCapabilities } from "../../src/cli.ts";
-import { HARNESS_COMMAND_CATALOG_MODEL_MAX_BYTES } from "../../src/client-actions/command-result.ts";
 import {
   HARNESS_COMMAND_ARGS_MAX_BYTES,
   HARNESS_COMMAND_ID_MAX_LENGTH,
@@ -412,7 +411,6 @@ describe("loom-commands tools", () => {
           signature:
             "loom.compose(title?: string) -> {loom_id, version}  [global]",
           title: "Compose a loom.",
-          description: "Creates or extends a loom.",
         },
         {
           name: "loom.inspect",
@@ -425,7 +423,6 @@ describe("loom-commands tools", () => {
           title: "Gather what is known about a person.",
         },
       ]);
-      expect(output.compacted).toBeUndefined();
       expect(output.omitted).toBeUndefined();
     });
 
@@ -452,6 +449,18 @@ describe("loom-commands tools", () => {
       expect(JSON.stringify(output)).not.toContain("x-");
     });
 
+    it("returns descriptions only for commands named in `detail`", async () => {
+      const { context } = contextWith();
+      const plain = listed(await listCommandsTool.invoke(context, {}));
+      expect(plain.entries[0]).not.toHaveProperty("description");
+      const detailed = listed(
+        await listCommandsTool.invoke(context, { detail: ["loom.compose"] }),
+      );
+      expect(detailed.entries[0]).toMatchObject({
+        description: "Creates or extends a loom.",
+      });
+    });
+
     it("shows the commands the host names as relevant first, marked, and keeps every other command", async () => {
       const { context, config } = contextWith();
       config.relevant = ["people-discovery.dossier", "not.listed"];
@@ -472,30 +481,29 @@ describe("loom-commands tools", () => {
         .toBe(1);
     });
 
-    it("compacts a catalog past the model bound, keeping the commands named in `detail` whole", async () => {
+    it("keeps every signature in a large catalog and details only for named commands", async () => {
       const help = "h".repeat(4_000);
-      const rows = Array.from({ length: 12 }, (_, index) => ({
+      const rows = Array.from({ length: 500 }, (_, index) => ({
         id: `cmd.n${index}`,
         help,
+        title: help,
         inputs: { type: "object" },
       }));
-      expect(JSON.stringify(rows).length).toBeGreaterThan(
-        HARNESS_COMMAND_CATALOG_MODEL_MAX_BYTES,
-      );
       const { context } = contextWith({
         manifest: JSON.stringify({ commands: rows }),
       });
       const output = listed(
-        await listCommandsTool.invoke(context, { detail: ["cmd.n11"] }),
+        await listCommandsTool.invoke(context, { detail: ["cmd.n499"] }),
       );
-      expect(output.compacted).toBeGreaterThan(0);
+      expect(output.entries).toHaveLength(rows.length);
+      expect(output).not.toHaveProperty("compacted");
       const last = output.entries.at(-1)!;
-      expect(last.name).toBe("cmd.n11");
+      expect(last.name).toBe("cmd.n499");
       expect("description" in last).toBe(true);
       expect("inputSchema" in last).toBe(true);
-      const compactedEntry = output.entries.at(-2)!;
-      expect("description" in compactedEntry).toBe(false);
-      expect(compactedEntry.signature).toBe("cmd.n10(...)  [global]");
+      const summary = output.entries.at(-2)!;
+      expect("description" in summary).toBe(false);
+      expect(summary.signature).toBe("cmd.n498(...)  [global]");
     });
   });
 
@@ -919,11 +927,87 @@ describe("loom-commands tools", () => {
         const results = output.results.map(executed);
         expect(results[0].entry?.status).toBe("admitted");
         expect(results.at(-1)?.entry).toBeUndefined();
+        expect(results.at(-1)?.hint).toBe(
+          "The result body was omitted to fit the tool output limit. No requested values are shown. Read a smaller date range, fewer results, or a smaller batch.",
+        );
         expect(results.at(-1)?.truncated).toBe(true);
         expect(output.truncated).toBe(true);
         expect(JSON.stringify(output).length).toBeLessThanOrEqual(
           LOOM_RETRIEVAL_MAX_OUTPUT_CHARS,
         );
+      });
+
+      it("keeps a fitting answer beside failed siblings without reserving their omission hints", async () => {
+        const answer = {
+          ok: true,
+          rows: Array.from({ length: 11 }, () => "x".repeat(3_900)),
+        };
+        const { context } = contextWith({
+          answer: ({ id }) =>
+            id === "loom.compose"
+              ? Response.json(answer)
+              : new Response("unavailable", { status: 502 }),
+        });
+        const output = batched(
+          await runCommandTool.invoke(context, {
+            calls: [
+              ...Array.from(
+                { length: 8 },
+                () => ({ command: "loom.inspect", args: {} }),
+              ),
+              { command: "loom.compose", args: {} },
+            ],
+          }),
+        );
+        expect(
+          output.results.slice(0, 8).every((result) =>
+            result.status === "failed_to_deliver"
+          ),
+        ).toBe(true);
+        expect(executed(output.results[8]).entry?.status).toBe("admitted");
+        expect(output.truncated).toBe(false);
+        expect(JSON.stringify(output).length).toBeLessThanOrEqual(
+          LOOM_RETRIEVAL_MAX_OUTPUT_CHARS,
+        );
+      });
+
+      it("allocates bodies smallest-first while returning calls in input order", async () => {
+        const bodies: Record<string, object> = {
+          "calendar.day": {
+            ok: true,
+            rows: Array.from({ length: 10 }, () => "c".repeat(3_900)),
+          },
+          "source.read": { ok: true, text: "e".repeat(3_000) },
+          "person.find": { ok: true, name: "Donut" },
+          "search.query": {
+            ok: true,
+            rows: Array.from({ length: 3 }, () => "s".repeat(3_900)),
+          },
+        };
+        for (
+          const commands of [Object.keys(bodies), Object.keys(bodies).reverse()]
+        ) {
+          const { context } = contextWith({
+            answer: ({ id }) => new Response(JSON.stringify(bodies[id])),
+          });
+          const output = batched(
+            await runCommandTool.invoke(context, {
+              calls: commands.map((command) => ({ command, args: {} })),
+            }),
+          );
+          const results = output.results.map(executed);
+          for (const [index, command] of commands.entries()) {
+            expect(results[index].outcome.bodyBytes).toBe(
+              new TextEncoder().encode(JSON.stringify(bodies[command])).length,
+            );
+            expect(results[index].entry?.status).toBe(
+              command === "calendar.day" ? undefined : "admitted",
+            );
+          }
+          expect(JSON.stringify(output).length).toBeLessThanOrEqual(
+            LOOM_RETRIEVAL_MAX_OUTPUT_CHARS,
+          );
+        }
       });
 
       it("keeps the batch's model view within the output bound whatever the summaries carry", async () => {
@@ -1004,7 +1088,7 @@ describe("loom-commands tools", () => {
         }
       });
 
-      it("leaves out a result's hint and keeps the signature a `bad-args` refusal carries", async () => {
+      it("keeps refusal guidance and the signature a `bad-args` refusal carries", async () => {
         const { context } = contextWith({
           answer: ({ id }) =>
             Response.json({
@@ -1021,7 +1105,7 @@ describe("loom-commands tools", () => {
           }),
         ).results.map(executed);
         expect(refused.outcome.code).toBe("not_granted");
-        expect(refused).not.toHaveProperty("hint");
+        expect(refused.hint).toContain("Do not retry it");
         expect(badArgs.signature).toBe(DOSSIER_SIGNATURE);
       });
 
@@ -1288,6 +1372,29 @@ describe("loom-commands tools", () => {
       }
     });
 
+    it("keeps refusal guidance when an oversized answer has no entry", async () => {
+      for (const batch of [false, true]) {
+        const { context } = contextWith({
+          answer: JSON.stringify({
+            ok: false,
+            code: "forbidden",
+            rows: Array.from({ length: 40 }, () => "x".repeat(3_000)),
+          }),
+        });
+        const call = { command: "loom.compose", args: {} };
+        const result = await runCommandTool.invoke(
+          context,
+          batch ? { calls: [call] } : call,
+        );
+        const output = executed(batch ? batched(result).results[0] : result);
+        expect(output.outcome.code).toBe("not_granted");
+        expect(output.entry).toBeUndefined();
+        expect(output.truncated).toBe(true);
+        expect(output.hint).toContain("Do not retry it");
+        expect(output.hint).not.toContain("Read a smaller");
+      }
+    });
+
     it("leaves out an answer that alone passes the output bound, marking the result truncated", async () => {
       const { context } = contextWith({
         answer: JSON.stringify({
@@ -1308,6 +1415,9 @@ describe("loom-commands tools", () => {
         LOOM_RETRIEVAL_MAX_OUTPUT_CHARS,
       );
       expect(output.entry).toBeUndefined();
+      expect(output.hint).toBe(
+        "The result body was omitted to fit the tool output limit. No requested values are shown. Read a smaller date range, fewer results, or a smaller batch.",
+      );
       expect(output.truncated).toBe(true);
     });
   });

@@ -12,6 +12,7 @@ import {
   type VNode,
   Writable,
 } from "commonfabric";
+import type { ProfileFaceFields } from "../../system/profile-face/profile-face.ts";
 
 /**
  * Group Chat Room Pattern v9
@@ -45,7 +46,9 @@ export interface Message {
  * key — compare profile cells with `equals()` instead (see
  * `docs/specs/shared-profile-rosters.md`).
  */
-export type ParticipantProfileCell = Cell<{ name?: string; avatar?: string }>;
+export type ParticipantProfileCell = Cell<
+  { name?: string } & ProfileFaceFields
+>;
 
 export interface User {
   /**

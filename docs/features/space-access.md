@@ -84,8 +84,10 @@ adder the list grants nothing. The answer does not depend on who is asking, so
 a call in a computation leaves the computation's read scope as it was, and the
 memory server's refusal of this runtime's session, which says something only
 about the caller's own principal, does not enter into it: the list alone
-decides, and `undefined` means it has not arrived. A `principal` that is not a
-well-formed DID throws; `*` is not a principal.
+decides, and `undefined` means it has not arrived. The exception is the refusal
+of a [deleted space](#a-deleted-space), which says something about every
+principal, and is `"none"`. A `principal` that is not a well-formed DID throws;
+`*` is not a principal.
 
 ## A space's members
 
@@ -127,7 +129,7 @@ and reads nothing from another can write what it returns into that space.
 | Answer | When |
 | --- | --- |
 | a level | the access list grants the principal one |
-| `"none"` | the list grants the principal nothing, or, on a client, the memory server has refused the runtime the space for good |
+| `"none"` | the list grants the principal nothing, or, on a client, the memory server has refused the runtime the space for good, or, on any runtime, has refused it as deleted |
 | `undefined` | the list has not arrived, the space has no list, the run has no principal, or `target` was passed as `undefined` |
 
 `undefined` is never a guess. A space with no access list is one the memory
@@ -147,7 +149,9 @@ The refusal counts only on a client, where the session the memory server
 refused is the principal's own. A serving runtime reads every space as that
 space's owner, so its session says nothing about the principal whose level it
 returns, and there the access list alone decides. Two principals demanding the
-same computation on a serving runtime get their own levels.
+same computation on a serving runtime get their own levels. The refusal of a
+[deleted space](#a-deleted-space) counts on a serving runtime too, whatever its
+replica kept of the list, since deletion ends the space for every principal.
 
 ## Keeping the answer current
 
@@ -164,8 +168,8 @@ to `false` on the same admission, and only the latter waits for the notice of
 an open's answer ([below](#a-deleted-space)).
 
 A refusal changes no document the computation has read, and neither does a
-readmission, so on a client the call also registers the running action with the
-storage manager's access-change observer (`subscribeSpaceAccessChange()`), which
+readmission, so the call also registers the running action with the storage
+manager's access-change observer (`subscribeSpaceAccessChange()`), which
 runs it again through `Scheduler.invalidateAction()` when the verdict changes.
 Each registration lasts until the next change for that space, or until the
 scheduler unsubscribes the action; a run that still asks registers again. The
@@ -232,9 +236,10 @@ has a deletion tombstone where its access list was. The memory server refuses it
 to every principal for good, with a refusal marked `deleted`, in every mode,
 `off` included
 ([INV-15](../specs/memory-v2/09-invariants.md#inv-15--space-deletion)). To the
-access calls that is a refusal like any other permanent one:
-`spaceAccess(target)` returns `"none"`, `spaceMembers(target)` returns
-`undefined`, and `retrySpaceAccess(space)` is refused again, in `off` mode as in
+access calls that is a refusal like any other permanent one, on a serving
+runtime as on a client, and for any principal:
+`spaceAccess(target)` and `spaceAccessOf(target, principal)` return `"none"`,
+`spaceMembers(target)` returns `undefined`, and `retrySpaceAccess(space)` is refused again, in `off` mode as in
 the others. A deletion tombstone is not a list, so `spaceReaderRole()` finds no
 role in it for anyone.
 
@@ -293,6 +298,15 @@ says only that an open has started.
   whose reads the serving runtime's own store supplies has no answer to wait
   for, as below.
 
+The memory server sends no document from a deleted space, so a load of one ends
+with no data. The storage manager settles that load as an absence rather than as
+a failed load, whether the runtime learned of the deletion from a refused open or
+from the revocation of a session it held on the space when the deletion
+committed. So an event whose handler reads a document it has to load from a
+deleted space runs, rather than failing or waiting on the load, and reads the
+document as absent, and `spaceDeleted()` on the document tells the handler why
+([events.md §5](../specs/server-side-execution/events.md#5-failure-semantics)).
+
 A runtime with no memory server it can ask about the space returns `undefined`
 from both, and a handler is not run again: there is no answer to wait for. Such
 a runtime is one whose storage manager has no sessions to report on, or one
@@ -318,7 +332,11 @@ the space is deleted. Only that change sends it again: a deleted space refused
 again sends nothing more. The renderer's placeholder for content of a deleted
 space reads "Deleted" and has no Retry button, since no retry can admit anyone,
 and the shell asks again neither when the person navigates into a deleted space
-nor when the page regains focus.
+nor when the page regains focus. Asking the worker to open a deleted space,
+whether its root, a piece in it, or a slug it held, fails with
+`RuntimeErrorCode.SpaceDeleted`, and starts nothing and fetches no pattern. The
+shell says on that failure that the space was deleted, in place of its load
+error and with nothing to try.
 
 A consumer that keeps a list of spaces, Home's shared-space catalog among
 them, uses `spaceDeleted(target)` to put away an entry whose space is gone

@@ -30,17 +30,14 @@
  */
 
 import { minOf } from "@commonfabric/collections/math";
+import type { GitHubDelivery } from "@commonfabric/github-webhooks/relay";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 import { CI_WORKFLOW, PORT, REPO, TICK_MS } from "./config.ts";
 import { latestCiJobs, TILES } from "./registry.ts";
 import { changesRunSource, makeCtx } from "./ctx.ts";
 import { RunLists } from "./github-runs.ts";
-import {
-  type GitHubDelivery,
-  type GitHubWebhooks,
-  githubWebhooks,
-} from "./github-webhooks.ts";
+import { type GitHubWebhooks, githubWebhooks } from "./github-webhooks.ts";
 import { greenBranchOf } from "./green-branch.ts";
 import { dashboardCacheFile } from "./history-files.ts";
 import {
