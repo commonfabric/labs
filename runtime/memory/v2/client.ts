@@ -1141,7 +1141,9 @@ export class Client {
       try {
         session.handleDisconnect();
         await this.restoreConnection();
-        await session.restore();
+        // A reconnect that had not yet taken stock of the client's sessions
+        // when this one was registered restored it already.
+        if (session.restorePending) await session.restore();
         // A restore that a permanent denial ended terminated the session
         // rather than failing; one a refusal for now holds is still pending.
         await session.whenRestored();
@@ -3229,6 +3231,14 @@ export class SpaceSession {
    * denial, such as the router's while its space's toolshed is down. Its
    * requests wait meanwhile, while the connection's other sessions work.
    */
+  /**
+   * @internal Whether this session has a restore pending: its connection
+   * dropped, or a restore has not finished, since it was last restored.
+   */
+  get restorePending(): boolean {
+    return this.#restoreComplete !== undefined;
+  }
+
   get held(): boolean {
     return this.#held;
   }
