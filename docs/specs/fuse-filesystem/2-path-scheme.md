@@ -231,8 +231,8 @@ directory structure. This keeps the piece directory navigable and prevents
 root (`[FS]` layout).
 
 Only top-level callable children under `input/` and `result/` are surfaced as
-`*.handler` and `*.tool`. These callable files are readable; the first line is
-a stable `cf exec` shebang, and the same paths are valid under both
+`*.handler` and `*.tool`. These callable files are readable shell scripts that
+run `cf exec` on themselves, and the same paths are valid under both
 `pieces/<piece-name>/...` and `entities/<piece-id>/...`. Tool internals such as
 `pattern/` and `extraParams/` do not appear as ordinary mounted directories.
 

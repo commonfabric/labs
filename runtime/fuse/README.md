@@ -112,7 +112,7 @@ xattr -p user.json.type home/pieces/todo-app/result/count
 cat home/pieces/todo-app/meta.json
 # => {"id":"of:ba4j...","entityId":"ba4j...","name":"todo-app","patternRef":{"identity":"<hash>","symbol":"default","source":{"ref":"cf:pattern:<hash>","repository":"https://github.com/commonfabric/labs","entry":"/patterns/todo-app.tsx"}}}
 
-# Mounted callables are executable and start with a cf exec shebang
+# Mounted callables are executable shell scripts that run cf exec on themselves
 head -n1 home/pieces/todo-app/result/addItem.handler
 head -n1 home/pieces/todo-app/result/search.tool
 

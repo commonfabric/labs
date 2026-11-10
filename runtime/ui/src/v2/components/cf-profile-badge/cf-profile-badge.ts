@@ -106,12 +106,65 @@ export const profileDisplayFromValue = (val: unknown): ProfileBadgeDisplay => {
 };
 
 /**
+ * The reads of a space's root that are under way, by the runtime that makes
+ * them and the space they read.
+ */
+const spaceRootReads = new WeakMap<
+  RuntimeClient,
+  Map<DID, Promise<CellHandle>>
+>();
+
+/**
+ * Helper for {@link spaceRootOf}, which reads the piece `space`'s root links.
+ * The space cell is loaded before its root is read.
+ */
+const readSpaceRoot = async (
+  runtime: RuntimeClient,
+  space: DID,
+): Promise<CellHandle> => {
+  const spaceCell = await runtime.getCell<{ defaultPattern: unknown }>(
+    space,
+    space,
+  );
+  // Loaded first: a space cell this runtime has not received resolves to
+  // itself, which would answer "not a profile" for a profile that is one.
+  await spaceCell.sync();
+  return await spaceCell.key("defaultPattern").resolveAsCell();
+};
+
+/**
+ * The piece `space`'s root links, as `runtime` reads it. A call made while a
+ * read of the same space through the same runtime is under way shares that
+ * read, and one made after it has finished reads again.
+ */
+const spaceRootOf = (
+  runtime: RuntimeClient,
+  space: DID,
+): Promise<CellHandle> => {
+  let reads = spaceRootReads.get(runtime);
+  if (reads === undefined) {
+    reads = new Map();
+    spaceRootReads.set(runtime, reads);
+  }
+  const underWay = reads.get(space);
+  if (underWay !== undefined) return underWay;
+  const read = readSpaceRoot(runtime, space);
+  reads.set(space, read);
+  const finished = () => {
+    reads.delete(space);
+  };
+  read.then(finished, finished);
+  return read;
+};
+
+/**
  * The space `cell` lives in, when `cell` is a profile; `undefined` otherwise.
  * A profile is its space's root: the create makes it so, and
  * `cf profile repair-root` does for an older one. So a document is taken for
  * a profile when it is the piece its space's root links, and anything else
  * carrying a principal's claim, a room's or a roster's record of the person
- * among them, is not. The space cell is loaded before its root is read.
+ * among them, is not. Calls about cells of one space that overlap share one
+ * read of its root, so a list of badges asks the worker once.
  *
  * @throws Error when the space's root cannot be read, which says nothing
  * about whether the cell is a profile.
@@ -121,14 +174,7 @@ export const profileSpaceOf = async (
 ): Promise<DID | undefined> => {
   if (cell.ref().path.length > 0) return undefined;
   const space = cell.space();
-  const spaceCell = await cell.runtime().getCell<{ defaultPattern: unknown }>(
-    space,
-    space,
-  );
-  // Loaded first: a space cell this runtime has not received resolves to
-  // itself, which would answer "not a profile" for a profile that is one.
-  await spaceCell.sync();
-  const root = await spaceCell.key("defaultPattern").resolveAsCell();
+  const root = await spaceRootOf(cell.runtime(), space);
   return root.space() === space && root.id() === cell.id() &&
       root.ref().path.length === 0
     ? space
@@ -603,6 +649,13 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
   private _resolveGeneration = 0;
 
   /**
+   * The profile the latest resolve was started for, since the element was
+   * last connected; unset when none has started since then.
+   */
+  #resolveStartedFor: { profile: CellHandle | undefined } | undefined =
+    undefined;
+
+  /**
    * Whether this seal is currently registered with the shared cursor
    * controller.
    */
@@ -616,8 +669,8 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
 
   /**
    * The verification state, the seal, whether the profile question has been
-   * answered, whether the badge presents as verified, and the resolve step,
-   * which a test drives directly.
+   * answered, whether the badge presents as verified, and the resolve and
+   * update steps, which a test drives directly.
    */
   get accessForTestingOnly(): {
     state: ProfileBadgeState;
@@ -625,6 +678,7 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
     profileKnown: boolean;
     readonly verified: boolean;
     resolve(): Promise<void>;
+    willUpdate(changed: PropertyValues): void;
   } {
     // deno-lint-ignore no-this-alias
     const outerThis = this;
@@ -651,6 +705,7 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
         return outerThis._verified;
       },
       resolve: () => this._resolve(),
+      willUpdate: (changed) => this.willUpdate(changed),
     };
   }
 
@@ -668,13 +723,21 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
     // resume, pass the (unchanged) generation check, and leak a live
     // subscription that updates a detached element.
     this._resolveGeneration++;
+    this.#resolveStartedFor = undefined;
     this._cleanup();
     this._setLiveness(false);
   }
 
   protected override willUpdate(changed: PropertyValues): void {
     super.willUpdate(changed);
-    if (changed.has("profile")) {
+    // A profile bound before the element connects is both resolved on
+    // connecting and reported as changed by the first update after it, and
+    // the resolve under way is already for that profile.
+    if (
+      changed.has("profile") &&
+      !(this.#resolveStartedFor !== undefined &&
+        this.#resolveStartedFor.profile === this.profile)
+    ) {
       void this._resolve();
     }
   }
@@ -792,6 +855,7 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
     this._navigable = false;
 
     const cell = this.profile;
+    this.#resolveStartedFor = { profile: cell };
     if (!cell) {
       this._applyValue(undefined);
       return;

@@ -1,13 +1,14 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
-import { NAME } from "@commonfabric/runtime-client";
+import { type CellHandle, NAME } from "@commonfabric/runtime-client";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 import {
   CFProfileBadge,
   profileDisplayFromValue,
   profileTooltipFromValue,
 } from "./index.ts";
+import { profileSpaceOf } from "./cf-profile-badge.ts";
 import { identitySeal } from "./identity-seal.ts";
 
 const OWNER_DID = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
@@ -125,6 +126,52 @@ function runtimeWithOtherRoot() {
         }),
       }),
   };
+}
+
+/**
+ * A runtime in which each space of `roots` links the document named there as
+ * its root, counting the times a space cell is opened. Opening one fails with
+ * `failure` while `failing` is set.
+ */
+function countingRuntime(roots: Record<string, string>, failure?: Error) {
+  let opened = 0;
+  let failing = failure !== undefined;
+  return {
+    signal: new AbortController().signal,
+    getCell: (space: string) => {
+      opened++;
+      if (failing) return Promise.reject(failure);
+      return Promise.resolve({
+        sync: () => Promise.resolve(),
+        key: () => ({
+          resolveAsCell: () =>
+            Promise.resolve({
+              ref: () => ({ path: [] }),
+              space: () => space,
+              id: () => roots[space],
+            }),
+        }),
+      });
+    },
+
+    /** How many times a space cell has been opened. */
+    opened: () => opened,
+
+    /** Lets the space cells open from here on. */
+    recover: () => {
+      failing = false;
+    },
+  };
+}
+
+/** The root cell `id` of `space`, read through `runtime`. */
+function rootCell(runtime: unknown, space: string, id: string): CellHandle {
+  return {
+    ref: () => ({ path: [] }),
+    space: () => space,
+    id: () => id,
+    runtime: () => runtime,
+  } as unknown as CellHandle;
 }
 
 function markConnected(element: CFProfileBadge, isConnected = true): void {
@@ -438,6 +485,65 @@ describe("CFProfileBadge", () => {
       el.disconnectedCallback();
       expect(unsubscribeCount).toBe(1);
       expect(el._unsubscribe).toBeUndefined();
+    });
+
+    describe("an update that reports the profile changed", () => {
+      /** A profile binding that counts the times it is resolved. */
+      const countingProfile = () => {
+        let resolutions = 0;
+        return {
+          cell: {
+            resolveAsCell: () => {
+              resolutions++;
+              return Promise.resolve(navResolvedCell({ path: [] }));
+            },
+          } as unknown as CFProfileBadge["profile"],
+          resolutions: () => resolutions,
+        };
+      };
+      const profileChanged = new Map([["profile", undefined]]);
+
+      it("resolves the profile once when it was bound before the element connected", async () => {
+        const profile = countingProfile();
+        const badge = new CFProfileBadge();
+        markConnected(badge, true);
+        badge.profile = profile.cell;
+
+        // Connecting resolves the profile, and the first update after it
+        // reports the profile changed.
+        const resolving = badge.accessForTestingOnly.resolve();
+        badge.accessForTestingOnly.willUpdate(profileChanged);
+        await resolving;
+
+        expect(profile.resolutions()).toBe(1);
+      });
+
+      it("resolves a profile bound in place of the one resolved", async () => {
+        const first = countingProfile();
+        const second = countingProfile();
+        const badge = new CFProfileBadge();
+        markConnected(badge, true);
+        badge.profile = first.cell;
+        await badge.accessForTestingOnly.resolve();
+
+        badge.profile = second.cell;
+        badge.accessForTestingOnly.willUpdate(profileChanged);
+
+        expect(second.resolutions()).toBe(1);
+      });
+
+      it("resolves the same profile again after a disconnection", async () => {
+        const profile = countingProfile();
+        const badge = new CFProfileBadge();
+        markConnected(badge, true);
+        badge.profile = profile.cell;
+        await badge.accessForTestingOnly.resolve();
+
+        badge.disconnectedCallback();
+        badge.accessForTestingOnly.willUpdate(profileChanged);
+
+        expect(profile.resolutions()).toBe(2);
+      });
     });
   });
 
@@ -1013,6 +1119,98 @@ describe("CFProfileBadge", () => {
       }
 
       expect(navigated).toBe(false);
+    });
+  });
+
+  describe("profileSpaceOf()", () => {
+    const SPACE = "did:key:z6MkiTBz1ymuepAQ4HEHYSF1H8quG5GLVVQR3djdX3mDooWp";
+    const OTHER_SPACE =
+      "did:key:z6MkjchhfUsD6mmvni8mCdXHw216Xrm9bQe2mBH1P5RDjVJG";
+
+    it("reads a space's root once for calls that overlap", async () => {
+      const runtime = countingRuntime({ [SPACE]: "of:profile" });
+
+      const spaces = await Promise.all([
+        profileSpaceOf(rootCell(runtime, SPACE, "of:profile")),
+        profileSpaceOf(rootCell(runtime, SPACE, "of:roster-entry")),
+        profileSpaceOf(rootCell(runtime, SPACE, "of:profile")),
+      ]);
+
+      expect(spaces).toEqual([SPACE, undefined, SPACE]);
+      expect(runtime.opened()).toBe(1);
+    });
+
+    it("reads a space's root again for a call made after a read has finished", async () => {
+      const runtime = countingRuntime({ [SPACE]: "of:profile" });
+
+      await profileSpaceOf(rootCell(runtime, SPACE, "of:profile"));
+      const space = await profileSpaceOf(
+        rootCell(runtime, SPACE, "of:profile"),
+      );
+
+      expect(space).toBe(SPACE);
+      expect(runtime.opened()).toBe(2);
+    });
+
+    it("reads each space's root for overlapping calls about different spaces", async () => {
+      const runtime = countingRuntime({
+        [SPACE]: "of:profile",
+        [OTHER_SPACE]: "of:room",
+      });
+
+      const spaces = await Promise.all([
+        profileSpaceOf(rootCell(runtime, SPACE, "of:profile")),
+        profileSpaceOf(rootCell(runtime, OTHER_SPACE, "of:profile")),
+      ]);
+
+      expect(spaces).toEqual([SPACE, undefined]);
+      expect(runtime.opened()).toBe(2);
+    });
+
+    it("reads a space's root through each runtime that asks", async () => {
+      const first = countingRuntime({ [SPACE]: "of:profile" });
+      const second = countingRuntime({ [SPACE]: "of:room" });
+
+      const spaces = await Promise.all([
+        profileSpaceOf(rootCell(first, SPACE, "of:profile")),
+        profileSpaceOf(rootCell(second, SPACE, "of:profile")),
+      ]);
+
+      expect(spaces).toEqual([SPACE, undefined]);
+      expect(first.opened()).toBe(1);
+      expect(second.opened()).toBe(1);
+    });
+
+    it("rejects every overlapping call when the root cannot be read, and reads again for a later call", async () => {
+      const failure = new Error("the space's root cannot be read");
+      const runtime = countingRuntime({ [SPACE]: "of:profile" }, failure);
+
+      const outcomes = await Promise.allSettled([
+        profileSpaceOf(rootCell(runtime, SPACE, "of:profile")),
+        profileSpaceOf(rootCell(runtime, SPACE, "of:profile")),
+      ]);
+      runtime.recover();
+      const space = await profileSpaceOf(
+        rootCell(runtime, SPACE, "of:profile"),
+      );
+
+      expect(outcomes).toEqual([
+        { status: "rejected", reason: failure },
+        { status: "rejected", reason: failure },
+      ]);
+      expect(space).toBe(SPACE);
+      expect(runtime.opened()).toBe(2);
+    });
+
+    it("returns `undefined` for a cell below a document's root, reading nothing", async () => {
+      const runtime = countingRuntime({ [SPACE]: "of:profile" });
+      const field = {
+        ...rootCell(runtime, SPACE, "of:profile"),
+        ref: () => ({ path: ["name"] }),
+      } as unknown as CellHandle;
+
+      expect(await profileSpaceOf(field)).toBeUndefined();
+      expect(runtime.opened()).toBe(0);
     });
   });
 

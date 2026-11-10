@@ -322,8 +322,9 @@ export interface CommentRecord {
   status: CommentStatus;
 
   /**
-   * The text between the anchors when the comment was written, shown once
-   * an edit has deleted that text from the body.
+   * The text between the anchors when the comment was written, shown in its
+   * row while the editor marks nothing for it: while it is a listed draft,
+   * once it is resolved, and once an edit has deleted that text.
    */
   quote: string;
 
@@ -471,18 +472,6 @@ const PLACES_PER_COMMENT = 2;
  */
 const NO_PROFILE = "Choose a Fabric profile of your own to comment.";
 
-/** How long a quote shown beside a comment may run before it is cut. */
-const EXCERPT_LENGTH = 80;
-
-/** `text` on one line, cut to `EXCERPT_LENGTH` characters. */
-const excerptOf = (text: string): string => {
-  const line = text.replace(/\s+/g, " ").trim();
-  const characters = Array.from(line);
-  return characters.length <= EXCERPT_LENGTH
-    ? line
-    : `${characters.slice(0, EXCERPT_LENGTH - 1).join("")}…`;
-};
-
 /**
  * The profile `myProfile` resolves to, once it holds a value and is the
  * profile of the person the handler runs for; `undefined` otherwise. A
@@ -573,18 +562,6 @@ const trackSelection = handler<
   );
 });
 
-/**
- * The draft being written in this session, if any: its id, and the text
- * between its anchors when it was started. `id` is empty while the composer
- * is closed.
- */
-interface Composing {
-  id: string;
-  text: string;
-}
-
-const NOT_COMPOSING: Composing = { id: "", text: "" };
-
 /** What starting a comment works on. */
 interface OpenComposerState {
   content: Writable<string>;
@@ -592,7 +569,7 @@ interface OpenComposerState {
   comments: CommentsCell;
   myProfile: ProfileCell | undefined;
   selection: Writable<NoteSelection>;
-  composing: Writable<Composing>;
+  composing: Writable<string>;
   draft: Writable<string>;
   notice: Writable<string>;
 }
@@ -612,7 +589,7 @@ const openComposer = handler<unknown, OpenComposerState>((_, state) => {
     state.notice.set(NO_PROFILE);
     return;
   }
-  if (state.composing.get().id !== "") {
+  if (state.composing.get() !== "") {
     state.notice.set("Post or cancel the comment you are writing first.");
     return;
   }
@@ -633,7 +610,7 @@ const openComposer = handler<unknown, OpenComposerState>((_, state) => {
   const id = mintCommentId();
   anchorComment(state.anchors, id, from, to);
   storeComment(state.comments, id, profile, "", text, "draft");
-  state.composing.set({ id, text });
+  state.composing.set(id);
   state.draft.set("");
   state.notice.set("");
 });
@@ -682,8 +659,7 @@ const discardDraftRecord = (
 interface ResumeState {
   comments: CommentsCell;
   id: string;
-  text: string;
-  composing: Writable<Composing>;
+  composing: Writable<string>;
   draft: Writable<string>;
   notice: Writable<string>;
 }
@@ -693,8 +669,8 @@ interface ResumeState {
  * composer is already open on another or the draft is no longer one.
  */
 const resumeDraft = handler<unknown, ResumeState>(
-  (_, { comments, id, text, composing, draft, notice }) => {
-    if (composing.get().id !== "") {
+  (_, { comments, id, composing, draft, notice }) => {
+    if (composing.get() !== "") {
       notice.set("Post or cancel the comment you are writing first.");
       return;
     }
@@ -703,7 +679,7 @@ const resumeDraft = handler<unknown, ResumeState>(
       notice.set("This draft was posted or discarded in another tab.");
       return;
     }
-    composing.set({ id, text });
+    composing.set(id);
     draft.set("");
     notice.set("");
   },
@@ -724,7 +700,7 @@ const discardDraft = handler<CommentIdEvent, DiscardState>(
 /** What closing the composer works on. */
 interface CloseComposerState {
   discardVerb: Stream<CommentIdEvent>;
-  composing: Writable<Composing>;
+  composing: Writable<string>;
   draft: Writable<string>;
   notice: Writable<string>;
 }
@@ -732,9 +708,9 @@ interface CloseComposerState {
 /** Discards the draft being written, with its anchors, and closes the composer. */
 const closeComposer = handler<unknown, CloseComposerState>(
   (_, { discardVerb, composing, draft, notice }) => {
-    const { id } = composing.get();
+    const id = composing.get();
     if (id !== "") discardVerb.send({ id });
-    composing.set(NOT_COMPOSING);
+    composing.set("");
     draft.set("");
     notice.set("");
   },
@@ -744,7 +720,7 @@ const closeComposer = handler<unknown, CloseComposerState>(
 interface PostCommentState {
   comments: CommentsCell;
   myProfile: ProfileCell | undefined;
-  composing: Writable<Composing>;
+  composing: Writable<string>;
   draft: Writable<string>;
   selectedId: Writable<string>;
   replyDraft: Writable<string>;
@@ -762,7 +738,7 @@ const postComment = handler<unknown, PostCommentState>((_, state) => {
     state.notice.set(NO_PROFILE);
     return;
   }
-  const { id } = state.composing.get();
+  const id = state.composing.get();
   const body = state.draft.get().trim();
   if (id === "" || body === "") {
     state.notice.set("Write a comment to post it.");
@@ -778,7 +754,7 @@ const postComment = handler<unknown, PostCommentState>((_, state) => {
   record.key("body").set(body);
   record.key("status").set("posted");
   record.key("postedAt").set(Date.now());
-  state.composing.set(NOT_COMPOSING);
+  state.composing.set("");
   state.draft.set("");
   state.notice.set("");
   selectId(id, state);
@@ -995,7 +971,9 @@ export const SharedNoteCore = pattern<
   const deleteVerb = deleteComment({ anchors, comments });
   const discardVerb = discardDraft({ anchors, comments });
   const selection = new Writable.perSession<NoteSelection>(NOTHING_SELECTED);
-  const composing = new Writable.perSession<Composing>(NOT_COMPOSING);
+  // The id of the draft this session is writing, or empty while the composer
+  // is closed.
+  const composing = new Writable.perSession("");
   const draft = new Writable.perSession("");
   const notice = new Writable.perSession("");
   const replyDraft = new Writable.perSession("");
@@ -1069,7 +1047,7 @@ export const SharedNoteCore = pattern<
     const marks = openIds.map((id) =>
       highlightOf(id, id === selected ? "active" : undefined)
     );
-    const writing = composing.get().id;
+    const writing = composing.get();
     return writing === "" || openIds.includes(writing)
       ? marks
       : [...marks, highlightOf(writing, "active")];
@@ -1080,17 +1058,14 @@ export const SharedNoteCore = pattern<
   const commentDisabled = computed((): PerSession<boolean> => {
     const selected = selection.get();
     return selected.from === selected.to || !hasProfile ||
-      composing.get().id !== "";
+      composing.get() !== "";
   });
   // Per-session differences in the composer, the notice and the rows are
   // shown or hidden through a per-session `display` prop. Each element shown
   // this way also carries a static `hidden`, which keeps it out of view until
   // its display has a value.
   const composerDisplay = computed((): PerSession<NoteDisplay> =>
-    composing.get().id === "" ? "none" : "flex"
-  );
-  const composerQuote = computed((): PerSession<string> =>
-    excerptOf(composing.get().text)
+    composing.get() === "" ? "none" : "flex"
   );
   const noticeDisplay = computed((): PerSession<NoteDisplay> =>
     notice.get() === "" ? "none" : "block"
@@ -1194,9 +1169,6 @@ export const SharedNoteCore = pattern<
             hidden
             style={{ display: composerDisplay }}
           >
-            <cf-text variant="caption" tone="muted">
-              On “{composerQuote}”
-            </cf-text>
             <cf-textarea
               id="shared-note-comment-draft"
               aria-label="Comment"
@@ -1244,22 +1216,16 @@ export const SharedNoteCore = pattern<
               const placed = computed(() => {
                 const range = rangeOf[comment.id];
                 const gone = range !== undefined && range.to <= range.from;
-                const draftDisplay: NoteDisplay = comment.status === "draft"
-                  ? "flex"
-                  : "none";
-                // The quote is the author's; the text between the anchors
-                // is the note's now, which anyone who can write the note can
-                // change. It is shown apart from the quote whenever the two
-                // differ.
-                const now = range === undefined || gone
-                  ? ""
-                  : content.get().slice(range.from, range.to);
+                const draft = comment.status === "draft";
+                const draftDisplay: NoteDisplay = draft ? "flex" : "none";
                 return {
                   order: placeOf[comment.id] ?? 0,
                   gone,
-                  quoteDecoration: gone ? "line-through" : "none",
-                  moved: now !== "" && now !== comment.quote,
-                  nowExcerpt: excerptOf(now),
+                  // The editor marks the text of an open comment, and of the
+                  // draft being written, which is not listed. A listed draft,
+                  // a resolved comment, and a comment whose text an edit
+                  // deleted mark nothing, so their rows name the text.
+                  quoted: gone || draft || comment.resolved.get(),
                   draftDisplay,
                 };
               });
@@ -1275,9 +1241,7 @@ export const SharedNoteCore = pattern<
                   // A draft is listed only to its author, and not while the
                   // composer is writing it.
                   row: comment.status === "draft"
-                    ? mine && composing.get().id !== comment.id
-                      ? "flex"
-                      : "none"
+                    ? mine && composing.get() !== comment.id ? "flex" : "none"
                     : !resolved || showResolved.get()
                     ? "flex"
                     : "none",
@@ -1305,42 +1269,48 @@ export const SharedNoteCore = pattern<
                       size="sm"
                       $profile={comment.authorProfile}
                     />
-                    <cf-cfc-authorship
-                      $value={comment.quote}
-                      $author={comment.authorProfile}
-                      verifyTextIntegrity
-                      style={{ minWidth: "0", maxWidth: "100%" }}
-                    >
-                      <cf-text
-                        variant="caption"
-                        tone="muted"
-                        style={{
-                          display: "block",
-                          fontStyle: "italic",
-                          overflow: "hidden",
-                          textOverflow: "ellipsis",
-                          whiteSpace: "nowrap",
-                          textDecoration: placed.quoteDecoration,
-                        }}
-                      >
-                        {comment.quote}
-                      </cf-text>
-                    </cf-cfc-authorship>
-                    {placed.gone
-                      ? (
-                        <cf-text variant="caption" tone="muted">
-                          text no longer in note
-                        </cf-text>
-                      )
-                      : null}
-                    {placed.moved
-                      ? (
-                        <cf-text variant="caption" tone="muted">
-                          now “{placed.nowExcerpt}”
-                        </cf-text>
-                      )
-                      : null}
                   </cf-hstack>
+                  {
+                    // The mark in the editor shows what a comment is about,
+                    // so the row names its text, the author's quote, only
+                    // while nothing marks it.
+                    placed.quoted
+                      ? (
+                        <cf-hstack gap="2" align="center" wrap>
+                          <cf-cfc-authorship
+                            $value={comment.quote}
+                            $author={comment.authorProfile}
+                            verifyTextIntegrity
+                            style={{ minWidth: "0", maxWidth: "100%" }}
+                          >
+                            <cf-text
+                              variant="caption"
+                              tone="muted"
+                              style={{
+                                display: "block",
+                                fontStyle: "italic",
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                                whiteSpace: "nowrap",
+                                textDecoration: placed.gone
+                                  ? "line-through"
+                                  : "none",
+                              }}
+                            >
+                              {comment.quote}
+                            </cf-text>
+                          </cf-cfc-authorship>
+                          {placed.gone
+                            ? (
+                              <cf-text variant="caption" tone="muted">
+                                text no longer in note
+                              </cf-text>
+                            )
+                            : null}
+                        </cf-hstack>
+                      )
+                      : null
+                  }
                   <cf-cfc-authorship
                     $value={comment.body}
                     $author={comment.authorProfile}
@@ -1387,7 +1357,6 @@ export const SharedNoteCore = pattern<
                       onClick={resumeDraft({
                         comments,
                         id,
-                        text: comment.quote,
                         composing,
                         draft,
                         notice,
