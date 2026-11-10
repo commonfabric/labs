@@ -1174,7 +1174,7 @@ export class Client {
     if (options.whileConnected === true && !this.#connected) {
       throw connectionLostWhileRestoring();
     }
-    const epoch = this.#requireConnected();
+    const epoch = await this.#ensureConnected();
     // A request that belongs with others on one connection, as a staged
     // watch set's parts do, is not sent on another.
     if (options.epoch !== undefined && epoch !== options.epoch) {
@@ -2699,6 +2699,19 @@ export class Client {
     return `req:${this.#nextRequest++}`;
   }
 
+  /**
+   * Returns, a turn later, the connection epoch for post-await readiness
+   * checks, as `#requireConnected()` decides it; a request is not sent in the
+   * turn it is made.
+   */
+  #ensureConnected(): Promise<number> {
+    try {
+      return Promise.resolve(this.#requireConnected());
+    } catch (error) {
+      return Promise.reject(error);
+    }
+  }
+
   /** Returns the observed connection epoch for post-await readiness checks. */
   #requireConnected(): number {
     if (this.#closed) {
@@ -3252,11 +3265,20 @@ export class SpaceSession {
     // open there: made while the client is connecting or the session is
     // held, or still waiting when that connection drops, it fails with
     // `notSentError()`. Commits waiting for the restore are sent in the order
-    // they were made.
+    // they were made. A failure's `readyToRetry()` waits for a connection
+    // later than the one the commit was made on.
+    const madeOn = {
+      epoch: this.#client.connectionEpoch,
+      sessionId: this.#sessionId,
+    };
     try {
-      await this.#ensureSessionRestored();
+      const signal = this.#client.connectionSignal;
+      this.#requireAvailable(signal);
+      if (this.#restoreComplete !== undefined) {
+        await this.#ensureSessionRestored(signal);
+      }
     } catch (error) {
-      throw this.#withReadyToRetry(error);
+      throw this.#withReadyToRetry(error, madeOn);
     }
     const raced = this.#outstandingCommits.get(commit.localSeq);
     if (raced) {
@@ -3269,7 +3291,7 @@ export class SpaceSession {
       pending: Promise.withResolvers<AppliedCommit>(),
     };
     this.#outstandingCommits.set(commit.localSeq, outstanding);
-    this.#sendOutstandingCommit(commit.localSeq, outstanding);
+    this.#sendOutstandingCommit(commit.localSeq, outstanding, madeOn);
     return await outstanding.pending.promise;
   }
 
@@ -5083,19 +5105,21 @@ export class SpaceSession {
   /**
    * Returns `error`, attaching to a `notSentError()` or `unacknowledgedError()`
    * a `readyToRetry()` that resolves once this session is open on a later
-   * connection than the one the error came from, so that a caller can send
+   * connection than the one the request was made on (`madeOn`, as the client
+   * and this session stood then), so that a caller can send
    * the request again then: a commit under its own `localSeq`, which the
    * server answers from its record if it landed. It rejects with the session's
    * close error, or with a `SessionReplacedError` when the server opened a new
    * session in this one's place, which judges a resent commit as a new one.
    */
-  #withReadyToRetry(error: unknown): Error {
+  #withReadyToRetry(
+    error: unknown,
+    madeOn: { epoch: number; sessionId: string },
+  ): Error {
     const failure = error instanceof Error ? error : new Error(String(error));
     if (connectionDeliveryOf(failure) === undefined) return failure;
-    const epoch = this.#client.connectionEpoch;
-    const sessionId = this.#sessionId;
     return Object.assign(failure, {
-      readyToRetry: () => this.#reopenedSince(epoch, sessionId),
+      readyToRetry: () => this.#reopenedSince(madeOn.epoch, madeOn.sessionId),
     });
   }
 
@@ -5130,6 +5154,7 @@ export class SpaceSession {
   #sendOutstandingCommit(
     localSeq: number,
     pendingCommit: OutstandingCommit,
+    madeOn: { epoch: number; sessionId: string },
   ): Promise<void> {
     const task = (async () => {
       try {
@@ -5159,7 +5184,7 @@ export class SpaceSession {
         if (isRetryableConflict(error)) {
           error.readyToRetry = () => this.#waitForCaughtUpLocalSeq(localSeq);
         }
-        pendingCommit.pending.reject(this.#withReadyToRetry(error));
+        pendingCommit.pending.reject(this.#withReadyToRetry(error, madeOn));
       }
     })();
     this.#queueBackground(task);

@@ -16,7 +16,10 @@ import {
 } from "../v2.ts";
 import {
   connect,
+  connectionDeliveryOf,
   isPushedSync,
+  isSessionReplacedError,
+  isUnacknowledgedError,
   loopback,
   type SessionOpenAuthContext,
   type Transport,
@@ -3169,26 +3172,31 @@ Deno.test(
   },
 );
 
-Deno.test("memory v2 client replays an in-flight transact after reconnect", async () => {
+Deno.test("memory v2 client fails a transact its connection dropped as unacknowledged, ready to send again once the session is back", async () => {
   const transport = new ScriptedReconnectTransport([1]);
   const client = await connect({ transport });
   const space = await client.mount("did:key:z6Mk-memory-v2-client-replay");
 
   try {
-    const applied = await space.transact({
+    const commit = {
       localSeq: 1,
       reads: { confirmed: [], pending: [] },
       operations: [{
-        op: "set",
+        op: "set" as const,
         id: "of:doc:1",
         value: {
           value: {
-            hello: "replayed",
+            hello: "sent again",
           },
         },
       }],
-    });
+    };
+    const error = await space.transact(commit).catch((e) => e);
+    assertEquals(isUnacknowledgedError(error), true);
+    await error.readyToRetry();
 
+    // The client sent it once; its caller sends it again, under its localSeq.
+    const applied = await space.transact(commit);
     assertEquals(transport.connectionCount, 2);
     assertEquals(transport.transactLocalSeqs, [1, 1]);
     assertEquals(applied.seq, 1);
@@ -3197,7 +3205,7 @@ Deno.test("memory v2 client replays an in-flight transact after reconnect", asyn
   }
 });
 
-Deno.test("memory v2 client replays retained commits in localSeq order after reconnect", async () => {
+Deno.test("memory v2 client fails the commits a drop caught, and lands them in localSeq order when their caller sends them again", async () => {
   const transport = new ScriptedReconnectTransport([1]);
   const client = await connect({ transport });
   const space = await client.mount(
@@ -3205,11 +3213,11 @@ Deno.test("memory v2 client replays retained commits in localSeq order after rec
   );
 
   try {
-    const first = space.transact({
+    const commit1 = {
       localSeq: 1,
       reads: { confirmed: [], pending: [] },
       operations: [{
-        op: "set",
+        op: "set" as const,
         id: "of:doc:1",
         value: {
           value: {
@@ -3217,8 +3225,8 @@ Deno.test("memory v2 client replays retained commits in localSeq order after rec
           },
         },
       }],
-    });
-    const second = space.transact({
+    };
+    const commit2 = {
       localSeq: 2,
       reads: {
         confirmed: [],
@@ -3229,7 +3237,7 @@ Deno.test("memory v2 client replays retained commits in localSeq order after rec
         }],
       },
       operations: [{
-        op: "set",
+        op: "set" as const,
         id: "of:doc:1",
         value: {
           value: {
@@ -3237,14 +3245,25 @@ Deno.test("memory v2 client replays retained commits in localSeq order after rec
           },
         },
       }],
-    });
+    };
+    const first = space.transact(commit1);
+    const second = space.transact(commit2);
 
-    const [applied1, applied2] = await Promise.all([first, second]);
+    const failures = await Promise.all([
+      first.catch((e) => e),
+      second.catch((e) => e),
+    ]);
+    // The first send drops the connection, and the second fails with it,
+    // whether or not it was handed over.
+    for (const failure of failures) {
+      expect(connectionDeliveryOf(failure)).toBeDefined();
+    }
+    await failures[0].readyToRetry();
+    const applied1 = await space.transact(commit1);
+    const applied2 = await space.transact(commit2);
 
     assertEquals(transport.connectionCount, 2);
-    // The first send drops the connection before the second request resumes
-    // from readiness. Both retained commits reach the replacement in order.
-    expect(transport.transactLocalSeqs).toEqual([1, 1, 2]);
+    expect(transport.transactLocalSeqs.slice(-2)).toEqual([1, 2]);
     assertEquals(applied1.seq, 1);
     assertEquals(applied2.seq, 2);
   } finally {
@@ -3918,7 +3937,7 @@ class SessionChangingTransport implements Transport {
   }
 }
 
-Deno.test("memory v2 client rejects outstanding commits when session ID changes on reopen", async () => {
+Deno.test("memory v2 client fails a commit its connection dropped, and its readyToRetry rejects as replaced once the session reopens under a new ID", async () => {
   const transport = new SessionChangingTransport();
 
   const client = await connect({ transport });
@@ -3927,8 +3946,8 @@ Deno.test("memory v2 client rejects outstanding commits when session ID changes 
   );
 
   try {
-    // Send a transact — will be disconnected before response
-    const commitPromise = session.transact({
+    // The transact's connection drops before its response.
+    const error = await session.transact({
       localSeq: 1,
       reads: { confirmed: [], pending: [] },
       operations: [{
@@ -3936,39 +3955,15 @@ Deno.test("memory v2 client rejects outstanding commits when session ID changes 
         id: "of:doc:orphan",
         value: { value: { data: "test" } },
       }],
-    });
+    }).catch((e) => e);
+    expect(connectionDeliveryOf(error)).toBeDefined();
 
-    // The commit should be rejected because the session ID changed
-    let rejected = false;
-    let resolvedValue: unknown = undefined;
-    try {
-      resolvedValue = await commitPromise;
-    } catch (e) {
-      rejected = true;
-      const err = e as Error;
-      assertEquals(
-        err.message.includes("session changed"),
-        true,
-        `Expected "session changed" but got: ${err.message}`,
-      );
-    }
-    assertEquals(
-      rejected,
-      true,
-      `Expected rejection but got resolved value: ${
-        JSON.stringify(resolvedValue)
-      }, ` +
-        `transactCount=${transport.transactCount}, sessionIds=${
-          JSON.stringify(transport.transactSessionIds)
-        }`,
-    );
+    // A commit sent again on the new session would be judged as a new one.
+    const replaced = await error.readyToRetry().catch((e: unknown) => e);
+    assertEquals(isSessionReplacedError(replaced), true);
     assertEquals(session.sessionId, "session-B");
     assertEquals(transport.sessionOpenCount, 2);
-    assertEquals(
-      transport.transactCount,
-      1,
-      "the client must reject the orphaned commit instead of replaying it on the replacement session",
-    );
+    assertEquals(transport.transactCount, 1);
     assertEquals(transport.transactSessionIds, ["session-A"]);
   } finally {
     await client.close();
