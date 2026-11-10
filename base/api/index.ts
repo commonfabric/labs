@@ -3816,11 +3816,24 @@ export type WishParams = {
   headless?: boolean;
 };
 
+/**
+ * Why a wish holds an `error`:
+ * - `"no-match"`: the wish looked and confirmed nothing matches, such as a
+ *   `#profile` wish for a user with no profile yet, or a hashtag search with
+ *   no match. A reader may offer to make one.
+ * - `"failed"`: the wish could not look, or what it found could not be read.
+ *
+ * A reader treats a code it does not know as `"failed"`.
+ */
+export type WishErrorCode = "no-match" | "failed";
+
 export type WishState<T> = {
   // A failed wish should have result of undefined and candidates of []
   result: T | undefined;
   candidates: T[];
   error?: any;
+  /** Set whenever `error` is, saying which kind of error it is. */
+  errorCode?: WishErrorCode;
   [UI]?: VNode;
 };
 
