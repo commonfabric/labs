@@ -37,8 +37,10 @@ a promoted `computed`.
 handler; and the body of a function declared at module scope of a module in
 the subset.
 
-**Imported tier (tier I).** A module that is not checked against the subset.
-The compiler reads the annotated signatures of its exports and nothing else.
+**Imported tier (tier I).** A module that begins with the directive
+`"use typescript";`. It is not checked against the subset. The compiler reads
+the annotated signatures of its exports and nothing else
+([§5.5](#55-imported-typescript-tier-i)).
 
 **Authored function.** A function declared at module scope, in tier F or in
 tier I. A builder result (`lift(...)`, `handler(...)`, `pattern(...)`) is not
@@ -187,10 +189,11 @@ where and how the rule is checked.
 | Stateful `RegExp` | Refused when the value is frozen | Refused at compile time from the literal's flags; a `RegExp` built by `new RegExp(...)` at module scope is still checked when frozen |
 | Ambient clock and entropy | Gated at run time: coarse in a handler, refused in a `lift`, a `computed`, and the pattern body (`createGatedDate` in `compartment-globals.ts`) | The same gate stays. The compiler also reports the read where it can see it (`function-body:ambient-read`) |
 
-The overview makes the compiler trusted. Whether the load-time verifier stays
-as a second check on compiled artifacts is not decided there, and this
-document does not decide it ([§13](#13-open-questions)). The language rule
-does not depend on the answer.
+The compiler is trusted, so for a module in the subset the compiler's check
+is the only one: the load-time verifier does not run on it, and the emitted
+code no longer has to stay inside the grammar the verifier recognizes. The
+verifier stays for tier-I modules, whose function bodies the compiler does
+not analyze ([§5.5](#55-imported-typescript-tier-i)).
 
 ## 4. Reactive tier (tier R)
 
@@ -359,15 +362,39 @@ object and array destructuring assignment.
 | `Proxy`, `Reflect`, `Symbol(...)`, `WeakMap`, `WeakSet`, `WeakRef` | `function-body:unsupported-global` | Not typed by the subset ([§9](#9-standard-library-surface)) |
 | A write to a module-scope constant, an import, or a global | `module-scope:frozen-data-write`, `function-body:global-write` | Statelessness ([§3.3](#33-the-statelessness-rule)) |
 | `Date.now()`, `new Date()` with no argument, `Math.random()` in a `lift`, a `computed`, or an authored function they call | `function-body:ambient-read` | A computation is a function of its inputs. The read is allowed in a `handler`, an `action`, and an inline event handler |
-| `pattern`, `lift`, `handler`, `computed`, `action` called in tier F | `function-body:builder-call` | Builders define nodes at module scope or in tier R. The exception is an inline `pattern(...)` used directly as the callee of an instantiation, which the compiler hoists |
-| An inline event-handler arrow in JSX built in tier F | `function-body:inline-handler` | It would create a handler per call. Pass a stream, or move the JSX into a pattern |
+| `pattern`, `lift`, `handler`, `computed` called in tier F | `function-body:builder-call` | Builders define nodes at module scope or in tier R. The exceptions are an inline `pattern(...)` used directly as the callee of an instantiation, which the compiler hoists, and `action` (§5.2) |
 
 ### 5.2 Runtime calls
 
-A tier-F body may make the three kinds of runtime call the overview names:
-instantiate a pattern, create a cell, and request an effectful built-in. Their
-forms are those of §4.4. Which of them a `lift` or a `computed` may make, as
-opposed to a `handler`, is specified in `builtin-inventory.md`.
+A tier-F body may make four kinds of runtime call: instantiate a pattern,
+create a cell, request an effectful built-in, and bind a handler. The forms
+of the first three are those of §4.4. Which of the four a `lift` or a
+`computed` may make, as opposed to a `handler`, is specified in
+`builtin-inventory.md`.
+
+**Binding a handler.** An arrow function written as an `on*` attribute of
+JSX built in tier F means what it means in tier R: an `action` around the
+arrow. `action(() => ...)` may also be written out. The compiler hoists the
+arrow to a handler definition whose state is the set of values the arrow
+captures, and the expression evaluates, at run time, to a stream bound to the
+captured values. Three rules apply to the captures.
+
+- A captured value is a data value or a cell handle. A captured function
+  value is refused (`ses-callback:callable-capture`), as in tier R.
+- A captured local is a `const` or a parameter. A captured `let` is refused
+  (`function-body:handler-capture`): the handler would see the value at the
+  time of binding, not later assignments, and the diagnostic says to copy it
+  into a `const` first.
+- A captured data value is copied into the binding. A captured cell handle
+  stays a link.
+
+```tsx
+// Shown for illustration only.
+const toppingButtons = (toppings: string[], chosen: Writable<string>) =>
+  toppings.map((topping) => (
+    <button onClick={() => chosen.set(topping)}>{topping}</button>
+  ));
+```
 
 A cell handle supports `.get()`, `.set()`, `.key()`, `.update()`, `.push()`,
 `.send()`, and the other methods `builtin-inventory.md` lists for its type.
@@ -394,8 +421,45 @@ subtree the footprint widened to. The causes visible in syntax are:
 - an input spread into an object or an array, or destructured with a rest
   element, which widens to that subtree;
 - an input captured by a closure that is passed to a function whose body is
-  not analyzed;
-- a cast of an input to `any` ([§7.8](#78-any-and-unknown)).
+  not analyzed.
+
+### 5.5 Imported TypeScript (tier I)
+
+A module is in tier I when its first statement is the directive
+`"use typescript";`. The directive is valid TypeScript, survives formatting,
+and is visible to the parser. Nothing else puts a module in tier I: a module
+without the directive that fails the subset check is refused, never treated
+as imported, so a mistake cannot silently turn a precise module into an
+opaque one.
+
+```ts
+// Shown for illustration only.
+"use typescript";
+
+type Shape<T> = T extends readonly (infer E)[] ? E : never;
+
+export function unitPrice(basePrice: number, glaze: string): number {
+  // Anything TypeScript accepts.
+}
+```
+
+- **Signatures.** Each exported function that a subset module imports has
+  annotated parameters and an annotated return type, all in the subset
+  (`import:signature-not-in-subset`). Types and interfaces it exports can be
+  imported when they are in the subset. Other exported values cannot
+  (`import:not-a-function`).
+- **Bodies.** The compiler does not analyze them. A call to such a function
+  reads every argument in full, and its result depends on every argument.
+- **Module scope.** The rules of §3.1 to §3.3 apply as far as syntax shows:
+  no `let`, `var`, or class at module scope, and data constants are frozen.
+  Because the compiler has not checked the bodies, the load-time verifier and
+  the freezing wrappers of the current system stay in force for these
+  modules, and a write to frozen data throws at run time.
+- **Authority.** It imports only types from `commonfabric`. It cannot call a
+  builder or a built-in.
+- **Parameters and results are data types.** A cell passed to such a function
+  could be written without the plan knowing, so cell-typed parameters are
+  refused until [§13](#13-open-questions) is settled.
 
 ## 6. Promotion of `computed`
 
@@ -433,9 +497,10 @@ costs no sandboxed call for the operations the body is made of.
    - `ifElse`, `when`, `unless`, or `str`.
 5. **Nothing else occurs in the body.** In particular it creates no cell,
    instantiates no pattern (including by a JSX tag that names one), requests
-   no effect, defines no event handler, and writes nothing.
+   no effect, and writes nothing.
 
-JSX with host elements only is allowed in a promoted body. A call of an
+JSX with host elements is allowed in a promoted body, and so is an inline
+event handler in it, which is then a tier-R handler (§4.5). A call of an
 authored function inside a promoted body stays a sandboxed call with its own
 footprint; the expression around it is promoted.
 
@@ -481,7 +546,7 @@ unions that name them.
 | `string`, `number`, `boolean`, `bigint`, `null`, `undefined`, `void` | `void` only as a function's return type |
 | Literal types | String, number, boolean, and bigint literals |
 | `unknown` | The top type. In a data type it declares a reference to another piece that is not read ([`unknown.md`](../../common/concepts/types-and-schemas/unknown.md)) |
-| `any` | Supported with a warning ([§7.8](#78-any-and-unknown)) |
+| `any` | Refused ([§7.8](#78-any-and-unknown)) |
 | `never` | The bottom type. `Record<string, never>` is the empty object |
 | Object types | Type literals and interfaces, `extends` between interfaces, optional properties (`?`), `readonly` properties. Property names are identifiers, string literals, numeric literals, and the well-known keys the API exports (`[UI]`, `[NAME]`, `[SELF]`, and the others) |
 | Index signatures | `[key: string]: T` and `Record<K, T>` where `K` is `string` or a union of string literals |
@@ -580,6 +645,13 @@ Assignability is structural, with these rules.
   widen it. `as const` keeps literal types and adds `readonly` throughout.
 - A function type is assignable when parameters are assignable in reverse and
   the result is assignable forward.
+- The value a pattern instantiation returns is assignable to every type the
+  pattern's result type is assignable to, to a cell of such a type, and to
+  `unknown`. This is what lets a handler push a new instance onto a list
+  declared with a narrower view of it, or hand it to `navigateTo`.
+- `Cell<T>` is assignable to `ReadonlyCell<U>` when `T` is assignable to `U`,
+  and to `Cell<U>` only when `T` and `U` are the same type up to
+  annotations, because the handle can write.
 - Label annotations do not take part in structural assignability
   ([§8.6](#86-assignability)).
 
@@ -608,7 +680,7 @@ The variable of a `catch` clause has type `unknown`.
 - `e as const` is allowed on literals.
 - `e!` removes `null` and `undefined`.
 - `e satisfies T` checks assignability and keeps the type of `e`.
-- A cast through `unknown` or `any` to an unrelated type is refused
+- A cast through `unknown` to an unrelated type is refused
   (`cast-validation:double-unknown`), as today.
 - A cast to a cell type or to `Reactive<T>` is refused
   (`cast-validation:cell-cast`, `cast-validation:forbidden-cast`), as today.
@@ -616,16 +688,30 @@ The variable of a `catch` clause has type `unknown`.
 
 ### 7.8 `any` and `unknown`
 
-`unknown` is preferred everywhere. In a data type it means a reference that
-is not read, and in code it forces a narrowing before use.
+`any` is refused, as a type and as the target of a cast
+(`subset-type:any`). A position typed `any` has the schema that accepts
+every value and is read in full, so every footprint that reaches it widens
+to the whole subtree, and a cast to `any` hides a type from the checker and
+from footprint analysis alike. A tier-I module may use `any` inside its
+bodies and not in the signatures a subset module imports.
 
-`any` is accepted, because the corpus uses it ([§11](#11-corpus-evidence)),
-with a warning (`subset-type:any`) wherever it is written, including as the
-target of a cast. A value of type `any` permits every operation, and each
-result is `any`. The cost is stated in the warning: a data position typed
-`any` has the schema that accepts every value and is read in full, so a
-footprint that reaches it widens to the whole subtree. A pattern's result
-type that is `any` or `unknown` at the top level stays an error
+`unknown` is the supported top type. In a data type it declares a reference
+that is not read, and in code it forces a narrowing before use.
+
+The corpus uses `any` for a small number of things
+([§11.3](#113-what-the-subset-refuses-in-the-corpus)). The subset supports
+each of them explicitly instead.
+
+| What `any` stands for today | Explicit form |
+| --- | --- |
+| A reference to some other piece, or a cell of unknown content (`cell: any`, `Writable<any>`) | `unknown` for the reference; `Cell<unknown>` for a handle. `.key(name)` on a `Cell<unknown>` takes any string and yields a `Cell<unknown>`, so a helper can walk a path without knowing the shape |
+| A pattern instance, or a cell, passed where a narrower or differently labeled view of it is declared (`entries.push(note as any)`, `navigateTo(note as any)`, `entries: entries as any`) | No cast. A pattern instance is assignable to every type its result type is assignable to (§7.5), and label annotations are not part of assignability (§8.6) |
+| A caught error (`(error as any).message`) | `error instanceof Error ? error.message : String(error)` (§7.6) |
+| An open record or arbitrary JSON (`Record<string, any>`, `result: any \| null`) | `Record<string, unknown>`, or `JSONValue` where the value is read |
+| Elements of a collection that was typed `any[]` (`(e: any) => e.name`) | Type the collection; the lambda parameter is then inferred |
+| An event or a result a builder does not use (`handler<any, State>`, `pattern<Input, any>`) | `handler<unknown, State>`; a declared result type |
+
+A pattern's result type that is `unknown` at the top level stays an error
 (`pattern:any-result-schema`).
 
 ### 7.9 Type features the checker refuses
@@ -636,7 +722,7 @@ type that is `any` or `unknown` at the top level stays an error
 | Mapped types | `subset-type:mapped` | `Record<K, T>`, `Partial`, `Required`, `Readonly`, `Pick`, or `Omit` |
 | Template literal types | `subset-type:template-literal` | `string`, or a union of string literals |
 | `symbol`, `unique symbol` | `schema-type:symbol` | A string literal key, or a well-known key exported by the API |
-| Function overloads | `subset-type:overload` | One signature with a union parameter, or two functions with different names |
+| Function overloads | `subset-type:overload` | One signature with a union parameter, or two functions with different names. To read a cell under another type, `cell.asSchema<T>()` ([§12.4](#124-a-named-form-for-re-typing-a-cell)) |
 | `enum`, `namespace` | `subset-syntax:enum`, `subset-syntax:namespace` | A union of string literals with an `as const` object; a module |
 | Class types, constructor types, abstract members, `this` types | `subset-type:class` | Object types and authored functions |
 | Declaration merging, `declare global`, module augmentation | `subset-syntax:ambient-declaration` | One declaration per name |
@@ -764,9 +850,9 @@ annotations intact.
 an alias like any other, instantiated by substitution. The result of
 `Sec<Donut>` is `Donut` with the annotation, exactly as if written in place.
 
-**`any`, `unknown`, `never`.** They can carry annotations like any shape.
-`Confidential<any, L>` is `any` with the annotation, and
-`Confidential<never, L>` is `never` with it.
+**`unknown` and `never`.** They can carry annotations like any shape.
+`Confidential<unknown, L>` is a labeled reference, and
+`Confidential<never, L>` is `never` with the annotation.
 
 ### 8.5 Label arguments
 
@@ -808,12 +894,19 @@ those of the type of `e` have no effect, and writing them draws a warning
 (`cfc-label:cast-ignored`) that says to declare the label on the cell, the
 pattern input, or the pattern result instead.
 
-This is the one place rule 2 of §2 can fail. A generic function that returns
-its unconstrained parameter as `Confidential<T, L>` is accepted by the
-subset and refused by TypeScript against today's typings, because the brand
-type is not assignable from an unconstrained `T`. The author can write
-`T extends {}` to satisfy both. [§13](#13-open-questions) lists the choice
-to change the published typings instead.
+This is the one place rule 2 of §2 can fail. The compiler does not read the
+declarations in `base/api/cfc.ts` (§7.2), but an editor does: it runs the
+TypeScript compiler over the same source against those declarations. A
+generic function that returns its unconstrained parameter as
+`Confidential<T, L>` is accepted by the subset and reported by the editor,
+because the brand type is not assignable from an unconstrained `T`. The
+author can write `T extends {}` to satisfy both.
+
+Once nothing but editors reads the published typings, they can be reduced to
+what an editor needs: each label alias an identity alias of its payload
+(`type Confidential<T, L> = T`), and each scope wrapper likewise. The
+exception then disappears, and so does every editor error that comes from
+the brand encoding ([§13](#13-open-questions)).
 
 ### 8.7 The TypeScript corner cases
 
@@ -835,7 +928,7 @@ The right column says what the annotation model does with it.
 | An alias read from a type alone, with no argument nodes, cannot name a `typeof` writer binding; the schema would carry no write restriction (`cfc-write-authorized-by:unread`) | Disappears. A binding reference is a term of the type system and survives every substitution. The diagnostic is retired |
 | A writer policy reached through a conditional alias, an indexed access, or a parameter the conditional checks cannot be read | Conditional types are refused (`subset-type:conditional`); indexed access keeps annotations by rule |
 | A CFC alias chain is followed by substituting type-argument nodes, with recursion bounded at three nested readings (`cfc-schema:recursion-limit`) | Replaced. Aliases are instantiated by ordinary substitution, and non-regular recursion is refused where it is declared (`subset-type:non-regular-recursion`) |
-| `Confidential<any, L>` is `any` to the checker, so the alias is read from its declaration, and a recursive such alias is refused (`cfc-schema:recursive-alias-of-any`) | Disappears. `any` carries annotations |
+| `Confidential<any, L>` is `any` to the checker, so the alias is read from its declaration, and a recursive such alias is refused (`cfc-schema:recursive-alias-of-any`) | Disappears. `any` is refused (§7.8), and `unknown` carries annotations |
 | A label list read only in part leaves `null` atoms and a warning (`cfc-label:unread`) | Replaced by an error. A label argument is in the constant language or is refused (`cfc-label:not-static`) |
 | Aliases are detected by canonical name, with no check of the declaring package, so a local type named like one is lowered as one | Disappears. An alias is recognized by resolving its import to `commonfabric` (§7.2) |
 | A function `<T>(v: T): Confidential<T, L>` does not type-check for unconstrained `T`, because the stamp is not assignable from `null` | Disappears in the subset. It remains in an editor until the typings change (§8.6) |
@@ -1080,8 +1173,8 @@ construct found and the replacement given here.
 | `function-body:unsupported-global` | error | A reference to a global §9 lists as not typed | The built-in named in the message, where one replaces it; otherwise remove the use | new |
 | `function-body:global-write` | error | A write to a global or to a member of one | Keep the state in a cell | new |
 | `function-body:ambient-read` | error | `Date.now()`, `new Date()` without arguments, or `Math.random()` in a `lift`, a `computed`, a promoted expression, or the pattern body, directly or through an authored function they call | Read the clock in a `handler` or `action` and store the value in a cell, or take the time as an input | new (the sandbox gate refuses the same read at run time) |
-| `function-body:builder-call` | error | `pattern`, `lift`, `handler`, `computed`, or `action` called in tier F, other than an inline `pattern(...)` as the callee of an instantiation | Define the builder at module scope and call its result. A function body that needs a reactive value instantiates a pattern | new |
-| `function-body:inline-handler` | error | An arrow function as an `on*` attribute of JSX built in tier F | Pass a stream from the enclosing pattern, or move the JSX into a pattern | new |
+| `function-body:builder-call` | error | `pattern`, `lift`, `handler`, or `computed` called in tier F, other than an inline `pattern(...)` as the callee of an instantiation | Define the builder at module scope and call its result. A function body that needs a reactive value instantiates a pattern | new |
+| `function-body:handler-capture` | error | An inline event handler or an `action` in tier F captures a `let` binding | Copy the value into a `const` before the handler and capture that | new |
 | `verb-result:undeclared-return` | error | A `handler` or `action` without a result type argument returns a plain value from a block body | Declare the result (`action<Event, Result>(...)`, `handler<Event, State, Result>(...)`), or use a bare `return;` | carries |
 | `mergeable-push:read-then-push` | warning | A handler reads a mergeable collection and then pushes to it | Push without reading, or use the merge-safe operation the message names | carries |
 | `footprint:widened` | hint | Footprint analysis gave up on an expression (§5.4) | The rewrite for the cause: a static key, a narrower argument, named properties in place of a spread | new |
@@ -1092,15 +1185,15 @@ construct found and the replacement given here.
 
 | Id | Sev. | Condition | Message tells the author to | Status |
 | --- | --- | --- | --- | --- |
-| `subset-type:conditional`, `subset-type:mapped`, `subset-type:template-literal`, `subset-type:overload`, `subset-type:class`, `subset-type:callable-object`, `subset-type:assertion-signature`, `subset-type:unsupported-modifier`, `subset-type:index-signature-key`, `subset-syntax:enum`, `subset-syntax:namespace`, `subset-syntax:ambient-declaration`, `subset-syntax:decorator` | error | The feature of §7.9 | The replacement in §7.9. Where the feature is needed for a helper's signature, move the helper to an imported module ([§12.6](#126-an-explicit-marker-for-imported-typescript)) | new |
+| `subset-type:conditional`, `subset-type:mapped`, `subset-type:template-literal`, `subset-type:overload`, `subset-type:class`, `subset-type:callable-object`, `subset-type:assertion-signature`, `subset-type:unsupported-modifier`, `subset-type:index-signature-key`, `subset-syntax:enum`, `subset-syntax:namespace`, `subset-syntax:ambient-declaration`, `subset-syntax:decorator` | error | The feature of §7.9 | The replacement in §7.9. Where the feature is needed for a helper's signature, move the helper to an imported module ([§5.5](#55-imported-typescript-tier-i)) | new |
 | `subset-type:function-in-data` | error | A function type inside a pattern input or result type, a cell's value type, or a handler's state or event type | Use a stream for behavior, or keep the function at module scope | new (today the value fails to store at run time) |
 | `subset-type:non-regular-recursion` | error | A recursive generic alias or interface that passes changed type arguments to itself | Recurse with the declaration's own parameters | new (replaces `cfc-schema:recursion-limit`) |
 | `subset-type:empty-intersection` | error | A written intersection that is `never` | Use a union, or one object type with both sets of properties | new |
 | `subset-type:operator-operand` | error | `Pick`, `Omit`, `Partial`, or `Required` applied to a type that is not an object type | Apply the operator to the object type and label the result | new |
 | `subset-type:cannot-infer-type-argument` | error | A generic call leaves a type parameter undetermined and without a default | Write the type argument | new |
-| `subset-type:any` | warning | `any` written as a type or as a cast target | Write the concrete type, or `unknown` with a narrowing. The message states that the position is read in full | new |
+| `subset-type:any` | error | `any` written as a type or as a cast target | The explicit form of §7.8 for the use found: `unknown` or `Cell<unknown>` for a reference, no cast for a pattern instance or a labeled value, `instanceof Error` for a caught error, `Record<string, unknown>` or `JSONValue` for open data | new |
 | `subset-type:mismatch` | error | An ordinary type error: assignability, a missing property, a wrong argument count, a possibly-`undefined` receiver | The expected and found types, and for a possibly-`undefined` receiver the `?.` or `??` form | new (reported by TypeScript today) |
-| `cast-validation:double-unknown` | error | A cast through `unknown` or `any` to an unrelated type | Declare the value with the type it has, or narrow it with a type predicate | carries |
+| `cast-validation:double-unknown` | error | A cast through `unknown` to an unrelated type | Declare the value with the type it has, or narrow it with a type predicate | carries |
 | `cast-validation:forbidden-cast` | error | A cast to `Reactive<T>` | Remove the cast | carries |
 | `cast-validation:cell-cast` | error | A cast to a cell type | Declare the cell type where the value is received (the pattern input or the handler state) | carries |
 | `schema:unknown-type-access` | error | A function body reads a property of a parameter, or of a member, typed `unknown`, or of an unbound type parameter | Replace `unknown` with a type that declares the properties read | carries |
@@ -1186,15 +1279,35 @@ and 2 local type declarations, and nothing else.
 
 | Construct | Occurrences (files) | Where | Resolution |
 | --- | --- | --- | --- |
-| Function overloads | 5 (2) | `patterns/system/fabrichat/manager.tsx` (4), `patterns/system/private-inbox/private-inbox.tsx` (1); 34 more in 29 pattern test files | Rewrite. Every occurrence is one idiom: a one-line function whose overload signature re-types a cell (`function inboxOf(pointer: Cell<A>): Cell<B>`) over an implementation that returns its argument as `unknown`. It exists because the double cast is refused. [§12.4](#124-a-named-form-for-re-typing-a-cell) recommends a named form |
+| Function overloads | 5 (2) | `patterns/system/fabrichat/manager.tsx` (4), `patterns/system/private-inbox/private-inbox.tsx` (1); 34 more in 29 pattern test files | Rewrite. Every occurrence is one idiom: a one-line function whose overload signature re-types a cell (`function inboxOf(pointer: Cell<A>): Cell<B>`) over an implementation that returns its argument as `unknown`. It exists because the double cast is refused. [§12.4](#124-a-named-form-for-re-typing-a-cell) proposes `asSchema<T>()` |
 | Mapped type | 1 (1) | `patterns/apps/topics/topic.tsx` | Rewrite as `Readonly<Record<K, number \| undefined>>` |
-| Inline event-handler arrows in JSX built inside a function body | 8 (5) | for example `patterns/apps/habit-tracker/habit-tracker.tsx` and `patterns/apps/calendar/calendar.tsx` | Rewrite: pass a stream, or move the JSX into a pattern |
-| `action` created inside a function body | 1 (1) | a `patterns/dev/` test fixture | Rewrite: move the `action` to the pattern body |
+| `any` in a type | 126 (see below) | for example `patterns/system/link-tool/link-tool.tsx`, `patterns/system/knowledge-graph/knowledge-graph.tsx` | Rewrite with the explicit forms of §7.8 |
+| `as any` | 52 (21) | for example `patterns/system/notes/daily-journal.tsx`, `patterns/system/agent-queue/agent-queue.tsx` | Remove: the rules of §7.5, §7.6, and §8.6 make most of them unnecessary |
 | Arrow function passed to a non-structural method in the pattern body | 2 (1) | `patterns/system/loom/main.tsx` (`some`) | Rewrite: wrap in `computed(() => ...)` |
 | `new` of a non-cell constructor in the pattern body | 4 (3) | `new Date(value)` in `patterns/system/notes/voice-note.tsx` and `patterns/apps/activity-log/activity-log.tsx`; `new Uint8Array` in a catalog story | Rewrite: wrap in `computed(() => ...)` |
 | `void name;` in the pattern body | 2 (2) | `patterns/system/home/home-ben.tsx`, `patterns/apps/store-mapper/store-mapper.tsx` | Rewrite: delete the statement |
 | Ambient authority | 2 (2) | `globalThis.prompt` in `patterns/showcase/scrabble/scrabble.tsx`; `Promise.resolve().then(...)` in a `patterns/dev/` test fixture | Refused with no rewrite. Both rely on something the sandbox is meant not to offer |
 | Reflection | 1 (1) | `Object.getOwnPropertySymbols` in a `patterns/dev/` test | Refused. `Object.getPrototypeOf` (4 uses) and `Object.create(null)` (2) were added to §9.3 instead, because the plain-object test they implement has no other spelling |
+
+`any` occurs 178 times in 48 modules, 126 times in a type and 52 times as
+the target of a cast. By what it stands for:
+
+| Use | Occurrences | Explicit form (§7.8) |
+| --- | --- | --- |
+| A reference to another piece or a cell of unknown content: a property typed `any` (33), `Writable<any>` (27), `any[]` and `Array<any>` (6), `AnyCell<any>` (1) | 67 | `unknown`, `Cell<unknown>` |
+| A parameter over such a value: a lambda parameter in `map`, `find`, `findIndex`, `filter`, `some` (21), a function parameter (10) | 31 | Follows from typing the collection or the parameter |
+| An open record: `Record<string, any>` (12), an index signature (2) | 14 | `Record<string, unknown>`, `JSONValue` |
+| A type argument of a builder: `handler<any, State>`, `pattern<Input, any>` | 9 | `unknown`; a declared result |
+| Other type positions | 5 | Case by case |
+| Cast: `(error as any).message` and similar member reads | 23 | Narrowing with `instanceof Error` |
+| Cast: a pattern instance or a cell passed where a view of it is declared: an object property (7), `navigateTo` (5), `push` (5), and 5 others | 22 | No cast: instance-to-view assignability (§7.5), labels outside assignability (§8.6) |
+| Cast: a JSX attribute value (5), `Object.keys(x as any)` (2) | 7 | Type the value |
+
+The 22 casts in the seventh row are the ones that exist because a type could
+not be expressed: a new `Note` pushed onto a list of `NotePiece`, or a queue
+whose exported type carries a write policy its local view does not. Whether
+the two assignability rules remove every one of them needs the type-checking
+prototype; the script classified them by syntax.
 
 **FabriChat** would need one change: the four overload signatures in
 `manager.tsx`. Nothing else in its nine modules is refused. In particular it
@@ -1204,12 +1317,13 @@ uses no `any`, and its two generic helpers and its use of
 
 ### 11.4 Where the subset was adjusted to the corpus
 
-These constructs were candidates for refusal. The counts are why they are
-accepted.
+These constructs were candidates for refusal. They are accepted, for the
+counts shown or because the project owner asked for them.
 
 | Construct | Occurrences (files) | Decision |
 | --- | --- | --- |
-| `any` in a type | 178 (48), plus 52 (21) `as any` | Accepted with the warning `subset-type:any` (§7.8). None in FabriChat |
+| Inline event-handler arrows in JSX built inside a function body | 8 (5), for example `patterns/apps/habit-tracker/habit-tracker.tsx` | Accepted as a handler binding (§5.2) |
+| `action` created inside a function body | 1 (1) | Accepted, the same way |
 | `as T` casts other than `as const` and `as any` | 240 (57) | Accepted as assertions between related types (§7.7) |
 | Non-null `!` | 56 (33) | Accepted |
 | `typeof name` in a type, outside label arguments | 125 (43) | Accepted (§7.1). Common forms are `Default<typeof EMPTY>`, `ReturnType<typeof handler>`, and `(typeof LIST)[number]` |
@@ -1361,10 +1475,11 @@ const titles = rows.map((row) => row.title.get());
 ### 12.4 A named form for re-typing a cell
 
 The overload idiom of §11.3 states "this cell, read under another type"
-through a hole in overload compatibility. A named operation says the same
-thing where the compiler and a reviewer can see it. This document recommends
-one and does not define it, because it is an API addition
-([§13](#13-open-questions)).
+through a hole in overload compatibility. The runtime's cells already have
+the operation the idiom stands for: `asSchema`, which returns the same cell
+read under another schema. This document proposes its type-argument form as
+the language construct, with the compiler supplying the schema from the
+type, as it does for `toSchema<T>()`.
 
 ```ts
 // Shown for illustration only.
@@ -1376,8 +1491,23 @@ function boxOf(pointer: Cell<DonutBoxPointer>): unknown {
 
 // After
 const boxOf = (pointer: Cell<DonutBoxPointer>) =>
-  pointer.viewAs<Pick<DonutBox, "add">>();
+  pointer.asSchema<Pick<DonutBox, "add">>();
 ```
+
+The proposed rules are these.
+
+- It is a method of cell handles only, valid in tier R and tier F.
+- It changes how the cell is read, never what is stored. A read through the
+  result is validated against the schema of `T`, as any read is.
+- It cannot remove a label. The labels of what is read come from the stored
+  document and from the template of the read. Annotations in `T` add
+  constraints and never replace the stored ones.
+- The plan records the call as a path projection with a schema, so a
+  footprint through it is as precise as one through a declared type.
+
+Because it changes the schema a value is read under, the second and third
+rules are CFC decisions and go through the specification
+([§13](#13-open-questions)).
 
 ### 12.5 Remove casts to labeled types
 
@@ -1393,40 +1523,23 @@ note.set(text);
 The label is declared once, on the cell
 (`new Writable<Confidential<string, readonly ["recipe-secret"]>>("")`).
 
-### 12.6 An explicit marker for imported TypeScript
+### 12.6 Mark imported TypeScript with a directive
 
-A module outside the subset declares it at its top, and the compiler then
-reads only its export signatures. This document assumes a directive
-prologue, because it is valid TypeScript, survives formatting, and is
-visible to the parser.
+A helper whose types need a feature the subset refuses moves to a module
+that begins with `"use typescript";` ([§5.5](#55-imported-typescript-tier-i)).
 
 ```ts
 // Shown for illustration only.
-"use typescript";
-
+// Before: in the pattern module
 type Shape<T> = T extends readonly (infer E)[] ? E : never;
+const firstOf = <T extends readonly unknown[]>(xs: T): Shape<T> => xs[0];
 
-export function unitPrice(basePrice: number, glaze: string): number {
-  // Anything TypeScript accepts.
+// After: in sprinkle-math.ts
+"use typescript";
+export function firstTopping(toppings: string[]): string | undefined {
+  return toppings[0];
 }
 ```
-
-The rules for such a module follow from the overview and §3.
-
-- Its module scope obeys §3.1 to §3.3 as far as syntax shows: no `let`,
-  `var`, or class at module scope, and its data constants are frozen. The
-  types of its declarations are not checked against the subset.
-- Each exported function that a subset module imports has annotated
-  parameters and an annotated return type, all in the subset
-  (`import:signature-not-in-subset`). Types and interfaces it exports can be
-  imported when they are in the subset.
-- It imports only types from `commonfabric`. It cannot call a builder or a
-  built-in, since its bodies are not analyzed.
-- A call to one of its functions reads every argument in full, and the
-  result depends on every argument.
-- Its parameters and results are data types. A cell passed to it could be
-  written without the plan knowing, so cell-typed parameters are refused
-  until [§13](#13-open-questions) is settled.
 
 ### 12.7 Declare defaults in types, not in the parameter
 
@@ -1441,67 +1554,72 @@ pattern<{ glaze: Default<string, "plain"> }>(({ glaze }) => ({ glaze }));
 
 ## 13. Open questions
 
-The first five need a decision from the project owner. The rest are for the
-sibling documents or for the prototype.
+Settled since the first draft, and written into the sections above: tier I
+is marked by `"use typescript";` (§5.5); the load-time verifier is retired
+for subset modules and kept for tier-I modules (§3.4); `any` is refused and
+each use gets an explicit form (§7.8); and an inline event handler in a
+function body is a handler binding (§5.2).
 
-1. **The marker for imported TypeScript.** The overview says a module outside
-   the subset "can be imported" and does not say how the compiler knows a
-   module is outside it. §12.6 assumes a `"use typescript";` directive. The
-   alternatives are a file-name convention, an import attribute at the
-   importing site, or automatic fallback when the subset check fails.
-   Automatic fallback is the only one this document recommends against: a
-   typo would silently turn a precise module into an opaque one.
-2. **Whether the load-time verifier stays.** The overview makes the compiler
-   trusted. `SES_SANDBOXING_SPEC.md` §4.2.6 keeps the compiler outside the
-   trusted base and has the runner verify the code about to execute. §3.4
-   assumes the language rule holds either way. If the verifier stays, the
-   compiler's emitted grammar has to remain the one the verifier recognizes.
-3. **Agreement with the editor.** §2 promises that a program the subset
-   accepts type-checks in TypeScript. §8.6 names one exception. Closing it
-   means changing the published brand typings in `base/api/cfc.ts`, or
-   shipping a language-service plugin that replaces TypeScript's diagnostics
-   with the compiler's. The second also decides how authors see the subset's
-   stricter errors (read-only data, refused type features) while editing.
-4. **A re-typing operation for cells.** §12.4 recommends one, to replace the
+The first two questions need a decision from the project owner. The rest are
+for the sibling documents or for the prototype.
+
+1. **What editors show.** An editor type-checks pattern source with the
+   TypeScript compiler against the published `commonfabric` typings. The
+   pattern compiler reads neither. So an editor can report an error the
+   compiler does not (the brand encoding, §8.6), and cannot report the errors
+   only the compiler knows: read-only module data, a refused type feature, a
+   tier-R statement rule. There are two steps, and they are independent.
+   - Simplify the published typings to identity aliases once the transformer
+     no longer reads them (§8.6). This removes the false errors and needs no
+     new tooling.
+   - Show the compiler's own diagnostics while editing. The usual mechanism
+     is a language-service plugin: a small extension the TypeScript service
+     inside the editor loads, which runs the pattern compiler on the open
+     file and adds its diagnostics to the list the editor displays. Without
+     one, authors see the compiler's diagnostics only when they compile.
+     Since most authors are language models that compile on every change,
+     this step can wait.
+2. **The rules of `asSchema<T>()`.** §12.4 proposes it to replace the
    overload idiom found in FabriChat, the private inbox, and 29 pattern test
-   files. Whether it exists, what it is called, and what it checks is an API
-   and CFC decision: re-typing a cell changes the schema, and therefore the
-   labels, it is read under.
-5. **`any`.** §7.8 accepts `any` with a warning because 48 modules use it.
-   The alternative is to refuse it and rewrite those modules, which would
-   remove a source of footprint widening by rule. FabriChat already uses
-   none.
-6. **Value semantics of tier R on missing data.** This document assumes a
+   files, and proposes that it validates reads and can never remove a label.
+   Those two rules change what CFC decides about a re-typed read, so they
+   need a ruling in the specification before the construct is relied on.
+3. **Value semantics of tier R on missing data.** This document assumes a
    tier-R expression has the value semantics of the same JavaScript
    expression, so that promotion preserves values exactly, and that strict
    `null` checks make a read through a possibly-missing value a type error.
    Stored data can still fail to match its declared type. What a path
    projection does then (yield `undefined`, or put the cone in an error
    state) belongs with the overview's open question on error states.
-7. **The label rule of a dynamic key.** §4.4 allows `a[k]` in tier R as an
+4. **The label rule of a dynamic key.** §4.4 allows `a[k]` in tier R as an
    index operation. This document assumes its template is the key's slots,
    the container's enumeration, and the selected element's slots, and that
    `plan-and-label-templates.md` defines the operation. If it does not, the
    fallback is to refuse a dynamic key in tier R, as the transformer does in
    the pattern body today, which affects 17 expressions in 7 modules.
-8. **More structural collection methods.** `some`, `every`, `find`, and
-   `findIndex` with a callback account for most `computed` calls that fail
-   promotion on a single construct. Whether they become structural
-   operations is for `builtin-inventory.md`.
-9. **Cells as arguments of imported functions.** §12.6 refuses them. Allowing
+5. **The label rule of a handler binding.** §5.2 adds a fourth runtime call
+   to the three the overview lists. `plan-and-label-templates.md` has to say
+   what the plan records for a stream bound inside a function body, and
+   `builtin-inventory.md` whether a `lift` or a `computed` may make one.
+6. **More structural collection methods.** `some`, `find`, and `findIndex`
+   with a callback account for most `computed` calls that fail promotion on
+   a single construct. Whether they become structural operations is for
+   `builtin-inventory.md`.
+7. **Instance-to-view assignability.** §7.5 lets a pattern instance stand
+   where a view of its result is declared. The prototype has to confirm that
+   this, with labels outside assignability, removes the 22 casts of §11.3,
+   and whether a handle needs a further rule.
+8. **Cells as arguments of imported functions.** §5.5 refuses them. Allowing
    them needs a declared write footprint in the signature.
-10. **Which runtime calls a `lift` or a `computed` may make.** §5.2 leaves to
-    `builtin-inventory.md` whether a computation, as opposed to a handler,
-    may instantiate a pattern or request an effect.
-11. **External packages.** The corpus's pattern modules import none. The
-    iframe guests import several, and they are not patterns. Whether tier I
-    ever reaches beyond the program's own modules is deferred with the
-    sandbox's dynamic-import question.
-12. **Stored source.** Today some authoring errors are demoted to warnings
+9. **External packages.** The corpus's pattern modules import none. The
+   iframe guests import several, and they are not patterns. Whether tier I
+   ever reaches beyond the program's own modules is deferred with the
+   sandbox's dynamic-import question.
+10. **Stored source.** Today some authoring errors are demoted to warnings
     when stored source is recompiled. Whether the new compiler ever compiles
     source that an older compiler admitted, and with which severities, is
     part of the overview's migration question.
-13. **Per-instantiation checking of generic functions.** §7.3 checks a
+11. **Per-instantiation checking of generic functions.** §7.3 checks a
     generic function body once per instantiation. That is simple and exact,
     and it reports an error in a generic helper at each call that triggers
     it. The prototype should confirm that the messages stay usable.

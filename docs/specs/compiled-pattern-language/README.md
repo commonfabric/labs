@@ -339,12 +339,15 @@ Built-ins divide into two groups.
 Each built-in needs to be placed in one of the two groups by reading its
 semantics, which this document has not done one by one.
 
-Inside a function body, three kinds of runtime call remain:
+Inside a function body, four kinds of runtime call remain:
 
 - instantiating a pattern;
 - creating a cell, which receives a causal identifier;
 - requesting an effectful built-in, which behaves like instantiating a
-  built-in pattern.
+  built-in pattern;
+- binding a handler to the values it captures, which yields a stream. An
+  inline event handler in JSX built by a function body is such a binding
+  ([language subset](language-subset.md), §5.2).
 
 A function body that needs reactivity instantiates a pattern. A handler that
 wants a reactive mapped list, for example, wraps the list in a pattern.
