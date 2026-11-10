@@ -27,7 +27,7 @@ import {
   UnsupportedOpCodecError,
   WaveCommitConflictError,
 } from "../v2/engine.ts";
-import { anchorsSchemaHash } from "../v2/anchors-label.ts";
+import { anchorsSchemaHash } from "../v2/cfc-anchors-label.ts";
 import { executionLeaseHolder } from "../v2/execution-lease.ts";
 import {
   CODEMIRROR_CHANGESET_CODEC,
@@ -2886,6 +2886,12 @@ describe("v2-operation-engine", () => {
               { path: ["body", "0"], label: { confidentiality: ["inside"] } },
               { path: ["title"], label: { confidentiality: ["beside"] } },
               { path: ["body"], label: {} },
+              {
+                path: ["cfc", "labels", "body"],
+                origin: "label-metadata",
+                observes: "labelMetadata",
+                label: { confidentiality: ["template"] },
+              },
             ]),
           );
 
@@ -3087,6 +3093,11 @@ describe("v2-operation-engine", () => {
             ],
             ["of:array", [envelope([])], "is not of a version"],
             [
+              "of:schema",
+              { version: 1, labelMap: { version: 1, entries: [] } },
+              "names no schema",
+            ],
+            [
               "of:map",
               { version: 1, schemaHash, labelMap: { version: 2, entries: [] } },
               "holds no label map the engine reads",
@@ -3127,6 +3138,29 @@ describe("v2-operation-engine", () => {
                 label: { confidentiality: ["s"], integrity: "i" },
               }]),
               "is not one the engine reads",
+            ],
+            [
+              "of:beside",
+              envelope([
+                { path: ["body"], label: secret },
+                { path: ["title"], label: "secret" },
+              ]),
+              "is not one the engine reads",
+            ],
+            [
+              "of:reference",
+              envelope([{ path: ["body"], label: { $ref: schemaDoc } }], 1),
+              "of version 1, holds a label by reference",
+            ],
+            [
+              "of:template",
+              envelope([{
+                path: ["body"],
+                origin: "label-metadata",
+                observes: "value",
+                label: secret,
+              }]),
+              "template entry",
             ],
           ];
           for (const [id, cfc, fault] of unreadable) {
@@ -3172,14 +3206,57 @@ describe("v2-operation-engine", () => {
           };
           stored("of:dangling", `cid:${taggedHashStringOf(["absent"])}`);
           stored("of:elsewhere", "https://example.test/label");
+          stored("of:nameless", "cid:");
 
-          for (const id of ["of:dangling", "of:elsewhere"]) {
+          for (const id of ["of:dangling", "of:elsewhere", "of:nameless"]) {
             const edit = () => insert(engine, id);
 
             expect(edit).toThrow(ProtocolError);
             expect(edit).toThrow("names a label document");
             expect(edit).toThrow("the store does not hold");
           }
+        } finally {
+          close(engine);
+          await Deno.remove(path);
+        }
+      });
+
+      it("throws `ProtocolError` for a label reference to a document that does not hold a label", async () => {
+        const { engine, path } = await openTestEngine();
+        try {
+          // The commit boundary refuses an envelope whose label document is
+          // not a label, so the reference is put in place beneath the engine.
+          const content = { title: "not a label" };
+          const contentDoc = `cid:${taggedHashStringOf(content)}`;
+          commit(engine, [{
+            op: "set",
+            id: contentDoc,
+            value: { value: content },
+          }]);
+          seed(
+            engine,
+            "of:content",
+            envelope([{ path: ["body"], label: secret }], 2),
+          );
+          engine.database.prepare(
+            "UPDATE revision SET data = :data WHERE id = :id",
+          ).run({
+            id: "of:content",
+            data: encodeMemoryBoundary({
+              value: { body: "abc" },
+              cfc: envelope(
+                [{ path: ["body"], label: { $ref: contentDoc } }],
+                2,
+              ),
+            }),
+          });
+
+          const edit = () => insert(engine, "of:content");
+
+          expect(edit).toThrow(ProtocolError);
+          expect(edit).toThrow(
+            `the label document \`${contentDoc}\` the CFC envelope of the document of:content names does not hold a label`,
+          );
         } finally {
           close(engine);
           await Deno.remove(path);
@@ -3217,17 +3294,22 @@ describe("v2-operation-engine", () => {
       it("returns the schema document and the labeled rewrite as derived again when the commit is sent a second time", async () => {
         const { engine, path } = await openTestEngine();
         try {
+          // The field's envelope names a schema of its own, stored with it,
+          // so that the store lacks the anchors schema document until the
+          // engine writes it.
+          const fieldSchema = { type: "object" };
           commit(engine, [{
+            op: "set",
+            id: `cid:${taggedHashStringOf(fieldSchema)}`,
+            value: { value: fieldSchema },
+          }, {
             op: "set",
             id: "of:label-resent",
             value: {
               value: { body: "abc" },
               cfc: {
-                version: 1,
-                labelMap: {
-                  version: 1,
-                  entries: [{ path: ["body"], label: secret }],
-                },
+                ...(envelope([{ path: ["body"], label: secret }]) as object),
+                schemaHash: taggedHashStringOf(fieldSchema),
               },
             },
           }, setAnchors("of:label-resent", { end: 3 })]);

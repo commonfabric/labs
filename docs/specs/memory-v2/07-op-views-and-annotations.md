@@ -416,11 +416,16 @@ Within the apply steps of §7.7.1:
    is left as its writer wrote it.
 
 The engine refuses the operation, and so the commit, where it cannot read the
-field's envelope or the anchors document's: one of a version other than 1 and
-2, one with no label map, an entry with no path, a label holding anything but
-`confidentiality` and `integrity` arrays, or a label reference no stored
-document backs. An edit that moves no anchor reads no envelope and is not
-refused for one.
+field's envelope or the anchors document's. It reads an envelope by the
+runner's rules, so that an envelope the runner would not produce labels from
+is one the engine does not copy a label out of: it refuses one of a version
+other than 1 and 2, one with no `schemaHash`, one with no label map, an entry
+with no path of strings, a label holding anything but `confidentiality` and
+`integrity` arrays, a label held by reference in a version-1 envelope, a
+label-metadata template entry keyed outside `["cfc", "labels"]` or classed as
+anything but `labelMetadata`, and a label reference that no stored document
+backs or whose document does not hold a label. An edit that moves no anchor
+reads no envelope and is not refused for one.
 
 The label is a record of the field at the edit, and it is the document's
 writers that end it. A writer's CFC pass drops a derived `value` entry at a

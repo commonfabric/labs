@@ -151,10 +151,18 @@ export interface Exemption {
 }
 
 /**
- * Every `§` citation under `runtime/runner/src/cfc/` that names something
- * other than a section of the specification, on purpose.
+ * Every `§` citation in {@link CITATION_SOURCE} that names something other
+ * than a section of the specification, on purpose.
  */
-export const EXEMPTIONS: readonly Exemption[] = [];
+export const EXEMPTIONS: readonly Exemption[] = [
+  {
+    file: "runtime/memory/v2/cfc-anchors-label.ts",
+    citation: "§7.7.4",
+    reason: "cites the memory-v2 specification, " +
+      "docs/specs/memory-v2/07-op-views-and-annotations.md, where the " +
+      "engine's labeling of moved anchors is arranged",
+  },
+];
 
 /** A file this check reads. */
 export interface SourceFile {

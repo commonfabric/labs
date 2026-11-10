@@ -26,7 +26,7 @@ import {
   anchorsSchemaDocument,
   anchorsSchemaHash,
   confidentialityOver,
-} from "./anchors-label.ts";
+} from "./cfc-anchors-label.ts";
 import {
   judgeOwnerReleaseByIntent,
   OWNER_RELEASE_BY_INTENT_RECORD_PREFIX,

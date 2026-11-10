@@ -215,12 +215,16 @@ An anchor says something about the field's text: where text is, how far apart
 two points are, and whatever its writer put in the id. The anchors document
 carries a Contextual Flow Control label from two sources.
 
-The first is the transaction that writes an anchor. A handler that reads the
-field before it writes the anchors writes them under the field's
-confidentiality, by the ordinary flow from what a transaction read to what it
-wrote. A writer that does not read the field leaves the anchors under whatever
-it did read, which for a writer that read nothing is no label at all: an
-offset its writer chose says nothing about the field.
+The first is the transaction that writes an anchor. An anchor a transaction
+writes carries the confidentiality of what that transaction read, by the
+ordinary flow from what a transaction read to what it wrote: the field, if the
+handler read it before writing the anchors, and any confidential link it
+followed to reach the field or the anchors, since which document a link led
+to is something an offset in that document can reveal. A writer that does
+not read the field leaves the anchors under whatever it did read, which for a
+writer that read nothing is no label at all: an offset its writer chose says
+nothing about the field. Writing one anchor labels that anchor alone; the
+other anchors in the document keep the labels they had.
 
 The second is Memory. An offset Memory computed from an edit says where the
 field was edited and by how much, and, for an anchor written past the end of
@@ -230,9 +234,10 @@ the field at that edit, in the same transaction. It reads the label entries
 of the field's stored envelope that lie at, above or inside the field's path,
 in the field's scope instance and in each broader instance of the same
 document, and writes their confidentiality as a derived label of the moved
-anchor's offset. A later reader of that offset is tainted as a reader of the
-field was, whoever wrote the anchor. An anchor the edit left where it was
-gets no label from it.
+anchor's offset, beside whatever label the anchor already carried. A later
+reader of that offset is tainted as a reader of the field was, whoever wrote
+the anchor. An anchor the edit left where it was gets no label from it, and
+an anchor neither written nor moved keeps the labels it had.
 
 The label is of the offset Memory wrote, and lasts as long as that offset
 does:
@@ -248,9 +253,12 @@ does:
 
 Where Memory cannot read the field's envelope, or the anchors document's, it
 refuses the edit and moves nothing, so that no offset is stored that is less
-confidential than the field it came from. An envelope of a version Memory
-does not read, a label of a shape it does not know, and a label reference no
-stored document backs are each such a case.
+confidential than the field it came from. Memory reads an envelope by the
+same rules as the runner, so every envelope the runner refuses to read, it
+refuses too: one of a version it does not know, one that names no schema, a
+label of a shape it does not know, a label held by reference in an envelope
+of a version that does not define that spelling, and a label reference no
+stored label document backs are each such a case.
 
 The anchors take none of the field's integrity, from either source, and the
 field's write policy does not govern them: a pattern that wants only certain
