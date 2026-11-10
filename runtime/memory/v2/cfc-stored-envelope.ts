@@ -79,8 +79,9 @@ const LABEL_MEMBERS: readonly string[] = ["confidentiality", "integrity"];
  * to, such as `FabricBytes` or `FabricEpochNsec`, keeps its state in private
  * fields and shows no own enumerable members, so a check of members alone
  * reads one as a label with no clauses. Every other record a rule here asks
- * for has to hold a member of its own (`version`, `entries`, `path`,
- * `$ref`), which no such instance does.
+ * for has to hold a member a rule names (`version`, `entries`, `path`,
+ * `$ref`), and none of those classes defines a member of any of those
+ * names, own or inherited.
  */
 export const isInlineCfcLabelShape = (
   value: unknown,

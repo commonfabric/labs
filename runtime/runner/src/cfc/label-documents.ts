@@ -61,8 +61,8 @@ export const parseCfcLabelReference = (
  * object whose every member is one of the two label members holding an
  * array. The check is the one the store and every reader hold a label
  * document to, Memory's `v2/cfc-stored-envelope`; the narrowing is to this
- * build's label, whose clauses and atoms the check finds to be arrays and no
- * more.
+ * build's label, more than the check establishes: it finds the two members
+ * to be arrays and does not look at the clauses and atoms they hold.
  */
 export const isCfcLabelDocumentContent = (value: unknown): value is IFCLabel =>
   isStoredLabelDocumentContent(value);

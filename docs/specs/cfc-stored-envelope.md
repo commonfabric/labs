@@ -93,9 +93,9 @@ one is a place a looser reader would read a labeled document as unlabeled:
   clauses. So a label, inline or in a label document, is refused unless its
   prototype is `Object.prototype` or `null`, and the store refuses a commit
   naming a label document that is not one. The other records an envelope
-  holds each need a member of their own (`version`, `entries`, `path`,
-  `$ref`), so no instance passes there, and their prototypes are not
-  checked.
+  holds each need a member a rule names (`version`, `entries`, `path`,
+  `$ref`), which none of those classes defines, so no instance passes
+  there, and their prototypes are not checked.
 - **A template-origin entry that is not keyed and classed as a template is
   not an entry.** The `label-metadata` origin marks an entry as keyed
   against the stored document rather than against `value`, and a reader
