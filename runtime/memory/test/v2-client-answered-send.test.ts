@@ -186,4 +186,123 @@ describe("client", () => {
       await server.close();
     }
   });
+  /**
+   * A transport whose send of the first `session.open` waits for its answer,
+   * then runs `after`, then rejects as a lost connection.
+   */
+  function answeredThenFailingOpen(
+    server: Server,
+    after: (closeReceiver: (error?: Error) => void) => Promise<void>,
+  ): Transport {
+    let inner: Transport | undefined;
+    let receiver = (_payload: string) => {};
+    let closeReceiver = (_error?: Error) => {};
+    let failOpen = true;
+    let openRequestId: unknown;
+    const answered = Promise.withResolvers<void>();
+    return {
+      setReceiver(next) {
+        receiver = next;
+      },
+      setCloseReceiver(next) {
+        closeReceiver = next;
+      },
+      async close() {
+        await inner?.close();
+        inner = undefined;
+      },
+      reset() {
+        void inner?.close();
+        inner = undefined;
+      },
+      async send(payload) {
+        if (inner === undefined) {
+          inner = loopback(server);
+          inner.setReceiver((frame) => {
+            receiver(frame);
+            const message = decodeMemoryBoundary(frame) as {
+              requestId?: unknown;
+            };
+            if (
+              openRequestId !== undefined &&
+              message.requestId === openRequestId
+            ) answered.resolve();
+          });
+        }
+        const message = decodeMemoryBoundary(payload) as {
+          type?: string;
+          requestId?: unknown;
+        };
+        if (message.type !== "session.open" || !failOpen) {
+          return await inner.send(payload);
+        }
+        failOpen = false;
+        openRequestId = message.requestId;
+        await inner.send(payload);
+        await answered.promise;
+        await after((error) => {
+          void inner?.close();
+          inner = undefined;
+          closeReceiver(error);
+        });
+        throw connectionError("connection lost after the open's answer");
+      },
+    };
+  }
+
+  it("rejects a mount whose `session.open` was answered when the client closed before the send failed", async () => {
+    const server = new Server({
+      ...testSessionOpenServerOptions,
+      store: new URL("memory://client-answered-send-closed"),
+    });
+    let closing: () => Promise<void> = () => Promise.resolve();
+    const client = await connect({
+      transport: answeredThenFailingOpen(server, () => closing()),
+    });
+    closing = () => client.close();
+    try {
+      await expect(
+        client.mount(
+          "did:key:z6Mk-client-answered-send-closed",
+          {},
+          testSessionOpenAuthFactory,
+        ),
+      ).rejects.toThrow();
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("rejects a mount whose `session.open` was answered on a replaced connection when restoring it there is denied for good", async () => {
+    let opens = 0;
+    const server = new Server({
+      ...testSessionOpenServerOptions,
+      authorizeSessionOpen: () =>
+        ++opens === 1
+          ? testSessionOpenServerOptions.authorizeSessionOpen()
+          : undefined,
+      store: new URL("memory://client-answered-send-denied"),
+    });
+    const reconnected = Promise.withResolvers<void>();
+    const client = await connect({
+      transport: answeredThenFailingOpen(server, async (drop) => {
+        drop(connectionError("connection lost after the open's answer"));
+        await reconnected.promise;
+      }),
+    });
+    client.subscribeReconnected(() => reconnected.resolve());
+    try {
+      await expect(
+        client.mount(
+          "did:key:z6Mk-client-answered-send-denied",
+          {},
+          testSessionOpenAuthFactory,
+        ),
+      ).rejects.toThrow();
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
 });

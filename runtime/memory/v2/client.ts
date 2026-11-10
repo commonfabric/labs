@@ -1151,13 +1151,15 @@ export class Client {
     // one, which is open only on the connection that is gone. It is restored
     // on the connection that is up before it is handed out.
     if (
-      answeredOn.epoch !== undefined &&
-      answeredOn.epoch !== this.#connectionEpoch
+      answeredOn.epoch !== undefined && this.#staleSince(answeredOn.epoch)
     ) {
       try {
         session.handleDisconnect();
         await this.restoreConnection();
         await session.restore();
+        // A restore that a permanent denial ended terminated the session
+        // rather than failing; one a refusal for now holds is still pending.
+        await session.whenRestored();
       } catch (error) {
         await session.close().catch(() => undefined);
         throw error;
