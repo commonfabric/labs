@@ -8,7 +8,6 @@ import type { FabricPlainObject, FabricValue } from "@commonfabric/api";
 import { cloneIfNecessary, debugStr } from "@commonfabric/data-model";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { getLogger } from "@commonfabric/logger";
-import { maxOf } from "@commonfabric/collections/math";
 import {
   isObjectNotArray,
   isPlainObject,
@@ -328,7 +327,7 @@ export type ConnectOptions = {
 
 /**
  * The connection states a `Client` distinguishes, one member per branch of
- * its `#ensureConnected()` guard — the decision every request passes through,
+ * its `#requireConnected()` guard — the decision every request passes through,
  * which reads the same fields to settle whether to proceed, to reconnect, or
  * to throw. A branch added to that guard is a member owed here.
  */
@@ -541,53 +540,21 @@ type OutstandingCommit = {
    * only after the frames the server sent while handling it.
    */
   applied?: AppliedCommit;
-
-  /**
-   * How many attempts failed because the commit's own write failed on an open
-   * connection. The client stops replaying the commit once this reaches
-   * `MAX_OWN_WRITE_FAILURES`.
-   */
-  writeFailures?: number;
 };
 
 /**
- * A watch mutation's request, from its first send until its mutation has
- * applied the response or failed. A session's restore sends it again when the
- * server has not answered it (see `SpaceSession.#resendWatchRequests()`), and
- * only the response to its latest send counts.
+ * A watch mutation's request, from its send until its mutation has applied
+ * the response or failed. It is sent once.
  */
 type WatchRequest<R> = {
-  /** Sends the request, as it stands at the time of the call. */
-  readonly send: () => Promise<R>;
-
-  /** The response to the latest send. */
+  /** The response. */
   response: Promise<R>;
 
   /**
-   * The server's answer to the latest send: `undefined` while there is none,
-   * which includes a send lost with its connection.
+   * The server's answer: `undefined` while there is none, which includes a
+   * send lost with its connection.
    */
   verdict: "ok" | "error" | undefined;
-
-  /**
-   * Resolves once the request has been sent again after its latest send, and
-   * rejects with the session's close error if the session closes first.
-   */
-  resent: PromiseWithResolvers<void>;
-
-  /**
-   * How many sends failed because the request's own write failed on an open
-   * connection. The request fails once this reaches `MAX_OWN_WRITE_FAILURES`.
-   */
-  writeFailures: number;
-};
-
-/** A `WatchRequest.resent` for a request just sent. */
-const awaitResend = (): PromiseWithResolvers<void> => {
-  const resent = Promise.withResolvers<void>();
-  // Rejected on close whether or not the request's mutation is waiting on it.
-  resent.promise.catch(() => {});
-  return resent;
 };
 
 export type WatchMutationResult = {
@@ -1207,7 +1174,7 @@ export class Client {
     if (options.whileConnected === true && !this.#connected) {
       throw connectionLostWhileRestoring();
     }
-    const epoch = await this.#ensureConnected();
+    const epoch = this.#requireConnected();
     // A request that belongs with others on one connection, as a staged
     // watch set's parts do, is not sent on another.
     if (options.epoch !== undefined && epoch !== options.epoch) {
@@ -1281,8 +1248,9 @@ export class Client {
         if (!isConnectionError(error)) {
           this.#pending.delete(requestId);
           this.#pendingSessions.delete(requestId);
+          throw error;
         }
-        throw error;
+        throw lostWithConnection(error instanceof Error ? error : undefined);
       }
     }
     const result = await pending.promise as ResponseMessage<Result>;
@@ -1347,7 +1315,7 @@ export class Client {
     // connection. A connected client issues the parts without an await, in
     // the order the caller's other requests would be issued.
     if (!this.#connected && options.whileConnected !== true) {
-      await this.#ensureConnected();
+      this.#requireConnected();
     }
     if (!this.#connected) {
       return await this.request<WatchSetResult>(message, options);
@@ -1482,7 +1450,7 @@ export class Client {
     // it while it waited for them. A reopen is part of that reconnect and
     // fails instead when the connection drops under it.
     if (!whileConnected) {
-      await this.#ensureConnected();
+      this.#requireConnected();
     }
     // A mount is made on the connection it began on: it fails as that
     // connection drops, whatever it is waiting on then, and its `session.open`
@@ -1740,9 +1708,14 @@ export class Client {
     return this.#connection.signal;
   }
 
+  /** @internal The count of handshakes begun (see `#connectionEpoch`). */
+  get connectionEpoch(): number {
+    return this.#connectionEpoch;
+  }
+
   /**
    * The state this client is in now, decided in the branch order
-   * `#ensureConnected()` uses. Reading `#connected` before falling through to
+   * `#requireConnected()` uses. Reading `#connected` before falling through to
    * `reconnecting` is what makes this agree with `isConnected()` across the
    * window a successful reconnect opens, where the handshake has already
    * marked the client connected while the reconnect it belongs to is still in
@@ -2727,7 +2700,7 @@ export class Client {
   }
 
   /** Returns the observed connection epoch for post-await readiness checks. */
-  async #ensureConnected(): Promise<number> {
+  #requireConnected(): number {
     if (this.#closed) {
       throw new Error("memory client is closed");
     }
@@ -3007,6 +2980,15 @@ export class SpaceSession {
   #watchApply: Promise<void> = Promise.resolve();
 
   /**
+   * `#watchApply` as it stood when the connection last dropped: it settles
+   * once each watch change made before then has applied its answer or
+   * failed, none of them waiting for the restore, since each ends with the
+   * connection it was made on. `restore()` waits for it before reopening, so
+   * the watch set it sends holds every change the server answered.
+   */
+  #watchesBeforeDrop: Promise<void> | undefined;
+
+  /**
    * Serializes request _issue_ in call order; in concurrent mode it advances
    * as soon as a request has been _sent_ (not answered), so multiple watch
    * round trips overlap on the wire. In single-flight mode it is unused and
@@ -3266,29 +3248,29 @@ export class SpaceSession {
     if (existing) {
       return await existing.pending.promise;
     }
-
-    beforeIssue?.();
-    const pending = Promise.withResolvers<AppliedCommit>();
-    this.#outstandingCommits.set(commit.localSeq, {
-      commit,
-      pending,
-    });
-
-    const outstanding = this.#outstandingCommits.get(commit.localSeq);
-    if (
-      outstanding !== undefined &&
-      this.#client.isConnected() &&
-      this.#readyOnConnection &&
-      !this.#restoring
-    ) {
-      this.#sendOutstandingCommit(commit.localSeq, outstanding);
-    } else {
-      // A terminal recovery failure rejects this commit through the session;
-      // the background trigger must not also leave an unhandled rejection.
-      void this.#client.restoreConnection().catch(() => undefined);
+    // A commit is sent on the connection that is up, once this session is
+    // open there: made while the client is connecting or the session is
+    // held, or still waiting when that connection drops, it fails with
+    // `notSentError()`. Commits waiting for the restore are sent in the order
+    // they were made.
+    try {
+      await this.#ensureSessionRestored();
+    } catch (error) {
+      throw this.#withReadyToRetry(error);
+    }
+    const raced = this.#outstandingCommits.get(commit.localSeq);
+    if (raced) {
+      return await raced.pending.promise;
     }
 
-    return await pending.promise;
+    beforeIssue?.();
+    const outstanding: OutstandingCommit = {
+      commit,
+      pending: Promise.withResolvers<AppliedCommit>(),
+    };
+    this.#outstandingCommits.set(commit.localSeq, outstanding);
+    this.#sendOutstandingCommit(commit.localSeq, outstanding);
+    return await outstanding.pending.promise;
   }
 
   async queryGraph(query: GraphQuery): Promise<GraphQueryResult> {
@@ -4118,8 +4100,13 @@ export class SpaceSession {
     this.#cancelHeldRestore();
     this.#restoring = true;
     this.#readyOnConnection = false;
-    let replayedThroughLocalSeq = 0;
     try {
+      const watchesBeforeDrop = this.#watchesBeforeDrop;
+      if (watchesBeforeDrop !== undefined) {
+        this.#watchesBeforeDrop = undefined;
+        await watchesBeforeDrop;
+        if (this.#closed) return;
+      }
       let restored: SessionOpenResult;
       try {
         restored = await this.#reopen();
@@ -4140,17 +4127,6 @@ export class SpaceSession {
       this.#cancelHeldRestore();
       this.#held = false;
       this.#readyOnConnection = true;
-      replayedThroughLocalSeq = Math.max(
-        0,
-        maxOf(this.#outstandingCommits.keys()),
-      );
-      const replayTasks = [...this.#outstandingCommits.entries()].map((
-        [localSeq, pendingCommit],
-      ) =>
-        this.#sendOutstandingCommit(localSeq, pendingCommit, {
-          throwOnConnectionError: true,
-        })
-      );
       if (restored.sync) {
         this.#noteCaughtUpLocalSeq(restored.sync.caughtUpLocalSeq);
         this.#noteOperationWatchCursors(restored.sync);
@@ -4204,10 +4180,8 @@ export class SpaceSession {
         }
       } else {
         this.#throwIfDisconnectedDuringRestore();
-        this.#resendWatchRequests(restored.resumed !== true);
       }
       this.#rejoinPresenceRooms();
-      await Promise.all(replayTasks);
       if (
         this.#client.isConnected() && this.#invalidDelivery === invalidDelivery
       ) this.#invalidDelivery = undefined;
@@ -4252,9 +4226,6 @@ export class SpaceSession {
     } finally {
       if (run === this.#restoreRun) {
         this.#restoring = false;
-        if (!this.#closed && this.#outstandingCommits.size > 0) {
-          this.#replayOutstandingCommits(replayedThroughLocalSeq);
-        }
       }
     }
   }
@@ -4370,7 +4341,6 @@ export class SpaceSession {
     this.#endPresenceRooms(this.#closeError);
     this.#restoreComplete?.reject(this.#closeError);
     this.#restoreComplete = undefined;
-    this.#endWatchRequests(this.#closeError);
     this.#readyOnConnection = false;
     this.#client.forgetSession(this);
     this.#rejectCaughtUpLocalSeqWaiters(this.#closeError);
@@ -4442,7 +4412,6 @@ export class SpaceSession {
     this.#endHold();
     this.#restoreComplete?.reject(error);
     this.#restoreComplete = undefined;
-    this.#endWatchRequests(error);
     this.#readyOnConnection = false;
     this.#client.forgetSession(this);
     // An accepted commit settles with its verdict: a session the commit's own
@@ -4498,8 +4467,21 @@ export class SpaceSession {
     this.#cancelHeldRestore();
     this.#heldRestores = 0;
     this.#readyOnConnection = false;
-    // The restore this session now needs is pending from here on, so a
-    // request made before the reconnect reaches it waits for it.
+    // A watch change the drop caught may have been applied, and a resumed
+    // server session keeps what it applied, so the restore sends the watch
+    // set this session holds even when the session resumes. An answered
+    // change can still wait to apply behind an unanswered one; the restore
+    // waits for both before reading the set.
+    if (
+      [...this.#unappliedWatchRequests].some((request) =>
+        request.verdict === undefined
+      )
+    ) this.#watchSetOwed = true;
+    this.#watchesBeforeDrop = this.#watchApply;
+    // The restore this session now needs is pending from here on: it is what
+    // `whenRestored()` and a `readyToRetry()` wait for. A request made on the
+    // next connection before the reconnect reaches this session waits for it
+    // too; one made while connecting fails (`#ensureSessionRestored()`).
     if (this.#restoreComplete === undefined) {
       this.#restoreComplete = Promise.withResolvers<void>();
       this.#restoreComplete.promise.catch(() => {});
@@ -4824,141 +4806,59 @@ export class SpaceSession {
    * tracks it until the mutation has applied the response or failed.
    */
   #sendWatchRequest<R>(send: () => Promise<R>): WatchRequest<R> {
-    const request: WatchRequest<R> = {
-      send,
-      response: send(),
-      verdict: undefined,
-      resent: awaitResend(),
-      writeFailures: 0,
-    };
+    const request: WatchRequest<R> = { response: send(), verdict: undefined };
     this.#noteWatchVerdict(request);
     this.#unappliedWatchRequests.add(request);
     return request;
   }
 
   /**
-   * Records the server's answer to `request`'s latest send as its `verdict`
-   * once there is one. A send lost with its connection gets none, unless the
-   * request's own write has failed `MAX_OWN_WRITE_FAILURES` times. The
-   * handlers are attached before any other, so they run first.
+   * Records the server's answer to `request` as its `verdict` once there is
+   * one; a send lost with its connection gets none. The handlers are attached
+   * before any other, so they run first.
    */
   #noteWatchVerdict<R>(request: WatchRequest<R>): void {
-    const { response } = request;
-    response.then(
+    request.response.then(
       () => {
-        if (request.response === response) request.verdict = "ok";
+        request.verdict = "ok";
       },
       (error) => {
-        if (request.response !== response) return;
-        if (isOwnWriteFailure(error)) request.writeFailures++;
-        if (
-          !isConnectionError(error) ||
-          request.writeFailures >= MAX_OWN_WRITE_FAILURES
-        ) {
-          request.verdict = "error";
-        }
+        if (!isConnectionError(error)) request.verdict = "error";
       },
     );
   }
 
   /**
    * Helper for `#runWatchMutation()`, which applies the response to
-   * `request`'s latest send, and rejects with the server's error when that
-   * response is one. A send lost with its connection is followed by the
-   * restore that sends the request again, so the mutation waits for that
-   * send and then for its response. The session's close ends the wait for a
-   * send that will not come, and the mutation rejects with the close error.
+   * `request`, and rejects with the server's error when that response is
+   * one, or with the connection error that ended it: a watch change is not
+   * sent again. A restore re-establishes the watch set this session holds
+   * after one went unanswered (`handleDisconnect()`).
    */
   async #applyWatchResponse<R, T>(
     request: WatchRequest<R>,
     apply: (result: R) => T,
   ): Promise<T> {
     try {
-      for (;;) {
-        const { response, resent } = request;
-        const answered = response.then((result) => ({ result }));
-        let answer: { result: R } | void;
-        try {
-          // Sending the request again ends this wait as well. The session's
-          // close, which rejects `resent`, does not: the response is still
-          // the server's own answer to the request.
-          answer = await Promise.race([
-            answered,
-            resent.promise.then(() => undefined, () => answered),
-          ]);
-        } catch (error) {
-          if (response !== request.response) continue;
-          if (request.verdict !== undefined) {
-            throw request.writeFailures >= MAX_OWN_WRITE_FAILURES
-              ? ownWriteError(error as Error)
-              : error;
-          }
-          await resent.promise;
-          continue;
-        }
-        if (answer !== undefined && response === request.response) {
-          return apply(answer.result);
-        }
-      }
+      return apply(await request.response);
     } finally {
       this.#unappliedWatchRequests.delete(request);
     }
   }
 
   /**
-   * Fails every watch mutation waiting for its request to be sent again with
-   * `error`, as the session closes.
-   */
-  #endWatchRequests(error: Error): void {
-    for (const request of this.#unappliedWatchRequests) {
-      request.resent.reject(error);
-    }
-  }
-
-  /**
-   * Helper for `restore()`, which sends again, in the order they were first
-   * sent, the watch requests from the first one the server has not answered
-   * onwards, its refusals excepted: the server applies them in that order
-   * again, so a request sent again cannot undo a later one. When
-   * `reestablished`, the server holds a session other than the one that
-   * answered the rest, so every request not refused is sent again. A mutation
-   * applies only the response to its request's latest send. Called in the
-   * same synchronous step as the reopen's completion, after the watch set the
-   * restore re-establishes if it sends one, so that these precede on the wire
-   * every mutation made after them. The caller checks first that the client is
-   * still connected.
-   */
-  #resendWatchRequests(reestablished: boolean): void {
-    let resending = reestablished;
-    for (const request of this.#unappliedWatchRequests) {
-      resending ||= request.verdict === undefined;
-      if (resending && request.verdict !== "error") {
-        const { resent } = request;
-        request.response = request.send();
-        request.verdict = undefined;
-        request.resent = awaitResend();
-        this.#noteWatchVerdict(request);
-        resent.resolve();
-      }
-    }
-  }
-
-  /**
    * Helper for `restore()`, which sends the watch set it re-establishes
-   * without queuing on the watch-mutation chain, followed by the watch requests
-   * the session has to send again (see `#resendWatchRequests()`). Mutations
-   * waiting on that chain hold their turns until the restore completes, so
-   * queuing behind them would wait on the restore itself; they follow it
-   * instead, in call order.
+   * without queuing on the watch-mutation chain. Mutations waiting on that
+   * chain hold their turns until the restore completes, so queuing behind
+   * them would wait on the restore itself; they follow it instead, in call
+   * order.
    */
   async #sendRestoreWatchMutation<R, T>(
     send: () => Promise<R>,
     apply: (result: R) => T,
   ): Promise<T> {
     this.#throwIfDisconnectedDuringRestore();
-    const response = send();
-    this.#resendWatchRequests(true);
-    return apply(await response);
+    return apply(await send());
   }
 
   /**
@@ -5180,40 +5080,58 @@ export class SpaceSession {
     return restored;
   }
 
-  #replayOutstandingCommits(minLocalSeqExclusive = 0): void {
-    if (
-      this.#outstandingCommits.size === 0 ||
-      !this.#readyOnConnection ||
-      !this.#client.isConnected()
-    ) {
-      return;
-    }
-    for (
-      const [localSeq, pendingCommit] of this.#outstandingCommits.entries()
-    ) {
-      if (localSeq <= minLocalSeqExclusive) {
+  /**
+   * Returns `error`, attaching to a `notSentError()` or `unacknowledgedError()`
+   * a `readyToRetry()` that resolves once this session is open on a later
+   * connection than the one the error came from, so that a caller can send
+   * the request again then: a commit under its own `localSeq`, which the
+   * server answers from its record if it landed. It rejects with the session's
+   * close error, or with a `SessionReplacedError` when the server opened a new
+   * session in this one's place, which judges a resent commit as a new one.
+   */
+  #withReadyToRetry(error: unknown): Error {
+    const failure = error instanceof Error ? error : new Error(String(error));
+    if (connectionDeliveryOf(failure) === undefined) return failure;
+    const epoch = this.#client.connectionEpoch;
+    const sessionId = this.#sessionId;
+    return Object.assign(failure, {
+      readyToRetry: () => this.#reopenedSince(epoch, sessionId),
+    });
+  }
+
+  /** Helper for `#withReadyToRetry()`; see there. */
+  async #reopenedSince(epoch: number, sessionId: string): Promise<void> {
+    for (;;) {
+      this.#assertOpen();
+      if (this.#sessionId !== sessionId) {
+        throw sessionReplacedError(
+          `memory session ${sessionId} was replaced by ${this.#sessionId}`,
+        );
+      }
+      const restore = this.#restoreComplete;
+      if (restore !== undefined) {
+        await restore.promise;
         continue;
       }
-      this.#sendOutstandingCommit(localSeq, pendingCommit);
+      if (
+        this.#client.isConnected() && this.#client.connectionEpoch > epoch &&
+        !this.#held
+      ) return;
+      await this.#client.whenStateChanged();
     }
   }
 
+  /**
+   * Helper for `transact()`, which sends a commit once and settles it with
+   * the server's verdict, or with the connection error that ended it: a
+   * `notSentError()` or `unacknowledgedError()` carrying `readyToRetry()`
+   * (see `#withReadyToRetry()`). Nothing is sent again.
+   */
   #sendOutstandingCommit(
     localSeq: number,
     pendingCommit: OutstandingCommit,
-    options: {
-      throwOnConnectionError?: boolean;
-    } = {},
   ): Promise<void> {
     const task = (async () => {
-      if (
-        this.#closed ||
-        !this.#readyOnConnection ||
-        !this.#client.isConnected()
-      ) {
-        return;
-      }
-
       try {
         const applied = await this.#client.request<AppliedCommit>({
           type: "transact",
@@ -5235,35 +5153,13 @@ export class SpaceSession {
           void this.ack(applied.seq).catch(() => undefined);
         }
       } catch (error) {
-        if (isConnectionError(error) || isSessionRevokedError(error)) {
-          // A commit whose own write fails on one new connection after
-          // another is at fault itself, and replaying it again would only take
-          // the next connection down with it. It is rejected with the write's
-          // error rather than a `ConnectionError`, which a caller would retry.
-          if (isOwnWriteFailure(error)) {
-            pendingCommit.writeFailures = (pendingCommit.writeFailures ?? 0) +
-              1;
-          }
-          if ((pendingCommit.writeFailures ?? 0) >= MAX_OWN_WRITE_FAILURES) {
-            if (this.#outstandingCommits.get(localSeq) === pendingCommit) {
-              this.#outstandingCommits.delete(localSeq);
-            }
-            pendingCommit.pending.reject(ownWriteError(error as Error));
-          }
-          if (options.throwOnConnectionError) {
-            throw error;
-          }
-          return;
-        }
         if (this.#outstandingCommits.get(localSeq) === pendingCommit) {
           this.#outstandingCommits.delete(localSeq);
         }
         if (isRetryableConflict(error)) {
           error.readyToRetry = () => this.#waitForCaughtUpLocalSeq(localSeq);
         }
-        pendingCommit.pending.reject(
-          error instanceof Error ? error : new Error(String(error)),
-        );
+        pendingCommit.pending.reject(this.#withReadyToRetry(error));
       }
     })();
     this.#queueBackground(task);
@@ -5719,9 +5615,9 @@ export const connectionError = (message: string, cause?: unknown): Error => {
 /**
  * Like `connectionError()`, except that it also marks the payload's own write
  * as what failed, on a connection that was open until then, as opposed to a
- * payload lost because the connection closed under it. The client counts such
- * failures against a commit or a watch request, and stops sending again one
- * whose own write has failed `MAX_OWN_WRITE_FAILURES` times.
+ * payload lost because the connection closed under it. The request fails with
+ * an `unacknowledgedError()` that keeps the mark, so that a caller sending it
+ * again can tell a payload that fails every time from a lost connection.
  */
 export const writeFailedError = (message: string, cause?: unknown): Error =>
   Object.assign(connectionError(message, cause), { ownWriteFailed: true });
@@ -5778,25 +5674,8 @@ export const isFirstHandshakeFailure = (error: unknown): boolean =>
 const isOwnReceiveFailure = (error: unknown): boolean =>
   (error as { ownReceiveFailed?: unknown } | null)?.ownReceiveFailed === true;
 
-/**
- * How many attempts may fail because one commit's or watch request's own write
- * failed before the client stops sending it again and rejects it with the
- * write's error (see `ownWriteError()`).
- */
-const MAX_OWN_WRITE_FAILURES = 5;
-
 const isOwnWriteFailure = (error: unknown): boolean =>
   (error as { ownWriteFailed?: unknown } | null)?.ownWriteFailed === true;
-
-/**
- * The error a request whose own write failed `MAX_OWN_WRITE_FAILURES` times is
- * rejected with: the write's own error rather than a `ConnectionError`, which a
- * caller would retry.
- */
-const ownWriteError = (error: Error): Error =>
-  error.cause instanceof Error
-    ? error.cause
-    : new Error(error.message, { cause: error.cause });
 
 const toConnectionError = (error?: Error): Error =>
   connectionError(error?.message ?? "memory transport closed", error);
@@ -5841,6 +5720,18 @@ export const connectionDeliveryOf = (
     (error.delivery === "notSent" || error.delivery === "unacknowledged")
     ? error.delivery
     : undefined;
+
+/**
+ * Returns the error a request's `readyToRetry()` rejects with when the server
+ * opened a new session in place of the one it was made on: a commit sent
+ * again under its `localSeq` is then judged as a new commit.
+ */
+export const sessionReplacedError = (message: string): Error =>
+  Object.assign(new Error(message), { name: "SessionReplacedError" });
+
+/** Returns whether `error` is one `sessionReplacedError()` made. */
+export const isSessionReplacedError = (error: unknown): boolean =>
+  error instanceof Error && error.name === "SessionReplacedError";
 
 /** Returns whether `error` is one `notSentError()` made. */
 export const isNotSentError = (error: unknown): boolean =>
