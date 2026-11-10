@@ -89,6 +89,7 @@ import {
   resolveExternalRootRefForStructure,
   resolveSlugReference,
   resolveSlugTargetInPiece,
+  resolveWriteTarget,
   Runtime,
   runtimePresets,
   RuntimeTelemetry,
@@ -189,6 +190,7 @@ import {
   type CellPushRequest,
   type CellRef,
   type CellResolveAsCellRequest,
+  type CellResolveAsCellResponse,
   CellResponse,
   type CellSendRequest,
   type CellSendReviewedRequest,
@@ -2533,28 +2535,16 @@ export class RuntimeProcessor {
     return { value: false };
   }
 
-  handleCellResolveAsCell(request: CellResolveAsCellRequest): CellResponse {
+  handleCellResolveAsCell(
+    request: CellResolveAsCellRequest,
+  ): CellResolveAsCellResponse {
     const cell = getCell(this.#runtime, request.cell);
-    const resolved = cell.resolveAsCell();
-    const ref = createCellRef(resolved);
-    if (
-      ref.schema && typeof ref.schema === "object" &&
-      !Array.isArray(ref.schema)
-    ) {
-      ref.schema = resolveExternalRootRefForStructure(ref.schema);
-    }
-    const raw = (resolved as Cell<unknown> & {
-      getRaw?: (options: { lastNode: "value" }) => unknown;
-    }).getRaw?.({ lastNode: "value" });
-    if (isSqliteDbRefValue(raw)) {
-      const schema = ref.schema && typeof ref.schema === "object" &&
-          !Array.isArray(ref.schema)
-        ? ref.schema
-        : { type: "object" as const };
-      ref.schema = { ...schema, asCell: ["sqlite"] as const };
-    }
+    // Both are resolved in this one turn, so they describe the same links.
     return {
-      cell: ref,
+      cell: resolvedCellRef(cell.resolveAsCell()),
+      ...(request.withWriteTarget
+        ? { writeTarget: resolvedCellRef(resolveWriteTarget(cell)) }
+        : {}),
     };
   }
 
@@ -4881,4 +4871,29 @@ export class RuntimeProcessor {
     }
     return processor;
   }
+}
+
+/**
+ * The ref a client receives for `resolved`, a cell resolved for it, with the
+ * schema it reads the cell through.
+ */
+function resolvedCellRef(resolved: Cell<unknown>): CellRef {
+  const ref = createCellRef(resolved);
+  if (
+    ref.schema && typeof ref.schema === "object" &&
+    !Array.isArray(ref.schema)
+  ) {
+    ref.schema = resolveExternalRootRefForStructure(ref.schema);
+  }
+  const raw = (resolved as Cell<unknown> & {
+    getRaw?: (options: { lastNode: "value" }) => unknown;
+  }).getRaw?.({ lastNode: "value" });
+  if (isSqliteDbRefValue(raw)) {
+    const schema = ref.schema && typeof ref.schema === "object" &&
+        !Array.isArray(ref.schema)
+      ? ref.schema
+      : { type: "object" as const };
+    ref.schema = { ...schema, asCell: ["sqlite"] as const };
+  }
+  return ref;
 }

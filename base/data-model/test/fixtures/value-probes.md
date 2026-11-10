@@ -179,6 +179,9 @@ would in fact handle the value:
 - `symbolKeyLength`: the length of the longest registered symbol's key, in code
   points.
 - `depth`: the value's depth, counted as section 12 counts it.
+- `bigintBytes`: the size of the largest bigint, a `BigInt@1` value or the
+  bigint of a temporal quantity, in bytes of its minimal two's-complement
+  representation.
 
 These are computed from the entry's text, and each is present only where it is
 past the floor section 12 sets for its measure, which every conforming reader

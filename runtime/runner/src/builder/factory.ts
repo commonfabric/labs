@@ -90,7 +90,11 @@ import {
 } from "./module.ts";
 import { isTrustedPattern, setPatternProgram } from "./pattern-metadata.ts";
 import { pattern } from "./pattern.ts";
-import { principalOf, principalsOf } from "./principal-of.ts";
+import {
+  principalOf,
+  principalsOf,
+  writtenPrincipalOf,
+} from "./principal-of.ts";
 import { profileOwnerOf } from "./profile-owner-of.ts";
 import { linksOf } from "./links-of.ts";
 import { resultOwnerOf } from "./result-owner-of.ts";
@@ -296,6 +300,7 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
     currentPrincipal,
     principalOf,
     principalsOf,
+    writtenPrincipalOf,
     profileOwnerOf,
     resultOwnerOf,
     linksOf,
