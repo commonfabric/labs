@@ -383,7 +383,7 @@ export default pattern<Input, Output>(
         extractedAisles,
         pending: isPending(extractionRequest),
         error: hasError(extractionRequest)
-          ? extractionRequest.errorMessage
+          ? extractionRequest.message
           : undefined,
       };
     });

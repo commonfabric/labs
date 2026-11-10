@@ -71,7 +71,7 @@ export const summaryResponseState = lift(
         response: "",
         pending: false,
         availability: "error",
-        error: responseRequest.errorMessage,
+        error: responseRequest.message,
       };
     }
     if (isSyncing(responseRequest)) {
@@ -87,7 +87,7 @@ export const summaryResponseState = lift(
         response: "",
         pending: false,
         availability: "obsolete",
-        error: responseRequest.obsoleteMessage ||
+        error: responseRequest.message ||
           "This summary is no longer served.",
       };
     }

@@ -65,7 +65,7 @@ export const WriteAndRunStatus = pattern<
   );
   const generationFailed = hasError(generatedRequest);
   const generationError = computed(() =>
-    hasError(generatedRequest) ? generatedRequest.errorMessage : undefined
+    hasError(generatedRequest) ? generatedRequest.message : undefined
   );
   const isCompiling = computed(() =>
     hasError(observedCompileRequest)
@@ -75,7 +75,7 @@ export const WriteAndRunStatus = pattern<
   const compileFailed = hasError(observedCompileRequest);
   const compileError = computed(() =>
     hasError(observedCompileRequest)
-      ? observedCompileRequest.errorMessage
+      ? observedCompileRequest.message
       : undefined
   );
   const isReady = computed(() =>

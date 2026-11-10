@@ -499,7 +499,7 @@ describe("fetch-program outbox mechanism", () => {
     expect(unavailable).toBeInstanceOf(FabricUnavailable);
     expect(unavailable.reason).toBe("error");
     expect(unavailable.errorKind).toBe("general");
-    expect(unavailable.errorMessage).toBe("program resolution exploded");
+    expect(unavailable.message).toBe("program resolution exploded");
     expect(isDeepFrozen(unavailable)).toBe(true);
   });
 

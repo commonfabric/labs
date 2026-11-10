@@ -209,7 +209,7 @@ describe("fetch builtins: taking over a claim", () => {
     const unavailable = await rawResultChild(runtime, result);
     expect(isUnavailable(unavailable)).toBe(true);
     expect(
-      isUnavailable(unavailable) ? unavailable.errorMessage : undefined,
+      isUnavailable(unavailable) ? unavailable.message : undefined,
     ).toContain("404");
     expect(result.key("pending").get()).toBe(false);
   });

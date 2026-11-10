@@ -1,4 +1,7 @@
-import { unavailableError } from "@commonfabric/data-model/availability";
+import {
+  unavailableError,
+  unavailableObsolete,
+} from "@commonfabric/data-model/availability";
 import { assertEquals } from "@std/assert";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "../src/storage/cache.deno.ts";
@@ -63,6 +66,13 @@ Deno.test("compileAndRun initializes outputs and handles invalid programs", asyn
     action(tx);
     assertEquals(sendResultCount, 1);
 
+    const obsolete = unavailableObsolete("Use the replacement program.");
+    inputs.setRawUntyped(obsolete);
+    action(tx);
+    assertEquals(outputs.result.withTx(tx).resolveAsCell().getRaw(), obsolete);
+    assertEquals(outputs.error.withTx(tx).get(), undefined);
+    assertEquals(outputs.pending.withTx(tx).get(), false);
+
     inputs.set({
       main: "/missing.tsx",
       files: [{ name: "/other.tsx", contents: "export default 1;" }],
@@ -78,7 +88,7 @@ Deno.test("compileAndRun initializes outputs and handles invalid programs", asyn
       .getRaw();
     assertEquals(missingResult.reason, "error");
     assertEquals(
-      missingResult.errorMessage,
+      missingResult.message,
       '"/missing.tsx" not found in files',
     );
     assertEquals(missingResult.errorKind, "compile");

@@ -140,14 +140,14 @@ self.onmessage = async (ev: MessageEvent) => {
               | {
                 reason: string;
                 errorKind: string | null;
-                rawErrorMessage: string | null;
+                rawMessage: string | null;
               }
               | undefined)
             ? [
               (value.unavailable as { reason: string }).reason,
               (value.unavailable as { errorKind: string | null }).errorKind,
-              (value.unavailable as { rawErrorMessage: string | null })
-                .rawErrorMessage,
+              (value.unavailable as { rawMessage: string | null })
+                .rawMessage,
             ]
             : undefined,
           prefabIsThatRealmsPrefab: value.prefab === UNAVAILABLE_SYNCING,

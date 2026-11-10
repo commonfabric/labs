@@ -66,7 +66,7 @@ export default pattern(({ searchQuery }) => {
         {isPending(request)
           ? <span>Loading...</span>
           : hasError(request)
-          ? <span>Error: {request.errorMessage}</span>
+          ? <span>Error: {request.message}</span>
           : <div>{JSON.stringify(result)}</div>}
         <cf-message-input oncf-send={handleSearch({ searchQuery })} />
       </div>

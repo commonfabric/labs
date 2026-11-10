@@ -358,7 +358,7 @@ describe("fetch builtins: a completion writeback the storage layer refuses", () 
       const unavailable = result.key("result").get();
       expect(isUnavailable(unavailable)).toBe(true);
       if (isUnavailable(unavailable) && unavailable.reason === "error") {
-        expect(unavailable.errorMessage).toBe(
+        expect(unavailable.message).toBe(
           `fetchJson completion write failed: ${REFUSAL.message}`,
         );
       }

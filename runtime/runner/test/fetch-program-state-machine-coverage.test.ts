@@ -163,7 +163,7 @@ describe("fetchProgram state-machine edge paths", () => {
 
       expect(fixture.pending.value).toBe(false);
       expect((fixture.result.value as FabricUnavailable).reason).toBe("error");
-      expect((fixture.result.value as FabricUnavailable).errorMessage).toBe(
+      expect((fixture.result.value as FabricUnavailable).message).toBe(
         "durable failure",
       );
       expect(fixture.error.value).toBe("durable failure");
@@ -187,7 +187,7 @@ describe("fetchProgram state-machine edge paths", () => {
       expect(fixture.result.value).toMatchObject({
         reason: "error",
         errorKind: "general",
-        errorMessage: "persisted failure",
+        message: "persisted failure",
       });
       expect(fixture.error.value).toBe("persisted failure");
       expect(fixture.effects).toHaveLength(0);

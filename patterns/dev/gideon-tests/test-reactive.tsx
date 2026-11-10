@@ -53,7 +53,7 @@ function BuildingBlock<T>(emails: Reactive<Email[]>, schema: JSONSchema) {
     const analysis: LegacyAnalysis<T> = {
       pending: computed(() => isPending(request)),
       result,
-      error: computed(() => hasError(request) ? request.errorMessage : ""),
+      error: computed(() => hasError(request) ? request.message : ""),
       messages: computed((): BuiltInLLMMessage[] => []),
       partial: computed(() => ""),
       cancelGeneration: cancelGeneration({}),

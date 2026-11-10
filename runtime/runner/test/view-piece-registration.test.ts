@@ -189,7 +189,7 @@ describe("view-piece-registration", () => {
       const calls: (number | string)[] = [];
       const implementation = ({ value }: { value: unknown }) => {
         const observed = isUnavailable(value)
-          ? value.errorMessage ?? "unavailable"
+          ? value.message ?? "unavailable"
           : Number(value) + 1;
         calls.push(observed);
         return observed;

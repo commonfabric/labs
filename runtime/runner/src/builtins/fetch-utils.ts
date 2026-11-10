@@ -127,7 +127,12 @@ export function writeUnavailableFetchResult(
 ): void {
   pending.withTx(tx).set(unavailable.reason === "pending");
   result.withTx(tx).setRaw(unavailable);
-  error.withTx(tx).set(legacyError ?? unavailable.rawErrorMessage ?? undefined);
+  error.withTx(tx).set(
+    legacyError ??
+      (unavailable.reason === "error"
+        ? unavailable.rawMessage ?? undefined
+        : undefined),
+  );
 }
 
 /**

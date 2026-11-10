@@ -228,7 +228,7 @@ describe("fetch builtins (fetchBinary / fetchText / fetchJson)", () => {
     const upgraded = await rawResultChild(runtime, state) as FabricUnavailable;
     expect(upgraded).toBeInstanceOf(FabricUnavailable);
     expect(upgraded.reason).toBe("error");
-    expect(upgraded.errorMessage).toBe("persisted legacy failure");
+    expect(upgraded.message).toBe("persisted legacy failure");
     expect(fetchCalls.length).toBe(1);
   });
 
@@ -298,7 +298,7 @@ describe("fetch builtins (fetchBinary / fetchText / fetchJson)", () => {
     });
     expect(data.pending).toBe(false);
     expect(data.error).toBeDefined();
-    expect((data.result as FabricUnavailable).errorMessage).toContain(
+    expect((data.result as FabricUnavailable).message).toContain(
       "failed schema validation",
     );
     expect(String(data.error?.message ?? data.error)).toContain(
@@ -616,7 +616,7 @@ describe("fetch builtins (fetchBinary / fetchText / fetchJson)", () => {
     ) as FabricUnavailable;
     expect(unavailable).toBeInstanceOf(FabricUnavailable);
     expect(unavailable.reason).toBe("error");
-    expect(unavailable.errorMessage).toBe("upstream failed");
+    expect(unavailable.message).toBe("upstream failed");
     expect(fetchCalls).toEqual([]);
   });
 

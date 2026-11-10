@@ -184,9 +184,9 @@ export async function resolveWish(
         error: typeof error === "string" && error.length > 0
           ? error
           : hasError(directValue)
-          ? directValue.errorMessage
-          : directValue.reason === "obsolete" && directValue.obsoleteMessage
-          ? directValue.obsoleteMessage
+          ? directValue.message
+          : directValue.reason === "obsolete" && directValue.message
+          ? directValue.message
           : `Wish result is ${directValue.reason}`,
       };
     }

@@ -156,7 +156,7 @@ describe("CFC native value classification", () => {
         expect(actual.reason).toBe(marker.reason);
         if (actual.reason === "error") {
           expect(actual.errorKind).toBe(marker.errorKind);
-          expect(actual.errorMessage).toBe(marker.errorMessage);
+          expect(actual.message).toBe(marker.message);
         }
       });
     }

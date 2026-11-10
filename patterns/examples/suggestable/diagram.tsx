@@ -83,7 +83,7 @@ const Diagram = pattern<DiagramInput, DiagramOutput>(({ topic, context }) => {
         response: "",
         pending: false,
         availability: "error",
-        error: responseRequest.errorMessage,
+        error: responseRequest.message,
       };
     }
     if (isSyncing(responseRequest)) {

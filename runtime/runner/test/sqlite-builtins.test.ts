@@ -520,7 +520,7 @@ describe("sqlite builtins (Phase 0 wiring)", () => {
       );
       expect(isUnavailable(q) && q.reason === "error").toBe(true);
       if (isUnavailable(q) && q.reason === "error") {
-        expect(q.errorMessage).toContain("sqlite backend unavailable");
+        expect(q.message).toContain("sqlite backend unavailable");
       }
     } finally {
       provider.sqliteQuery = original;

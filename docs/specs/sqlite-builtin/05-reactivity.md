@@ -51,7 +51,7 @@ long way without a query-dependency analyzer.
 The public query request is `AsyncResult<SqliteQueryResult<Row>>`, not the
 internal state record. `isPending(request)` and `isSyncing(request)` observe
 waiting; `hasError(request)` observes terminal failure and exposes
-`errorKind`/`errorMessage`. Ordinary consumers read `resultOf(request).rows`.
+`errorKind`/`message`. Ordinary consumers read `resultOf(request).rows`.
 Unaccepted unavailable states propagate through dependent computations rather
 than becoming a successful empty row array.
 

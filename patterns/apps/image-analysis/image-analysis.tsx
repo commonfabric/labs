@@ -60,14 +60,14 @@ export const ImageAnalysisPresentation = pattern<
       return {
         response: undefined,
         pending: false,
-        error: observedResponse.errorMessage,
+        error: observedResponse.message,
       };
     }
     if (isObsolete(observedResponse)) {
       return {
         response: undefined,
         pending: false,
-        error: observedResponse.obsoleteMessage ||
+        error: observedResponse.message ||
           "This response is no longer served.",
       };
     }

@@ -44,7 +44,7 @@ export default pattern<void, FetchProgramTestOutput>(() => {
   );
   const fetchPending = computed(() => isPending(fetchRequest));
   const fetchError = computed(() =>
-    hasError(fetchRequest) ? fetchRequest.errorMessage : undefined
+    hasError(fetchRequest) ? fetchRequest.message : undefined
   );
 
   // Step 2: Compile and run the fetched program
@@ -58,7 +58,7 @@ export default pattern<void, FetchProgramTestOutput>(() => {
   const result = resultOf(compileRequest);
   const compilePending = computed(() => isPending(compileRequest));
   const compileError = computed(() =>
-    hasError(compileRequest) ? compileRequest.errorMessage : undefined
+    hasError(compileRequest) ? compileRequest.message : undefined
   );
 
   return {

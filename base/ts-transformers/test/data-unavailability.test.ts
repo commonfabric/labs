@@ -27,7 +27,7 @@ for (
       ${definition}
       export default pattern((input: { bundle: Input }) => ({
         value: computed(() => hasError(input.bundle.request)
-          ? input.bundle.request.errorMessage
+          ? input.bundle.request.message
           : resultOf(input.bundle.request).name),
       }));
     `,
@@ -114,7 +114,7 @@ Deno.test("guarded error metadata preserves the native result union", async () =
     import { type AsyncResult, computed, hasError, pattern } from "commonfabric";
     export default pattern((input: { request: AsyncResult<{ rows: number[] }> }) => {
       const request = input.request;
-      return { error: computed(() => hasError(request) ? request.errorMessage : "") };
+      return { error: computed(() => hasError(request) ? request.message : "") };
     });
   `,
     { types: { "commonfabric.d.ts": commonfabricTypes }, typeCheck: true },
@@ -145,7 +145,7 @@ Deno.test("a flow-narrowed guard does not exclude a successful capture arm", asy
     export default pattern((input: { request: AsyncResult<string> }) => {
       const request = input.request;
       return { value: computed(() => {
-        if (typeof request === "object") return hasError(request) ? request.errorMessage : "";
+        if (typeof request === "object") return hasError(request) ? request.message : "";
         return request;
       }) };
     });
@@ -174,7 +174,7 @@ Deno.test("a guarded generic property keeps its instantiated result type", async
     export default pattern((input: { box: Box<AsyncResult<string>> }) => {
       const box = input.box;
       return { value: computed(() => {
-        if (typeof box.request === "object") return hasError(box.request) ? box.request.errorMessage : "";
+        if (typeof box.request === "object") return hasError(box.request) ? box.request.message : "";
         return box.request;
       }) };
     });
@@ -216,7 +216,7 @@ Deno.test("scoped generic guards preserve availability through local aliases", a
         return { value: computed(() => {
           if (typeof box.request === "object") {
             const local = box.request;
-            return hasError(local) ? local.errorMessage : "";
+            return hasError(local) ? local.message : "";
           }
           return box.request;
         }) };
@@ -1027,7 +1027,7 @@ Deno.test("availability guards stay plain in a nested compute over mapped result
       const labels = requests.map((item) => computed(() => {
         const pending = isPending(item.request);
         if (pending) return "pending";
-        if (hasError(item.request)) return item.request.errorMessage;
+        if (hasError(item.request)) return item.request.message;
         return item.result.label;
       }));
       return { labels };
@@ -1213,7 +1213,7 @@ Deno.test("an in-compute observation reports only its availability diagnostic", 
       const content = computed(() => {
         const observed = observeAvailability(input.request, "error");
         return hasError(observed)
-          ? observed.errorMessage
+          ? observed.message
           : resultOf(observed).name;
       });
       return { content };
@@ -1280,7 +1280,7 @@ Deno.test("computed canonicalizes request and resultOf alias to one guarded capt
         isPending(requestState)
           ? "pending"
           : hasError(requestState)
-          ? requestState.errorMessage
+          ? requestState.message
           : result.name + result.url
       );
       return { content };
@@ -1387,7 +1387,7 @@ Deno.test("a synthesized guarded expression canonicalizes its resultOf alias", a
         label: isPending(request)
           ? "pending"
           : hasError(request)
-          ? request.errorMessage
+          ? request.message
           : result.name,
       };
     });
@@ -1444,7 +1444,7 @@ Deno.test("explicit lift canonicalizes a resultOf alias with its guarded source"
       const request = input.request;
       const result = resultOf(request);
       const label = lift(() =>
-        hasError(request) ? request.errorMessage : result.name
+        hasError(request) ? request.message : result.name
       )({});
       return { label };
     });
@@ -1825,7 +1825,7 @@ Deno.test("pending error and success JSX shares one physical async capture", asy
       return isPending(request)
         ? <div>Loading repository...</div>
         : hasError(request)
-        ? <div>Error: {request.errorMessage}</div>
+        ? <div>Error: {request.message}</div>
         : <a href={result.url}>{result.name}</a>;
     });
   `,

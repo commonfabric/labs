@@ -17,7 +17,7 @@ describe("obsolete", () => {
       import { type AsyncResult, computed, isObsolete, pattern, resultOf } from "commonfabric";
       export default pattern((input: { request: AsyncResult<string> }) => ({
         diagnostic: computed(() => isObsolete(input.request)
-          ? input.request.obsoleteMessage ?? "Retired output"
+          ? input.request.message ?? "Retired output"
           : resultOf(input.request)),
       }));
     `,
@@ -47,7 +47,7 @@ describe("obsolete", () => {
       export default pattern((input: { request: string }) => {
         const observed = observeAvailability(input.request, "obsolete");
         return { diagnostic: computed(() => isObsolete(observed)
-          ? observed.obsoleteMessage ?? "Retired output"
+          ? observed.message ?? "Retired output"
           : resultOf(observed)) };
       });
     `,

@@ -216,7 +216,7 @@ function createStreamDataAction(
       partialWithLog!.setRaw(unavailableInput);
       errorWithLog.set(
         unavailableInput.reason === "error"
-          ? unavailableInput.rawErrorMessage ?? undefined
+          ? unavailableInput.rawMessage ?? undefined
           : undefined,
       );
       return;

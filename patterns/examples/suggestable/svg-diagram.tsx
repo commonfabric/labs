@@ -67,7 +67,7 @@ export const SvgDiagramPresentation = pattern<
           response: "",
           pending: false,
           availability: "error",
-          error: responseRequest.errorMessage,
+          error: responseRequest.message,
           errorKind: responseRequest.errorKind,
         };
       }

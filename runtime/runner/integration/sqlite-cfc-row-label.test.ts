@@ -200,7 +200,7 @@ async function runTest(base: URL) {
       // Aggregate on a rule-bearing table fails closed.
       const countUnavailable = result.key("qCount").resolveAsCell().getRaw();
       const countError = hasError(countUnavailable)
-        ? countUnavailable.errorMessage
+        ? countUnavailable.message
         : undefined;
       if (
         !hasError(countUnavailable) ||

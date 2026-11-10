@@ -214,7 +214,7 @@ Use the user context above to personalize your suggestions when relevant.`;
   });
   const { addMessage, pending } = dialog;
   const error = computed(() =>
-    hasError(dialog.result) ? dialog.result.errorMessage : undefined
+    hasError(dialog.result) ? dialog.result.message : undefined
   );
   const shouldGenerate = computed(() =>
     isPending(dialog.result) || hasError(dialog.result)

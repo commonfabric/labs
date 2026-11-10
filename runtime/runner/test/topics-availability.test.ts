@@ -176,10 +176,10 @@ export default pattern<{
             throw new Error("Expected native source state");
           }
           expect(current.reason).toBe(marker.reason);
-          expect(current.obsoleteMessage).toBe(marker.obsoleteMessage);
+          expect(current.message).toBe(marker.message);
           if (current.reason === "error") {
             expect(current.errorKind).toBe(marker.errorKind);
-            expect(current.errorMessage).toBe(marker.errorMessage);
+            expect(current.message).toBe(marker.message);
           }
           const unavailableRows = rows.get();
           expect(isUnavailable(unavailableRows)).toBe(true);
@@ -188,8 +188,8 @@ export default pattern<{
           }
           expect(unavailableRows.reason).toBe(marker.reason);
           expect(unavailableRows.errorKind).toBe(marker.errorKind);
-          expect(unavailableRows.errorMessage).toBe(marker.errorMessage);
-          expect(unavailableRows.obsoleteMessage).toBe(marker.obsoleteMessage);
+          expect(unavailableRows.message).toBe(marker.message);
+          expect(unavailableRows.message).toBe(marker.message);
         }
 
         const empty = runtime.edit();

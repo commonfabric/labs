@@ -372,7 +372,7 @@ describe("executor-fetch-program-instances", () => {
         expect(failed).toMatchObject({
           reason: "error",
           errorKind: "general",
-          errorMessage: "program fetch failed",
+          message: "program fetch failed",
         });
         f.requests[1].response.resolve(programResponse("neighbor"));
         await f.retired(2);

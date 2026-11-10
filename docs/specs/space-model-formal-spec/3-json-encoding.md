@@ -197,10 +197,10 @@ Section 1.4.5.
 
 State is `{ reason: string }` for a transient reason, and for reason `error`
 `{ reason: string, errorKind: string }` or
-`{ reason: string, errorKind: string, errorMessage: string }`. `reason` is one
+`{ reason: string, errorKind: string, message: string }`. `reason` is one
 of `pending`, `syncing`, `obsolete`, and `error`; `errorKind` is one of `general`,
 `schemaMismatch`, `invalidInput`, `network`, `decode`, `compile`, `provider`,
-and `sync`, present exactly when the reason is `error`; and `errorMessage` is
+and `sync`, present exactly when the reason is `error`; and `message` is
 present exactly when a message is stored. A field with nothing to say is
 absent rather than present as `null`. An `error` whose message is its kind's
 default encodes without one, the default being presentation rather than
@@ -208,18 +208,18 @@ state.
 
 On decoding, a state that is not an object, whose `reason` is not one of the
 four, whose `errorKind` is present and not one of the kinds, or whose
-`errorMessage` is present and not a string produces a `ProblematicValue`. So
+`message` is present and not a string produces a `ProblematicValue`. So
 does a state pairing a kind or a message with a transient reason, or omitting
 the kind from `error`: the class never writes either, and the constructor
 refuses both. A well-formed state that is a transient reason alone decodes to
 that reason's prefab instance. See `1-fabric-values.md` Section 1.4.12.
 
 For reason `obsolete`, state is `{ reason: "obsolete" }` or
-`{ reason: "obsolete", obsoleteMessage: string }`. The message-free state
-decodes to `UNAVAILABLE_OBSOLETE`. A present `obsoleteMessage` must be an own
+`{ reason: "obsolete", message: string }`. The message-free state
+decodes to `UNAVAILABLE_OBSOLETE`. A present `message` must be an own
 string property, including an empty string; present `null` or `undefined` is
 malformed. Inherited diagnostic fields are ignored. An obsolete state carrying
-error fields, or another reason carrying `obsoleteMessage`, decodes to a
+an `errorKind`, or a transient reason carrying `message`, decodes to a
 `ProblematicValue`.
 
 ### `BigInt@1` — arbitrary-precision integers

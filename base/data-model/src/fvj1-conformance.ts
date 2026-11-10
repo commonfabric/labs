@@ -599,6 +599,21 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     make: () => new FabricLink({ kind: "example", targets: [1, 2] }),
   },
   {
+    name: "obsolete output with no guidance",
+    section: SECTION_UNAVAILABLE,
+    make: () => new FabricUnavailable("obsolete"),
+  },
+  {
+    name: "obsolete output with empty guidance",
+    section: SECTION_UNAVAILABLE,
+    make: () => new FabricUnavailable("obsolete", null, ""),
+  },
+  {
+    name: "obsolete output with guidance",
+    section: SECTION_UNAVAILABLE,
+    make: () => new FabricUnavailable("obsolete", null, "Use overview.text."),
+  },
+  {
     name: "unavailable with an error kind and no message",
     section: "3-json-encoding.md section 3, `Unavailable@1`",
     make: () => new FabricUnavailable("error", "network"),
@@ -1048,19 +1063,19 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
   {
     name: "unavailable error with a numeric message",
     section: SECTION_UNAVAILABLE,
-    text: 'fvj1:{"/Unavailable@1":{"errorKind":"network","errorMessage":5,' +
+    text: 'fvj1:{"/Unavailable@1":{"errorKind":"network","message":5,' +
       '"reason":"error"}}',
   },
   {
     name: "unavailable error with a null message",
     section: SECTION_UNAVAILABLE,
     text: 'fvj1:{"/Unavailable@1":{"errorKind":"network",' +
-      '"errorMessage":null,"reason":"error"}}',
+      '"message":null,"reason":"error"}}',
   },
   {
     name: "unavailable pairing a message with a transient reason",
     section: SECTION_UNAVAILABLE,
-    text: 'fvj1:{"/Unavailable@1":{"errorMessage":"m","reason":"pending"}}',
+    text: 'fvj1:{"/Unavailable@1":{"message":"m","reason":"pending"}}',
   },
   {
     name: "regular expression with a string state",

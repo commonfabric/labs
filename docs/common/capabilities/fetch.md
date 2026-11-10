@@ -35,7 +35,7 @@ const repo = resultOf(repoRequest);
 {isPending(repoRequest)
   ? <span>Loading...</span>
   : hasError(repoRequest)
-  ? <span>Error: {repoRequest.errorMessage}</span>
+  ? <span>Error: {repoRequest.message}</span>
   : <p>{repo.name} ({repo.stargazers_count}★)</p>}
 ```
 

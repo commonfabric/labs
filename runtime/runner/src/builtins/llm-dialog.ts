@@ -3103,14 +3103,14 @@ function classifyToolResult(
     if (rawResult.reason === "error") {
       return {
         status: "error",
-        error: new Error(rawResult.errorMessage),
+        error: new Error(rawResult.message),
       };
     }
     if (rawResult.reason === "obsolete") {
       return {
         status: "error",
         error: new Error(
-          rawResult.obsoleteMessage || "Tool result is obsolete.",
+          rawResult.message || "Tool result is obsolete.",
         ),
       };
     }

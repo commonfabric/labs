@@ -71,7 +71,6 @@ export function unavailableObsolete(
   return message === undefined ? UNAVAILABLE_OBSOLETE : new FabricUnavailable(
     "obsolete",
     null,
-    null,
     message,
   ) as FabricUnavailable & IsObsolete;
 }

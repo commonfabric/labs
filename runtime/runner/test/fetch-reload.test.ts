@@ -147,7 +147,7 @@ Deno.test("fetch results and claims survive a cold runtime reload", async () => 
       .getRaw() as FabricUnavailable;
     expect(createdError.reason).toBe("error");
     expect(createdError.errorKind).toBe("general");
-    expect(createdError.errorMessage).toBe(
+    expect(createdError.message).toBe(
       "durable program resolution failure",
     );
     expect(createFetches).toBe(3);
@@ -211,7 +211,7 @@ Deno.test("fetch results and claims survive a cold runtime reload", async () => 
       .getRaw() as FabricUnavailable;
     expect(reloadedError.reason).toBe("error");
     expect(reloadedError.errorKind).toBe("general");
-    expect(reloadedError.errorMessage).toBe(
+    expect(reloadedError.message).toBe(
       "durable program resolution failure",
     );
     expect(isDeepFrozen(reloadedError)).toBe(true);

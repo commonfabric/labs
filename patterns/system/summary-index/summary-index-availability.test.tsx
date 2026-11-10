@@ -45,7 +45,7 @@ export default pattern(() => {
   const indexState = computed(() => {
     if (isPending(entries)) return "pending";
     if (isSyncing(entries)) return "syncing";
-    if (hasError(entries)) return entries.errorMessage;
+    if (hasError(entries)) return entries.message;
     return "usable";
   });
 

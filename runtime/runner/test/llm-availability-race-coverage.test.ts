@@ -371,7 +371,7 @@ describe("LLM availability race coverage", () => {
       expect(isUnavailable(marker)).toBe(true);
       expect(marker.reason).toBe("error");
       if (marker.reason === "error") {
-        expect(marker.errorMessage).toBe("persisted tools failure");
+        expect(marker.message).toBe("persisted tools failure");
       }
       expect(rehydrated.state.key("pending").withTx(reconcileTx).get()).toBe(
         false,

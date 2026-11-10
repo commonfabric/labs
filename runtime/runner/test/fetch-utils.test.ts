@@ -128,7 +128,7 @@ describe("legacyFetchResultMarker", () => {
       { message: "legacy failure" },
     );
     expect(error?.reason).toBe("error");
-    expect(error?.errorMessage).toBe("legacy failure");
+    expect(error?.message).toBe("legacy failure");
 
     expect(legacyFetchResultMarker(undefined, true, undefined)).toBe(
       UNAVAILABLE_PENDING,
@@ -143,7 +143,7 @@ describe("legacyFetchResultMarker", () => {
 
     expect(repaired?.reason).toBe("error");
     expect(repaired?.errorKind).toBe("general");
-    expect(repaired?.errorMessage).toBe("legacy native failure");
+    expect(repaired?.message).toBe("legacy native failure");
   });
 
   it("never replaces a current usable value or marker", () => {

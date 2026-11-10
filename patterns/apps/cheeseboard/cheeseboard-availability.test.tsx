@@ -31,7 +31,7 @@ export default pattern(() => {
   const scheduleState = computed(() => {
     if (isPending(pizzas)) return "pending";
     if (isSyncing(pizzas)) return "syncing";
-    if (hasError(pizzas)) return `${pizzas.errorKind}: ${pizzas.errorMessage}`;
+    if (hasError(pizzas)) return `${pizzas.errorKind}: ${pizzas.message}`;
     return "usable";
   });
 

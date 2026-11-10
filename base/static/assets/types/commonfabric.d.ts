@@ -591,17 +591,18 @@ export interface FabricUnavailableBase extends FabricPrimitive {
   readonly errorKind: UnavailableErrorKind | null;
 
   /**
-   * The message, when the reason is `error`: the one given at construction,
-   * or the kind's default when none was. `null` for a non-error reason.
+   * Diagnostic text for an error or obsolete output. Errors supply their
+   * kind's default when none was given. `null` for transient reasons and an
+   * obsolete output with no guidance.
    */
-  readonly errorMessage: string | null;
+  readonly message: string | null;
 
   /**
    * The message as given at construction, with no default supplied: `null`
-   * for a non-error reason, and for an `error` whose message is its kind's
-   * default or was never given.
+   * for transient reasons, an obsolete output with no guidance, and an error
+   * whose message is its kind's default or was never given.
    */
-  readonly rawErrorMessage: string | null;
+  readonly rawMessage: string | null;
 
   /** Whether the reason is `pending`. */
   isPending(): boolean;
@@ -610,12 +611,12 @@ export interface FabricUnavailableBase extends FabricPrimitive {
   isSyncing(): boolean;
 
   /**
-   * Whether the reason is `error`, narrowing `errorKind` and `errorMessage`
+   * Whether the reason is `error`, narrowing `errorKind` and `message`
    * to the non-`null` values the `error` reason always carries.
    */
   isError(): this is {
     readonly errorKind: UnavailableErrorKind;
-    readonly errorMessage: string;
+    readonly message: string;
   };
 
   /**
@@ -628,14 +629,11 @@ export interface FabricUnavailableBase extends FabricPrimitive {
 /**
  * A marker standing in for data that is not available, saying why. It holds
  * no payload of its own: its reason and diagnostic fields are the whole of
- * what it says. Only `error` carries error members; `errorMessage` supplies
- * its kind's default when none was given. Only `obsolete` may carry an
- * `obsoleteMessage`, diagnostic guidance which confers no authority to act.
+ * what it says. Only `error` carries an error kind; `message` supplies its
+ * kind's default when none was given. For `obsolete`, `message` is optional
+ * migration guidance. Diagnostic text confers no authority to act.
  */
 export interface FabricUnavailable extends FabricUnavailableBase {
-  /** Optional guidance about a retired output; `null` otherwise. */
-  readonly obsoleteMessage: string | null;
-
   /** Whether the output is no longer served. */
   isObsolete(): boolean;
 }
@@ -644,8 +642,7 @@ export interface FabricUnavailableConstructor {
   new (
     reason: UnavailableReason,
     errorKind?: UnavailableErrorKind | null,
-    errorMessage?: string | null,
-    obsoleteMessage?: string | null,
+    message?: string | null,
   ): FabricUnavailable;
   prototype: FabricUnavailable;
 }
@@ -659,8 +656,6 @@ type CompatibleUnavailable =
     /** Retirement predicate, when provided by the native implementation. */
     readonly isObsolete?: FabricUnavailable["isObsolete"];
 
-    /** No retirement guidance belongs to a non-obsolete reason. */
-    readonly obsoleteMessage?: null;
   };
 
 /** A pending result whose producer has not completed. */
@@ -676,7 +671,7 @@ export type IsObsolete = FabricUnavailable & { readonly reason: "obsolete" };
 export type HasError = CompatibleUnavailable & {
   readonly reason: "error";
   readonly errorKind: UnavailableErrorKind;
-  readonly errorMessage: string;
+  readonly message: string;
 };
 
 /** A terminal result whose value does not satisfy its schema. */

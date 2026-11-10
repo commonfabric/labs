@@ -16,7 +16,7 @@ import {
 describe("data-unavailability selection helpers", () => {
   it("ranks all terminal error kinds above pending and syncing", () => {
     const mismatch = unavailableMismatch("Required field is absent");
-    expect(mismatch.errorMessage).toBe("Required field is absent");
+    expect(mismatch.message).toBe("Required field is absent");
     expect(selectDataUnavailable([UNAVAILABLE_PENDING, mismatch])).toBe(
       mismatch,
     );
@@ -47,13 +47,13 @@ describe("data-unavailability selection helpers", () => {
       unavailableError: original,
     });
     expect(failed?.reason).toBe("error");
-    expect(failed?.errorMessage).toBe("replica failed");
+    expect(failed?.message).toBe("replica failed");
 
     const failedWithoutCause = dataUnavailableFromTransformFailure({
       unavailableReason: "error",
     });
     expect(failedWithoutCause?.reason).toBe("error");
-    expect(failedWithoutCause?.errorMessage).toBe(
+    expect(failedWithoutCause?.message).toBe(
       "Linked document synchronization failed",
     );
 

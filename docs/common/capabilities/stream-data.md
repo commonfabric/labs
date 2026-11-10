@@ -21,7 +21,7 @@ const finalEvent = resultOf(request);
 const liveEvent = partialResultOf(request);
 
 return hasError(request)
-  ? <p>Stream failed: {request.errorMessage}</p>
+  ? <p>Stream failed: {request.message}</p>
   : isSyncing(request)
   ? <p>Waiting for stream inputs</p>
   : isPending(request)

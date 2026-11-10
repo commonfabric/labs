@@ -107,7 +107,6 @@ export default pattern(() => {
             new FabricUnavailable(
               "obsolete",
               null,
-              null,
               "Use the replacement journal.",
             ) as IsObsolete,
           )
@@ -136,7 +135,7 @@ export default pattern(() => {
       {
         action: action(() => {
           journal.set(
-            new FabricUnavailable("obsolete", null, null, "") as IsObsolete,
+            new FabricUnavailable("obsolete", null, "") as IsObsolete,
           );
           nowMs.set(2);
         }),
@@ -151,7 +150,7 @@ export default pattern(() => {
         action: action(() => {
           journal.set([]);
           nowMs.set(
-            new FabricUnavailable("obsolete", null, null, "") as IsObsolete,
+            new FabricUnavailable("obsolete", null, "") as IsObsolete,
           );
         }),
       },

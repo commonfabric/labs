@@ -99,8 +99,7 @@ export type ErrorKindsAgree = MustBeTrue<
 type FabricUnavailableState = {
   reason: UnavailableReason;
   errorKind?: UnavailableErrorKind;
-  errorMessage?: string;
-  obsoleteMessage?: string;
+  message?: string;
 };
 
 /** The reasons that have a message-free prefab instance. */
@@ -114,8 +113,8 @@ type PrefabReason = Exclude<UnavailableReason, "error">;
  * The reasons split along one axis, which `isTransient()` reports: `pending`
  * and `syncing` say the data is on its way, `error` says producing it failed,
  * and `obsolete` says the output is no longer served. Only `error` carries
- * an error kind and error message; only `obsolete` may carry migration
- * guidance in `obsoleteMessage`. Diagnostics confer no authority to act.
+ * an error kind. Both terminal reasons may carry a `message`: error details
+ * or migration guidance. Diagnostics confer no authority to act.
  * The constructor refuses the other pairings.
  * See Section 1.4.12 of `1-fabric-values.md`.
  */
@@ -131,23 +130,19 @@ export class FabricUnavailable extends BaseFabricPrimitive
    * The message as stored: `null` when none was given, and also when the one
    * given is the kind's default, which is stored as no message at all.
    */
-  readonly #errorMessage: string | null;
-
-  /** Guidance about a retired output, when the reason is `obsolete`. */
-  readonly #obsoleteMessage: string | null;
+  readonly #message: string | null;
 
   /**
    * Constructs an instance with the given reason, kind of error, and
    * message. Throws when `reason` is not one of the reasons; when it is
    * `error` and `errorKind` is not one of the kinds; or when it is a
-   * non-error reason and either error field is not `null`; or when
-   * `obsoleteMessage` is non-string or belongs to another reason.
+   * non-error reason and `errorKind` is not `null`; or when `message` is
+   * non-string or belongs to a transient reason.
    */
   constructor(
     reason: UnavailableReason,
     errorKind: UnavailableErrorKind | null = null,
-    errorMessage: string | null = null,
-    obsoleteMessage: string | null = null,
+    message: string | null = null,
   ) {
     super(BLESSING_TOKEN, FabricUnavailable);
 
@@ -162,6 +157,10 @@ export class FabricUnavailable extends BaseFabricPrimitive
 
     let storedMessage: string | null = null;
 
+    if ((message !== null) && (typeof message !== "string")) {
+      throw new Error(debugStr`Not a \`message\`: $quote${message}`);
+    }
+
     if (reason === UNAVAILABLE_REASONS.error) {
       if (
         (typeof errorKind !== "string") ||
@@ -171,37 +170,24 @@ export class FabricUnavailable extends BaseFabricPrimitive
           debugStr`Reason \`error\` requires an \`UnavailableErrorKind\`, not $quote${errorKind}.`,
         );
       }
-      if ((errorMessage !== null) && (typeof errorMessage !== "string")) {
-        throw new Error(
-          debugStr`Not an \`errorMessage\`: $quote${errorMessage}`,
-        );
-      }
       // A message equal to the kind's default is stored as none.
       storedMessage =
-        (errorMessage === FabricUnavailable.#DEFAULT_ERROR_MESSAGES[errorKind])
+        (message === FabricUnavailable.#DEFAULT_ERROR_MESSAGES[errorKind])
           ? null
-          : errorMessage;
-    } else if ((errorKind !== null) || (errorMessage !== null)) {
+          : message;
+    } else if (errorKind !== null) {
       throw new Error(
-        debugStr`Reason $quote${reason} takes neither an \`errorKind\` nor an \`errorMessage\`.`,
+        debugStr`Reason $quote${reason} takes no \`errorKind\`.`,
       );
-    }
-
-    if (obsoleteMessage !== null) {
-      if (reason !== UNAVAILABLE_REASONS.obsolete) {
-        throw new Error("Only reason `obsolete` takes an `obsoleteMessage`.");
-      }
-      if (typeof obsoleteMessage !== "string") {
-        throw new Error(
-          debugStr`Not an \`obsoleteMessage\`: $quote${obsoleteMessage}`,
-        );
-      }
+    } else if (reason === UNAVAILABLE_REASONS.obsolete) {
+      storedMessage = message;
+    } else if (message !== null) {
+      throw new Error(debugStr`Reason $quote${reason} takes no \`message\`.`);
     }
 
     this.#reason = reason;
     this.#errorKind = errorKind;
-    this.#errorMessage = storedMessage;
-    this.#obsoleteMessage = obsoleteMessage;
+    this.#message = storedMessage;
   }
 
   //
@@ -229,29 +215,25 @@ export class FabricUnavailable extends BaseFabricPrimitive
   }
 
   /**
-   * The message, when the reason is `error`: the one stored, or the kind's
-   * default when none is. `null` for any non-error reason.
+   * Diagnostic text for a terminal reason: error details or migration guidance.
+   * An error with no stored message supplies its kind's default. `null` for
+   * transient reasons and an obsolete output with no guidance.
    */
-  get errorMessage(): string | null {
+  get message(): string | null {
     const kind = this.#errorKind;
 
     return (kind === null)
-      ? null
-      : (this.#errorMessage ?? FabricUnavailable.#DEFAULT_ERROR_MESSAGES[kind]);
+      ? this.#message
+      : (this.#message ?? FabricUnavailable.#DEFAULT_ERROR_MESSAGES[kind]);
   }
 
   /**
-   * The message as stored, with no default supplied: `null` for a non-error
-   * reason, and for an `error` whose message is its kind's default or was
-   * never given. This is what the codecs and the hasher read.
+   * The message as stored, with no default supplied: `null` for transient
+   * reasons, an obsolete output with no guidance, and an error whose message
+   * is its kind's default or was never given. Codecs and the hasher read this.
    */
-  get rawErrorMessage(): string | null {
-    return this.#errorMessage;
-  }
-
-  /** Guidance about a retired output; `null` when none was given. */
-  get obsoleteMessage(): string | null {
-    return this.#obsoleteMessage;
+  get rawMessage(): string | null {
+    return this.#message;
   }
 
   /** Whether the reason is `pending`. */
@@ -270,12 +252,12 @@ export class FabricUnavailable extends BaseFabricPrimitive
   }
 
   /**
-   * Whether the reason is `error`, narrowing `errorKind` and `errorMessage`
+   * Whether the reason is `error`, narrowing `errorKind` and `message`
    * to the non-`null` values the `error` reason always carries.
    */
   isError(): this is {
     readonly errorKind: UnavailableErrorKind;
-    readonly errorMessage: string;
+    readonly message: string;
   } {
     return this.#reason === UNAVAILABLE_REASONS.error;
   }
@@ -297,18 +279,14 @@ export class FabricUnavailable extends BaseFabricPrimitive
   #state(): FabricUnavailableState {
     const reason = this.#reason;
     const errorKind = this.#errorKind;
-    const errorMessage = this.#errorMessage;
-
-    if (this.#obsoleteMessage !== null) {
-      return Object.freeze({ reason, obsoleteMessage: this.#obsoleteMessage });
-    }
+    const message = this.#message;
 
     if (errorKind === null) {
-      return Object.freeze({ reason });
-    } else if (errorMessage === null) {
+      return Object.freeze(message === null ? { reason } : { reason, message });
+    } else if (message === null) {
       return Object.freeze({ reason, errorKind });
     } else {
-      return Object.freeze({ reason, errorKind, errorMessage });
+      return Object.freeze({ reason, errorKind, message });
     }
   }
 
@@ -322,7 +300,7 @@ export class FabricUnavailable extends BaseFabricPrimitive
   }
 
   /**
-   * The message `errorMessage` returns for each kind when none was stored.
+   * The message `message` returns for each kind when none was stored.
    * Presentation rather than state: none of these is ever encoded or hashed,
    * and a message given at construction that equals its kind's entry here is
    * stored as no message at all.
@@ -454,8 +432,8 @@ export class FabricUnavailable extends BaseFabricPrimitive
    * Helper for both codecs' `canDecode()`, which reports whether `state` has
    * the shape of a {@link FabricUnavailableState}: a plain object whose own
    * `reason` is one of the reasons, whose own `errorKind`, if
-   * present at all, is one of the kinds, and whose own `errorMessage`, if
-   * present at all, is a string; likewise for `obsoleteMessage`. Every field
+   * present at all, is one of the kinds, and whose own `message`, if
+   * present at all, is a string. Every field
    * is read as an own property, so
    * nothing inherited stands in for one. Presence is the test for the optional
    * fields rather than a comparison against `undefined`, because the realm
@@ -468,11 +446,10 @@ export class FabricUnavailable extends BaseFabricPrimitive
       return false;
     }
 
-    const { reason, errorKind, errorMessage, obsoleteMessage } = state as {
+    const { reason, errorKind, message } = state as {
       reason: unknown;
       errorKind?: unknown;
-      errorMessage?: unknown;
-      obsoleteMessage?: unknown;
+      message?: unknown;
     };
 
     if (
@@ -490,10 +467,7 @@ export class FabricUnavailable extends BaseFabricPrimitive
       return false;
     }
 
-    return (!Object.hasOwn(state, "errorMessage") ||
-      (typeof errorMessage === "string")) &&
-      (!Object.hasOwn(state, "obsoleteMessage") ||
-        (typeof obsoleteMessage === "string"));
+    return !Object.hasOwn(state, "message") || (typeof message === "string");
   }
 
   /** Whether the reason has a message-free prefab. */
@@ -539,17 +513,11 @@ export class FabricUnavailable extends BaseFabricPrimitive
     const errorKind = Object.hasOwn(state, "errorKind")
       ? state.errorKind
       : undefined;
-    const errorMessage = Object.hasOwn(state, "errorMessage")
-      ? state.errorMessage
-      : undefined;
-    const obsoleteMessage = Object.hasOwn(state, "obsoleteMessage")
-      ? state.obsoleteMessage
-      : undefined;
+    const message = Object.hasOwn(state, "message") ? state.message : undefined;
 
     if (
       FabricUnavailable.#isPrefabReason(reason) &&
-      (errorKind === undefined) && (errorMessage === undefined) &&
-      (obsoleteMessage === undefined)
+      (errorKind === undefined) && (message === undefined)
     ) {
       return FabricUnavailable.#prefabFor(reason);
     }
@@ -557,8 +525,7 @@ export class FabricUnavailable extends BaseFabricPrimitive
     return new FabricUnavailable(
       reason,
       errorKind ?? null,
-      errorMessage ?? null,
-      obsoleteMessage ?? null,
+      message ?? null,
     );
   }
 }

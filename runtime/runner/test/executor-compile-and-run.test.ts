@@ -461,7 +461,7 @@ describe("executor-compile-and-run", () => {
       );
       expect(value).toMatchObject({ reason: "error" });
       expect(value).toMatchObject({ errorKind: "compile" });
-      expect((value as UnavailableVariant).errorMessage).not.toBe("");
+      expect((value as UnavailableVariant).message).not.toBe("");
       const poke = client.getCell<number>(space, "unrelated-input");
       const tx = client.edit();
       poke.withTx(tx).set(1);

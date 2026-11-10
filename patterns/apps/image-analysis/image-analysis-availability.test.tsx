@@ -87,7 +87,6 @@ export default pattern(() => {
             new FabricUnavailable(
               "obsolete",
               null,
-              null,
               "Use imageOverview.description instead.",
             ) as IsObsolete,
           )
@@ -110,7 +109,7 @@ export default pattern(() => {
       {
         action: action(() =>
           request.set(
-            new FabricUnavailable("obsolete", null, null, "") as IsObsolete,
+            new FabricUnavailable("obsolete", null, "") as IsObsolete,
           )
         ),
       },

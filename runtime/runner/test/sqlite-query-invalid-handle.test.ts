@@ -37,7 +37,7 @@ type QueryValue = { rows: unknown[] } | FabricUnavailable;
 
 function queryErrorMessage(value: QueryValue): string | undefined {
   return isUnavailable(value) && value.reason === "error"
-    ? value.errorMessage
+    ? value.message
     : undefined;
 }
 

@@ -75,6 +75,6 @@ export const subAgentPattern = pattern<SubAgentInput, any>((
   const response = resultOf(responseRequest);
 
   return hasError(responseRequest)
-    ? { error: responseRequest.errorMessage }
+    ? { error: responseRequest.message }
     : response;
 });

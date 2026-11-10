@@ -2025,13 +2025,13 @@ const FoundRoom = pattern<FoundRoomInput, FoundRoomOutput>(
       if (isPending(root.result) || isSyncing(root.result)) return undefined;
       if (hasError(root.result)) {
         return {
-          message: root.result.errorMessage,
+          message: root.result.message,
           kind: root.result.errorKind,
         };
       }
       if (isObsolete(root.result)) {
         return {
-          message: root.result.obsoleteMessage ||
+          message: root.result.message ||
             "This catalog root is no longer served.",
           kind: "obsolete",
         };

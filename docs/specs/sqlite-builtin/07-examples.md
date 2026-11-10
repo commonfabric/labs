@@ -114,7 +114,7 @@ const leaderboard = db.query<{ author: Cell<User>; n: number }>(
 return isPending(leaderboard)
   ? "Loading…"
   : hasError(leaderboard)
-  ? `Query failed: ${leaderboard.errorMessage}`
+  ? `Query failed: ${leaderboard.message}`
   // `author` decoded back into Cell<User> despite the `AS author` alias.
   : resultOf(leaderboard).rows.map((r) => ({
     name: lift((u: User | undefined) => u?.name)(r.author),
@@ -200,7 +200,7 @@ export default pattern<{ db: SqliteDb; key: string }>(({ db, key }) => {
   return isPending(lookup)
     ? "Waiting for a database to be connected…" // until cf wires it
     : hasError(lookup)
-    ? `Database error: ${lookup.errorMessage}`
+    ? `Database error: ${lookup.message}`
     : resultOf(lookup).rows[0]?.value;
 });
 ```

@@ -152,7 +152,7 @@ export const LedgerMonthTransactionsPresentation = pattern<
     isPending(observedRowsRead) || isSyncing(observedRowsRead)
   );
   const errorMessage = computed(() =>
-    hasError(observedRowsRead) ? observedRowsRead.errorMessage : ""
+    hasError(observedRowsRead) ? observedRowsRead.message : ""
   );
   const hasQueryError = computed(() => errorMessage !== "");
   const isEmpty = computed(() =>

@@ -66,7 +66,7 @@ export default pattern<{ db: SqliteDb; tick: number }>(({ db, tick }) => {
   return {
     count: computed(() => resultOf(query).rows.length),
     pending: computed(() => isPending(query)),
-    error: computed(() => hasError(query) ? query.errorMessage : undefined),
+    error: computed(() => hasError(query) ? query.message : undefined),
   };
 });
 `;

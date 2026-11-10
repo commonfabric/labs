@@ -8,7 +8,7 @@
  * kind or a message with a transient reason, or lacking the kind `error`
  * requires, is a state this class never writes, and is reported as a
  * `ProblematicValue` rather than built. The message's default is checked from
- * both sides: `errorMessage` supplies it and `rawErrorMessage` does not, and
+ * both sides: `message` supplies it and `rawMessage` does not, and
  * a message given equal to the default is indistinguishable from none. The
  * prefabs are checked by identity where a decode is meant to yield one, and
  * by content where equality is the question.
@@ -110,10 +110,10 @@ describe("FabricUnavailable", () => {
       expect(Object.isFrozen(new FabricUnavailable("syncing"))).toBe(true);
     });
 
-    it("defaults `errorKind` and `errorMessage` to `null`", () => {
+    it("defaults `errorKind` and `message` to `null`", () => {
       const instance = new FabricUnavailable("pending");
       expect(instance.errorKind).toBe(null);
-      expect(instance.errorMessage).toBe(null);
+      expect(instance.message).toBe(null);
     });
 
     it("accepts explicit `null`s for a transient reason", () => {
@@ -124,7 +124,7 @@ describe("FabricUnavailable", () => {
     it("accepts reason `error` with a kind and no message", () => {
       const instance = new FabricUnavailable("error", "network");
       expect(instance.errorKind).toBe("network");
-      expect(instance.rawErrorMessage).toBe(null);
+      expect(instance.rawMessage).toBe(null);
     });
 
     it("throws given a reason outside the set", () => {
@@ -172,15 +172,15 @@ describe("FabricUnavailable", () => {
     it("throws given reason `error` and a message that is not a string", () => {
       expect(() =>
         new FabricUnavailable("error", "general", 1 as unknown as string)
-      ).toThrow(/Not an `errorMessage`: `1`/);
+      ).toThrow(/Not a `message`: `1`/);
     });
 
     it("throws given a kind or a message with a transient reason", () => {
       for (const reason of TRANSIENT_REASONS) {
         expect(() => new FabricUnavailable(reason, "general"))
-          .toThrow(/takes neither an `errorKind` nor an `errorMessage`/);
+          .toThrow(/takes no `errorKind`/);
         expect(() => new FabricUnavailable(reason, null, "boom"))
-          .toThrow(/takes neither an `errorKind` nor an `errorMessage`/);
+          .toThrow(/takes no `message`/);
       }
     });
   });
@@ -216,45 +216,45 @@ describe("FabricUnavailable", () => {
       });
     });
 
-    describe(".errorMessage", () => {
+    describe(".message", () => {
       it("is the message given with reason `error`", () => {
-        expect(new FabricUnavailable("error", "general", "boom").errorMessage)
+        expect(new FabricUnavailable("error", "general", "boom").message)
           .toBe("boom");
       });
 
       it("is a non-empty string for every kind when none was given", () => {
         for (const [kind, instance] of Object.entries(errorsByKind())) {
-          expect([kind, typeof instance.errorMessage]).toEqual([
+          expect([kind, typeof instance.message]).toEqual([
             kind,
             "string",
           ]);
-          expect(instance.errorMessage!.length).toBeGreaterThan(0);
+          expect(instance.message!.length).toBeGreaterThan(0);
         }
       });
 
       it("differs between kinds when none was given", () => {
         const messages = Object.values(errorsByKind())
-          .map((instance) => instance.errorMessage);
+          .map((instance) => instance.message);
         expect(new Set(messages).size).toBe(messages.length);
       });
 
       it("is `null` for a transient reason", () => {
         for (const prefab of Object.values(PREFABS)) {
-          expect(prefab.errorMessage).toBe(null);
+          expect(prefab.message).toBe(null);
         }
       });
     });
 
-    describe(".rawErrorMessage", () => {
+    describe(".rawMessage", () => {
       it("is the message given with reason `error`", () => {
         expect(
-          new FabricUnavailable("error", "general", "boom").rawErrorMessage,
+          new FabricUnavailable("error", "general", "boom").rawMessage,
         ).toBe("boom");
       });
 
       it("is `null` when none was given, for every kind", () => {
         for (const [kind, instance] of Object.entries(errorsByKind())) {
-          expect([kind, instance.rawErrorMessage]).toEqual([kind, null]);
+          expect([kind, instance.rawMessage]).toEqual([kind, null]);
         }
       });
 
@@ -263,16 +263,16 @@ describe("FabricUnavailable", () => {
           const explicit = new FabricUnavailable(
             "error",
             kind as UnavailableErrorKind,
-            instance.errorMessage,
+            instance.message,
           );
-          expect([kind, explicit.rawErrorMessage]).toEqual([kind, null]);
-          expect(explicit.errorMessage).toBe(instance.errorMessage);
+          expect([kind, explicit.rawMessage]).toEqual([kind, null]);
+          expect(explicit.message).toBe(instance.message);
         }
       });
 
       it("is `null` for a transient reason", () => {
         for (const prefab of Object.values(PREFABS)) {
-          expect(prefab.rawErrorMessage).toBe(null);
+          expect(prefab.rawMessage).toBe(null);
         }
       });
     });
@@ -314,7 +314,7 @@ describe("FabricUnavailable", () => {
       // it, which becomes unused, and fails the check, if the narrowing ever
       // reaches there on its own.
 
-      it("narrows `errorKind` and `errorMessage` to non-`null` when it returns `true`", () => {
+      it("narrows `errorKind` and `message` to non-`null` when it returns `true`", () => {
         const instance: FabricUnavailable = new FabricUnavailable(
           "error",
           "network",
@@ -326,7 +326,7 @@ describe("FabricUnavailable", () => {
 
         if (instance.isError()) {
           const kind: UnavailableErrorKind = instance.errorKind;
-          const message: string = instance.errorMessage;
+          const message: string = instance.message;
           expect(kind).toBe("network");
           expect(message.length).toBeGreaterThan(0);
         } else {
@@ -356,41 +356,36 @@ describe("FabricUnavailable", () => {
         const value = new FabricUnavailable(
           "obsolete",
           null,
-          null,
           "Use overview.text instead.",
         );
         expect(value.isObsolete()).toBe(true);
         expect(value.isTransient()).toBe(false);
         expect(value.isError()).toBe(false);
         expect(value.errorKind).toBe(null);
-        expect(value.errorMessage).toBe(null);
-        expect(value.obsoleteMessage).toBe("Use overview.text instead.");
-        expect(UNAVAILABLE_OBSOLETE.obsoleteMessage).toBe(null);
+        expect(value.message).toBe("Use overview.text instead.");
+        expect(value.rawMessage).toBe(value.message);
+        expect(UNAVAILABLE_OBSOLETE.message).toBe(null);
       });
 
       it("rejects diagnostic fields belonging to another reason", () => {
         expect(() => new FabricUnavailable("obsolete", "general"))
-          .toThrow(/takes neither/);
-        expect(() => new FabricUnavailable("obsolete", null, "wrong field"))
-          .toThrow(/takes neither/);
-        for (const reason of ["pending", "syncing", "error"] as const) {
+          .toThrow(/takes no `errorKind`/);
+        for (const reason of TRANSIENT_REASONS) {
           expect(() =>
             new FabricUnavailable(
               reason,
-              reason === "error" ? "general" : null,
               null,
               "Use new.",
             )
-          ).toThrow(/Only reason `obsolete`/);
+          ).toThrow(/takes no `message`/);
         }
         expect(() =>
           new FabricUnavailable(
             "obsolete",
             null,
-            null,
             7 as unknown as string,
           )
-        ).toThrow(/Not an `obsoleteMessage`/);
+        ).toThrow(/Not a `message`/);
       });
 
       it("round-trips absent, empty, and authored guidance through both codecs", () => {
@@ -404,17 +399,16 @@ describe("FabricUnavailable", () => {
             const value = new FabricUnavailable(
               "obsolete",
               null,
-              null,
               message,
             );
             const state = codec.encode(value, NULL_LIVE_ENVIRONMENT) as {
               reason: "obsolete";
-              obsoleteMessage?: string;
+              message?: string;
             };
             expect(state).toStrictEqual(
               message === null
                 ? { reason: "obsolete" }
-                : { reason: "obsolete", obsoleteMessage: message },
+                : { reason: "obsolete", message: message },
             );
             expect(codec.canDecode(state)).toBe(true);
             const decoded = codec.decode(
@@ -422,7 +416,8 @@ describe("FabricUnavailable", () => {
               state,
               NULL_LIVE_ENVIRONMENT,
             ) as FabricUnavailable;
-            expect(decoded.obsoleteMessage).toBe(message);
+            expect(decoded.message).toBe(message);
+            expect(decoded.rawMessage).toBe(message);
             expect(valueEqual(decoded, value)).toBe(true);
             if (message === null) expect(decoded).toBe(UNAVAILABLE_OBSOLETE);
           }
@@ -436,14 +431,14 @@ describe("FabricUnavailable", () => {
             FabricUnavailable[REALM_CODEC],
           ]
         ) {
-          for (const obsoleteMessage of [null, undefined, 3]) {
-            expect(codec.canDecode({ reason: "obsolete", obsoleteMessage }))
+          for (const message of [null, undefined, 3]) {
+            expect(codec.canDecode({ reason: "obsolete", message }))
               .toBe(false);
           }
           expect(
             codec.decode(CODEC_TYPE_TAGS.Unavailable, {
               reason: "pending",
-              obsoleteMessage: "Use new.",
+              message: "Use new.",
             }, NULL_LIVE_ENVIRONMENT),
           )
             .toBeInstanceOf(ProblematicValue);
@@ -451,8 +446,8 @@ describe("FabricUnavailable", () => {
       });
 
       it("ignores inherited retirement guidance", () => {
-        const prototype = Object.prototype as { obsoleteMessage?: string };
-        prototype.obsoleteMessage = "Inherited guidance";
+        const prototype = Object.prototype as { message?: string };
+        prototype.message = "Inherited guidance";
         try {
           for (
             const codec of [
@@ -469,7 +464,7 @@ describe("FabricUnavailable", () => {
             ).toBe(UNAVAILABLE_OBSOLETE);
           }
         } finally {
-          delete prototype.obsoleteMessage;
+          delete prototype.message;
         }
       });
     });
@@ -507,7 +502,7 @@ describe("FabricUnavailable", () => {
           ).toStrictEqual({
             reason: "error",
             errorKind: "network",
-            errorMessage: "boom",
+            message: "boom",
           });
         });
 
@@ -521,7 +516,7 @@ describe("FabricUnavailable", () => {
           const explicit = new FabricUnavailable(
             "error",
             "decode",
-            given.errorMessage,
+            given.message,
           );
           expect(codec.encode(explicit, env))
             .toStrictEqual({ reason: "error", errorKind: "decode" });
@@ -548,7 +543,7 @@ describe("FabricUnavailable", () => {
             codec.canDecode({
               reason: "error",
               errorKind: "general",
-              errorMessage: "x",
+              message: "x",
             }),
           ).toBe(true);
         });
@@ -594,17 +589,17 @@ describe("FabricUnavailable", () => {
             codec.canDecode({
               reason: "error",
               errorKind: "general",
-              errorMessage: 1,
+              message: 1,
             }),
           ).toBe(false);
           expect(
             codec.canDecode({
               reason: "error",
               errorKind: "general",
-              errorMessage: undefined,
+              message: undefined,
             }),
           ).toBe(false);
-          expect(codec.canDecode({ reason: "pending", errorMessage: null }))
+          expect(codec.canDecode({ reason: "pending", message: null }))
             .toBe(false);
         });
       });
@@ -619,14 +614,14 @@ describe("FabricUnavailable", () => {
         it("decodes an error to a fresh instance carrying the kind and message", () => {
           const decoded = codec.decode(
             expectedTag,
-            { reason: "error", errorKind: "compile", errorMessage: "boom" },
+            { reason: "error", errorKind: "compile", message: "boom" },
             env,
           ) as unknown as FabricUnavailable;
 
           expect(decoded).toBeInstanceOf(FabricUnavailable);
           expect(decoded.reason).toBe("error");
           expect(decoded.errorKind).toBe("compile");
-          expect(decoded.rawErrorMessage).toBe("boom");
+          expect(decoded.rawMessage).toBe("boom");
         });
 
         it("decodes an error given no message to one whose message is the kind's default", () => {
@@ -636,9 +631,9 @@ describe("FabricUnavailable", () => {
             env,
           ) as unknown as FabricUnavailable;
 
-          expect(decoded.rawErrorMessage).toBe(null);
-          expect(decoded.errorMessage)
-            .toBe(new FabricUnavailable("error", "compile").errorMessage);
+          expect(decoded.rawMessage).toBe(null);
+          expect(decoded.message)
+            .toBe(new FabricUnavailable("error", "compile").message);
         });
 
         it("ignores an error field that is inherited rather than own", () => {
@@ -646,10 +641,10 @@ describe("FabricUnavailable", () => {
           // reads the same way, so the two cannot disagree about a state.
           const polluted = Object.prototype as {
             errorKind?: unknown;
-            errorMessage?: unknown;
+            message?: unknown;
           };
           polluted.errorKind = "general";
-          polluted.errorMessage = "boom";
+          polluted.message = "boom";
           try {
             expect(codec.canDecode({ reason: "pending" })).toBe(true);
             expect(codec.decode(expectedTag, { reason: "pending" }, env))
@@ -659,10 +654,10 @@ describe("FabricUnavailable", () => {
               { reason: "error", errorKind: "sync" },
               env,
             ) as unknown as FabricUnavailable;
-            expect(decoded.rawErrorMessage).toBe(null);
+            expect(decoded.rawMessage).toBe(null);
           } finally {
             delete polluted.errorKind;
-            delete polluted.errorMessage;
+            delete polluted.message;
           }
         });
 
@@ -672,7 +667,7 @@ describe("FabricUnavailable", () => {
           expect(
             codec.decode(
               expectedTag,
-              { reason: "error", errorMessage: "boom" },
+              { reason: "error", message: "boom" },
               env,
             ),
           ).toBeInstanceOf(ProblematicValue);
@@ -689,7 +684,7 @@ describe("FabricUnavailable", () => {
           expect(
             codec.decode(
               expectedTag,
-              { reason: "syncing", errorMessage: "boom" },
+              { reason: "syncing", message: "boom" },
               env,
             ),
           ).toBeInstanceOf(ProblematicValue);
@@ -708,7 +703,7 @@ describe("FabricUnavailable", () => {
             expect(decoded).toBeInstanceOf(FabricUnavailable);
             expect(decoded.reason).toBe(original.reason);
             expect(decoded.errorKind).toBe(original.errorKind);
-            expect(decoded.rawErrorMessage).toBe(original.rawErrorMessage);
+            expect(decoded.rawMessage).toBe(original.rawMessage);
           }
         });
 
@@ -721,7 +716,7 @@ describe("FabricUnavailable", () => {
             ) as unknown as FabricUnavailable;
 
             expect(decoded.errorKind).toBe(original.errorKind);
-            expect(decoded.errorMessage).toBe(original.errorMessage);
+            expect(decoded.message).toBe(original.message);
           }
         });
       });
@@ -783,7 +778,7 @@ describe("FabricUnavailable", () => {
             codec.canDecode({
               reason: "error",
               errorKind: "sync",
-              errorMessage: undefined,
+              message: undefined,
             }),
           ).toBe(false);
         });
@@ -804,13 +799,13 @@ describe("FabricUnavailable", () => {
         it("decodes an error to a fresh instance carrying the kind and message", () => {
           const decoded = codec.decode(
             expectedTag,
-            { reason: "error", errorKind: "provider", errorMessage: "boom" },
+            { reason: "error", errorKind: "provider", message: "boom" },
             env,
           ) as unknown as FabricUnavailable;
 
           expect(decoded).toBeInstanceOf(FabricUnavailable);
           expect(decoded.errorKind).toBe("provider");
-          expect(decoded.rawErrorMessage).toBe("boom");
+          expect(decoded.rawMessage).toBe("boom");
         });
 
         it("decodes a kind with a transient reason to a `ProblematicValue`", () => {
@@ -834,7 +829,7 @@ describe("FabricUnavailable", () => {
       it(`\`${reason}\` has that reason and no error members`, () => {
         expect(prefab.reason).toBe(reason);
         expect(prefab.errorKind).toBe(null);
-        expect(prefab.errorMessage).toBe(null);
+        expect(prefab.message).toBe(null);
       });
 
       it(`\`${reason}\` is equal by content to a fresh instance with that reason`, () => {

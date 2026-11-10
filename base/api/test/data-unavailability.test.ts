@@ -63,12 +63,15 @@ function nativeCompatibilityTypecheck(
   isObsolete: IsObsoleteFunction,
 ): void {
   current.isObsolete();
-  const currentGuidance: string | null = current.obsoleteMessage;
+  const currentGuidance: string | null = current.message;
   accepted.isObsolete?.();
   // @ts-expect-error Accepted native implementations may omit this method.
   accepted.isObsolete();
-  // @ts-expect-error Accepted non-obsolete implementations may omit this getter.
-  const requiredGuidance: string | null = accepted.obsoleteMessage;
+  const requiredGuidance: string | null = accepted.message;
+  // @ts-expect-error Diagnostics use the shared message accessor.
+  current.errorMessage;
+  // @ts-expect-error Retirement guidance uses the shared message accessor.
+  current.obsoleteMessage;
   // @ts-expect-error An accepted older marker is not the current concrete API.
   const concrete: FabricUnavailable = pending;
   // @ts-expect-error Structural lookalikes lack the native primitive brand.
@@ -79,7 +82,7 @@ function nativeCompatibilityTypecheck(
     true;
   if (isObsolete(accepted)) {
     accepted.isObsolete();
-    const guidance: string | null = accepted.obsoleteMessage;
+    const guidance: string | null = accepted.message;
     void guidance;
   }
   void currentGuidance;
@@ -163,7 +166,7 @@ function guardNarrowingTypecheck(
 ): string | boolean | undefined {
   if (hasError(value)) {
     const narrowed: HasError = value;
-    return narrowed.errorMessage;
+    return narrowed.message;
   }
   if (isPending(value)) {
     const narrowed: IsPending = value;
@@ -178,7 +181,7 @@ function asyncResultNarrowingTypecheck(
   resultOf: ResultOfFunction,
 ): string {
   if (hasError(request)) {
-    return request.errorMessage;
+    return request.message;
   }
 
   const result = resultOf(request);
@@ -226,9 +229,9 @@ function exhaustiveObservationTypecheck(
 ): string {
   const observed = observe(value);
   if (isPending(observed)) return "pending";
-  if (hasError(observed)) return observed.errorMessage;
+  if (hasError(observed)) return observed.message;
   if (isSyncing(observed)) return "syncing";
-  if (isObsolete(observed)) return observed.obsoleteMessage ?? "obsolete";
+  if (isObsolete(observed)) return observed.message ?? "obsolete";
   if (hasSchemaMismatch(observed)) return "schema mismatch";
 
   const usable: Repo = observed;
@@ -427,7 +430,7 @@ function compileResultTypecheck(
   > = true;
 
   if (hasError(request)) {
-    const message = request.errorMessage;
+    const message = request.message;
     const messageIsTyped: Equal<typeof message, string> = true;
     void messageIsTyped;
   }

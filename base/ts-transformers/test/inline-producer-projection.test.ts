@@ -97,7 +97,7 @@ export default pattern((input: { request: AsyncResult<{ name: string }> }) => {
   const usable = resultOf(input.request);
   return { value: computed(() => {
     const input = "local";
-    return hasError(request) ? request.errorMessage : usable.name + input + input_1;
+    return hasError(request) ? request.message : usable.name + input + input_1;
   }) };
 });`,
       { types: COMMONFABRIC_TYPES, typeCheck: true },

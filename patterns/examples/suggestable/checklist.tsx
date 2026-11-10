@@ -54,7 +54,7 @@ export const ChecklistPresentation = pattern<
       return {
         response: { items: [] },
         pending: false,
-        error: observedResponse.errorMessage,
+        error: observedResponse.message,
       };
     }
     return { response: resultOf(observedResponse), pending: false, error: "" };

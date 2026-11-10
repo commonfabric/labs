@@ -116,7 +116,7 @@ export default pattern<Input>(({ items }) => {
       result: computed(() =>
         isPending(request) || hasError(request) ? undefined : resultOf(request)
       ),
-      error: computed(() => hasError(request) ? request.errorMessage : ""),
+      error: computed(() => hasError(request) ? request.message : ""),
       messages: computed((): BuiltInLLMMessage[] => []),
       partial: computed(() => ""),
       // The old output exposed cancellation even though the direct API does not.

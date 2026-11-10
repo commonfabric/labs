@@ -39,7 +39,7 @@ export default pattern(() => {
   const state = computed(() => {
     if (isPending(rows)) return "pending";
     if (isSyncing(rows)) return "syncing";
-    if (hasError(rows)) return `${rows.errorKind}: ${rows.errorMessage}`;
+    if (hasError(rows)) return `${rows.errorKind}: ${rows.message}`;
     return "usable";
   });
   const demo = Records({});

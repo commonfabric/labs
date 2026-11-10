@@ -137,7 +137,7 @@ describe("a builtin whose staged request is abandoned", () => {
       if (typeof value.error === "string") return value;
       const raw = cell.withTx().key("result").resolveAsCell().getRaw();
       return isUnavailable(raw) && raw.reason === "error"
-        ? { error: raw.errorMessage }
+        ? { error: raw.message }
         : value;
     });
   }

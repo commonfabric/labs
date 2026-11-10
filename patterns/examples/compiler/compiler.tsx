@@ -67,7 +67,7 @@ export default pattern<Input>(({ code }) => {
         {hasError(compileRequest)
           ? (
             <b>
-              fix the error: {compileRequest.errorMessage}
+              fix the error: {compileRequest.message}
             </b>
           )
           : (

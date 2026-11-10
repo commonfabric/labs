@@ -159,7 +159,7 @@ export const WeeklyRollupPresentation = pattern(
     );
     const error = computed(() => {
       if (isPending(response) || isSyncing(response)) return "";
-      return hasError(response) ? response.errorMessage : "";
+      return hasError(response) ? response.message : "";
     });
     return {
       weeklyRollup,

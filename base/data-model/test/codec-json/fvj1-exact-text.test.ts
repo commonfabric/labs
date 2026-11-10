@@ -290,7 +290,7 @@ const CLASS_CASES: Readonly<
       what: "an error with a message",
       make: () => new FabricUnavailable("error", "network", "offline"),
       text:
-        'fvj1:{"/Unavailable@1":{"errorKind":"network","errorMessage":"offline","reason":"error"}}',
+        'fvj1:{"/Unavailable@1":{"errorKind":"network","message":"offline","reason":"error"}}',
     },
   ],
   FabricError: [

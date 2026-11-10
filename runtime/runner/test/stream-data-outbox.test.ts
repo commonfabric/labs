@@ -316,7 +316,7 @@ describe("stream-data outbox mechanism", () => {
     expect(unavailableReason(rawResult(fixture.state.partial))).toBe("error");
     const unavailable = rawResult(fixture.state.result);
     if (isUnavailable(unavailable) && unavailable.reason === "error") {
-      expect(unavailable.errorMessage).toContain("503 Service Unavailable");
+      expect(unavailable.message).toContain("503 Service Unavailable");
     }
 
     await runtime.settled();
@@ -401,7 +401,7 @@ describe("stream-data outbox mechanism", () => {
     const errorResult = rawResult(errorFixture.state.result);
     expect(
       isUnavailable(errorResult) && errorResult.reason === "error"
-        ? errorResult.errorMessage
+        ? errorResult.message
         : undefined,
     ).toBe("upstream URL failed");
     expect(rawResult(errorFixture.state.pending)).toBe(false);
@@ -423,7 +423,7 @@ describe("stream-data outbox mechanism", () => {
     expect(unavailableReason(rawResult(fixture.state.partial))).toBe("error");
     expect(
       isUnavailable(final) && final.reason === "error"
-        ? final.errorMessage
+        ? final.message
         : undefined,
     ).toBe("body failed");
     expect(fetchCalls).toHaveLength(0);

@@ -26,7 +26,7 @@ const title = computed(() => `${repo.owner}/${repo.name}`);
 return isPending(repoRequest)
   ? <div>Loading…</div>
   : hasError(repoRequest)
-    ? <div>{repoRequest.errorMessage}</div>
+    ? <div>{repoRequest.message}</div>
     : <h1>{title}</h1>;
 ```
 
@@ -61,7 +61,7 @@ transformer can name that path:
 const selectedRequest = requests[index];
 const content = computed(() =>
   hasError(selectedRequest)
-    ? <div>{selectedRequest.errorMessage}</div>
+    ? <div>{selectedRequest.message}</div>
     : <RepoCard repo={resultOf(selectedRequest)} />
 );
 ```

@@ -1,6 +1,7 @@
 import {
   UNAVAILABLE_PENDING,
   UNAVAILABLE_SYNCING,
+  unavailableObsolete,
 } from "@commonfabric/data-model/availability";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
@@ -88,7 +89,13 @@ describe("fetch-json mutex mechanism: core mutex behavior", () => {
     await storageManager?.close();
   });
 
-  for (const marker of [UNAVAILABLE_PENDING, UNAVAILABLE_SYNCING]) {
+  for (
+    const marker of [
+      UNAVAILABLE_PENDING,
+      UNAVAILABLE_SYNCING,
+      unavailableObsolete("Use the replacement endpoint."),
+    ]
+  ) {
     it(`clears a legacy error when the fetch result becomes ${marker.reason}`, () => {
       const pending = runtime.getCell<boolean>(
         space,
@@ -116,7 +123,7 @@ describe("fetch-json mutex mechanism: core mutex behavior", () => {
       expect(pending.get()).toBe(marker.reason === "pending");
       expect(result.get()).toMatchObject({
         reason: marker.reason,
-        errorMessage: null,
+        message: marker.message,
       });
     });
   }

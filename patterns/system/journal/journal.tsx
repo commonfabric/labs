@@ -112,28 +112,28 @@ export const journalAvailability = lift(
     if (hasError(journal)) {
       return {
         availability: "error",
-        error: journal.errorMessage,
+        error: journal.message,
         errorKind: journal.errorKind,
       };
     }
     if (hasError(nowMs)) {
       return {
         availability: "error",
-        error: nowMs.errorMessage,
+        error: nowMs.message,
         errorKind: nowMs.errorKind,
       };
     }
     if (isObsolete(journal)) {
       return {
         availability: "obsolete",
-        error: journal.obsoleteMessage || "This journal is no longer served.",
+        error: journal.message || "This journal is no longer served.",
         errorKind: "",
       };
     }
     if (isObsolete(nowMs)) {
       return {
         availability: "obsolete",
-        error: nowMs.obsoleteMessage ||
+        error: nowMs.message ||
           "The journal clock is no longer served.",
         errorKind: "",
       };

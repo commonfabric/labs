@@ -259,7 +259,7 @@ describe("optional-wish-availability", () => {
     if (!isObsolete(retained)) {
       throw new Error("Expected the retired log marker.");
     }
-    expect(retained.obsoleteMessage).toBe("Use the replacement log.");
+    expect(retained.message).toBe("Use the replacement log.");
     const destination = runtime.getCell(space, "replacement log events", {
       asCell: ["stream"],
     });

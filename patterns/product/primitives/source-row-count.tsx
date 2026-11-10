@@ -136,7 +136,7 @@ export const SourceRowCountPresentation = pattern<
     isPending(observedCountRead) || isSyncing(observedCountRead)
   );
   const errorMessage = computed(() =>
-    hasError(observedCountRead) ? observedCountRead.errorMessage : ""
+    hasError(observedCountRead) ? observedCountRead.message : ""
   );
   const queryHasError = computed(() => errorMessage !== "");
 

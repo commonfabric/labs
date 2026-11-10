@@ -279,7 +279,7 @@ describe("fetch-json mutex mechanism: reactive fetch state", () => {
     const unavailable = await rawResultChild(rt, result) as FabricUnavailable;
     expect(unavailable).toBeInstanceOf(FabricUnavailable);
     expect(unavailable.reason).toBe("error");
-    expect(unavailable.errorMessage).toMatch(/HTTP 404/);
+    expect(unavailable.message).toMatch(/HTTP 404/);
     expect(isDeepFrozen(unavailable)).toBe(true);
 
     await localTx.commit().settled;

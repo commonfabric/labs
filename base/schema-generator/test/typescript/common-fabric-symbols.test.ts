@@ -274,7 +274,7 @@ describe("isCommonFabricSymbol", () => {
         export type IsPending = NativeUnavailable & { readonly reason: "pending" };
         export type IsSyncing = NativeUnavailable & { readonly reason: "syncing" };
         export type IsObsolete = NativeUnavailable & { readonly reason: "obsolete" };
-        export type HasError = NativeUnavailable & { readonly reason: "error"; readonly errorMessage: string };
+        export type HasError = NativeUnavailable & { readonly reason: "error"; readonly message: string };
         export type HasSchemaMismatch = HasError & { readonly errorKind: "schemaMismatch" };
       `,
     });

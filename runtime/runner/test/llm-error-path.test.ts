@@ -195,5 +195,5 @@ function expectDirectError(value: unknown, message: string): void {
   if (!(value instanceof FabricUnavailable) || value.reason !== "error") {
     throw new Error("expected a direct FabricUnavailable error");
   }
-  expect(value.errorMessage).toBe(message);
+  expect(value.message).toBe(message);
 }

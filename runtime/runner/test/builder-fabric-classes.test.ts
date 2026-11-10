@@ -180,7 +180,7 @@ describe("commonfabric `FabricSpecialObject` classes", () => {
       expect(instance).toBeInstanceOf(FabricUnavailable);
       expect(instance.reason).toBe("error");
       expect(instance.errorKind).toBe("network");
-      expect(instance.errorMessage).toBe("boom");
+      expect(instance.message).toBe("boom");
       expect(instance.isError()).toBe(true);
     });
   });

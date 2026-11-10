@@ -9,7 +9,7 @@
  * {ifElse(isPending(ideaRequest),
  *   <span>Generating...</span>,
  *   ifElse(hasError(ideaRequest),
- *     <span>Error: {ideaRequest.errorMessage}</span>,
+ *     <span>Error: {ideaRequest.message}</span>,
  *     <div>
  *       <h3>{idea.name}</h3>
  *       <p>{idea.description}</p>
@@ -52,7 +52,7 @@ export default pattern<Input, Input>(({ userInput }) => {
   const idea = resultOf(ideaRequest);
 
   // Error message as string for display
-  const errorMessage = hasError(ideaRequest) ? ideaRequest.errorMessage : null;
+  const errorMessage = hasError(ideaRequest) ? ideaRequest.message : null;
 
   return {
     [NAME]: "GenerateObject Error Handling Test",

@@ -337,7 +337,7 @@ export default pattern<{ prompt: string }, { output: any }>(({ prompt }) => ({
                 if (isUnavailable(actual.result)) {
                   expect(actual.result.reason).toBe("error");
                   if (actual.result.reason === "error") {
-                    expect(actual.result.errorMessage).toBe(message);
+                    expect(actual.result.message).toBe(message);
                   }
                 }
               }

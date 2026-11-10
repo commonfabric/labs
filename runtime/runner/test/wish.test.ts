@@ -451,7 +451,7 @@ describe("wish built-in", () => {
       isUnavailable(unavailableResult) &&
       unavailableResult.reason === "error"
     ) {
-      expect(unavailableResult.errorMessage).toMatch(/no query/);
+      expect(unavailableResult.message).toMatch(/no query/);
       expect(unavailableResult.errorKind).toBe("invalidInput");
     }
     // A native unavailable value occupies the result slot, not a provider cell.

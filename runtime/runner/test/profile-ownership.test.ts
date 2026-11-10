@@ -303,7 +303,7 @@ describe("profile-ownership", () => {
     const found = result.key("profile");
     const profile = found.key("result");
     const value = profile.getRaw();
-    if (hasError(value)) return value.errorMessage;
+    if (hasError(value)) return value.message;
     expect(isUnavailable(value)).toBe(false);
     return addressOf(profile.resolveAsCell());
   }

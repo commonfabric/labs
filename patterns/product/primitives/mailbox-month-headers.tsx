@@ -155,7 +155,7 @@ export const MailboxMonthHeadersPresentation = pattern<
     isPending(observedHeadersRead) || isSyncing(observedHeadersRead)
   );
   const errorMessage = computed(() =>
-    hasError(observedHeadersRead) ? observedHeadersRead.errorMessage : ""
+    hasError(observedHeadersRead) ? observedHeadersRead.message : ""
   );
   const hasQueryError = computed(() => errorMessage !== "");
   const isEmpty = computed(() =>

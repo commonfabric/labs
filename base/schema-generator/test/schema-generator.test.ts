@@ -4007,13 +4007,12 @@ type CalculatorRequest = {
           "/commonfabric.d.ts": `
             interface FabricUnavailable {
               readonly reason: "pending" | "obsolete";
-              readonly obsoleteMessage: string | null;
+              readonly message: string | null;
               isObsolete(): boolean;
             }
             type CompatibleUnavailable =
-              Omit<FabricUnavailable, "isObsolete" | "obsoleteMessage"> & {
+              Omit<FabricUnavailable, "isObsolete"> & {
                 readonly isObsolete?: FabricUnavailable["isObsolete"];
-                readonly obsoleteMessage?: null;
               };
             type IsPending = CompatibleUnavailable & { readonly reason: "pending" };
           `,

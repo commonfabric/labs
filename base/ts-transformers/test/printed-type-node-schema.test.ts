@@ -3846,7 +3846,7 @@ export default pattern(() => {
   const setName = handler<string, { doc: Writable<Named> }>((name, { doc }) => doc.set({ name }));
   const found = wish<${success}>({ query: "#name", headless: true });
   const usable = resultOf(found.result);
-  const name = computed(() => hasError(found.result) ? found.result.errorMessage : usable.get().name);
+  const name = computed(() => hasError(found.result) ? found.result.message : usable.get().name);
   return { name, setName };
 });`,
           "hasError",

@@ -380,7 +380,7 @@ describe("generateObject with tools", () => {
     const unavailable = result.key("result").resolveAsCell()
       .getRaw() as FabricUnavailable;
     expect(unavailable.reason).toBe("error");
-    expect(unavailable.errorMessage).toContain("presentResult");
+    expect(unavailable.message).toContain("presentResult");
     expect(typeof result.key("error").get()).toBe("string");
   });
 

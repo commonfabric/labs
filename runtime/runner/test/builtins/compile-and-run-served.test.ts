@@ -398,7 +398,7 @@ describe("compile-and-run-served", () => {
       expect(value).toMatchObject({
         reason: "error",
         errorKind: "compile",
-        errorMessage: "compileAndRun request was refused before it started",
+        message: "compileAndRun request was refused before it started",
       });
     } finally {
       await runtime.dispose();
@@ -484,7 +484,7 @@ describe("compile-and-run-served", () => {
       expect(launches).toBe(1);
       const value = result.get();
       expect(isUnavailable(value) && value.reason).toBe("error");
-      expect(isUnavailable(value) && value.errorMessage).toContain(
+      expect(isUnavailable(value) && value.message).toContain(
         "labeled source compiler failure",
       );
     } finally {
@@ -623,7 +623,7 @@ describe("compile-and-run-served", () => {
       expect(f.outputs.result.get()).toMatchObject({
         reason: "error",
         errorKind: "compile",
-        errorMessage: "compileAndRun request was refused before it started",
+        message: "compileAndRun request was refused before it started",
       });
       expect(f.memo.get()?.requestHash).toBe(hashOf(PROGRAM).toString());
       expect(f.memo.get()?.phase).toBe("resolved");

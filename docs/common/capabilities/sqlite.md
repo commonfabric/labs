@@ -75,14 +75,14 @@ without changing the search. Include a source or registration generation only
 when that change must invalidate the previous answer and issue a fresh request.
 
 Render the failure when the UI needs to explain it. Guard the original request
-with `hasError(request)` and read `request.errorMessage`; otherwise the unavailable
+with `hasError(request)` and read `request.message`; otherwise the unavailable
 error propagates and downstream computations do not run. Query errors include
 a statement the database refuses and a handle that does not read back as one.
 
 A read refused for labeling arrives the same way and is the case most easily
 mistaken for an empty source: where a table declares a per-row label rule, a
 query that does not project every column the rule reads is refused rather than
-returned unlabeled, and `errorMessage` names the column and says to select it.
+returned unlabeled, and `message` names the column and says to select it.
 The request is then unavailable, not empty — so a view that renders "none found"
 over it states a fact about the data that nobody established. Branch on
 `hasError(request)` before branching on emptiness.
@@ -105,7 +105,7 @@ react to.
 
 A bind param is resolved as the statement is issued, and `undefined` is refused
 rather than bound: the whole read fails with "sqlite: param is undefined",
-`hasError(request)` is true and `request.errorMessage` carries that text.
+`hasError(request)` is true and `request.message` carries that text.
 Computations consuming `resultOf(request)` propagate the unavailable error
 instead of inventing empty fields.
 `null` is what binds SQL NULL.

@@ -73,7 +73,7 @@ export default pattern<InputSchema, Input>(({ repos }) => {
     isPending(staticFetch)
       ? "Loading..."
       : hasError(staticFetch)
-      ? `Error: ${staticFetch.errorMessage}`
+      ? `Error: ${staticFetch.message}`
       : `Stars: ${staticValue.stargazers_count ?? "N/A"}`
   );
 
@@ -181,13 +181,11 @@ export default pattern<InputSchema, Input>(({ repos }) => {
                     <div style={{ fontSize: "12px" }}>
                       Pending: {computed(() => String(isPending(request)))}
                       {" | "}
-                      Error:{" "}
-                      {computed(() =>
-                        hasError(request) ? request.errorMessage : "none"
+                      Error: {computed(() =>
+                        hasError(request) ? request.message : "none"
                       )}
                       {" | "}
-                      Result:{" "}
-                      {computed(() =>
+                      Result: {computed(() =>
                         `Stars: ${result.stargazers_count ?? "N/A"}`
                       )}
                     </div>

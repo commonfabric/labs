@@ -20,7 +20,7 @@ import {
 
 describe("availability", () => {
   it("recognizes and hashes native markers from a pre-obsolete concrete module", async () => {
-    // This snapshot is the concrete module at 89e752c51f9a3f69412fcac2d041231001f5a8de.
+    // This fixture omits retirement members but implements the shared message API.
     // Sharing its dependencies exercises the same native seam as the duplicate import.
     const source = await Deno.readTextFile(
       new URL(
@@ -56,7 +56,7 @@ describe("availability", () => {
       const legacy: unknown = new legacyModule.FabricUnavailable(
         canonical.reason,
         canonical.errorKind,
-        canonical.rawErrorMessage,
+        canonical.rawMessage,
       );
       expect(isUnavailable(legacy)).toBe(true);
       if (!isUnavailable(legacy)) {
@@ -64,7 +64,7 @@ describe("availability", () => {
       }
       expect("isObsolete" in legacy).toBe(false);
       expect(legacy.isObsolete?.()).toBeUndefined();
-      expect(legacy.obsoleteMessage).toBeUndefined();
+      expect(legacy.message).toBe(canonical.message);
       expect(Object.isFrozen(legacy)).toBe(true);
       expect(isObsolete(legacy)).toBe(false);
       expect(isPending(legacy)).toBe(isPending(canonical));
@@ -81,11 +81,11 @@ describe("availability", () => {
     expect(isPending(value)).toBe(false);
     expect(isSyncing(value)).toBe(false);
     expect(hasError(value)).toBe(false);
-    expect(value.obsoleteMessage).toBe("Use overview.text instead.");
+    expect(value.message).toBe("Use overview.text instead.");
     const diagnostic = toCompactDebugString(value);
     expect(diagnostic).toContain('reason:"obsolete"');
     expect(diagnostic).toContain(
-      'obsoleteMessage:"Use overview.text instead."',
+      'message:"Use overview.text instead."',
     );
     expect(unavailableObsolete()).toBe(UNAVAILABLE_OBSOLETE);
     expect(isObsolete({ reason: "obsolete" })).toBe(false);
@@ -98,7 +98,7 @@ describe("availability", () => {
     const failure = unavailableError(new Error("request failed"), "network");
     expect(hasError(failure)).toBe(true);
     expect(failure.errorKind).toBe("network");
-    expect(failure.errorMessage).toBe("request failed");
+    expect(failure.message).toBe("request failed");
     expect(hasSchemaMismatch(failure)).toBe(false);
     expect(hasSchemaMismatch(unavailableMismatch())).toBe(true);
     expect(hasError(unavailableMismatch())).toBe(true);

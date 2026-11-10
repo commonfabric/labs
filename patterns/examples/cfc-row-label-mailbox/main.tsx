@@ -180,7 +180,7 @@ export default pattern<MailboxInput, MailboxOutput>(
     const inboxRows = computed<InboxRow[]>(() => inboxResult.rows);
     const sliceRows = computed<MailRow[]>(() => sliceResult.rows);
     const countError = computed<string>(() =>
-      hasError(mailCount) ? mailCount.errorMessage : ""
+      hasError(mailCount) ? mailCount.message : ""
     );
 
     const seed = seedMail({ db });

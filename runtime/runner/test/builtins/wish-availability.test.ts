@@ -141,7 +141,7 @@ describe("wish-availability", () => {
         expect(state.key("result").get()).toMatchObject({
           reason: "error",
           errorKind: "general",
-          errorMessage: expect.stringContaining(scenario.error),
+          message: expect.stringContaining(scenario.error),
         });
       } finally {
         cancel();

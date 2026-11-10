@@ -194,7 +194,7 @@ describe("generateObject under a refused commit", () => {
     if (!isUnavailable(rawResult)) throw new Error("expected unavailable");
     expect(rawResult.reason).toBe("error");
     if (rawResult.reason === "error") {
-      expect(rawResult.errorMessage).toBe(
+      expect(rawResult.message).toBe(
         "generateObject request was refused before it started",
       );
     }

@@ -51,7 +51,7 @@ function markerIsPending(marker: UnavailableVariant): boolean {
 function markerErrorMessage(
   marker: UnavailableVariant,
 ): string | undefined {
-  return marker.rawErrorMessage ?? undefined;
+  return marker.reason === "error" ? marker.rawMessage ?? undefined : undefined;
 }
 
 function compileRequestHash(

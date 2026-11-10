@@ -213,7 +213,7 @@ describe("JavaScript-node data unavailability", () => {
     expect(calls).toBe(0);
     expectUnavailable(selectedInput, "error");
     expectUnavailable(writtenResult, "error");
-    expect(expectUnavailable(output, "error").errorMessage).toBe(
+    expect(expectUnavailable(output, "error").message).toBe(
       "upstream failed",
     );
   });
@@ -232,7 +232,7 @@ describe("JavaScript-node data unavailability", () => {
     });
     expect(calls).toBe(0);
     const retired = expectUnavailable(output, "obsolete");
-    expect(retired.obsoleteMessage).toBe("Use overview.text instead.");
+    expect(retired.message).toBe("Use overview.text instead.");
     expect(retired.isTransient()).toBe(false);
     expect(retired.isError()).toBe(false);
   });
@@ -247,7 +247,7 @@ describe("JavaScript-node data unavailability", () => {
       unavailableInputPolicy: [{ path: [], reasons: ["obsolete"] }],
       implementation: (value: FabricUnavailable) => {
         calls++;
-        return value.obsoleteMessage;
+        return value.message;
       },
     });
     expect(calls).toBe(1);
@@ -295,11 +295,11 @@ describe("JavaScript-node data unavailability", () => {
     });
 
     expect(calls).toBe(0);
-    expect((selectedInput as FabricUnavailable).errorMessage).toBe("first");
-    expect(expectUnavailable(writtenResult, "error").errorMessage).toBe(
+    expect((selectedInput as FabricUnavailable).message).toBe("first");
+    expect(expectUnavailable(writtenResult, "error").message).toBe(
       "first",
     );
-    expect((output as FabricUnavailable).errorMessage).toBe("first");
+    expect((output as FabricUnavailable).message).toBe("first");
 
     const pending = UNAVAILABLE_PENDING;
     const pendingOutput = await runValueNode({
@@ -414,14 +414,14 @@ describe("JavaScript-node data unavailability", () => {
       implementation: (argument) => {
         calls++;
         acceptedArgument = argument.value;
-        return argument.value.errorMessage;
+        return argument.value.message;
       },
     });
 
     expect(acceptedOutput).toBe("observable");
     expect(acceptedArgument).toBeInstanceOf(FabricUnavailable);
     expect((acceptedArgument as FabricUnavailable).reason).toBe("error");
-    expect((acceptedArgument as FabricUnavailable).errorMessage).toBe(
+    expect((acceptedArgument as FabricUnavailable).message).toBe(
       "observable",
     );
     expect(calls).toBe(1);
@@ -473,7 +473,7 @@ describe("JavaScript-node data unavailability", () => {
       ],
       implementation: (argument) => ({
         errorIsMarker: argument.first instanceof FabricUnavailable,
-        errorMessage: argument.first.errorMessage,
+        errorMessage: argument.first.message,
         pendingIsMarker: argument.list[0] instanceof FabricUnavailable,
         pendingReason: argument.list[0].reason,
       }),
@@ -593,7 +593,7 @@ describe("JavaScript-node data unavailability", () => {
 
     expect(calls).toBe(0);
     expect(output).toBeInstanceOf(FabricUnavailable);
-    expect((output as FabricUnavailable).errorMessage).toBe(
+    expect((output as FabricUnavailable).message).toBe(
       "shared but unaccepted",
     );
   });
@@ -803,7 +803,7 @@ describe("JavaScript-node data unavailability", () => {
 
         expect(calls).toBe(0);
         const unavailable = expectUnavailable(output, marker.reason);
-        expect(unavailable.obsoleteMessage).toBe(marker.obsoleteMessage);
+        expect(unavailable.message).toBe(marker.message);
       }
     });
 
@@ -1660,7 +1660,7 @@ describe("JavaScript-node data unavailability", () => {
       expect(output).toBeInstanceOf(FabricUnavailable);
       expect((output as FabricUnavailable).reason).toBe("error");
 
-      expect((output as FabricUnavailable).errorMessage).toBe(
+      expect((output as FabricUnavailable).message).toBe(
         "provider offline",
       );
       expect(readinessAttempts).toBeGreaterThanOrEqual(1);
@@ -2050,7 +2050,7 @@ export default pattern((input: { request: AsyncResult<{ nested: { field: string 
             marker.reason,
           );
           expect(observed.errorKind).toBe(marker.errorKind);
-          expect(observed.errorMessage).toBe(marker.errorMessage);
+          expect(observed.message).toBe(marker.message);
         }
 
         const recovery = runtime.edit();
@@ -2113,7 +2113,7 @@ export default pattern((input: { rows: { id: string }[] }) => ({
             marker.reason,
           );
           expect(observed.errorKind).toBe(marker.errorKind);
-          expect(observed.errorMessage).toBe(marker.errorMessage);
+          expect(observed.message).toBe(marker.message);
           const read = runtime.edit();
           expect(parent.key("rows").withTx(read).getRaw()).toEqual(marker);
           const reads = [...getTransactionReadActivities(read)].filter((
@@ -2194,7 +2194,7 @@ export default pattern((input: { rows: { id: string }[] }) => ({
               }
               const observed = expectUnavailable(result.ok, marker.reason);
               expect(observed.errorKind).toBe(marker.errorKind);
-              expect(observed.errorMessage).toBe(marker.errorMessage);
+              expect(observed.message).toBe(marker.message);
               expect(
                 [...getTransactionReadActivities(read)].some((entry) =>
                   entry.id === source.getAsNormalizedFullLink().id &&
@@ -2285,7 +2285,7 @@ export default pattern((input: { rows: { id: string }[] }) => ({
       if (!isUnavailable(value)) throw new Error("Expected native marker");
       expect(value.reason).toBe("error");
       expect(value.errorKind).toBe("general");
-      expect(value.errorMessage).toBe("secret marker message");
+      expect(value.message).toBe("secret marker message");
       expect(
         [...getTransactionReadActivities(read)].some((entry) =>
           entry.id === root.id && entry.path.length === 1 &&

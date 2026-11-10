@@ -150,7 +150,7 @@ const response = resultOf(responseRequest);
 {isPending(responseRequest) || isSyncing(responseRequest)
   ? <cf-loader />
   : hasError(responseRequest)
-  ? <div>{responseRequest.errorMessage}</div>
+  ? <div>{responseRequest.message}</div>
   : <cf-markdown>{response}</cf-markdown>}
 ```
 

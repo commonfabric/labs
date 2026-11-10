@@ -153,7 +153,7 @@ describe("llmDialog", () => {
     const unavailable = result.key("result").getRaw();
     expect(isUnavailable(unavailable)).toBe(true);
     if (isUnavailable(unavailable) && unavailable.reason === "error") {
-      expect(unavailable.errorMessage).toMatch(/no matching mock response/);
+      expect(unavailable.message).toMatch(/no matching mock response/);
     }
     expect(result.key("error").get()).toMatch(/no matching mock response/);
   });

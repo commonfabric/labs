@@ -434,7 +434,7 @@ describe("raw builtin data unavailability propagation", () => {
     expect(calls).toBe(2);
     const output = finalRaw(result.key("filtered")) as FabricUnavailable;
     expect(output.reason).toBe("error");
-    expect(output.errorMessage).toBe("predicate failed");
+    expect(output.message).toBe("predicate failed");
 
     result.withTx(tx).key("values").set([1, 2, 3]);
     await commitAndPull(result);

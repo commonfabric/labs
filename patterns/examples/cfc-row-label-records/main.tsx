@@ -124,11 +124,9 @@ export default pattern<Record<string, never>, RecordsOutput>(() => {
 
   const diagnosisList = DiagnosisList({ request: diagnoses });
   const diagnosisError = computed<string>(() =>
-    hasError(diagnoses) ? diagnoses.errorMessage : ""
+    hasError(diagnoses) ? diagnoses.message : ""
   );
-  const ssnError = computed<string>(() =>
-    hasError(ssns) ? ssns.errorMessage : ""
-  );
+  const ssnError = computed<string>(() => hasError(ssns) ? ssns.message : "");
 
   const seed = seedRecords({ db });
 

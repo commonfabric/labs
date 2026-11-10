@@ -678,7 +678,7 @@ describe("ValueHasher", () => {
           const messages = [null, "", "Use new.title.", "Use new.body."];
           const hashes = messages.map((message) =>
             hex(hashBytesOf(
-              new FabricUnavailable("obsolete", null, null, message),
+              new FabricUnavailable("obsolete", null, message),
             ))
           );
           expect(new Set(hashes).size).toBe(messages.length);
@@ -690,12 +690,11 @@ describe("ValueHasher", () => {
               ...new TextEncoder().encode("obsolete"),
               0x20,
               0x20,
-              0x20,
             ]),
           );
           expect(
             hashBytesOf(
-              new FabricUnavailable("obsolete", null, null, "Use new."),
+              new FabricUnavailable("obsolete", null, "Use new."),
             ),
           )
             .toEqual(
@@ -704,7 +703,6 @@ describe("ValueHasher", () => {
                 0x24,
                 0x08,
                 ...new TextEncoder().encode("obsolete"),
-                0x20,
                 0x20,
                 0x24,
                 0x08,
@@ -771,7 +769,7 @@ describe("ValueHasher", () => {
         it("produces the same hash for an error given its kind's default message and one given none", () => {
           const given = new FabricUnavailable("error", "network");
           expect(hex(hashBytesOf(
-            new FabricUnavailable("error", "network", given.errorMessage),
+            new FabricUnavailable("error", "network", given.message),
           ))).toBe(hex(hashBytesOf(given)));
         });
 

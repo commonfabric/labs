@@ -2,6 +2,7 @@ import {
   FabricUnavailable,
   UNAVAILABLE_PENDING,
   unavailableError,
+  unavailableObsolete,
 } from "@commonfabric/data-model/availability";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
@@ -509,11 +510,26 @@ describe("generation data unavailability", () => {
     });
     const tx = invoke(generation.action);
     const result = rawResult(generation.state, tx) as FabricUnavailable;
-    expect(result.errorMessage).toBe(marker.errorMessage);
-    expect(result.errorMessage).not.toBe("");
-    expect(result.rawErrorMessage).toBeNull();
+    expect(result.message).toBe(marker.message);
+    expect(result.message).not.toBe("");
+    expect(result.rawMessage).toBeNull();
     expect(generation.state.key("error").withTx(tx).get()).toBeUndefined();
     await tx.commit().settled;
+  });
+
+  it("preserves obsolete guidance without reporting a generation error", async () => {
+    const marker = unavailableObsolete("Use the replacement prompt.");
+    for (const makeAction of [makeTextAction, makeObjectAction]) {
+      const generation = await makeAction({
+        prompt: marker as unknown as string,
+      });
+      const tx = invoke(generation.action);
+      expect(rawResult(generation.state, tx)).toBe(marker);
+      expect(rawPartial(generation.state, tx)).toBe(marker);
+      expect(generation.state.key("error").withTx(tx).get()).toBeUndefined();
+      expect(generation.state.key("pending").withTx(tx).get()).toBe(false);
+      await tx.commit().settled;
+    }
   });
 
   it("classifies empty text-generation requests as invalid input", async () => {
@@ -521,7 +537,7 @@ describe("generation data unavailability", () => {
     const tx = invoke(generation.action);
     const result = rawResult(generation.state, tx) as FabricUnavailable;
     expect(result.errorKind).toBe("invalidInput");
-    expect(result.errorMessage).toBe(
+    expect(result.message).toBe(
       "Text generation requires a prompt or messages",
     );
     expect(generation.state.key("pending").withTx(tx).get()).toBe(false);
@@ -546,7 +562,7 @@ describe("generation data unavailability", () => {
 
       const result = rawResult(generation.state, tx) as FabricUnavailable;
       expect(result.reason).toBe("error");
-      expect(result.errorMessage).toBe("upstream prompt failed");
+      expect(result.message).toBe("upstream prompt failed");
       expect(generation.state.key("pending").withTx(tx).get()).toBe(false);
       expect(generation.state.key("error").withTx(tx).get()).toBe(
         "upstream prompt failed",
@@ -608,13 +624,13 @@ describe("generation data unavailability", () => {
 
     const result = rawResult(generation.state) as FabricUnavailable;
     expect(result.reason).toBe("error");
-    expect(result.errorMessage).toContain("no matching mock response");
+    expect(result.message).toContain("no matching mock response");
     expect(generation.state.key("error").get()).toContain(
       "no matching mock response",
     );
     const partial = rawPartial(generation.state) as FabricUnavailable;
     expect(partial.reason).toBe("error");
-    expect(partial.errorMessage).toContain("no matching mock response");
+    expect(partial.message).toContain("no matching mock response");
   });
 
   it("upgrades a persisted legacy text error without retrying the provider", async () => {
@@ -652,10 +668,10 @@ describe("generation data unavailability", () => {
       const tx = invoke(rehydrated.action);
       const result = rawResult(rehydrated.state, tx) as FabricUnavailable;
       expect(result.reason).toBe("error");
-      expect(result.errorMessage).toBe("persisted legacy text failure");
+      expect(result.message).toBe("persisted legacy text failure");
       const partial = rawPartial(rehydrated.state, tx) as FabricUnavailable;
       expect(partial.reason).toBe("error");
-      expect(partial.errorMessage).toBe("persisted legacy text failure");
+      expect(partial.message).toBe("persisted legacy text failure");
       expect(rehydrated.state.key("pending").withTx(tx).get()).toBe(false);
       tx.prepareCfc();
       const commit = await tx.commit().settled;
@@ -859,7 +875,7 @@ describe("generation data unavailability", () => {
     const result = rawResult(generation.state) as FabricUnavailable;
     expect(result.reason).toBe("error");
     expect(result.errorKind).toBe("schemaMismatch");
-    expect(result.errorMessage).toContain("failed schema validation");
+    expect(result.message).toContain("failed schema validation");
     expect(rawPartial(generation.state)).toMatchObject({
       reason: "error",
       errorKind: "schemaMismatch",
@@ -914,10 +930,10 @@ describe("generation data unavailability", () => {
       const tx = invoke(rehydrated.action);
       const result = rawResult(rehydrated.state, tx) as FabricUnavailable;
       expect(result.reason).toBe("error");
-      expect(result.errorMessage).toBe("persisted legacy object failure");
+      expect(result.message).toBe("persisted legacy object failure");
       const partial = rawPartial(rehydrated.state, tx) as FabricUnavailable;
       expect(partial.reason).toBe("error");
-      expect(partial.errorMessage).toBe("persisted legacy object failure");
+      expect(partial.message).toBe("persisted legacy object failure");
       expect(rehydrated.state.key("pending").withTx(tx).get()).toBe(false);
       tx.prepareCfc();
       const commit = await tx.commit().settled;
@@ -996,7 +1012,7 @@ describe("generation data unavailability", () => {
 
       const result = output.resolveAsCell().getRaw() as FabricUnavailable;
       expect(result.reason).toBe("error");
-      expect(result.errorMessage).toBe("linked prompt failed");
+      expect(result.message).toBe("linked prompt failed");
       expect(calls).toBe(0);
     } finally {
       LLMClient.prototype.generateObject = originalGenerateObject;

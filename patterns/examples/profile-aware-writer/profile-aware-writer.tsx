@@ -67,7 +67,7 @@ export const ProfileWriterResultPresentation = pattern<
       return {
         response: "",
         availability: "error",
-        error: resultRequest.errorMessage,
+        error: resultRequest.message,
         errorKind: resultRequest.errorKind,
       };
     }

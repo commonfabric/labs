@@ -477,10 +477,7 @@ export class ValueHasher {
         hasher.update(TAG_UNAVAILABLE_BYTES);
         this.feedValue(fab.reason);
         this.feedValue(fab.errorKind);
-        this.feedValue(fab.rawErrorMessage);
-        if (fab.reason === "obsolete") {
-          this.feedValue(fab.obsoleteMessage);
-        }
+        this.feedValue(fab.rawMessage);
         return;
       }
 

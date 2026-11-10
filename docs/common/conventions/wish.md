@@ -52,7 +52,7 @@ const note = resultOf(noteWish.result);
 
 return {
   [UI]: hasError(noteWish.result)
-    ? <div>{noteWish.result.errorMessage}</div>
+    ? <div>{noteWish.result.message}</div>
     : <NoteCard note={note} />,
 };
 ```

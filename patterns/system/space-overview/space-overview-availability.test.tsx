@@ -45,7 +45,7 @@ export default pattern(() => {
   const summaryState = computed(() => {
     if (isPending(summary)) return "pending";
     if (isSyncing(summary)) return "syncing";
-    if (hasError(summary)) return summary.errorMessage;
+    if (hasError(summary)) return summary.message;
     return summary;
   });
 

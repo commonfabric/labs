@@ -118,11 +118,11 @@ type UnavailableObservationKind =
 type FabricUnavailableState =
   | { reason: "pending" }
   | { reason: "syncing" }
-  | { reason: "obsolete"; obsoleteMessage?: string }
+  | { reason: "obsolete"; message?: string }
   | {
     reason: "error";
     errorKind: UnavailableErrorKind;
-    errorMessage: string;
+    message?: string;
   };
 ```
 
@@ -134,12 +134,12 @@ to preserve the producer's classification and avoid value churn.
 
 `obsolete` is non-transient and is not an error. `UNAVAILABLE_OBSOLETE` is its
 message-free prefab. An authored marker may provide an optional
-`obsoleteMessage` explaining which output to use instead:
+`message` explaining which output to use instead:
 
 ```typescript
 // Shown at module scope.
 const retired = new FabricUnavailable(
-  "obsolete", null, null, "Use overview.text instead.",
+  "obsolete", null, "Use overview.text instead.",
 );
 ```
 
@@ -147,6 +147,11 @@ The message survives storage, transport, hashing, propagation, and debug
 inspection. It is diagnostic data, not executable instructions or authority to
 access or rewrite another piece. Upgrade logic chooses when to write a marker;
 the runtime does not automatically mark removed outputs.
+
+Both terminal reasons expose diagnostic text through `.message`. An error
+supplies its kind's default when no message is stored; obsolete guidance has
+no default. `.rawMessage` returns only stored text. Both accessors return
+`null` for transient reasons.
 
 Headless Wish reads report nonempty obsolete guidance as their unavailable
 diagnostic. A message-free obsolete result remains unavailable rather than
@@ -174,7 +179,7 @@ type IsPending = FabricUnavailable & {
 type HasError = FabricUnavailable & {
   readonly reason: "error";
   readonly errorKind: UnavailableErrorKind;
-  readonly errorMessage: string;
+  readonly message: string;
 };
 
 type IsSyncing = FabricUnavailable & {
@@ -299,7 +304,7 @@ const repo = resultOf(repoState);
 return isPending(repoState)
   ? <div>Loading repository...</div>
   : hasError(repoState)
-    ? <div>Error: {repoState.errorMessage}</div>
+    ? <div>Error: {repoState.message}</div>
     : <RepoCard url={repo.url} name={repo.name} />;
 ```
 
@@ -333,7 +338,7 @@ reason. Other reasons still propagate through that node.
 const repoState = fetchJson<Repo>({ url });
 
 return hasError(repoState)
-  ? <div class="error">Error: {repoState.errorMessage}</div>
+  ? <div class="error">Error: {repoState.message}</div>
   : <RepoCard repo={resultOf(repoState)} />;
 ```
 
@@ -356,7 +361,7 @@ const content = computed(() =>
   isPending(repoState)
     ? <div>Loading repository...</div>
     : hasError(repoState)
-      ? <div>Error: {repoState.errorMessage}</div>
+      ? <div>Error: {repoState.message}</div>
       : <RepoCard repo={resultOf(repoState)} />
 );
 ```
@@ -406,7 +411,7 @@ const labelOrError = observeAvailability(input.label, "error");
 
 const displayLabel = computed(() =>
   hasError(labelOrError)
-    ? `Unavailable: ${labelOrError.errorMessage}`
+    ? `Unavailable: ${labelOrError.message}`
     : labelOrError
 );
 ```
@@ -938,7 +943,7 @@ const output = resultOf(compileRequest);
 const diagnostics = compileDiagnosticsOf(compileRequest);
 
 const message = hasError(compileRequest)
-  ? compileRequest.errorMessage
+  ? compileRequest.message
   : undefined;
 ```
 
@@ -1080,7 +1085,7 @@ and intentionally hides current failures behind the last complete value.
 ## Error Semantics
 
 `new FabricUnavailable("error", kind, message)` represents a failed producer or effect. Its
-`errorKind` classifies the failure and `errorMessage` carries diagnostic text.
+`errorKind` classifies the failure and `message` carries diagnostic text.
 Structured native errors remain private operation state where needed.
 
 A result-schema verification failure is `"error"` with
@@ -1095,10 +1100,11 @@ into data would hide programming errors and is not part of this design.
 ## Compatibility and Versioning
 
 Availability guards accept canonical native markers whose implementations omit
-the retirement method and guidance getter. The accepted non-obsolete variants
-therefore expose `isObsolete` and `obsoleteMessage` as optional members. Use the
+the retirement method. The accepted non-obsolete variants therefore expose
+`isObsolete` as an optional member. All variants provide `message` and
+`rawMessage`. Use the
 free `isObsolete()` guard to recognize retirement and obtain its guidance.
-Constructing a current `FabricUnavailable` always provides both members; the
+Constructing a current `FabricUnavailable` always provides the method; the
 compatibility types retain the native primitive brand and do not admit
 structural lookalikes.
 

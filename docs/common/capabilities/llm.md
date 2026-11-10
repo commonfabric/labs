@@ -21,7 +21,7 @@ const response = resultOf(responseRequest);
 {isPending(responseRequest) || isSyncing(responseRequest)
   ? <span>Generating...</span>
   : hasError(responseRequest)
-  ? <span>Error: {responseRequest.errorMessage}</span>
+  ? <span>Error: {responseRequest.message}</span>
   : <div>{response}</div>}
 ```
 
@@ -48,7 +48,7 @@ const idea = resultOf(ideaRequest);
 {isPending(ideaRequest) || isSyncing(ideaRequest)
   ? <span>Generating...</span>
   : hasError(ideaRequest)
-  ? <span>Error: {ideaRequest.errorMessage}</span>
+  ? <span>Error: {ideaRequest.message}</span>
   : (
     <div>
       <h3>{idea.name}</h3>
@@ -139,7 +139,7 @@ return (
   <>
     <cf-message-beads $messages={messages} pending={dialog.pending} />
     {hasError(dialog.result)
-      ? <p>{dialog.result.errorMessage}</p>
+      ? <p>{dialog.result.message}</p>
       : <ResearchView result={result} />}
   </>
 );

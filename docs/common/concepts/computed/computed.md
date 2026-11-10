@@ -35,7 +35,7 @@ const label = computed(() =>
   isPending(repoRequest)
     ? "Loading…"
     : hasError(repoRequest)
-      ? `Error: ${repoRequest.errorMessage}`
+      ? `Error: ${repoRequest.message}`
       : repo.name
 );
 ```

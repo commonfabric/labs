@@ -63,7 +63,7 @@ export const questionResponseState = lift(
       return {
         response: { question: "", options: [] },
         pending: false,
-        error: responseRequest.obsoleteMessage ||
+        error: responseRequest.message ||
           "This question is no longer served.",
       };
     }
@@ -71,7 +71,7 @@ export const questionResponseState = lift(
       return {
         response: { question: "", options: [] },
         pending: false,
-        error: responseRequest.errorMessage,
+        error: responseRequest.message,
       };
     }
     return { response: resultOf(responseRequest), pending: false, error: "" };

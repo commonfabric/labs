@@ -236,7 +236,7 @@ export const searchWeb = pattern<
   // special [ERROR] for errors? Ideally this isn't specific to using patterns as
   // tools but a general pattern.
   return computed(() =>
-    hasError(request) ? { error: request.errorMessage } : result
+    hasError(request) ? { error: request.message } : result
   );
 });
 
@@ -277,7 +277,7 @@ export const readWebpage = pattern<
   const result = resultOf(request);
 
   return computed(() =>
-    hasError(request) ? { error: request.errorMessage } : result
+    hasError(request) ? { error: request.message } : result
   );
 });
 
@@ -332,7 +332,7 @@ export const bash = pattern<BashRequest, BashResult | { error: string }>(
     });
     const result = resultOf(request);
     return computed(() =>
-      hasError(request) ? { error: request.errorMessage } : result
+      hasError(request) ? { error: request.message } : result
     );
   },
 );
@@ -395,7 +395,7 @@ export const fetchAndRunPattern = pattern<FetchAndRunPatternInput>(
     const result = resultOf(compileRequest);
 
     return hasError(compileRequest)
-      ? { error: compileRequest.errorMessage }
+      ? { error: compileRequest.message }
       : { cell: result };
   },
 );
