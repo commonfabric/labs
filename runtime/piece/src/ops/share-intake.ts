@@ -198,8 +198,9 @@ export function startShareIntakeOf(
  * another offer's sender and `id` decides nothing about that offer. A row
  * refused for something in the row itself (its envelope, its `kind` or its
  * `host`) or for the kind its space declares, which never changes, is decided
- * for the life of the instance, and so is one sent or skipped for its
- * receipt, unless it is sent again for its profile as above. A row refused
+ * for the life of the instance, and so is one Home handled once sent, or
+ * skipped for its receipt, unless it is sent again for its profile as above.
+ * A row whose send fails is not decided, as below. A row refused
  * for the state of its space (its access list, its root, or the result schema
  * its root stores) is vetted again when that state changes, as the instance
  * follows it (`followSpaceState`) while an inbox it follows holds a row
@@ -269,6 +270,13 @@ export class ShareIntake {
   #everyInbox = false;
   #changedInboxes = new Set<string>();
   #draining = false;
+  /**
+   * How many changes the instance has been told of, and how many it had when
+   * the scan under way took up the changes it scans for, so that a send that
+   * fails can tell whether a change came while Home handled it.
+   */
+  #changes = 0;
+  #scannedThrough = 0;
   #drained: Promise<void> = Promise.resolve();
   #pending = new Set<Promise<void>>();
   #stopped = false;
@@ -406,6 +414,17 @@ export class ShareIntake {
    * done. Changes arriving during a scan are taken up by one more.
    */
   #poke(address?: string | typeof EVERY_INBOX): void {
+    this.#changes++;
+    this.#takeUp(address);
+  }
+
+  /**
+   * Has the inbox at `address`, or what {@link #poke} says of no address or
+   * {@link EVERY_INBOX}, scanned once the scan under way is done, without
+   * counting a change: what {@link #afterSend} replays is a change already
+   * counted.
+   */
+  #takeUp(address?: string | typeof EVERY_INBOX): void {
     if (address === undefined) this.#holdersChanged = true;
     else if (address === EVERY_INBOX) this.#everyInbox = true;
     else this.#changedInboxes.add(address);
@@ -427,6 +446,7 @@ export class ShareIntake {
           this.#changedInboxes.size > 0) &&
         !this.#halted
       ) {
+        this.#scannedThrough = this.#changes;
         const holdersChanged = this.#holdersChanged;
         const everyInbox = this.#everyInbox;
         const changed = [...this.#changedInboxes];
@@ -684,22 +704,36 @@ export class ShareIntake {
     logger.info("offer-sent", () => [`Sent Home the offer ${receipt}`]);
     this.#decide(row, raw, "sent", address);
     const room = offer.kind === CHAT_ROOM_SPACE_KIND ? root : undefined;
-    const pending = this.#afterSend(row, receipt, sending, room);
+    const pending = this.#afterSend(
+      row,
+      receipt,
+      address,
+      this.#scannedThrough,
+      sending,
+      room,
+    );
     this.#pending.add(pending);
     void pending.finally(() => this.#pending.delete(pending));
   }
 
   /**
-   * Waits for Home's handling of the row keyed `row`, which `sending` sent,
-   * and acts on its receipt (`#afterRegistration`). A send that failed, at
-   * once or in Home's handling, registered nothing, so the row is left
-   * undecided again, to be vetted again when its inbox next changes, Home's
-   * profile records change, or a lost connection to the host comes back. Its
-   * space, which vetting passed, keeps it waiting no longer.
+   * Waits for Home's handling of the row keyed `row`, in the inbox at
+   * `address`, which `sending` sent, and acts on its receipt
+   * (`#afterRegistration`). A send that failed, at once or in Home's handling,
+   * registered nothing, so the row is left undecided again, to be vetted
+   * again when its inbox next changes, Home's profile records change, or a
+   * lost connection to the host comes back. Its space, which vetting passed,
+   * keeps it waiting no longer. A change that came after the scan that sent
+   * it took up its changes, `scannedThrough` of them, found the row decided
+   * while Home handled it, so its inbox is scanned again at once. A failure
+   * with no such change is not, so a send that keeps failing is not retried
+   * in a loop.
    */
   async #afterSend(
     row: string,
     receipt: string,
+    address: string,
+    scannedThrough: number,
     sending: ReturnType<typeof sendVerbEvent>,
     room: Cell<unknown> | undefined,
   ): Promise<void> {
@@ -728,6 +762,7 @@ export class ShareIntake {
       `Sending Home the offer ${receipt}:`,
       failed.error,
     ]);
+    if (this.#changes !== scannedThrough) this.#takeUp(address);
   }
 
   /**

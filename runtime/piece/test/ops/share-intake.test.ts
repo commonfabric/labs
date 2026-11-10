@@ -15,6 +15,7 @@ import {
 } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { getLoggerCountsBreakdown } from "@commonfabric/logger";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import { PiecesController } from "../../src/ops/pieces-controller.ts";
 import {
   type ShareIntake,
@@ -1288,6 +1289,58 @@ describe("share-intake", () => {
         "unhandled",
       ]);
       expect(sendFailuresLogged() - failuresBefore).toBe(1);
+    });
+
+    it("is sent again at once when its inbox changed while Home's handling of it, which failed, was being reported", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      await refuseRegistrations(true);
+      // The scheduler, but for the report of Home's handling of `held`, which
+      // waits for `release`, so that the row stays decided as sent while its
+      // inbox changes. `failed` resolves once that handling has failed for
+      // good, the scheduler having run it again while it could.
+      const failed = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const queueEvent = runtime.scheduler.queueEvent.bind(runtime.scheduler);
+      using _held = stub(
+        runtime.scheduler,
+        "queueEvent",
+        (link, event, retries, onCommit, ...rest) => {
+          const offer = isObjectNotArray(event) && isObjectNotArray(event.offer)
+            ? event.offer
+            : undefined;
+          return queueEvent(
+            link,
+            event,
+            retries,
+            onCommit === undefined || offer?.id !== "held"
+              ? onCommit
+              : (tx) => {
+                failed.resolve();
+                void release.promise.then(() => onCommit(tx));
+              },
+            ...rest,
+          );
+        },
+      );
+      const intake = start();
+      await deliver([offerOf(space, "held")]);
+      await failed.promise;
+      await refuseRegistrations(false);
+      await deliver([offerOf(space, "while held")]);
+      await registeredThrough("while held");
+      expect(intake.accessForTestingOnly.decisionsFor(sender, "held"))
+        .toEqual(["sent"]);
+
+      release.resolve();
+      for (const _ of [1, 2]) {
+        await intake.idle();
+        await runtime.idle();
+      }
+      const rows = (await home.key("registered" as never).asSchema(
+        registeredSchema,
+      ).pull() ?? []) as Row[];
+
+      expect(registeredIds(rows).sort()).toEqual(["held", "while held"]);
     });
 
     it("is registered when Home's catalog cannot be read", async () => {

@@ -894,9 +894,10 @@ manager that throws is logged under `piece.share-intake`.
 
 Each row of an inbox is decided by its whole content, so a row that names
 another offer's `from` and `id` decides nothing about that offer. A row the
-intake sent, skipped for its receipt, or refused for something in the row itself
-(its envelope, its `kind` or its `host`) or for the kind its space declares,
-which never changes, is decided for the life of the runtime worker. A row
+intake sent and Home handled, skipped for its receipt, or refused for something
+in the row itself (its envelope, its `kind` or its `host`) or for the kind its
+space declares, which never changes, is decided for the life of the runtime
+worker; a row whose send fails is not, as below. A row
 refused for the state of its space (the access list, the root, or the result
 schema the root stores) is vetted again when that state changes, such as a grant
 to the sender, a room linked back at its reserved address, a Loom linked back as
@@ -919,7 +920,10 @@ that state, which takes up a failure that has passed, and then each time the
 state changes, with the connection to the host up or not. A send to Home that
 fails, whether the send throws or Home's handling of it fails, is logged
 (`send-failed`), and it and a failed read of Home or of an inbox before the row
-is reached leave the row undecided too. When a lost
+is reached leave the row undecided too. A change that arrives while Home handles
+a send finds the row decided, so when the send then fails the intake considers
+the row's inbox again at once; a failed send with no such change waits for the
+next one, so a send that keeps failing is not retried in a loop. When a lost
 connection to the host comes back, the intake reads again which inboxes Home
 holds and retains and considers every row of each, so a row left undecided
 while it was down is taken up then, or when its inbox next changes or Home's
