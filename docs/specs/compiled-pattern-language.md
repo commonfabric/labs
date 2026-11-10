@@ -298,6 +298,11 @@ executions arrive at the same identifier even when they start from slightly
 different data. Such a document is written when it is first assigned, and it
 carries no pattern metadata.
 
+The compiler derives these identifiers exactly as the transformer does, which
+names a state cell after the variable it is assigned to (the `.for(...)` cause
+it emits). Existing stored state then keeps its identifiers, and migrating an
+instance consists of no longer writing its per-node documents.
+
 ### Provenance
 
 A kept output carries a full provenance chain: its label template, the
@@ -370,9 +375,12 @@ today, for cones whose write surface is static:
 - the node registry and the per-node record;
 - read-set discovery from transaction journals and the diffing of read sets;
 - ordering nodes within a pass;
-- trigger-read bookkeeping, because a template's slot set already contains
-  every input that can cause a recomputation. This claim needs a proof before
-  the bookkeeping is removed.
+- trigger-read bookkeeping for statically known reads, because a template's
+  slot set already contains every such input that can cause a recomputation.
+
+Trigger reads stay for reads that follow links through data. Their targets
+are not in any template, so a recomputation caused by a change behind a link
+has to join that address's label the way it does today.
 
 A scheduler remains across instances. Its units are pattern instances,
 effectful operations, and materializers, and its edges are links between kept
@@ -402,10 +410,17 @@ latency, and send events to the server
 value code and the plan and does not compile. Effectful operations are not
 speculated.
 
-Speculative values that reach the render boundary need labels. The proposal is
-that a client reuses the last committed label of an output while the slots of
-its template are unchanged, and instantiates the template locally otherwise.
-Whether the render boundary can accept that is an open question.
+Speculative values that reach the render boundary need labels. A client
+reuses the last committed label of an output while the slots of its template
+are unchanged, and instantiates the template locally otherwise.
+
+A client also evaluates the gates the server will evaluate, so that it does
+not show a result the server is going to refuse. FabriChat is the reference
+case: the pattern declares that a message is added only when the send event
+comes from a trusted UI element. A send from an element without that
+integrity is refused by the server, so the client's speculative run of the
+handler refuses it too, from the same plan. The client's verdict is advisory
+and the server's is authoritative.
 
 ## Correspondence with the CFC specification
 
@@ -471,19 +486,23 @@ Each stage can be checked before the next begins.
    template labels with the labels the runtime computes for the whole corpus.
    Template labels must be equal or tighter, and never looser.
 4. Run one pattern with one transaction per cause and with only its keep set
-   stored. Then do the same for `map`.
+   stored. Then do the same for `map`. FabriChat is the reference pattern for
+   this stage and the previous one, because it exercises confidentiality,
+   event integrity, and per-row instances together.
 5. Move the remaining scheduler into the serving loop.
 6. Retire the builder form the transformer emits.
 
 ## Open questions
 
-- **Render boundary under speculation.** Whether the display gates accept a
-  reused committed label for a speculative value
-  ([render-boundary composition](cfc-render-boundary-composition.md)).
-- **Trigger reads.** Whether a template's slot set fully replaces
-  trigger-read tracking, as claimed under [The scheduler](#the-scheduler).
-- **Implicit flows from sandboxed bodies.** The label rule for an exception or
-  non-termination in a function body.
+- **Gates under speculation.** Which of the server's gates a client can
+  evaluate from the plan alone, and how a client presents a refusal it
+  predicts ([render-boundary composition](cfc-render-boundary-composition.md)).
+- **Error states and termination.** A function body that throws, or does not
+  terminate, reveals something about its inputs. An error is a state with a
+  label of its own, and a cone in an error state stops propagating unless
+  something reads that state. The label rule for it, and how far the design
+  is termination-sensitive, follow the specification's treatment of
+  termination.
 - **Built-in classification.** Which group each built-in belongs to, and the
   label rule of each structural operation.
 - **Cycles through side-writes.** How much the compiler can reject statically,
@@ -492,5 +511,6 @@ Each stage can be checked before the next begins.
   beyond patterns.
 - **Cache promotion.** The cost model for promoting a cone to a durable cache,
   and where that cache lives.
-- **Migration.** How existing stored pattern instances, with their per-node
-  documents, move to the keep-set layout.
+- **Migration.** Whether anything besides state cells in existing stored
+  instances has to keep its identifier, and when per-node documents already
+  stored can be deleted.
