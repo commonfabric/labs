@@ -160,6 +160,25 @@ export const removeSuggestedPicture = handler<
   profileSuggestion!.set(rest);
 });
 
+// Sets the picture the profile the surface creates starts with, from the
+// user's own pick, keeping the suggested name. It goes where a host's
+// suggested picture goes, so the seed step applies it the same way, written
+// by the profile's creator; picking replaces a suggested picture, and
+// "Remove picture" drops it again. An event without bytes changes nothing.
+// The stored suggestion always has a name (`profile-suggestion.ts`), so a
+// pick with nothing suggested stores an empty one, which suggests no name.
+export const chooseSuggestedPicture = handler<
+  SetProfilePictureEvent,
+  { profileSuggestion?: Writable<ProfileSuggestion | undefined> }
+>((event, { profileSuggestion }) => {
+  const picture = event.picture ?? event.detail?.bytes;
+  if (!picture?.length || profileSuggestion === undefined) return;
+  profileSuggestion.set({
+    name: profileSuggestion.get()?.name ?? "",
+    picture,
+  });
+});
+
 // Appends a freshly-created profile (its own `inSpace` space) to the home
 // `profiles` list. The cross-space `inSpace` child materializes during the push;
 // the `.inSpace(...)` call opts the transaction into a multi-space commit (see
@@ -668,10 +687,12 @@ export type ProfileCreateInput = {
    * The profile the user's host suggests, which the `#profile` wish hands
    * over. Its name starts the field in place of `defaultName`; its picture is
    * shown, with a control that removes it, and the profile created takes the
-   * picture still shown. Removing the picture removes it from the stored
-   * suggestion; creating a profile leaves the suggestion stored for the host
-   * to replace, and the wish shows this surface only while the user has no
-   * profile.
+   * picture still shown. The user may also choose a picture of their own,
+   * which replaces the suggested one there. Removing or choosing a picture
+   * changes the stored suggestion; creating a profile leaves the suggestion
+   * stored for the host to replace, and the wish shows this surface only
+   * while the user has no profile. A surface handed none keeps a chosen
+   * picture in this input of its own.
    */
   profileSuggestion?: Writable<ProfileSuggestion | undefined>;
 };
@@ -689,8 +710,10 @@ export default pattern<ProfileCreateInput, ProfileCreateOutput>(
       profiles,
       seedName,
     });
+    // An empty suggested name suggests none, as a picture chosen with nothing
+    // suggested stores it.
     const startingName = computed(() =>
-      profileSuggestion?.get()?.name ?? defaultName ?? ""
+      profileSuggestion?.get()?.name || defaultName || ""
     );
     // An empty picture is none: the seed step and `setPicture` take only bytes.
     const suggestedPicture = computed(() => {
@@ -738,6 +761,15 @@ export default pattern<ProfileCreateInput, ProfileCreateOutput>(
             </cf-hstack>,
             null,
           )}
+          <cf-hstack
+            gap="2"
+            align="center"
+            data-ui-region="profile-create-choose-picture"
+          >
+            <cf-avatar-input
+              oncf-change={chooseSuggestedPicture({ profileSuggestion })}
+            />
+          </cf-hstack>
           <cf-submit-input
             inputId={inputId ?? "profile-name-input"}
             data-ui-action={TRUSTED_PROFILE_CREATE_ACTION}
