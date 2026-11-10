@@ -262,7 +262,7 @@ export type BodyCall =
   /** Requests an effectful built-in and returns a link to its result. */
   | { readonly kind: "effect"; readonly builtin: string }
   /** Binds a handler to captured values and returns its stream. */
-  | { readonly kind: "bind"; readonly handler: Index };
+  | { readonly kind: "bind"; readonly binding: Index };
 
 export interface Widening {
   /** The slot that now stands for a whole subtree. */
@@ -369,7 +369,8 @@ export interface StateCell {
   readonly scope: "space" | "user" | "session";
   /**
    * The collection whose element key joins the cause, inside an element
-   * body. Elements with equal keys share the cell (section 1.3).
+   * body. Legal only where that key is a cell's identity or holds the
+   * index (section 1.3).
    */
   readonly perElementOf?: Index;
   readonly schema: Hash;
@@ -416,6 +417,30 @@ export interface Child {
   readonly space?: Index;
 }
 
+/**
+ * A handler bound to state: in the reactive tier, or at a `bind` site of a
+ * body (section 3.14). The handler is a body of this plan, or a handler
+ * factory received as a value (section 3.21).
+ */
+export interface Binding {
+  readonly handler:
+    | { readonly body: Index }
+    | { readonly factory: Index };
+  /** For a factory value, declared by the factory's type. */
+  readonly eventSchema: Hash;
+  readonly stateSchema: Hash;
+  /** What is bound to each path of the handler's state. */
+  readonly state: readonly {
+    readonly path: Path;
+    readonly template: Template;
+    /** A data value is copied into the binding; a cell stays a link. */
+    readonly capture: "copy" | "link";
+  }[];
+  /** For a binding in the reactive tier: the cause of its stream. */
+  readonly name?: string;
+  readonly perElementOf?: Index;
+}
+
 export interface Plan {
   readonly version: 1;
   readonly argumentSchema: Hash;
@@ -432,6 +457,7 @@ export interface Plan {
   readonly stateCells: readonly StateCell[];
   readonly operations: readonly Operation[];
   readonly children: readonly Child[];
+  readonly bindings: readonly Binding[];
 }
 
 /** What the compiler emits, addressed as one thing. */
@@ -517,8 +543,7 @@ in place is a new element.
 A key derived from a value is salted with a secret of the space before it
 enters a document identifier, as the row identifiers of `sqliteQuery` are
 (`builtin-inventory.md`, "Element keys"). Without the salt an identifier
-would reveal a low-entropy value to anyone who can see a link (open question
-8).
+would reveal a low-entropy value to anyone who can see a link.
 
 The position is part of the key only when the body uses it:
 `Collection.bodyUses.index`, or `bodyUses.array`, since a body that reads the
@@ -535,13 +560,27 @@ documents under those keys are not found again.
 
 Consequences, which later sections rely on:
 
-- **Equal elements are one element.** Two positions that hold equal plain
-  values, or links to the same cell, have the same key and share one cone.
-  The value is computed once. A state cell with `perElementOf` is shared by
-  them, and so is a handler bound in the body: an event from either rendered
-  copy reaches the same handler with the same captured element, which is
-  correct because nothing distinguishes the two. An author who wants state
-  per position uses the index in the body, or makes the elements cells.
+- **Equal elements share one cone.** Two positions that hold equal plain
+  values, or links to the same cell, have the same key. The value is computed
+  once and both positions receive it. That is sound because a body is a
+  function of its element, its captures, and the index only when it uses the
+  index.
+- **State and handlers need an element with an identity.** A state cell
+  with `perElementOf`, and a handler bound in an element body, exist only
+  where the element's key is a cell's identity or holds the index. An
+  element body over plain values that declares a state cell or binds a
+  handler without using the index is a compile error: two rows that show
+  the same value would otherwise share one flag and one stream. The author
+  uses the index, or makes the elements cells, which a list of records
+  written by a handler already is. Two positions that link to the same cell
+  are the same element and do share its state.
+
+  The compiler reports the error where the element type is a primitive, or
+  the collection is one the instance constructs inline. For a record-typed
+  input the compiler cannot tell a stored link from an inline record.
+  *Assumed:* such an element body compiles, and an element that arrives
+  inline at run time fails its cone (section 5.2), so that sharing never
+  happens silently.
 - **Values are per key, labels are per position.** The two positions can
   carry different labels, because a label is stored at an address and the
   addresses differ. The element slots of a template are therefore bound per
@@ -577,7 +616,7 @@ follows.
 | --- | --- |
 | A handler, no explicit cause | The event's key and the occurrence's ordinal among the handler's requests in that invocation. A retry of the same event with the same control flow names the same things. A handler binding is the exception: it is identified as in the last row everywhere |
 | A handler, `.for(tag)` | The handler's instance and the tag, so that different events name the same thing |
-| A `lift` or `computed` | An explicit cause (`createCell`), the request's content (`effect`), or the enclosing instance, the handler body, and the captured values and cells (`bind`). Never an ordinal, because such a body is re-evaluated. Captured values are salted like element keys |
+| A `lift` or `computed` | An explicit cause (`createCell`), or the enclosing instance, the handler, and the captured values and cells (`bind`). Never an ordinal, because such a body is re-evaluated. Captured values are salted like element keys. Such a body neither instantiates a pattern nor requests an effect |
 
 ## 2. Slots and observation classes
 
@@ -737,8 +776,12 @@ the comparisons below, "today" means that per-node arrangement.
 The comparison criterion is the overview's: a template label is **equal or
 tighter, never looser**. Tighter means fewer confidentiality clauses, or more
 integrity atoms. Each rule that is tighter says what the narrowing rests on.
-One rule, the collection index, is looser than today, and section 3.17 says
-why that is deliberate.
+**There is one exception.** The collection index (section 3.17) is looser
+than today, deliberately: a bucket's membership label includes the key of
+every element, where the runtime today stores only the labels of the
+elements in the bucket. Exclusion from a bucket is an observation, so the
+wider label is the correct one. The stage 3 comparison expects this
+difference and no other in that direction (section 7.5).
 
 ### 3.2 Template semantics
 
@@ -939,7 +982,7 @@ positions depend on lengths alone.
 
 The aggregates are `count`, `countTruthy`, `sum`, `min`, `max`, `minBy` and
 `maxBy`, as `builtin-inventory.md` lists them. `some`, `every` and `find` are
-not among them (open question 3).
+reactive constructs too; they depend on order and are in section 3.13.
 
 | Aggregate | Template |
 | --- | --- |
@@ -1111,9 +1154,9 @@ principal, is a declared entry and is added as it is today.
 **Today.** The handler's transaction join over the event payload and the
 state it read lands on every written path. **Equal.**
 
-### 3.13 `findIndex` and `reduce`
+### 3.13 `findIndex`, `some`, `every`, `find`, and `reduce`
 
-Both are reactive constructs. Unlike the operations above, their result
+All five are reactive constructs. Unlike the operations above, their rule
 depends on the *order* of the collection.
 
 **`xs.findIndex((x) => pred)`.** The result is the position of the first
@@ -1136,6 +1179,18 @@ element whose predicate is truthy, or `-1`.
 - **State.** None is required. The per-element predicate cones are memoized
   by key like any other, so a scan after a change re-evaluates nothing
   unchanged.
+
+**`xs.some((x) => pred)` and `xs.every((x) => pred)`.** The same prefix
+rule. `some` is a `fold` of the predicate's template through the first
+truthy element, and over all elements when the result is `false`. `every`
+is a `fold` through the first falsy element, and over all elements when the
+result is `true`. Each is joined with the collection's membership.
+
+**`xs.find((x) => pred)`.** `pick` (section 3.18) over the collection. The
+choice is the `fold` through the first match, joined with membership; the
+body is the matching element, passed through with its own label. When
+nothing matches the result is `undefined` and carries the choice, a fold
+over every element.
 
 **`xs.reduce((acc, x) => expr, init)`**, where the callback is an
 expression.
@@ -1165,8 +1220,10 @@ expression.
 
 **Today.** `reduce` and `findIndex` on a cell mint a `lift` inline
 (`reduce` and `findIndex` in `runtime/runner/src/cell.ts`), which reads the
-whole array in one transaction. **Equal** for `reduce` without conditionals,
-**tighter** for `findIndex` (elements after the match) and for a `reduce`
+whole array in one transaction. `some`, `every` and `find` are array methods
+an author calls inside a `computed`, which reads the whole array too.
+**Equal** for `reduce` without conditionals, **tighter** for the four
+prefix operations (elements after the deciding one) and for a `reduce`
 whose expression selects.
 
 ### 3.14 Runtime calls in a function body
@@ -1190,7 +1247,7 @@ the child instance (section 3.15) when the transaction commits.
 | A link to an instance requested earlier in the same invocation, passed as an argument | A reference like any other: it carries its own identity label, `T_b`. It is legal before either instance exists, because both are created by the same commit |
 | `.for(tag)` | The tag's value is part of the footprint. The instance's existence label is frozen when it is first created (§8.12.8, `08-12-store-label-monotonicity.md`); a later event that names the same instance creates nothing |
 | `asScope(scope)` | A constant of the site. It sets the scope of the state the child declares |
-| `inSpace(space, options)` | The target is a slot or a constant of the site: a space identifier, the space of a given cell, a name, or anonymous. The argument is written into another space, so the write-side checks of that space apply to the argument's templates joined with `T_b`. *Assumed*, with `builtin-inventory.md` (open question 3): the new instance's and space's identifiers derive from the request and are known before the commit, which spans both spaces as it does today |
+| `inSpace(space, options)` | The target is a slot or a constant of the site: a space identifier, the space of a given cell, a name, or anonymous. The argument is written into another space, so the write-side checks of that space apply to the argument's templates joined with `T_b`. The new instance's and space's identifiers derive from the request and are known before the commit, which spans both spaces |
 
 The instance becomes an instantiated pattern, with a result cell, when its
 link is written into state or passed to `navigateTo`. A link the body drops
@@ -1212,26 +1269,27 @@ creates nothing.
 
 The initial value of a created cell is a `WriteEdge` with target `created`.
 
-**Requesting an effect** (`effect`). The request's arguments carry `T_b` and
-form the `input` of an `Operation` of kind `effect`, on which the egress
-ceiling is checked (section 4.4). The call returns a link to the operation's
-result, which is pending in the requesting transaction. In a handler the
-occurrence is identified by the event and its ordinal. In a `lift` or
-`computed` it is identified by the content of the request, which is also the
-memo, so a re-evaluation that makes the same request finds the same result.
-`builtin-inventory.md` recommends refusing an effect request in a `lift` or
-`computed` (its open question 4); if that is adopted, only the handler case
-remains.
+**Requesting an effect** (`effect`, legal in a handler and an action). The
+request's arguments carry `T_b` and form the `input` of an `Operation` of
+kind `effect`, on which the egress ceiling is checked (section 4.4). The
+call returns a link to the operation's result, which is pending in the
+requesting transaction. The occurrence is identified by the event and its
+ordinal. A `lift` or a `computed` does not request an effect, and since it
+does not instantiate a pattern either, it has no indirect way to: effects
+are requested from the reactive tier and from handlers only.
 
-**Binding a handler** (`bind`): an `action(...)`, or an inline event handler
-in JSX the body builds. The compiler hoists the arrow to a handler `Body`
-whose state is its captures.
+**Binding a handler** (`bind`): an `action(...)`, an inline event handler in
+JSX the body builds, or a handler factory applied to its state. For the
+first two the compiler hoists the arrow to a handler `Body` whose state is
+its captures. The site refers to a `Binding`, which records the handler and
+the template and capture mode of each state path. A handler factory
+received as a value is section 3.21.
 
 | Part | Label |
 | --- | --- |
 | Captured data values | Copied into the binding's state document with `T_b` |
 | Captured cell handles | Stay links, with the reference rules of section 3.9 |
-| The stream returned | A reference whose identity is derived from the handler body and the captures. Its identity label is the join of the captures' labels, which is `T_b` unless every capture is a passed reference |
+| The stream returned | A reference whose identity is derived from the enclosing instance, the handler and the captures. Its identity label is the join of the captures' labels, which is `T_b` unless every capture is a passed reference |
 | The bound handler's state | Slots with root `binding`. When an event arrives, the handler's own template is over those slots and its event |
 
 Because the identity is derived from content, two bindings of the same
@@ -1240,7 +1298,9 @@ handler to equal captures are one stream, and a re-evaluation of a
 element-key rule of section 1.3 applied to bindings, salt included, and it
 is what makes a binding legal in a body that is re-evaluated. A handler that
 has to act on one occurrence among equal ones needs the index or a cell in
-its captures.
+its captures. In an element body of the reactive tier that is enforced
+(section 1.3); in a function body, where a binding is made in an ordinary
+loop, equal captures give one stream.
 
 **Today.** A factory called in a running body creates a node in the run's
 frame, and the runner turns the frame into a synthesized pattern after the
@@ -1291,9 +1351,9 @@ is a `slot` template and keeps the child's integrity.
 **A changed factory.** The child's result cell is named from the enclosing
 instance and the call site, not from the factory. When the factory at the
 slot changes, the old child is torn down and a new one is started under the
-same name, so the replacement takes the old one's place. *Assumed:* the new
-child's state cells are those of its own plan under that name, so stored
-state is found again only where cell names agree.
+same name, so the replacement takes the old one's place. The new child's
+state cells are those of its own plan under that name, so stored state is
+found again only where cell names agree.
 
 **One transaction.** A child in the same space is evaluated in the cause's
 transaction, by the pull that extends through its result. A child created
@@ -1387,14 +1447,17 @@ Every element's selector result is in a bucket's membership, not only those
 of the elements in the bucket: that an element is absent from bucket `k`
 says its key is not `k`.
 
-**Today.** Each `collectionIndexMember` run reads its own key and writes one
-bucket, and its reads of other members' records are machinery reads
+**This is the one rule that is looser than today.** Each
+`collectionIndexMember` run reads its own key and writes one bucket, and its
+reads of other members' records are machinery reads
 (`runtime/runner/src/builtins/collection-index-member.ts`). A bucket's
 stored label is therefore the join of the runs that wrote into it, which
-covers the elements in the bucket and not the absent ones. The template is
-**looser** here, deliberately: it follows the membership rule `filter`
-already has, under which exclusion is as much an observation as inclusion
-(§8.5.6.1). The stage 3 comparison has to expect this difference.
+covers the elements in the bucket and not the absent ones. The template
+adds the keys of the absent ones. That is deliberate and decided: it is the
+membership rule `filter` already has, under which exclusion is as much an
+observation as inclusion (§8.5.6.1), and today's stored label under-states
+it. The stage 3 comparison expects a wider label for every bucket,
+`lookup`, `keys` and `keyEntries`, and treats it as conforming.
 
 ### 3.18 Chosen children
 
@@ -1476,7 +1539,75 @@ A query computed at run time gets the join of all four, as
 reference and hashtag search joins every candidate it reads
 (`runtime/runner/src/builtins/wish.ts`). **Equal.**
 
-### 3.20 Summary
+### 3.21 A handler factory received as a value
+
+A handler can be passed by reference and bound where it arrives: in the
+reactive tier, or at a `bind` site of a body. The compiler then knows the
+handler's type and not the handler. This parallels the child instance of
+section 3.15.
+
+**What the enclosing plan records** (`Binding` with `handler.factory`): the
+slot that holds the factory, observed for `identity`; the event and state
+schemas the factory's type declares; and, for each state path, the template
+of what is bound to it and whether it is copied or stays a link.
+
+**What the handler's own record supplies.** A handler factory value names a
+compiled handler by content address. The compiled module it comes from
+holds the handler's `Body` record, and the runtime resolves it when the
+binding is made:
+
+- the **footprint**: which state and event paths the body reads, and the
+  handles it reads through. The runtime narrows the argument to it, as for
+  any body. The declared state schema bounds what the binder passes; the
+  footprint can only be narrower.
+- the **write edges**: the paths the body writes, relative to the cells in
+  its state, with their constraints, and its `outputs` and `calls`.
+- the **body identity**, `Body.code`, which is what a `WriterPolicy.body`
+  names and what `TransformedBy` carries.
+
+**Labels.** The handler's template, when an event arrives, is its own
+record's `derive` over its event and `binding` slots, joined with the
+`identity` slot of the factory: which handler runs is a function of that
+slot, so its label is on everything the handler writes. The stream's
+identity derives from the enclosing instance, the factory's content address
+and the captures.
+
+**Checks that move from compile time to run time.**
+
+| Check | With a known handler | With a factory value |
+| --- | --- | --- |
+| The writer policy of a written path names this handler | Compile time, for a static write edge (section 4.4) | When the handler writes: the resolved `Body.code` against the policy of the cell it was bound to |
+| The handler's schemas fit the binding | Compile time | When the binding is made: the resolved record's event and state schemas against the declared ones. A misfit fails the binding's cone, or the binding handler |
+| Input requirements and ceilings on the handler's state | Compile time where the bound slots are declared | At instantiation, from the resolved record's constraints over the `binding` slots |
+| Some element of the pattern binds the handler under the surface its UI contract names | Compile time (section 4.4) | Not checkable; per event only |
+| A write the handler's record does not list | Compile time | Refused by the runtime when attempted (section 7.4) |
+
+**What is hard.**
+
+- **The write surface of a pattern is no longer closed at compile time.** A
+  cell passed as state to a handler value can be written by code the
+  compiler never saw. Every analysis that asks "who writes this cell" has
+  to count such a cell as written by an unknown handler: the detection of
+  cycles through side-writes, and any classification of a cell as written
+  only by computations.
+- **The static error becomes a run-time refusal.** Passing the wrong
+  handler to a cell whose policy names another is found when the handler
+  first writes, not when the pattern is compiled.
+- **The record has to be available where the binding runs.** A client that
+  speculates the handler needs the handler's compiled module, which the
+  binder's compiled pattern does not contain. It is fetched by content
+  address, like a child's plan.
+- **A handler's policy names it by type.** A type such as the one a write
+  policy uses names a handler definition. A handler value satisfies it only
+  if it *is* that definition, which the content address decides at run
+  time; the type checker of the binder can check the declared schemas and
+  nothing more.
+
+**Today.** A handler factory read from a cell is plain data and cannot be
+bound (`builtin-inventory.md`, "Factory values"). This is new, so there is
+nothing to compare.
+
+### 3.22 Summary
 
 | Operation | Template | Against today |
 | --- | --- | --- |
@@ -1488,9 +1619,10 @@ reference and hashtag search joins every candidate it reads
 | `flatMap` | Element template; membership `fold` of segment lengths | Tighter (content of other segments excluded) |
 | `count`, `countTruthy`, `sum`, `min`, `max` | `fold` | Equal; `count` equal or tighter |
 | `minBy`, `maxBy` | `pick`, choice a `fold` of selectors | Equal |
-| `findIndex` | `fold` through the first match | Tighter (elements after the match excluded) |
+| `findIndex`, `some`, `every` | `fold` through the deciding element | Tighter (later elements excluded) |
+| `find` | `pick`, choice a prefix `fold` | Tighter (later elements excluded) |
 | `reduce` | `fold` of the step expression, plus the initial value | Equal; tighter when the expression selects |
-| `groupBy`, `keyBy`, `lookup`, `keys`, `keyEntries` | Bucket membership a `fold` of selectors; `pick` for `key` mode | Looser (absent elements' keys included), deliberately |
+| `groupBy`, `keyBy`, `lookup`, `keys`, `keyEntries` | Bucket membership a `fold` of selectors; `pick` for `key` mode | **Looser**, the one exception: absent elements' keys are included |
 | Dynamic key `a[k]` | `pick` over a container | Equal |
 | Template literal | `derive` over substitutions | Equal; tighter inside a constructed object |
 | Sandboxed call | `derive` over footprint and handles; references passed through | Equal or tighter |
@@ -1499,11 +1631,13 @@ reference and hashtag search joins every candidate it reads
 | Handler | `derive` over event and state footprint | Equal |
 | Calls in a body | The body's template on what it creates | Equal; tighter for passed references |
 | Child instance | Argument templates in; `child` slots out | Equal |
+| Handler factory value | The handler's own record, plus the factory's `identity` | New |
 | Context reads | `cause`, `labelMetadata`, `identity` slots; `dynamic` for access lists | Equal |
 | `anchorsOf`, `cellFromUrl` parsing, `wish` | References with computed identity; `dynamic` search | Equal |
 
-One row is looser, the collection index, and section 3.17 says why. The other
-way a compiled label could be looser than today's is a static footprint
+One row is looser, the collection index, and section 3.17 says why; that is
+decided and is the only exception. The other way a compiled label could be
+looser than today's is a static footprint
 standing in for reads that are dynamic today, and `handles` exclude it: a
 read a body makes through a cell stays journaled. A widening affects only
 slots the runtime materializes into the argument, which the body's argument
@@ -2258,97 +2392,68 @@ clause any of its slots carries.
   with the labels the Lean evaluator computes from the same plan and inputs.
 - **Stage 3 of the overview** compares template labels with the labels the
   current runtime computes, over the whole corpus, before any template is
-  enforced. That comparison is the test of every row of section 3.20.
+  enforced. That comparison is the test of every row of section 3.22. It
+  expects equal or tighter labels everywhere except for collection indexes,
+  where it expects the wider membership label of section 3.17.
 
 ## 8. Open questions
 
-Each entry states the assumption this document made. The first group needs
-the project owner; the second is for the sibling documents, the
-specification change, or the prototype.
+The project owner has decided the questions earlier drafts listed, and the
+sections above state the outcomes: equal plain values share a cone and never
+state or handlers (1.3); the prefix rule (3.13); `some`, `every` and `find`
+as operations (3.13); the wider collection-index label (3.17); rejection of
+a cause's whole transaction (4.4); a child replaced under the same name
+(3.15); identifiers of a cross-space request known before its commit (3.14);
+salted value-derived identifiers (1.3); no effect request from a `lift` or
+`computed` (3.14); handler factories bindable as values (3.21).
 
-**For the project owner.**
+What remains is for the sibling documents, the specification change, or the
+prototype. Each entry states the assumption this document made.
 
-1. **Equal elements share state and handlers.** This follows from keying an
-   element by its value (section 1.3): two positions with equal plain values
-   share a `perElementOf` state cell and a bound handler. *Assumed:* that is
-   intended, and the compiler reports a hint where an element body declares
-   state over a collection of plain values without using the index.
-2. **The prefix rule of `findIndex`.** Section 3.13 leaves the elements
-   after the first match out of the label, on the argument that the value
-   does not depend on them and the label is a function of the value.
-   *Assumed:* accepted. The alternative is a `fold` over every element,
-   which equals today's label.
-3. **`some`, `every`, `find`.** They are not given operations. If they
-   become reactive constructs, `some` and `every` would take the prefix rule
-   of `findIndex`, through the first truthy or the first falsy predicate,
-   and `find` would be a `pick` whose choice is that prefix fold. Each
-   depends on order, as `findIndex` does.
-4. **The collection index is looser than today.** Section 3.17 puts every
-   element's key into a bucket's membership label, where the runtime today
-   stores only the labels of the elements in the bucket. *Assumed:* the
-   wider label is the correct one, because exclusion from a bucket is an
-   observation.
-5. **Rejection granularity.** Section 4.4 rejects the whole transaction of a
-   cause when any constraint fails. One transaction per cause makes a
-   transaction wider than a node, so one output's labels can withhold
-   unrelated outputs of the same cause. *Assumed:* whole-transaction
-   rejection. Refusing a single derived write is the alternative, and it
-   needs an argument that a partly committed cause is still a consistent
-   state.
-6. **A factory that changes under a child.** Section 3.15 has the old child
-   torn down and a new one started under the same name, and assumes stored
-   state is found again only where cell names agree.
-7. **Requests that reach another space.** Section 3.14 assumes, with
-   `builtin-inventory.md`, that the identifiers of an `inSpace` instance and
-   its space are known before the commit that creates them. What a handler
-   can read from such a request in the same invocation depends on the
-   commit across spaces the overview leaves open.
-
-8. **Values in document identifiers.** Element keys and binding identities
-   derive from values. *Assumed:* they are salted with a secret of the space
-   (section 1.3), as `builtin-inventory.md` recommends. The alternative is
-   to accept that an identifier reveals equality of confidential values.
-
-**For the sibling documents, the specification change, and the prototype.**
-
-9. **How fine footprint analysis should be for computed values.** Section
-   3.9 gives a body's computed result paths one template and refines only
-   references and required paths. *Assumed:* one template for computed
-   values, which equals today's label. A template per computed path would be
-   a further claim under section 7.4, and unlike the reference rules the
-   runtime could not verify it. `footprint-analysis.md` decides.
-10. **References reached through data.** Section 3.9 covers a reference at a
+1. **How fine footprint analysis should be for computed values.** Section 3.9
+   gives a body's computed result paths one template and refines only
+   references and required paths. *Assumed:* one template for computed values,
+   which equals today's label. A template per computed path would be a further
+   claim under section 7.4, and unlike the reference rules the runtime could
+   not verify it. `footprint-analysis.md` decides.
+2. **References reached through data.** Section 3.9 covers a reference at a
    result path that equals an input reference. A reference the body found by
    reading through a handle is not an input slot. *Assumed:* it gets the
    `derive` template.
-11. **Effect requests from a `lift` or `computed`.** Section 3.14 gives such
-    a request an identifier that survives re-evaluation.
-    `builtin-inventory.md` recommends refusing the request instead.
-12. **The accumulator of `reduce` is a data type.** Section 3.13 needs this
-    for the durable state. It is a rule for `language-subset.md`.
-13. **Demand as a channel.** Section 5.5 lists it as accepted. Whether a
-    kept output that nothing demands should be marked stale, so that a later
-    reader can tell, is undecided.
-14. **`shape` versus `enumeration` in storage.** The plan separates them and
-    the runtime's entry classes do not (section 2.2). *Assumed:* both resolve
-    as a `shape` read until a count entry exists.
-15. **Literals and integrity in the proof.** The existing Lean expression
-    language gives a literal an empty integrity, which empties the meet of
-    anything combined with it. Section 3.2 makes `const` neutral, as the
-    runtime does. The Lean development of the specification change keeps the
-    existing convention, which under-claims integrity.
-16. **`count` over a raw list.** Section 3.8 marks `count` "equal or
-    tighter" pending the stage 3 comparison.
-17. **Nondeterministic inputs.** A handler reads the clock (`sendInto` stamps
-    `sentAt`). *Assumed:* the coarse clock a handler may read, and entropy,
-    are unlabeled inputs with no slot. The clock a pattern reads through
-    `wish` is a cell (section 3.19).
-18. **Where provenance and origins are stored.** A kept output carries its
-    template, the identities bound to its slots, and the compiled pattern's
-    identity; a kept derived collection carries the origin of each position
-    (section 3.7). *Assumed:* beside the envelope's label map, keyed by
-    output path. The stored format is a host arrangement.
-19. **A record in a template literal.** Section 3.19 gives a record
+3. **The accumulator of `reduce` is a data type.** Section 3.13 needs this for
+   the durable state. It is a rule for `language-subset.md`.
+4. **Demand as a channel.** Section 5.5 lists it as accepted. Whether a kept
+   output that nothing demands should be marked stale, so that a later reader
+   can tell, is undecided.
+5. **`shape` versus `enumeration` in storage.** The plan separates them and the
+   runtime's entry classes do not (section 2.2). *Assumed:* both resolve as a
+   `shape` read until a count entry exists.
+6. **Literals and integrity in the proof.** The existing Lean expression
+   language gives a literal an empty integrity, which empties the meet of
+   anything combined with it. Section 3.2 makes `const` neutral, as the runtime
+   does. The Lean development of the specification change keeps the existing
+   convention, which under-claims integrity.
+7. **`count` over a raw list.** Section 3.8 marks `count` "equal or tighter"
+   pending the stage 3 comparison.
+8. **Nondeterministic inputs.** A handler reads the clock (`sendInto` stamps
+   `sentAt`). *Assumed:* the coarse clock a handler may read, and entropy, are
+   unlabeled inputs with no slot. The clock a pattern reads through `wish` is a
+   cell (section 3.19).
+9. **Where provenance and origins are stored.** A kept output carries its
+   template, the identities bound to its slots, and the compiled pattern's
+   identity; a kept derived collection carries the origin of each position
+   (section 3.7). *Assumed:* beside the envelope's label map, keyed by output
+   path. The stored format is a host arrangement.
+10. **A record in a template literal.** Section 3.19 gives a record
     substitution a `value` slot over its subtree. If the language renders a
-    record as JavaScript does, only its `shape` is observed, and the slot
-    can be narrower.
+    record as JavaScript does, only its `shape` is observed, and the slot can
+    be narrower.
+11. **An inline record in a stateful element body.** Section 1.3 makes it a
+    compile error to declare state or bind a handler over plain values without
+    the index, and assumes that where the compiler cannot tell (a record-typed
+    input) an inline element fails its cone at run time. `language-subset.md`
+    owns the diagnostic and may prefer a type-level way to say "elements are
+    cells".
+12. **The cost of handler factory values.** Section 3.21 lists what moves to
+    run time. Whether cycle detection and write classification stay useful when
+    any cell handed to a handler value counts as written is for the prototype.
