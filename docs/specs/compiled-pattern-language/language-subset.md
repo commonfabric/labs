@@ -113,14 +113,13 @@ call is refused (`builder-callback:indirect-reference`).
 The other builders are not module-scope builders. `computed`, `action`, and
 `assert` take a function and are written in tier R only (§4.4).
 
-Two further calls at module scope are declarations the compiler reads, and
-are frozen data in every other respect: `exchangeRule(...)` and
-`exchangeRules([...])`, which must be exported and static as the CFC
-authoring contract requires, and `sqliteDatabase(...)` where it is declared
-outside a pattern. Every other API function called at module scope is a pure
-function whose result is frozen data: `toSchema<T>()`, `schema(...)`,
-`dataFile(path)`, `table(...)`, the `cfcAtom` and `cfcPattern` constructors,
-and the Fabric value classes.
+Every other API function called at module scope is a plain function whose
+result is frozen data, or a compile-time intrinsic: `exchangeRule(...)` and
+`exchangeRules([...])`, which freeze and return a rule declaration that the
+CFC authoring contract requires to be exported and static; `toSchema<T>()`,
+which the compiler replaces with the schema of `T`; and `schema(...)`,
+`dataFile(path)`, `table(...)`, the `cfcAtom` and `cfcPattern`
+constructors, and the Fabric value classes.
 
 **Function.** An arrow function or a function expression written in place. It
 is an authored function, exactly as a function declaration is.
@@ -356,9 +355,18 @@ use it is keyed without it.
 A state cell declared inside a collection callback takes its identifier
 from the parent instance, the element's key, and the cell's name, so
 per-element state follows the element when the element moves, and does not
-when the key includes the index. Two elements with equal plain values have
-equal keys; what distinguishes their cones and their state is a question for
-`plan-and-label-templates.md` ([§13](#13-open-questions)).
+when the key includes the index.
+
+**Equal plain values share.** Two elements with the same plain value have
+the same key, so they share one cone, and also one state cell and one
+handler binding declared in the callback: two rows that show `"glazed"`
+share an "expanded" flag and open together. An author who wants state per
+row makes the elements cells, which a list of records written by a handler
+already is, or uses the index. The identifier
+`collection:shared-element-state` is reserved for a diagnostic on a callback
+over plain values that declares a state cell or binds a handler without
+using the index. Whether it is reported, and at which severity, is pending
+with the project owner ([§13](#13-open-questions)).
 
 #### 4.4.2 Patterns as callees
 
@@ -542,9 +550,14 @@ cell, and bind a handler.
 | --- | --- | --- | --- |
 | Instantiate a pattern | §4.4.2, with a statically resolved pattern or a pattern factory value | Yes | No. Selecting among patterns is done in tier R |
 | Create a cell | The constructors of §4.7 | Yes, with no cause needed | Yes, with an explicit cause (`X.for(cause)`) |
-| Request an effectful built-in | As `builtin-inventory.md` lists | As listed there | As listed there |
-| Read context | `eventKey()`, `currentPrincipal()`; `principalOf` and its siblings; `spaceOf` and its siblings; `linksOf`; `getPatternEnvironment()` | Yes | Those `builtin-inventory.md` marks legal in a lift |
-| Bind a handler | Below | Yes | Yes, under the identity rule below |
+| Request an effectful built-in | As `builtin-inventory.md` lists | Yes | No. A request whose inputs are computed is written in tier R. This row is the inventory's recommendation and is pending with the project owner |
+| Read context | `eventKey()`, `currentPrincipal()`; `principalOf` and its siblings; `spaceOf` and its siblings; `linksOf`; `getPatternEnvironment()` | Yes | All except `eventKey()` and `currentPrincipal()`: a computation has no event |
+| Bind a handler | Below | Yes | Yes |
+
+The table is the one in `builtin-inventory.md` ("Which body may make which
+call"), which gives the reasons row by row. Each "No" has a diagnostic in
+[§10.3](#103-function-tier). An authored function is held to the rules of
+the bodies that call it.
 
 Two causes of the difference between the columns come from the overview. A
 handler invocation is a new frame for each event, so what it creates is new
@@ -577,17 +590,15 @@ Either evaluates, at run time, to a stream. These rules apply to the state.
 - A handler factory received as a value cannot be bound; the callee is a
   name the compiler resolves (§4.4.2).
 
-**The identity of a binding.** In a `handler`, an `action`, or an inline
-event handler, a binding is identified like everything else the invocation
-creates. In a `lift` or a `computed`, its identity is derived from the
-handler definition, the position of the binding expression in the body, and
-the bound state (each data value, and the identity of each cell handle). The
-same body evaluated again with the same state names the same stream, and a
-binding made in a loop is told from its neighbors by its state and not by
-its position in the loop, so that reordering the loop does not re-point an
-event already on its way. This is the assumption this document makes until
-`builtin-inventory.md` states the rule for bindings in computations
-([§13](#13-open-questions)).
+**The identity of a binding** is derived from the enclosing instance, the
+handler definition, and the bound state: each copied data value, and the
+identity of each cell handle. `builtin-inventory.md` defines it ("A handler
+binding made in a body"). Three consequences are visible to an author. A
+`lift` or a `computed` evaluated again with the same state names the same
+streams. A binding made in a loop is told from its neighbors by its state
+and not by its position, so reordering the loop does not re-point an event
+already on its way. And two bindings of one handler to equal state are one
+stream, which is harmless because they behave alike.
 
 ```tsx
 // Shown for illustration only.
@@ -1404,6 +1415,11 @@ construct found and the replacement given here.
 | `function-body:ambient-read` | error | `Date.now()`, `new Date()` without arguments, or `Math.random()` in a `lift`, a `computed`, a promoted expression, or the pattern body, directly or through an authored function they call | Read the clock in a `handler` or `action` and store the value in a cell, or take the time as an input | new (the sandbox gate refuses the same read at run time) |
 | `function-body:builder-call` | error | `pattern`, `lift`, `handler`, or `computed` called in tier F, other than an inline `pattern(...)` as the callee of an instantiation | Define the builder at module scope and call its result. A function body that needs a reactive value instantiates a pattern | new |
 | `function-body:handler-capture` | error | An inline event handler or an `action` in tier F captures a `let` binding | Copy the value into a `const` before the handler and capture that | new |
+| `function-body:instantiation-in-computation` | error | A pattern instantiated in a `lift` or a `computed`, directly or through an authored function they call | Select among patterns in the pattern body: `kind === "box" ? Box({ ... }) : Bag({ ... })` | new |
+| `function-body:cell-needs-cause` | error | A cell created in a `lift` or a `computed` without an explicit cause | Name it: `Writable.for<T>(cause)`, with a cause that is the same on every evaluation | new (a run-time throw today) |
+| `function-body:effect-in-computation` | error | An effectful built-in requested in a `lift` or a `computed` | Request it in the pattern body, where it is a durable operation, or in a `handler` | new; pending with the project owner (§5.2) |
+| `function-body:event-context-in-computation` | error | `eventKey()` or `currentPrincipal()` in a `lift`, a `computed`, or the pattern body | Read it in the `handler` or `action` and pass or store the value | new (a run-time throw today) |
+| `collection:shared-element-state` | pending | A collection callback over plain values declares a state cell or binds a handler without using the index, so equal values share it (§4.4.1) | Make the elements cells, or use the index | reserved; pending with the project owner |
 | `verb-result:undeclared-return` | error | A `handler` or `action` without a result type argument returns a plain value from a block body | Declare the result (`action<Event, Result>(...)`, `handler<Event, State, Result>(...)`), or use a bare `return;` | carries |
 | `mergeable-push:read-then-push` | warning | A handler reads a mergeable collection and then pushes to it | Push without reading, or use the merge-safe operation the message names | carries |
 | `footprint:widened` | hint | Footprint analysis gave up on an expression (§5.4) | The rewrite for the cause: a static key, a narrower argument, named properties in place of a spread | new |
@@ -1862,30 +1878,25 @@ now. Each names the document it is addressed to.
    selected element's slots. If the plan defines no such operation, the
    fallback is to refuse a dynamic key in tier R, which affects 17
    expressions in 7 modules.
-4. **Handler bindings in a `lift` or a `computed`** (to
-   `builtin-inventory.md` and `plan-and-label-templates.md`). §5.2 allows
-   them and derives the stream's identity from the handler, the binding's
-   position, and the bound state. The inventory's follow-up had not landed
-   when this was written; if it restricts bindings to `handler` and `action`
-   bodies, the 16 corpus sites move to tier R instead, and the second column
-   of the table in §5.2 changes for that row.
-5. **`some`, `every`, and `find`** (to `builtin-inventory.md`). The project
-   owner made `reduce` and `findIndex` reactive constructs and did not rule
-   on these three. They are tier-F code here. `plan-and-label-templates.md`
-   §3.8 names `some` and `every` among the aggregates, which this document
-   and the inventory do not; the three documents have to agree. `some` and
-   `find` are the largest single cause of a `computed` not being promoted
-   (§11.5).
-6. **Equal plain elements in a `map`** (to `plan-and-label-templates.md`).
-   Two elements with the same plain value have the same key (§4.4.1). Their
-   values are then equal by construction, but state cells declared in the
-   callback would be shared between them. Either the key of a repeated value
-   includes its ordinal among equals, or declaring state in a callback over
-   plain values is refused.
-7. **The label rules of `reduce` and `findIndex`** (to
-   `plan-and-label-templates.md`). Both depend on element order, which the
-   `fold` of its §3.8 does not: a general `reduce` step need not be
-   commutative, and `findIndex` returns a position.
+4. **Effect requests from a `lift` or a `computed`** (to the project owner,
+   through `builtin-inventory.md`, its open question 4). §5.2 follows the
+   inventory's recommendation and refuses them. If the owner allows them,
+   the row of the table and `function-body:effect-in-computation` go.
+5. **`some`, `every`, and `find`** (to the project owner, through
+   `builtin-inventory.md`, its open question 5). The inventory recommends
+   making all three structural. Until the owner rules they are tier-F code
+   here. If they become structural they take the callback grammar of
+   `findIndex` (§4.4.1), move into the first row of §4.4, and about 22 more
+   `computed` calls are promoted (§11.5). `plan-and-label-templates.md` §3.8
+   already names `some` and `every` among the aggregates.
+6. **A diagnostic for state shared by equal plain values** (to the project
+   owner, through `builtin-inventory.md`, its open question 10). The sharing
+   itself is the rule (§4.4.1). Whether `collection:shared-element-state`
+   is reported, and as a warning or a hint, is pending.
+7. **`reduce` and `findIndex` in the plan** (to
+   `plan-and-label-templates.md`). `builtin-inventory.md` gives both a label
+   rule as a `fold` joined with membership and order. The plan document's
+   §3.8 has to carry an ordered fold for them.
 8. **The spelling of a pattern factory value with bound parameters** (to
    `builtin-inventory.md`). `patternTool(pattern, extraParams)` is removed
    in favor of a pattern factory value that closes over the bound
