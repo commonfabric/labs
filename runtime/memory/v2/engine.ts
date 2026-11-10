@@ -33,6 +33,7 @@ import {
   parseOwnerReleaseByIntentRecord,
   type VerifiedOwnerReleaseByIntent,
 } from "./cfc-owner-release-by-intent.ts";
+import { isCfcLabelDocumentContent } from "./cfc-stored-envelope.ts";
 import {
   admitsDroppedDeclaredPaths,
   droppedDeclaredPaths,
@@ -7200,17 +7201,11 @@ const applyCommitTransaction = (
     });
   }
 
-  // A label document's content is a record whose every member is
-  // `confidentiality` or `integrity` holding an array. The hash alone
-  // cannot tell a label from a record that merely verifies, and a reader
-  // resolving a malformed one would fail closed on every read of the
-  // envelope, so the shape is refused here, where the writer can act on it.
-  const isLabelDocumentShape = (value: unknown): boolean =>
-    isObjectNotArray(value) &&
-    Object.entries(value).every(([key, member]) =>
-      (key === "confidentiality" || key === "integrity") &&
-      Array.isArray(member)
-    );
+  // A label document's content is held to `isCfcLabelDocumentContent()`.
+  // The hash alone cannot tell a label from a record that merely verifies,
+  // and a reader resolving a malformed one would fail closed on every read
+  // of the envelope, so the shape is refused here, where the writer can act
+  // on it.
   for (const hash of requiredLabelDocs) {
     const id = `cid:${hash}`;
     // A set in this commit reached here with its content verified against
@@ -7234,7 +7229,7 @@ const applyCommitTransaction = (
         `memory v2 commit references CFC label document ${id} whose stored content does not verify`,
       );
     }
-    if (!isLabelDocumentShape(content)) {
+    if (!isCfcLabelDocumentContent(content)) {
       throw new ProtocolError(
         `memory v2 commit references CFC label document ${id} whose content does not hold a label`,
       );
