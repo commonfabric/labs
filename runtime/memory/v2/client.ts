@@ -759,7 +759,7 @@ export async function settleBounded<T>(
 /** A request awaiting its response; see {@link Client.request}. */
 type PendingRequest = PromiseWithResolvers<unknown> & {
   /** Hears the response as the client handles it, before any frame after it. */
-  onResponse?: (response: ResponseMessage<unknown>) => void;
+  onResponse: (response: ResponseMessage<unknown>) => void;
 };
 
 export class Client {
@@ -1215,12 +1215,19 @@ export class Client {
     const encoded = options.encoded !== undefined && options.epoch === epoch
       ? options.encoded
       : this.#encodeRequest(message);
-    const pending: PendingRequest = Promise.withResolvers<unknown>();
     const { onResponse } = options;
-    if (onResponse !== undefined) {
-      pending.onResponse = (response) =>
-        onResponse(response as ResponseMessage<Result>);
-    }
+    // Set as the response arrives, which on some transports is before the
+    // send settles.
+    let answered = false;
+    const pending: PendingRequest = Object.assign(
+      Promise.withResolvers<unknown>(),
+      {
+        onResponse: (response: ResponseMessage<unknown>) => {
+          answered = true;
+          onResponse?.(response as ResponseMessage<Result>);
+        },
+      },
+    );
     // The rejection handler below only attaches after the transport send
     // completes, and send suspends across event-loop turns on any real
     // transport — close()'s rejectPending() can fire in that window with
@@ -1246,14 +1253,18 @@ export class Client {
     try {
       await this.#transport.send(encoded);
     } catch (error) {
-      // A send the transport refused outright gets no response, so its entry
-      // would otherwise stay until the connection closes. A send lost with its
-      // connection is settled by the close that reports the loss.
-      if (!isConnectionError(error)) {
-        this.#pending.delete(requestId);
-        this.#pendingSessions.delete(requestId);
+      // A response that arrived before the send settled answers the request,
+      // whatever the send then reports: the server has acted on it.
+      if (!answered) {
+        // A send the transport refused outright gets no response, so its
+        // entry would otherwise stay until the connection closes. A send lost
+        // with its connection is settled by the close that reports the loss.
+        if (!isConnectionError(error)) {
+          this.#pending.delete(requestId);
+          this.#pendingSessions.delete(requestId);
+        }
+        throw error;
       }
-      throw error;
     }
     const result = await pending.promise as ResponseMessage<Result>;
     if (result.error) {
@@ -2608,7 +2619,7 @@ export class Client {
         this.#pending.delete(message.requestId);
         this.#pendingSessions.delete(message.requestId);
         try {
-          pending.onResponse?.(message);
+          pending.onResponse(message);
         } catch (cause) {
           console.error("request response observer threw:", cause);
         }
