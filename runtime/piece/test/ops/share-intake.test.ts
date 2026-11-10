@@ -1331,11 +1331,12 @@ describe("share-intake", () => {
       expect(intake.accessForTestingOnly.decisionsFor(sender, "held"))
         .toEqual(["sent"]);
 
+      // One wait covers the failure's report, the scan it has made again, and
+      // the send that scan makes.
+      const idle = intake.idle();
       release.resolve();
-      for (const _ of [1, 2]) {
-        await intake.idle();
-        await runtime.idle();
-      }
+      await idle;
+      expect(intake.isIdle()).toBe(true);
       const rows = (await home.key("registered" as never).asSchema(
         registeredSchema,
       ).pull() ?? []) as Row[];

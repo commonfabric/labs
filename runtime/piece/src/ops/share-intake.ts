@@ -370,12 +370,16 @@ export class ShareIntake {
   /**
    * Resolves once every change the instance has been told of so far has been
    * taken up: each offer then in an inbox decided or left for the next change,
-   * and each registration sent to Home handled and its receipt read. A
-   * registration whose handling never settles holds it.
+   * and each registration sent to Home handled and its receipt read,
+   * including what a failed send takes up again. A registration whose
+   * handling never settles holds it, and so do changes that keep arriving.
    */
   async idle(): Promise<void> {
-    await this.#drained;
-    await Promise.all(this.#pending);
+    // A send that settles can start another scan, which can send again.
+    while (!this.isIdle()) {
+      await this.#drained;
+      await Promise.all(this.#pending);
+    }
   }
 
   /**
