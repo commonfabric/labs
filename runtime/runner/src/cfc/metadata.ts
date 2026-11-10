@@ -185,9 +185,10 @@ export const cfcMetadataPresent = (value: unknown): boolean =>
  * in a version-2 envelope alone, by reference, with any label-metadata
  * template among them keyed and classed as one.
  *
- * The narrowing is to `StoredCfcMetadata`, whose labels' clauses and atoms
- * the check finds to be arrays and no more, and whose entries' `origin` and
- * `observes` it reads only to find a template.
+ * The narrowing is to `StoredCfcMetadata`, more than the check establishes:
+ * it finds each label's `confidentiality` and `integrity` members to be
+ * arrays and does not look at the clauses and atoms they hold, and it reads
+ * an entry's `origin` and `observes` only to find a template.
  */
 const isCfcMetadata = (value: unknown): value is StoredCfcMetadata =>
   isReadableStoredCfcEnvelope(value);
