@@ -655,7 +655,6 @@ type CompatibleUnavailable =
   & {
     /** Retirement predicate, when provided by the native implementation. */
     readonly isObsolete?: FabricUnavailable["isObsolete"];
-
   };
 
 /** A pending result whose producer has not completed. */
