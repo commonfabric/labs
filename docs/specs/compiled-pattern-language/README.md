@@ -319,8 +319,11 @@ carries no pattern metadata.
 
 The compiler derives these identifiers exactly as the transformer does, which
 names a state cell after the variable it is assigned to (the `.for(...)` cause
-it emits). Existing stored state then keeps its identifiers, and migrating an
-instance consists of no longer writing its per-node documents.
+it emits). Existing stored state of an instance then keeps its identifiers,
+and migrating an instance consists of no longer writing its per-node
+documents. State declared inside a `map` body is the exception: its
+identifier includes the element key, which this design redefines, so such
+state does not carry over.
 
 ### Provenance
 
@@ -410,8 +413,12 @@ identifier and returns a link. The runtime performs the instantiation when the
 handler's transaction commits. Writing the link into state is what gives the
 new instance a result cell and makes it an instantiated pattern. Passing the
 link to `navigateTo` does the same, because navigation requires a result
-cell. In the reactive tier the same call denotes an anonymous sub-pattern,
-compiled into the surrounding instance like the body of a `map`.
+cell. In the reactive tier the same call, with a callee the compiler can
+resolve statically, denotes an anonymous sub-pattern, compiled into the
+surrounding instance like the body of a `map`. A callee that is a factory
+value is known only at run time, so the call creates a child instance with
+its own plan and result cell
+([plan format and label templates](plan-and-label-templates.md), §3.15).
 
 The body of a `computed` or a `lift` does not instantiate a pattern.
 Selecting among patterns is done in the reactive tier.
