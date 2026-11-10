@@ -10,6 +10,7 @@ export { FabricDurationDay } from "./FabricDurationDay.ts";
 export {
   FabricUnavailable,
   UNAVAILABLE_ERROR_KINDS,
+  UNAVAILABLE_OBSOLETE,
   UNAVAILABLE_PENDING,
   UNAVAILABLE_REASONS,
   UNAVAILABLE_SYNCING,

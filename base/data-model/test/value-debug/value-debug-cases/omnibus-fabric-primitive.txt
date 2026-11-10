@@ -96,16 +96,16 @@ unavailable:
 )
 
 unavailable, error:
-/Unavailable(reason:"error",errorKind:"network",errorMessage:"boom")
+/Unavailable(reason:"error",errorKind:"network",message:"boom")
 /Unavailable(
   reason: "error",
   errorKind: "network",
-  errorMessage: "boom"
+  message: "boom"
 )
 /Unavailable(
   reason: "error",
   errorKind: "network",
-  errorMessage: "boom"
+  message: "boom"
 )
 
 unavailable, error, default message:

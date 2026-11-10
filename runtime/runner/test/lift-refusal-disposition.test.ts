@@ -1,4 +1,5 @@
 import { expect } from "@std/expect";
+import { FabricUnavailable } from "@commonfabric/data-model/availability";
 import { afterEach, describe, it } from "@std/testing/bdd";
 import {
   createSchedulerTestRuntime,
@@ -37,7 +38,7 @@ describe("lift refusal disposition", () => {
   ): Promise<
     {
       before: string | undefined;
-      after: string | undefined;
+      after: string | FabricUnavailable | undefined;
       recovered: string | undefined;
       errors: Error[];
     }
@@ -93,19 +94,27 @@ describe("lift refusal disposition", () => {
     }
   }
 
-  it("writes an undefined result when the body's synchronous read refuses under the view", async () => {
+  it("writes a schema-mismatch marker when the body's synchronous read refuses under the view", async () => {
     const outcome = await breakSecondRow(true);
     expect(outcome.before).toBe("bb");
     expect(outcome.errors).toEqual([]);
-    expect(outcome.after).toBeUndefined();
+    expect(outcome.after).toBeInstanceOf(FabricUnavailable);
+    expect(outcome.after).toMatchObject({
+      reason: "error",
+      errorKind: "schemaMismatch",
+    });
     expect(outcome.recovered).toBe("recovered");
   });
 
-  it("writes an undefined result for the same data when the argument is read eagerly", async () => {
+  it("writes a schema-mismatch marker for the same data when the argument is read eagerly", async () => {
     const outcome = await breakSecondRow(false);
     expect(outcome.before).toBe("bb");
     expect(outcome.errors).toEqual([]);
-    expect(outcome.after).toBeUndefined();
+    expect(outcome.after).toBeInstanceOf(FabricUnavailable);
+    expect(outcome.after).toMatchObject({
+      reason: "error",
+      errorKind: "schemaMismatch",
+    });
     expect(outcome.recovered).toBe("recovered");
   });
 });

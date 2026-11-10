@@ -818,6 +818,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     pattern: "apps/deep-research/deep-research.tsx",
     baselines: [
       "20260729T022742Z-6PInVAlNOHThJNGH",
+      "20260729T215043Z-N-aECY83NHI2C9W1",
     ],
     paths: [
       "argument.messages[].role",

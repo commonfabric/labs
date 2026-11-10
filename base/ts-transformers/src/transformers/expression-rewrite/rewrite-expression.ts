@@ -23,6 +23,10 @@ import {
   emitPropertyAccess,
   emitTemplateExpression,
 } from "./emitters/mod.ts";
+import {
+  getOpaqueAccessInfo,
+  isLocalOpaqueOriginBindingReference,
+} from "../opaque-roots.ts";
 
 const EMITTERS: readonly Emitter[] = [
   emitPropertyAccess,
@@ -77,6 +81,22 @@ function isInsideKnownSafeCallbackWrapper(
       hasSyntheticComputeCallbackAncestor(node, context));
 }
 
+function canLowerLocalOpaqueMemberInPlace(
+  expression: ts.Expression,
+  context: RewriteParams["context"],
+): boolean {
+  if (
+    !ts.isPropertyAccessExpression(expression) &&
+    !ts.isElementAccessExpression(expression)
+  ) {
+    return false;
+  }
+  const info = getOpaqueAccessInfo(expression, context);
+  return info.dynamic === false && info.path.length > 0 &&
+    info.rootIdentifier !== undefined &&
+    isLocalOpaqueOriginBindingReference(info.rootIdentifier, context);
+}
+
 function rewriteChildExpressions(
   node: ts.Expression,
   context: RewriteParams["context"],
@@ -88,6 +108,14 @@ function rewriteChildExpressions(
 ): ts.Expression {
   const visitor = (child: ts.Node): ts.Node => {
     if (ts.isExpression(child)) {
+      // A direct member read on a local reactive-origin binding already is a
+      // key-specific reactive value. Leave it structural so the late pattern
+      // pass can lower the path in place instead of capturing the whole root
+      // in a synthetic lift.
+      if (canLowerLocalOpaqueMemberInPlace(child, context)) {
+        return child;
+      }
+
       if (ts.isCallExpression(child)) {
         const arrayMethodCall =
           detectCallKind(child, context.checker)?.kind === "array-method"

@@ -2,6 +2,7 @@ import {
   action,
   assert,
   pattern,
+  resultOf,
   TESTS,
   UI,
   wish,
@@ -30,9 +31,10 @@ const backlinkStreamOf = (subject: { [UI]: unknown }): BacklinkStream => {
 };
 
 export default pattern(() => {
-  const pieceRegistry = wish<Writable<Array<{ title?: string }>>>({
+  const pieceRegistryWish = wish<Writable<Array<{ title?: string }>>>({
     query: "#pieceRegistry",
-  }).result!;
+  });
+  const pieceRegistry = resultOf(pieceRegistryWish.result);
   const subject = ChatNote({
     title: "Subject",
     content: "",

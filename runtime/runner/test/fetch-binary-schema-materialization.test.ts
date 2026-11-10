@@ -46,13 +46,14 @@ const PROGRAM: RuntimeProgram = {
     {
       name: "/main.tsx",
       contents: [
-        "import { computed, fetchBinary, pattern } from 'commonfabric';",
+        "import { computed, fetchBinary, pattern, type FetchBinaryResult } from 'commonfabric';",
         "export default pattern(() => {",
         "  const art = fetchBinary({ url: 'https://mock.test/img' });",
-        "  const mediaType = computed(() => art.result?.mediaType ?? '');",
+        "  const readyArt = art as FetchBinaryResult;",
+        "  const mediaType = computed(() => readyArt.mediaType ?? '');",
         "  const dataUrl = computed(() => {",
-        "    const bytes = art.result?.bytes;",
-        "    const mt = art.result?.mediaType;",
+        "    const bytes = readyArt.bytes;",
+        "    const mt = readyArt.mediaType;",
         "    if (!bytes || !mt) return '';",
         "    const raw = bytes.slice();",
         "    let binary = '';",

@@ -1,6 +1,7 @@
 import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { FabricValue } from "@commonfabric/data-model";
+import { UNAVAILABLE_PENDING } from "@commonfabric/data-model/availability";
 import { Identity } from "@commonfabric/identity";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
@@ -699,6 +700,19 @@ describe("CFC flow labels: pointwise structure (phase B)", () => {
         e.observes === "enumerate",
     );
     expect(membershipEntries.length).toBe(1);
+    await seedLabeledDoc(
+      runtime,
+      "grow-list",
+      UNAVAILABLE_PENDING,
+      "source-unavailable-secret",
+    );
+    await result.pull();
+    await runtime.idle();
+    expect(result.key("kept").get()).toBe(UNAVAILABLE_PENDING);
+    expect(derivedConfidentiality(resolvedContainerId(result.key("kept"))))
+      .toContainEqual(
+        "source-unavailable-secret",
+      );
   });
 
   it("flatMap: result structure carries the op outputs' taint", async () => {

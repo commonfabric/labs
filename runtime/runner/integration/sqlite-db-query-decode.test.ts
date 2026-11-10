@@ -51,7 +51,7 @@ async function runTest(base: URL) {
       pattern.resultSchema,
     );
     // Read through the COMPILED pattern.resultSchema — which the transformer
-    // derived from the <Row> return type, so q.result.items.author_cf_link
+    // derived from the <Row> return type, so q.rows.items.author_cf_link
     // carries asCell. No hand-written schema override.
     const result = await runtime.runSynced(resultCell, pattern, {});
     const cancelSink = result.sink(() => {});
@@ -68,14 +68,12 @@ async function runTest(base: URL) {
       while (Date.now() < deadline) {
         await runtime.idle();
         await runtime.storageManager.synced();
-        if ((result.key("q").key("pending").get() as unknown) === false) {
-          const arr = result.key("q").key("result").getRaw() as
-            | unknown[]
-            | undefined;
-          if (Array.isArray(arr) && arr.length === 1) {
-            ready = true;
-            break;
-          }
+        const arr = result.key("q").key("rows").getRaw() as
+          | unknown[]
+          | undefined;
+        if (Array.isArray(arr) && arr.length === 1) {
+          ready = true;
+          break;
         }
         await new Promise((r) => setTimeout(r, 50));
       }
@@ -85,7 +83,7 @@ async function runTest(base: URL) {
 
       // Piece A: the runtime decoded the stored sigil-link STRING to a sigil
       // OBJECT (driven by the transformer-injected rowSchema for db.query<Row>).
-      const colCell = result.key("q").key("result").key(0).key(
+      const colCell = result.key("q").key("rows").key(0).key(
         "author_cf_link",
       );
       const sigil = colCell.getRaw();

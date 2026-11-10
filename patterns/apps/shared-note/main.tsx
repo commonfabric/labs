@@ -13,6 +13,9 @@ import {
   type FieldAnchors,
   FS,
   handler,
+  hasError,
+  isPending,
+  isSyncing,
   NAME,
   pattern,
   type PerSession,
@@ -20,6 +23,7 @@ import {
   type PerUser,
   principalOf,
   profileOwnerOf,
+  resultOf,
   type Stream,
   TILE_UI,
   UI,
@@ -1476,17 +1480,22 @@ export default pattern<SharedNoteInput, SharedNoteOutput>(
   ({ title, content, comments }) => {
     const profile = wish<NoteProfile>({ query: "#profile" });
     const profileName = wish<string>({ query: "#profileName" });
-    const participantName = computed(() =>
-      normalizePresenceParticipantName(profileName.result ?? "")
-    );
+    const participantName = computed(() => {
+      if (
+        isPending(profileName.result) || isSyncing(profileName.result) ||
+        hasError(profileName.result)
+      ) return "";
+      return normalizePresenceParticipantName(resultOf(profileName.result));
+    });
     const hasProfile = computed(() =>
       participantName !== "" &&
-      profile.result !== undefined
+      !isPending(profile.result) && !isSyncing(profile.result) &&
+      !hasError(profile.result)
     );
     const note = SharedNoteCore({
       content,
       comments,
-      myProfile: profile.result,
+      myProfile: resultOf(profile.result),
       participantName,
     });
 

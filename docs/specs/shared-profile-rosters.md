@@ -31,8 +31,9 @@ contribute their own entry when they join**:
   `wish({ query: "#profile" })` (and the convenience target `#profileName`).
   Under PR #3830 a user can have multiple profiles; the wish
   resolves the user's **default** profile in the headless/single-profile case
-  and launches the framework picker when there are two or more. Patterns just
-  read `wish(...).result`; the multi-profile selection is handled for them.
+  and launches the framework picker when there are two or more. Patterns retain
+  the Wish state, inspect `state.result` with availability guards when needed,
+  and use `resultOf(state.result)` for the selected profile.
 - The join handler writes that viewer's contribution into the shared roster —
   by default a **link** to their live profile cell (rendered with
   `<cf-profile-badge>`), or a **stable snapshot** of name/picture for the
@@ -155,11 +156,13 @@ import {
   equals,
   type FabricBytes,
   handler,
+  hasError,
   NAME,
   pattern,
   type PerSession,
   type PerSpace,
   type PerUser,
+  resultOf,
   Stream,
   UI,
   type VNode,
@@ -247,14 +250,11 @@ export type JoinEvent = void;
 const join = handler<JoinEvent, {
   roster: RosterCell;
   viewer: ViewerCell;
-  // May be undefined until the viewer's `#profile` wish resolves; guarded below.
-  profile: ParticipantProfileCell | undefined;
+  profile: ParticipantProfileCell;
   name: string;
 }>((_event, { roster, viewer, profile, name }) => {
   const trimmed = (name ?? "").trim();
   if (!trimmed) return; // No resolved profile name yet — nothing to contribute.
-  if (!profile) return; // No resolved profile cell — no stable identity yet.
-
   // Idempotent: dedupe by profile-cell identity so a viewer who later renames
   // still counts as joined, and two distinct users sharing a display name don't
   // block each other.
@@ -303,11 +303,12 @@ export default pattern<RosterDemoInput, RosterDemoOutput>(
     });
     const profileNameWish = wish<string>({ query: "#profileName" });
 
-    // Derived viewer-facing values. Falls back gracefully if the profile has
-    // not resolved yet (e.g. user has no profile, or it is still loading).
-    const myName = computed(() => profileNameWish.result ?? "");
+    // Explicitly handle the no-profile error. Pending values still wait.
+    const myName = hasError(profileNameWish.result)
+      ? ""
+      : resultOf(profileNameWish.result);
     // The live profile cell — passed to the join handler as the identity key.
-    const myProfile = profileWish.result;
+    const myProfile = resultOf(profileWish.result);
 
     const participants = roster.participants;
     const participantCount = participants.length;
@@ -391,7 +392,8 @@ for the complete pattern. The shape:
 ```tsx
 // Shown inside a pattern body.
 const profileWish = wish({ query: "#profile" }); // result is ProfileHomeOutput-shaped
-// In the join handler, push { profile: profileWish.result, joinedAt }.
+const profile = resultOf(profileWish.result);
+// In the join handler, push { profile, joinedAt }.
 // Render each entry with: <cf-profile-badge $profile={entry.profile} />
 //   — live, carries the verified-identity seal + bio/pinned tooltip, visitable.
 ```

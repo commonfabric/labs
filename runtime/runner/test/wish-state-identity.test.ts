@@ -59,12 +59,13 @@ const program = (resultType: string): RuntimeProgram => ({
   files: [{
     name: "/main.tsx",
     contents: [
-      'import { pattern, wish } from "commonfabric";',
+      'import { pattern, resultOf, wish } from "commonfabric";',
       "",
       "export default pattern<{}, { name: string | undefined; found: unknown }>(",
       "  () => {",
       `    const found = wish<${resultType}>({ query: "#${TAG}", scope: ["~"] });`,
-      "    return { name: found.result?.name, found };",
+      "    const profile = resultOf(found.result);",
+      "    return { name: profile.name, found };",
       "  },",
       ");",
     ].join("\n"),

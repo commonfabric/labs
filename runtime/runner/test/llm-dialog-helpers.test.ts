@@ -1,3 +1,9 @@
+import {
+  UNAVAILABLE_PENDING,
+  unavailableError,
+  unavailableMismatch,
+} from "@commonfabric/data-model/availability";
+
 import { assert, assertEquals, assertThrows } from "@std/assert";
 import { expect } from "@std/expect";
 
@@ -34,6 +40,7 @@ const {
   serializeForLLMObservation,
   traverseAndCellify,
   toolAllowsObservedConfidentiality,
+  classifyToolResult,
 } = llmDialogTestHelpers;
 
 function makeDocumentationCell(params: {
@@ -70,6 +77,24 @@ function makeDocumentationCell(params: {
   }
   return cell;
 }
+
+Deno.test("classifyToolResult rejects terminal unavailable child results", () => {
+  const failed = classifyToolResult(
+    unavailableError(new Error("child generation failed")),
+    {},
+  );
+  assertEquals(failed.status, "error");
+  if (failed.status !== "error") throw new Error("expected tool error");
+  assertEquals(failed.error.message, "child generation failed");
+
+  const mismatch = classifyToolResult(
+    unavailableMismatch(),
+    {},
+  );
+  assertEquals(mismatch.status, "error");
+  const pending = classifyToolResult(UNAVAILABLE_PENDING, {});
+  assertEquals(pending.status, "wait");
+});
 
 Deno.test("parseTargetString recognizes handle format", () => {
   const parsed = parseLLMFriendlyLink(

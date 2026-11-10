@@ -1,10 +1,18 @@
 import {
+  type AsyncResult,
   computed,
   Default,
   generateText,
+  hasError,
+  hasSchemaMismatch,
   ifElse,
+  isObsolete,
+  isPending,
+  isSyncing,
+  lift,
   NAME,
   pattern,
+  resultOf,
   UI,
   type VNode,
 } from "commonfabric";
@@ -22,7 +30,75 @@ export type SummaryOutput = {
   topic: string;
   summary: string;
   pending: boolean;
+  availability: string;
+  error: string;
 };
+
+/** Projects summary generation into explicit presentation states. */
+export const summaryResponseState = lift(
+  (
+    { topic, responseRequest }: {
+      topic: string;
+      responseRequest: AsyncResult<string>;
+    },
+  ) => {
+    if (!topic) {
+      return {
+        response: "",
+        pending: false,
+        availability: "ready",
+        error: "",
+      };
+    }
+    if (isPending(responseRequest)) {
+      return {
+        response: "",
+        pending: true,
+        availability: "pending",
+        error: "",
+      };
+    }
+    if (hasSchemaMismatch(responseRequest)) {
+      return {
+        response: "",
+        pending: false,
+        availability: "schemaMismatch",
+        error: "The generated summary did not match the expected format.",
+      };
+    }
+    if (hasError(responseRequest)) {
+      return {
+        response: "",
+        pending: false,
+        availability: "error",
+        error: responseRequest.message,
+      };
+    }
+    if (isSyncing(responseRequest)) {
+      return {
+        response: "",
+        pending: true,
+        availability: "syncing",
+        error: "",
+      };
+    }
+    if (isObsolete(responseRequest)) {
+      return {
+        response: "",
+        pending: false,
+        availability: "obsolete",
+        error: responseRequest.message ||
+          "This summary is no longer served.",
+      };
+    }
+    return {
+      response: resultOf(responseRequest),
+      pending: false,
+      availability: "ready",
+      error: "",
+    };
+  },
+);
 
 // ===== Pattern =====
 
@@ -40,13 +116,13 @@ const Summary = pattern<SummaryInput, SummaryOutput>(({ topic, context }) => {
     return `Please provide a concise, well-structured summary of ${topic}`;
   });
 
-  // Generate the summary
-  const response = generateText({
+  const responseRequest = generateText({
     system:
       "You are a helpful assistant that creates clear, concise summaries. Focus on the key points and structure your response in a readable way.",
     prompt,
     context,
   });
+  const responseState = summaryResponseState({ topic, responseRequest });
 
   return {
     [NAME]: computed(() => (topic ? `Summary: ${topic}` : "Summary")),
@@ -60,20 +136,28 @@ const Summary = pattern<SummaryInput, SummaryOutput>(({ topic, context }) => {
 
         <cf-vstack gap="3" style="padding: 1.5rem;">
           {ifElse(
-            response.pending,
+            responseState.pending,
             <div style="color: var(--cf-theme-color-text-secondary);">
               <cf-loader show-elapsed /> Generating summary...
             </div>,
-            <div style="line-height: 1.6; white-space: pre-wrap;">
-              {response.result}
-            </div>,
+            ifElse(
+              responseState.error,
+              <div role="alert" style="color: var(--cf-theme-color-error);">
+                {responseState.error}
+              </div>,
+              <div style="line-height: 1.6; white-space: pre-wrap;">
+                {responseState.response}
+              </div>,
+            ),
           )}
         </cf-vstack>
       </cf-screen>
     ),
     topic,
-    summary: computed(() => response.result || ""),
-    pending: response.pending,
+    summary: responseState.response,
+    pending: responseState.pending,
+    availability: responseState.availability,
+    error: responseState.error,
   };
 });
 

@@ -31,9 +31,14 @@ import {
   computed,
   type Default,
   handler,
+  hasError,
+  isObsolete,
+  isPending,
+  isSyncing,
   lift,
   NAME,
   pattern,
+  resultOf,
   type Stream,
   UI,
   type VNode,
@@ -290,8 +295,15 @@ export const FolksonomyTags = pattern<
       scope: ["~", "."],
     });
 
-    // Use injected aggregator if available, otherwise use wish result
-    const aggregator = injectedAggregator ?? aggregatorWish.result ?? null;
+    // A missing optional aggregator keeps the pattern in local-only mode.
+    const discoveredAggregator = computed(() => {
+      const result = aggregatorWish.result;
+      return hasError(result) || isObsolete(result) || isPending(result) ||
+          isSyncing(result)
+        ? null
+        : resultOf(result);
+    });
+    const aggregator = injectedAggregator ?? discoveredAggregator;
 
     // Get the aggregator's postEvent stream for telemetry
     const aggregatorStream: Stream<TagEvent> | null = aggregator?.postEvent ??
@@ -318,6 +330,7 @@ export const FolksonomyTags = pattern<
 
     // Check if aggregator is connected
     const hasAggregator = aggregator != null;
+    const showTags = hasTags(tags);
 
     // Computed name for display
     const displayName = computed(() => {
@@ -355,7 +368,7 @@ export const FolksonomyTags = pattern<
           />
 
           {/* Current tags */}
-          {hasTags(tags)
+          {showTags
             ? (
               <cf-hstack gap="2" wrap>
                 {tags.map((tag: string, index: number) => (

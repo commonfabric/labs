@@ -24,7 +24,7 @@ export function cloneKeyExpression(
   factory: ts.NodeFactory,
 ): ts.Expression {
   if (ts.isIdentifier(expr)) {
-    return factory.createIdentifier(expr.text);
+    return ts.setOriginalNode(factory.createIdentifier(expr.text), expr);
   }
   if (ts.isStringLiteral(expr)) {
     return factory.createStringLiteral(expr.text);

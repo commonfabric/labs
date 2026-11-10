@@ -161,7 +161,7 @@ async function deployedSource(runtime: Runtime): Promise<RuntimeProgram> {
     storedAs(
       await currentSource(runtime),
       BOARD_PATH,
-      /const (\w+) = (crossrefTable\(\{ sources: topics \}\));/,
+      /const (\w+) = (crossrefTable\(\{ sources: topics, values: topics \}\));/,
       "crossrefs",
     ),
     TOPIC_PATH,

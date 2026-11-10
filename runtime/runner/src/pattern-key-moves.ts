@@ -43,6 +43,8 @@ export const MOVED_PATTERN_KEYS: Readonly<Record<string, string>> = {
   "cfc-trusted-surfaces/": "examples/cfc-trusted-surfaces/",
   "cfc/": "system/cfc/",
   "chatbot.tsx": "system/chatbot/chatbot.tsx",
+  "cheeseboard-availability.test.tsx":
+    "apps/cheeseboard/cheeseboard-availability.test.tsx",
   "cheeseboard.tsx": "apps/cheeseboard/cheeseboard.tsx",
   "collaborative-note/": "dev/collaborative-note/",
   "collection-naming/": "product/collection-naming/",
@@ -97,6 +99,8 @@ export const MOVED_PATTERN_KEYS: Readonly<Record<string, string>> = {
     "examples/phonetic-speller/phonetic-speller.test.tsx",
   "examples/phonetic-speller.tsx":
     "examples/phonetic-speller/phonetic-speller.tsx",
+  "examples/profile-aware-writer-availability.test.tsx":
+    "examples/profile-aware-writer/profile-aware-writer-availability.test.tsx",
   "examples/profile-aware-writer.tsx":
     "examples/profile-aware-writer/profile-aware-writer.tsx",
   "examples/queue-test.tsx": "examples/queue-test/queue-test.tsx",
@@ -111,6 +115,8 @@ export const MOVED_PATTERN_KEYS: Readonly<Record<string, string>> = {
   "examples/ui-variants-host.tsx": "examples/ui-variants/ui-variants-host.tsx",
   "examples/wish-note-example.tsx":
     "examples/wish-note-example/wish-note-example.tsx",
+  "examples/write-and-run-availability.test.tsx":
+    "examples/write-and-run/write-and-run-availability.test.tsx",
   "examples/write-and-run.tsx": "examples/write-and-run/write-and-run.tsx",
   "experimental/": "dev/experimental/",
   "fabrichat/": "system/fabrichat/",
@@ -131,6 +137,8 @@ export const MOVED_PATTERN_KEYS: Readonly<Record<string, string>> = {
   "iframe-shared-tape-lab/": "showcase/iframe-shared-tape-lab/",
   "iframe-signal-atlas/": "showcase/iframe-signal-atlas/",
   "iframe-verb-list/": "examples/iframe-verb-list/",
+  "image-analysis-availability.test.tsx":
+    "apps/image-analysis/image-analysis-availability.test.tsx",
   "image-analysis.tsx": "apps/image-analysis/image-analysis.tsx",
   "image.tsx": "examples/image/image.tsx",
   "kept-element-references.test.tsx":
@@ -210,6 +218,8 @@ export const MOVED_PATTERN_KEYS: Readonly<Record<string, string>> = {
     "system/home/home-shared-space-catalog.test.tsx",
   "system/home.test.tsx": "system/home/home.test.tsx",
   "system/home.tsx": "system/home/home.tsx",
+  "system/journal-availability.test.tsx":
+    "system/journal/journal-availability.test.tsx",
   "system/journal.tsx": "system/journal/journal.tsx",
   "system/knowledge-graph.tsx": "system/knowledge-graph/knowledge-graph.tsx",
   "system/link-tool.tsx": "system/link-tool/link-tool.tsx",
@@ -260,10 +270,14 @@ export const MOVED_PATTERN_KEYS: Readonly<Record<string, string>> = {
     "system/shared-space/shared-space-interface.ts",
   "system/shared-space-profiles.test.tsx":
     "system/shared-space/shared-space-profiles.test.tsx",
+  "system/space-overview-availability.test.tsx":
+    "system/space-overview/space-overview-availability.test.tsx",
   "system/space-overview.tsx": "system/space-overview/space-overview.tsx",
   "system/suggestion-history.tsx":
     "system/suggestion-history/suggestion-history.tsx",
   "system/suggestion.tsx": "system/suggestion/suggestion.tsx",
+  "system/summary-index-availability.test.tsx":
+    "system/summary-index/summary-index-availability.test.tsx",
   "system/summary-index.tsx": "system/summary-index/summary-index.tsx",
   "test/": "dev/test/",
   "test/vnode-helpers.ts": "tools/test-support/vnode-helpers.ts",

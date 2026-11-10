@@ -64,14 +64,12 @@ async function runTest(base: URL) {
       while (Date.now() < deadline) {
         await runtime.idle();
         await runtime.storageManager.synced();
-        if ((result.key("q").key("pending").get() as unknown) === false) {
-          const arr = result.key("q").key("result").getRaw() as
-            | unknown[]
-            | undefined;
-          if (Array.isArray(arr) && arr.length === 1) {
-            ready = true;
-            break;
-          }
+        const arr = result.key("q").key("rows").getRaw() as
+          | unknown[]
+          | undefined;
+        if (Array.isArray(arr) && arr.length === 1) {
+          ready = true;
+          break;
         }
         await new Promise((r) => setTimeout(r, 50));
       }
@@ -79,7 +77,7 @@ async function runTest(base: URL) {
 
       // (a) The link column still decoded to a resolvable sigil-link object and
       // round-trips to the author cell — labeling did not corrupt it.
-      const sigil = result.key("q").key("result").key(0).key("author_cf_link")
+      const sigil = result.key("q").key("rows").key(0).key("author_cf_link")
         .getRaw();
       if (
         !sigil || typeof sigil !== "object" ||
@@ -103,10 +101,10 @@ async function runTest(base: URL) {
         );
       }
 
-      // (b) A consumer reading `q.result[0].note` inherits its confidentiality
+      // (b) A consumer reading `q.rows[0].note` inherits its confidentiality
       // (via dereference-trace accumulation as the read traverses the links).
       const dtx = runtime.edit();
-      result.key("q").key("result").key(0).key("note").withTx(dtx).get();
+      result.key("q").key("rows").key(0).key("note").withTx(dtx).get();
       const view = cfcLabelViewForDereferenceTraces(
         dtx,
         dtx.getCfcState().dereferenceTraces,

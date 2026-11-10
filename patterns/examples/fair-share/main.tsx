@@ -26,9 +26,14 @@ import {
   equals,
   type FabricBytes,
   handler,
+  hasError,
+  hasSchemaMismatch,
+  isPending,
+  isSyncing,
   NAME,
   pattern,
   type PerUser,
+  resultOf,
   UI,
   wish,
   Writable,
@@ -186,11 +191,21 @@ export default pattern<State>(({ people, expenses, myName }) => {
     query: "#profile",
   });
   const profileNameWish = wish<string>({ query: "#profileName" });
-  const myProfileName = computed(() => (profileNameWish.result ?? "").trim());
-  const myProfileFace = computed(() => profileFace(profileWish.result));
-  const hasProfile = computed(() =>
-    (profileNameWish.result ?? "").trim() !== ""
-  );
+  const profile = hasError(profileWish.result) ||
+      isPending(profileWish.result) ||
+      isSyncing(profileWish.result) ||
+      hasSchemaMismatch(profileWish.result)
+    ? undefined
+    : resultOf(profileWish.result);
+  const profileName = hasError(profileNameWish.result) ||
+      isPending(profileNameWish.result) ||
+      isSyncing(profileNameWish.result) ||
+      hasSchemaMismatch(profileNameWish.result)
+    ? ""
+    : resultOf(profileNameWish.result);
+  const myProfileName = computed(() => profileName.trim());
+  const myProfileFace = computed(() => profileFace(profile));
+  const hasProfile = computed(() => profileName.trim() !== "");
 
   // --- Derived data ---
   const peopleOptions = computed(() =>
@@ -277,7 +292,7 @@ export default pattern<State>(({ people, expenses, myName }) => {
             }
             <cf-hstack gap="3" align="center" wrap>
               <cf-label>You are</cf-label>
-              <cf-profile-badge $profile={profileWish.result} size="sm" />
+              <cf-profile-badge $profile={profile} size="sm" />
               <cf-button
                 color="primary"
                 variant="solid"

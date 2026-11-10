@@ -38,13 +38,14 @@ const ACTION_VALUES_PROGRAM: RuntimeProgram = {
   files: [{
     name: "/main.tsx",
     contents: [
-      'import { computed, fetchBinary, pattern } from "commonfabric";',
+      'import { computed, fetchBinary, pattern, resultOf } from "commonfabric";',
       "",
       "// CT-1851: schema vocabulary does not cover this FabricValue table.",
       "export default pattern<{}, { values?: any }>(() => {",
       '  const art = fetchBinary({ url: "https://mock.test/image" });',
+      "  const artResult = resultOf(art);",
       "  const values = computed(() => {",
-      "    const bytes = art.result?.bytes;",
+      "    const bytes = artResult?.bytes;",
       "    if (!bytes) return undefined;",
       "    return ({",
       "      // Motivating case: materialized FabricBytes returned by a lift.",

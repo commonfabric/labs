@@ -2,7 +2,7 @@ import { assert, pattern, TESTS } from "commonfabric";
 import Clock from "./clock.tsx";
 
 // The clock's labels derive from the reactive #now clock. They read the
-// load-window placeholders until #now resolves, and the harness re-runs the
+// unavailable state until #now resolves, and the harness re-runs the
 // assertions once it does — so these assert the resolved shape (HH:MM:SS and a
 // non-empty date), not a specific wall-clock value.
 export default pattern(() => {

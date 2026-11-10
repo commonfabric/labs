@@ -3,6 +3,7 @@ import type {
   JSONSchema,
   MutableJSONSchema,
   MutableJSONSchemaObj,
+  SchemaScope,
 } from "@commonfabric/api";
 import type { Mutable } from "@commonfabric/js-values/types";
 import type { ExpansionBudget } from "./typescript/expanding-recursion.ts";
@@ -64,6 +65,13 @@ export interface SchemaHint {
    * (`SchemaGenerationOptions.definesDocument`).
    */
   readonly definesDocument?: true;
+
+  /**
+   * The scope of a compiler-generated availability capture slot. Its native
+   * marker alternatives are values beside the successful cell capability,
+   * not members of an authored scope wrapper around that capability.
+   */
+  readonly availabilityCaptureScope?: SchemaScope;
 }
 
 export type SchemaHints = WeakMap<ts.Node, SchemaHint>;

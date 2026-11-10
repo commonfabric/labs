@@ -1,11 +1,18 @@
 import {
+  type AsyncResult,
   computed,
   generateText,
   handler,
+  hasError,
   ifElse,
   ImageData,
+  isObsolete,
+  isPending,
+  isSyncing,
   NAME,
+  observeAvailability,
   pattern,
+  resultOf,
   UI,
   VNode,
   Writable,
@@ -38,6 +45,65 @@ type ImageUploadEvent = {
     allFiles?: ImageData[];
   };
 };
+
+/** Presents an image-analysis response and its waiting state. */
+export const ImageAnalysisPresentation = pattern<
+  { responseRequest: AsyncResult<string> },
+  { response: string | undefined; pending: boolean; error: string; [UI]: VNode }
+>(({ responseRequest }) => {
+  const observedResponse = observeAvailability(responseRequest);
+  const responseState = computed(() => {
+    if (isPending(observedResponse) || isSyncing(observedResponse)) {
+      return { response: undefined, pending: true, error: "" };
+    }
+    if (hasError(observedResponse)) {
+      return {
+        response: undefined,
+        pending: false,
+        error: observedResponse.message,
+      };
+    }
+    if (isObsolete(observedResponse)) {
+      return {
+        response: undefined,
+        pending: false,
+        error: observedResponse.message ||
+          "This response is no longer served.",
+      };
+    }
+    return { response: resultOf(observedResponse), pending: false, error: "" };
+  });
+  const result = responseState.response;
+  return {
+    response: result,
+    pending: responseState.pending,
+    error: responseState.error,
+    [UI]: (
+      <div style="display: contents;">
+        {ifElse(
+          responseState.pending,
+          <cf-card>
+            <div>Analyzing...</div>
+          </cf-card>,
+          ifElse(
+            responseState.error,
+            <p role="alert">{responseState.error}</p>,
+            ifElse(
+              result,
+              <cf-card>
+                <cf-vstack gap="2">
+                  <cf-heading level={5}>Response</cf-heading>
+                  <div style="white-space: pre-wrap;">{result}</div>
+                </cf-vstack>
+              </cf-card>,
+              null,
+            ),
+          ),
+        )}
+      </div>
+    ),
+  };
+});
 
 const syncUploadedImages = handler<
   ImageUploadEvent,
@@ -74,13 +140,14 @@ export default pattern<ImageChatInput, ImageChatOutput>(
     });
 
     // Generate text from the content parts
-    const { result, pending, requestHash: _requestHash } = generateText({
+    const responseRequest = generateText({
       system: computed(() =>
         systemPrompt ||
         "You are a helpful assistant that can analyze images. Describe what you see."
       ),
       prompt: contentParts,
     });
+    const presentation = ImageAnalysisPresentation({ responseRequest });
 
     const ui = (
       <cf-screen>
@@ -119,22 +186,7 @@ export default pattern<ImageChatInput, ImageChatOutput>(
             </cf-card>
 
             {/* Response */}
-            {ifElse(
-              pending,
-              <cf-card>
-                <div>Analyzing...</div>
-              </cf-card>,
-              ifElse(
-                result,
-                <cf-card>
-                  <cf-vstack gap="2">
-                    <cf-heading level={5}>Response</cf-heading>
-                    <div style="white-space: pre-wrap;">{result}</div>
-                  </cf-vstack>
-                </cf-card>,
-                null,
-              ),
-            )}
+            {presentation[UI]}
           </cf-vstack>
         </cf-vscroll>
       </cf-screen>
@@ -145,8 +197,8 @@ export default pattern<ImageChatInput, ImageChatOutput>(
       [UI]: ui,
       images,
       prompt,
-      response: result,
-      pending,
+      response: presentation.response,
+      pending: presentation.pending,
       ui,
     };
   },

@@ -1,0 +1,74 @@
+{
+  "argumentSchema": {
+    "properties": {
+      "context": {
+        "additionalProperties": true,
+        "default": {},
+        "properties": {},
+        "type": "object"
+      },
+      "topic": {
+        "default": "",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "examples/suggestable/svg-diagram.tsx",
+  "resultSchema": {
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "availability": {
+        "type": "string"
+      },
+      "diagram": {
+        "type": "string"
+      },
+      "error": {
+        "type": "string"
+      },
+      "errorKind": {
+        "anyOf": [
+          {
+            "type": "undefined"
+          },
+          {
+            "enum": [
+              "compile",
+              "decode",
+              "general",
+              "invalidInput",
+              "network",
+              "provider",
+              "schemaMismatch",
+              "sync"
+            ],
+            "type": "string"
+          }
+        ]
+      },
+      "pending": {
+        "type": "boolean"
+      },
+      "topic": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "topic",
+      "diagram",
+      "pending",
+      "availability",
+      "error",
+      "errorKind",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

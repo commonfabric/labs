@@ -18,7 +18,9 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
-import type { FabricValue } from "@commonfabric/data-model";
+import type { SqliteQueryResult } from "@commonfabric/api";
+import type { FabricUnavailable, FabricValue } from "@commonfabric/data-model";
+import { hasError, isUnavailable } from "@commonfabric/data-model/availability";
 import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
@@ -57,12 +59,6 @@ interface Row {
   id: number;
   to_addr: string;
   body: string;
-}
-
-interface QueryState {
-  pending?: boolean;
-  result?: Row[];
-  error?: unknown;
 }
 
 describe("CFC flow labels: a map over rows with different labels", () => {
@@ -160,8 +156,8 @@ describe("CFC flow labels: a map over rows with different labels", () => {
         // deno-lint-ignore no-explicit-any -- the builtin's input is untyped
         { db, reactOn: db, sql, params: [input.excluded] } as any,
       );
-      // deno-lint-ignore no-explicit-any -- the builtin's state is untyped
-      const cards = (query as any).result.mapWithPattern(
+      // deno-lint-ignore no-explicit-any -- the builder's array operations are untyped
+      const cards = (cf.resultOf(query) as any).rows.mapWithPattern(
         cf.pattern(({ element }: FactoryInput<any>) => card(element)),
         {},
       );
@@ -179,15 +175,18 @@ describe("CFC flow labels: a map over rows with different labels", () => {
     );
     runtime.prepareTxForCommit(tx);
     expect((await tx.commit().settled).error).toBeUndefined();
-    const state = await waitForCellValue<QueryState>(
+    const state = await waitForCellValue<
+      SqliteQueryResult<Row> | FabricUnavailable
+    >(
       runtime,
       // deno-lint-ignore no-explicit-any -- the builtin's state
       result.key("query") as Cell<any>,
       (value) =>
-        (value?.pending === false && (value?.result ?? []).length === rows) ||
-        value?.error !== undefined,
+        hasError(value) ||
+        (value !== undefined && !isUnavailable(value) && "rows" in value &&
+          Array.isArray(value.rows) && value.rows.length === rows),
     );
-    expect(state.error).toBeUndefined();
+    expect(hasError(state)).toBe(false);
     await result.pull();
     await runtime.idle();
     // deno-lint-ignore no-explicit-any -- the page's outputs are untyped

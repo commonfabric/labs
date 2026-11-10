@@ -694,8 +694,9 @@ transaction shape, and a transaction outside the blind-write family —
 including its verifier reads — keeps naming every layer, unless it
 carries the durable-read mark below; `speculation-overlay.test.ts`
 pins the export, the scoping, the verify-durable consistency, the
-content-addressed exemption, and the durable-read mark on both a
-direct transaction and a piece start.
+content-addressed exemption, and the durable-read mark on a direct transaction
+and a piece start. `list-result-container-seed.test.ts` pins the same mark on a
+list result-container recovery seed.
 
 The echo a blind write lands over is the speculation of an event whose
 authoritative consequence commits later, and that consequence does not
@@ -703,7 +704,7 @@ land over the write in turn: serving-loop.md §3d supersedes every
 consequence write that a later write of the event's firing session
 overwrote.
 
-### The durable-read mark, and the piece start that needs it
+### The durable-read mark and the bookkeeping that needs it
 
 An authored transaction whose writes must reach the wire can read the
 durable replica view instead of the ordinary one. `markDurableReadTx`
@@ -713,9 +714,12 @@ transaction consumed and what it names stay the same set — the
 verify-durable and name-durable pairing again, one shape wider. A
 document still short of its authoritative value re-derives reactively
 once that value lands, which is the recovery path §6's refusal
-message names. The direct SQLite capability's exec carries the mark,
-an authored write with no reactive run around it, and so does the
-runner's piece start.
+message names. The direct SQLite capability's exec and the runner's piece
+start carry the mark. A `map` / `filter` / `flatMap` result-container recovery
+seed on a server-execution client also carries it: the seed is wire-bound
+bookkeeping, and its presence probe must not consume the coordinator's own
+speculative result.
+
 
 A host read that must not report this runtime's preview carries it
 too, on a read-only transaction: `readConfirmed()` and `readDurable()`

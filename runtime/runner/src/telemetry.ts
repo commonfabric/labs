@@ -5,6 +5,7 @@
 import type { CfcRefusalDetail } from "./cfc/refusal-detail.ts";
 import type { ReadAttemptCounts } from "./read-stats.ts";
 import type { FabricValue } from "@commonfabric/data-model";
+import type { UnavailableObservationKind } from "@commonfabric/data-model/availability";
 
 import type { IMemoryChange } from "./storage/interface.ts";
 
@@ -349,6 +350,8 @@ export type RuntimeTelemetryMarker = {
   dirtyDependencyCount: number;
   hasDirtyDependencies: boolean;
   skipped: boolean;
+  inputUnavailableReason?: UnavailableObservationKind;
+  queueDepth: number;
   populateMs: number;
   txToLogMs: number;
   depCommitMs: number;

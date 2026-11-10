@@ -39,12 +39,14 @@
  * evaluating the property whole.
  *
  * The root is the exception: a mismatch there yields `undefined`, which is what
- * an eager read yields for the same data, so the runner's existing
- * "argument did not resolve" gate handles it unchanged.
+ * an eager read yields for the same data, and reports `SchemaMismatchError`
+ * through `onFailure`. Callers use that failure to distinguish native schema
+ * mismatch from an unresolved argument.
  */
 
 import type { JSONSchema } from "@commonfabric/api";
 import { FabricPrimitive, type FabricValue } from "@commonfabric/data-model";
+import { isUnavailable } from "@commonfabric/data-model/availability";
 import { isArrayIndexPropertyName } from "@commonfabric/js-values/arrays";
 import { getLogger } from "@commonfabric/logger";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
@@ -64,6 +66,7 @@ import { isWithdrawnVerb } from "./withdrawn-verb.ts";
 import type { Runtime } from "./runtime.ts";
 import {
   createOpaqueReference,
+  narrowUnionByValueType,
   processDefaultValue,
   validateAndTransform,
 } from "./schema.ts";
@@ -84,9 +87,8 @@ const logger = getLogger("schema-view", { enabled: false, level: "warn" });
 /**
  * Thrown when a reader touches data the schema does not describe.
  *
- * The runner treats one of these as an argument that did not resolve rather
- * than as a fault: the run could not proceed on the data available, which is a
- * non-event, not a failure.
+ * The runner suppresses the callback and publishes a native schema-mismatch
+ * state rather than reporting an ordinary JavaScript execution fault.
  */
 export class SchemaMismatchError extends Error {
   override readonly name: string = "SchemaMismatchError";
@@ -174,6 +176,18 @@ const isExcluded = (schema: JSONSchema): boolean =>
   (schema.$comment === "emptyProperties" ||
     schema.$comment === "missingProperty" ||
     schema.$comment === "rejectedProperty");
+
+/** Identifies a position absent from the schema-selected argument surface. */
+export const isSchemaViewExcluded = isExcluded;
+
+/** Narrows a schema only when the reached value's type decides its union. */
+export const narrowSchemaForValue = (
+  schema: JSONSchema | undefined,
+  value: unknown,
+): JSONSchema | undefined =>
+  isObjectOrArray(schema)
+    ? narrowUnionByValueType(schema, value) ?? schema
+    : schema;
 
 /**
  * Whether an excluded property is one the schema turned down on purpose, as
@@ -276,6 +290,15 @@ const childSchema = (
   return false;
 };
 
+/** Selects one argument edge using the same exclusions as a lazy schema view. */
+export function schemaViewChildSchema(
+  schema: JSONSchema,
+  key: string,
+  container: "object" | "array",
+): JSONSchema {
+  return childSchema(schema, key, container);
+}
+
 const declaredDefault = (schema: JSONSchema): FabricValue | undefined => {
   if (!isObjectOrArray(schema)) return undefined;
   const resolved = ContextualFlowControl.resolveSchemaRefs(schema);
@@ -306,8 +329,8 @@ export const defaultForAbsentValue = (
  * against the epoch taken here rather than against whatever the reader writes
  * afterwards. Taking the read again is what fixes a later instant.
  *
- * At the root a mismatch is `undefined` — the answer an eager read gives for
- * the same data. Below it, a mismatch throws.
+ * At the root a mismatch returns `undefined` and reports `SchemaMismatchError`
+ * through `onFailure` when supplied. Below it, a mismatch throws.
  */
 export function materializeSchemaView(
   runtime: Runtime,
@@ -317,6 +340,7 @@ export function materializeSchemaView(
   cfcLabelView: CfcLabelView | undefined,
   synced: boolean,
   isRoot: boolean,
+  onFailure?: (failure: { error: unknown }) => void,
 ): unknown {
   pinImmutableCell(link, link.id);
   const mismatch = (reason: string): undefined => {
@@ -325,8 +349,11 @@ export function materializeSchemaView(
     // it wanted arrives; `noteSchemaRefusal` records the error, not the read.
     // Recursive, because what failed is a value the reader asked for.
     tx.readValueOrThrow(link);
-    if (isRoot) return undefined;
     const refusal = new SchemaMismatchError(link, reason);
+    if (isRoot) {
+      onFailure?.({ error: refusal });
+      return undefined;
+    }
     // Record as well as throw: a reader can catch this and carry on, and the
     // run still has to be disposed of as an argument that did not resolve.
     tx.noteSchemaRefusal(refusal);
@@ -360,6 +387,10 @@ export function materializeSchemaView(
     return mismatch("the schema rejects this value");
   }
 
+  if (isUnavailable(value)) {
+    tx.readValueOrThrow(link, { nonRecursive: true });
+    return value;
+  }
   const actualType = getJsonType(value);
   if (
     schema !== undefined && actualType !== null &&

@@ -387,9 +387,12 @@ Deno.test("a ten-minute lease is renewed two minutes ahead of each expiry, over 
   setModernCellRepConfig(true);
   const start = Date.UTC(2026, 9, 1);
   const time = new FakeTime(start);
+  const challengedAt: number[] = [];
   const renewedAt: number[] = [];
+  let renewed = Promise.withResolvers<void>();
   const p = peer(frame(hello()), (body, push) => {
     if (body.type === "connection.challenge") {
+      challengedAt.push((Date.now() - start) / 1000);
       push({
         type: "response",
         requestId: body.requestId,
@@ -405,6 +408,7 @@ Deno.test("a ten-minute lease is renewed two minutes ahead of each expiry, over 
           expiresAt: Math.floor(Date.now() / 1000) + 600,
         },
       });
+      renewed.resolve();
     } else if (body.type === "session.open") {
       push({
         type: "response",
@@ -420,15 +424,16 @@ Deno.test("a ten-minute lease is renewed two minutes ahead of each expiry, over 
   const client = await connect({ transport: p.transport });
   try {
     const session = await client.mount(identity.did(), {}, principal());
-    for (let i = 0; i < 2000 && renewedAt.length < 5; i++) {
-      await time.tickAsync(1000);
+    for (let i = 0; i < 4; i++) {
+      renewed = Promise.withResolvers<void>();
+      await time.tickAsync(480_000);
+      // Signing completes on the real event loop while lease time stays fixed.
+      await renewed.promise;
+      await time.tickAsync(0);
     }
     // Each grant of 600 s is renewed at 480 s, before it lapses.
-    assertEquals(renewedAt.length, 5);
-    for (let i = 1; i < renewedAt.length; i++) {
-      const gap = renewedAt[i] - renewedAt[i - 1];
-      assert(gap >= 479 && gap <= 481, `renewal ${i} came after ${gap} s`);
-    }
+    expect(challengedAt).toEqual([480, 960, 1440, 1920]);
+    expect(renewedAt).toEqual([0, 480, 960, 1440, 1920]);
     assertEquals(session.closeError, undefined);
     assertEquals(client.isConnected(), true);
   } finally {
@@ -1030,18 +1035,30 @@ async function tickUntil(
 Deno.test("a pushed challenge's signature refused for now is sent again a second later, with no open waiting for it", async () => {
   setModernCellRepConfig(true);
   const time = new FakeTime(Date.UTC(2026, 9, 1));
-  const { p, log, auths, pushChallenge } = routedPeer((n) => n === 2);
+  const refused = Promise.withResolvers<void>();
+  const admitted = Promise.withResolvers<void>();
+  const renewed = Promise.withResolvers<void>();
+  const { p, log, auths, pushChallenge } = routedPeer((n) => n === 2, {
+    onAuth: (count) => {
+      if (count === 2) refused.resolve();
+      if (count === 3) admitted.resolve();
+      if (count === 4) renewed.resolve();
+    },
+  });
   const client = await connect({ transport: p.transport });
   try {
     const session = await client.mount(identity.did(), {}, principal());
     // The mount is over, so no open waits for this signature and no session
     // retries when it is refused.
     pushChallenge();
-    await tickUntil(time, () => auths().length >= 2, 0, 40);
+    await refused.promise;
+    await time.tickAsync(0);
     assertEquals(auths().length, 2);
     // The challenge cancelled the key's renewal. The refusal arms another
     // attempt, so the statement is sent once more, a second or more later.
-    await tickUntil(time, () => auths().length >= 3);
+    expect(await time.nextAsync()).toBe(true);
+    await admitted.promise;
+    await time.tickAsync(0);
     const sent = auths();
     assertEquals(sent.length, 3);
     assertEquals(sent[2].statement, sent[1].statement);
@@ -1050,8 +1067,9 @@ Deno.test("a pushed challenge's signature refused for now is sent again a second
     assert(sent[2].at - sent[1].at >= 1025, `${sent[2].at - sent[1].at} ms`);
     assertEquals(log.filter((e) => e.type === "challenge").length, 0);
     // Admitted, the key is renewed two minutes before its new lease ends.
-    await time.tickAsync(470_000);
-    await tickUntil(time, () => auths().length >= 4, 1000, 30);
+    expect(await time.nextAsync()).toBe(true);
+    await renewed.promise;
+    await time.tickAsync(0);
     assertEquals(auths().length, 4);
     const gap = (auths()[3].at - sent[2].at) / 1000;
     assert(gap >= 479 && gap <= 481, `renewed after ${gap} s`);

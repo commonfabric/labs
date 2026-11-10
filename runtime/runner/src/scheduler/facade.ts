@@ -1,9 +1,13 @@
-import type { CellScope, ScopeKeyIdentity } from "@commonfabric/memory/v2";
+import {
+  type CellScope,
+  resolveScopeKey,
+  type ScopeKeyIdentity,
+} from "@commonfabric/memory/v2";
 import { BoundedKeyMap } from "@commonfabric/collections/cache";
 import { ensureNotRenderThread } from "@commonfabric/platform/env";
 import { getLogger } from "@commonfabric/logger";
-import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 
 import { getTopFrame } from "../builder/pattern.ts";
 import type { Cancel } from "../cancel.ts";
@@ -107,6 +111,7 @@ import {
   endPieceStartWaits,
   eventHandlerImplementations,
   EventHandlerRegistry,
+  eventScopeIdentity,
   isHeadEventParked as isHeadEventParkedState,
   processPullQueuedEventDuringExecute,
   queueSchedulerEvent,
@@ -322,6 +327,13 @@ export {
   markReadAsAttemptedWrite,
 };
 
+export interface ExternalDependencyActionToken {
+  readonly action: Action;
+  readonly registration: object | undefined;
+  readonly attempt: object;
+  readonly identityKey: string;
+}
+
 export class Scheduler {
   readonly #eventQueue: QueuedEvent[] = [];
   #eventHandlers = new EventHandlerRegistry();
@@ -491,6 +503,8 @@ export class Scheduler {
    * first.
    */
   #executingAction: Action | null = null;
+  #actionAttempts = new WeakMap<Action, Map<string, object>>();
+  #executingAttempt: object | undefined;
 
   /** Called with each action {@link unsubscribe} is given. */
   #unsubscribeObservers = new Set<(action: Action) => void>();
@@ -574,6 +588,12 @@ export class Scheduler {
     eventId: string;
     generations: Map<string, number>;
   } | null = null;
+
+  /** One-shot reactive subscriptions for unavailable captured handler inputs. */
+  readonly #eventInputWaits = new Map<
+    QueuedEvent,
+    { action: Action; parked: boolean; cancels: Cancel[] }
+  >();
 
   /**
    * Generations already pending before the current event preflight. Used to
@@ -806,14 +826,80 @@ export class Scheduler {
    * during `fn` are registered as children of `action`. Restores the previous
    * executing action afterwards (stack-like nesting).
    */
-  withExecutingAction<T>(action: Action, fn: () => T): T {
+  withExecutingAction<T>(
+    action: Action,
+    fn: () => T,
+    identity?: ScopeKeyIdentity,
+  ): T {
     const prev = this.#executingAction;
+    const previousAttempt = this.#executingAttempt;
     this.#executingAction = action;
+    this.#executingAttempt = prev === action && previousAttempt !== undefined
+      ? previousAttempt
+      : this.#beginExternalDependencyAttempt(action, identity);
     try {
       return fn();
     } finally {
       this.#executingAction = prev;
+      this.#executingAttempt = previousAttempt;
     }
+  }
+
+  #beginExternalDependencyAttempt(
+    action: Action,
+    identity?: ScopeKeyIdentity,
+  ): object {
+    const attempt = {};
+    let attempts = this.#actionAttempts.get(action);
+    if (attempts === undefined) {
+      this.#actionAttempts.set(action, attempts = new Map());
+    }
+    attempts.set("own", attempt);
+    attempts.set(
+      resolveScopeKey("session", identity ?? this.runtime.scopeKeyIdentity),
+      attempt,
+    );
+    return attempt;
+  }
+
+  getExecutingActionToken(
+    identity?: ScopeKeyIdentity,
+  ): ExternalDependencyActionToken | undefined {
+    const action = this.#executingAction;
+    if (action === null) return undefined;
+    const attempt = this.#executingAttempt;
+    if (attempt === undefined) return undefined;
+    const identityKey = identity === undefined
+      ? "own"
+      : resolveScopeKey("session", identity);
+    let attempts = this.#actionAttempts.get(action);
+    if (attempts === undefined) {
+      this.#actionAttempts.set(action, attempts = new Map());
+    }
+    attempts.set(identityKey, attempt);
+    return {
+      action,
+      attempt,
+      identityKey,
+      registration: this.#nodes.get(action)?.registrationToken,
+    };
+  }
+
+  scheduleExternalDependencySettlement(
+    token: ExternalDependencyActionToken,
+    identity?: ScopeKeyIdentity,
+  ): boolean {
+    const node = this.#nodes.get(token.action);
+    if (
+      node === undefined || node.registrationToken !== token.registration ||
+      this.#actionAttempts.get(token.action)?.get(token.identityKey) !==
+        token.attempt
+    ) return false;
+    this.invalidateAction(token.action, {
+      retry: true,
+      ...(identity !== undefined && { instances: [identity] }),
+    });
+    return true;
   }
 
   /**
@@ -2755,6 +2841,9 @@ export class Scheduler {
     this.endPatternChangeWaits();
     this.#headEventLoadPark = null;
     this.#headEventLoadParkHistory = null;
+    for (const event of this.#eventInputWaits.keys()) {
+      this.#clearEventInputWait(event);
+    }
     this.#disposed = true;
     for (const record of this.#nodes.nodes()) {
       record.cancelLocalReadWake?.();
@@ -3489,6 +3578,7 @@ export class Scheduler {
       hasPendingLineageHeadEvent: () => this.#hasPendingLineageHeadEvent(),
       hasLoadWaitingHeadEvent: () => this.#hasLoadWaitingHeadEvent(),
       settleDeferredForLoadPark: () => this.#settleDeferredForLoadPark,
+      hasInputParkedHeadEvent: () => this.#hasInputParkedHeadEvent(),
       scheduleWake: (at) => this.#gates.scheduleWake(at),
       hasWakeTimer: () => this.#gates.hasWakeTimer(),
       setScheduled: (scheduled) => {
@@ -3544,6 +3634,11 @@ export class Scheduler {
       parkHeadEventForLoads: (event, keys) =>
         this.#parkHeadEventForLoads(event, keys),
       isHeadEventLoadParked: (event) => this.#isHeadEventLoadParked(event),
+      isEventWaitingForInput: (event) =>
+        this.#eventInputWaits.get(event)?.parked === true,
+      parkEventUntilInputChanges: (event, deps) =>
+        this.#parkEventUntilInputChanges(event, deps),
+      clearEventInputWait: (event) => this.#clearEventInputWait(event),
       nodes: this.#nodes,
       pending: this.#pending,
       get eventPreflightTelemetryEnabled() {
@@ -3690,12 +3785,17 @@ export class Scheduler {
       isDisposed: () => this.#disposed,
       parkLocalRead: (target, log) => this.#parkLocalRead(target, log),
       queueExecution: () => this.queueExecution(),
-      setExecutingAction: (target, targetActionId) => {
+      setExecutingAction: (target, targetActionId, identity) => {
         this.#executingAction = target;
+        this.#executingAttempt = this.#beginExternalDependencyAttempt(
+          target,
+          identity,
+        );
         this.#currentActionId = targetActionId;
       },
       clearExecutingAction: () => {
         this.#executingAction = null;
+        this.#executingAttempt = undefined;
         this.#currentActionId = undefined;
       },
       captureRemoteEcho: (tx, log, invalidCauses) =>
@@ -4154,6 +4254,67 @@ export class Scheduler {
     }
   }
 
+  #parkEventUntilInputChanges(
+    event: QueuedEvent,
+    dependencies: ReactivityLog,
+  ): void {
+    this.#clearEventInputWait(event);
+    const wake = () => {
+      const wait = this.#eventInputWaits.get(event);
+      if (wait?.action !== wakeAction || !wait.parked) return;
+      wait.parked = false;
+      this.queueExecution();
+    };
+    const wakeAction: Action = wake;
+    const cancels: Cancel[] = [];
+    this.#eventInputWaits.set(event, {
+      action: wakeAction,
+      parked: true,
+      cancels,
+    });
+    this.resubscribe(wakeAction, dependencies, { isEffect: true });
+    const identity = eventScopeIdentity(event);
+    this.withExecutingAction(wakeAction, () => {
+      const token = this.getExecutingActionToken(identity);
+      if (token !== undefined) {
+        this.runtime.attachLinkedDocLoadWaiter(
+          dependencies.reads,
+          token,
+          identity,
+        );
+      }
+    }, identity);
+    for (const space of new Set(dependencies.reads.map((read) => read.space))) {
+      const cancel = this.runtime.storageManager.open(space).replica
+        .subscribeLocalCoverage?.((addresses) => {
+          if (
+            dependencies.reads.some((read) =>
+              read.space === space &&
+              addresses.some((address) =>
+                address.id === read.id &&
+                (address.scope ?? "space") === (read.scope ?? "space")
+              )
+            )
+          ) wake();
+        });
+      if (cancel !== undefined) cancels.push(cancel);
+    }
+  }
+
+  #clearEventInputWait(event: QueuedEvent): void {
+    const wait = this.#eventInputWaits.get(event);
+    if (wait === undefined) return;
+    this.#eventInputWaits.delete(event);
+    for (const cancel of wait.cancels) cancel();
+    this.unsubscribe(wait.action);
+  }
+
+  #hasInputParkedHeadEvent(): boolean {
+    const head = this.#eventQueue[0];
+    return head !== undefined &&
+      this.#eventInputWaits.get(head)?.parked === true;
+  }
+
   #dropEvent(
     event: QueuedEvent,
     reason: string,
@@ -4168,6 +4329,7 @@ export class Scheduler {
       servedOutcome?: ServedEventFailureOutcome;
     } = {},
   ): void {
+    this.#clearEventInputWait(event);
     if (this.#headEventLoadPark?.eventId === event.id) {
       // The park's release finds no park once the drop has ended it.
       this.#endHeadEventLoadPark();

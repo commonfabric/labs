@@ -15,12 +15,14 @@ import {
   dataFile,
   Default,
   handler,
+  hasError,
   ifElse,
   NAME,
   pattern,
   type PerSession,
   type PerSpace,
   type PerUser,
+  resultOf,
   Stream,
   UI,
   wish,
@@ -1142,11 +1144,12 @@ const ScrabbleGame = pattern<GameInput, GameOutput>(
       query: "#profile",
     });
     const profileNameWish = wish<string>({ query: "#profileName" });
+    const profile = resultOf(profileWish.result);
 
-    const profileName = computed(() => profileNameWish.result ?? "");
-    const hasProfile = computed(() =>
-      (profileNameWish.result ?? "").trim() !== ""
-    );
+    const profileName = hasError(profileNameWish.result)
+      ? ""
+      : resultOf(profileNameWish.result);
+    const hasProfile = computed(() => profileName.trim() !== "");
     // The button is the JOIN action; the adjacent `#profile` wish UI is the
     // create/pick surface. Label it as such (a disabled "Join" until the viewer
     // has a profile) rather than mislabeling the button "Create a profile…".
@@ -1166,7 +1169,7 @@ const ScrabbleGame = pattern<GameInput, GameOutput>(
     );
     const joinGame = joinGameHandler({
       name: profileName,
-      profile: profileWish.result,
+      profile,
       myName,
       rack,
       placed,
@@ -1253,7 +1256,7 @@ const ScrabbleGame = pattern<GameInput, GameOutput>(
                     {/* The viewer's own identity, first-class (CT-1761). */}
                     <cf-profile-badge
                       variant="chip"
-                      $profile={profileWish.result}
+                      $profile={profile}
                     />
                   </cf-hstack>
                 )

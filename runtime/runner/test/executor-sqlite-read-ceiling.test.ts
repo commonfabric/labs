@@ -36,8 +36,7 @@ const bob = await Identity.fromPassphrase("read-ceiling host bob");
 const space = owner.did() as MemorySpace;
 
 type QueryView = {
-  pending?: boolean;
-  result?: { body: string }[];
+  rows?: { body: string }[];
   error?: unknown;
 };
 type ClientView = { runtime: Runtime; result: Cell<{ query: QueryView }> };
@@ -59,7 +58,7 @@ const rows: SqliteNativeRow[] = [
 ];
 
 const bodies = (state: QueryView | undefined): string[] =>
-  (state?.result ?? []).map((row) => row.body);
+  (state?.rows ?? []).map((row) => row.body);
 
 async function fixture(scope: "space" | "session") {
   const server = newSharedServer({ subscriptionRefreshDelayMs: 0 });
@@ -204,7 +203,8 @@ export default pattern<{ sql: ${scoped} }, { query: any }>(({ sql }) => {
         runtime.run(start, pattern, argument, result);
         expect((await start.commit().settled).error).toBeUndefined();
       }
-      client.cancel = result.key("query").key("pending").sink(() => {});
+      client.cancel = result.key("query").asSchema({ asCell: ["readonly"] })
+        .sink(() => {});
       return { runtime, result };
     };
     return {
@@ -230,7 +230,7 @@ export default pattern<{ sql: ${scoped} }, { query: any }>(({ sql }) => {
         waitForCellValue<QueryView>(
           view.runtime,
           view.result.key("query"),
-          (state) => state?.pending === false,
+          (state) => Array.isArray(state?.rows),
         ),
       close,
     };
@@ -264,14 +264,10 @@ describe("executor-sqlite-read-ceiling", () => {
   it("materializes a shared served query while withholding its rows from the bounded client", async () => {
     const f = await fixture("space");
     try {
-      await waitForCellValue(
-        f.first.runtime,
-        f.first.result.key("query").key("pending"),
-        (pending) => pending === false,
-      );
-      expect(() => f.first.result.key("query").get()).toThrow(/read ceiling/);
       const second = await f.join(bob);
       const all = await f.settled(second);
+      await f.first.runtime.idle();
+      expect(() => f.first.result.key("query").get()).toThrow(/read ceiling/);
       expect(all.error).toBeUndefined();
       expect(bodies(all)).toEqual(["mine", "shared"]);
       await f.issued(1);

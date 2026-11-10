@@ -56,6 +56,7 @@ import {
   type ViewUpdate,
 } from "@codemirror/view";
 import { type DID, isDID } from "@commonfabric/identity/did";
+import { isUnavailable } from "@commonfabric/data-model/availability";
 import { parseFabricUrl } from "@commonfabric/runner/fabric-url";
 import { stringSchema } from "@commonfabric/runner/schemas";
 import {
@@ -163,6 +164,14 @@ import {
   caretFacetOf,
   participantFromRecord,
 } from "./presence-facets.ts";
+
+/** The mention universe displays no rows until its value is available. */
+function mentionableRowsForDisplay(
+  handle: CellHandle<MentionableArray> | null | undefined,
+): MentionableArray {
+  const value = handle ? valueForDisplay(handle) : undefined;
+  return value === undefined || isUnavailable(value) ? [] : value;
+}
 
 /** A unique noteId, so notes created from a mention do not collide. */
 function generateNoteId(): string {
@@ -689,7 +698,8 @@ export class CFCodeEditor extends BaseElement {
 
   /**
    * Whether a read the editor computes its writes from holds no value: the
-   * worker refused it, or has not answered it yet. The reads are the content
+   * worker refused it, has not answered it yet, or holds an unavailable
+   * value. The reads are the content
    * (`value`), `$mentionable`, which resolves a wiki-link's id to its piece
    * and says which pieces exist, `$references`, which resolves a reference's
    * key and says which keys are taken, and `$mentioned`, which the editor
@@ -713,7 +723,10 @@ export class CFCodeEditor extends BaseElement {
    */
   private get _readsWithheld(): boolean {
     return this._cellController.refusal !== undefined ||
-      this._inputs().some((handle) => !("value" in handle.lastRead()));
+      this._inputs().some((handle) => {
+        const read = handle.lastRead();
+        return !("value" in read) || isUnavailable(read.value);
+      });
   }
 
   /** The handles the editor computes its writes from. */
@@ -1065,7 +1078,7 @@ export class CFCodeEditor extends BaseElement {
     const handle = this.mentionable;
     if (!handle) return [];
 
-    const rows = (valueForDisplay(handle) ?? []) as MentionableArray;
+    const rows = mentionableRowsForDisplay(handle);
     const matches: Array<[CellHandle<Mentionable>, number, string]> = [];
 
     for (let i = 0; i < rows.length; i++) {
@@ -1129,7 +1142,7 @@ export class CFCodeEditor extends BaseElement {
       return [];
     }
 
-    const mentionableData = (valueForDisplay(handle) ?? []) as MentionableArray;
+    const mentionableData = mentionableRowsForDisplay(handle);
 
     if (mentionableData.length === 0) {
       return [];
@@ -1176,9 +1189,7 @@ export class CFCodeEditor extends BaseElement {
     query: string,
     match: "contains" | "exact" = "contains",
   ): boolean {
-    const mentionableData =
-      ((this.mentionable ? valueForDisplay(this.mentionable) : undefined) ??
-        []) as MentionableArray;
+    const mentionableData = mentionableRowsForDisplay(this.mentionable);
     const queryLower = query.toLowerCase();
     return mentionableData.some((mention, index) => {
       if (!this._isIndexRow(index) || this._resolvedPieceIds.has(index)) {
@@ -1233,7 +1244,7 @@ export class CFCodeEditor extends BaseElement {
     const handle = this.mentionable;
     if (!handle) return null;
 
-    const mentionableData = (valueForDisplay(handle) ?? []) as MentionableArray;
+    const mentionableData = mentionableRowsForDisplay(handle);
 
     const queryLower = query.toLowerCase();
 
@@ -1822,7 +1833,7 @@ export class CFCodeEditor extends BaseElement {
     const handle = this.mentionable;
     if (!handle) return null;
 
-    const mentionableData = (valueForDisplay(handle) ?? []) as MentionableArray;
+    const mentionableData = mentionableRowsForDisplay(handle);
 
     if (mentionableData.length === 0) return null;
 
@@ -1858,9 +1869,7 @@ export class CFCodeEditor extends BaseElement {
    * surfaces withhold it rather than mint an id naming the row.
    */
   private _isIndexRow(index: number): boolean {
-    const item =
-      (((this.mentionable ? valueForDisplay(this.mentionable) : undefined) ??
-        []) as MentionableArray)[index];
+    const item = mentionableRowsForDisplay(this.mentionable)[index];
     return item != null && Object.hasOwn(item, "piece");
   }
 
@@ -1901,7 +1910,7 @@ export class CFCodeEditor extends BaseElement {
 
     this._mentionResolutionPending = true;
 
-    const mentionableData = (valueForDisplay(handle) ?? []) as MentionableArray;
+    const mentionableData = mentionableRowsForDisplay(handle);
 
     // Keep a reference to the current mentionable to detect a rebind, and a
     // generation to detect a newer pass over the SAME handle: contents can
@@ -3755,14 +3764,12 @@ export class CFCodeEditor extends BaseElement {
     const mentionedHandle = this.mentioned;
     if (!mentionedHandle) return curIds;
 
-    const currentSource =
-      (valueForDisplay(mentionedHandle) ?? []) as MentionableArray;
+    const currentSource = mentionableRowsForDisplay(mentionedHandle);
 
     const mentionableHandle = this.mentionable;
     if (!mentionableHandle) return curIds;
 
-    const mentionableData =
-      (valueForDisplay(mentionableHandle) ?? []) as MentionableArray;
+    const mentionableData = mentionableRowsForDisplay(mentionableHandle);
 
     // For each current mentioned value, find its ID by matching in mentionable
     for (const mentionedValue of currentSource) {
@@ -4156,9 +4163,7 @@ export class CFCodeEditor extends BaseElement {
     // nothing to name.
     if (!this.references) return {};
 
-    const rows =
-      ((this.mentionable ? valueForDisplay(this.mentionable) : undefined) ??
-        []) as MentionableArray;
+    const rows = mentionableRowsForDisplay(this.mentionable);
     const namesByPiece = new Map<string, string>();
     for (let index = 0; index < rows.length; index++) {
       const pieceCell = this._resolvedPieceCells.get(index);

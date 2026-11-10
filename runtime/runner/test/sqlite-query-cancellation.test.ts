@@ -7,6 +7,7 @@ import { Identity } from "@commonfabric/identity";
 import type { URI } from "@commonfabric/memory/interface";
 
 import { sqliteQuery } from "../src/builtins/sqlite-builtins.ts";
+import { sqliteQueryStateNodeFactory } from "../src/builtins/sqlite/query-node.ts";
 import type { Cell } from "../src/cell.ts";
 import { Runtime } from "../src/runtime.ts";
 import { CooperativeYield } from "../src/scheduler/cooperative-yield.ts";
@@ -129,7 +130,10 @@ describe("sqlite-query-cancellation", () => {
             }),
           },
         });
-        return cf.sqliteQuery({ db, sql: "SELECT content FROM messages" });
+        return sqliteQueryStateNodeFactory({
+          db,
+          sql: "SELECT content FROM messages",
+        });
       });
       const tx = runtime.edit();
       const resultCell = runtime.getCell(

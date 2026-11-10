@@ -56,9 +56,12 @@ import {
   fetchProgram,
   fetchText,
   generateObject,
+  generateObjectStream,
   generateText,
+  generateTextStream,
   ifElse,
   inspectConfLabel,
+  latestComplete,
   llm,
   llmDialog,
   navigateTo,
@@ -88,6 +91,17 @@ import {
   handler,
   lift,
 } from "./module.ts";
+import {
+  compileDiagnosticsOf,
+  hasError,
+  hasSchemaMismatch,
+  isObsolete,
+  isPending,
+  isSyncing,
+  observeAvailability,
+  partialResultOf,
+  resultOf,
+} from "./data-unavailable.ts";
 import { isTrustedPattern, setPatternProgram } from "./pattern-metadata.ts";
 import { pattern } from "./pattern.ts";
 import {
@@ -233,6 +247,18 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
     assertCapture,
     assertRenderParts,
 
+    // Pure unavailable-data observation helpers
+    isPending,
+    isObsolete,
+    hasError,
+    isSyncing,
+    hasSchemaMismatch,
+    observeAvailability,
+    compileDiagnosticsOf,
+    partialResultOf,
+    resultOf,
+    latestComplete,
+
     // Names a sub-pattern instance bound to a `const`, for its identity. The
     // reactive-variable transformer stage emits the calls when its
     // `instanceNames` option is on; authored code does not call it.
@@ -247,7 +273,9 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
     llm,
     llmDialog,
     generateObject,
+    generateObjectStream,
     generateText,
+    generateTextStream,
     agent,
     fetchBinary,
     cellFromUrl,

@@ -8,11 +8,14 @@ import {
   FS,
   generateText,
   handler,
+  hasError,
+  isPending,
   NAME,
   navigateTo,
   pattern,
   patternTool,
   type PatternToolResult,
+  resultOf,
   SELF,
   type Stream,
   TILE_UI,
@@ -106,16 +109,25 @@ export interface NoteOutput extends NotePiece {
   stopEditingTitle: Stream<void>;
 }
 
+export type BacklinkCreateEvent = {
+  detail: {
+    piece: Writable<MentionablePiece>;
+    navigate: boolean;
+  };
+};
+
+/** The backlink event binding installed on every note editor. */
+export const backlinkCreateProps = (
+  stream: Stream<BacklinkCreateEvent>,
+): { "onbacklink-create": Stream<BacklinkCreateEvent> } => ({
+  "onbacklink-create": stream,
+});
+
 // ===== Module-scope handlers (reused with different bindings) =====
 
-// Used in cf-code-editor - binds mentionable and pieceRegistry
-const handleNewBacklink = handler<
-  {
-    detail: {
-      piece: Writable<MentionablePiece>;
-      navigate: boolean;
-    };
-  },
+/** Register a backlink created by the editor and optionally navigate to it. */
+export const handleNewBacklink = handler<
+  BacklinkCreateEvent,
   {
     mentionable: Writable<MentionablePiece[]>;
     pieceRegistry: Writable<MinimalPiece[]>;
@@ -165,15 +177,16 @@ const translatePattern = pattern<
   { language: string; content: string },
   string | undefined
 >(({ language, content }) => {
-  const genResult = generateText({
+  const translationRequest = generateText({
     system: computed(() => `Translate the content to ${language}.`),
     prompt: computed(() => `<to_translate>${content}</to_translate>`),
   });
+  const translation = resultOf(translationRequest);
 
   return computed(() => {
-    if (genResult.pending !== false) return undefined;
-    if (genResult.result == null) return "Error occurred";
-    return genResult.result;
+    if (isPending(translationRequest)) return undefined;
+    if (hasError(translationRequest)) return "Error occurred";
+    return translation;
   });
 });
 
@@ -207,16 +220,24 @@ const Note = pattern<NoteInput, NoteOutput>(
 
     // Notebooks and "All Notes" from wish scope (must be before actions that reference them)
     const notebooks = notebookWish.candidates;
-    const allNotesPiece = allNotesWish.result;
+    const allNotesPiece = hasError(allNotesWish.result)
+      ? undefined
+      : resultOf(allNotesWish.result);
 
     // The registry is writable for creating notes and backlinks.
-    const pieceRegistry = wish<Writable<MinimalPiece[]>>({
+    const pieceRegistryWish = wish<Writable<MinimalPiece[]>>({
       query: "#pieceRegistry",
       headless: true,
-    }).result!;
-    const mentionable = wish<MentionablePiece[] | Default<[]>>(
+    });
+    const pieceRegistry: Writable<MinimalPiece[]> = resultOf(
+      pieceRegistryWish.result,
+    );
+    const mentionableWish = wish<MentionablePiece[] | Default<[]>>(
       { query: "#mentionable", headless: true },
-    ).result;
+    );
+    const mentionable = hasError(mentionableWish.result)
+      ? []
+      : resultOf(mentionableWish.result);
     const mentioned = new Writable<MentionablePiece[]>([]);
 
     // UI state
@@ -225,6 +246,11 @@ const Note = pattern<NoteInput, NoteOutput>(
 
     // Backlinks - populated by backlinks-index.tsx
     const backlinks = new Writable<MentionablePiece[]>([]);
+
+    const createBacklink = handleNewBacklink({
+      mentionable,
+      pieceRegistry,
+    });
 
     // Summary - truncated content for search indexing
     const summary = computed(() => {
@@ -508,15 +534,12 @@ const Note = pattern<NoteInput, NoteOutput>(
     const editorUI = (
       <cf-code-editor
         $value={content}
-        $mentionable={mentionable!}
+        $mentionable={mentionable}
         $mentioned={mentioned}
         $references={references!}
         $pattern={patternJson}
         onbacklink-click={handlePieceLinkClick}
-        onbacklink-create={handleNewBacklink({
-          mentionable: mentionable!,
-          pieceRegistry,
-        })}
+        {...backlinkCreateProps(createBacklink)}
         language="text/markdown"
         mode="prose"
         wordWrap

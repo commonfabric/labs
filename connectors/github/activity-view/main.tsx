@@ -3,9 +3,13 @@ import {
   Default,
   fetchJson,
   generateText,
+  hasError,
+  ifElse,
+  isPending,
   NAME,
   type OpaqueCell,
   pattern,
+  resultOf,
   UI,
   type VNode,
   Writable,
@@ -198,10 +202,11 @@ function shortOid(value: string | null): string {
 export default pattern<GithubActivityInput, GithubActivityOutput>((state) => {
   const activeTab = new Writable.perSession<SyncedTab>("pull-requests");
 
+  const hasIndex = computed(() => state.pullRequestIndex !== undefined);
   const parsed = computed(() => parseUrl(state.repoUrl.get()));
   const fallbackApiUrl = computed(() => {
     // Empty URL and prompt inputs keep both network-backed built-ins idle.
-    if (state.pullRequestIndex !== undefined) return "";
+    if (hasIndex) return "";
     const { owner, repo } = parsed;
     if (owner && repo) {
       return `https://api.github.com/repos/${owner}/${repo}/commits`;
@@ -210,9 +215,11 @@ export default pattern<GithubActivityInput, GithubActivityOutput>((state) => {
   });
 
   const commitsData = fetchJson<CommitResponse>({ url: fallbackApiUrl });
-  const commits = commitsData.result;
+  const commits = computed(() =>
+    hasError(commitsData) ? [] : resultOf(commitsData)
+  );
   const fallbackPrompt = computed(() => {
-    const commitList = commits ?? [];
+    const commitList = commits;
     if (commitList.length === 0) return "";
     const messages = commitList
       .slice(0, 10)
@@ -225,6 +232,9 @@ export default pattern<GithubActivityInput, GithubActivityOutput>((state) => {
       "You are a concise technical writer. Summarize the recent development activity based on these commit messages. Focus on themes and notable changes. Keep it to 2-3 sentences.",
     prompt: fallbackPrompt,
   });
+  const summaryText = computed(() =>
+    hasError(summary) ? "" : resultOf(summary)
+  );
 
   const repoName = computed(() => {
     const { owner, repo } = parsed;
@@ -285,23 +295,24 @@ export default pattern<GithubActivityInput, GithubActivityOutput>((state) => {
   );
   const recentPullRequests = computed(() => indexedPullRequests.slice(0, 12));
   const pieceName = computed(() =>
-    state.pullRequestIndex
-      ? `GitHub pull requests: ${state.pullRequestIndex.viewer}`
+    hasIndex
+      ? `GitHub pull requests: ${state.pullRequestIndex?.viewer}`
       : `GitHub Activity: ${repoName}`
   );
 
   return {
     [NAME]: pieceName,
-    [UI]: state.pullRequestIndex
-      ? (
+    [UI]: ifElse(
+      hasIndex,
+      (
         <cf-screen>
           <cf-vstack gap="4" padding="4">
             <cf-hstack justify="between" align="center" gap="3" wrap>
               <div>
                 <cf-heading level={2}>GitHub pull requests</cf-heading>
                 <cf-text tone="muted">
-                  @{state.pullRequestIndex.viewer} · generation{" "}
-                  {state.pullRequestIndex.generation}
+                  @{state.pullRequestIndex?.viewer} · generation{" "}
+                  {state.pullRequestIndex?.generation}
                 </cf-text>
               </div>
               <cf-badge
@@ -515,24 +526,25 @@ export default pattern<GithubActivityInput, GithubActivityOutput>((state) => {
                         <tbody>
                           <tr>
                             <th>Viewer</th>
-                            <td>@{state.pullRequestIndex.viewer}</td>
+                            <td>@{state.pullRequestIndex?.viewer}</td>
                           </tr>
                           <tr>
                             <th>Generation</th>
-                            <td>{state.pullRequestIndex.generation}</td>
+                            <td>{state.pullRequestIndex?.generation}</td>
                           </tr>
                           <tr>
                             <th>Collection observed</th>
                             <td>
                               {formatDate(
-                                state.pullRequestIndex.lastCompleteCollectionAt,
+                                state.pullRequestIndex
+                                  ?.lastCompleteCollectionAt,
                               )}
                             </td>
                           </tr>
                           <tr>
                             <th>Index published</th>
                             <td>
-                              {formatDate(state.pullRequestIndex.generatedAt)}
+                              {formatDate(state.pullRequestIndex?.generatedAt)}
                             </td>
                           </tr>
                           <tr>
@@ -614,8 +626,8 @@ export default pattern<GithubActivityInput, GithubActivityOutput>((state) => {
             </cf-tabs>
           </cf-vstack>
         </cf-screen>
-      )
-      : (
+      ),
+      (
         <div>
           <div style="margin-bottom: 16px;">
             <cf-input
@@ -625,19 +637,19 @@ export default pattern<GithubActivityInput, GithubActivityOutput>((state) => {
             />
           </div>
 
-          {summary.pending
+          {isPending(summary)
             ? (
               <div style="margin-bottom: 16px;">
                 <cf-loader show-elapsed /> Generating summary...
               </div>
             )
-            : summary.result
+            : summaryText
             ? (
               <div style="margin-bottom: 16px; padding: 12px; background: #f5f5f5; border-radius: 4px;">
                 <h3 style="margin: 0 0 8px 0; font-size: 14px; font-weight: 600;">
                   Activity Summary
                 </h3>
-                <p style="margin: 0; line-height: 1.5;">{summary.result}</p>
+                <p style="margin: 0; line-height: 1.5;">{summaryText}</p>
               </div>
             )
             : null}
@@ -645,6 +657,7 @@ export default pattern<GithubActivityInput, GithubActivityOutput>((state) => {
           {computed(() => renderGithubCommits(commits))}
         </div>
       ),
+    ),
     pullRequests,
     pullRequestCount,
     repositoryCount,

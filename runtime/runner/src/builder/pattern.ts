@@ -10,6 +10,7 @@ import {
   isDeepFrozen,
   isWalkableObjectOrArray,
 } from "@commonfabric/data-model";
+import { isUnavailable } from "@commonfabric/data-model/availability";
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
 import { isInertPlainObject } from "@commonfabric/js-values/objects";
 import {
@@ -1059,7 +1060,8 @@ function assignComputedCellKinds(
   // A writer that disqualifies its output cells from the computed kind:
   // anything whose writes are not a deterministic replay of its inputs.
   // Handlers never appear as writers (their `outputs` is `{}`), but the
-  // checks stay for hand-built nodes. `javascript` computes qualify even
+  // checks stay for hand-built nodes. `javascript` and
+  // `javascript-availability` computes qualify even
   // with capture writes / `materializerWriteInputPaths` — those writes
   // replay. `pattern` writers qualify (instantiation writes converge on
   // replay; see plan risk 4 — flip to disqualifying if that fails in
@@ -1072,6 +1074,7 @@ function assignComputedCellKinds(
     if (module.isEffect === true) return true;
     switch (module.type) {
       case "javascript":
+      case "javascript-availability":
       case "pattern":
       case "passthrough":
         return false;
@@ -1176,7 +1179,11 @@ function assignComputedCellKinds(
     // collect nothing and leave a cell root inside it undisqualified from the
     // `computed` tag -- the ack-and-drop this function exists to prevent. A
     // `FabricInstance` is refused here.
-    if (isWalkableObjectOrArray(target) && !isReactive(target)) {
+    if (
+      !isUnavailable(target) &&
+      isWalkableObjectOrArray(target) &&
+      !isReactive(target)
+    ) {
       const properties = isObjectNotArray(schema.properties)
         ? schema.properties
         : undefined;
@@ -1237,6 +1244,7 @@ function assignComputedCellKinds(
     if (module.isEffect === true) return all();
     switch (module.type) {
       case "javascript":
+      case "javascript-availability":
       case "passthrough":
         // Qualifying computes and the passthrough copy read their inputs;
         // their (replayable) writes are covered on the writer side.

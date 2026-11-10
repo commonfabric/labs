@@ -16,7 +16,7 @@ import { __cfHelpers } from "commonfabric";
  * schema describes `pieceRegistry` as an object holding `length`, which is the
  * value it receives. The array itself reaches only the `.map()`.
  */
-import { computed, NAME, pattern, UI, wish } from "commonfabric";
+import { computed, NAME, pattern, resultOf, UI, wish } from "commonfabric";
 const define = undefined;
 const runtimeDeps = undefined;
 const __cfAmdHooks = undefined;
@@ -119,7 +119,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 // Context: the capture is the `length` member, so the lift's input schema is
 //   an object holding `length`, not the array the member is read from.
 export default pattern(() => {
-    const __cf_destructure_1 = wish<{
+    const piecesWish = wish<{
         pieceRegistry: Piece[];
     }>({ query: "/" }, {
         type: "object",
@@ -146,7 +146,8 @@ export default pattern(() => {
                 required: ["id", "name"]
             }
         }
-    } as const satisfies __cfHelpers.JSONSchema), pieceRegistry = __cf_destructure_1.key("result", "pieceRegistry").for("pieceRegistry", true);
+    } as const satisfies __cfHelpers.JSONSchema).for("piecesWish", true);
+    const __cf_destructure_1 = resultOf(piecesWish.key("result")), pieceRegistry = __cf_destructure_1.key("pieceRegistry").for("pieceRegistry", true);
     return {
         [NAME]: __cfLift_1({ pieceRegistry: {
                 length: pieceRegistry.key("length")

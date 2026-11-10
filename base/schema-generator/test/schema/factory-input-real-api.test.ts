@@ -206,4 +206,32 @@ describe("Schema: real API FactoryInput", () => {
       asCell: ["stream", "opaque"],
     });
   });
+
+  it("formats direct streaming results without traversing fabric error internals", () => {
+    const code = `
+      import type {
+        AsyncStreamResult,
+      } from "./base/api/index.ts";
+
+      interface SchemaRoot {
+        result: AsyncStreamResult<{ title: string }, string>;
+      }
+    `;
+    const { type, checker, sourceFile } = getTypeFromRealApiCode(
+      code,
+      "SchemaRoot",
+    );
+    const gen = new SchemaGenerator();
+
+    expect(() =>
+      gen.generateSchema(
+        type,
+        checker,
+        undefined,
+        undefined,
+        undefined,
+        sourceFile,
+      )
+    ).not.toThrow();
+  });
 });

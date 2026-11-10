@@ -212,7 +212,8 @@ export default pattern(() => {
     tables: { messages: messagesTable(), participants: participantsTable() },
   });
   const seedCurrent = seedCurrentMonth({ db: current });
-  const forwarded = ForwardingCaller({ mail: current });
+  const forwardedMonth = new Writable<string | undefined>();
+  const forwarded = ForwardingCaller({ mail: current, month: forwardedMonth });
 
   return {
     // The one warning this allows is normalizeAndDiff's "Storing a
@@ -223,12 +224,14 @@ export default pattern(() => {
     // declare. The flag is a boolean, so it cannot be pinned to that text.
     allowConsoleWarnings: true,
     [TESTS]: [
+      { action: action(() => forwardedMonth.set("1970-01")) },
       { assertion: assert(() => mailbox.headerCount === 0) },
       { assertion: assert(() => broken.headerCount === 0) },
 
       { action: action(() => seed.send()) },
       { action: action(() => seedNarrowRow.send()) },
       { action: action(() => seedCurrent.send()) },
+      { action: action(() => forwardedMonth.set(undefined)) },
       { action: action(() => month.set("2026-03")) },
       { action: action(() => brokenMonth.set("2026-03")) },
 

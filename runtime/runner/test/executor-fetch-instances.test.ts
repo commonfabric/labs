@@ -4,6 +4,10 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
+import {
+  isUnavailable,
+  type UnavailableVariant,
+} from "@commonfabric/data-model/availability";
 import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 
@@ -22,18 +26,11 @@ const bob = await Identity.fromPassphrase("fetch instances bob");
 const space = spaceSigner.did() as MemorySpace;
 const url = "https://example.test/instance-fetch";
 
-/** Public state of the fetch node. */
-type FetchView = {
-  pending?: boolean;
-  result?: string;
-  error?: unknown;
-};
-
 /** One requesting client and its view of the shared piece. */
 type ClientView = {
   runtime: Runtime;
   argument: Cell<{ url: string }>;
-  result: Cell<{ fetched: FetchView }>;
+  result: Cell<{ fetched: string | UnavailableVariant }>;
 };
 
 /** Creates a host with controlled HTTP responses and separate requesting clients. */
@@ -189,7 +186,9 @@ export default pattern<{ url: ${scoped} }, { fetched: any }>(({ url }) => ({
         "fetch-input",
         pattern.argumentSchema,
       );
-      const result = runtime.getCell<{ fetched: FetchView }>(
+      const result = runtime.getCell<{
+        fetched: string | UnavailableVariant;
+      }>(
         space,
         "fetch-result",
         pattern.resultSchema,
@@ -214,10 +213,10 @@ export default pattern<{ url: ${scoped} }, { fetched: any }>(({ url }) => ({
 
     /** Observes a settled payload through the client's subscribed fetch field. */
     const value = (view: ClientView, payload: string) =>
-      waitForCellValue<FetchView>(
+      waitForCellValue<string | UnavailableVariant>(
         view.runtime,
         view.result.key("fetched"),
-        (state) => state?.pending === false && state.result === payload,
+        (state) => state === payload,
       );
 
     return {
@@ -263,7 +262,7 @@ describe("executor-fetch-instances", () => {
       try {
         await f.issued(1);
         f.requests[0].response.resolve(new Response("first payload"));
-        expect((await f.value(f.first, "first payload")).error).toBeUndefined();
+        expect(await f.value(f.first, "first payload")).toBe("first payload");
         expect(f.servingErrors).toEqual([]);
       } finally {
         await f.close();
@@ -356,15 +355,19 @@ describe("executor-fetch-instances", () => {
         const second = await f.join(scope === "user" ? bob : alice);
         await f.issued(2);
         f.requests[0].response.reject(new Error("request failed"));
-        const failed = await waitForCellValue<FetchView>(
+        const failed = await waitForCellValue<
+          string | UnavailableVariant
+        >(
           f.first.runtime,
           f.first.result.key("fetched"),
-          (state) => state?.pending === false && state.error !== undefined,
+          (state) => isUnavailable(state) && state.reason === "error",
         );
-        expect(failed.result).toBeUndefined();
+        expect(isUnavailable(failed) && failed.reason === "error").toBe(
+          true,
+        );
         expect(f.requests[1].signal?.aborted).toBe(false);
         f.requests[1].response.resolve(new Response("second payload"));
-        expect((await f.value(second, "second payload")).error).toBeUndefined();
+        expect(await f.value(second, "second payload")).toBe("second payload");
         expect(f.servingErrors).toEqual([]);
       } finally {
         await f.close();

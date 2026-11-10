@@ -477,7 +477,7 @@ export class ValueHasher {
         hasher.update(TAG_UNAVAILABLE_BYTES);
         this.feedValue(fab.reason);
         this.feedValue(fab.errorKind);
-        this.feedValue(fab.rawErrorMessage);
+        this.feedValue(fab.rawMessage);
         return;
       }
 

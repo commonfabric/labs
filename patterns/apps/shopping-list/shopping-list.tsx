@@ -13,11 +13,14 @@ import {
   equals,
   generateObject,
   handler,
+  hasError,
+  isPending,
   NAME,
   navigateTo,
   pattern,
   patternTool,
   Reactive,
+  resultOf,
   Stream,
   UI,
   Writable,
@@ -368,16 +371,15 @@ export default pattern<Input, Output>(({ items, storeLayout }) => {
       `Store layout:\n${effectiveLayout}\n\nItem: ${item.title}\n\nSeed: ${item.aisleSeed}\n\nWhich aisle or department is this item most likely to be in? Respond with the exact location name.`;
 
     // Generate location using AI (only if layout exists)
-    const aisleResult = generateObject<AisleResult>({
+    const aisleRequest = generateObject<AisleResult>({
       system:
         "You are a grocery store assistant. Given a store layout and an item, determine which aisle or department the item is most likely to be in. You must respond with one of the exact locations from the store layout, or 'Other' if the item doesn't fit any category.",
       prompt: categorizePrompt,
       model: "anthropic:claude-haiku-4-5",
     });
-
     return {
       item,
-      aisle: aisleResult,
+      aisleRequest,
     };
   });
 
@@ -509,77 +511,94 @@ export default pattern<Input, Output>(({ items, storeLayout }) => {
               ? (
                 <cf-vstack gap="2">
                   {/* Items with aisles */}
-                  {itemsWithAisles.map((itemWithAisle) => (
-                    <cf-card>
-                      <cf-hstack gap="2" align="center">
-                        <cf-checkbox $checked={itemWithAisle.item.done} />
-                        <div
-                          style={{
-                            flex: 1,
-                            color: "#111827",
-                            textDecoration: itemWithAisle.item.done
-                              ? "line-through"
-                              : "none",
-                            opacity: itemWithAisle.item.done ? 0.6 : 1,
-                          }}
-                        >
-                          {itemWithAisle.item.title}
-                        </div>
-                        {/* Show aisle - prefer user override, then AI result */}
-                        {itemWithAisle.item.aisleOverride
-                          ? (
-                            <span
-                              style={{
-                                fontSize: "12px",
-                                padding: "4px 8px",
-                                borderRadius: "4px",
-                                background: "var(--cf-colors-green-100)",
-                                color: "var(--cf-colors-green-600)",
-                              }}
-                            >
-                              {itemWithAisle.item.aisleOverride}
-                            </span>
-                          )
-                          : itemWithAisle.aisle.pending
-                          ? (
-                            <span
-                              style={{
-                                fontSize: "11px",
-                                color: "#667eea",
-                              }}
-                            >
-                              🔄 sorting...
-                            </span>
-                          )
-                          : (
-                            <span
-                              style={{
-                                fontSize: "12px",
-                                padding: "4px 8px",
-                                borderRadius: "4px",
-                                background: "var(--cf-colors-blue-100)",
-                                color: "var(--cf-colors-blue-600)",
-                              }}
-                            >
-                              {itemWithAisle.aisle.result?.location || "Other"}
-                            </span>
-                          )}
-                        {/* Correction button */}
-                        <cf-button
-                          variant="ghost"
-                          onClick={openCorrection({
-                            items,
-                            item: itemWithAisle.item,
-                            correctionIndex,
-                            correctionTitle,
-                          })}
-                          style="font-size: 12px; padding: 4px;"
-                        >
-                          ✏️
-                        </cf-button>
-                      </cf-hstack>
-                    </cf-card>
-                  ))}
+                  {itemsWithAisles.map((itemWithAisle) => {
+                    const aisle = resultOf(itemWithAisle.aisleRequest);
+                    return (
+                      <cf-card>
+                        <cf-hstack gap="2" align="center">
+                          <cf-checkbox $checked={itemWithAisle.item.done} />
+                          <div
+                            style={{
+                              flex: 1,
+                              color: "#111827",
+                              textDecoration: itemWithAisle.item.done
+                                ? "line-through"
+                                : "none",
+                              opacity: itemWithAisle.item.done ? 0.6 : 1,
+                            }}
+                          >
+                            {itemWithAisle.item.title}
+                          </div>
+                          {/* Show aisle - prefer user override, then AI result */}
+                          {itemWithAisle.item.aisleOverride
+                            ? (
+                              <span
+                                style={{
+                                  fontSize: "12px",
+                                  padding: "4px 8px",
+                                  borderRadius: "4px",
+                                  background: "var(--cf-colors-green-100)",
+                                  color: "var(--cf-colors-green-600)",
+                                }}
+                              >
+                                {itemWithAisle.item.aisleOverride}
+                              </span>
+                            )
+                            : isPending(itemWithAisle.aisleRequest)
+                            ? (
+                              <span
+                                style={{
+                                  fontSize: "11px",
+                                  color: "#667eea",
+                                }}
+                              >
+                                🔄 sorting...
+                              </span>
+                            )
+                            : hasError(itemWithAisle.aisleRequest)
+                            ? (
+                              <span
+                                style={{
+                                  fontSize: "12px",
+                                  padding: "4px 8px",
+                                  borderRadius: "4px",
+                                  background: "var(--cf-colors-blue-100)",
+                                  color: "var(--cf-colors-blue-600)",
+                                }}
+                              >
+                                Other
+                              </span>
+                            )
+                            : (
+                              <span
+                                style={{
+                                  fontSize: "12px",
+                                  padding: "4px 8px",
+                                  borderRadius: "4px",
+                                  background: "var(--cf-colors-blue-100)",
+                                  color: "var(--cf-colors-blue-600)",
+                                }}
+                              >
+                                {aisle.location || "Other"}
+                              </span>
+                            )}
+                          {/* Correction button */}
+                          <cf-button
+                            variant="ghost"
+                            onClick={openCorrection({
+                              items,
+                              item: itemWithAisle.item,
+                              correctionIndex,
+                              correctionTitle,
+                            })}
+                            style="font-size: 12px; padding: 4px;"
+                          >
+                            ✏️
+                          </cf-button>
+                        </cf-hstack>
+                      </cf-card>
+                    );
+                  })}
 
                   {/* Demo layout notice */}
                   {!hasConnectedStore

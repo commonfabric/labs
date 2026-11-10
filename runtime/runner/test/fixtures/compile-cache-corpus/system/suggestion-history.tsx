@@ -5,6 +5,7 @@ import {
   pattern,
   patternTool,
   type PatternToolResult,
+  resultOf,
   UI,
   type VNode,
   wish,
@@ -58,10 +59,11 @@ export const searchPattern = pattern<
 });
 
 const SuggestionHistory = pattern<Input, Output>(() => {
-  const { result: entries } = wish<SuggestionHistoryEntry[] | Default<[]>>({
+  const entriesWish = wish<SuggestionHistoryEntry[] | Default<[]>>({
     query: "#suggestions",
   });
-  const allEntries = computed(() => entries ?? []);
+  const entries = resultOf(entriesWish.result);
+  const allEntries = computed(() => entries);
 
   return {
     [NAME]: "Suggestion History",

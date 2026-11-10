@@ -1,0 +1,91 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "SqliteDatabase": {
+        "additionalProperties": true,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "rev": {
+            "type": "number"
+          },
+          "tables": {
+            "additionalProperties": true,
+            "type": "object"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "properties": {
+      "predicate": {
+        "default": "",
+        "description": "A SQL boolean expression over the table's own columns. Empty counts every\nrow.",
+        "type": "string"
+      },
+      "source": {
+        "$ref": "#/$defs/SqliteDatabase",
+        "asCell": [
+          "sqlite"
+        ],
+        "description": "The database to count in. Whoever wired the input chose which."
+      },
+      "table": {
+        "description": "The table to count, by the name the store declares it under.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "source",
+      "table"
+    ],
+    "type": "object"
+  },
+  "pattern": "product/primitives/source-row-count.tsx",
+  "resultSchema": {
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "errorMessage": {
+        "description": "Why the read failed, empty while it has not.",
+        "type": "string"
+      },
+      "matching": {
+        "description": "How many of those rows satisfy `predicate`.",
+        "type": "number"
+      },
+      "pending": {
+        "description": "Whether the query is pending or awaiting replica synchronization.",
+        "type": "boolean"
+      },
+      "predicate": {
+        "description": "The predicate `matching` counted under, empty when it counted every row.",
+        "type": "string"
+      },
+      "table": {
+        "description": "The table the numbers below were read from.",
+        "type": "string"
+      },
+      "total": {
+        "description": "Every row the table holds.",
+        "type": "number"
+      }
+    },
+    "required": [
+      "table",
+      "predicate",
+      "total",
+      "matching",
+      "pending",
+      "errorMessage",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

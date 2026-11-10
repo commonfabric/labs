@@ -7,12 +7,16 @@ import {
   equals,
   type FabricBytes,
   handler,
+  hasError,
+  isPending,
+  isSyncing,
   type JSONSchema,
   lift,
   NAME,
   pattern,
   type PerSession,
   type ReadonlyCell,
+  resultOf,
   SELF,
   Stream,
   toSchema,
@@ -2478,9 +2482,21 @@ export default pattern<TopicInput, TopicOutput>(
     // the fields once here would pin the page to the empty profile the topic
     // opened with: the composer's controls never enable, and a comment or edit
     // made through them carries blank attribution.
-    const profileName = computed(() => profileWish.result?.get()?.name ?? "");
-    const viewerFace = computed(() => profileFace(profileWish.result));
-    const hasProfile = profileName.trim().length > 0;
+    const profileName = computed(() => {
+      if (
+        hasError(profileWish.result) || isPending(profileWish.result) ||
+        isSyncing(profileWish.result)
+      ) return "";
+      return resultOf(profileWish.result).get()?.name ?? "";
+    });
+    const viewerFace = computed(() => {
+      if (
+        hasError(profileWish.result) || isPending(profileWish.result) ||
+        isSyncing(profileWish.result)
+      ) return {};
+      return profileFace(resultOf(profileWish.result));
+    });
+    const hasProfile = computed(() => profileName.trim().length > 0);
     const createdByView = createdByOf({ createdBy });
 
     // --- Streams (external API; also usable headlessly via CLI) ---
@@ -2722,7 +2738,7 @@ export default pattern<TopicInput, TopicOutput>(
                 {hasProfile
                   ? (
                     <cf-profile-badge
-                      $profile={profileWish.result}
+                      $profile={resultOf(profileWish.result)}
                       size="sm"
                       noNavigate
                     />

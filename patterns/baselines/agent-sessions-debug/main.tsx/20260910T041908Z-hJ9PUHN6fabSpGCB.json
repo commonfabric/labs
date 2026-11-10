@@ -1,0 +1,871 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "CellLink": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "path": {
+            "items": {
+              "type": [
+                "number",
+                "string"
+              ]
+            },
+            "type": "array"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "space": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "space",
+          "path"
+        ],
+        "type": "object"
+      },
+      "DeferredDocument": {
+        "properties": {},
+        "type": "object"
+      },
+      "HostActivity": {
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "details": {
+            "$ref": "#/$defs/ShardedJsonObject"
+          },
+          "id": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "sourceId": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "at",
+          "type",
+          "message"
+        ],
+        "type": "object"
+      },
+      "HostHealth": {
+        "properties": {
+          "activity": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "undefined"
+                },
+                {
+                  "$ref": "#/$defs/HostActivity",
+                  "asCell": [
+                    "cell"
+                  ]
+                }
+              ]
+            },
+            "type": "array"
+          },
+          "commandProcessing": {
+            "properties": {
+              "accepting": {
+                "type": "boolean"
+              },
+              "failedCommands": {
+                "type": "number"
+              },
+              "lastError": {
+                "type": "string"
+              },
+              "pendingReceiptPublications": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "accepting",
+              "pendingReceiptPublications",
+              "failedCommands"
+            ],
+            "type": "object"
+          },
+          "schema": {
+            "type": "string"
+          },
+          "service": {
+            "type": "string"
+          },
+          "sources": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "undefined"
+                },
+                {
+                  "$ref": "#/$defs/SourceRow",
+                  "asCell": [
+                    "cell"
+                  ]
+                }
+              ]
+            },
+            "type": "array"
+          },
+          "startedAt": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "sync": {
+            "properties": {
+              "completedAt": {
+                "type": "string"
+              },
+              "error": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "sessionCount": {
+                "type": "number"
+              },
+              "startedAt": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "reason",
+              "status",
+              "startedAt"
+            ],
+            "type": "object"
+          },
+          "target": {
+            "properties": {
+              "cells": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "properties": {},
+                "type": "object"
+              },
+              "debugPieceId": {
+                "type": "string"
+              },
+              "spaceDid": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "spaceDid",
+              "cells"
+            ],
+            "type": "object"
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema",
+          "service",
+          "status",
+          "startedAt",
+          "updatedAt",
+          "target",
+          "commandProcessing",
+          "sources",
+          "activity"
+        ],
+        "type": "object"
+      },
+      "JsonObject": {
+        "additionalProperties": true,
+        "properties": {},
+        "type": "object"
+      },
+      "JsonValue": {
+        "anyOf": [
+          {
+            "type": [
+              "null",
+              "number",
+              "string",
+              "undefined"
+            ]
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "$ref": "#/$defs/JsonObject"
+          },
+          {
+            "items": {
+              "anyOf": [
+                {
+                  "type": [
+                    "null",
+                    "number",
+                    "string",
+                    "undefined"
+                  ]
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "$ref": "#/$defs/JsonObject"
+                },
+                {
+                  "items": {
+                    "type": "unknown"
+                  },
+                  "type": "array"
+                }
+              ]
+            },
+            "type": "array"
+          }
+        ]
+      },
+      "PublishedSessionInput": {
+        "properties": {
+          "active": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "archived": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cwd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "gitBranch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "gitRepo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "gitWorktreeRoot": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "manifest": {
+            "$ref": "#/$defs/DeferredDocument",
+            "asCell": [
+              "opaque"
+            ]
+          },
+          "nativeSessionId": {
+            "type": "string"
+          },
+          "sourceId": {
+            "type": "string"
+          },
+          "syncStatus": {
+            "enum": [
+              "complete",
+              "partial",
+              "stale",
+              "deleted"
+            ]
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "updatedAt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "sourceId",
+          "nativeSessionId",
+          "title",
+          "cwd",
+          "gitRepo",
+          "gitBranch",
+          "gitWorktreeRoot",
+          "updatedAt",
+          "archived",
+          "active",
+          "manifest",
+          "syncStatus"
+        ],
+        "type": "object"
+      },
+      "ReceiptIndex": {
+        "properties": {
+          "receipts": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "undefined"
+                },
+                {
+                  "$ref": "#/$defs/ReceiptRow",
+                  "asCell": [
+                    "cell"
+                  ]
+                }
+              ]
+            },
+            "type": "array"
+          },
+          "schema": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema",
+          "receipts",
+          "updatedAt"
+        ],
+        "type": "object"
+      },
+      "ReceiptRow": {
+        "properties": {
+          "commandId": {
+            "type": "string"
+          },
+          "error": {
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "retryable": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "retryable"
+            ],
+            "type": "object"
+          },
+          "nativeSessionId": {
+            "type": "string"
+          },
+          "receipt": {
+            "$ref": "#/$defs/CellLink"
+          },
+          "sourceId": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "commandId",
+          "sourceId",
+          "nativeSessionId",
+          "status",
+          "updatedAt",
+          "receipt"
+        ],
+        "type": "object"
+      },
+      "SessionIndexInput": {
+        "properties": {
+          "bucket": {
+            "enum": [
+              "recent",
+              "all"
+            ]
+          },
+          "generatedAt": {
+            "type": "string"
+          },
+          "generation": {
+            "type": "number"
+          },
+          "olderSessionCount": {
+            "type": "number"
+          },
+          "schema": {
+            "type": "string"
+          },
+          "sessions": {
+            "items": {
+              "$ref": "#/$defs/PublishedSessionInput",
+              "asCell": [
+                "opaque"
+              ]
+            },
+            "type": "array"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/$defs/SourceRow",
+              "asCell": [
+                "opaque"
+              ]
+            },
+            "type": "array"
+          },
+          "totalSessionCount": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "schema",
+          "sources",
+          "sessions"
+        ],
+        "type": "object"
+      },
+      "ShardedJsonObject": {
+        "additionalProperties": {
+          "$ref": "#/$defs/ShardedJsonValue"
+        },
+        "properties": {},
+        "type": "object"
+      },
+      "ShardedJsonValue": {
+        "anyOf": [
+          {
+            "type": [
+              "null",
+              "number",
+              "string",
+              "undefined"
+            ]
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "$ref": "#/$defs/ShardedJsonObject"
+          },
+          {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "undefined"
+                },
+                {
+                  "$ref": "#/$defs/ShardedJsonValue",
+                  "asCell": [
+                    "cell"
+                  ]
+                }
+              ]
+            },
+            "type": "array"
+          }
+        ]
+      },
+      "SourceError": {
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "nativeSessionId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "type": "object"
+      },
+      "SourceRow": {
+        "properties": {
+          "capabilities": {
+            "$ref": "#/$defs/ShardedJsonObject"
+          },
+          "complete": {
+            "type": "boolean"
+          },
+          "driver": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "errors": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "undefined"
+                },
+                {
+                  "$ref": "#/$defs/SourceError",
+                  "asCell": [
+                    "cell"
+                  ]
+                }
+              ]
+            },
+            "type": "array"
+          },
+          "id": {
+            "type": "string"
+          },
+          "lastCollectionCompletedAt": {
+            "type": "string"
+          },
+          "lastCollectionStartedAt": {
+            "type": "string"
+          },
+          "lastError": {
+            "type": "string"
+          },
+          "sessionCount": {
+            "type": "number"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "driver",
+          "capabilities",
+          "errors"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "allIndex": {
+        "anyOf": [
+          {
+            "type": "undefined"
+          },
+          {
+            "$ref": "#/$defs/SessionIndexInput"
+          }
+        ]
+      },
+      "allIndexCell": {
+        "anyOf": [
+          {
+            "type": "undefined"
+          },
+          {
+            "$ref": "#/$defs/DeferredDocument"
+          }
+        ],
+        "asCell": [
+          "opaque"
+        ]
+      },
+      "commandsCell": {
+        "asCell": [
+          "cell"
+        ],
+        "items": {
+          "$ref": "#/$defs/JsonValue"
+        },
+        "type": "array"
+      },
+      "health": {
+        "anyOf": [
+          {
+            "type": "undefined"
+          },
+          {
+            "$ref": "#/$defs/HostHealth"
+          }
+        ]
+      },
+      "healthCell": {
+        "anyOf": [
+          {
+            "type": "undefined"
+          },
+          {
+            "$ref": "#/$defs/DeferredDocument"
+          }
+        ],
+        "asCell": [
+          "opaque"
+        ]
+      },
+      "ownerDid": {
+        "type": "string"
+      },
+      "receipts": {
+        "anyOf": [
+          {
+            "type": "undefined"
+          },
+          {
+            "$ref": "#/$defs/ReceiptIndex"
+          }
+        ]
+      },
+      "receiptsCell": {
+        "anyOf": [
+          {
+            "type": "undefined"
+          },
+          {
+            "$ref": "#/$defs/DeferredDocument"
+          }
+        ],
+        "asCell": [
+          "opaque"
+        ]
+      },
+      "recentIndex": {
+        "anyOf": [
+          {
+            "type": "undefined"
+          },
+          {
+            "$ref": "#/$defs/SessionIndexInput"
+          }
+        ]
+      },
+      "recentIndexCell": {
+        "anyOf": [
+          {
+            "type": "undefined"
+          },
+          {
+            "$ref": "#/$defs/DeferredDocument"
+          }
+        ],
+        "asCell": [
+          "opaque"
+        ]
+      }
+    },
+    "required": [
+      "ownerDid",
+      "recentIndex",
+      "allIndex",
+      "health",
+      "receipts",
+      "recentIndexCell",
+      "allIndexCell",
+      "healthCell",
+      "commandsCell",
+      "receiptsCell"
+    ],
+    "type": "object"
+  },
+  "pattern": "agent-sessions-debug/main.tsx",
+  "resultSchema": {
+    "$defs": {
+      "JsonObject": {
+        "additionalProperties": true,
+        "properties": {},
+        "type": "object"
+      },
+      "JsonValue": {
+        "anyOf": [
+          {
+            "type": [
+              "null",
+              "number",
+              "string",
+              "undefined"
+            ]
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "$ref": "#/$defs/JsonObject"
+          },
+          {
+            "items": {
+              "anyOf": [
+                {
+                  "type": [
+                    "null",
+                    "number",
+                    "string",
+                    "undefined"
+                  ]
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "$ref": "#/$defs/JsonObject"
+                },
+                {
+                  "items": {
+                    "type": "unknown"
+                  },
+                  "type": "array"
+                }
+              ]
+            },
+            "type": "array"
+          }
+        ]
+      },
+      "OwnerCommandQueue": {
+        "ifc": {
+          "addIntegrity": [
+            {
+              "kind": "represents-principal",
+              "subject": {
+                "__ctCurrentPrincipal": true
+              }
+            }
+          ],
+          "ownerPrincipal": {
+            "__ctCurrentPrincipal": true
+          },
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/packages/connectors/agents/debug-view/main.tsx",
+              "moduleIdentity": "UHabIY7UO3eWS8zvovUuig-jp_lK-xeRW6MNVWIUKoA",
+              "path": [
+                "sendOwnerAgentCommand"
+              ]
+            }
+          }
+        },
+        "items": {
+          "$ref": "#/$defs/JsonValue"
+        },
+        "type": "array"
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "activityCount": {
+        "type": "number"
+      },
+      "commandAuthorization": {
+        "ifc": {
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/packages/connectors/agents/debug-view/main.tsx",
+              "moduleIdentity": "UHabIY7UO3eWS8zvovUuig-jp_lK-xeRW6MNVWIUKoA",
+              "path": [
+                "sendOwnerAgentCommand"
+              ]
+            }
+          }
+        },
+        "type": "boolean"
+      },
+      "commandCount": {
+        "type": "number"
+      },
+      "commandQueue": {
+        "$ref": "#/$defs/OwnerCommandQueue"
+      },
+      "receiptCount": {
+        "type": "number"
+      },
+      "sessionCount": {
+        "type": "number"
+      },
+      "sourceCount": {
+        "type": "number"
+      },
+      "status": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "status",
+      "sourceCount",
+      "sessionCount",
+      "commandCount",
+      "receiptCount",
+      "activityCount",
+      "commandQueue",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

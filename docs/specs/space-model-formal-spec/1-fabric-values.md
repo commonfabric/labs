@@ -108,7 +108,8 @@ type FabricValue =
   //       - JS object wrappers: `FabricError`, `FabricMap`,
   //         `FabricSet` (Section 1.4)
   //       - User-defined types: `Cell`, `Stream`, etc.
-  //       - System types: `UnknownValue`, `ProblematicValue`
+  //       - System types: `FabricUnavailable`, `UnknownValue`,
+  //         `ProblematicValue`
   | FabricInstance
 
   // (d) Plain containers -- read-only; see the immutability callout below
@@ -465,7 +466,7 @@ included in `FabricValue` via the `FabricPrimitive` arm of the union (Section
 | `FabricBytes` | `FabricPrimitive` | `Bytes@1` | `Uint8Array` (private byte storage) | Immutable byte sequence. The instance owns its bytes outright: input is copied at construction time, unless the caller cedes it with `transfer`. Callers access bytes via `slice()`, `sliceBuffer()`, `copyInto()`, and `length`. |
 | `FabricKeyPair` | `FabricPrimitive` | `KeyPair@1` | Either two `CryptoKey` handles, or an algorithm name and the two keys' bytes | Asymmetric key pair. Which of the two states it holds decides what it can do: only the material state has a JSON encoding or a hash, and only the handle state can hand back a `CryptoKeyPair` (see Section 1.4.11). |
 | `FabricRegExp` | `FabricPrimitive` | `RegExp@1` | `source` / `flags` / `flavor` strings | Regular-expression value. `source` is the pattern string (`regex.source`); `flags` is the flag string (`regex.flags`); `flavor` is the regex dialect identifier (e.g. `"es2025"`). Stores strings only; `value` returns a fresh JS `RegExp` clone per call. Extra enumerable properties on a JS `RegExp` cause rejection. |
-| `FabricUnavailable` | `FabricPrimitive` | `Unavailable@1` | `reason` string; for reason `error`, an `errorKind` string and an optional `errorMessage` string | Marker standing in for data that is not available, saying why: `pending`, `syncing`, or `error`, the last sorted by a kind. Only the `error` reason carries a kind and a message. Wire state is `{ reason }`, `{ reason, errorKind }`, or `{ reason, errorKind, errorMessage }` (see Section 1.4.12). |
+| `FabricUnavailable` | `FabricPrimitive` | `Unavailable@1` | `reason` string; for reason `error`, an `errorKind` string and an optional `message` string; for reason `obsolete`, an optional `message` string | Marker standing in for data that is not available, saying why: `pending`, `syncing`, `obsolete`, or `error`, the last sorted by a kind. `pending` and `syncing` are transient; `obsolete` denotes a retired output and may carry diagnostic migration guidance. Wire state is `{ reason }`, `{ reason, message }`, `{ reason, errorKind }`, or `{ reason, errorKind, message }` (see Section 1.4.12). |
 
 #### Extra Enumerable Properties
 
@@ -1403,8 +1404,9 @@ JSON.
 #### 1.4.12 `FabricUnavailable`
 
 `FabricUnavailable` is a marker standing in for data that is not available,
-saying why. It holds no data of its own: the reason, and for one reason the
-kind of error and a message, are the whole of what it says, which is what
+saying why. It holds no data of its own: the reason, an error kind for `error`,
+and optional diagnostic text for either terminal reason are the whole of what
+it says, which is what
 makes it a `FabricPrimitive` rather than a container. A consumer reading a
 slot that holds one learns that the value it wanted is not there and why,
 rather than reading `undefined` and having to guess among the situations that
@@ -1417,9 +1419,10 @@ could have produced it.
 /**
  * Why a `FabricUnavailable` stands where data would otherwise be. The two
  * transient reasons say the data is on its way; `error` says producing it
- * failed, and is the one reason that carries a kind and a message.
+ * failed; `obsolete` says the output is no longer served and may carry
+ * migration guidance.
  */
-type UnavailableReason = "pending" | "syncing" | "error";
+type UnavailableReason = "pending" | "syncing" | "error" | "obsolete";
 
 /**
  * The kinds of failure a `FabricUnavailable` with reason `error` sorts into.
@@ -1441,7 +1444,9 @@ The reasons split along one axis, which `isTransient()` reports:
 * `pending` — the value is being produced and has not arrived yet.
 * `syncing` — the value exists but has not reached this runtime yet.
 * `error` — producing the value failed. `errorKind` says how, and
-  `errorMessage` says more.
+  `message` says more.
+* `obsolete` — the output is no longer served. It is non-transient and is
+  not an error. Optional `message` text explains what to use instead.
 
 The kinds sort a failure by what failed, so that a consumer can tell a broken
 service from a violated data contract without parsing a message:
@@ -1466,36 +1471,40 @@ service from a violated data contract without parsing a message:
  * Extends `FabricPrimitive` (not a `FabricInstance`).
  *
  * Only the `error` reason carries a kind, and it always does; only the
- * `error` reason may carry a message. The constructor refuses the other
- * pairings.
+ * `error` and `obsolete` reasons may carry a message. The constructor
+ * refuses messages on transient reasons.
  */
 export class FabricUnavailable extends FabricPrimitive {
   readonly #reason: UnavailableReason;
   readonly #errorKind: UnavailableErrorKind | null;
-  readonly #errorMessage: string | null;
+  readonly #message: string | null;
 
   constructor(
     reason: UnavailableReason,
     errorKind: UnavailableErrorKind | null = null,
-    errorMessage: string | null = null,
+    message: string | null = null,
   ) {
     super();
     if (reason === "error") {
       if (errorKind === null) {
         throw new Error("Reason `error` requires an `UnavailableErrorKind`.");
       }
-    } else if (errorKind !== null || errorMessage !== null) {
-      throw new Error(
-        `Reason \`${reason}\` takes neither an \`errorKind\` nor an ` +
-          "`errorMessage`.",
-      );
+    } else if (errorKind !== null) {
+      throw new Error(`Reason \`${reason}\` takes no \`errorKind\`.`);
+    }
+    if (message !== null && typeof message !== "string") {
+      throw new Error("A message must be a string or null.");
+    }
+    if ((reason === "pending" || reason === "syncing") && message !== null) {
+      throw new Error("Transient reasons take no message.");
     }
     this.#reason = reason;
     this.#errorKind = errorKind;
     // A message equal to the kind's default is stored as none.
-    this.#errorMessage = (errorMessage === defaultMessageFor(errorKind))
+    this.#message = (reason === "error" &&
+        message === defaultMessageFor(errorKind))
       ? null
-      : errorMessage;
+      : message;
   }
 
   get reason(): UnavailableReason {
@@ -1507,13 +1516,13 @@ export class FabricUnavailable extends FabricPrimitive {
   }
 
   /** The message, or the kind's default when none was stored. */
-  get errorMessage(): string | null {
-    return this.#errorMessage ?? defaultMessageFor(this.#errorKind);
+  get message(): string | null {
+    return this.#message ?? defaultMessageFor(this.#errorKind);
   }
 
   /** The message as stored, with no default supplied. */
-  get rawErrorMessage(): string | null {
-    return this.#errorMessage;
+  get rawMessage(): string | null {
+    return this.#message;
   }
 
   isPending(): boolean {
@@ -1524,16 +1533,20 @@ export class FabricUnavailable extends FabricPrimitive {
     return this.#reason === "syncing";
   }
 
+  isObsolete(): boolean {
+    return this.#reason === "obsolete";
+  }
+
   /** Narrows the two error members to what the `error` reason carries. */
   isError(): this is {
     readonly errorKind: UnavailableErrorKind;
-    readonly errorMessage: string;
+    readonly message: string;
   } {
     return this.#reason === "error";
   }
 
   isTransient(): boolean {
-    return this.#reason !== "error";
+    return this.#reason === "pending" || this.#reason === "syncing";
   }
 }
 
@@ -1548,25 +1561,26 @@ transient reason with a kind or a message, is refused. A wire state carrying
 either pairing is therefore one the class never wrote, and decoding it
 produces a `ProblematicValue` (Section 3.5) rather than an instance.
 
-**The message has a default, and the default is not state.** `errorMessage`
+**An error message has a default, and the default is not state.** `message`
 returns the stored message, or a fixed message for the kind when none is
-stored; `rawErrorMessage` returns the stored message alone, `null` when there
+stored; `rawMessage` returns the stored message alone, `null` when there
 is none. A message given at construction that equals its kind's default is
 stored as no message at all, so the two ways of arriving at the default are
 one state: they encode alike, hash alike, and are equal by content. The
 default text is presentation, never encoded or hashed, and may change without
 a format change.
 
-**Prefab instances.** The two transient reasons each have one exported
-instance, `UNAVAILABLE_PENDING` and `UNAVAILABLE_SYNCING`, and both wire
+**Prefab instances.** The non-error reasons each have one message-free exported
+instance: `UNAVAILABLE_PENDING`, `UNAVAILABLE_SYNCING`, and
+`UNAVAILABLE_OBSOLETE`. Both wire
 formats decode a state naming one of those reasons alone to that instance
 rather than to a fresh one. Nothing turns on the identity: two instances with
 the same state are equal by content (Section 6), and hash the same, however
 they were made. The prefabs exist so that the common case allocates nothing.
 
 **Wire state** is `{ reason }` for a transient reason, and for `error`
-`{ reason, errorKind }` or `{ reason, errorKind, errorMessage }`, the message
-present exactly when `rawErrorMessage` is not `null`, under the tag
+`{ reason, errorKind }` or `{ reason, errorKind, message }`, the message
+present exactly when `rawMessage` is not `null`, under the tag
 `Unavailable@1`. A field with nothing to say is absent from the state rather
 than present as `null`. The state is a record of strings, so it is a
 `FabricValue` and a realm-crossing value alike: the JSON codec is nonterminal
@@ -1575,6 +1589,15 @@ over it and the realm codec terminal, as for `FabricRegExp` (Section 3.4 of
 reason, the kind or `null`, and the raw message or `null`, under the dedicated
 `TAG_UNAVAILABLE` (Section 4.18 of
 [2-hash-byte-format.md](./2-hash-byte-format.md)).
+
+For `obsolete`, wire state is `{ reason: "obsolete" }` or
+`{ reason: "obsolete", message: string }`. The optional message has no
+default: an empty string differs from no message. It is persisted, hashed, and
+visible in debug inspection, so an agent diagnosing a blocked consumer can read
+the suggested replacement. It is diagnostic data, not executable instructions
+or authorization to access a replacement. Its `errorKind` is `null`; its
+guidance uses the same `message` field as error diagnostics and the same third
+hash field. Transient reasons cannot carry a message.
 
 What flows where — which built-ins produce one and under which kind, how a
 computation reacts to one arriving as an input, what a renderer shows while a
@@ -1905,6 +1928,14 @@ engine does within one. They are written as explicit links (`FabricInstance`s
 referencing other documents), so two cells may reference each other and form a
 cycle in the broader data graph without any single cell's content containing
 one.
+
+### 1.7 Runtime Control Values
+
+The canonical unavailable control value is the `FabricUnavailable` primitive
+specified in Section 1.4.12. It is not structurally identified: authored objects
+with similar fields remain ordinary data. The runtime's propagation, explicit
+observation, and rendering rules are specified in
+[`../data-unavailability.md`](../data-unavailability.md).
 
 ---
 

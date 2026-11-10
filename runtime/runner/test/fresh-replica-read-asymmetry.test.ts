@@ -384,13 +384,20 @@ describe("fresh-replica read asymmetry", () => {
     }
   });
 
-  it("ensureLinkedDocLoaded hands back both reservations on a failed kick", async () => {
-    // The traverse-side kick path: a failed sync must clear the runtime's
-    // dedup set AND retract the storage manager's shouldPullDoc reservation,
-    // so the next report retries; after a successful kick the dedup holds.
+  it("releases failed-load reservations and retries after reconnect", async () => {
     const { rt, close } = freshReader();
     try {
       const storage = rt.storageManager;
+      const subscribe = storage.subscribeConnectionState!.bind(storage);
+      let connectionListener: Parameters<typeof subscribe>[1] | undefined;
+      storage.subscribeConnectionState = (observedSpace, callback) => {
+        if (observedSpace !== space) return subscribe(observedSpace, callback);
+        connectionListener = callback;
+        callback({ status: "ready", epoch: 0 });
+        return () => {
+          connectionListener = undefined;
+        };
+      };
       const provider = storage.open(space);
       const origSync = provider.sync.bind(provider);
       const ghostId = writerRt.getCell(space, "eldl-ghost", entrySchema)
@@ -417,7 +424,16 @@ describe("fresh-replica read asymmetry", () => {
       await (storage.crossSpaceSettled?.() ?? Promise.resolve());
       expect(failures).toBe(1);
 
-      // The failure handed back both reservations: a second report re-kicks.
+      // A ready-connection failure stays terminal for this epoch.
+      rt.ensureLinkedDocLoaded(link, space);
+      await (storage.crossSpaceSettled?.() ?? Promise.resolve());
+      expect(calls).toBe(1);
+      connectionListener!({
+        status: "disconnected",
+        epoch: 0,
+        cause: new Error("connection lost"),
+      });
+      connectionListener!({ status: "ready", epoch: 1 });
       rt.ensureLinkedDocLoaded(link, space);
       await (storage.crossSpaceSettled?.() ?? Promise.resolve());
       expect(calls).toBe(2);

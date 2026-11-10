@@ -13,9 +13,11 @@ import {
   type Cell,
   computed,
   handler,
+  hasError,
   NAME,
   pattern,
   type PerSession,
+  resultOf,
   Stream,
   UI,
   type VNode,
@@ -270,10 +272,10 @@ const BattleshipLobby = pattern<LobbyState, LobbyOutput>(
     });
     const profileNameWish = wish<string>({ query: "#profileName" });
 
-    const profileName = computed(() => profileNameWish.result ?? "");
-    const hasProfile = computed(() =>
-      (profileNameWish.result ?? "").trim() !== ""
-    );
+    const profileName = hasError(profileNameWish.result)
+      ? ""
+      : resultOf(profileNameWish.result);
+    const hasProfile = computed(() => profileName.trim() !== "");
     const joinLabel = computed(() =>
       hasProfile ? `Join as ${profileName}` : "Create a profile to join"
     );
@@ -281,7 +283,7 @@ const BattleshipLobby = pattern<LobbyState, LobbyOutput>(
     const sharedCells = { player1, player2, shots, gameState };
     const join = joinGame({
       name: profileName,
-      profile: profileWish.result,
+      profile: resultOf(profileWish.result),
       myName,
       myPlayerNumber,
       ...sharedCells,
