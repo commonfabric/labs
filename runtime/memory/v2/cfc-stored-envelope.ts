@@ -14,9 +14,10 @@
  * readable envelope, resolving the label documents it names, and caching
  * what was found stay with each reader.
  *
- * Every check is of shape alone. A label's clauses and atoms are checked to
- * be arrays and no further, and an entry's `origin` and `observes` are read
- * only where a rule below names them.
+ * Every check is of shape alone. A label's `confidentiality` and
+ * `integrity` members are checked to be arrays, and the clauses and atoms
+ * they hold are not checked at all; an entry's `origin` and `observes` are
+ * read only where a rule below names them.
  */
 
 import { isObjectNotArray } from "@commonfabric/js-values/types";
