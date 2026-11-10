@@ -2685,7 +2685,7 @@ cf piece call --cell ID listTopics -- --filter '.status == "open"'
 `wish` writes them beside the target it resolves:
 
 ```bash
-cf wish '#profile' -i ./claude.key --select name,avatar
+cf wish '#profile' -i ./claude.key --select name,bio
 cf wish '#mentionable' -i ./claude.key -s my-space --filter '.status == "open"'
 ```
 

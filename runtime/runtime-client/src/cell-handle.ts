@@ -1518,6 +1518,32 @@ export class CellHandle<T = unknown> {
   }
 
   /**
+   * Resolves this cell both to the cell its links lead to, as
+   * {@link resolveAsCell} does (`cell`), and to where a write to it lands
+   * (`writeTarget`): write redirects are followed, and a link stored as the
+   * value there is not. The worker reads both at once, so they describe the
+   * same links.
+   */
+  async resolveAsCellWithWriteTarget(): Promise<
+    { cell: CellHandle<T>; writeTarget: CellHandle<T> }
+  > {
+    const response = await this.#enqueueOperation(() =>
+      this.#conn.request<RequestType.CellResolveAsCell>({
+        type: RequestType.CellResolveAsCell,
+        cell: this.ref(),
+        withWriteTarget: true,
+      })
+    );
+    if (response.writeTarget === undefined) {
+      throw new Error("The worker answered without the cell's write target.");
+    }
+    return {
+      cell: new CellHandle<T>(this.#rt, response.cell),
+      writeTarget: new CellHandle<T>(this.#rt, response.writeTarget),
+    };
+  }
+
+  /**
    * The fields this record cell holds, by name, each as a handle on the
    * field within it, whose reads the worker decides one by one. Nothing a
    * field holds is read to list them. The names come from the record, not its
