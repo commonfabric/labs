@@ -334,6 +334,16 @@ export type ComponentPropRead = {
   readonly schema: JSONSchema;
   readonly projected?: true;
   readonly renders?: readonly NestedRenderPath[];
+  /**
+   * Set when `schema` reads everything the component shows from the binding:
+   * the component reads nothing through the handle beyond that read, and the
+   * read takes no position as a cell that the component reads further. Such
+   * a binding is decided on that read, rather than on the handle's own
+   * schema. An entry whose component reads through a cell its read hands it,
+   * as the code editor reads each mention's destination for its name, is not
+   * complete.
+   */
+  readonly complete?: true;
 };
 
 /** Version exchanged when a renderer registers its component read contract. */
@@ -398,10 +408,15 @@ export const componentReadContracts: Readonly<
     references: { schema: MentionRefMapSchema, projected: true },
   },
   "cf-profile-badge": {
-    profile: { schema: ProfileBadgeSchema, projected: true },
+    // Complete but for the seal, which the badge shows from whether its
+    // space's root links the profile (`profileSpaceOf`), a read of the
+    // space's own document rather than of the binding.
+    profile: { schema: ProfileBadgeSchema, projected: true, complete: true },
   },
   "cf-markdown": { content: { schema: true } },
-  "cf-fab": { previewMessage: { schema: stringSchema, projected: true } },
+  "cf-fab": {
+    previewMessage: { schema: stringSchema, projected: true, complete: true },
+  },
   "cf-theme": { theme: { schema: true } },
   "cf-calendar": { value: { schema: true }, markedDates: { schema: true } },
   "cf-select": { value: { schema: true } },
