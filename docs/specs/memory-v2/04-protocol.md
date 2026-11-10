@@ -722,16 +722,19 @@ Rules:
   (or, undeclared, the delivery memory) still lists, and clears the memory,
   so nothing outside the empty union lingers as demand. A resume without
   `holdings` is diffed against the server's memory
-- after reconnect, the client resumes the session, replays retained commits,
-  applies inline catch-up `sync` when present, and only re-establishes the
-  watch set if the session was reopened fresh — declaring its holdings on that
+- after reconnect, the client resumes the session, applies inline catch-up
+  `sync` when present, and re-establishes the watch set it holds if the
+  session was reopened fresh, or if a watch mutation the drop caught went
+  unanswered (the server may have applied it) — declaring its holdings on that
   `session.watch.set` (section 4.3.5) so the re-establishment carries the
-  difference rather than the whole union
+  difference rather than the whole union. It replays nothing: a commit or
+  watch mutation the drop caught failed (section 4.8.5), and its caller sends
+  it again
 - a retry after a failed handshake or session restoration discards the previous
   transport connection before sending `hello` again. A connection accepts
   `hello` only once; the fresh connection also supplies a new authentication
-  challenge. Mounted sessions retain their watch intent and unconfirmed commits
-  while they await restoration on that connection. A transport that cannot
+  challenge. Mounted sessions retain their watch intent while they await
+  restoration on that connection. A transport that cannot
   discard its failed connection stops recovery with the original failure,
   rejecting pending writes and restoration waiters instead of repeating `hello`
 - a `session.open` denied with an `AuthorizationError` the server did NOT mark
@@ -1404,10 +1407,11 @@ this rule existed writable: admission accepts a resulting document whose
 the label map must leave no number in it.
 
 The client compacts a temporary outgoing message before Fabric encoding and
-transport byte/node validation. It retains the original inline commit for
-pending requests, conflict handling and reconnect replay. Each send uses the
-current connection's negotiation; a replacement connection without the
-capability receives the inline representation even for a retained commit.
+transport byte/node validation. Its caller keeps the original inline commit,
+for conflict handling and for sending it again after a lost connection. Each
+send uses the current connection's negotiation; a replacement connection
+without the capability receives the inline representation even for a commit
+sent again.
 
 The server performs bounded wire decoding, then expands negotiated metadata
 before validating the request's commit shape or running CFC and storage checks.
@@ -2497,7 +2501,9 @@ The connection carries on, so a commit the server cannot handle fails alone,
 without taking the connection or the client's other commits with it. A failure
 to deliver a response is a failure of the connection instead, and closes it:
 the request may already have taken effect, a commit whose verdict was lost
-among them, so the client replays it and the server answers from its record.
+among them, so the client fails it as unacknowledged, its caller sends the
+same commit again under its `localSeq`, and the server answers from its
+record.
 A request is answered once. A failure after its response has gone out, such as
 in delivering the self-revocation a commit defers until after its verdict, is
 not answered again on the same `requestId`; it closes the connection the same
@@ -2629,16 +2635,23 @@ reports the deletion as a refused reopen would.
 
 On disconnect:
 
-1. requests awaiting a response get none; retained commits and watch mutations
-   stay pending, and every other request rejects with `ConnectionError`
+1. requests awaiting a response get none, and the client fails each with a
+   `ConnectionError` saying how far it got: one handed to the connection is
+   unacknowledged (it may have landed), and one still waiting to be sent, or
+   made while the client reconnects or while the session is held, is never
+   sent. The client keeps nothing for a later connection. Each failed commit
+   or watch mutation carries `readyToRetry()`, which resolves once the session
+   can take it again: on a later connection, for an unacknowledged one
 2. the logical session may still be resumable
-3. the client reconnects, replays retained commits, restores the watch set, and
-   resumes integrating sync from `seenSeq` — declaring what its replica holds
-   (section 4.1.2) so the server re-delivers exactly what it lacks
-4. the client sends again, in their original order, the pending watch
-   mutations from the first one whose answer it lacks onwards (every pending
-   one, when the session was re-established), and every watch mutation made
-   after them follows them
+3. the client reconnects, restores the watch set, and resumes integrating sync
+   from `seenSeq` — declaring what its replica holds (section 4.1.2) so the
+   server re-delivers exactly what it lacks
+4. the caller sends a failed commit again unchanged, under the same
+   `localSeq`, so the server answers one that landed from its record and
+   judges one that did not afresh; when the session was replaced by one with
+   another ID, `readyToRetry()` rejects instead, since the server would judge
+   the commit as a new one. Commits sent again keep increasing `localSeq`
+   order (section 4.11.1)
 
 ## 4.9 Blob Transfer
 

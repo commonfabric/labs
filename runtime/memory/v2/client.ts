@@ -218,14 +218,15 @@ export type Transport = {
    * Rejects with an error named `ConnectionError` (see `connectionError()`)
    * when the connection was lost or could not be opened before the write was
    * confirmed. The payload may still have reached the peer, so the request
-   * has no verdict either way. The client keeps a commit rejected that way
-   * for replay on the next connection, so the transport must report the same
-   * loss to its close receiver, which starts the reconnect that replays it;
-   * `reset()` and `close()` are the exceptions, as the client calls them
-   * itself. A transport whose write of this very payload failed on an open
-   * connection rejects with `writeFailedError()` instead, so that the client
-   * stops replaying a commit whose own write keeps failing. Any other
-   * rejection fails the request with that error.
+   * has no verdict either way, and fails with `unacknowledgedError()`; the
+   * transport must report the same loss to its close receiver, which starts
+   * the reconnect, `reset()` and `close()` being the exceptions, as the
+   * client calls them itself. A transport whose write of this very payload
+   * failed on an open connection rejects with `writeFailedError()` instead,
+   * whose mark the request's failure keeps, so that a caller sending it again
+   * can stop once its own write keeps failing. Any other rejection fails the
+   * request with that error. A response that arrived before the rejection
+   * answers the request.
    */
   send(payload: string): Promise<void>;
 
@@ -4746,10 +4747,12 @@ export class SpaceSession {
       return await this.#issueWatchMutation(send, apply, sendAfter, options);
     }
     // A watch change its connection lost fails ready to be made again once
-    // this session can take it, as a commit does (`#withReadyToRetry()`).
+    // this session can take it, as a commit does (`#withReadyToRetry()`),
+    // on whichever server session it then has: a re-established session
+    // holds the watch set this one does.
     const madeOn = {
       epoch: this.#client.connectionEpoch,
-      sessionId: this.#sessionId,
+      sessionId: undefined,
     };
     try {
       return await this.#issueWatchMutation(send, apply, sendAfter, options);
@@ -5146,7 +5149,7 @@ export class SpaceSession {
    */
   #withReadyToRetry(
     error: unknown,
-    madeOn: { epoch: number; sessionId: string },
+    madeOn: { epoch: number; sessionId: string | undefined },
   ): Error {
     const failure = error instanceof Error ? error : new Error(String(error));
     if (connectionDeliveryOf(failure) === undefined) return failure;
@@ -5156,11 +5159,18 @@ export class SpaceSession {
     });
   }
 
-  /** Helper for `#withReadyToRetry()`; see there. */
-  async #reopenedSince(epoch: number, sessionId: string): Promise<void> {
+  /**
+   * Helper for `#withReadyToRetry()`; see there. A request made on the server
+   * session `sessionId` is not ready again on another; one made with none
+   * named, such as a watch change, is.
+   */
+  async #reopenedSince(
+    epoch: number,
+    sessionId: string | undefined,
+  ): Promise<void> {
     for (;;) {
       this.#assertOpen();
-      if (this.#sessionId !== sessionId) {
+      if (sessionId !== undefined && this.#sessionId !== sessionId) {
         throw sessionReplacedError(
           `memory session ${sessionId} was replaced by ${this.#sessionId}`,
         );

@@ -86,6 +86,7 @@ import {
   type ViewPlan,
 } from "@commonfabric/memory/v2";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
+import { untilAnswered } from "./until-answered.ts";
 import type { ClientBuild } from "@commonfabric/memory/v2/client-info";
 import { validatePresencePublication } from "@commonfabric/memory/v2/presence";
 import type { AppliedCommit } from "@commonfabric/memory/v2/engine";
@@ -355,47 +356,6 @@ function dataUriMemoWeight(id: string): number {
 // commit cannot hang forever. On expiry we surface the conflict and let the
 // scheduler retry path re-gate on readiness.
 const CONFLICT_READ_REPAIR_TIMEOUT_MS = 30_000;
-
-/**
- * How many times a commit is sent again after its own payload failed the
- * write (a `ConnectionError` marked `ownWriteFailed`) before it fails with
- * that error: a payload that fails every time would otherwise take each new
- * connection down with it.
- */
-const MAX_OWN_WRITE_FAILURES = 5;
-
-/**
- * Calls `attempt`, a request to the memory client, until it settles with
- * something other than a lost connection. The client keeps nothing for a later
- * connection: a request its connection lost, before it was handed over or
- * after, fails with a `ConnectionError` saying which, and its `readyToRetry()`
- * says when the session can take it again; this makes it again then. A caller
- * whose request must apply once makes it again unchanged, as a commit under
- * its own `localSeq` is, which the server answers from its record if it
- * landed. A request whose own payload failed the write `MAX_OWN_WRITE_FAILURES`
- * times fails with that error; one whose session closed, or was replaced,
- * fails as `readyToRetry()` does.
- */
-async function untilAnswered<T>(attempt: () => Promise<T>): Promise<T> {
-  let ownWriteFailures = 0;
-  for (;;) {
-    try {
-      return await attempt();
-    } catch (error) {
-      if (MemoryV2Client.connectionDeliveryOf(error) === undefined) throw error;
-      if (
-        error instanceof Error && "ownWriteFailed" in error &&
-        error.ownWriteFailed === true &&
-        ++ownWriteFailures >= MAX_OWN_WRITE_FAILURES
-      ) throw error;
-      if (
-        !(error instanceof Error) || !("readyToRetry" in error) ||
-        typeof error.readyToRetry !== "function"
-      ) throw error;
-      await error.readyToRetry();
-    }
-  }
-}
 
 // Strategy 1 — client-side conflict admission control (EXPERIMENT, default off).
 // Once a commit conflicts, the client knows its read set is behind on the

@@ -144,6 +144,16 @@ class ReplacingPreWatchEffectTransport extends ScriptedSessionTransport {
   }
 
   protected override handle(message: ScriptedTransportMessage): void {
+    if (message.type === "session.watch.set") {
+      // The restore re-establishes the watch set the session holds, which
+      // the failed add is not part of.
+      this.respond({
+        type: "response",
+        requestId: message.requestId!,
+        ok: { serverSeq: 1, sync: sync(1, 1, []) },
+      });
+      return;
+    }
     if (message.type !== "session.watch.add") {
       throw new Error(`Unhandled scripted message: ${message.type}`);
     }
@@ -283,8 +293,14 @@ describe("memory-v2-pre-watch-effect", () => {
     );
 
     try {
-      // The connection drops under the first request, which the restore
-      // sends again on the session that replaces the one the effect came on.
+      // The connection drops under the first request, which fails; made
+      // again once the session is back, it goes to the session that replaces
+      // the one the effect came on.
+      const failed = await session.watchAddSync([watch(watchedId)]).catch((
+        error,
+      ) => error);
+      expect(MemoryV2Client.connectionDeliveryOf(failed)).toBeDefined();
+      await failed.readyToRetry();
       const result = await session.watchAddSync([watch(watchedId)]);
 
       expect(transport.watchAddCount).toBe(2);
