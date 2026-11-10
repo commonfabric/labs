@@ -108,6 +108,11 @@ import { txToReactivityLog } from "../../../runner/src/scheduler.ts";
 import { interceptTransaction } from "../../../runner/test/support/intercept-transaction.ts";
 import { patchableCell } from "../../../runner/test/support/patchable-cell.ts";
 import { createTrustedBuilder } from "../../../runner/test/support/trusted-builder.ts";
+import {
+  SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
+  writeSeedEnvelopeDoc,
+} from "../../../runner/test/cfc-seed-envelope.ts";
 import { buildProcessor } from "./build-processor.ts";
 import { stubWorkerBoot } from "./stub-worker-boot.ts";
 import { createTransactionCommitReceipt } from "../../../runner/src/storage/commit-receipt.ts";
@@ -10142,6 +10147,78 @@ describe("runtime-processor", () => {
         });
       } finally {
         await runtime.dispose();
+      }
+    });
+
+    it("decides a host's read under the ceiling `initialize()` configures, with the resolver a mount gets", async () => {
+      // The ceiling admits what the acting user may see. A value labeled with
+      // the session's own space is admitted through the exchange rules alone,
+      // which the resolver built for that space applies, and a value labeled
+      // with a resource the ceiling does not name is refused.
+      const space = cfcSigner.did();
+      const server = new MemoryV2Server.Server({
+        authorizeSessionOpen: () => cfcSigner.did(),
+        sessionOpenAuth: { audience: testSessionOpenAudience },
+      });
+      const storageManager = new SharedV2StorageManager({
+        as: cfcSigner,
+        memoryHost: new URL("memory://"),
+      }, server);
+      const restoreBoot = stubWorkerBoot(() => storageManager);
+      try {
+        const processor = await RuntimeProcessor.initialize({
+          apiUrl: "http://worker.test/",
+          identity: cfcSigner.keyPair,
+          spaceDid: space,
+          renderConfidentialityCeiling: { atoms: [cfcAtom.user(space)] },
+        });
+        try {
+          const runtime = processor.accessForTestingOnly.runtime;
+          const labeled = async (id: string, atom: unknown) => {
+            const tx = runtime.edit();
+            const cell = runtime.getCell<string>(space, id, undefined, tx);
+            writeSeedEnvelopeDoc(tx, space);
+            seedStoredEnvelope(tx, {
+              space,
+              id: cell.getAsNormalizedFullLink().id!,
+              type: "application/json",
+              path: [],
+            }, {
+              value: `value-of-${id}`,
+              cfc: {
+                version: 1,
+                schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+                labelMap: {
+                  version: 1,
+                  entries: [{ path: [], label: { confidentiality: [atom] } }],
+                },
+              },
+            } as never);
+            expect((await tx.commit().settled).ok).toBeDefined();
+            return processor.handleCellGet({
+              type: RequestType.CellGet,
+              cell: {
+                ...cell.getAsNormalizedFullLink(),
+                schema: { type: "string" },
+              } as unknown as CellRef,
+            });
+          };
+
+          expect(await labeled("session-space-note", cfcAtom.space(space)))
+            .toEqual({ value: "value-of-session-space-note" });
+          expect(
+            await labeled(
+              "credential-note",
+              cfcAtom.resource("CredentialSecret"),
+            ),
+          ).toEqual({ refused: { refusedBy: "display-ceiling" } });
+        } finally {
+          await processor.dispose();
+        }
+      } finally {
+        restoreBoot();
+        await storageManager.close();
+        await server.close();
       }
     });
   });

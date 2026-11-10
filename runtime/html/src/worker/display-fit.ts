@@ -112,13 +112,13 @@ export function admitsEverything(policy: RenderPolicy): boolean {
  * labels the reads consumed, which reach every document a read passed
  * through, including one behind a link crossed part way along the path, and
  * the labels at `cell`'s own node, as {@link cellLabelRefusal} fits them,
- * which include those its ancestors' labels cover (see {@link nodeLabelSources}). What
- * lies below `cell` is fitted as the reads consumed it, so a read that stops
- * short of a labeled field is not refused for that field, and one that
- * reaches it is (spec §8.10.6: a display boundary evaluates the consumed
- * labels). A read that reports no consumed labels counts as consuming the
- * marker no policy admits, and reads that consumed none are fitted by the
- * cell's schema.
+ * which include those its ancestors' labels cover (see
+ * {@link nodeLabelSources}). What lies below `cell` is fitted as the reads
+ * consumed it, so a read that stops short of a labeled field is not refused
+ * for that field, and one that reaches it is (spec §8.10.6: a display
+ * boundary evaluates the consumed labels). A read that reports no consumed
+ * labels counts as consuming the marker no policy admits, and reads that
+ * consumed none are fitted by the cell's schema.
  */
 export function readRefusal(
   cell: Cell<unknown>,

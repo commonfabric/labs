@@ -119,7 +119,10 @@ function displayLabel(
 export type HostReadSources =
   & Omit<DisplayFitSources, "modulePolicies">
   & {
-    readonly modulePolicies?: Pick<CfcModulePolicySource, "subscribe" | "load">;
+    readonly modulePolicies?: Pick<
+      CfcModulePolicySource,
+      "resolve" | "subscribe" | "load"
+    >;
   };
 
 /**
@@ -150,9 +153,15 @@ export class HostReadGate {
    * decides on the access lists and module policy manifests the space last
    * sent rather than refusing on one not yet synced: a read made once has no
    * subscription to decide it again when one arrives. Each round decides the
-   * read as {@link read} does and loads what that decision would watch,
-   * until a round finds nothing new to load, since an access list that
-   * arrives can lead the exchange rules to consult another.
+   * read as {@link read} does and loads what that decision would watch and
+   * does not already admit: an access list granting no role, or a manifest
+   * that does not verify. A refusal stops a decision before it reaches the
+   * labels behind it, so a load can bring more labels into the next round,
+   * and the rounds end once one finds nothing new. A load that fails is
+   * taken as loaded, and the read is decided on what the replica holds,
+   * which refuses what it cannot admit. A load waits on the space that
+   * holds the document, so a read whose labels name a space that never
+   * answers waits as a read of that space would.
    */
   async settle(cell: Cell<unknown>): Promise<void> {
     await this.#settle((policy, sources, watch) => {
@@ -190,22 +199,31 @@ export class HostReadGate {
     const policy = this.#policy;
     if (policy === undefined) return;
     const { membership, modulePolicies } = this.#sources;
+    // What failed to load reads as what the replica holds, which a decision
+    // refuses when it cannot admit it.
+    const quietly = (load: Promise<void>) => load.catch(() => {});
     const loaded = new Set<string>();
-    while (true) {
-      const loads: Promise<void>[] = [];
+    let loads: Promise<void>[];
+    do {
+      const round: Promise<void>[] = [];
+      loads = round;
       const loading: DisplayFitSources = {
         ...this.#sources,
         membership: membership && {
           readerRole: (space) => membership.readerRole(space),
           subscribe: (space) => {
-            loads.push(membership.load(space));
+            if (membership.readerRole(space) === null) {
+              round.push(quietly(membership.load(space)));
+            }
             return () => {};
           },
           load: (space) => membership.load(space),
         },
         modulePolicies: modulePolicies && {
           subscribe: (reference, space) => {
-            loads.push(modulePolicies.load(reference, space));
+            if (modulePolicies.resolve(reference, [space]) === undefined) {
+              round.push(quietly(modulePolicies.load(reference, space)));
+            }
             return () => {};
           },
         },
@@ -216,10 +234,9 @@ export class HostReadGate {
         reeval: () => {},
       };
       decide(policy, loading, watch);
-      if (loads.length === 0) return;
       for (const key of watch.watched) loaded.add(key);
-      await Promise.all(loads);
-    }
+      await Promise.all(round);
+    } while (loads.length > 0);
   }
 
   /**

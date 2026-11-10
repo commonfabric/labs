@@ -991,6 +991,9 @@ type RuntimeOperationSession = {
 export class RuntimeProcessor {
   #runtime: Runtime;
   #cc: PiecesController;
+
+  /** The space the session was opened for, which the exchange rules resolve against. */
+  readonly #sessionSpace: DID;
   #spaces = new Map<DID, PiecesController>();
   // The boot-time health check's verdict, and whether `initialize()` waited
   // for it before returning. A processor built without `initialize()` made
@@ -1158,6 +1161,7 @@ export class RuntimeProcessor {
     this.#runtime = runtime;
     this.#ipcSizes = ipcSizes;
     this.#cc = cc;
+    this.#sessionSpace = initSpace;
     this.#spaces.set(initSpace, cc);
     this.#identity = identity;
     this.#telemetry = telemetry;
@@ -1336,8 +1340,7 @@ export class RuntimeProcessor {
         return outerThis.#renderConfidentialityCeiling;
       },
       set renderConfidentialityCeiling(value) {
-        outerThis.#renderConfidentialityCeiling = value;
-        outerThis.#hostReadGate = outerThis.#buildHostReadGate();
+        outerThis.#configureRenderCeiling(value);
       },
       get renderDeclassificationPolicy() {
         return outerThis.#renderDeclassificationPolicy;
@@ -1347,18 +1350,37 @@ export class RuntimeProcessor {
   }
 
   /**
-   * A gate deciding a host's reads under the root render policy, with the
-   * resolver and the providers as they stand.
+   * Puts `ceiling` in force: the resolver and the providers every mount is
+   * given, which are built for it, and the gate that decides a host's reads
+   * under the root render policy it sets, with those same sources.
    */
-  #buildHostReadGate(): HostReadGate {
-    return new HostReadGate(
-      rootRenderPolicyFor(this.#renderConfidentialityCeiling),
-      {
-        resolveConfidentiality: this.#renderConfidentialityResolver,
-        membership: this.#renderMembershipProvider,
-        modulePolicies: this.#renderModulePolicySource,
-      },
+  #configureRenderCeiling(
+    ceiling: RenderConfidentialityCeiling | undefined,
+  ): void {
+    const runtime = this.#runtime;
+    this.#renderConfidentialityCeiling = ceiling;
+    this.#renderMembershipProvider = renderMembershipProviderFor(
+      runtime,
+      this.#identity,
+      ceiling,
     );
+    this.#renderModulePolicySource = renderModulePolicySourceFor(
+      runtime,
+      ceiling,
+    );
+    this.#renderConfidentialityResolver = renderConfidentialityResolverFor(
+      runtime,
+      this.#identity,
+      ceiling,
+      this.#sessionSpace,
+      this.#renderMembershipProvider,
+      this.#renderModulePolicySource,
+    );
+    this.#hostReadGate = new HostReadGate(rootRenderPolicyFor(ceiling), {
+      resolveConfidentiality: this.#renderConfidentialityResolver,
+      membership: this.#renderMembershipProvider,
+      modulePolicies: this.#renderModulePolicySource,
+    });
   }
 
   #siteTableCancel: Cancel | undefined;
@@ -1818,14 +1840,15 @@ export class RuntimeProcessor {
           "use `CellHandle.getCfcLabel()` for the redacted display view",
       );
     }
-    const gate = this.#hostReadGate;
     let cell = getCell(this.#runtime, request.cell);
     if (request.meta !== undefined) {
       // The document root, which the keyed ancestor's schema does not
       // describe.
       const { keyedFrom: _keyedFrom, ...address } = request.cell;
       const rootCell = getCell(this.#runtime, { ...address, path: [] });
-      await gate.settleMetadata(rootCell);
+      await this.#hostReadGate.settleMetadata(rootCell);
+      // Read after the wait, so that a ceiling configured meanwhile decides.
+      const gate = this.#hostReadGate;
       if (request.meta !== "argument" && request.meta !== "result") {
         // A metadata field that is not a link returns the raw data.
         return gate.readMetadata(rootCell, request.meta);
@@ -1850,8 +1873,8 @@ export class RuntimeProcessor {
     // read cell's own ref, when asked for, addresses for a metadata link read
     // the linked cell itself, so the caller can subscribe to it or consult
     // its schema's declarations.
-    await gate.settle(cell);
-    return gate.read(cell, {
+    await this.#hostReadGate.settle(cell);
+    return this.#hostReadGate.read(cell, {
       includeRef: request.includeRef,
       includeCfcLabel: request.includeCfcLabel,
     });
@@ -4989,26 +5012,9 @@ export class RuntimeProcessor {
     // any present-but-unknown value becomes "deny"; absent stays "allow".
     processor.#renderDeclassificationPolicy =
       normalizeRenderDeclassificationPolicy(data.renderDeclassificationPolicy);
-    processor.#renderConfidentialityCeiling =
-      normalizeRenderConfidentialityCeiling(data.renderConfidentialityCeiling);
-    processor.#renderMembershipProvider = renderMembershipProviderFor(
-      runtime,
-      identity,
-      processor.#renderConfidentialityCeiling,
+    processor.#configureRenderCeiling(
+      normalizeRenderConfidentialityCeiling(data.renderConfidentialityCeiling),
     );
-    processor.#renderModulePolicySource = renderModulePolicySourceFor(
-      runtime,
-      processor.#renderConfidentialityCeiling,
-    );
-    processor.#renderConfidentialityResolver = renderConfidentialityResolverFor(
-      runtime,
-      identity,
-      processor.#renderConfidentialityCeiling,
-      space,
-      processor.#renderMembershipProvider,
-      processor.#renderModulePolicySource,
-    );
-    processor.#hostReadGate = processor.#buildHostReadGate();
     processor.#intentOutcomeCancel = subscribeEventAttentionNotifications(
       runtime,
       undefined,

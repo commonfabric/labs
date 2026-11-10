@@ -110,12 +110,17 @@ each slot holding a link the read followed, which a dereference retains
   a render is, a record's field list, and a metadata read. A refused read
   reaches the host as a refusal, never as an empty value. A read answered
   once first loads the access lists and policy manifests its decision
-  consults, since nothing would decide it again when one arrived. The gate
-  holds a read to the root ceiling, not to a boundary around the element,
-  which is why a complete or nested-render binding inside a boundary that
-  lowers the ceiling is decided on everything its cell reaches. Two host
-  reads are answered without the gate: resolving a cell's links to the
-  address they land on, and a cell's label view.
+  consults and does not already admit, since nothing would decide it again
+  when one arrived; it waits on the spaces holding them, and one that fails
+  to load leaves the decision to what the replica holds. The gate holds a
+  read to the root ceiling, not to a boundary around the element, which is
+  why a complete or nested-render binding inside a boundary that lowers the
+  ceiling is decided on everything its cell reaches. Two host reads are
+  still answered without the gate, and each is an open gap, since each
+  consumes labels (spec §8.2.4): resolving a cell's links to the address
+  they land on, which is how the profile badge reads its space's root for
+  the seal, and a cell's label view, including one carried on a ref or a
+  link inside a value, which names the paths of its labeled fields.
 
 Each decision is made again when what its read consumed changes, labels
 included, and when the membership those labels name changes, and only a

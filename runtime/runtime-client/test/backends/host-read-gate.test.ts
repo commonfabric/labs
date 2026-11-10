@@ -420,16 +420,22 @@ describe("HostReadGate", () => {
      * provider reads only once the team's access list is loaded, as a
      * replica that has not yet synced it does.
      */
-    function gateWithAccessListToLoad(runtime: Runtime) {
+    function gateWithAccessListToLoad(
+      runtime: Runtime,
+      load: (space: string, loaded: Set<string>) => Promise<void> = (
+        space,
+        loaded,
+      ) => {
+        loaded.add(space);
+        return Promise.resolve();
+      },
+    ) {
       const ceiling = defaultRenderConfidentialityCeiling(owner.did());
       const loaded = new Set<string>();
       const membership: SpaceMembershipProvider = {
         readerRole: (of) => loaded.has(of) ? "reader" : null,
         subscribe: () => () => {},
-        load: (of) => {
-          loaded.add(of);
-          return Promise.resolve();
-        },
+        load: (of) => load(of, loaded),
       };
       const modulePolicies = renderModulePolicySourceFor(runtime, ceiling);
       return new HostReadGate(rootRenderPolicyFor(ceiling), {
@@ -457,6 +463,23 @@ describe("HostReadGate", () => {
       expect("refused" in gate.read(note)).toBe(true);
       await gate.settle(note);
       expect(gate.read(note)).toEqual({ value: TEAM_NOTE });
+    });
+
+    it("leaves refused, rather than failing, a read whose access list does not load", async () => {
+      await using docs = await shelf();
+      const gate = gateWithAccessListToLoad(
+        docs.runtime,
+        () => Promise.reject(new Error("the team's space did not answer")),
+      );
+      const note = await docs.write("unloaded-team-note", TEAM_NOTE, [[
+        [],
+        [cfcAtom.space(team)],
+      ]]);
+
+      await gate.settle(note);
+      expect(gate.read(note)).toEqual({
+        refused: { refusedBy: "display-ceiling" },
+      });
     });
 
     it("leaves refused a read whose labels name no space to load", async () => {
