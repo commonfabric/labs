@@ -256,7 +256,12 @@ evaluates its cone and nothing else, for the value and for the label.
   the element is a plain value, and the identity of the element's cell when
   it is not. Elements that move keep their cones, so reordering a list does
   not recompute it. The element's index is part of the key only when the
-  callback uses the index, since such a cone cannot move.
+  callback uses the index, since such a cone cannot move. A key that enters
+  a document identifier is first salted with a secret of the space, so that
+  an identifier does not reveal that two confidential values are equal.
+- Equal plain values have one key and so share one cone. A body over plain
+  values that declares a state cell or binds a handler without using the
+  index is therefore refused: the two rows would share that state.
 - A change to one element dirties that element's cone. A membership change
   dirties the container.
 
@@ -361,7 +366,9 @@ label rule.
   replacement, only as long as doing so costs it nothing beyond mapping each
   to the same operation as `?:`, `&&`, `||`, and a template literal. `reduce`
   and `findIndex` are reactive constructs too, and the callback of `reduce`
-  is restricted to an expression. `wish` is structural because what it
+  is restricted to an expression. `some`, `every`, and `find` are reactive
+  constructs as well. The label of `findIndex` joins the elements up to and
+  including the first match, and not the ones after it. `wish` is structural because what it
   creates, it creates idempotently: its result reads as if the data had
   already existed.
 - **Effectful operations** stay durable boundaries with declared label rules
@@ -378,7 +385,10 @@ Inside a function body, five kinds of runtime call remain:
 - instantiating a pattern;
 - creating a cell, which receives a causal identifier;
 - requesting an effectful built-in, which behaves like instantiating a
-  built-in pattern;
+  built-in pattern. Only a `handler` or an `action` may do this. A `lift` or
+  a `computed` may not, and since it does not instantiate a pattern either,
+  it has no indirect way to. An effect that depends on computed data is
+  requested in the reactive tier, with the computed value as its input;
 - reading context that is not a cell: the event's key and acting principal,
   a space's identity and access list, and the principals a label attests;
 - binding a handler to the values it captures, which yields a stream. An
@@ -405,8 +415,12 @@ stays a call, `DonutCard({ donut })`, and the callee must be one of:
   ([first-class serializable factories](../pattern-construction/node-factory-shipping.md)).
 
 A callee may carry the modifiers `asScope(scope)` and
-`inSpace(space, options)`. Pattern factories are the only kind of factory
-value a function body may call.
+`inSpace(space, options)`. A function body may call two kinds of factory
+value: a pattern factory, which it instantiates, and a handler factory, which
+it binds to state to obtain a stream. A handler received by reference is
+resolved at run time like a pattern received by reference: its own compiled
+record supplies its footprint, its write edges, and the identity that write
+policies name.
 
 In a handler, the call records an instantiation request with a causal
 identifier and returns a link. The runtime performs the instantiation when the
