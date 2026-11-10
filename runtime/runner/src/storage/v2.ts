@@ -2352,21 +2352,23 @@ export class StorageManager implements IStorageManager {
             "owns itself could not be opened",
         );
       }
-      const commit = untilAnswered(() =>
-        session.transact({
-          ...declarations,
-          localSeq: 1,
-          reads: {
-            confirmed: [{ id: aclId, path: toDocumentPath([]), seq: 0 }],
-            pending: [],
-          },
-          operations: [{
-            op: "set",
-            id: aclId,
-            value: { value: { ...acl(space) } },
-          }],
-        })
-      );
+      // Built once: a genesis sent again after a lost connection carries the
+      // same bytes under the same `localSeq`, so the server answers one that
+      // landed from its record, whatever the caller's grants are by then.
+      const genesis: ClientCommit = {
+        ...declarations,
+        localSeq: 1,
+        reads: {
+          confirmed: [{ id: aclId, path: toDocumentPath([]), seq: 0 }],
+          pending: [],
+        },
+        operations: [{
+          op: "set",
+          id: aclId,
+          value: { value: { ...acl(space) } },
+        }],
+      };
+      const commit = untilAnswered(() => session.transact(genesis));
       this.trackPendingCommit(commit);
       await commit;
       if (afterGenesis !== undefined) delegation = await afterGenesis();
@@ -2973,19 +2975,21 @@ export class StorageManager implements IStorageManager {
         // first inspection; the resume below then opens what it wrote.
         if (isFresh(current)) {
           try {
+            // Built once, as `#createSpaceAs()` builds its genesis.
+            const genesis: ClientCommit = {
+              localSeq: 1,
+              reads: {
+                confirmed: [{ id: aclId, path: toDocumentPath([]), seq: 0 }],
+                pending: [],
+              },
+              operations: [{
+                op: "set",
+                id: aclId,
+                value: { value: { [space]: "OWNER" } },
+              }],
+            };
             const commit = untilAnswered(() =>
-              bootstrap.session.transact({
-                localSeq: 1,
-                reads: {
-                  confirmed: [{ id: aclId, path: toDocumentPath([]), seq: 0 }],
-                  pending: [],
-                },
-                operations: [{
-                  op: "set",
-                  id: aclId,
-                  value: { value: { [space]: "OWNER" } },
-                }],
-              }, () => {
+              bootstrap.session.transact(genesis, () => {
                 assertCurrentRoute();
                 routeState.writeIssuedGeneration = routeGeneration;
               })
