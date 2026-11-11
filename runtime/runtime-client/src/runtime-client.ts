@@ -178,9 +178,11 @@ export type RuntimeClientEvents = {
   spaceaccesslost: [{ space: DID; deleted?: true }];
 
   /**
-   * A space that refused the runtime principal admitted it again. A load the
-   * refusal failed may succeed if asked again, and this is the word to ask
-   * on for that space.
+   * A space that refused the runtime principal admitted it again, or a retry
+   * reached a space the runtime had never reached (see
+   * `retryUnreachableSpaces()`). A load the refusal or the failed connection
+   * failed may succeed if asked again, and this is the word to ask on for
+   * that space.
    */
   spaceaccessrestored: [{ space: DID }];
 

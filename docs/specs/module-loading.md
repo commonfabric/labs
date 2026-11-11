@@ -141,7 +141,16 @@ It:
 
 3. Compiles the closure through the `CommonFabricTransformerPipeline`, emitting
    one CommonJS body per module ([`MODULE_KIND`][c4]) plus a per-module source
-   map. There is no whole-program `outFile` bundle.
+   map. There is no whole-program `outFile` bundle. This step is a pure
+   function of a request that holds only data (`ModuleCompileRequest`,
+   `runtime/runner/src/harness/module-compile.ts`), so a runtime given a
+   `moduleCompiler` runs it in a compile worker
+   (`runtime/runner/src/harness/compile-worker.ts`) and the steps around it
+   in its own realm. The worker emits the same bytes, and a compile error
+   reaches the caller as the same `CompilerError` or `TransformerError`. A
+   compile instrumented for pattern coverage, or one that asks for its
+   transformed program, runs in the runtime's realm, since what it hands the
+   compiler cannot cross a port.
 
 4. Wraps each emitted body in a module record keyed `cf:module/<identity>`
    ([`compileSourcesToRecords`][c7]) and security-classifies it
@@ -506,7 +515,7 @@ inputs also require the integration described in
 The per-load program prefix survives on the *diagnostic* path only: source maps
 resolve through `/<programId>/<authoredPath>`, while identities are computed
 prefix-free. Consumers that must present a load-independent spelling normalize
-through the Engine's `storedFilenameFor`, which strips the prefix and unmaps
+through [`storedFilenameFor`][c18], which strips the prefix and unmaps
 fabric-mount paths. Debug `fn.src` reaches the same load-independent spelling
 without a source map: `recordModuleProvenance` joins the module identity to the
 sidecar's authored coordinates, yielding
@@ -1036,6 +1045,7 @@ index's restart-stable `action` column,
 [c15]: ../../runtime/runner/src/sandbox/runtime-module-policy.ts
 [c16]: ../../runtime/runner/src/harness/authored-debug-source.ts
 [c17]: ../../runtime/runner/src/harness/declared-data-files.ts
+[c18]: ../../runtime/runner/src/harness/module-compile.ts
 
 - Compile and evaluate entry points: [`Engine.compileToRecordGraph`][c1],
   [`Engine.compileResolvedToRecordGraph`][c1],
@@ -1043,7 +1053,7 @@ index's restart-stable `action` column,
   and the warm path [`Engine.evaluateCachedModules`][c1].
 - Per-load path prefixing: [`pretransformProgramForModules`][c2], stripped again
   for identity by [`stripIdentityPrefix`][c7] and for stored spellings by
-  [`storedFilenameFor`][c1].
+  [`storedFilenameFor`][c18].
 - Module identity: [`computeModuleHashes`][c3] and [`resolveModuleImports`][c3],
   with [`findInternalTarget`][c3] deciding what counts as an internal edge, and
   the Engine-facing wrappers [`computeModuleIdentities`][c7] and

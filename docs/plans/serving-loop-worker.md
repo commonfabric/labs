@@ -186,8 +186,14 @@ replay keying, which keys on the holder and the counter.
 `/api/patterns` over HTTP, which the main thread answers; the compiled-module
 byte cache is per worker, and that worker's runtimes take turns at a cold compile
 so that a program compiles once per worker, which with a worker per space is
-once per space whose own storage closure does not hold it; external effects (`fetch`, LLM calls, the
-outbox) run where the runtime runs. A Worker started without a permission
+once per space whose own storage closure does not hold it; the type-check,
+transform and emit step of a serving runtime's compiles runs in a compile
+worker the serving worker starts (`ModuleCompileWorker`), so its CPU and its
+heap are off the thread that serving worker's loops run on, except for a
+compile instrumented for pattern coverage or one that asks for its
+transformed program, which runs on that thread; external effects (`fetch`,
+LLM calls, the outbox) run where the runtime runs. A Worker started without
+a permission
 descriptor inherits the process's permissions, FFI for SQLite included.
 
 ## Ordering and failure
@@ -283,6 +289,9 @@ places it on a fresh one.
 graph: on a four-core machine one takes about half a second to load, and holds
 about 45 MB of JavaScript heap, about 110 MB of the process's memory, before
 it serves anything, where a kept runtime in a shared host holds about 3 MB.
+A serving worker whose runtimes compile also starts a compile worker of its
+own (`ModuleCompileWorker`), a second isolate that lasts until the serving
+worker's host closes.
 Three knobs bound that: `maxWorkers`, past which a space joins a worker that
 already serves one; `spareWorkers`, which hides the load time from a
 placement; and the cap on workers kept only for parked runtimes, with the
@@ -382,3 +391,9 @@ between the two.
     space against one worker for every space on the same box: activation
     latency with and without a spare, the process's memory by active space
     count, and the wave timings of two spaces settling at once.
+11. [ ] **Compile workers the serving workers share.** Each serving worker
+    starts a compile worker of its own at its first compile and keeps it
+    until its host closes, so with a worker per space a space that has
+    compiled holds two isolates. Compiles handed to a set of compile workers
+    on the main thread, reached over the serving port, would let every
+    serving worker share them, and a serving worker's own would go.
