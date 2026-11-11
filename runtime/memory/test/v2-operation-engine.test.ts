@@ -3010,6 +3010,44 @@ describe("v2-operation-engine", () => {
         }
       });
 
+      it("merges the label of a moved anchor's writer into one entry, keeping its confidentiality and dropping its integrity", async () => {
+        const { engine, path } = await openTestEngine();
+        try {
+          seed(
+            engine,
+            "of:written",
+            envelope([{ path: ["body"], origin: "declared", label: secret }]),
+          );
+          const carols = { confidentiality: ["carol"], integrity: ["bob"] };
+          const hash = taggedHashStringOf(carols);
+          commit(engine, [
+            { op: "set", id: `cid:${hash}`, value: { value: carols } },
+            {
+              op: "set",
+              id: anchorsDoc("of:written"),
+              value: {
+                value: { b: 1, end: 3 },
+                cfc: envelope([{
+                  path: ["end"],
+                  origin: "derived",
+                  observes: "value",
+                  label: { $ref: `cid:${hash}` },
+                }], 2),
+              },
+            },
+          ]);
+
+          insert(engine, "of:written");
+
+          expect(labelEntries(engine, "of:written")).toEqual([
+            moved("end", ["carol", "secret"]),
+          ]);
+        } finally {
+          close(engine);
+          await Deno.remove(path);
+        }
+      });
+
       it("joins the confidentiality of the broader instances of a scoped field's document", async () => {
         const { engine, path } = await openTestEngine();
         const alice = "did:key:z6MkAnchorsLabelAlice";

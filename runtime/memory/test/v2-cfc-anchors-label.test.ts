@@ -1,8 +1,10 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { FabricValue } from "@commonfabric/api";
+import { taggedHashStringOf } from "@commonfabric/data-model";
 import {
   anchorsEnvelopeWith,
+  AnchorsLabelError,
   confidentialityOver,
 } from "../v2/cfc-anchors-label.ts";
 import { storedCfcEnvelopeDefect } from "../v2/cfc-stored-envelope.ts";
@@ -48,7 +50,33 @@ const withAnchor = (envelope: unknown): unknown =>
     ["secret"],
     ["anchor-1"],
     "of:anchors",
+    () => undefined,
   );
+
+/** A version-1 envelope holding `entries`. */
+const anchorsEnvelope = (entries: unknown[], version = 1): FabricValue =>
+  ({
+    version,
+    schemaHash: "hash",
+    labelMap: { version: 1, entries },
+  }) as FabricValue;
+
+/** The envelope after an edit moves `end`, with the field holding `alice`. */
+const movingEnd = (
+  envelope: FabricValue,
+  labelDocument: (hash: string) => FabricValue | undefined = () => undefined,
+) =>
+  anchorsEnvelopeWith(
+    envelope,
+    ["alice"],
+    ["end"],
+    "of:anchors",
+    labelDocument,
+  );
+
+/** The label-map entries of `envelope`. */
+const entriesOf = (envelope: unknown) =>
+  (envelope as { labelMap: { entries: unknown[] } }).labelMap.entries;
 
 describe("cfc-anchors-label", () => {
   describe("confidentialityOver()", () => {
@@ -127,6 +155,151 @@ describe("cfc-anchors-label", () => {
       const result = withAnchor(stored);
       expect(storedCfcEnvelopeDefect(result)).toBeUndefined();
       expect(result).toMatchObject({ labelMap: { version: 1 } });
+    });
+
+    it("returns one derived value entry at a moved anchor, joining the writer's confidentiality and the field's, and holding no integrity", () => {
+      // The offset the engine wrote is not the one the entry's writer chose,
+      // so the writer's integrity no longer speaks for it.
+
+      const result = movingEnd(anchorsEnvelope([{
+        path: ["end"],
+        origin: "derived",
+        observes: "value",
+        label: { confidentiality: ["carol"], integrity: ["bob-wrote"] },
+      }]));
+
+      expect(entriesOf(result)).toEqual([{
+        path: ["end"],
+        origin: "derived",
+        observes: "value",
+        label: { confidentiality: ["carol", "alice"] },
+      }]);
+    });
+
+    it("returns one entry at a moved anchor that held two derived value entries", () => {
+      const result = movingEnd(anchorsEnvelope([
+        {
+          path: ["end"],
+          origin: "derived",
+          observes: "value",
+          label: { confidentiality: ["carol"] },
+        },
+        {
+          path: ["end"],
+          origin: "derived",
+          observes: "value",
+          label: { confidentiality: ["dave", "alice"] },
+        },
+      ]));
+
+      expect(entriesOf(result)).toEqual([{
+        path: ["end"],
+        origin: "derived",
+        observes: "value",
+        label: { confidentiality: ["carol", "dave", "alice"] },
+      }]);
+    });
+
+    it("returns `undefined` for a moved anchor whose entry already holds the field's confidentiality and no integrity", () => {
+      expect(movingEnd(anchorsEnvelope([{
+        path: ["end"],
+        origin: "derived",
+        observes: "value",
+        label: { confidentiality: ["alice"] },
+      }]))).toBeUndefined();
+    });
+
+    it("returns a derived entry of no class at a moved anchor without its integrity, beside a new value entry", () => {
+      // A read of the offset consumes an entry of no class as well, so its
+      // integrity goes; its confidentiality stays, since reads of the other
+      // classes consume it too.
+
+      const result = movingEnd(anchorsEnvelope([{
+        path: ["end"],
+        origin: "derived",
+        label: { confidentiality: ["carol"], integrity: ["bob-wrote"] },
+      }]));
+
+      expect(entriesOf(result)).toEqual([
+        {
+          path: ["end"],
+          origin: "derived",
+          label: { confidentiality: ["carol"] },
+        },
+        {
+          path: ["end"],
+          origin: "derived",
+          observes: "value",
+          label: { confidentiality: ["alice"] },
+        },
+      ]);
+    });
+
+    it("returns every entry of another component, class or anchor as it was stored", () => {
+      const kept = [
+        {
+          path: ["end"],
+          origin: "declared",
+          label: { integrity: ["policy"] },
+        },
+        {
+          path: ["end"],
+          origin: "derived",
+          observes: "shape",
+          label: { confidentiality: ["carol"], integrity: ["bob-wrote"] },
+        },
+        {
+          path: ["start"],
+          origin: "derived",
+          observes: "value",
+          label: { confidentiality: ["carol"], integrity: ["bob-wrote"] },
+        },
+      ];
+
+      const result = movingEnd(anchorsEnvelope(kept));
+
+      expect(entriesOf(result)).toEqual([
+        ...kept,
+        {
+          path: ["end"],
+          origin: "derived",
+          observes: "value",
+          label: { confidentiality: ["alice"] },
+        },
+      ]);
+    });
+
+    it("returns the writer's label held by reference joined into the entry it writes", () => {
+      const carols = { confidentiality: ["carol"], integrity: ["bob-wrote"] };
+      const hash = taggedHashStringOf(carols);
+
+      const result = movingEnd(
+        anchorsEnvelope([{
+          path: ["end"],
+          origin: "derived",
+          observes: "value",
+          label: { $ref: `cid:${hash}` },
+        }], 2),
+        (wanted) => wanted === hash ? carols : undefined,
+      );
+
+      expect(entriesOf(result)).toEqual([{
+        path: ["end"],
+        origin: "derived",
+        observes: "value",
+        label: { confidentiality: ["carol", "alice"] },
+      }]);
+    });
+
+    it("throws `AnchorsLabelError` for a writer's label at a moved anchor that no stored document backs", () => {
+      expect(() =>
+        movingEnd(anchorsEnvelope([{
+          path: ["end"],
+          origin: "derived",
+          observes: "value",
+          label: { $ref: "cid:missing" },
+        }], 2))
+      ).toThrow(AnchorsLabelError);
     });
 
     it("returns an envelope keeping members it does not define", () => {

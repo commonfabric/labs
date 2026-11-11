@@ -191,14 +191,10 @@ export const confidentialityOver = (
       if (isLabelMetadataTemplateEntry(entry)) continue;
       if (!bearsOn(entry.path, path)) continue;
       const label = resolvedLabel(entry.label, holder, labelDocument);
-      for (const clause of label.confidentiality ?? []) {
-        if (!clauses.some((held) => valueEqual(held, clause))) {
-          clauses.push(clause);
-        }
-      }
+      clauses.push(...(label.confidentiality ?? []));
     }
   }
-  return clauses;
+  return distinctClauses(clauses);
 };
 
 /**
@@ -234,47 +230,111 @@ const resolvedLabel = (
 
 /**
  * The envelope an anchors document stores once each anchor of `anchorIds`
- * carries `confidentiality` besides what `envelope`, the one it stores now,
- * says: for each, an entry labeling that anchor's offset, derived rather
- * than declared, that a read of the offset consumes. Returns `undefined`
- * where nothing is to be written: `confidentiality` is empty, or `envelope`
- * already holds every such entry.
+ * carries `confidentiality` beside what `envelope`, the one it stores now,
+ * held for that anchor's offset. Returns `undefined` where nothing is to be
+ * written: `confidentiality` is empty, or the envelope already holds every
+ * label this would write.
  *
- * An entry sits at its anchor's own path and is of the value class alone,
- * which is what ties the label to the offset the engine computed. A writer's
- * envelope pass drops a derived value-class entry at a path the writer
- * replaces, and a writer of the document writes the anchors that differ, so
- * the label lasts until its anchor is next written and no longer.
+ * Each moved anchor's offset is labeled by one derived entry of the value
+ * class at the anchor's own path, which is what ties the label to the offset
+ * the engine computed. Where the envelope holds such an entry, the engine
+ * joins `confidentiality` into it: the new offset is computed from the old
+ * one, so it keeps the clauses the old one carried. The entry loses its
+ * integrity, since the engine, not the entry's writer, produced the offset it
+ * now labels; a derived entry of no class at the path, which a read of the
+ * offset also consumes, loses its integrity too and keeps its
+ * confidentiality. Where the envelope holds none, the engine adds one. Every
+ * other entry, a declared one at the anchor's path among them, stays as its
+ * writer left it.
  *
- * A document with no envelope gets one naming {@link anchorsSchemaHash}.
+ * A writer's envelope pass drops a derived value-class entry at a path the
+ * writer replaces, and a writer of the document writes the anchors that
+ * differ, so the label lasts until its anchor is next written and no longer.
  *
- * @throws AnchorsLabelError for an envelope the engine cannot read.
+ * A document with no envelope gets one naming {@link anchorsSchemaHash}. A
+ * label an entry at a moved anchor's path holds by reference is read through
+ * `labelDocument`, as {@link confidentialityOver} reads one.
+ *
+ * @throws AnchorsLabelError for an envelope the engine cannot read, and for
+ *   a label at a moved anchor's path that it cannot resolve.
  */
 export const anchorsEnvelopeWith = (
   envelope: Stored,
   confidentiality: readonly FabricValue[],
   anchorIds: readonly string[],
   holder: string,
+  labelDocument: (hash: string) => Stored,
 ): FabricValue | undefined => {
   if (confidentiality.length === 0) return undefined;
   const stored = readableEnvelopeOf(envelope, holder);
-  const held: readonly FabricValue[] = stored?.labelMap.entries ?? [];
-  const added = anchorIds
-    .map((id): FabricValue => ({
-      path: [id],
+  const held: readonly ReadEntry[] = stored?.labelMap.entries ?? [];
+  const moved = new Set(anchorIds);
+  const resolved = (entry: ReadEntry) =>
+    resolvedLabel(entry.label, holder, labelDocument);
+
+  // The clauses each moved anchor's offset already carried, from every
+  // derived value-class entry at its path, which the one written replaces.
+  const carried = new Map<string, FabricValue[]>();
+  for (const entry of held) {
+    const anchor = movedAnchorOf(entry, moved);
+    if (anchor === undefined || entry.observes !== "value") continue;
+    carried.set(anchor, [
+      ...(carried.get(anchor) ?? []),
+      ...(resolved(entry).confidentiality ?? []),
+    ]);
+  }
+  const labelFor = (anchor: string) => ({
+    confidentiality: distinctClauses([
+      ...(carried.get(anchor) ?? []),
+      ...confidentiality,
+    ]),
+  });
+
+  const written = new Set<string>();
+  const entries: FabricValue[] = [];
+  for (const entry of held) {
+    const anchor = movedAnchorOf(entry, moved);
+    if (anchor === undefined) {
+      entries.push(entry);
+    } else if (entry.observes === "value") {
+      if (written.has(anchor)) continue;
+      written.add(anchor);
+      entries.push({ ...entry, label: labelFor(anchor) });
+    } else if (entry.observes === undefined) {
+      const label = resolved(entry);
+      entries.push(
+        (label.integrity ?? []).length === 0 ? entry : {
+          ...entry,
+          label: label.confidentiality === undefined
+            ? {}
+            : { confidentiality: label.confidentiality },
+        },
+      );
+    } else {
+      entries.push(entry);
+    }
+  }
+  for (const anchor of anchorIds) {
+    if (written.has(anchor)) continue;
+    written.add(anchor);
+    entries.push({
+      path: [anchor],
       origin: "derived",
       observes: "value",
-      label: { confidentiality: [...confidentiality] },
-    }))
-    .filter((entry) => !held.some((other) => valueEqual(other, entry)));
-  if (added.length === 0) return undefined;
+      label: labelFor(anchor),
+    });
+  }
+
   if (stored === undefined) {
     return {
       version: 1,
       schemaHash: anchorsSchemaHash(),
-      labelMap: { version: 1, entries: added },
+      labelMap: { version: 1, entries },
     };
   }
+  const unchanged = entries.length === held.length &&
+    entries.every((entry, index) => valueEqual(entry, held[index]));
+  if (unchanged) return undefined;
   // A spread copies own enumerable members only, and the check that found
   // `stored` readable also reads members a class defines, so the members it
   // requires are copied by name.
@@ -285,7 +345,32 @@ export const anchorsEnvelopeWith = (
     labelMap: {
       ...stored.labelMap,
       version: stored.labelMap.version,
-      entries: [...held, ...added],
+      entries,
     },
   };
+};
+
+/**
+ * Helper for {@link anchorsEnvelopeWith}, which returns the anchor of `moved`
+ * whose offset `entry` labels as a derived entry at its path, or `undefined`
+ * for an entry of another component or path.
+ */
+const movedAnchorOf = (
+  entry: ReadEntry,
+  moved: ReadonlySet<string>,
+): string | undefined =>
+  entry.origin === "derived" && entry.path.length === 1 &&
+    moved.has(entry.path[0])
+    ? entry.path[0]
+    : undefined;
+
+/** `clauses` with each clause once, in the order first found. */
+const distinctClauses = (clauses: readonly FabricValue[]): FabricValue[] => {
+  const distinct: FabricValue[] = [];
+  for (const clause of clauses) {
+    if (!distinct.some((held) => valueEqual(held, clause))) {
+      distinct.push(clause);
+    }
+  }
+  return distinct;
 };

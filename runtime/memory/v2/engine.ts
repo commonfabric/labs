@@ -5298,19 +5298,27 @@ const fieldConfidentiality = (
     readStateForScopeKey(engine, { branch, id: field.id, scopeKey: key })
       ?.document?.cfc
   );
-  // A label document is content-addressed and lives at space scope.
   return confidentialityOver(
     envelopes,
     field.path,
     `the document ${field.id}`,
-    (hash) =>
-      readStateForScopeKey(engine, {
-        branch,
-        id: `cid:${hash}`,
-        scopeKey: DEFAULT_SCOPE_KEY,
-      })?.document?.value,
+    labelDocumentOf(engine, branch),
   );
 };
+
+/**
+ * Reads the value of the label document stored under a hash, in `branch`,
+ * or `undefined` where the store holds none. A label document is
+ * content-addressed and lives at space scope.
+ */
+const labelDocumentOf =
+  (engine: Engine, branch: BranchName) =>
+  (hash: string): FabricValue | undefined =>
+    readStateForScopeKey(engine, {
+      branch,
+      id: `cid:${hash}`,
+      scopeKey: DEFAULT_SCOPE_KEY,
+    })?.document?.value;
 
 const operationValueByteLength = (value: FabricValue): number =>
   new TextEncoder().encode(encodeMemoryBoundary(value)).byteLength;
@@ -5948,6 +5956,7 @@ const writeAnchorsDocument = (
       fieldConfidentiality(engine, { branch: write.branch, field, scopeKey }),
       moved,
       `the anchors document ${id}`,
+      labelDocumentOf(engine, write.branch),
     );
   } catch (cause) {
     throw cause instanceof AnchorsLabelError

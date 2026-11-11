@@ -236,18 +236,23 @@ in the field's scope instance and in each broader instance of the same
 document. The label-metadata templates are left out: they are keyed against
 the stored document rather than its value, so none labels the field, not
 even a field that is the whole value, whose path is a prefix of every path,
-or one named `cfc`. Memory writes the confidentiality of the entries it read as
-a derived label of the moved anchor's offset, beside whatever label the
-anchor already carried. A later
-reader of that offset is tainted as a reader of the field was, whoever wrote
-the anchor. An anchor the edit left where it was gets no label from it, and
-an anchor neither written nor moved keeps the labels it had.
+or one named `cfc`. Memory joins the confidentiality of the entries it read
+into the label of the moved anchor's offset, the one derived entry of the
+value class at the anchor's path, and adds that entry where there is none.
+The label keeps the clauses it held, since the new offset is computed from
+the old one, and loses its integrity, since Memory rather than the anchor's
+writer produced the offset. A derived entry of no class at the path, which a
+read of the offset also consumes, loses its integrity too and keeps its
+clauses, and every other label at the path stays as it was. A later reader
+of that offset is tainted as a reader of the field was, whoever wrote the
+anchor. An anchor the edit left where it was gets no label from it, and an
+anchor neither written nor moved keeps the labels it had.
 
 The label is of the offset Memory wrote, and lasts as long as that offset
 does:
 
-- A later edit that moves the anchor again labels it with what the field
-  holds then, beside what it already carries.
+- A later edit that moves the anchor again joins what the field holds then
+  into the label the anchor carries.
 - The field's label changing without an edit that moves the anchor leaves
   the anchor's label as it was.
 - A write that replaces the anchor's offset replaces the label with the
@@ -267,7 +272,9 @@ backs, and leaves a reference elsewhere in the envelope unresolved. It does
 not compare a label document with its hash, since the store installs a
 `cid:` document only when its content hashes to its id. It reads the anchors
 document's envelope only when it has a label to add to it, and refuses the
-edit when that envelope cannot be read.
+edit when that envelope cannot be read, or when a label it holds by
+reference at a moved anchor's path has no stored label document behind
+it.
 
 The anchors take none of the field's integrity, from either source, and the
 field's write policy does not govern them: a pattern that wants only certain

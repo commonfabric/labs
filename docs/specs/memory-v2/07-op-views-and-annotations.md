@@ -408,15 +408,22 @@ Within the apply steps of §7.7.1:
    segment standing for any key. A label-metadata template entry is keyed
    against the stored document rather than the value, so it is never one of
    these: not for a field that is the whole value, whose path is a prefix of
-   every path, and not for a field named `cfc`. A label an entry names by document is read
-   from that document. Integrity is not taken. Where that confidentiality is
-   not empty, the engine adds to the anchors document's envelope, for each
-   moved anchor, an entry at the anchor's path, of origin `derived` and class
-   `value`, holding it, unless the envelope already holds that entry. An
-   anchors document with no envelope gets one, naming the schema document of
-   the schema that declares nothing, which the engine stores in the same
-   commit where the store does not hold it. Whatever else the envelope holds
-   is left as its writer wrote it.
+   every path, and not for a field named `cfc`. A label an entry names by
+   document is read from that document. Integrity is not taken. Where that
+   confidentiality is not empty, the engine joins it, for each moved anchor,
+   into the entry at the anchor's path of origin `derived` and class
+   `value`, and adds that entry where the envelope holds none, so that the
+   path holds one such entry. The entry keeps the confidentiality it held,
+   since the moved offset is computed from the old one, and holds no
+   integrity, since the engine rather than the entry's writer produced the
+   offset. A `derived` entry of no class at that path, which a read of the
+   offset also consumes, loses its integrity and keeps its confidentiality.
+   A label one of these entries names by document is read from that
+   document. Where the envelope already holds every label this would write, it
+   is not written. An anchors document with no envelope gets one, naming the
+   schema document of the schema that declares nothing, which the engine stores
+   in the same commit where the store does not hold it. Whatever else the
+   envelope holds is left as its writer wrote it.
 
 The engine refuses the operation, and so the commit, where an anchor moved
 and it cannot read the field's envelope, or, where it has a label to add, the
@@ -431,8 +438,9 @@ as anything but `labelMetadata`. It resolves the labels of the entries that
 bear on the field and no others, and refuses a reference among them that no
 stored document backs or whose document does not hold a label. It does not
 compare a label document with its id, since the store installs a `cid:`
-document only when its content hashes to its id. An edit that moves no
-anchor reads no envelope and is not refused for one.
+document only when its content hashes to its id. It also refuses a reference
+in an entry at a moved anchor's path that no stored document backs. An edit
+that moves no anchor reads no envelope and is not refused for one.
 
 The label is a record of the field at the edit, and it is the document's
 writers that end it. A writer's CFC pass drops a derived `value` entry at a
