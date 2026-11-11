@@ -888,6 +888,39 @@ same tests, which is what leaves the delta comparable when the totals are not. A
 measured set's figure is narrower still: only its own suite's tests, over only
 its member's files.
 
+To see which files a group's count comes from, add `--by-file`. The command then
+prints one line for each file with uncovered lines, largest count first. Files
+with equal counts are in path order, with paths compared character by character,
+so that capital letters come before lowercase ones. A line gives the file's
+uncovered line count, then `record` or `no-record`, then the file's
+repository-relative path. A `no-record` file is one the report has no record
+for. [How the two are scored](#how-the-two-are-scored) says what such a file is
+charged. The counts of a group's files add up to that group's total. `--under`
+limits the listing to the files at or below one repository-relative path, such
+as `--under=runtime/memory`. A path holding no tracked source file is an error.
+
+`--lcov` reads an LCOV file in place of `--profile-dir`. One such file is the
+[combined report](#a-combined-report-for-ides) of a `main` commit, which gives
+the per-file breakdown of the repository-wide figure. That report holds the
+coverage of whichever lanes' reports downloaded, since the download step carries
+on past a failure. When a lane's report is missing, the lines only that lane
+covered count as uncovered, and a file only that lane loaded is charged as a
+file with no record. Point `--root` at a checkout of the commit the report
+measured. The list of files, and the charge for a file the report has no record
+for, both come from that checkout.
+
+Whichever way the report is read, the command refuses one that has no line of
+any tracked source file the checkout holds. That is what a report of nothing
+looks like, and what a report read against the wrong root looks like.
+
+```bash
+gsutil cp gs://commontools-build-artifacts/workspace-artifacts/labs-<commit-sha>.lcov .
+deno run --allow-read --allow-write --allow-run --allow-env \
+  tasks/coverage-metrics.ts \
+  --lcov=labs-<commit-sha>.lcov --root="$(pwd)" \
+  --by-file --under=runtime/memory
+```
+
 ## Coverage figures in the record store
 
 A run's coverage figures travel to the
