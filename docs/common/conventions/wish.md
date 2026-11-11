@@ -283,10 +283,11 @@ hands it that user's suggestion. No pattern supplies one.
 
 The surface offers it and applies nothing on its own: the user edits the name,
 keeps, removes, or replaces the picture, and creates the profile with the same
-trusted click as ever. Removing or choosing a picture is a gesture on the same
-trusted surface, recorded on the surface itself; the host's suggestion is left
-as the host stored it. The profile takes the picture the user chose, or else
-the one the suggestion holds,
+trusted click as ever. Removing or choosing a picture is recorded on the
+surface itself; the host's suggestion is left as the host stored it. Unlike the
+create, these two choices are not yet gated to a gesture on the surface (see
+the "CFC debt" section of `patterns/system/profile-create/README.md`). The
+profile takes the picture the user chose, or else the one the suggestion holds,
 set through its `setPicture` by the runtime that creates it, so the picture's
 label names the profile's owner, as a reader of a face requires. The suggestion
 stays stored for the host to replace; the surface is shown only while the user

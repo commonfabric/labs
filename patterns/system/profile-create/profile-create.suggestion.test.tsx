@@ -29,8 +29,6 @@ import ProfileCreate, {
   type ProfileSuggestion,
   seedProfileName,
   TRUSTED_PROFILE_CREATE_ACTION,
-  TRUSTED_PROFILE_CREATE_PICTURE_ACTION,
-  TRUSTED_PROFILE_CREATE_SURFACE,
 } from "./profile-create.tsx";
 import ProfileHome, {
   type ProfileHomeOutput,
@@ -78,13 +76,6 @@ const byRegion = (region: string) => (node: TestVNode) =>
 // A stand-in for a picture; nothing here decodes it.
 const PICTURE = [0x89, 0x50, 0x4e, 0x47];
 
-// The picture controls' gesture: only one on the trusted create surface may
-// choose or remove the picture, so the steps send it as the renderer would.
-const pictureGesture = {
-  surface: TRUSTED_PROFILE_CREATE_SURFACE,
-  action: TRUSTED_PROFILE_CREATE_PICTURE_ACTION,
-};
-
 const bytesAre = (actual: FabricBytes | undefined, expected: number[]) =>
   actual?.slice().join() === expected.join();
 
@@ -117,17 +108,10 @@ export default pattern(() => {
       (profiles.get()?.length ?? 0) === 0;
   });
 
-  // Choosing and removing the picture are the surface's own trusted
-  // gestures, like the create.
-  const assert_picture_controls_are_trusted_actions = assert(() =>
-    propValue(
-        find(surface[UI], byTag("cf-avatar-input"))?.props["data-ui-action"],
-      ) === TRUSTED_PROFILE_CREATE_PICTURE_ACTION &&
-    propValue(
-        find(surface[UI], byId("profile-create-remove-picture"))?.props[
-          "data-ui-action"
-        ],
-      ) === TRUSTED_PROFILE_CREATE_PICTURE_ACTION
+  // The surface offers both picture controls while a picture shows.
+  const assert_picture_controls_are_offered = assert(() =>
+    find(surface[UI], byTag("cf-avatar-input")) !== undefined &&
+    find(surface[UI], byId("profile-create-remove-picture")) !== undefined
   );
 
   const assert_removed_picture_is_not_shown = assert(() =>
@@ -255,28 +239,25 @@ export default pattern(() => {
       { assertion: assert_suggested_picture_is_shown },
       { assertion: assert_create_stays_the_trusted_click },
       { assertion: assert_empty_picture_is_not_shown },
-      { assertion: assert_picture_controls_are_trusted_actions },
-      // A click on the rendered control, which carries the surface's markers.
+      { assertion: assert_picture_controls_are_offered },
+      // A click on the rendered control.
       { press: surface[UI], control: "Remove picture" },
       { assertion: assert_removed_picture_is_not_shown },
       { assertion: assert_removal_leaves_the_suggestion },
       {
         action: chooser.choosePicture,
         event: chosenPicture,
-        trustedUi: pictureGesture,
       },
       { assertion: assert_chosen_picture_is_shown },
       {
         action: chooser.choosePicture,
         event: { detail: {} },
-        trustedUi: pictureGesture,
       },
       { assertion: assert_chosen_picture_is_shown },
       { assertion: assert_bare_surface_shows_no_picture },
       {
         action: bare.choosePicture,
         event: barePicture,
-        trustedUi: pictureGesture,
       },
       { assertion: assert_bare_surface_shows_chosen_picture },
       { action: action_seed_created_profile },

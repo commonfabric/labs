@@ -5,7 +5,6 @@ import {
   equals,
   type FabricBytes,
   handler,
-  type HandlerFactory,
   ifElse,
   linksOf,
   NAME,
@@ -15,7 +14,6 @@ import {
   spaceDeleted,
   spaceOf,
   Stream,
-  type TrustedActionWrite,
   UI,
   type VNode,
   Writable,
@@ -36,7 +34,6 @@ import ProfileHome, {
 // default profile and stamping most-recently-used (MRU).
 export const TRUSTED_PROFILE_CREATE_SURFACE = "ProfileCreateSurface";
 export const TRUSTED_PROFILE_CREATE_ACTION = "CreateProfile";
-export const TRUSTED_PROFILE_CREATE_PICTURE_ACTION = "ChooseProfilePicture";
 export const TRUSTED_PROFILE_PICKER_SURFACE = "ProfilePickerSurface";
 export const TRUSTED_PROFILE_SET_DEFAULT_ACTION = "SetDefaultProfile";
 export const TRUSTED_PROFILE_SET_MRU_ACTION = "SetMruProfile";
@@ -172,48 +169,36 @@ export const seedProfileName = handler<
   if (picture) target.setPicture?.send({ picture });
 });
 
-/**
- * The surface's picture choice, which only `choosePicture`, triggered by a
- * gesture on the trusted create surface, may write: the seed step gives the
- * profile this picture as its owner's face, so a pattern that reaches the
- * surface's streams must not be able to choose it.
- */
-export type TrustedPictureChoice = TrustedActionWrite<
-  PictureChoice | undefined,
-  typeof choosePicture,
-  typeof TRUSTED_PROFILE_CREATE_PICTURE_ACTION,
-  typeof TRUSTED_PROFILE_CREATE_SURFACE
->;
-
-// The choice's cell has no default, so setup writes nothing to it and its
-// document stores no policy until the first write. That write is checked
-// against the schema the writer brings, the handler's state, so the state
-// carries the whole contract (as `setPicture`'s does in profile-home); a
-// contract only on the pattern's `new Writable` would never be enforced. The
-// explicit `HandlerFactory` type lets the state name the handler as its own
-// writer.
+// CFC debt: the picture the user chooses here is not gated. Real CFC would
+// admit a write to `pictureChoice` only from a gesture on this trusted create
+// surface, as it admits the create itself. It cannot yet: `cf-avatar-input`
+// hands over the picked image in a `cf-change` event the component sends after
+// the file dialog closes, and the renderer vouches only for events the browser
+// marks trusted, so a gate here would refuse every real pick. A pattern that
+// reaches this surface's streams can therefore choose or remove the picture
+// the create then gives the new profile, as it can already set a profile's
+// picture through profile-home's ungated `setPicture`. The name and the create
+// stay gated. See README.md, "CFC debt".
 export type ChoosePictureState = {
-  pictureChoice: Writable<TrustedPictureChoice>;
+  pictureChoice: Writable<PictureChoice | undefined>;
   remove?: boolean;
 };
 
-// Records the user's picture decision on the trusted create surface: the
-// image they chose (`cf-avatar-input`'s change), or, bound with `remove`, no
-// picture at all. A host's suggestion is left as the host stored it. A change
-// without bytes decides nothing.
-export const choosePicture: HandlerFactory<
+// Records the user's picture decision on the create surface: the image they
+// chose (`cf-avatar-input`'s change), or, bound with `remove`, no picture at
+// all. A host's suggestion is left as the host stored it. A change without
+// bytes decides nothing.
+export const choosePicture = handler<
   SetProfilePictureEvent,
   ChoosePictureState
-> = handler<SetProfilePictureEvent, ChoosePictureState>(
-  (event, { pictureChoice, remove }) => {
-    if (remove) {
-      pictureChoice.set({});
-      return;
-    }
-    const picture = event?.picture ?? event?.detail?.bytes;
-    if (picture?.length) pictureChoice.set({ picture });
-  },
-);
+>((event, { pictureChoice, remove }) => {
+  if (remove) {
+    pictureChoice.set({});
+    return;
+  }
+  const picture = event?.picture ?? event?.detail?.bytes;
+  if (picture?.length) pictureChoice.set({ picture });
+});
 
 // Appends a freshly-created profile (its own `inSpace` space) to the home
 // `profiles` list. The cross-space `inSpace` child materializes during the push;
@@ -740,19 +725,19 @@ export type ProfileCreateOutput = {
   /** The picture the created profile will start with, if any. */
   picture?: FabricBytes;
 
-  /** Chooses that picture; only a gesture on the surface is admitted. */
+  /** Chooses that picture (ungated: see README.md, "CFC debt"). */
   choosePicture: Stream<SetProfilePictureEvent>;
 
   /**
-   * Removes that picture; only a gesture on the surface is admitted. The
-   * event's content is ignored.
+   * Removes that picture (ungated: see README.md, "CFC debt"). The event's
+   * content is ignored.
    */
   removePicture: Stream<SetProfilePictureEvent>;
 };
 
 export default pattern<ProfileCreateInput, ProfileCreateOutput>(
   ({ profiles, inputId, defaultName, privateInbox, profileSuggestion }) => {
-    const pictureChoice = new Writable<TrustedPictureChoice>(undefined).for(
+    const pictureChoice = new Writable<PictureChoice | undefined>(undefined).for(
       "pictureChoice",
     );
     const seedName = seedProfileName({
@@ -794,9 +779,9 @@ export default pattern<ProfileCreateInput, ProfileCreateOutput>(
               trusted-click path. */
           }
           {
-            /* The picture the profile will start with. Choosing and removing
-              it are gestures on this trusted surface, as the create is: the
-              seed step sets it as the owner's face. */
+            /* The picture the profile will start with, which the seed step
+              sets as the owner's face. Unlike the create, choosing and
+              removing it are not gated (see choosePicture, "CFC debt"). */
           }
           <cf-hstack
             gap="2"
@@ -814,7 +799,6 @@ export default pattern<ProfileCreateInput, ProfileCreateOutput>(
               null,
             )}
             <cf-avatar-input
-              data-ui-action={TRUSTED_PROFILE_CREATE_PICTURE_ACTION}
               oncf-change={chooseOwnPicture}
             />
             {ifElse(
@@ -823,7 +807,6 @@ export default pattern<ProfileCreateInput, ProfileCreateOutput>(
                 id="profile-create-remove-picture"
                 variant="ghost"
                 size="sm"
-                data-ui-action={TRUSTED_PROFILE_CREATE_PICTURE_ACTION}
                 onClick={removePicture}
               >
                 Remove picture
