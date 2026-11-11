@@ -1020,3 +1020,33 @@ playbook:
    run time from what it reads can. Label documents keep their bodies.
    Whether the disclosure is acceptable where different hosts serve
    different spaces behind a memory router is open for a ruling.
+7. **Delivering only the selected paths' closures.** Delivery by reference
+   removes the repeated bodies, but each space still delivers and holds the
+   closure of every link in every document a read touches, though a narrow
+   read follows few of those links. Delivering only the closures of the
+   links a read follows would also cut the per-space entries. It reverses
+   the read-side guarantee as stated here: delivery is whole-document, so a
+   client would hold documents whose other refs it cannot resolve, fetch on
+   use, and give up "resolved means locally available", which arrival
+   validation and quarantine are built around. The two compose.
+8. **Set reconciliation.** Here the server names the documents a frame
+   needs and the client asks for the ones it lacks, which costs a list of
+   references the size of the closure and, for a frame that lacks bodies,
+   one round trip, or two when a fetch it waited on failed.
+   Range-based set reconciliation is the more general way for two peers to
+   agree on what each holds, trading more round trips for less of either
+   list crossing the wire. Which suits which sizes of closure and holding
+   is open.
+9. **Holdings that outlive a session, and beyond schemas.** The realm
+   registry is the client's verified store for one run, cleared when its
+   last session ends, so a later run receives every body again. A
+   persistent verified store, such as IndexedDB in a browser, would let a
+   later run resolve references with no fetch, as long as it re-verifies
+   each body against its hash on load, as registration does now. Nothing in
+   the reference form ties resolution to a session's lifetime, so that
+   store extends this one. Going further, a client could state what hashes
+   it holds, across restarts, and the same mechanism could reach ordinary
+   documents, which are hashed like any content. A document the server
+   knows no client can hold yet, because it was just created, would then
+   want a send-it-now path that skips the reference, and whether schema
+   documents want one too is part of the question.
