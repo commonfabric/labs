@@ -1222,7 +1222,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     pattern: "system/fabrichat/manager.tsx",
     baselines: ["20261002T164437Z-O47ebJ7gn-iAk7TA"],
     paths: [
-      "argument.requests.*",
       "result.$VIEWS.chats.rooms",
       // The paths from here on are recorded in
       // `docs/history/pattern-compat-every-issue-paths.md`, which names the
@@ -1258,7 +1257,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "20261008T210909Z-Kyy64jL0hYC-5p6Q",
     ],
     paths: [
-      "argument.requests.*",
       "result.$VIEWS.chats.rooms",
       // The paths from here on are recorded in
       // `docs/history/pattern-compat-every-issue-paths.md`, which names the
@@ -1296,7 +1294,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "20261010T083035Z-Mp5ZALK-A2rUfm_u",
     ],
     paths: [
-      "argument.requests.*",
       "result.$VIEWS.chats.rooms",
       "result.$VIEWS.chats.requests.*",
       // The paths from here on are recorded in
@@ -1332,7 +1329,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     paths: [
       "result.$VIEWS.chats.rooms",
       "result.$VIEWS.chats.people",
-      "argument.requests.*",
       // The paths from here on are recorded in
       // `docs/history/pattern-compat-every-issue-paths.md`, which names the
       // recorded change each one comes from.
@@ -1379,7 +1375,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "20261024T002137Z-_xficjXREAbKWap9",
     ],
     paths: [
-      "argument.requests.*",
       "result.$VIEWS.chats.people",
       // The paths from here on are recorded in
       // `docs/history/pattern-compat-every-issue-paths.md`, which names the
@@ -1529,7 +1524,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "20261011T170652Z-2XdZAneyCTt2Teex",
     ],
     paths: [
-      "argument.requests.*",
       "result.$VIEWS.chats.requests.*",
       "result.$VIEWS.chats.people",
       "result.requests.*",
