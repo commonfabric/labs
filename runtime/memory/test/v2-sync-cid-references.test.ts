@@ -440,16 +440,18 @@ describe("sync-cid-references", () => {
           },
         }]);
         await referenced.promise;
-        const order: string[] = [];
+        // The fetch's answer is let through once the transport has handed
+        // over everything else, so a barrier that waited for the transport
+        // alone would resolve with the watch's answer still held.
+        let pendingAtDelivered: number | undefined;
         const delivered = watcherClient.delivered().then(() => {
-          order.push("delivered");
+          pendingAtDelivered = watcherClient.pendingRequestCount;
         });
         await transport.delivered!();
-        order.push("answered");
         answers.resolve();
         await delivered;
         await watching;
-        expect(order).toStrictEqual(["answered", "delivered"]);
+        expect(pendingAtDelivered).toBe(0);
       } finally {
         await writerClient.close();
         await watcherClient.close();
