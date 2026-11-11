@@ -75,6 +75,9 @@ fi
 PATTERN_SRC="$SCRIPT_DIR/pattern/main.tsx"
 SCHEMA_COMPATIBLE_PATTERN_SRC="$SCRIPT_DIR/pattern/schema-compatible.tsx"
 SCHEMA_INCOMPATIBLE_PATTERN_SRC="$SCRIPT_DIR/pattern/schema-incompatible.tsx"
+# A first-party pattern the toolshed serves as `system:apps/shared-note/main.tsx`.
+FOLLOWED_PATTERN_SRC="$SCRIPT_DIR/../../../patterns/apps/shared-note/main.tsx"
+FOLLOWED_ORIGIN="system:apps/shared-note/main.tsx"
 CUSTOM_EXPORT="customPatternExport" # for testing this feature
 SECTION="${CF_CLI_INTEGRATION_SECTION:-${1:-all}}"
 
@@ -393,6 +396,61 @@ run_piece_values() {
   schema_value=$(cf cell get $SPACE_ARGS --piece "$schema_piece_id" value)
   if [ "$schema_value" != "5" ]; then
     error "Dangerously authorized setsrc did not preserve the valid result."
+  fi
+
+  # Created from the file, a piece records no origin. `cf piece follow` points
+  # it at the one the toolshed serves the same pattern under: the serving
+  # runtime makes the follow where the deployment serves lifecycle verbs, and
+  # this process does elsewhere.
+  echo "Following a system origin."
+  local follow_piece_id follow_state follow_pin follow_revision follow_status
+  follow_piece_id=$(cf piece new --no-start $SPACE_ARGS "$FOLLOWED_PATTERN_SRC")
+  follow_state=$(
+    cf piece inspect --pattern-identity --json $SPACE_ARGS \
+      --piece "$follow_piece_id"
+  )
+  if [ "$(echo "$follow_state" | jq -r '.origin // "none"')" != "none" ]; then
+    error "A piece created from a file should record no origin."
+  fi
+  follow_pin=$(echo "$follow_state" | jq -r '.patternIdentity + "#" + .symbol')
+  follow_revision=$(echo "$follow_state" | jq -r '.revisionId // "none"')
+  # The creation appended a revision, so a pin to an empty log is off.
+  set +e
+  cf piece follow $SPACE_ARGS --piece "$follow_piece_id" \
+    --expect-revision none "$FOLLOWED_ORIGIN" \
+    >"$WORK_DIR/follow-stale.out" 2>"$WORK_DIR/follow-stale.err"
+  follow_status=$?
+  set -e
+  if [ "$follow_status" -ne 3 ]; then
+    error "A follow off its pin should exit 3, not $follow_status: $(cat "$WORK_DIR/follow-stale.err")"
+  fi
+  cf piece follow --quiet $SPACE_ARGS --piece "$follow_piece_id" \
+    --expect "$follow_pin" --expect-revision "$follow_revision" \
+    "$FOLLOWED_ORIGIN"
+  follow_state=$(
+    cf piece inspect --pattern-identity --json $SPACE_ARGS \
+      --piece "$follow_piece_id"
+  )
+  if [ "$(echo "$follow_state" | jq -r '.origin')" != "$FOLLOWED_ORIGIN" ]; then
+    error "The followed piece does not record its origin: $follow_state"
+  fi
+  if [ "$(echo "$follow_state" | jq -r '.revisionId')" = "$follow_revision" ]; then
+    error "The follow appended no revision: $follow_state"
+  fi
+
+  # `setsrc --origin` writes the source it is given and records the origin, so
+  # the piece follows it from then on rather than being detached.
+  echo "Recording an origin with a source update."
+  local claimed_piece_id claimed_origin
+  claimed_piece_id=$(cf piece new --no-start $SPACE_ARGS "$FOLLOWED_PATTERN_SRC")
+  cf piece setsrc --quiet $SPACE_ARGS --piece "$claimed_piece_id" \
+    --origin "$FOLLOWED_ORIGIN" "$FOLLOWED_PATTERN_SRC"
+  claimed_origin=$(
+    cf piece inspect --pattern-identity --json $SPACE_ARGS \
+      --piece "$claimed_piece_id" | jq -r '.origin'
+  )
+  if [ "$claimed_origin" != "$FOLLOWED_ORIGIN" ]; then
+    error "setsrc --origin did not record the origin: $claimed_origin"
   fi
 
   echo "Applying piece input."

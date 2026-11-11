@@ -15,10 +15,9 @@
  * a comment on an open topic, which moves that topic's comment count and last
  * activity. `backlink` opens the topic the most siblings cite and waits for the
  * rows its backlink derivation produces, which the `crossref` segment above
- * cannot measure — that one follows a citation outward from the topmost card,
- * and the topmost card is the newest topic, which nothing cites. Both record
- * their reads through `topics-browser-measurement.ts` alongside the interval
- * they chart.
+ * cannot measure — that one follows a citation outward from the newest seeded
+ * topic, which nothing cites. Both record their reads through
+ * `topics-browser-measurement.ts` alongside the interval they chart.
  *
  * Every segment benchmark reaches its starting point outside the measured
  * window: the browser is launched, the board is loaded, and the earlier
@@ -267,14 +266,9 @@ note(
  * segments that do not need it pays nothing for it. The scale benchmark seeds
  * its boards the same way and for the same reason.
  *
- * Sending a comment is a durable write: it moves the topic's comment count and
- * its last activity, and the board orders its cards by last activity, so a
- * commented topic becomes the topmost card. The `crossref` and `journey`
- * segments open the topmost card and then follow a citation out of it, and only
- * the newest few topics cite anything, so a comment landing on the shared
- * fixture would leave those two opening a card with nothing to follow. Do not
- * merge the two boards: nothing orders the cases within a file, so the failure
- * would depend on the order Deno happened to run them in.
+ * Comments change a topic's count and activity and the board's card order.
+ * Their board is separate so the navigation segments always read an
+ * unmodified fixture, regardless of the order Deno runs the cases in.
  */
 let commentSeeding: Promise<TopicBoardFixture> | undefined;
 

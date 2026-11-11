@@ -968,6 +968,25 @@ describe("stage G SpaceServer recovery seams", () => {
     expect(stats.structureLoadFailures).toBe(0);
   });
 
+  it("leaves its input wait in the turn a demand note arrives, and runs a demand pass for it", async () => {
+    // A zero-delay turn runs after every microtask the note sets off and
+    // before any positive-delay timer armed beside it, so the loop is out of
+    // its input wait by then only if the note itself woke it.
+
+    const stats = emptyServingLoopStats();
+    const created = newSpaceServer({ stats });
+    expect(await created.activate()).toBe(true);
+    do await created.whenQuiescent(); while (!created.quiescent);
+    const passesBefore = stats.demand.demandPasses;
+
+    created.noteDemandChanged();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    expect(created.suspendedOnInput).toBe(false);
+    do await created.whenQuiescent(); while (!created.quiescent);
+    expect(stats.demand.demandPasses).toBeGreaterThan(passesBefore);
+  });
+
   it("a demanded root stuck in per-cycle deferral is counted after the threshold — the forever-park is visible from stats (OW46)", async () => {
     // The home-profile Ada shape (rootcause §1; verification-coverage.md
     // OW46): a doc whose pattern pointer names an identity that can

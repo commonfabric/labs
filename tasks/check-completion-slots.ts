@@ -132,6 +132,10 @@ export const NO_OPTION_CANDIDATES = new Map<string, string>([
     "piece follow:expect-revision",
     "the revision head the caller inspected, or none",
   ],
+  [
+    "piece setsrc:origin",
+    "a `system:` ref or fabric URL the caller names for the piece to follow",
+  ],
   ["piece new:request-key", "an opaque caller retry key"],
   [
     "ingest mint:gmail-access-token",

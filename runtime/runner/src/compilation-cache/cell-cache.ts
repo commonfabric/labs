@@ -18,7 +18,10 @@ import {
   CFC_STRUCTURAL_PROVENANCE_UNDECLARABLE_STORE,
   runtimeWritePolicyAuthorization,
 } from "../cfc/types.ts";
-import { ensureCompilerStack } from "../harness/deferred-compiler-stack.ts";
+import {
+  compilerStackLoaded,
+  ensureCompilerStack,
+} from "../harness/deferred-compiler-stack.ts";
 import { computeModuleHashes } from "../harness/module-identity.ts";
 import type { CacheableModule } from "../harness/types.ts";
 import { createSigilLinkFromParsedLink, parseLink } from "../link-utils.ts";
@@ -157,6 +160,16 @@ export interface CompiledDoc extends ModuleDocBase {
   readonly starTargetSpecs?: readonly string[];
   readonly importSpecs?: readonly string[];
   readonly policyManifests?: readonly unknown[];
+
+  /**
+   * Every module specifier the module's authored source names, as the
+   * identity scan reads them: the list its identity was computed over. It
+   * rides under the document's root compiler stamp, so verifying the source
+   * set recomputes identities from it rather than parsing the source
+   * ({@link verifySourceDocs}). Absent on a data document and on documents
+   * written before the field existed, whose source is parsed instead.
+   */
+  readonly sourceImports?: readonly string[];
 
   /** Debug-only authored builder sites, keyed by runtime artifact symbol. */
   readonly builderSourceSites?: BuilderSourceSitesV1;
@@ -701,11 +714,21 @@ export interface SourceDocVerification {
  * Extra unrelated documents in the set are harmless to their siblings: a
  * module's identity depends only on its own reachable view. Every document in
  * the set is still verified (in its own view).
+ *
+ * The recomputation needs each module's import list. `attestedImports`
+ * returns the list a compiler-stamped compiled document records for an
+ * identity, which is taken in place of parsing that document's source; a
+ * document without one is parsed. The hash is the same either way, and still
+ * folds the document's bytes, so a forged source fails here as it does under
+ * a parse: an attested list is the scan of exactly the source its identity
+ * was computed from.
  */
 export function verifySourceDocs(
   entryIdentity: string,
   docsByIdentity: ReadonlyMap<string, SourceDoc>,
   runtimeFingerprint = "",
+  attestedImports: (identity: string) => readonly string[] | undefined = () =>
+    undefined,
 ): SourceDocVerification {
   const entry = docsByIdentity.get(entryIdentity);
   if (entry === undefined) {
@@ -728,13 +751,7 @@ export function verifySourceDocs(
   // A forged data edge buys nothing: it changes the identity of the document
   // carrying it, and hashing a real module as a leaf changes that module's
   // identity too, so both diverge from their keys here.
-  const dataIdentities = new Set<string>();
-  for (const doc of docsByIdentity.values()) {
-    for (const imp of doc.imports) {
-      if (!imp.specifier.startsWith(DATA_FILE_SPECIFIER)) continue;
-      if (docsByIdentity.has(imp.identity)) dataIdentities.add(imp.identity);
-    }
-  }
+  const dataIdentities = dataDocIdentities(docsByIdentity);
 
   // identity → whether its recomputed hash matches its key. A verdict reached
   // inside one view holds in every view (entry-point independence), so each
@@ -800,6 +817,13 @@ export function verifySourceDocs(
         .filter((id) => dataIdentities.has(id))
         .map((id) => docsByIdentity.get(id)!.filename),
     );
+    const declarations = new Map<string, { imports: readonly string[] }>();
+    for (const id of viewIds) {
+      const imports = attestedImports(id);
+      if (imports !== undefined) {
+        declarations.set(docsByIdentity.get(id)!.filename, { imports });
+      }
+    }
     const recomputed = computeModuleHashes(
       { main: rootDoc.filename, files },
       {
@@ -808,6 +832,7 @@ export function verifySourceDocs(
           ? {}
           : { additionalInternalDeps }),
         ...(viewDataFiles.size === 0 ? {} : { dataFiles: viewDataFiles }),
+        ...(declarations.size === 0 ? {} : { declarations }),
       },
     );
     for (const id of viewIds) {
@@ -830,6 +855,45 @@ export function verifySourceDocs(
     mismatches,
     missing,
   };
+}
+
+/**
+ * Helper for `verifySourceDocs()` and `sourceClosureNeedsParser()`, which
+ * returns the identities of the data documents in `docsByIdentity`: those
+ * another document of the set reaches over a data-file edge. A data
+ * document's bytes are hashed as a leaf and never parsed.
+ */
+function dataDocIdentities(
+  docsByIdentity: ReadonlyMap<string, SourceDoc>,
+): Set<string> {
+  const out = new Set<string>();
+  for (const doc of docsByIdentity.values()) {
+    for (const imp of doc.imports) {
+      if (!imp.specifier.startsWith(DATA_FILE_SPECIFIER)) continue;
+      if (docsByIdentity.has(imp.identity)) out.add(imp.identity);
+    }
+  }
+  return out;
+}
+
+/**
+ * Whether verifying `closure` in `space` parses some module: whether a code
+ * document of it has no import list attested by a compiled document this
+ * runtime has read in `space`.
+ */
+export function sourceClosureNeedsParser(
+  runtime: Runtime,
+  space: MemorySpace,
+  closure: ReadonlyMap<string, SourceDoc>,
+): boolean {
+  const dataIdentities = dataDocIdentities(closure);
+  for (const identity of closure.keys()) {
+    if (dataIdentities.has(identity)) continue;
+    if (runtime.attestedSourceImports(space, identity) === undefined) {
+      return true;
+    }
+  }
+  return false;
 }
 
 //
@@ -1275,6 +1339,8 @@ export function readLoadedSourceClosure(
 }
 
 function verifyLoadedSourceClosure(
+  runtime: Runtime,
+  space: MemorySpace,
   entryIdentity: string,
   closure: Map<string, SourceDoc> | undefined,
   runtimeFingerprint: string,
@@ -1284,6 +1350,7 @@ function verifyLoadedSourceClosure(
     entryIdentity,
     closure,
     runtimeFingerprint,
+    (identity) => runtime.attestedSourceImports(space, identity),
   );
   if (!verification.ok) {
     // Name the offenders (bounded): a bare count forces whoever hits this
@@ -1309,7 +1376,10 @@ function verifyLoadedSourceClosure(
 }
 
 /**
- * Load the deferred parser used by synchronous source-closure verification.
+ * Load the deferred parser, for a flow that goes on to parse or compile the
+ * source it verifies. A flow that only verifies prepares through
+ * `PatternManager.prepareSourceClosureVerification()`, which loads the parser
+ * only for a closure whose import lists no compiled document attests.
  */
 export async function prepareSourceClosureVerification(): Promise<void> {
   await ensureCompilerStack();
@@ -1318,8 +1388,10 @@ export async function prepareSourceClosureVerification(): Promise<void> {
 /**
  * Verify a synchronized source closure while retaining its reads in `tx`.
  *
- * Callers first synchronize the recursive closure and await
- * {@link prepareSourceClosureVerification}.
+ * Callers first synchronize the recursive closure and prepare it through
+ * `PatternManager.prepareSourceClosureVerification()`. A closure that would
+ * need the parser while it is not loaded, as when the closure changed after
+ * that preparation, reads as unverified.
  */
 export function readVerifiedSourceClosure(
   runtime: Runtime,
@@ -1328,9 +1400,22 @@ export function readVerifiedSourceClosure(
   tx: IExtendedStorageTransaction,
   runtimeFingerprint = "",
 ): Map<string, SourceDoc> | undefined {
+  const closure = readLoadedSourceClosure(runtime, space, entryIdentity, tx);
+  if (
+    closure !== undefined && !compilerStackLoaded() &&
+    sourceClosureNeedsParser(runtime, space, closure)
+  ) {
+    logger.warn("source-closure-verify-unprepared", () => [
+      `entry=${entryIdentity}`,
+      "a module carries no attested import list and the parser is not loaded",
+    ]);
+    return undefined;
+  }
   return verifyLoadedSourceClosure(
+    runtime,
+    space,
     entryIdentity,
-    readLoadedSourceClosure(runtime, space, entryIdentity, tx),
+    closure,
     runtimeFingerprint,
   );
 }
@@ -1353,12 +1438,15 @@ export async function loadVerifiedSourceClosure(
 ): Promise<Map<string, SourceDoc> | undefined> {
   const closure = await loadSourceClosure(runtime, space, entryIdentity, tx);
   if (closure === undefined) return undefined;
-  // Identity verification parses source (module hashing scans imports), and
-  // every source-closure consumer parses further downstream (fabric-import
-  // scans, recompiles) — this is the shared entry those flows funnel through,
-  // so load the deferred compiler stack here, once.
-  await prepareSourceClosureVerification();
+  // Identity verification parses each module whose import list no compiled
+  // document attests. A consumer that parses or compiles the verified source
+  // loads the compiler itself.
+  if (sourceClosureNeedsParser(runtime, space, closure)) {
+    await ensureCompilerStack();
+  }
   const verified = verifyLoadedSourceClosure(
+    runtime,
+    space,
     entryIdentity,
     closure,
     runtimeFingerprint,
@@ -1393,6 +1481,7 @@ const compiledDocProperties = {
   exportNames: { type: "array", items: { type: "string" } },
   starTargetSpecs: { type: "array", items: { type: "string" } },
   importSpecs: { type: "array", items: { type: "string" } },
+  sourceImports: { type: "array", items: { type: "string" } },
   patternCoverageSpansJson: { type: "string" },
   builderSourceSitesJson: { type: "string" },
   policyManifests: {
@@ -1439,6 +1528,7 @@ export const COMPILED_DOC_SCHEMA = {
         exportNames: { type: "array", items: { type: "string" } },
         starTargetSpecs: { type: "array", items: { type: "string" } },
         importSpecs: { type: "array", items: { type: "string" } },
+        sourceImports: { type: "array", items: { type: "string" } },
         patternCoverageSpansJson: { type: "string" },
         builderSourceSitesJson: { type: "string" },
         policyManifests: {
@@ -1489,6 +1579,7 @@ interface StoredCompiledDoc {
   exportNames?: readonly string[];
   starTargetSpecs?: readonly string[];
   importSpecs?: readonly string[];
+  sourceImports?: readonly string[];
   patternCoverageSpansJson?: string;
   builderSourceSitesJson?: string;
   policyManifests?: readonly unknown[];
@@ -1723,6 +1814,23 @@ export function stageModuleDelegations(
 }
 
 /**
+ * Helper for `writeCompiledDocs()`, which returns the record surface of a code
+ * module: the one it carries when it was copied from a compiled document that
+ * stores it, and otherwise the one derived from parsing its body.
+ */
+function recordSurfaceOf(module: CacheableModule): {
+  exportNames: readonly string[];
+  starTargetSpecs: readonly string[];
+  importSpecs: readonly string[];
+} {
+  const { exportNames, starTargetSpecs, importSpecs } = module;
+  return exportNames !== undefined && starTargetSpecs !== undefined &&
+      importSpecs !== undefined
+    ? { exportNames, starTargetSpecs, importSpecs }
+    : deriveModuleRecordFields(module.js);
+}
+
+/**
  * Write every emitted module's compiled body as a
  * `compileCache:<runtimeVersion>/<identity>` cell into `space`, stamped with the
  * compiler integrity atom, imports linked to dependency compiled cells (the
@@ -1768,11 +1876,10 @@ export function writeCompiledDocs(
       recordUndeclarablePolicyStore(tx, cell);
       // Fix B: derive the record surface from the compiled body once, here, so
       // the boot-time record build reads it instead of re-parsing per load. A
-      // data entry has no record surface and its bytes are not JavaScript, so
-      // it is never handed to the extractor.
-      const derived = module.isData
-        ? undefined
-        : deriveModuleRecordFields(module.js);
+      // module copied from a compiled document already carries it, and is not
+      // parsed again. A data entry has no record surface and its bytes are
+      // not JavaScript, so it is never handed to the extractor.
+      const derived = module.isData ? undefined : recordSurfaceOf(module);
       const delegatedModuleIdentities = validDelegatedModuleIdentities(
         module.identity,
         [...(effectiveModuleDelegations.get(module.identity) ?? [])],
@@ -1799,6 +1906,9 @@ export function writeCompiledDocs(
           starTargetSpecs: derived.starTargetSpecs,
           importSpecs: derived.importSpecs,
         }),
+        ...(module.isData || module.sourceImports === undefined
+          ? {}
+          : { sourceImports: [...module.sourceImports] }),
         ...(module.sourceMap !== undefined
           ? { sourceMap: module.sourceMap }
           : {}),
@@ -2179,6 +2289,12 @@ export async function loadCompiledClosure(
       ...(doc.importSpecs !== undefined
         ? { importSpecs: doc.importSpecs }
         : {}),
+      ...(() => {
+        const sourceImports = doc.kind === "data"
+          ? undefined
+          : storedStringList(doc.sourceImports);
+        return sourceImports === undefined ? {} : { sourceImports };
+      })(),
       ...(coverageSpans === undefined
         ? {}
         : { patternCoverageSpans: coverageSpans }),
@@ -2200,6 +2316,38 @@ export async function loadCompiledClosure(
   }
   if (!tx.hasWrites()) {
     runtime.registerModuleDelegations(space, moduleDelegationsFromDocs(out));
+    runtime.registerSourceImportAttestations(
+      space,
+      sourceImportAttestationsFromDocs(out),
+    );
+  }
+  return out;
+}
+
+/**
+ * Helper for `loadCompiledClosure()`, which returns a stored list of strings
+ * as a plain array, or `undefined` when the stored value is not one.
+ */
+function storedStringList(value: unknown): readonly string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const out: string[] = [];
+  for (const item of value) {
+    if (typeof item !== "string") return undefined;
+    out.push(item);
+  }
+  return out;
+}
+
+/**
+ * Helper for `loadCompiledClosure()`, which returns the authored import list
+ * each verified compiled document of `docs` attests for its identity.
+ */
+function sourceImportAttestationsFromDocs(
+  docs: ReadonlyMap<string, CompiledDoc>,
+): Map<string, readonly string[]> {
+  const out = new Map<string, readonly string[]>();
+  for (const [identity, doc] of docs) {
+    if (doc.sourceImports !== undefined) out.set(identity, doc.sourceImports);
   }
   return out;
 }

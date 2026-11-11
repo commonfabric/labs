@@ -20,6 +20,7 @@ import { isDID } from "@commonfabric/identity/did";
 import { HttpProgramResolver } from "@commonfabric/js-compiler/program";
 import { setLLMUrl } from "@commonfabric/llm";
 import type { ClientBuild } from "@commonfabric/memory/v2/client-info";
+import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
 import type { CfcPosture } from "@commonfabric/runner";
 import {
   applyPieceSourceTransition,
@@ -102,7 +103,6 @@ import { getLogger } from "@commonfabric/logger";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 
-import { prepareSourceClosureVerification } from "../../../runner/src/compilation-cache/cell-cache.ts";
 import { getResultCellWithSourceSchema } from "../../../runner/src/piece-helpers.ts";
 import { pieceId } from "../piece-id.ts";
 // System space-root pattern refs, their derivation, and the source→URL
@@ -140,7 +140,7 @@ import {
 import { ensurePrivateInboxOf } from "./private-inbox.ts";
 import { repairProfileRootsOf } from "./profile-space-root.ts";
 import { type ShareIntake, startShareIntakeOf } from "./share-intake.ts";
-import { compileProgram } from "./utils.ts";
+import { compileProgram, instanceTx } from "./utils.ts";
 export {
   DEFAULT_APP_PATTERN_SOURCE,
   deriveSystemPatternSource,
@@ -1542,7 +1542,13 @@ export class PiecesController<T = unknown> {
     if (argumentLink === undefined) {
       throw new Error("piece missing argument cell");
     }
-    return this.runtime.getCellFromLink(argumentLink);
+    // A piece read as one principal's instance has its argument read as
+    // that principal's too.
+    return this.runtime.getCellFromLink(
+      argumentLink,
+      undefined,
+      instanceTx(piece),
+    );
   }
 
   getResult<T = unknown>(
@@ -1739,11 +1745,18 @@ export class PiecesController<T = unknown> {
       ) => void;
       repository?: string;
       sourceTransition?: PieceSourceTransition;
+
+      /** The scope the piece is addressed at; absent, its space instance. */
+      scope?: CellScope;
     },
   ): Promise<Cell<unknown>> {
     const piece = this.runtime.getCellFromEntityId(
       this.#space,
       entityIdFrom(pieceId),
+      [],
+      undefined,
+      undefined,
+      options?.scope,
     );
     await piece.sync();
     const start = options?.start ?? true;
@@ -1812,6 +1825,16 @@ export class PiecesController<T = unknown> {
        * commit itself reconciled.
        */
       served?: { actingUser: string };
+
+      /** The scope the piece is addressed at; absent, its space instance. */
+      scope?: CellScope;
+
+      /**
+       * The principal, and for session scope the session, whose instance of
+       * a piece addressed at a user or session scope the update reads and
+       * writes (`RunSyncedOptions.scopeKeyIdentity`).
+       */
+      scopeKeyIdentity?: ScopeKeyIdentity;
     },
   ): Promise<{
     /** Cell view reconciled to the pattern current after post-commit work. */
@@ -1822,6 +1845,10 @@ export class PiecesController<T = unknown> {
     const piece = this.runtime.getCellFromEntityId(
       this.#space,
       entityIdFrom(pieceId),
+      [],
+      undefined,
+      undefined,
+      options.scope,
     );
     const result = await this.runtime.runSyncedWithCommit(
       piece,
@@ -1840,6 +1867,9 @@ export class PiecesController<T = unknown> {
             options.served.actingUser,
           ),
         }),
+        ...(options.scopeKeyIdentity === undefined
+          ? {}
+          : { scopeKeyIdentity: options.scopeKeyIdentity }),
       },
     );
     if (options.served !== undefined) return result;
@@ -1872,15 +1902,19 @@ export class PiecesController<T = unknown> {
       pattern.resultSchema,
     );
     // Setup verifies the source closure of a pattern that carries a
-    // content-addressed entry ref, and verifies it synchronously. Load the
-    // parser it needs first, since setup cannot await one.
+    // content-addressed entry ref, and verifies it synchronously. Prepare
+    // that verification first, since setup cannot await.
     const knownEntryRef = this.runtime.patternManager.getArtifactEntryRef(
       pattern,
     );
     if (knownEntryRef !== undefined) {
       await timePiecePhase(
         "setupPersistent.prepareSourceClosureVerification",
-        () => prepareSourceClosureVerification(),
+        () =>
+          this.runtime.patternManager.prepareSourceClosureVerification(
+            this.#space,
+            [knownEntryRef.identity],
+          ),
       );
     }
     await timePiecePhase(
@@ -3308,7 +3342,7 @@ export class PiecesController<T = unknown> {
       runtime,
       rootToStart,
       sourceSnapshot,
-      { allowUnavailable: true },
+      { allowUnavailable: true, candidateIdentity: officialRef.identity },
     );
     const sourceTransition: PieceSourceTransition = {
       revisionId: crypto.randomUUID(),

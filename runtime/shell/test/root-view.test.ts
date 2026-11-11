@@ -611,6 +611,58 @@ describe("XRootView", () => {
     }
   });
 
+  it("retries the runtime's unreachable spaces on the window's `online` and `focus` while connected, and not after disconnecting", async () => {
+    const restore = installBrowserGlobals();
+    const { RuntimeInternals } = await import("@commonfabric/lib-shell");
+    const originalCreate = RuntimeInternals.create;
+    let unreachableRetries = 0;
+    RuntimeInternals.create = (() =>
+      Promise.resolve({
+        runtime: () => ({
+          on: () => {},
+          off: () => {},
+          listEventAttention: () => Promise.resolve([]),
+          retryUnreachableSpaces: () => {
+            unreachableRetries++;
+            return Promise.resolve();
+          },
+        }),
+        dispose: () => Promise.resolve(),
+      } as unknown as Awaited<
+        ReturnType<typeof RuntimeInternals.create>
+      >)) as typeof RuntimeInternals.create;
+
+    try {
+      const { XRootView } = await import("../src/views/RootView.ts");
+      const view = new XRootView();
+      // As above: no DOM for Lit to render into.
+      (view as unknown as { performUpdate: () => void }).performUpdate =
+        () => {};
+      view.app = {
+        ...view.app,
+        identity: await Identity.fromPassphrase("root-view-online-test"),
+      };
+      const task = view.accessForTestingOnly.rt;
+      task.run([view.app]);
+      await task.taskComplete;
+
+      view.connectedCallback();
+      globalThis.dispatchEvent(new Event("online"));
+      expect(unreachableRetries).toBe(1);
+      globalThis.dispatchEvent(new Event("focus"));
+      expect(unreachableRetries).toBe(2);
+
+      view.disconnectedCallback();
+      globalThis.dispatchEvent(new Event("online"));
+      globalThis.dispatchEvent(new Event("focus"));
+      expect(unreachableRetries).toBe(2);
+    } finally {
+      RuntimeInternals.create = originalCreate;
+      delete (globalThis as { commonfabric?: unknown }).commonfabric;
+      restore();
+    }
+  });
+
   it("keeps a complete attention card visible until Retry or Dismiss resolves it", async () => {
     const restore = installBrowserGlobals();
     try {

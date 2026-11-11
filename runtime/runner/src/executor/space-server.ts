@@ -161,6 +161,12 @@ import type {
   Unit,
   URI,
 } from "../storage/interface.ts";
+import { internalVerifierRead } from "../storage/reactivity-log.ts";
+import {
+  getDirectTransactionReactivityLog,
+  getTransactionReadActivities,
+  getTransactionWriteAttempts,
+} from "../storage/transaction-inspection.ts";
 import {
   ensurePieceRunningVerdict,
   type EnsurePieceVerdict,
@@ -185,6 +191,7 @@ import { readWatermarkSeq } from "./watermark-engine.ts";
 import {
   bumpDerivedCommits,
   type ServingLoopStats,
+  SETTLE_SERIES_MAX,
   updateDeliveryCheckpointStats,
 } from "./stats.ts";
 import { type SealedEffectBatch, SpaceOutbox } from "./outbox.ts";
@@ -717,12 +724,6 @@ const demanderPairKey = (identity: ScopeKeyIdentity): string =>
     identity.sessionId === undefined ? "" : String(identity.sessionId)
   }`;
 
-/** Coalesces demand notifications into one pending wake callback. Input
- * cycles can reconcile demand before it fires, and notifications racing a
- * pass can require another pass. The grace is separate from the active
- * wave's consequence-flush deadline. */
-const DEMAND_WAKE_GRACE_MS = 300;
-
 const neverAPieceRootId = (id: string): boolean =>
   id === SERVER_EXECUTION_WATERMARK_DOC_ID ||
   // Phase 4: the effects doc is a session-scoped VALUE doc every
@@ -1118,8 +1119,7 @@ export class SpaceServer implements TransactionSealDestination {
   #pendingStructureRetryWake = false;
 
   /** Level-converted demand wake (stage B): a session's watch set
-   * changed (or a session opened) and the grace elapsed; consumed by the
-   * next #waitForInput. */
+   * changed (or a session opened); consumed by the next #waitForInput. */
   #pendingDemandWake = false;
 
   /**
@@ -1141,9 +1141,6 @@ export class SpaceServer implements TransactionSealDestination {
 
   /** Whether the last publish left a `read` view without its answer. */
   #readViewUnanswered = false;
-
-  /** The demand wake's grace timer (see noteDemandChanged). */
-  #demandWakeTimer: ReturnType<typeof setTimeout> | undefined;
 
   /** WARM DEMAND (the explicit warm request's demand half —
    * serving-loop.md §1's third activation trigger, RULED 2026-08-21):
@@ -2186,8 +2183,8 @@ export class SpaceServer implements TransactionSealDestination {
       // for every warm notice — pre-activation pendings, the
       // registration drain, and mid-tenure arrivals alike — and a
       // fresh capture notes a demand change so an idle-waiting loop
-      // runs a fresh demand pass over it (the same grace-coalesced
-      // latch a session's watch change uses).
+      // runs a fresh demand pass over it (the same latch a session's
+      // watch change sets).
       let captured = false;
       let named = false;
       for (const write of record.writes) {
@@ -2261,9 +2258,9 @@ export class SpaceServer implements TransactionSealDestination {
         wavesAtCoverage: this.#wavesCommitted,
       };
     }
-    if (series.length > 4000) {
-      this.#options.stats.settle.dropped += series.length - 4000;
-      series.splice(0, series.length - 4000);
+    if (series.length > SETTLE_SERIES_MAX) {
+      this.#options.stats.settle.dropped += series.length - SETTLE_SERIES_MAX;
+      series.splice(0, series.length - SETTLE_SERIES_MAX);
     }
   }
 
@@ -2296,13 +2293,11 @@ export class SpaceServer implements TransactionSealDestination {
     }
   }
 
-  /** Reconsiders demanded roots after a session's demand changes.
-   * Notifications share one pending grace callback, which latches a cycle.
-   * Each notification also advances the demand generation, so a pass that
-   * already captured its rows re-arms on completion. One callback can
-   * therefore lead to multiple passes. Input-driven cycles reconcile demand
-   * independently of the timer; the grace is a coalescing interval, not a
-   * minimum wait for every new demand. */
+  /** Reconsiders demanded roots after a session's demand changes. Each
+   * notification latches a cycle and wakes a loop waiting on input; the
+   * notifications that arrive before that cycle's demand pass share it. Each
+   * also advances the demand generation, so a pass that already captured its
+   * rows re-arms on completion. */
   noteDemandChanged(
     reason: "watch" | "push-growth" | "warm" | "read-view" = "watch",
   ): void {
@@ -2324,12 +2319,8 @@ export class SpaceServer implements TransactionSealDestination {
     } else if (reason === "watch") {
       this.#options.stats.demand.watchWakes += 1;
     }
-    if (this.#demandWakeTimer !== undefined) return;
-    this.#demandWakeTimer = setTimeout(() => {
-      this.#demandWakeTimer = undefined;
-      this.#pendingDemandWake = true;
-      this.#feedArrived?.resolve();
-    }, DEMAND_WAKE_GRACE_MS);
+    this.#pendingDemandWake = true;
+    this.#feedArrived?.resolve();
   }
 
   /**
@@ -2665,8 +2656,7 @@ export class SpaceServer implements TransactionSealDestination {
   #atRest(): boolean {
     return this.suspendedOnInput && this.#feed.length === 0 &&
       this.#nothingOwed() && !this.#pendingShadowFlipWake &&
-      !this.#outboxDrainOwed && this.#demandWakeTimer === undefined &&
-      this.#deferredRescanTimer === undefined &&
+      !this.#outboxDrainOwed && this.#deferredRescanTimer === undefined &&
       this.#originFollowsInFlight.size === 0;
   }
 
@@ -2817,10 +2807,10 @@ export class SpaceServer implements TransactionSealDestination {
         basisSeq: Engine.serverSeq(this.#options.engine),
         actionId: info.actionId,
       });
-      // Authoritative, as an effect completion's writes are: the no-op
-      // elision diffs against the replica's optimistic view, which can
-      // hold a sealed layer the wave later drops.
-      tx.markAuthoritativeWrites?.();
+      // An unchanged direct commit still owes the same snapshot check as
+      // one carrying writes. The commit boundary adds document-root guards
+      // and validates their durable origins before returning its verdict.
+      tx.tx.validateReactiveReads = true;
     }
     const principal = info.scopeKeyIdentity?.principal;
     const attributionFromScope = info.kind === "derivation" &&
@@ -3373,13 +3363,58 @@ export class SpaceServer implements TransactionSealDestination {
       );
     }
     this.#recordLifecycleVerbWrites(tx);
-    const identity = runtime.scopeKeyIdentity;
+    // A transaction that names a principal's instance — a served source
+    // change to a requester's piece held at a user or session scope —
+    // addresses its scoped documents as that instance; any other addresses
+    // them as the serving runtime's own.
+    const instance = inner.scopeKeyIdentity;
+    const identity = instance ?? runtime.scopeKeyIdentity;
+    // Ordinary patches and elisions are sound only over a committed base.
+    // Guard every commit dependency or attempted document, including a net-zero
+    // write and untouched siblings carried by a whole-document replacement.
+    // These verifier reads consume no flow labels. They remain in the
+    // scheduling log so an empty seal validates the original snapshot too.
+    const emptyNative: NativeStorageCommit = { operations: [] };
+    const initialReads =
+      replica.storeCommitOf(emptyNative, inner, instance).reads;
+    const dependencies = new Set(
+      [...initialReads.confirmed, ...initialReads.pending].map((read) =>
+        toDirtyKey(read.id, resolveScopeKey(read.scope, identity))
+      ),
+    );
+    const guarded = new Set<string>();
+    const targets = [
+      ...Array.from(getTransactionReadActivities(inner)).filter((read) =>
+        read.space === this.#options.space && dependencies.has(
+          toDirtyKey(read.id, resolveScopeKey(read.scope, identity)),
+        )
+      ),
+      ...getTransactionWriteAttempts(inner) ?? [],
+      ...getDirectTransactionReactivityLog(inner)?.attemptedWrites ?? [],
+    ];
+    for (const target of targets) {
+      const scope: CellScope = target.scope ?? "space";
+      const root = { ...target, scope, path: [] };
+      const key = addressKey(root);
+      if (guarded.has(key)) continue;
+      guarded.add(key);
+      const guard = inner.read(root, {
+        trackReadWithoutLoad: true,
+        meta: internalVerifierRead,
+      });
+      if (guard.error !== undefined) {
+        return refuse(
+          `direct commit could not guard ${key}: ${guard.error.message}`,
+        );
+      }
+    }
+    // An empty seal clears its activity without calling the collector.
+    // Preserve its read set so even that verdict is checked by the store.
+    const emptyStore = replica.storeCommitOf(emptyNative, inner, instance);
     // Every space the transaction wrote is collected before anything
     // commits, so a refusal leaves nothing behind. The store's shape of the
     // serving space's commit is taken during the handoff, while the
-    // transaction's read log is still the transaction's to give, under the
-    // replica's own identity: a direct commit is a bookkeeping run's, which
-    // carries no other.
+    // transaction's read log is still the transaction's to give.
     const handed: Array<{
       space: MemorySpace;
       native: NativeStorageCommit;
@@ -3399,7 +3434,7 @@ export class SpaceServer implements TransactionSealDestination {
           native,
           source,
           store: space === this.#options.space
-            ? replica.storeCommitOf!(native, source)
+            ? replica.storeCommitOf!(native, source, instance)
             : undefined,
         });
         return Promise.resolve({ ok: {} });
@@ -3408,8 +3443,16 @@ export class SpaceServer implements TransactionSealDestination {
     const result = await inner.sealInto(collector);
     if (result.error !== undefined) return result;
     if (handed.length === 0) {
-      // An all-no-op transaction handed over nothing.
-      return result;
+      if (
+        emptyStore.reads.confirmed.length === 0 &&
+        emptyStore.reads.pending.length === 0
+      ) return result;
+      handed.push({
+        space: this.#options.space,
+        native: emptyNative,
+        source: inner,
+        store: emptyStore,
+      });
     }
     if (handed.length > 1 || handed[0].store === undefined) {
       return refuse(
@@ -3459,6 +3502,7 @@ export class SpaceServer implements TransactionSealDestination {
       operations,
       preconditions: [...preconditions],
       confirmedReads,
+      dependencyScopeIdentity: identity,
       annotations,
       consequenceOf: [],
       basisInstances: [],
@@ -3475,7 +3519,7 @@ export class SpaceServer implements TransactionSealDestination {
       native,
       source,
       Promise.resolve({ committed: { seq: committedSeq } }),
-      { reads },
+      { reads, ...(instance === undefined ? {} : { identity: instance }) },
     );
     const settled = await sealed.settled;
     if (settled.error !== undefined) {
@@ -8177,12 +8221,12 @@ export class SpaceServer implements TransactionSealDestination {
             to: advanceTo,
             at: performance.now(),
           });
-          if (stats.settleAdvances.series.length > 4000) {
+          if (stats.settleAdvances.series.length > SETTLE_SERIES_MAX) {
             stats.settleAdvances.dropped += stats.settleAdvances.series.length -
-              4000;
+              SETTLE_SERIES_MAX;
             stats.settleAdvances.series.splice(
               0,
-              stats.settleAdvances.series.length - 4000,
+              stats.settleAdvances.series.length - SETTLE_SERIES_MAX,
             );
           }
           logger.debug?.("settle-advance", () => [
@@ -8453,10 +8497,6 @@ export class SpaceServer implements TransactionSealDestination {
     // every key it reads.
     this.#demandMirror.clear();
     this.#demandFullReconcile = true;
-    if (this.#demandWakeTimer !== undefined) {
-      clearTimeout(this.#demandWakeTimer);
-      this.#demandWakeTimer = undefined;
-    }
     this.#pendingDemandWake = false;
     // MINOR-2: fold any demand-root delta since the last pass BEFORE the
     // runtime (and its counters) are disposed below, so a transition after

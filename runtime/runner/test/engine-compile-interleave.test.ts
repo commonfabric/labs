@@ -57,6 +57,10 @@ async function turnsDuring<T>(
     const result = await work();
     return { result, turns };
   } finally {
+    // The work can settle in the microtasks after a message dispatch on any
+    // port. Closing this port there while its handler still re-posts never
+    // returns in Deno, so the handler goes first.
+    port1.onmessage = null;
     port1.close();
     port2.close();
   }

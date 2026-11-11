@@ -1520,6 +1520,125 @@ describe("cli piece parsing", () => {
     });
   });
 
+  it("setPiecePattern() sends the origin to a serving deployment, and fails over a receipt that records none", async () => {
+    const requests: unknown[] = [];
+    let recordsOrigin = true;
+    const deps = {
+      loadPieces: () =>
+        Promise.resolve({
+          runtime: { experimental: { serverExecution: true } },
+          getSpace: () => SPACE_DID,
+          getPieceCell: () => Promise.resolve({}),
+          getResult: () => ({}),
+        } as any),
+      resolvePieceAddress: () => Promise.resolve(PIECE),
+      getPinnedProgramFromFile: () =>
+        Promise.resolve({ main: "/main.tsx", files: [] } as any),
+      pullServed: () => Promise.resolve(),
+      setPieceSourceOnServer: (_config: unknown, input: unknown) => {
+        requests.push(input);
+        return Promise.resolve({
+          pieceId: PIECE,
+          pattern: { identity: "B".repeat(43), symbol: "default" },
+          revisionId: "revision-2",
+          seq: 12,
+          detachedOrigin: null,
+          ...(recordsOrigin ? { origin: "system:origin.tsx" } : {}),
+        });
+      },
+    };
+    const config = {
+      apiUrl: API_URL,
+      space: SPACE,
+      identity: ID,
+      piece: PIECE,
+    };
+    const entry = { mainPath: "/main.tsx" };
+
+    const receipt = await setPiecePattern(config, entry, {
+      origin: "system:origin.tsx",
+    }, deps);
+    expect(receipt.origin).toBe("system:origin.tsx");
+    expect(requests[0]).toMatchObject({ origin: "system:origin.tsx" });
+
+    // A server that does not take an origin drops it and detaches.
+    recordsOrigin = false;
+    await expect(
+      setPiecePattern(config, entry, { origin: "system:origin.tsx" }, deps),
+    ).rejects.toThrow("does not record an origin");
+    // Without one asked for, no receipt has to name one.
+    const plain = await setPiecePattern(config, entry, {}, deps);
+    expect(plain.origin).toBeUndefined();
+    expect(requests[2]).not.toHaveProperty("origin");
+  });
+
+  it("setPiecePattern() sends a piece addressed at a scope to a serving deployment with its scope, and refreshes that instance, changing nothing here", async () => {
+    const requests: { scope?: string }[] = [];
+    const opened: unknown[] = [];
+    const deps = {
+      loadPieces: () =>
+        Promise.resolve({
+          runtime: { experimental: { serverExecution: true } },
+          getSpace: () => SPACE_DID,
+          getPieceCell: (
+            id: string,
+            _open: unknown,
+            _schema: unknown,
+            scope: unknown,
+          ) => {
+            opened.push([id, scope]);
+            return Promise.resolve({});
+          },
+          getResult: () => ({}),
+          get: () => {
+            throw new Error("must not reach the client-side update");
+          },
+        } as any),
+      resolvePieceAddress: () => Promise.resolve(PIECE),
+      getPinnedProgramFromFile: () =>
+        Promise.resolve({ main: "/main.tsx", files: [] } as any),
+      pullServed: () => Promise.resolve(),
+      setPieceSourceOnServer: (_config: unknown, input: { scope?: string }) => {
+        requests.push(input);
+        return Promise.resolve({
+          pieceId: PIECE,
+          pattern: { identity: "B".repeat(43), symbol: "default" },
+          revisionId: "revision-2",
+          seq: 12,
+          detachedOrigin: null,
+        });
+      },
+    };
+    const config = {
+      apiUrl: API_URL,
+      space: SPACE,
+      identity: ID,
+      piece: PIECE,
+    };
+    const entry = { mainPath: "/main.tsx" };
+
+    for (const pieceScope of ["user", "session", "space"] as const) {
+      const receipt = await setPiecePattern(
+        { ...config, pieceScope },
+        entry,
+        {},
+        deps,
+      );
+      expect(receipt.refresh).toEqual({ status: "completed" });
+    }
+    expect(requests.map((request) => request.scope)).toEqual([
+      "user",
+      "session",
+      undefined,
+    ]);
+    expect(requests[2]).not.toHaveProperty("scope");
+    expect(opened).toEqual([
+      [PIECE, "user"],
+      [PIECE, "session"],
+      [PIECE, "space"],
+    ]);
+  });
+
   it("recreateSpaceRootPattern() targets the explicit space", async () => {
     const seen: { config?: SpaceConfig } = {};
     const pieceId = await recreateSpaceRootPattern({
@@ -3231,6 +3350,31 @@ describe("cli piece parsing", () => {
       `Committed source update for piece ${PIECE} ` +
         `(Pattern Ref: cf:module/${"B".repeat(43)}#default, ` +
         `Revision: revision-2, Seq: 12)`,
+    );
+  });
+
+  it("names the origin the update records in the setsrc success line", () => {
+    expect(setsrcSuccessLine(
+      {
+        apiUrl: API_URL,
+        space: SPACE,
+        identity: "/tmp/test.key",
+        piece: PIECE,
+      },
+      {
+        status: "committed",
+        ref: { identity: "B".repeat(43), symbol: "default" },
+        revisionId: "revision-2",
+        detachedOrigin: null,
+        origin: "system:origin.tsx",
+        space: SPACE_DID,
+        seq: 12,
+        refresh: { status: "completed" },
+      },
+    )).toBe(
+      `Committed source update for piece ${PIECE} ` +
+        `(Pattern Ref: cf:module/${"B".repeat(43)}#default, ` +
+        `Revision: revision-2, Seq: 12); it follows system:origin.tsx`,
     );
   });
 

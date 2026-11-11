@@ -610,6 +610,7 @@ export class EngineWaveCommitSink implements WaveCommitSink {
       let applied;
       try {
         applied = applyWaveCommit(engine, {
+          dependencyScopeIdentity: batch.dependencyScopeIdentity,
           sessionId: this.#sessionId,
           space: batch.space,
           principal: this.#principal,

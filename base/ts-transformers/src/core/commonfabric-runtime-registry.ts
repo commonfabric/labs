@@ -107,6 +107,13 @@ export const COMMONFABRIC_RUNTIME_EXPORT_REGISTRY = [
     category: "ignored",
     reactiveOrigin: false,
   },
+  // Reads the principal a cell's value's own cell represents, from its
+  // label, and returns a plain DID. It builds no graph node.
+  {
+    exportName: "writtenPrincipalOf",
+    category: "ignored",
+    reactiveOrigin: false,
+  },
   // Reads which pattern result a cell belongs to, from the runtime's
   // back-link, and returns a plain string. It builds no graph node.
   {
