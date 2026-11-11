@@ -304,8 +304,10 @@ A serving runtime's type-check, transform and emit run in a compile worker
 and timing statistics beside the realm's own, under logger names prefixed
 `compile-worker:`; `compile-worker:js-compiler`'s `phase/*` keys are the
 compiler's phase timings. They are a snapshot taken after the worker's latest
-compile, so reading them never waits on the worker, and their timestamps are
-moved onto the realm's `performance.now()` clock. A realm `js-compiler` entry
+compile, so reading them never waits on the worker. Their `performance.now()`
+timestamps, `lastTimestamp` and `slowest[].at`, are moved onto the realm's
+clock; `slowest[].epochMs` stays in epoch milliseconds. A realm `js-compiler`
+entry
 can appear beside them, from the compiles that stay in the realm (pattern
 coverage, or a compile that asks for its transformed program). A compile
 worker that dies keeps its last snapshot until a fresh one has compiled,

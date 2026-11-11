@@ -103,8 +103,9 @@ export class ModuleCompileWorker implements ModuleCompiler {
    * The worker realm's loggers as they stood after its latest answered
    * compile, each logger's name prefixed with
    * {@link COMPILE_WORKER_LOGGER_PREFIX} so they can sit beside this realm's
-   * own, and each timestamp moved onto this realm's `performance.now()`
-   * clock. Before the first answer there are none; after a worker dies they
+   * own, and its `performance.now()` timestamps (`lastTimestamp`,
+   * `slowest[].at`) moved onto this realm's clock; `slowest[].epochMs` stays
+   * in epoch milliseconds. Before the first answer there are none; after a worker dies they
    * stay as they were until a fresh worker answers, whose counts start again
    * from zero.
    */
