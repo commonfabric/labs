@@ -756,6 +756,20 @@ schema it already knows it has.
   body unless the same value also serves as a schema, and so do code
   documents and every other `cid:` document. A one-shot `graph.query`
   returns every entity with its body.
+- **A schema that names a principal.** A schema whose content holds a DID
+  anywhere — a confidentiality or integrity clause bound to its principal,
+  as binding a `CurrentPrincipal` placeholder to the creator writes one, or
+  a DID among its values — never travels by reference and never resolves
+  from the registry. Its hash identifies whom it was bound to, so whether a
+  client fetches it would say whether the client has touched data bound to
+  that principal. A server sends such a schema with its body, and a client
+  given a reference to one fetches its body from the space that named it
+  even when the registry already holds it. The client's half is the one
+  that closes the probe, since a server probing for it is not one that
+  honors the server's half; the server's half spares an honest server's
+  client a round trip that reveals nothing. A placeholder that is not yet
+  bound names no principal, and travels by reference like any other
+  schema.
 - **What the server still enforces, per space.** Nothing above moves: the
   commit boundary validates every closure a commit references against that
   space's commit and store, result assembly verifies every closure a frame
@@ -833,9 +847,11 @@ schema it already knows it has.
   code — with the defaults a pattern's author writes — holds no user data,
   and that is most schema documents. A schema a pattern builds at run time
   from what it reads can hold that data, in a `default`, `const` or `enum`
-  among others, and its hash then says what the client holds of it. Label
-  documents, whose labels can name principals, are not resolved as schemas
-  and keep their bodies. The disclosure can also be probed for: a server can
+  among others, and its hash then says what the client holds of it. A
+  schema that names a principal never travels by reference or resolves from
+  the registry, as above, and label documents, whose labels can name
+  principals, are not resolved as schemas and keep their bodies. The
+  disclosure can also be probed for: a server can
   name any hashes by reference and watch which bodies the client fetches,
   since the client cannot check a server's claim that its store holds a
   document. Sharing fetches per host bounds who can stall a frame, but not
@@ -1047,10 +1063,14 @@ playbook:
    pattern anywhere, or has read a space that hands out a known document.
    This is the attack browsers met in their HTTP caches, and the delivery
    that existed before references had no such oracle, since the client never
-   asked for a body. A schema generated from pattern code holds no user
-   data; one a pattern builds at run time from what it reads can, and its
-   hash then says what the client holds of it. Label documents keep their
-   bodies. Browsers closed the attack by partitioning their caches by
+   asked for a body. A schema generated from pattern code, with its
+   principal placeholders unbound, holds no user data. A schema that names a
+   principal, a bound clause among them, never travels by reference or
+   resolves from the registry, so a client's fetches say nothing about it.
+   A schema a pattern builds at run time from what it reads can hold that
+   data, in a `default`, `const` or `enum` among others, and its hash then
+   says what the client holds of it; that case stays open. Label documents
+   keep their bodies. Browsers closed the attack by partitioning their caches by
    top-level site, and the same key fits here: a reference from a space on
    site B would resolve through the registry only if the hash arrived from
    a space on site B, and would be fetched from B otherwise, while the
