@@ -10,10 +10,11 @@
 
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
 
 import { realmFromFabricValue } from "@commonfabric/data-model/codecs";
 import { Identity } from "@commonfabric/identity";
-import { type Cell, Runtime } from "@commonfabric/runner";
+import { type Cell, loadDocument, Runtime } from "@commonfabric/runner";
 import {
   type ServingMemoryServer,
   startServingMemoryServer,
@@ -51,6 +52,9 @@ const carol = await Identity.fromPassphrase("send-reviewed carol", {
 });
 // What `buildProcessor()` runs the processor under, which the client asserts.
 const apiUrl = "http://localhost/";
+
+/** The schema a host's handle on a stream reads it under. */
+const STREAM = { asCell: ["stream"] } as const;
 
 /** The surface and action the pattern's writer is gated on. */
 const chatSend = { surface: "ChatSendSurface", action: "ChatSend" };
@@ -327,6 +331,119 @@ async function membersRoom(
 }
 
 /**
+ * A pattern exposing the `save` and `mark` streams of a pattern nested two
+ * deep, each passed on by the pattern around it. Both append the event's body
+ * to `items`.
+ */
+const relayPatternSource = `
+  import { handler, pattern, Writable } from "commonfabric";
+
+  const append = handler<{ body: string }, { items: Writable<string[]> }>(
+    ({ body }, { items }) => items.push(body),
+  );
+
+  const Core = pattern(() => {
+    const items = new Writable<string[]>([]);
+    return { items, save: append({ items }), mark: append({ items }) };
+  });
+
+  const Middle = pattern(() => {
+    const core = Core({});
+    return { items: core.items, save: core.save, mark: core.mark };
+  });
+
+  export default pattern(() => {
+    const middle = Middle({});
+    return { items: middle.items, save: middle.save, mark: middle.mark };
+  });
+`;
+
+/**
+ * The relay pattern, run by a runtime that is then disposed, and `runtime`,
+ * over the same memory server, which has loaded none of it. `save` names the
+ * outermost result's `save` as a host's handle on the stream does, `items`
+ * names that result's `items`, and `markStream` names the document of the
+ * stream that result's `mark` leads to. With `serverExecution`, both
+ * runtimes are clients of a serving memory server, which runs the handlers.
+ */
+async function coldRelay(options: { serverExecution?: boolean } = {}) {
+  const serverExecution = options.serverExecution === true;
+  const serving = serverExecution
+    ? await startServingMemoryServer({
+      apiUrl: new URL(import.meta.url),
+      policy: { flushDeadlineMs: 5_000, idleParkMs: 600_000 },
+    })
+    : undefined;
+  const server = serving?.server ?? newLoopbackServer();
+
+  /** A runtime acting as `signer` over the memory server. */
+  const connect = () => {
+    const storage = EmulatedStorageManager.connectTo(server, { as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(apiUrl),
+      storageManager: storage,
+      ...(serverExecution && { experimental: { serverExecution: true } }),
+    });
+    return {
+      runtime,
+      [Symbol.asyncDispose]: async () => {
+        await runtime.dispose();
+        await storage.close();
+      },
+    };
+  };
+
+  let refs;
+  {
+    await using owner = connect();
+    const compiled = await owner.runtime.patternManager.compilePattern({
+      main: "/main.tsx",
+      files: [{ name: "/main.tsx", contents: relayPatternSource }],
+    }, { space });
+    const root: Cell<unknown> = await owner.runtime.runSynced(
+      owner.runtime.getCell(
+        space,
+        `send-reviewed-relay-${crypto.randomUUID()}`,
+      ),
+      compiled,
+      {},
+    );
+    await owner.runtime.idle();
+    refs = {
+      save: createCellRef(root.key("save").asSchema(STREAM)),
+      items: root.key("items").getAsNormalizedFullLink(),
+      markStream: {
+        ...createCellRef(root.key("mark").resolveAsCell()),
+        schema: STREAM,
+      },
+    };
+  }
+  const cold = connect();
+
+  return {
+    runtime: cold.runtime,
+    ...refs,
+
+    /**
+     * What `items` holds once `runtime` is idle, as a fresh runtime reads it
+     * from the memory server.
+     */
+    stored: async () => {
+      await cold.runtime.idle();
+      await using reader = connect();
+      const cell = reader.runtime.getCellFromLink<string[]>(refs.items);
+      await cell.pull();
+      return cell.get();
+    },
+
+    [Symbol.asyncDispose]: async () => {
+      await cold[Symbol.asyncDispose]();
+      await (serving?.close() ?? server.close());
+    },
+  };
+}
+
+/**
  * `promise`, under a stuck-condition net when a serving loop is running,
  * whose lease timer keeps the process from going quiet on a send that never
  * settles.
@@ -338,6 +455,146 @@ const settled = <T>(
 ): Promise<T> => serverExecution ? withStuckNet(promise, label) : promise;
 
 describe("send-reviewed", () => {
+  describe("a stream reached through an unloaded result", () => {
+    // Each case sends from a runtime that has loaded nothing of the pattern,
+    // through the outermost result, so that the stream is reached through
+    // three documents the runtime does not hold.
+
+    for (const serverExecution of [false, true]) {
+      for (const reviewed of [false, true]) {
+        it(`handles ${reviewed ? "a reviewed" : "a strict"} send, with serverExecution=${serverExecution}`, async () => {
+          await using relay = await coldRelay({ serverExecution });
+          const client = await attachClient(relay.runtime);
+          try {
+            const stream = client.getCellFromRef(relay.save);
+            await settled(
+              serverExecution,
+              reviewed
+                ? stream.sendReviewed({ body: "saved" }, chatSend)
+                : stream.sendStrict({ body: "saved" }, { awaitHandling: true }),
+              "cold send",
+            );
+          } finally {
+            await client.dispose();
+          }
+          expect(await relay.stored()).toEqual(["saved"]);
+        });
+      }
+    }
+
+    it("rejects with the load's failure, and sends nothing, when a document the stream is reached through fails to load", async () => {
+      await using relay = await coldRelay();
+      const processor = buildProcessor({
+        runtime: relay.runtime,
+        identity: signer,
+        space,
+      });
+      try {
+        // The failure a provider reports for a load the server refuses.
+        using _refused = stub(
+          relay.runtime.storageManager,
+          "syncCell",
+          () => Promise.reject(new Error("The server refused the load.")),
+        );
+        await expect(processor.handleCellSend({
+          type: RequestType.CellSend,
+          cell: relay.save,
+          event: { body: "refused" },
+          awaitHandling: true,
+        })).rejects.toThrow("Could not load document");
+      } finally {
+        await processor.dispose();
+      }
+      expect(await relay.stored()).toEqual([]);
+    });
+
+    it("rejects, and sends nothing, when the processor is disposed while the stream's documents load", async () => {
+      await using relay = await coldRelay();
+      const processor = buildProcessor({
+        runtime: relay.runtime,
+        identity: signer,
+        space,
+      });
+      // The load lands only after the processor is disposed.
+      const landing = Promise.withResolvers<void>();
+      const sync = relay.runtime.storageManager.syncCell.bind(
+        relay.runtime.storageManager,
+      );
+      using _held = stub(
+        relay.runtime.storageManager,
+        "syncCell",
+        (cell, options) => landing.promise.then(() => sync(cell, options)),
+      );
+      const sent = processor.handleCellSend({
+        type: RequestType.CellSend,
+        cell: relay.save,
+        event: { body: "disposed" },
+        awaitHandling: true,
+      });
+      await processor.dispose();
+      landing.resolve();
+      await expect(sent).rejects.toThrow(
+        "The runtime was disposed before the event was sent.",
+      );
+      expect(await relay.stored()).toEqual([]);
+    });
+
+    it("handles two sends in the order they were made, when the first is reached through unloaded documents and the second is not", async () => {
+      await using relay = await coldRelay();
+      await loadDocument(
+        relay.runtime,
+        relay.runtime.getCellFromLink(relay.markStream),
+      );
+      const processor = buildProcessor({
+        runtime: relay.runtime,
+        identity: signer,
+        space,
+      });
+      try {
+        await Promise.all([
+          processor.handleCellSend({
+            type: RequestType.CellSend,
+            cell: relay.save,
+            event: { body: "first" },
+            awaitHandling: true,
+          }),
+          processor.handleCellSend({
+            type: RequestType.CellSend,
+            cell: relay.markStream,
+            event: { body: "second" },
+            awaitHandling: true,
+          }),
+        ]);
+      } finally {
+        await processor.dispose();
+      }
+      expect(await relay.stored()).toEqual(["first", "second"]);
+    });
+
+    it("has handled a send it took without waiting by the time it is idle", async () => {
+      await using relay = await coldRelay();
+      const processor = buildProcessor({
+        runtime: relay.runtime,
+        identity: signer,
+        space,
+      });
+      try {
+        processor.handleCellSend({
+          type: RequestType.CellSend,
+          cell: relay.save,
+          event: { body: "idle" },
+        });
+        await processor.handleIdle();
+        // Read without a pull, which would wait for the send itself.
+        expect(relay.runtime.getCellFromLink(relay.items).get()).toEqual([
+          "idle",
+        ]);
+      } finally {
+        await processor.dispose();
+      }
+    });
+  });
+
   describe("the event the worker sends", () => {
     it("holds `native` provenance for the bound surface and action in place of the payload's, is renderer-trusted, matches the bound contract, and is a trusted gesture, where `sendStrict()` sends one that is none of those", async () => {
       // A handler of the scheduler's own reads the event the worker sends,

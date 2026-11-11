@@ -192,6 +192,14 @@ turns an event down throws, which fails its run and rejects the send. Under
 server execution the run it waits for is the served one, whose outcome reaches
 the worker as the consequence the serving loop recorded for the event.
 
+Each of these delivers its event to the stream the handle's stored links lead
+to, such as a nested pattern's stream that the result it is reached through
+passes on. The worker first loads each document those links pass through that it
+has not loaded yet, as a worker that has just started has loaded none, and a
+load that fails refuses the send. Events reach their streams in the order they
+were sent, so a send whose documents are loading holds back the ones sent after
+it, and `RuntimeClient.idle()` waits for those sends too.
+
 `CellHandle.sendReviewed(event, { surface, action })` sends a reviewed action
 from a control the host draws itself, bound to one trusted surface and one
 action. The worker stamps the event with `native` provenance for them, replacing

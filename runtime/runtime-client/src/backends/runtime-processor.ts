@@ -79,6 +79,7 @@ import {
   isCellResult,
   isLoopbackHostname,
   isPieceRoot,
+  loadDocument,
   markDurableReadTx,
   type NormalizedFullLink,
   normalizeSpaceHost,
@@ -1006,6 +1007,11 @@ export class RuntimeProcessor {
   // `handleIdle()` takes in: a reload before a mark is sent would leave the
   // space listed as saved.
   #deletionMarks = new Set<Promise<void>>();
+  // The last of the sends still loading the documents their targets are
+  // reached through, which `#sendCellEvent()` queues behind and
+  // `handleIdle()` takes in, and which never rejects; `undefined` when none
+  // is.
+  #loadingSends: Promise<void> | undefined;
   // Aborted as disposal begins, so an inbox ensure still in flight sends
   // nothing after it, a profile root repair starts no commit after it, and
   // the share intake stops.
@@ -2410,14 +2416,106 @@ export class RuntimeProcessor {
    * logged; `commit` waits for the transaction's commit, and `handling` for
    * the commit of the handler's run as well, and either rejects with the
    * refusal.
+   *
+   * The event goes to the address `ref`'s stored links lead to, so each
+   * document they pass through is loaded first, and events reach their
+   * streams in the order they were sent. A send whose documents cannot be
+   * loaded, or that the runtime's disposal overtakes, sends nothing, and
+   * rejects or is logged as a refusal is.
    */
   #sendCellEvent(
     ref: CellRef,
     deliver: (send: (event: unknown) => void) => void,
     wait: "commit" | "handling" | undefined,
   ): void | Promise<void> {
+    const target = getCell(this.#runtime, ref);
+    const earlier = this.#loadingSends;
+    const loading = earlier === undefined
+      ? this.#loadLinkedDocuments(target)
+      : undefined;
+    if (earlier === undefined && loading === undefined) {
+      return this.#enqueueCellEvent(target, deliver, wait);
+    }
+    const enqueued = (async () => {
+      await earlier;
+      // A send that queued behind an earlier one checks its documents once
+      // its turn comes, since a link can change while it waits.
+      await (loading ?? this.#loadLinkedDocuments(target));
+      if (this.#isDisposed) {
+        throw new Error("The runtime was disposed before the event was sent.");
+      }
+      // In an object, so that the outcome of the send is not awaited here:
+      // holding later sends behind a handler's run would hold them behind
+      // work that may wait for them.
+      return { outcome: this.#enqueueCellEvent(target, deliver, wait) };
+    })();
+    const lane = enqueued.then(() => {}, () => {});
+    this.#loadingSends = lane;
+    void lane.then(() => {
+      if (this.#loadingSends === lane) this.#loadingSends = undefined;
+    });
+    const outcome = enqueued.then(({ outcome }) => outcome);
+    if (wait !== undefined) return outcome;
+    void outcome.catch((error) => {
+      console.error("[RuntimeProcessor] Cell send failed:", error);
+    });
+  }
+
+  /**
+   * Helper for `#sendCellEvent()`, which loads each document the links from
+   * `target` pass through that the replica has no basis for, not even a
+   * confirmed absence, so that `target` resolves to the address those links
+   * name rather than to the first document still to arrive. A send derives
+   * the event's durable id and its stream's entries from that address.
+   * Returns `undefined`, loading nothing, when the replica has a basis for
+   * every one, and otherwise a promise that resolves once each has loaded.
+   * A document that does not exist ends the links, as a stream's own
+   * document, which holds no value, often does.
+   *
+   * @throws The promise rejects with a `DocumentLoadError` when a load fails,
+   *   as one the server refuses does.
+   */
+  #loadLinkedDocuments(target: Cell<unknown>): Promise<void> | undefined {
+    // A replica that reports no coverage replicates nothing lazily, so it
+    // holds every document it can.
+    const unloaded = (): NormalizedFullLink | undefined => {
+      const end = target.resolveAsCell().getAsNormalizedFullLink();
+      const covered = this.#runtime.storageManager.open(end.space).replica
+        .hasLocalDocumentCoverage?.(end.id, end.scope);
+      return covered === false ? end : undefined;
+    };
+    const first = unloaded();
+    if (first === undefined) return undefined;
+    return (async () => {
+      // Each pass loads the document a resolution stopped at, so that the
+      // next one goes past it, and loads each document once, so the passes
+      // end.
+      const loaded = new Set<string>();
+      const keyOf = ({ space, scope, id }: NormalizedFullLink) =>
+        JSON.stringify([space, scope, id]);
+      for (
+        let end: NormalizedFullLink | undefined = first;
+        end !== undefined && !loaded.has(keyOf(end));
+        end = unloaded()
+      ) {
+        loaded.add(keyOf(end));
+        await loadDocument(this.#runtime, this.#runtime.getCellFromLink(end));
+      }
+    })();
+  }
+
+  /**
+   * Helper for `#sendCellEvent()`, which opens the event's transaction once
+   * the documents `target` is reached through are loaded, sends the event in
+   * it, and commits it, waiting as `wait` asks.
+   */
+  #enqueueCellEvent(
+    target: Cell<unknown>,
+    deliver: (send: (event: unknown) => void) => void,
+    wait: "commit" | "handling" | undefined,
+  ): void | Promise<void> {
     const tx = this.#runtime.edit();
-    const cell = getCell(this.#runtime, ref).withTx(tx);
+    const cell = target.withTx(tx);
     const handled = wait === "handling"
       ? Promise.withResolvers<IExtendedStorageTransaction>()
       : undefined;
@@ -3165,10 +3263,15 @@ export class RuntimeProcessor {
     // and the marks of deleted spaces on their way to Home's catalog. That
     // work issues scheduler work, and scheduler work can hand the share
     // intake more to take up, so the two are awaited until both hold at once.
+    //
+    // A send still loading the documents its target is reached through has
+    // not reached the scheduler yet, so the sends are awaited first.
     for (;;) {
+      await this.#loadingSends;
       const intake = await this.#homeHousekeepingIdle();
       await this.#runtime.scheduler.idleWithPendingCommits();
       if (
+        this.#loadingSends === undefined &&
         (intake === undefined || intake.isIdle()) &&
         this.#deletionMarks.size === 0 &&
         this.#runtime.scheduler.isIdleWithPendingCommits()
