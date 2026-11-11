@@ -28,9 +28,17 @@ next.
   [`../history/specs/compiled-pattern-language/cross-read-2026-11-11.md`](../history/specs/compiled-pattern-language/cross-read-2026-11-11.md)
   lists every contradiction found by reading the seven documents against
   each other, with the side that governs and the smallest correction for
-  each. None of it is applied yet. This plan cites its findings by number:
-  K1 to K19, the numbers 1 to 26 of its section 3, F1 to F21, and the A, B,
-  C, and D numbers of its section 5.
+  each. This plan cites its findings by number: K1 to K19, the numbers 1
+  to 26 of its section 3, F1 to F21, and the A, B, C, and D numbers of its
+  section 5. Applied so far are the corrections to the overview,
+  `language-subset.md`, `plan-and-label-templates.md`, and
+  `builtin-inventory.md` that need no ruling: section 5 of the record, K1,
+  K2, K6, K8 to K11, and K16 to K19. Not applied from those are the ones
+  that wait on the owner (A2, A9, the first item of A14, the two senses of
+  "cause" in A17, K3, and K12 to K15), the corpus counts (K4, K5, A16), and
+  the numbering gap after §3.19 of the plan document (K7), which stays
+  because other documents cite the numbers after it. Sections 3 and 4 of
+  the record, on the three newer documents, are not applied.
 - **Specification change:** draft pull request #91 in `commonfabric/specs`
   (branch `claude/compiled-pattern-label-templates`) carries the label
   semantics as prose, pseudocode, and Lean statements. It includes the
@@ -278,6 +286,24 @@ answer goes to the specification with the document.
 30. **`inspectConfLabel` on an interim value** (K3). The plan document
     instantiates the value's template when asked; the inventory answers
     `notAvailable`. The ruling says an interim value is not labeled.
+31. **A child instantiated per element over equal plain values.** The
+    compile error for shared per-element state covers a body that declares
+    a state cell or binds a handler. A body that instantiates a child is
+    not covered: the child's result cell is named by the element key, so
+    two equal plain elements share one child and its state. A
+    factory-typed element is a plain value, so
+    `factories.map((F) => F({ ... }))` is the plain case. *Assumed:* the
+    error is as ruled and does not cover it.
+32. **Context reads in the pattern body** (`builtin-inventory.md`, open
+    question 10). The language subset refuses `eventKey` and
+    `currentPrincipal` there and no document decides the others. Today
+    every one but `equals` and `getPatternEnvironment` throws in a pattern
+    body. *Assumed:* the others are legal there, as in a `lift`.
+33. **"Evaluate the same gates"** (K18). The ruling has clients evaluate
+    the same gates as the server. One gate cannot be evaluated on a
+    client: the egress ceiling of an effect a handler requests depends on
+    sink ceilings that are server configuration. The overview now says a
+    client evaluates the gates it can from the plan and the data it holds.
 
 ## Open, and not needing the owner
 
@@ -309,10 +335,6 @@ correction. The ones more depends on:
   channel, which transaction a failed egress ceiling rejects, what a failed
   cone's side-write targets take, and a journaled label-metadata
   observation.
-- **Among the first four documents** (section 5 of the record): the array
-  parameter in the element key (A1), when a received handler's writer
-  policy is checked (A3), the durable state of `reduce` (A4), diagnostics
-  with no catalog entry (A6, A13), and fourteen sentences of the overview.
 - **Where a result is split into documents.** The ruling leaves the rule
   about size to `execution-and-storage.md`: which subtrees get a document
   of their own, how such a document is identified so that a reorder moves
@@ -325,6 +347,52 @@ correction. The ones more depends on:
   `builtin-inventory.md`, and `footprint-analysis.md` (K4, K5, A16, F20).
 
 The open questions each document ends with stay where they are.
+
+### Found while correcting the first four documents
+
+These are not in the cross-read record. Each is left as it was found.
+
+- **The FabriChat example of `plan-and-label-templates.md` §6.2.** `facts`
+  and `replies` meet the promotion criterion and are still shown as
+  `computed` bodies, because showing them promoted needs a body input that
+  is another cone's value and a rule for `.key(k).get()` on a handle in the
+  reactive tier. The reactions list is a `state` write edge in §6.2 and a
+  created cell in §6.3. §6.3 counts five places where `sendInto` throws,
+  and the source has four `throw` statements there and twelve in its
+  helpers. `authorProfile` is said to pass a reference on, where the stored
+  link is the result of `resolveAsCell()`.
+- **An `inSpace` option or target computed inside a body** has no form in
+  the plan record. A fixture of the corpus computes `root` and `grants`.
+- **`resultOwnerOf`.** Source reads the back-link as a verifier read. If a
+  verifier read is left out of flow derivation, the label rule in
+  `plan-and-label-templates.md` §3.16 and its comparison with today need
+  checking, and so does the inventory's "ordinary journaled reads".
+- **`spaceDeleted` as a constant** gives nothing that makes a reading cone
+  stale when the server's answer changes. **`spaceOf`** records one
+  `identity` slot, and the inventory says today's read follows links and
+  joins their pointer labels.
+- **`setSchema`** is removed by `language-subset.md` §4.7 and has no
+  catalog entry. That document also does not say whether a cell handle
+  type is a data type or a code type, which its rule for imported
+  signatures depends on.
+- **A computation that reads its own write target.**
+  `footprint-analysis.md` §6.6 says it breaks idempotency whatever the
+  data; `scheduler-and-serving-loop.md` §8.2 says a write that normalizes
+  the value it reads settles in two evaluations.
+- **The overview** still says a `map` element is a cone with a key, where
+  an element body is one or more cones; that the scheduler's rule P7
+  applies to cycles, where the proposal fails the cone at the bound; that
+  a handler's read closure is static, which does not hold for the reads
+  footprint analysis leaves dynamic; and that the compiler checks
+  statelessness in all three tiers, where imported modules keep the
+  load-time verifier.
+- **Wording that the pass left uneven.** `plan-and-label-templates.md` now
+  calls the callback of `minBy`, `maxBy`, and the indexes the key
+  function; `language-subset.md` and `builtin-inventory.md` say selector.
+  `footprint-analysis.md` §8.3 quotes a sentence the inventory no longer
+  has, and its request 13 names bodies B2 and B3 of an example that is
+  renumbered. `language-subset.md` cites open questions of the newer
+  documents by number.
 
 ## Known limits of what exists
 
@@ -365,16 +433,16 @@ The open questions each document ends with stay where they are.
 
 1. **The owner rules** on the questions above. A ruling is added to
    [Decided](#decided) and the question removed.
-2. **One reconciliation pass per document,** each by one author, applying
-   the corrections of the cross-read record that need no ruling and the
-   rulings that exist by then, the pending ones of the Decided list first.
-   The order follows what governs:
-   `plan-and-label-templates.md` first, because most requests are addressed
-   to it, with specs pull request #91 changed in the same pass; then
-   `builtin-inventory.md` and `language-subset.md`; then the three newer
-   documents, where `execution-and-storage.md` and
-   `scheduler-and-serving-loop.md` are reconciled by authors who each read
-   the other in full; the overview last.
+2. **The remaining reconciliation passes,** each document by one author.
+   The pending rulings of the Decided list are written in first, with any
+   ruling made by then. The order follows what governs:
+   `plan-and-label-templates.md` first, for the records and label rules
+   the newer documents ask of it, with specs pull request #91 changed in
+   the same pass; then `footprint-analysis.md` (section 4 of the record);
+   then `execution-and-storage.md` and `scheduler-and-serving-loop.md`
+   (section 3), by authors who each read the other in full; then
+   `builtin-inventory.md` and `language-subset.md` for what those passes
+   changed; the overview last.
 3. **Bring specs pull request #91 up to `plan-and-label-templates.md`**
    (section 2 of the record), and add the label rules listed above.
 4. **One corpus measurement** with one stated method, so that the three
