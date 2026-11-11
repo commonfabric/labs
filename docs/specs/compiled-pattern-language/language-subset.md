@@ -460,19 +460,57 @@ footprint, its write edges, and the identity that write policies name. A
 received handler cannot be named in a label argument: `typeof name` in
 `WriteAuthorizedBy` needs a declaration ([§8.5](#85-label-arguments)).
 
-A factory value is obtained by referring to a module-scope `pattern(...)`
-or `handler(...)` definition without calling it: `{ onSave: saveDonut }`
-puts a handler factory in a data position. A bound handler is not a
-factory. It is a stream, and has the type `Stream<E>`.
+A factory value is obtained in two ways. The first is by referring to a
+module-scope `pattern(...)` or `handler(...)` definition without calling it:
+`{ onSave: saveDonut }` puts a handler factory in a data position. A bound
+handler is not a factory. It is a stream, and has the type `Stream<E>`.
+
+The second is a **pattern closure**: an inline `pattern(...)` expression in
+tier R that is used as a value instead of being called.
+
+```tsx
+// Shown for illustration only.
+const DonutSearch = pattern<{ donuts: Donut[] }>(({ donuts }) => {
+  const search = pattern<{ flavor: string }>(({ flavor }) =>
+    donuts.filter((donut) => donut.flavor === flavor)
+  );
+  return { search };
+});
+```
+
+- **Captures.** The callback may refer to `const` bindings and parameters of
+  the enclosing tier-R bodies, under the capture rules of
+  [§4.6](#46-captures): a captured value is a data value or a cell, and a
+  captured function value is refused. The compiler turns each capture into a
+  private parameter of the closure and binds it where the closure is
+  written. Authored code has no spelling for that binding.
+- **Type.** The expression has the type `PatternFactory<I, O>`, where `I` is
+  the callback's declared input type. The captures are not part of `I`: a
+  caller supplies `{ flavor }` and can neither see nor supply `donuts`. This
+  is what lets a closure be given to a language-model built-in as a tool
+  without exposing what it closes over.
+- **Use.** A pattern closure is a pattern factory value like any other. It
+  may be returned in the pattern's result, passed to a child pattern, given
+  as a tool, or called. Called in the body that wrote it, it is a statically
+  resolved callee and is compiled in. Called by a receiver, it is a child
+  with a plan of its own (`plan-and-label-templates.md`, §3.15).
+- **Tier F.** A function body does not write a pattern closure as a value.
+  An inline `pattern(...)` there remains legal only as the callee of an
+  instantiation (§5.1).
+
+There is no handler closure of this kind and none is needed: `action` and an
+inline event handler already bind a handler to its captures and yield the
+stream.
 
 A `lift` result is not a factory type and cannot be received as data: an
-imported function is called as a function.
+imported function is called as a function. Only patterns and handlers are
+factory values.
 
 #### 4.4.3 Removed call forms
 
 `ifElse`, `when`, `unless`, and the `str` tag are not part of the language,
 so that no new pattern is written with them. `patternTool` is removed too,
-in favor of pattern factory values (`builtin-inventory.md`).
+in favor of pattern closures (§4.4.2).
 
 For an interim period the compiler accepts the first four with a warning
 (`removed-form:helper`) that states the replacement, by rewriting each to
@@ -495,8 +533,30 @@ the transformer emits is retired, the overview's last stage: from then on
 in this repository, which is rewritten before that stage so that no pattern
 an author might imitate uses a removed form.
 
-`patternTool(...)` has no interim acceptance, because its replacement is not
-a local rewrite (`removed-form:pattern-tool`).
+`patternTool(...)` has no interim acceptance (`removed-form:pattern-tool`).
+Its rewrite moves the bound parameters out of the pattern's input and into
+captures:
+
+```tsx
+// Shown for illustration only.
+// Before
+const tool = patternTool(
+  pattern<{ flavor: string; donuts: Donut[] }>(({ flavor, donuts }) =>
+    donuts.filter((donut) => donut.flavor === flavor)
+  ),
+  { donuts },
+);
+
+// After
+const tool = pattern<{ flavor: string }>(({ flavor }) =>
+  donuts.filter((donut) => donut.flavor === flavor)
+);
+```
+
+A `patternTool` call whose pattern is declared at module scope is rewritten
+the same way, by writing the pattern inline where the bound values are in
+scope, or by an inline closure that calls the module-scope pattern with
+them.
 
 ### 4.5 JSX
 
@@ -1463,7 +1523,7 @@ construct found and the replacement given here.
 | `ses-callback:callable-capture` | error | A tier-F body inside tier R captures a function value from an enclosing function scope | Move the function to module scope | carries |
 | `removed-form:helper` | warning | A direct call of `ifElse`, `when`, or `unless`, or a `str` tagged template, in tier R (§4.4.3). An error once the builder form is retired | The rewrite: `c ? a : b` for `ifElse(c, a, b)`, `c && v` for `when(c, v)`, `c \|\| f` for `unless(c, f)`, a plain template literal for `str` | new |
 | `removed-form:helper-unsupported` | error | One of those four in any other form: with schema arguments, passed as a value, or through an alias | The same rewrite | new |
-| `removed-form:pattern-tool` | error | A call of `patternTool` | Pass the pattern itself as a pattern factory value, as `builtin-inventory.md` describes | new (replaces `pattern-context:patterntool-requires-pattern`, which is retired) |
+| `removed-form:pattern-tool` | error | A call of `patternTool` | Write an inline `pattern(...)` that captures the bound values, and pass it as the tool (§4.4.3) | new (replaces `pattern-context:patterntool-requires-pattern`, which is retired) |
 | `collection:callback-parameters` | error | A reactive collection callback that is not an arrow function written at the call, or that takes the whole array as a parameter | Write the arrow at the call, with the element and at most the index. Capture the array by name if the body needs it | new |
 | `collection:reduce-callback` | error | A `reduce` in tier R whose callback has a block body | Write the step as one expression, `(sum, donut) => sum + donut.price`. A step that needs statements is a loop inside `computed(() => ...)` | new |
 | `collection:reduce-initial` | error | A `reduce` in tier R without an initial value | Pass the initial value as the second argument | new |
@@ -1609,7 +1669,7 @@ and 2 local type declarations, and nothing else.
 | Function overloads | 5 (2) | `patterns/system/fabrichat/manager.tsx` (4), `patterns/system/private-inbox/private-inbox.tsx` (1); 34 more in 29 pattern test files | Rewrite. Every occurrence is one idiom: a one-line function whose overload signature re-types a cell (`function inboxOf(pointer: Cell<A>): Cell<B>`) over an implementation that returns its argument as `unknown`. It exists because the double cast is refused. [§12.4](#124-replace-the-re-typing-overloads-with-declared-types) gives the two rewrites, which need no new construct |
 | Mapped type | 1 (1) | `patterns/apps/topics/topic.tsx` | Rewrite as `Readonly<Record<K, number \| undefined>>` |
 | `ifElse`, `when`, `str` | 155 (53); 1 (1); 1 (1). No `unless` | for example `patterns/system/self/self.tsx`, `patterns/system/loom/main.tsx`; `when` in `patterns/system/omnibox-fab/omnibox-fab.tsx`; `str` in `patterns/apps/deep-research/deep-research.tsx` | Accepted for the interim with a warning (§4.4.3). The rewrite is mechanical: all 157 are direct calls with the plain arguments |
-| `patternTool` | 31 (12) | pattern bodies | Rewrite to pattern factory values, as `builtin-inventory.md` describes |
+| `patternTool` | 31 (12) | pattern bodies | Rewrite to a pattern closure (§4.4.3) |
 | A collection method called on a cell handle in a handler | 2, as `builtin-inventory.md` counts them | handlers | Rewrite: `cell.get().map(...)` (`cell:collection-method-in-function`) |
 | A per-element body over plain values that binds a handler without using the index | 6 (6) where the collection is a module-scope constant or a call result, for example `patterns/apps/weekly-calendar/event.tsx` and `patterns/examples/group-chat-room/group-chat-room.tsx`. A further 95 callbacks over stored lists bind a handler without the index; which of those have a primitive element type needs the type checker. No callback in the corpus declares a state cell | handler bindings in `map` callbacks | Rewrite: use the index, or make the elements cells (`collection:shared-element-state`) |
 | `any` in a type | 126 (see below) | for example `patterns/system/link-tool/link-tool.tsx`, `patterns/system/knowledge-graph/knowledge-graph.tsx` | Rewrite with the explicit forms of §7.8 |
@@ -1963,11 +2023,10 @@ now. Each names the document it is addressed to.
    them shares it between equal records, which the rule exists to prevent.
    The plan has to say what the runtime does there: add an ordinal among
    equals to the key, or fail the cone.
-3. **The spelling of a pattern factory value with bound parameters** (to
-   `builtin-inventory.md`). `patternTool(pattern, extraParams)` is removed
-   in favor of a pattern factory value that closes over the bound
-   parameters. This document has no syntax that produces one, so the 31
-   corpus calls have no rewrite it can state.
+3. **A pattern closure written in a function body** (to the prototype).
+   §4.4.2 allows a pattern closure as a value in tier R only. A handler that
+   wants to store a closure over its own locals has no form for it. No
+   corpus site needs one.
 4. **Instance-to-view assignability** (to the prototype). §7.5 lets a
    pattern instance stand where a view of its result is declared. The
    prototype has to confirm that this, with labels outside assignability,

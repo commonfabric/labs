@@ -1422,7 +1422,7 @@ throws outside the frames named.
 
 | Name | Today | New design |
 | --- | --- | --- |
-| `patternTool(pattern, extraParams?)` | Returns the plain descriptor `{ pattern, extraParams }`; no node. A model built-in instantiates the pattern at tool-call time. | D. Replaced by a pattern factory value that closes over the bound parameters, as the factory plan's stage 4 already intends. |
+| `patternTool(pattern, extraParams?)` | Returns the plain descriptor `{ pattern, extraParams }`; no node. A model built-in instantiates the pattern at tool-call time. | D. Replaced by a pattern closure: an inline `pattern(...)` that captures the bound values, which the compiler binds as private parameters (`language-subset.md`, §4.4.2). |
 | `byRef(name)` | A factory for a registered built-in by name. Not used in the pattern corpus. | D. Built-ins are not addressed by name from authored code. |
 | `uiVariant(piece, kind)` | Returns a view node for `cf-render`; no graph node. | Unchanged; a pure function. |
 | `nameInstance(value, name)` | Records an instance name consumed by `factoryFromPattern`; emitted by the transformer only with the `instanceNames` option. | D. The compiler records instance names in the plan. |
@@ -1928,9 +1928,9 @@ built-ins for tools, and the harness for function implementations. A factory
 read from a cell in a handler or lift body is therefore plain data and
 cannot be called. The first-class factory design
 ([node factory shipping](../pattern-construction/node-factory-shipping.md))
-is proposed, and its
-[implementation plan](../../plans/first-class-serializable-factories.md) has
-not started.
+supplies callable factory values. Its
+[implementation plan](../../plans/first-class-serializable-factories.md) is
+carried out by pull request #4687 in this repository, which is not merged.
 
 ### What a function body may call
 
@@ -1943,9 +1943,11 @@ nothing a function value does not. Built-ins are not factory values at all;
 an effect request names its built-in statically, so that the compiler knows
 the boundary's declared label rule.
 
-Pattern factory values replace `patternTool` and give `compileAndRun` an
-ordinary reading: compilation returns a pattern factory value, and the
-author instantiates it. The corpus has no source site that calls or binds a
+Pattern closures replace `patternTool`: the bound parameters become
+captures of an inline pattern, private to it, so a model that is given the
+closure as a tool supplies the public input only. Pattern factory values
+also give `compileAndRun` an ordinary reading: compilation returns a pattern
+factory value, and the author instantiates it. The corpus has no source site that calls or binds a
 received factory in a body, so nothing has to be rewritten.
 
 ### Binding a handler received by reference
@@ -1975,9 +1977,11 @@ Three things are hard about it, and they are the cost.
   serializes one way, to a module descriptor, and no read turns the stored
   form back into something that can be bound (`moduleToEncodableForm` in
   `builder/to-encodable-form.ts`). The first-class factory design supplies
-  a durable factory value for patterns, modules, and handlers, and its
+  a durable factory value, and its
   [implementation plan](../../plans/first-class-serializable-factories.md)
-  has not started. Stages 0 to 2 of that plan are a prerequisite. The
+  is carried out by pull request #4687, which is not merged. That work is a
+  prerequisite. In this design only pattern and handler factories are
+  values; a module factory made by `lift` is not one. The
   design also has to say what a factory value's label is: holding one
   reveals which code a party chose.
 - **Checks move from compile time to binding time at that site.** For a

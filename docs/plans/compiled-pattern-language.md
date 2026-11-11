@@ -93,7 +93,10 @@ relitigated.
   and its accumulator is a data type.
 - `any` is refused. Published label typings are identity aliases, and no
   editor plugin is part of the design.
-- `patternTool`, `streamData`, and `llm` are removed. `wish` is structural.
+- `streamData` and `llm` are removed. `wish` is structural.
+- `patternTool` is removed in favor of a pattern closure: an inline
+  `pattern(...)` in the reactive tier, used as a value, whose captures the
+  compiler binds as private parameters.
 
 **Calls inside a function body**
 
@@ -105,7 +108,8 @@ relitigated.
   instantiates.
 - A function body may call two kinds of factory value: a pattern factory,
   which it instantiates, and a handler factory, which it binds. Both are
-  resolved at run time from their own compiled records.
+  resolved at run time from their own compiled records. A `lift` result is
+  not a factory value.
 
 **Identity and storage**
 
@@ -135,11 +139,7 @@ relitigated.
 
 ## Open, and needing the owner
 
-1. **The replacement for `patternTool`.** It is removed in favor of a
-   pattern factory value that closes over bound parameters, and the language
-   has no syntax that produces one. The 31 calls in the corpus have no
-   stated rewrite (`language-subset.md`, open question 3).
-2. **Whether to start the next three documents**, listed under
+1. **Whether to start the next three documents**, listed under
    [Next work](#next-work).
 
 ## Open, and not needing the owner
@@ -171,6 +171,10 @@ migration.
   last revision.** Every ruled point was checked by search across the four,
   and each open-question section was read. A full read of all four together
   is owed before more is built on them.
+- **Specs pull request #91 is one change behind.** The pattern closure
+  (`Closure`, the `params` slot root, and its label rule in
+  `plan-and-label-templates.md` §3.15) is not in it yet and has to be added
+  there.
 - **Specs pull request #91 has not been reviewed.** Its Lean development
   states the two target theorems; the operations added after the first draft
   (element keys, the prefix fold, chosen children, body calls, child
@@ -184,10 +188,9 @@ migration.
   stored but not read back as something callable. Pull request #4687 in this
   repository implements
   [first-class serializable factories](first-class-serializable-factories.md)
-  and is not merged. It also removes `patternTool` in favor of an inline
-  pattern that closes over values of the enclosing pattern body, which is
-  the model for the replacement asked about above. The inventory's statement
-  that this work has not started predates that pull request.
+  and is not merged. It is where the pattern closure comes from. As
+  described it also makes `lift` factories values, which this design does
+  not; the owner is asking for that pull request to cover patterns only.
 
 ## Next work
 
@@ -216,8 +219,7 @@ author. They can be written in parallel.
 
 After those:
 
-4. Settle the `patternTool` replacement in `language-subset.md` once the
-   owner has ruled.
+4. Add the pattern closure to specs pull request #91.
 5. Read all the documents against each other and list the contradictions
    for the owner, as was done after the first three.
 6. Begin stage 2 of the overview's staging: prototype the subset type

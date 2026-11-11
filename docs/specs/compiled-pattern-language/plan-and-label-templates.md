@@ -92,7 +92,9 @@ export type SlotRoot =
   /** The state a handler was bound to: its copied captures. */
   | { readonly kind: "binding"; readonly handler: Index }
   /** A property of the cause: path `eventKey` or `principal`. */
-  | { readonly kind: "cause" };
+  | { readonly kind: "cause" }
+  /** The private parameters a pattern closure was bound to (section 3.15). */
+  | { readonly kind: "params" };
 
 /** One input observed at one path in one way. */
 export interface Slot {
@@ -418,6 +420,23 @@ export interface Child {
 }
 
 /**
+ * A pattern closure used as a value: an inline pattern bound to what it
+ * captures (section 3.15). It is what a `factory` slot holds when the
+ * factory was written in this plan.
+ */
+export interface Closure {
+  /** The compiled identity of the inline pattern. */
+  readonly pattern: Hash;
+  /** What is bound to each path of the pattern's private parameters. */
+  readonly params: readonly {
+    readonly path: Path;
+    readonly template: Template;
+    /** A data value is copied into the factory value; a cell stays a link. */
+    readonly capture: "copy" | "link";
+  }[];
+}
+
+/**
  * A handler bound to state: in the reactive tier, or at a `bind` site of a
  * body (section 3.14). The handler is a body of this plan, or a handler
  * factory received as a value (section 3.21).
@@ -457,6 +476,7 @@ export interface Plan {
   readonly stateCells: readonly StateCell[];
   readonly operations: readonly Operation[];
   readonly children: readonly Child[];
+  readonly closures: readonly Closure[];
   readonly bindings: readonly Binding[];
 }
 
@@ -1355,6 +1375,36 @@ same name, so the replacement takes the old one's place. The new child's
 state cells are those of its own plan under that name, so stored state is
 found again only where cell names agree.
 
+**A pattern closure.** An inline pattern used as a value is a `Closure`:
+the compiled inline pattern, with the values it captures bound as its
+private parameters (`language-subset.md`, §4.4.2). The inline pattern has a
+plan of its own, in which the captures are slots with root `params`. A
+caller supplies the public argument only and cannot observe or supply the
+parameters.
+
+- **The label of the factory value.** A closure is a value computed from its
+  captures. Its `value` template is the join of the templates of the
+  captures that are copied, and the `identity` slots of the captures that
+  are cells. Holding the factory reveals that those values were what they
+  were, so the factory carries their labels wherever it is stored or passed.
+- **Stored form.** A copied capture is stored with the factory value under
+  its instantiated template. A captured cell is stored as a link. A closure
+  that reaches a kept output therefore makes its copied captures kept.
+- **Inside the child.** When a receiver calls the closure, the child's
+  `params` slots resolve to the labels stored with the factory value, as
+  its `argument` slots resolve to the argument document. A captured cell is
+  read through its link, and the read is journaled where the child's plan
+  does not name the path statically.
+- **Coming back.** The rule above already joins the factory's `identity`
+  slot into every template that reads the child. For a closure that slot's
+  label includes the captures' labels, so a result that depends on a
+  captured value carries that value's label even when the child's own
+  template for the path names no `params` slot.
+- **Called where it is written.** A closure called in the body that wrote
+  it is a statically resolved callee. It is compiled into the surrounding
+  instance, its captures are ordinary slots, and no `Closure` or `Child`
+  record exists for the call.
+
 **One transaction.** A child in the same space is evaluated in the cause's
 transaction, by the pull that extends through its result. A child created
 with `inSpace` is not (section 3.14).
@@ -1631,6 +1681,7 @@ nothing to compare.
 | Handler | `derive` over event and state footprint | Equal |
 | Calls in a body | The body's template on what it creates | Equal; tighter for passed references |
 | Child instance | Argument templates in; `child` slots out | Equal |
+| Pattern closure | Join of the capture templates on the factory value; `params` slots inside | Equal |
 | Handler factory value | The handler's own record, plus the factory's `identity` | New |
 | Context reads | `cause`, `labelMetadata`, `identity` slots; `dynamic` for access lists | Equal |
 | `anchorsOf`, `cellFromUrl` parsing, `wish` | References with computed identity; `dynamic` search | Equal |

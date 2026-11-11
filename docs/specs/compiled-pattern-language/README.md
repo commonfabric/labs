@@ -410,7 +410,9 @@ stays a call, `DonutCard({ donut })`, and the callee must be one of:
 
 - a pattern imported by name;
 - an inline `pattern(...)` expression, which the compiler hoists, turning its
-  captures into parameters;
+  captures into private parameters. In the reactive tier such an expression
+  may also be used as a value, a pattern closure, which is what replaces
+  `patternTool` ([language subset](language-subset.md), §4.4.2);
 - a pattern received as a factory value
   ([first-class serializable factories](../pattern-construction/node-factory-shipping.md)).
 
@@ -420,7 +422,7 @@ value: a pattern factory, which it instantiates, and a handler factory, which
 it binds to state to obtain a stream. A handler received by reference is
 resolved at run time like a pattern received by reference: its own compiled
 record supplies its footprint, its write edges, and the identity that write
-policies name.
+policies name. A `lift` result is not a factory value.
 
 In a handler, the call records an instantiation request with a causal
 identifier and returns a link. The runtime performs the instantiation when the
