@@ -1,5 +1,18 @@
+/**
+ * The realm side of a compile worker: `ModuleCompileWorker`, which runs a
+ * runtime's compiles in a Worker of this process (`compile-worker.ts`), and
+ * the prefix it puts on the worker realm's logger names when it reports
+ * them.
+ */
+
 import { debugStr } from "@commonfabric/data-model";
 import type { CompiledTypeScriptModule } from "@commonfabric/js-compiler";
+import type {
+  LogCounts,
+  SlowTiming,
+  TimingStats,
+  TimingStatsBreakdown,
+} from "@commonfabric/logger";
 
 import { markPlaceCompileFailure } from "./compile-failure.ts";
 import {
@@ -8,6 +21,7 @@ import {
   decodeCompileFailure,
   decodeCompileWorkerAnswer,
   decodeModules,
+  type WorkerDiagnostics,
 } from "./compile-worker-protocol.ts";
 import type { ModuleCompiler, ModuleCompileRequest } from "./module-compile.ts";
 
@@ -22,12 +36,21 @@ import type { ModuleCompiler, ModuleCompileRequest } from "./module-compile.ts";
  * the compile ran (`markPlaceCompileFailure()`), and the next compile starts a
  * fresh one. {@link ModuleCompileWorker.close} ends the worker and fails what
  * it held the same way.
+ *
+ * The compiler's own phase timings accumulate in the worker's realm. Each
+ * answer carries a snapshot of that realm's loggers, and
+ * {@link ModuleCompileWorker.diagnostics} returns the latest one, so a realm
+ * reporting on its loggers can include them without waiting on the worker.
  */
 export class ModuleCompileWorker implements ModuleCompiler {
   readonly #workerModule: URL;
   #generation: WorkerGeneration | undefined;
   #nextId = 0;
   #closed = false;
+  #diagnostics: CompileWorkerDiagnostics = {
+    timingStats: {},
+    loggerCounts: {},
+  };
 
   /**
    * Constructs an instance whose worker runs `workerModule`, by default this
@@ -40,10 +63,9 @@ export class ModuleCompileWorker implements ModuleCompiler {
   }
 
   /**
-   * Compiles `request` in the worker.
-   *
-   * @throws Error when this instance is closed, or its worker cannot be
-   * started; both are failures of the place the compile was to run.
+   * Compiles `request` in the worker. The returned promise rejects, as a
+   * failure of the place the compile was to run, when this instance is
+   * closed or its worker cannot be started.
    */
   compile(
     request: ModuleCompileRequest,
@@ -75,6 +97,20 @@ export class ModuleCompileWorker implements ModuleCompiler {
       generation.queued.push(message);
     }
     return promise;
+  }
+
+  /**
+   * The worker realm's loggers as they stood after its latest answered
+   * compile, each logger's name prefixed with
+   * {@link COMPILE_WORKER_LOGGER_PREFIX} so they can sit beside this realm's
+   * own, and its `performance.now()` timestamps (`lastTimestamp`,
+   * `slowest[].at`) moved onto this realm's clock; `slowest[].epochMs` stays
+   * in epoch milliseconds. Before the first answer there are none; after a worker dies they
+   * stay as they were until a fresh worker answers, whose counts start again
+   * from zero.
+   */
+  diagnostics(): CompileWorkerDiagnostics {
+    return this.#diagnostics;
   }
 
   /** Ends the worker, failing every compile it still held. */
@@ -149,6 +185,7 @@ export class ModuleCompileWorker implements ModuleCompiler {
     }
     // Decoded before the request leaves `pending`, so a decode failure still
     // reaches it through `#end()`.
+    this.#diagnostics = fromWorkerRealm(answer.diagnostics);
     if (answer.kind === "compiled") {
       const modules = decodeModules(answer.modules);
       generation.pending.delete(answer.id);
@@ -210,3 +247,58 @@ type WorkerGeneration = {
     reject(error: Error): void;
   }>;
 };
+
+/**
+ * What {@link ModuleCompileWorker.diagnostics} puts ahead of each of the
+ * worker realm's logger names.
+ */
+export const COMPILE_WORKER_LOGGER_PREFIX = "compile-worker:";
+
+/**
+ * The worker realm's loggers, as {@link ModuleCompileWorker.diagnostics}
+ * returns them.
+ */
+export interface CompileWorkerDiagnostics {
+  /** Timing statistics by prefixed logger name and key. */
+  readonly timingStats: TimingStatsBreakdown;
+
+  /** Log counts by prefixed logger name and message key. */
+  readonly loggerCounts: Record<string, Record<string, LogCounts>>;
+}
+
+/**
+ * Helper for `ModuleCompileWorker.#settle()`, which prefixes `diagnostics`'s
+ * logger names and moves its timestamps from the worker's clock onto this
+ * realm's.
+ */
+function fromWorkerRealm(
+  diagnostics: WorkerDiagnostics,
+): CompileWorkerDiagnostics {
+  const shift = diagnostics.timeOrigin - performance.timeOrigin;
+  const prefixed = <T, U>(byLogger: Record<string, T>, map: (value: T) => U) =>
+    Object.fromEntries(
+      Object.entries(byLogger).map((
+        [name, value],
+      ) => [`${COMPILE_WORKER_LOGGER_PREFIX}${name}`, map(value)]),
+    );
+  const shiftedStats = (stats: TimingStats): TimingStats => ({
+    ...stats,
+    lastTimestamp: stats.lastTimestamp + shift,
+    slowest: stats.slowest.map((slow): SlowTiming => ({
+      ...slow,
+      at: slow.at + shift,
+    })),
+  });
+  return {
+    timingStats: prefixed(
+      diagnostics.timingStats,
+      (byKey) =>
+        Object.fromEntries(
+          Object.entries(byKey).map((
+            [key, stats],
+          ) => [key, shiftedStats(stats)]),
+        ),
+    ),
+    loggerCounts: prefixed(diagnostics.loggerCounts, (byKey) => byKey),
+  };
+}

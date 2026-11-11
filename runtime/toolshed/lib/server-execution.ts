@@ -22,6 +22,7 @@ import {
   RoutedPlane,
   webSocketRoute,
 } from "@commonfabric/runner/executor/routed-plane";
+import { servingLoopDiagnostics } from "@commonfabric/runner/executor/serving-loop-diagnostics";
 import { DEFAULT_FLUSH_DEADLINE_MS } from "@commonfabric/runner/executor/space-server";
 import {
   SERVING_RUNTIME_EXPERIMENTAL,
@@ -39,10 +40,6 @@ import {
   servedLifecycleRunner,
   type ServedLifecycleVerbRunner,
 } from "@commonfabric/piece/ops";
-import {
-  getLoggerCountsBreakdown,
-  getTimingStatsBreakdown,
-} from "@commonfabric/logger";
 import { ProcessModuleByteCache } from "@commonfabric/test-support/compile-byte-cache";
 
 /**
@@ -506,11 +503,10 @@ export function startServerExecutionHost(options: {
     loop = {
       ...servedLifecycleRunner(host, options.identity),
       stats: () => host.stats(),
+      // This thread's loggers, and the compile worker's timings, which hold
+      // the compiler's phases.
       diagnostics: () =>
-        Promise.resolve({
-          loggerCounts: getLoggerCountsBreakdown(),
-          timingStats: getTimingStatsBreakdown(),
-        }),
+        Promise.resolve(servingLoopDiagnostics(moduleCompiler)),
       collectedWorkerMemory: () => Promise.resolve(undefined),
       host,
       // The compile worker closes first, so a compile an activation still

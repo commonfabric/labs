@@ -41,14 +41,11 @@ import { toFileUrl } from "@std/path";
 import { Identity } from "@commonfabric/identity";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
-import {
-  getLoggerCountsBreakdown,
-  getTimingStatsBreakdown,
-} from "@commonfabric/logger";
 import { namesInstancesByDefault } from "../builder/instance-name.ts";
 import type { ExperimentalOptions } from "../runtime.ts";
 import { newLoopbackServer } from "../storage/v2-emulate.ts";
 import { ExecutorHost, type ExecutorHostOptions } from "./host.ts";
+import { servingLoopDiagnostics } from "./serving-loop-diagnostics.ts";
 import {
   servingRuntimeFactory,
   type ServingRuntimeFactoryOptions,
@@ -455,11 +452,7 @@ async function attachServingLoop(params: {
     });
     loop = {
       stats: () => host.stats(),
-      diagnostics: () =>
-        Promise.resolve({
-          loggerCounts: getLoggerCountsBreakdown(),
-          timingStats: getTimingStatsBreakdown(),
-        }),
+      diagnostics: () => Promise.resolve(servingLoopDiagnostics()),
       host,
       close: () => host.close(),
     };

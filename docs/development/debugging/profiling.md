@@ -297,10 +297,21 @@ the memory server's thread, and its `servingLoop` block holds executor counters
 rather than worker logger rows. The realm route asks the worker and waits for
 its turn, which is why it is not part of `stats`; with the loop on this thread
 it answers with the process's own loggers, and with the loop off it answers
-404. Collect both routes to account for the serving loop's work. Neither
-holds the compiler's own phase timings (`js-compiler`'s `phase/*`): a serving
-runtime's type-check, transform and emit run in a compile worker
-(`ModuleCompileWorker`), whose loggers no route reads.
+404. Collect both routes to account for the serving loop's work.
+
+A serving runtime's type-check, transform and emit run in a compile worker
+(`ModuleCompileWorker`). The realm route carries that worker's logger counts
+and timing statistics beside the realm's own, under logger names prefixed
+`compile-worker:`; `compile-worker:js-compiler`'s `phase/*` keys are the
+compiler's phase timings. They are a snapshot taken after the worker's latest
+compile, so reading them never waits on the worker. Their `performance.now()`
+timestamps, `lastTimestamp` and `slowest[].at`, are moved onto the realm's
+clock; `slowest[].epochMs` stays in epoch milliseconds. A realm `js-compiler`
+entry
+can appear beside them, from the compiles that stay in the realm (pattern
+coverage, or a compile that asks for its transformed program). A compile
+worker that dies keeps its last snapshot until a fresh one has compiled,
+whose counts start again from zero.
 
 The memory server emits `memory/refresh/batch` for each space processed by a
 flush, with its dirty instance keys, derived-key count, and connection count.
