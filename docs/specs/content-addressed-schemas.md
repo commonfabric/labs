@@ -756,20 +756,24 @@ schema it already knows it has.
   body unless the same value also serves as a schema, and so do code
   documents and every other `cid:` document. A one-shot `graph.query`
   returns every entity with its body.
-- **A schema that names a principal.** A schema whose content holds a DID
+- **A schema that names a principal.** A schema whose closure holds a DID
   anywhere — a confidentiality or integrity clause bound to its principal,
   as binding a `CurrentPrincipal` placeholder to the creator writes one, or
-  a DID among its values — never travels by reference and never resolves
-  from the registry. Its hash identifies whom it was bound to, so whether a
-  client fetches it would say whether the client has touched data bound to
-  that principal. A server sends such a schema with its body, and a client
-  given a reference to one fetches its body from the space that named it
-  even when the registry already holds it. The client's half is the one
-  that closes the probe, since a server probing for it is not one that
-  honors the server's half; the server's half spares an honest server's
-  client a round trip that reveals nothing. A placeholder that is not yet
-  bound names no principal, and travels by reference like any other
-  schema.
+  a DID among its values, in the schema itself or in any document it names
+  — never travels by reference and never resolves from the registry. Its
+  hash identifies whom it was bound to, so whether a client fetches it would
+  say whether the client has touched data bound to that principal. The
+  closure counts because decomposition puts a bound clause in a document of
+  its own, and a schema naming that document commits to the clause's DID
+  through its hash. A schema naming a document the registry cannot resolve
+  counts as naming a principal, since nothing rules it out. A server sends
+  such a schema with its body, and a client given a reference to one fetches
+  its body from the space that named it even when the registry already
+  holds it. The client's half is the one that closes the probe, since a
+  server probing for it is not one that honors the server's half; the
+  server's half spares an honest server's client a round trip that reveals
+  nothing. A placeholder that is not yet bound names no principal, and
+  travels by reference like any other schema.
 - **What the server still enforces, per space.** Nothing above moves: the
   commit boundary validates every closure a commit references against that
   space's commit and store, result assembly verifies every closure a frame

@@ -2935,7 +2935,8 @@ export class Client {
   > {
     const namesPrincipalHere = (hash: string): boolean => {
       const schema = lookupSchemaDocument(hash);
-      return schema !== undefined && namesPrincipal(schema);
+      return schema !== undefined &&
+        namesPrincipal(schema, lookupSchemaDocument);
     };
     const own: string[] = [];
     const shared: [string, Promise<boolean>][] = [];

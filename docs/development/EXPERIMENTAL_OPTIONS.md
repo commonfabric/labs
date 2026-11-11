@@ -1784,7 +1784,8 @@ the per-epic implementation notes).
   stores it, so a client reading many spaces built from one pattern receives
   the same closure from each. On a connection where both sides are on, a server
   names a `cid:` schema document its registry holds by id and seq alone, unless
-  the schema names a principal (holds a DID), which keeps its body. The client
+  the schema names a principal (a DID anywhere in its closure), which keeps its
+  body. The client
   takes the body from its own registry, and fetches what a frame lacks with one
   `graph.query` for all of it, sharing a fetch already in flight from the same
   host: any space's on a direct connection, the same space's on a routed one. A

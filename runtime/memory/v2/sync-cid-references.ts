@@ -12,6 +12,7 @@
 
 import type { JSONSchema } from "@commonfabric/api";
 import { verifySchemaDocument } from "@commonfabric/data-model-schema/schema-closure";
+import { collectExternalSchemaRefHashes } from "@commonfabric/data-model-schema/schema-refs";
 import { isObjectNotArray, isPlainObject } from "@commonfabric/js-values/types";
 
 import type {
@@ -28,12 +29,16 @@ const CID_PREFIX = "cid:";
 /** The registry lookup each half consults: a verified schema, or nothing. */
 export type SchemaDocumentLookup = (hash: string) => JSONSchema | undefined;
 
-/** {@link namesPrincipal}'s answers, by the schema object it was asked of. */
+/**
+ * {@link namesPrincipal}'s settled answers, by the schema object it was asked
+ * of. An answer is settled once every document the schema's closure reaches
+ * has resolved, so that no later registration can change it.
+ */
 const principalNamingSchemas = new WeakMap<object, boolean>();
 
 /**
  * Whether `value` holds a DID anywhere: in a string at any depth, or in a key.
- * Helper for {@link namesPrincipal}, which memoizes it per schema.
+ * Helper for {@link closureNamesPrincipal}.
  */
 const holdsDid = (value: unknown): boolean => {
   if (typeof value === "string") return value.includes("did:");
@@ -45,25 +50,58 @@ const holdsDid = (value: unknown): boolean => {
 };
 
 /**
- * Whether `schema` names a principal: holds a DID anywhere, as a
- * confidentiality or integrity clause bound to its principal does, or a DID
- * among its values. Such a schema's hash identifies whom it was bound to, so
- * it never travels by reference and never resolves from the registry
- * (`docs/specs/content-addressed-schemas.md`, "Delivery by reference"). A
- * `CurrentPrincipal` placeholder not yet bound holds no DID, and does not
- * count. Memoized on the schema object, which a registry holds interned and
- * frozen, so a schema is walked once. Errs toward `true`: a string that
- * merely mentions `did:` keeps a body that could have been referenced.
+ * Helper for {@link namesPrincipal}, which answers for `schema`'s closure
+ * through `lookup`: `true` when a document in it holds a DID, `false` when
+ * every document in it resolved and none does, and `undefined` when one did
+ * not resolve and none that did holds a DID. Only a `true` or `false` is
+ * memoized. Content addressing rules out a cycle between documents, since a
+ * document's hash commits to the hash of each document it names.
  */
-export const namesPrincipal = (schema: JSONSchema): boolean => {
+const closureNamesPrincipal = (
+  schema: JSONSchema,
+  lookup: SchemaDocumentLookup,
+): boolean | undefined => {
   if (!isObjectNotArray(schema)) return false;
-  let answer = principalNamingSchemas.get(schema);
-  if (answer === undefined) {
-    answer = holdsDid(schema);
-    principalNamingSchemas.set(schema, answer);
+  const settled = principalNamingSchemas.get(schema);
+  if (settled !== undefined) return settled;
+  let answer: boolean | undefined = holdsDid(schema);
+  if (!answer) {
+    for (const hash of collectExternalSchemaRefHashes(schema)) {
+      const named = lookup(hash);
+      const namedAnswer = named === undefined
+        ? undefined
+        : closureNamesPrincipal(named, lookup);
+      if (namedAnswer === true) {
+        answer = true;
+        break;
+      }
+      if (namedAnswer === undefined) answer = undefined;
+    }
   }
+  if (answer !== undefined) principalNamingSchemas.set(schema, answer);
   return answer;
 };
+
+/**
+ * Whether `schema` names a principal: whether a DID appears anywhere in its
+ * closure, the schema itself and every document it names through `lookup`,
+ * as a confidentiality or integrity clause bound to its principal does, or a
+ * DID among its values. A decomposed schema puts a bound clause in a
+ * document of its own and names it by hash, so a schema whose own content
+ * holds no DID can still commit to one. Such a schema's hash identifies whom
+ * it was bound to, so it never travels by reference and never resolves from
+ * the registry (`docs/specs/content-addressed-schemas.md`, "Delivery by
+ * reference"). A document `lookup` cannot resolve counts as naming one,
+ * since nothing rules it out. A `CurrentPrincipal` placeholder not yet bound
+ * holds no DID, and does not count. Memoized on the schema object, which a
+ * registry holds interned and frozen, so a closure is walked once. Errs
+ * toward `true`: a string that merely mentions `did:` keeps a body that
+ * could have been referenced.
+ */
+export const namesPrincipal = (
+  schema: JSONSchema,
+  lookup: SchemaDocumentLookup,
+): boolean => closureNamesPrincipal(schema, lookup) !== false;
 
 /** What resolving a message's references found. */
 export interface CidReferenceResolution {
@@ -98,7 +136,9 @@ const referenceableHash = (
   const hash = upsert.id.slice(CID_PREFIX.length);
   if (lookup(hash) === undefined) return undefined;
   const schema = verifySchemaDocument(hash, doc.value);
-  return schema === undefined || namesPrincipal(schema) ? undefined : hash;
+  return schema === undefined || namesPrincipal(schema, lookup)
+    ? undefined
+    : hash;
 };
 
 /**
@@ -204,7 +244,8 @@ export const resolveServerMessageCidReferences = (
       if (unresolvable.has(hash)) continue;
       const schema = lookup(hash);
       if (
-        schema === undefined || (namesPrincipal(schema) && !fetched.has(hash))
+        schema === undefined ||
+        (namesPrincipal(schema, lookup) && !fetched.has(hash))
       ) {
         missing.push(hash);
         continue;

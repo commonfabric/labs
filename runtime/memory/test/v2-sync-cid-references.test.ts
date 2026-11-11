@@ -1,8 +1,9 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import type { JSONSchema } from "@commonfabric/api";
+import type { JSONSchema, JSONSchemaObj } from "@commonfabric/api";
 import { internSchema } from "@commonfabric/data-model-schema";
 
+import { decomposeSchema } from "../../runner/src/schema-decompose.ts";
 import { acquireSchemaRegistryLease } from "../../runner/src/schema-registry.ts";
 import {
   connect,
@@ -73,7 +74,49 @@ const placeholderSchema = {
 const placeholderHash = internSchema(placeholderSchema, true)
   .taggedHashString;
 
-/** A lookup holding exactly the schemas above. */
+/**
+ * A schema whose `$defs` hold a clause bound to its principal, decomposed:
+ * the bound clause becomes a document of its own, and the root names it by
+ * hash. `documentLookup` holds every document of the decomposition.
+ */
+const decomposedBound = (() => {
+  const { rootRef, documents } = decomposeSchema({
+    type: "object",
+    title: "sync-cid-references-decomposed",
+    properties: { secret: { $ref: "#/$defs/Secret" }, n: { type: "number" } },
+    $defs: {
+      Secret: {
+        type: "string",
+        ifc: {
+          confidentiality: [{
+            type: "User",
+            subject: "did:key:z6MkhSyncCidReferencesDecomposedPrincipal",
+          }],
+        },
+      },
+    },
+  } as unknown as JSONSchemaObj);
+  const rootHash = rootRef.slice("cid:".length);
+  const documentLookup: SchemaDocumentLookup = (hash) => documents.get(hash);
+  return { root: documents.get(rootHash)!, rootHash, documentLookup };
+})();
+
+/** A schema that names a document no lookup here holds. */
+const danglingSchema = {
+  type: "object",
+  title: "sync-cid-references-dangling",
+  properties: {
+    x: {
+      $ref: `cid:${
+        internSchema({ type: "string", title: "never-registered" }, true)
+          .taggedHashString
+      }`,
+    },
+  },
+} as const;
+const danglingHash = internSchema(danglingSchema, true).taggedHashString;
+
+/** A lookup holding exactly the leaf, outer, bound and placeholder schemas. */
 const lookup: SchemaDocumentLookup = (hash) =>
   hash === leafHash
     ? leafSchema as JSONSchema
@@ -390,6 +433,31 @@ describe("sync-cid-references", () => {
       );
     });
 
+    it("keeps the body of a decomposed schema that names a bound clause's document", () => {
+      const { root, rootHash, documentLookup } = decomposedBound;
+      const message = responseWith([{
+        branch: "",
+        id: `cid:${rootHash}`,
+        seq: 8,
+        doc: { value: root },
+      }]);
+      expect(referenceServerMessageSchemaDocuments(message, documentLookup))
+        .toBe(message);
+    });
+
+    it("keeps the body of a schema naming a document the lookup does not hold", () => {
+      const message = responseWith([{
+        branch: "",
+        id: `cid:${danglingHash}`,
+        seq: 8,
+        doc: { value: danglingSchema },
+      }]);
+      const holdingDangling: SchemaDocumentLookup = (hash) =>
+        hash === danglingHash ? danglingSchema as JSONSchema : lookup(hash);
+      expect(referenceServerMessageSchemaDocuments(message, holdingDangling))
+        .toBe(message);
+    });
+
     it("names a schema whose principal placeholder is unbound by reference", () => {
       const message = referenceServerMessageSchemaDocuments(
         responseWith([{
@@ -432,14 +500,32 @@ describe("sync-cid-references", () => {
 
   describe("namesPrincipal()", () => {
     it("returns `true` for a schema holding a DID and `false` for one holding a placeholder", () => {
-      expect(namesPrincipal(boundSchema as unknown as JSONSchema)).toBe(true);
-      expect(namesPrincipal(placeholderSchema as unknown as JSONSchema)).toBe(
-        false,
-      );
+      expect(namesPrincipal(boundSchema as unknown as JSONSchema, lookup))
+        .toBe(true);
+      expect(
+        namesPrincipal(placeholderSchema as unknown as JSONSchema, lookup),
+      ).toBe(false);
     });
 
     it("returns `false` for a boolean schema", () => {
-      expect(namesPrincipal(true)).toBe(false);
+      expect(namesPrincipal(true, lookup)).toBe(false);
+    });
+
+    it("returns `true` for a decomposed schema that names a bound clause's document", () => {
+      // Decomposition puts the bound clause in a document of its own, so
+      // the root holds only a `cid:` reference to it, and no DID.
+      const { root, rootHash, documentLookup } = decomposedBound;
+      expect(JSON.stringify(root).includes("did:")).toBe(false);
+      expect(namesPrincipal(root, documentLookup)).toBe(true);
+      expect(documentLookup(rootHash)).toBe(root);
+    });
+
+    it("returns `false` for a schema whose closure resolves and holds no DID", () => {
+      expect(namesPrincipal(outerSchema as JSONSchema, lookup)).toBe(false);
+    });
+
+    it("returns `true` for a schema naming a document the lookup does not hold", () => {
+      expect(namesPrincipal(danglingSchema as JSONSchema, lookup)).toBe(true);
     });
   });
 
@@ -508,6 +594,26 @@ describe("sync-cid-references", () => {
         seq: 6,
         doc: { value: boundSchema },
       }]);
+    });
+
+    it("returns a held decomposed schema that names a bound clause's document as missing until its own space returned it", () => {
+      const { rootHash, documentLookup } = decomposedBound;
+      const message = responseWith([{
+        branch: "",
+        id: `cid:${rootHash}`,
+        seq: 8,
+        byReference: true,
+      }]);
+      expect(
+        resolveServerMessageCidReferences(message, documentLookup).missing,
+      ).toStrictEqual([rootHash]);
+      const resolved = resolveServerMessageCidReferences(
+        message,
+        documentLookup,
+        new Set(),
+        new Set([rootHash]),
+      );
+      expect(resolved.missing).toStrictEqual([]);
     });
 
     it("throws on a reference that carries a body", () => {
