@@ -1,6 +1,8 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { decodeMemoryBoundary } from "@commonfabric/memory/v2";
 import {
+  isCfcLabelDocumentContent,
   isCfcLabelReference,
   isInlineCfcLabelShape,
   isKnownCfcEnvelopeVersion,
@@ -8,10 +10,18 @@ import {
   isReadableStoredCfcEnvelope,
   isWellFormedLabelMetadataTemplateEntry,
   LABEL_METADATA_TEMPLATE_ORIGIN,
+  parseCfcLabelReference,
   storedCfcEnvelopeDefect,
 } from "@commonfabric/memory/v2/cfc-stored-envelope";
 
 const secret = { confidentiality: ["secret"] };
+
+/**
+ * The value a writer's text `{"x":<wire>}` decodes to at `x`, as the store
+ * decodes a commit.
+ */
+const decoded = (wire: string): unknown =>
+  (decodeMemoryBoundary(`fvj1:{"x":${wire}}`) as { x: unknown }).x;
 
 const envelope = (entries: unknown[], version: unknown = 2) => ({
   version,
@@ -46,6 +56,17 @@ describe("cfc-stored-envelope", () => {
     });
   });
 
+  describe("parseCfcLabelReference()", () => {
+    it("returns the hash after the `cid:` prefix", () => {
+      expect(parseCfcLabelReference({ $ref: "cid:abc" })).toBe("abc");
+    });
+
+    it("returns `undefined` for a reference outside the `cid:` namespace, or naming no hash", () => {
+      expect(parseCfcLabelReference({ $ref: "of:abc" })).toBeUndefined();
+      expect(parseCfcLabelReference({ $ref: "cid:" })).toBeUndefined();
+    });
+  });
+
   describe("isInlineCfcLabelShape()", () => {
     it("returns `true` for `confidentiality` and `integrity` holding arrays or `undefined`", () => {
       expect(isInlineCfcLabelShape({})).toBe(true);
@@ -61,6 +82,55 @@ describe("cfc-stored-envelope", () => {
       expect(isInlineCfcLabelShape({ integrity: {} })).toBe(false);
       expect(isInlineCfcLabelShape([secret])).toBe(false);
       expect(isInlineCfcLabelShape("secret")).toBe(false);
+    });
+
+    it("returns `false` for a class instance a stored value decodes to", () => {
+      // Each of these keeps its state in private fields and shows no own
+      // enumerable members, so a check of members alone passes it.
+
+      for (
+        const wire of [
+          '{"/Bytes@1":""}',
+          '{"/Bytes@1":"AQID"}',
+          '{"/EpochNsec@1":"AA"}',
+          '{"/RegExp@1":{"flags":"","flavor":"es2025","source":"x"}}',
+        ]
+      ) {
+        const label = decoded(wire);
+        expect(Object.keys(label as object)).toEqual([]);
+        expect(isInlineCfcLabelShape(label)).toBe(false);
+      }
+    });
+
+    it("returns `true` for a label with no prototype", () => {
+      const label = Object.assign(Object.create(null), secret);
+
+      expect(isInlineCfcLabelShape(label)).toBe(true);
+    });
+  });
+
+  describe("isCfcLabelDocumentContent()", () => {
+    it("returns `true` for `confidentiality` and `integrity` holding arrays", () => {
+      expect(isCfcLabelDocumentContent({})).toBe(true);
+      expect(
+        isCfcLabelDocumentContent({ confidentiality: ["s"], integrity: [] }),
+      ).toBe(true);
+    });
+
+    it("returns `false` for an `undefined` member, which a document never stores", () => {
+      expect(isCfcLabelDocumentContent({ ...secret, integrity: undefined }))
+        .toBe(false);
+    });
+
+    it("returns `false` for a third member, a member not an array, or no plain object", () => {
+      expect(isCfcLabelDocumentContent({ ...secret, sealed: true })).toBe(
+        false,
+      );
+      expect(isCfcLabelDocumentContent({ confidentiality: "s" })).toBe(false);
+      expect(isCfcLabelDocumentContent([secret])).toBe(false);
+      expect(isCfcLabelDocumentContent(decoded('{"/Bytes@1":"AQID"}'))).toBe(
+        false,
+      );
     });
   });
 
@@ -222,6 +292,12 @@ describe("cfc-stored-envelope", () => {
         storedCfcEnvelopeDefect(envelope([{
           path: ["body"],
           label: { ...secret, sealed: true },
+        }])),
+      ).toBe("entry-label");
+      expect(
+        storedCfcEnvelopeDefect(envelope([{
+          path: ["body"],
+          label: decoded('{"/Bytes@1":"AQID"}'),
         }])),
       ).toBe("entry-label");
     });

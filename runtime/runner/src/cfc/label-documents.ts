@@ -9,7 +9,11 @@
 
 import { deepFreeze, taggedHashStringOf } from "@commonfabric/data-model";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
-import { isCfcLabelReference } from "@commonfabric/memory/v2/cfc-stored-envelope";
+import {
+  isCfcLabelDocumentContent as isStoredLabelDocumentContent,
+  isCfcLabelReference,
+  parseCfcLabelReference,
+} from "@commonfabric/memory/v2/cfc-stored-envelope";
 import { canonicalizeCfcLabel } from "./canonical.ts";
 import type { IFCLabel } from "./label-view-core.ts";
 import { onSchemaRegistryClear } from "../schema-registry.ts";
@@ -31,44 +35,24 @@ export const CFC_LABEL_INLINE_LIMIT = 128;
 
 const utf8 = new TextEncoder();
 
-const CID_PREFIX = "cid:";
-
 /**
- * Whether a stored entry's label is a reference rather than an inline label.
- * The check is the one every reader of a stored envelope holds to, so it
- * lives with the others in Memory's `v2/cfc-stored-envelope`.
+ * Whether a stored entry's label is a reference rather than an inline label,
+ * and the document hash a reference names. Every reader of a stored envelope
+ * holds to these, so they live with the other envelope checks in Memory's
+ * `v2/cfc-stored-envelope`.
  */
-export { isCfcLabelReference };
+export { isCfcLabelReference, parseCfcLabelReference };
 
 /**
- * The document hash a label reference names, or `undefined` for a reference
- * outside the `cid:` namespace. The hash is the part after the prefix, the
- * form `schemaHash` carries and `cid:<hash>` documents are addressed by.
- */
-export const parseCfcLabelReference = (
-  reference: CfcLabelReference,
-): string | undefined =>
-  reference.$ref.startsWith(CID_PREFIX) &&
-    reference.$ref.length > CID_PREFIX.length
-    ? reference.$ref.slice(CID_PREFIX.length)
-    : undefined;
-
-const LABEL_MEMBERS = ["confidentiality", "integrity"] as const;
-
-/**
- * Whether `value` has the shape of a label document's content: a record
- * whose every member is one of the two label members holding an array.
- * A record of any other shape hashes like any other value, so the content
- * hash alone cannot tell a label from a document that merely verifies;
- * this is the check that keeps a malformed document from resolving as a
- * label whose members a consumer then reads as empty.
+ * Whether `value` has the shape of a label document's content: a plain
+ * object whose every member is one of the two label members holding an
+ * array. The check is the one the store and every reader hold a label
+ * document to, Memory's `v2/cfc-stored-envelope`; the narrowing is to this
+ * build's label, more than the check establishes: it finds the two members
+ * to be arrays and does not look at the clauses and atoms they hold.
  */
 export const isCfcLabelDocumentContent = (value: unknown): value is IFCLabel =>
-  isObjectNotArray(value) &&
-  Object.keys(value).every((key) =>
-    (LABEL_MEMBERS as readonly string[]).includes(key) &&
-    Array.isArray(value[key])
-  );
+  isStoredLabelDocumentContent(value);
 
 /**
  * The canonical content of a label document: the label with its clauses

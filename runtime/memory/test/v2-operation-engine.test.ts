@@ -38,6 +38,7 @@ import {
 import {
   type ApplyOpOperation,
   type ConfirmedRead,
+  decodeMemoryBoundary,
   encodeMemoryBoundary,
   type Operation,
   operationAnchorsDocId,
@@ -3140,6 +3141,16 @@ describe("v2-operation-engine", () => {
               "is not one the engine reads",
             ],
             [
+              "of:instance",
+              envelope([{
+                path: ["body"],
+                label: (decodeMemoryBoundary(
+                  'fvj1:{"x":{"/Bytes@1":"AQID"}}',
+                ) as { x: FabricValue }).x,
+              }]),
+              "is not one the engine reads",
+            ],
+            [
               "of:beside",
               envelope([
                 { path: ["body"], label: secret },
@@ -3226,37 +3237,45 @@ describe("v2-operation-engine", () => {
         try {
           // The commit boundary refuses an envelope whose label document is
           // not a label, so the reference is put in place beneath the engine.
-          const content = { title: "not a label" };
-          const contentDoc = `cid:${taggedHashStringOf(content)}`;
-          commit(engine, [{
-            op: "set",
-            id: contentDoc,
-            value: { value: content },
-          }]);
-          seed(
-            engine,
-            "of:content",
-            envelope([{ path: ["body"], label: secret }], 2),
-          );
-          engine.database.prepare(
-            "UPDATE revision SET data = :data WHERE id = :id",
-          ).run({
-            id: "of:content",
-            data: encodeMemoryBoundary({
-              value: { body: "abc" },
-              cfc: envelope(
-                [{ path: ["body"], label: { $ref: contentDoc } }],
-                2,
-              ),
-            }),
-          });
+          // The second content is a class instance, which shows no own
+          // members for a check of members alone to refuse.
+          const contents: [string, FabricValue][] = [
+            ["of:content", { title: "not a label" }],
+            [
+              "of:instance-content",
+              (decodeMemoryBoundary('fvj1:{"x":{"/Bytes@1":"AQID"}}') as {
+                x: FabricValue;
+              }).x,
+            ],
+          ];
+          for (const [id, content] of contents) {
+            const contentDoc = `cid:${taggedHashStringOf(content)}`;
+            commit(engine, [{
+              op: "set",
+              id: contentDoc,
+              value: { value: content },
+            }]);
+            seed(engine, id, envelope([{ path: ["body"], label: secret }], 2));
+            engine.database.prepare(
+              "UPDATE revision SET data = :data WHERE id = :id",
+            ).run({
+              id,
+              data: encodeMemoryBoundary({
+                value: { body: "abc" },
+                cfc: envelope(
+                  [{ path: ["body"], label: { $ref: contentDoc } }],
+                  2,
+                ),
+              }),
+            });
 
-          const edit = () => insert(engine, "of:content");
+            const edit = () => insert(engine, id);
 
-          expect(edit).toThrow(ProtocolError);
-          expect(edit).toThrow(
-            `the label document \`${contentDoc}\` the CFC envelope of the document of:content names does not hold a label`,
-          );
+            expect(edit).toThrow(ProtocolError);
+            expect(edit).toThrow(
+              `the label document \`${contentDoc}\` the CFC envelope of the document ${id} names does not hold a label`,
+            );
+          }
         } finally {
           close(engine);
           await Deno.remove(path);

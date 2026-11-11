@@ -86,6 +86,16 @@ one is a place a looser reader would read a labeled document as unlabeled:
   document is held to the same shape for a second reason: its content hash
   is its identity, so the shape check is what stops a record that merely
   hashes correctly from registering as a label.
+- **A label is a plain object.** A stored value can decode to a class
+  instance, such as `FabricBytes` or `FabricEpochNsec`, and one keeps its
+  state in private fields, so it shows no members of its own. A check of
+  members alone would read one at a label position as a label with no
+  clauses. So a label, inline or in a label document, is refused unless its
+  prototype is `Object.prototype` or `null`, and the store refuses a commit
+  naming a label document that is not one. The other records an envelope
+  holds each need a member a rule names (`version`, `entries`, `path`,
+  `$ref`), which none of those classes defines, so no instance passes
+  there, and their prototypes are not checked.
 - **A template-origin entry that is not keyed and classed as a template is
   not an entry.** The `label-metadata` origin marks an entry as keyed
   against the stored document rather than against `value`, and a reader

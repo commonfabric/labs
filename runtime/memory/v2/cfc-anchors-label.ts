@@ -18,8 +18,9 @@
 import type { FabricValue } from "@commonfabric/api";
 import { taggedHashStringOf, valueEqual } from "@commonfabric/data-model";
 import {
+  isCfcLabelDocumentContent,
   isCfcLabelReference,
-  isInlineCfcLabelShape,
+  parseCfcLabelReference,
   type StoredCfcEnvelope,
   type StoredCfcEnvelopeDefect,
   storedCfcEnvelopeDefect,
@@ -53,8 +54,6 @@ export const anchorsSchemaDocument = (): { value: FabricValue } => ({
   value: ANCHORS_SCHEMA,
 });
 
-const CID_PREFIX = "cid:";
-
 /** A stored document member, or `undefined` where the document has none. */
 type Stored = FabricValue | undefined;
 
@@ -62,12 +61,12 @@ type Stored = FabricValue | undefined;
 type InlineLabel = StoredInlineCfcLabel<FabricValue>;
 
 /**
- * Whether the stored value `value` has the shape of an inline label
- * (`isInlineCfcLabelShape()`), whose clauses and atoms are then stored
- * values too.
+ * Whether the stored value `value` has the shape of a label document's
+ * content (`isCfcLabelDocumentContent()`), whose clauses and atoms are then
+ * stored values too.
  */
-const isInlineLabel = (value: FabricValue): value is InlineLabel =>
-  isInlineCfcLabelShape(value);
+const isLabelDocumentContent = (value: FabricValue): value is InlineLabel =>
+  isCfcLabelDocumentContent(value);
 
 /** A label-map entry as the engine reads it: a path, and a label. */
 type ReadEntry = StoredCfcLabelEntry<FabricValue>;
@@ -208,16 +207,14 @@ const resolvedLabel = (
   labelDocument: (hash: string) => Stored,
 ): InlineLabel => {
   if (!isCfcLabelReference(label)) return label;
-  const resolved = label.$ref.length > CID_PREFIX.length &&
-      label.$ref.startsWith(CID_PREFIX)
-    ? labelDocument(label.$ref.slice(CID_PREFIX.length))
-    : undefined;
+  const hash = parseCfcLabelReference(label);
+  const resolved = hash === undefined ? undefined : labelDocument(hash);
   if (resolved === undefined) {
     throw new AnchorsLabelError(
       `the CFC envelope of ${holder} names a label document \`${label.$ref}\` the store does not hold`,
     );
   }
-  if (!isInlineLabel(resolved)) {
+  if (!isLabelDocumentContent(resolved)) {
     throw new AnchorsLabelError(
       `the label document \`${label.$ref}\` the CFC envelope of ${holder} names does not hold a label`,
     );

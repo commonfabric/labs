@@ -20,7 +20,7 @@
  * read only where a rule below names them.
  */
 
-import { isObjectNotArray } from "@commonfabric/js-values/types";
+import { isObjectNotArray, isPlainObject } from "@commonfabric/js-values/types";
 
 /**
  * A stored envelope's `version`. Version 1 holds every label inline;
@@ -55,6 +55,21 @@ export const isCfcLabelReference = (
   isObjectNotArray(value) && typeof value.$ref === "string" &&
   Object.keys(value).length === 1;
 
+const CID_PREFIX = "cid:";
+
+/**
+ * The document hash a label reference names, or `undefined` for a reference
+ * outside the `cid:` namespace. The hash is the part after the prefix, the
+ * form `schemaHash` carries and `cid:<hash>` documents are addressed by.
+ */
+export const parseCfcLabelReference = (
+  reference: StoredCfcLabelReference,
+): string | undefined =>
+  reference.$ref.startsWith(CID_PREFIX) &&
+    reference.$ref.length > CID_PREFIX.length
+    ? reference.$ref.slice(CID_PREFIX.length)
+    : undefined;
+
 /**
  * A label as an envelope holds it inline, with clauses and atoms of type
  * `Leaf`. A type rather than an interface, so that a label of stored values
@@ -68,20 +83,53 @@ export type StoredInlineCfcLabel<Leaf = unknown> = {
 const LABEL_MEMBERS: readonly string[] = ["confidentiality", "integrity"];
 
 /**
- * Whether `value` has the shape of an inline label: a record whose every
- * member is `confidentiality` or `integrity`, holding an array or
+ * Helper for {@link isInlineCfcLabelShape} and
+ * {@link isCfcLabelDocumentContent}, which returns whether `value` is a plain
+ * object whose every member is `confidentiality` or `integrity` holding an
+ * array, or `undefined` where `admitsUndefined` is `true`.
+ */
+const isLabelRecord = (value: unknown, admitsUndefined: boolean): boolean =>
+  isPlainObject(value) &&
+  Object.keys(value).every((key) =>
+    LABEL_MEMBERS.includes(key) &&
+    (Array.isArray(value[key]) ||
+      (admitsUndefined && value[key] === undefined))
+  );
+
+/**
+ * Whether `value` has the shape of an inline label: a plain object whose
+ * every member is `confidentiality` or `integrity`, holding an array or
  * `undefined`. A label carrying a third member is of a format the reader
  * postdates, and reading the two members it knows would drop whatever the
  * third carries.
+ *
+ * A label, inline or in a label document, is the one position where a
+ * record's prototype is checked. A class instance a stored value decodes
+ * to, such as `FabricBytes` or `FabricEpochNsec`, keeps its state in private
+ * fields and shows no own enumerable members, so a check of members alone
+ * reads one as a label with no clauses. Every other record a rule here asks
+ * for has to hold a member a rule names (`version`, `entries`, `path`,
+ * `$ref`), and none of those classes defines a member of any of those
+ * names, own or inherited.
  */
 export const isInlineCfcLabelShape = (
   value: unknown,
-): value is StoredInlineCfcLabel =>
-  isObjectNotArray(value) &&
-  Object.keys(value).every((key) =>
-    LABEL_MEMBERS.includes(key) &&
-    (value[key] === undefined || Array.isArray(value[key]))
-  );
+): value is StoredInlineCfcLabel => isLabelRecord(value, true);
+
+/**
+ * Whether `value` has the shape of a label document's content, the value of
+ * the `cid:` document a version-2 label reference names. Like
+ * {@link isInlineCfcLabelShape}, except that a member is never `undefined`:
+ * a document stores no member it does not hold. The document's hash alone
+ * cannot tell a label from a record that merely verifies against it, so
+ * this is the check that keeps a malformed document from resolving as a
+ * label whose members a reader then reads as empty. The store refuses a
+ * commit naming a document this returns `false` for, and each reader fails
+ * closed on one.
+ */
+export const isCfcLabelDocumentContent = (
+  value: unknown,
+): value is StoredInlineCfcLabel => isLabelRecord(value, false);
 
 /**
  * The origin of a label-metadata population template entry, which the
