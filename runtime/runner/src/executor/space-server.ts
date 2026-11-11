@@ -2182,8 +2182,8 @@ export class SpaceServer implements TransactionSealDestination {
       // for every warm notice — pre-activation pendings, the
       // registration drain, and mid-tenure arrivals alike — and a
       // fresh capture notes a demand change so an idle-waiting loop
-      // runs a fresh demand pass over it (the same grace-coalesced
-      // latch a session's watch change uses).
+      // runs a fresh demand pass over it (the same latch a session's
+      // watch change sets).
       let captured = false;
       let named = false;
       for (const write of record.writes) {

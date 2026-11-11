@@ -344,8 +344,8 @@ export type ServingLoopStats = {
      * request's staged instances entering the tenure's warm demand,
      * serving-loop.md §1; RULED 2026-08-21) — counted apart so
      * `watchWakes` keeps meaning exactly the session-watch notifies.
-     * Like the other wake counters, counts notifies before the grace
-     * coalescing. */
+     * Like the other wake counters, counts notifies; the notifies that
+     * arrive before a cycle's demand pass share it. */
     warmWakes: number;
   };
 
