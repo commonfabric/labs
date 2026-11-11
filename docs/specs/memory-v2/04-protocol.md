@@ -55,8 +55,8 @@ rewrite. In particular:
   explicitly
 - delivering schema documents by reference (`syncCidReferencesV1`, sections
   4.1.1 and 4.2.3) is specified and not yet implemented. It is to ship as an
-  experimental option, off by default, so until a deployment turns it on
-  every frame carries each schema document with its body
+  experimental option that servers offer and clients take only when they opt
+  in, so a client that has not receives each schema document with its body
 
 ## 4.1 Transport
 
@@ -287,10 +287,12 @@ It defaults to `false` when absent. The server sends an upsert marked
 it, and a client refuses a sync carrying one otherwise. A client connected to
 an older server, and an older client connected to any server, receive every
 schema document with its body, as without the flag. It is an experimental
-option, off by default and switchable per deployment
-([`EXPERIMENTAL_OPTIONS.md`](../../development/EXPERIMENTAL_OPTIONS.md)): a
-peer advertises it only while enabled, so a server with it off delivers bodies
-to every client. It is not yet implemented.
+option ([`EXPERIMENTAL_OPTIONS.md`](../../development/EXPERIMENTAL_OPTIONS.md))
+with a switch on each side: a server advertises it unless its deployment turns
+it off, and a client advertises it only when its runtime, or the host
+embedding it, opts in. Since both must advertise it, a client that does not
+opt in sees no change, and a deployment that turns it off delivers bodies to
+every client. It is not yet implemented.
 
 `commitLabelTableV1` independently advertises label and label-path tables for
 client `transact` requests and server transaction acknowledgments. This build

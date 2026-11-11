@@ -27,8 +27,9 @@ reference at rest never needs transport compression. Code documents
 (§ Code documents) share the namespace and its rules: the compile cache
 stores each module's text as one, and its records link to them.
 Delivery by reference (§ Delivery by reference) is specified and not yet
-implemented. It is to ship as an experimental option, off by default, so
-until a deployment turns it on every schema document travels with its body.
+implemented. It is to ship as an experimental option that servers offer and
+clients take only when they opt in, so every schema document travels with its
+body to a client that has not.
 
 ## Last Updated
 
@@ -739,12 +740,12 @@ schema it already knows it has.
   connection where either peer does not delivers every schema document with
   its body, as the rest of this document describes. It is an experimental
   option
-  ([`EXPERIMENTAL_OPTIONS.md`](../development/EXPERIMENTAL_OPTIONS.md)), off
-  by default and switchable per deployment: a peer advertises it only while
-  enabled, and a deployment whose server leaves it off delivers bodies to
-  every client. It stays an option until a measurement settles whether the
-  bandwidth saved outweighs the round trip a frame pays for a body its
-  client lacks.
+  ([`EXPERIMENTAL_OPTIONS.md`](../development/EXPERIMENTAL_OPTIONS.md)) with
+  a switch on each side. A server advertises it unless its deployment turns
+  it off. A client advertises it only when its runtime, or the host
+  embedding it, opts in, so nothing changes for a client that does not. It
+  stays an option until a measurement settles whether the bandwidth saved
+  outweighs the round trip a frame pays for a body its client lacks.
 - **What travels by reference.** A `cid:` document in a session frame may
   travel as a reference — its id and the seq the space holds it at, without
   its body (memory-v2/04-protocol.md §4.2.3) — when the copy the delivering
