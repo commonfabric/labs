@@ -228,6 +228,14 @@ const resolvedLabel = (
   return resolved;
 };
 
+// SPEC-PENDING https://github.com/commonfabric/specs/pull/93 The label of a
+// moved anchor is a store-performed derivation, which the pull request adds
+// a section to rule on: the field's confidentiality joined into the anchor's
+// derived value entry, which keeps its clauses and holds no integrity. It
+// changes what is stored without a dial, an exception to the pending-marker
+// procedure that Robin McCollum accepted in the review of labs#9667: anchors
+// are already persisted, and the label narrows what a reader of them learns.
+
 /**
  * The envelope an anchors document stores once each anchor of `anchorIds`
  * carries `confidentiality` beside what `envelope`, the one it stores now,
