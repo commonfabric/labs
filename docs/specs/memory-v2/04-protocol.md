@@ -53,6 +53,10 @@ rewrite. In particular:
 - watch-set mutations return inline `sync` payloads; a pushed frame retracts a
   document a write left no watch reaching, and a client shrinks its watch set
   explicitly
+- delivering schema documents by reference (`syncCidReferencesV1`, sections
+  4.1.1 and 4.2.3) is specified and not yet implemented. It is to ship as an
+  experimental option that servers offer and clients take only when they opt
+  in, so a client that has not receives each schema document with its body
 
 ## 4.1 Transport
 
@@ -276,6 +280,21 @@ advertised by this build, and defaults to `false` when absent. The server
 compacts labels and paths only
 when both peers advertise it. A client refuses a sync carrying either table
 unless the connection negotiated the capability.
+
+`syncCidReferencesV1` advertises that the peer delivers, or takes, schema
+documents by reference
+([content-addressed-schemas.md](../content-addressed-schemas.md#delivery-by-reference)).
+It defaults to `false` when absent. The server sends an upsert marked
+`byReference` (section 4.2.3) only on a connection where both peers advertised
+it, and a client refuses a sync carrying one otherwise. A client connected to
+an older server, and an older client connected to any server, receive every
+schema document with its body, as without the flag. It is an experimental
+option ([`EXPERIMENTAL_OPTIONS.md`](../../development/EXPERIMENTAL_OPTIONS.md))
+with a switch on each side: a server advertises it unless its deployment turns
+it off, and a client advertises it only when its runtime, or the host
+embedding it, opts in. Since both must advertise it, a client that does not
+opt in sees no change, and a deployment that turns it off delivers bodies to
+every client. It is not yet implemented.
 
 `commitLabelTableV1` independently advertises label and label-path tables for
 client `transact` requests and server transaction acknowledgments. This build
@@ -730,8 +749,10 @@ Rules:
   session and apply them as they arrive
 - a resuming client that advertises `sessionHoldings` (and whose server does)
   sends `holdings`: the documents its replica holds, each at the seq it holds
-  it at. The server replaces its memory of what the session was delivered with
-  that statement before computing the catch-up, so the delta re-delivers every
+  it at, a schema document delivered by reference (section 4.2.3) at the seq
+  its reference carried. The server replaces its memory of what the session
+  was delivered with that statement before computing the catch-up, so the
+  delta re-delivers every
   document the client does not hold — one it never absorbed, or lost with a
   replaced replica — and elides every one it does. A session with no watches
   covers nothing: the catch-up retracts as `removes` whatever the declaration
@@ -1088,6 +1109,9 @@ interface SessionSync {
     seq: number;
     doc?: EntityDocument;
     deleted?: true;
+    // A schema document named without its `doc` (connections negotiating
+    // `syncCidReferencesV1`; see below).
+    byReference?: true;
   }>;
   removes: Array<{
     branch: BranchId;
@@ -1112,6 +1136,15 @@ Semantics:
 - `upserts` carry the latest state each watched entity should have after
   integrating `toSeq`
 - `deleted: true` means the entity is currently tombstoned
+- `byReference: true` marks a `cid:` schema document the server names without
+  its `doc`: its space's store holds the document at `seq`, verified as the
+  schema document its id names, and the client takes the content from its own
+  verified store, fetching with `graph.query` (section 4.3.3) any body it
+  lacks. Only a schema document the server's realm registry holds travels
+  this way, never with `deleted`. The frame applies once every body it lacks
+  has arrived
+  ([content-addressed-schemas.md](../content-addressed-schemas.md#delivery-by-reference)
+  states the client's rules)
 - `removes` are not deletions in storage; they mean the entity is no longer in
   the session's relevant watch-set result
 - `crossings` are the value links a watch's schema traversal followed into
@@ -1520,6 +1553,12 @@ The selector path is relative to `document.value`, not the full stored document
 root. The server converts it to a document path by prepending `"value"` before
 running shared traversal.
 
+A `graph.query` result carries every entity with its document, whatever the
+connection negotiated: delivery by reference (section 4.2.3) applies to
+session sync frames only. A query whose roots are `cid:` schema documents is
+how a client fetches the bodies a frame named by reference, and it adds
+nothing to the session's watch set.
+
 When `includeAuthoredSeq` is true, `authoredSeq` is the highest authored commit
 sequence in the query's branch at or below `atSeq` (or `serverSeq` when omitted),
 and is zero when none exists. This metadata requires the same authenticated READ
@@ -1729,8 +1768,9 @@ Semantics:
   documents as delivered: a response to a watch mutation or a resume and a
   `session/effect` each go out in the step that records them, so a frame that
   leaves out a `cid:` document because the session holds it never precedes the
-  frame carrying that document. A session's own accepted write is the one
-  document no frame carries, and the marker covering it can follow a frame that
+  frame carrying that document, with its body or by reference. A session's
+  own accepted write is the one document no frame carries, and the marker
+  covering it can follow a frame that
   leaves it out, so a client resolves such a frame's references through its own
   pending writes
 
