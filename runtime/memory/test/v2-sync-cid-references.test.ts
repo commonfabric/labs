@@ -1147,6 +1147,139 @@ describe("sync-cid-references", () => {
       }
     });
 
+    it("sends no body fetch on a new connection for a hold its old connection lost", async () => {
+      // Two spaces' frames name the same bodies on one direct connection,
+      // and one waits on the other's fetch. That fetch is lost with its
+      // connection, and the client reconnects to the same server. The hold
+      // that waited was discarded with the connection, so the only fetches
+      // the new connection carries are ones its own frames call for: none
+      // goes out before a frame on it names a body by reference.
+      const server = new Server({
+        ...testSessionOpenServerOptions,
+        store: new URL("memory://sync-cid-references-shared-lost"),
+        subscriptionRefreshDelayMs: 0,
+      });
+      let receiver = (_payload: string) => {};
+      let disconnected = (_error?: Error) => {};
+      let generations = 0;
+      let activeGeneration = 0;
+      let firstReferences = 0;
+      let namedOnNew = false;
+      let answerWithheld = false;
+      let earlyQueries = 0;
+      const bothFramesArrived = Promise.withResolvers<void>();
+      const firstAnswerWithheld = Promise.withResolvers<void>();
+      const reach = (): Transport => {
+        const generation = generations++;
+        activeGeneration = generation;
+        const connection = loopback(server);
+        connection.setReceiver((payload) => {
+          if (payload.includes('"byReference":true')) {
+            acquireSchemaRegistryLease()();
+            if (generation > 0) namedOnNew = true;
+            else if (++firstReferences === 2) bothFramesArrived.resolve();
+          }
+          if (generation === 0 && payload.includes('"entities"')) {
+            // The first connection answers no fetch: its answers are lost
+            // with it.
+            if (!answerWithheld) {
+              answerWithheld = true;
+              firstAnswerWithheld.resolve();
+            }
+            return;
+          }
+          receiver(payload);
+        });
+        return connection;
+      };
+      let active: Transport | null = reach();
+      const transport: Transport = {
+        async send(payload) {
+          if (active === null) throw connectionError("connection refused");
+          if (
+            payload.includes('"graph.query"') && activeGeneration > 0 &&
+            !namedOnNew
+          ) {
+            earlyQueries++;
+          }
+          await active.send(payload);
+        },
+        close: () => active?.close() ?? Promise.resolve(),
+        reset() {
+          if (active === null) active = reach();
+        },
+        setReceiver(next) {
+          receiver = next;
+        },
+        setCloseReceiver(next) {
+          disconnected = next;
+        },
+      };
+      const writerClient = await connect({ transport: loopback(server) });
+      const watcherClient = await connect({
+        transport,
+        syncCidReferences: true,
+      });
+      const spaces = [
+        "did:key:z6Mk-sync-cid-references-shared-lost-a",
+        "did:key:z6Mk-sync-cid-references-shared-lost-b",
+      ];
+      const carrier = "of:sync-cid-references-shared-lost";
+      try {
+        for (const space of spaces) {
+          const writer = await writerClient.mount(
+            space,
+            {},
+            testSessionOpenAuthFactory,
+          );
+          await writer.transact({
+            localSeq: 1,
+            reads: { confirmed: [], pending: [] },
+            operations: closureOperations(carrier),
+          });
+        }
+        const [a, b] = await Promise.all(
+          spaces.map((space) =>
+            watcherClient.mount(space, {}, testSessionOpenAuthFactory)
+          ),
+        );
+        const watch = [{
+          id: "carrier",
+          kind: "graph" as const,
+          query: {
+            roots: [{ id: carrier, selector: { path: [], schema: false } }],
+          },
+        }];
+        const watching = Promise.all([
+          a.watchSet(watch).catch(() => undefined),
+          b.watchSet(watch).catch(() => undefined),
+        ]);
+        await Promise.all([
+          bothFramesArrived.promise,
+          firstAnswerWithheld.promise,
+        ]);
+        const lost = active!;
+        active = null;
+        await lost.close();
+        disconnected(new Error("synthetic outage"));
+        await watcherClient.restoreConnection();
+        await watching;
+        const viewA = (await a.watchAddSync([])).view;
+        const viewB = (await b.watchAddSync([])).view;
+        expect(earlyQueries).toBe(0);
+        expect(documentIn(viewA, `cid:${outerHash}`)).toEqual({
+          value: outerSchema,
+        });
+        expect(documentIn(viewB, `cid:${outerHash}`)).toEqual({
+          value: outerSchema,
+        });
+      } finally {
+        await writerClient.close();
+        await watcherClient.close();
+        await server.close();
+      }
+    });
+
     it("resolves one session's `delivered()` while another session's sync waits for a body", async () => {
       // Two spaces share the watcher's connection. Space A's frame names a
       // body the registry lacks, and the answer to its fetch is held until

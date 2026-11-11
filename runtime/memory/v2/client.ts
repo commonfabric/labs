@@ -2802,13 +2802,15 @@ export class Client {
   /**
    * Helper for the reference hold, which fetches the bodies `hashes` name
    * for the first held sync, then hands on what the hold can now resolve.
+   * The fetch goes only on the connection current now, the one the hold
+   * belongs to, since a later connection discards the hold.
    */
   #fetchHeldCidBodies(
     key: string,
     hold: CidReferenceHold,
     hashes: readonly string[],
   ): void {
-    void this.#fetchCidBodies(hold.session, hashes).then(
+    void this.#fetchCidBodies(hold.session, hashes, this.#connectionEpoch).then(
       ({ unresolved, fetched, lost }) => {
         // A hold its connection's end already discarded has nothing to hand
         // on.
@@ -2925,11 +2927,14 @@ export class Client {
    * registry, so whether it is fetched says nothing about what this client
    * holds. Returns the hashes still unresolved afterward, each logged, the
    * hashes this space returned verified, and whether a fetch went unanswered
-   * because the connection was lost. Never rejects.
+   * because the connection was lost. Every request goes on the connection
+   * `epoch` names, and one that would go on another counts as lost. Never
+   * rejects.
    */
   async #fetchCidBodies(
     session: SyncPartSession,
     hashes: readonly string[],
+    epoch: number,
   ): Promise<
     { unresolved: Set<string>; fetched: Set<string>; lost: boolean }
   > {
@@ -2950,7 +2955,7 @@ export class Client {
     const fetched = new Set<string>();
     let answered = true;
     if (own.length > 0) {
-      const request = this.#requestCidBodies(session, own);
+      const request = this.#requestCidBodies(session, own, epoch);
       for (const hash of own) {
         const done = request.then((reply) =>
           reply.answered && reply.verified.has(hash)
@@ -2979,7 +2984,7 @@ export class Client {
       }
     }
     if (answered && retry.length > 0) {
-      const reply = await this.#requestCidBodies(session, retry);
+      const reply = await this.#requestCidBodies(session, retry, epoch);
       answered = reply.answered;
       for (const hash of reply.verified) fetched.add(hash);
     }
@@ -3020,13 +3025,15 @@ export class Client {
    * Helper for `#fetchCidBodies()`, which asks `session`'s space for the
    * `cid:` documents `hashes` name with a one-shot query, and registers
    * each returned body that verifies as the schema document its id names.
-   * Returns whether the query was answered, `false` when the connection was
-   * lost, and the hashes whose bodies it returned verified. Never rejects: a
-   * refused query is logged and registers nothing.
+   * The query goes only on the connection `epoch` names. Returns whether the
+   * query was answered, `false` when that connection was lost, and the
+   * hashes whose bodies it returned verified. Never rejects: a refused query
+   * is logged and registers nothing.
    */
   async #requestCidBodies(
     session: SyncPartSession,
     hashes: readonly string[],
+    epoch: number,
   ): Promise<{ answered: boolean; verified: Set<string> }> {
     const verified = new Set<string>();
     try {
@@ -3041,7 +3048,7 @@ export class Client {
             selector: { path: [], schema: false },
           })),
         },
-      });
+      }, { epoch });
       for (const entity of result.entities) {
         // Only a `cid:` document is a body: an entity under any other id is
         // not one, whatever its content hashes to.
