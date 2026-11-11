@@ -29,6 +29,7 @@ import {
   type SetupRecord,
   trackListSetupRollback,
 } from "./list-element-rollback.ts";
+import { listChildSetupBatch } from "./list-child-setup-batch.ts";
 import { listInstanceCoordinator } from "./list-instance-coordinator.ts";
 import {
   LIST_OP_CAPTURED_ARGUMENT_FIELDS,
@@ -443,6 +444,7 @@ function createFilterInstance(
     // list can be republished once they confirm — distinct from a predicate that
     // has settled falsy, which reads false and is excluded immediately.
     const pendingCells: Cell<any>[] = [];
+    const childSetup = listChildSetupBatch();
     for (let i = 0; i < list.length; i++) {
       // Skip sparse holes — don't create predicate runs for them
       if (!(i in list)) continue;
@@ -462,13 +464,14 @@ function createFilterInstance(
             // reads the same document again. Owe the setup until the wait ends.
             existing.needsSetup = true;
           } else {
-            runtime.runner.run(
+            const started = runtime.runner.runInTransaction(
               tx,
               opPattern,
               createRunInput(list[i], i),
               existing.resultCell,
               {
                 doNotUpdateOnPatternChange: true,
+                prepareScopedDefaults: true,
                 awaitSyncBeforeInitialRun: elementAwaitSync,
                 parentPieceRootId,
                 referencedArgumentFields: LIST_OP_REFERENCED_ARGUMENT_FIELDS,
@@ -476,6 +479,10 @@ function createFilterInstance(
                 droppedArgumentFields,
               },
             );
+            if (started instanceof Promise) {
+              childSetup.add(started);
+              continue;
+            }
             // The whole setup, every time, because issuing it takes the debt
             // for it: an overlapping reconcile that wrote the link and has not
             // settled hands it to this one, and a partial issuance would leave
@@ -501,13 +508,14 @@ function createFilterInstance(
         // long as the coordinator. A cell bound to the transaction would pin
         // the settled transaction, its journal, and everything it read.
         const resultCell = boundResultCell.withTx();
-        runtime.runner.run(
+        const started = runtime.runner.runInTransaction(
           tx,
           opPattern,
           createRunInput(list[i], i),
           resultCell,
           {
             doNotUpdateOnPatternChange: true,
+            prepareScopedDefaults: true,
             awaitSyncBeforeInitialRun: elementAwaitSync,
             parentPieceRootId,
             referencedArgumentFields: LIST_OP_REFERENCED_ARGUMENT_FIELDS,
@@ -515,6 +523,10 @@ function createFilterInstance(
             droppedArgumentFields,
           },
         );
+        if (started instanceof Promise) {
+          childSetup.add(started);
+          continue;
+        }
         linkElementCell(boundResultCell);
 
         const entry = { resultCell, lastIndex: i, needsSetup: false };
@@ -533,6 +545,9 @@ function createFilterInstance(
         pendingCells.push(childCell);
       }
     }
+
+    const pendingSetup = childSetup.retry();
+    if (pendingSetup !== undefined) return pendingSetup;
 
     // Wait for the whole resume batch before the aggregate moves. Its
     // documents are the ones still catching up, and republishing from them once
