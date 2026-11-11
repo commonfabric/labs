@@ -63,7 +63,10 @@ settling single-result semantics; do not bind to a fixed ordering.
 
 A host renders the profile by mounting a thin wrapper pattern that
 wishes `#profile` inside the runtime it already boots — never by
-re-implementing resolution host-side. Full wish semantics:
+re-implementing resolution host-side. A host that already knows who its
+user is suggests their first profile's name and picture with
+`RuntimeClient.offerProfileSuggestion()`, which the create surface offers
+for the user to keep, edit, or drop. Full wish semantics:
 [docs/common/conventions/wish.md](../common/conventions/wish.md).
 
 ---

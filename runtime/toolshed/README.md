@@ -191,12 +191,32 @@ by the service; neither the join link nor the redemption request carries it.
 Redemption only raises access: an identity that already holds the invited access
 or more keeps what it has.
 
+An invitation made for one person may carry a `suggestedProfile`: the name, and
+optionally the picture, its issuer knows that person by, for the person to keep,
+edit, or drop when they make their first profile. `suggestedProfile` in the
+capability response bounds it: `maxNameLength` (128) UTF-16 code units of
+well-formed name, which has no leading or trailing whitespace and no control
+character, and `maxPictureBytes` (65,536) bytes of picture, carried as unpadded
+base64url text, which the service holds without inspecting. An invitation that
+carries one admits one identity, so its `maxUses` is 1. A response without the
+field comes from a host that predates suggestions and refuses a create carrying
+one with `invalid-request`, as it refuses every unknown field. The suggestion is
+returned to the identity that redeemed the invitation, on its `redeemed` receipt
+and on each `already-redeemed` receipt after it, until the invitation expires or
+is revoked, or its issuer is found to own the space no longer, when the service
+forgets it. Exhausting the invitation keeps it, so a redeemer that lost its
+first receipt reads it again on retry, on either transport. No administration
+operation (`create`, `list`, `revoke`, `receipts`) returns it, and anyone
+holding the link before the person it is for can redeem it and read the
+suggestion, as they can redeem the invitation.
+
 Over HTTP, every invitation operation is a signed JSON POST under
 `/api/spaces/:space/invites/`: `create`, `redeem`, `list`, `revoke`, and
 `receipts`; the memory-session forms are below. They use the existing CF1 proof,
 binding method, authority, path, body hash, and signer DID, with a maximum
 300-second lifetime and 60 seconds of future clock skew. Bodies are limited to 4
-KiB and unknown fields are refused. Redemption does not require an existing
+KiB, beyond which a `create` may add the base64url text of the largest suggested
+picture, and unknown fields are refused. Redemption does not require an existing
 target-space session. Its recipient is always the proof signer. Creation,
 listing, revocation, and receipt listing require a current explicit OWNER entry
 in the space ACL. First redemption also requires the issuer to remain an
@@ -243,20 +263,20 @@ cannot read the space ACL before redeeming, and afterwards an ACL check can show
 at most that the DID is an owner, not that it issued the link. Like the space
 DID, it travels in the query, so it reaches the shell host's access logs.
 `issue` accepts a prepared request containing `inviteId`, `codeVerifier`,
-`access`, `ttlSeconds`, and optional `maxUses`. Retain the credentials before
-calling it so an uncertain response can be retried with the same ID. The
-convenience `create` accepts the same access/lifetime/limit options and optional
-paired `inviteId` and `code`, and returns flat active metadata plus `code`. If
-the create request fails, `SpaceInviteCreateError` retains its credentials and
-original options in the frozen `retry` getter. Retry with
-`client.create(error.retry)` on the same client. The getter contains the bearer
-code: keep it private, and use it only to recover or retry this invitation.
-Ordinary error inspection and JSON serialization omit these credentials. The
-error preserves a structured refusal code; uncertain transport or response
-parsing failures use `create-outcome-unknown`. Validation failures before
-sending remain `SpaceInviteError` refusals. `redeem` accepts only `inviteId` and
-`code`; `list` and `receipts` return arrays; `revoke` returns
-`{ "revoked": true }`.
+`access`, `ttlSeconds`, and optional `maxUses` and `suggestedProfile`. Retain
+the credentials before calling it so an uncertain response can be retried with
+the same ID. The convenience `create` accepts the same
+access/lifetime/limit/suggestion options and optional paired `inviteId` and
+`code`, and returns flat active metadata plus `code`. If the create request
+fails, `SpaceInviteCreateError` retains its credentials and original options in
+the frozen `retry` getter. Retry with `client.create(error.retry)` on the same
+client. The getter contains the bearer code: keep it private, and use it only to
+recover or retry this invitation. Ordinary error inspection and JSON
+serialization omit these credentials. The error preserves a structured refusal
+code; uncertain transport or response parsing failures use
+`create-outcome-unknown`. Validation failures before sending remain
+`SpaceInviteError` refusals. `redeem` accepts only `inviteId` and `code`; `list`
+and `receipts` return arrays; `revoke` returns `{ "revoked": true }`.
 
 Given a `session`, a function that sends an operation on the space's memory
 session as `IStorageManager.administerInvites()` does, `SpaceInviteClient` sends
@@ -268,13 +288,14 @@ that open is refused its grant (an `AuthorizationError`), which a repeat
 redemption of an invitation whose access was since removed is.
 
 Successful redemption returns `outcome` (`redeemed` or `already-redeemed`),
-`redemption` (`inviteId` and `did`), and `currentAccess` (`READ`, `WRITE`,
-`OWNER`, or null). Current access is an observation, and the ordinary session
-checks it again. A receipt-first retry never regrants removed access. New
-identities see `invite-unavailable` for unknown, wrong-code, expired, revoked,
-exhausted, or issuer-invalid invitations. Proof failures use `invalid-proof`;
-owner failures use `not-owner`. Every operation, `create`, `redeem`, `list`,
-`revoke` and `receipts` alike, on a
+`redemption` (`inviteId` and `did`), `currentAccess` (`READ`, `WRITE`, `OWNER`,
+or null), and the invitation's `suggestedProfile` while the service holds one.
+Current access is an observation, and the ordinary session checks it again. A
+receipt-first retry never regrants removed access. New identities see
+`invite-unavailable` for unknown, wrong-code, expired, revoked, exhausted, or
+issuer-invalid invitations. Proof failures use `invalid-proof`; owner failures
+use `not-owner`. Every operation, `create`, `redeem`, `list`, `revoke` and
+`receipts` alike, on a
 [deleted space](../../docs/specs/random-space-identities.md#deleting-a-space) is
 refused with `space-deleted` and HTTP status 410 (Gone), since no grant can
 admit anyone to such a space. Over HTTP that check comes after rate limiting,
@@ -292,7 +313,8 @@ itself. Outside the convenience `create` operation, transport failures remain
 transport failures. Malformed error responses use `service-error`.
 
 Admission uses private tables in the target space's SQLite engine, inside the
-same serialized transaction as its ACL-only public commit. A unique receipt pair
+same serialized transaction as its ACL-only public commit. A suggested profile
+is a private row of its own, beside the invitation's. A unique receipt pair
 consumes one use, including when the recipient already has sufficient access.
 Stronger explicit or wildcard access remains intact. Exhaustion, revocation, and
 expiration remove the active verifier; successful receipt pairs remain.

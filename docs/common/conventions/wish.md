@@ -233,7 +233,10 @@ for `wish({ query: "#profile" })`:
 - **0 profiles:** the trusted profile-create surface (same input as the home
   Profile tab). Submitting a name creates the viewer's first profile and leaves
   the current view in place; the wish reacts once the link exists. `.result` is
-  `undefined` and `error` is set until the first profile exists.
+  `undefined` and `error` is set until the first profile exists. When the
+  viewer's host has suggested a profile, the surface starts its name field
+  with the suggested name and shows the suggested picture with a control that
+  removes it (see "A host's profile suggestion" below).
 - **1 profile:** a link to that profile.
 - **2+ profiles, a valid default set:** a link to the default profile.
 - **2+ profiles, no valid default:** the **profile picker**
@@ -263,6 +266,26 @@ surface per process, not on every re-run of the wish behind it.
 
 When rendering profile data from a shared piece, use a user-scoped result schema
 for the rendered output so each viewer sees their own home profile projection.
+
+### A host's profile suggestion
+
+A host that knows who its user is before they have a profile, as Web Weaver
+does from an invitation made for one person, suggests a name and a picture with
+`RuntimeClient.offerProfileSuggestion()`. The runtime stores the suggestion in
+the user's home space, in a document no pattern can address
+(`offerProfileSuggestion()` in `runtime/runner/src/profile-suggestion.ts`), and
+the wish hands the create surface a link to it as `profileSuggestion`. The
+runtime that builds the surface derives that link from the home space of the
+user the surface is for, so a space server building it on a user's behalf
+hands it that user's suggestion. No pattern supplies one.
+
+The surface offers it and applies nothing on its own: the user edits the name,
+keeps or removes the picture, and creates the profile with the same trusted
+click as ever. The profile takes the picture the suggestion still holds then,
+set through its `setPicture` by the runtime that creates it, so the picture's
+label names the profile's owner, as a reader of a face requires. The suggestion
+stays stored for the host to replace; the surface is shown only while the user
+has no profile.
 
 ### Favorites vs Mentionables vs Profile
 

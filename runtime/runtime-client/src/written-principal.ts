@@ -36,29 +36,38 @@ const NAME_SCHEMA = {
  * principal its seal shows (`ownerPrincipalFromLabel()`), until the returned
  * function is called: for a profile, whose profile it is. A value holding a
  * written `name` is read by the claims on its root and its `name`, and any
- * other by every claim its label holds. `undefined` when the label names no
- * single principal, for a cell the worker refuses, and while the label the
- * handle holds is not the one the worker read with its value, as after a
- * write through the handle.
+ * other by every claim its label holds. Nothing is reported until the cell
+ * delivers the label the worker read with its value, or the worker refuses
+ * it, so that `undefined` never means that the label has yet to load. After
+ * that, it is `undefined` when the label names no single principal, for a
+ * cell the worker refuses, and while the label the handle holds is not the
+ * one the worker read with its value, as after a write through the handle.
  */
 export const observeRepresentedPrincipal = (
   cell: CellHandle<unknown>,
   onPrincipal: (principal: string | undefined) => void,
-): () => void =>
-  cell.asSchema<{ name?: string }>(NAME_SCHEMA).subscribe(
-    (value, label, delivery) =>
-      onPrincipal(
-        delivery?.cfcLabelCurrent === true
-          ? ownerPrincipalFromLabel(
-            label,
-            isWrittenProfileName(
-              isObjectNotArray(value) ? value.name : undefined,
-            ),
-          )
-          : undefined,
-      ),
-    { includeCfcLabel: true, onRefused: () => onPrincipal(undefined) },
+): () => void => {
+  let decided = false;
+  const report = (principal: string | undefined) => {
+    decided = true;
+    onPrincipal(principal);
+  };
+  return cell.asSchema<{ name?: string }>(NAME_SCHEMA).subscribe(
+    (value, label, delivery) => {
+      if (delivery?.cfcLabelCurrent === true) {
+        report(ownerPrincipalFromLabel(
+          label,
+          isWrittenProfileName(
+            isObjectNotArray(value) ? value.name : undefined,
+          ),
+        ));
+      } else if (decided) {
+        report(undefined);
+      }
+    },
+    { includeCfcLabel: true, onRefused: () => report(undefined) },
   );
+};
 
 /** What `observeWrittenPrincipal()` reports each time it decides. */
 export type WrittenValue<T> = {

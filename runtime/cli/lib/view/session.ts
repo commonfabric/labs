@@ -74,6 +74,7 @@ import {
 } from "./display.ts";
 import {
   commentOnlyFiles,
+  compareNetChange,
   DIFF_COUNT_MODES,
   type DiffCountMode,
   diffCountModeLabel,
@@ -558,6 +559,11 @@ export class Session {
   #jumpSel = 0;
   #jumpSearching = false;
   #jumpCountMode: DiffCountMode = "normal";
+  /**
+   * Whether the jump list orders each commit's files by net line change
+   * rather than by their order in the diff.
+   */
+  #jumpByNetChange = false;
   #commitHeaderCache?: {
     readonly doc: Document;
     readonly headers: readonly CommitHeader[];
@@ -5421,8 +5427,13 @@ export class Session {
     this.#scrollJumpToSelection(this.#jumpSel);
   }
 
-  /** Every file the diff touches and every commit whose message it carries, in
-   * document order. Empty for a non-diff view. */
+  /**
+   * Every file the diff touches and every commit whose message it carries.
+   * Commits are in document order, each followed by its files. A diff with no
+   * commit lists only its files. Files are in document order, or ordered by
+   * net line change while `#jumpByNetChange` is set. Empty for a non-diff
+   * view.
+   */
   #buildJumpEntries(): JumpEntry[] {
     if (!this.#source?.isDiff) return [];
     const texts = this.#currentDoc.lines.map((l) => l.text);
@@ -5430,7 +5441,29 @@ export class Session {
     const counts = this.#jumpDiffCounts();
     const headers = this.#commitHeaders();
     const files = this.#foldFiles();
+    const countsOf = (file: DiffFileRange) => counts.files[file.index] ?? file;
     const entries: JumpEntry[] = [];
+    const pushFiles = (group: readonly DiffFileRange[]) => {
+      const ordered = this.#jumpByNetChange
+        ? group.toSorted((a, b) => compareNetChange(countsOf(a), countsOf(b)))
+        : group;
+      for (const file of ordered) {
+        entries.push({
+          line: file.headerLine,
+          endLine: file.endLine,
+          display: fileJumpLine(
+            file,
+            this.#collapsed.has(file.index),
+            countsOf(file),
+          ),
+          filterText: file.path.toLowerCase(),
+          name: file.path,
+          fileIndex: file.index,
+        });
+      }
+    };
+    const firstCommitLine = headers[0]?.line ?? Infinity;
+    pushFiles(files.filter((file) => file.headerLine < firstCommitLine));
     for (const [index, header] of headers.entries()) {
       const endLine = (headers[index + 1]?.line ?? texts.length) - 1;
       const commitFiles = files.filter((file) =>
@@ -5444,32 +5477,15 @@ export class Session {
         display: commitJumpLine(
           short,
           subject,
-          sumDiffLineCounts(
-            commitFiles.map((file) => counts.files[file.index] ?? file),
-          ),
+          sumDiffLineCounts(commitFiles.map(countsOf)),
           commitFiles.length > 0 &&
             commitFiles.every((file) => this.#collapsed.has(file.index)),
         ),
         filterText: `commit ${header.sha} ${subject}`.toLowerCase(),
         name: `commit ${short}`,
       });
+      pushFiles(commitFiles);
     }
-    for (const file of files) {
-      const fileCounts = counts.files[file.index] ?? file;
-      entries.push({
-        line: file.headerLine,
-        endLine: file.endLine,
-        display: fileJumpLine(
-          file,
-          this.#collapsed.has(file.index),
-          fileCounts,
-        ),
-        filterText: file.path.toLowerCase(),
-        name: file.path,
-        fileIndex: file.index,
-      });
-    }
-    entries.sort((a, b) => a.line - b.line);
     return entries;
   }
 
@@ -5487,16 +5503,23 @@ export class Session {
     this.#scrollJumpToSelection(this.#jumpSel);
   }
 
-  /** The index of the entry the viewport currently sits on: the last one whose
-   * jump line is at or above the top document line. */
+  /**
+   * The index of the entry the viewport currently sits on: the one whose jump
+   * line is nearest at or above the top document line, or the first entry
+   * when none is.
+   */
   #jumpEntryAtViewport(): number {
     const line = this.#toDoc(this.top);
-    let idx = 0;
-    for (let i = 0; i < this.#jumpEntries.length; i++) {
-      if (this.#jumpEntries[i].line <= line) idx = i;
-      else break;
+    let idx = -1;
+    for (const [i, entry] of this.#jumpEntries.entries()) {
+      if (
+        entry.line <= line &&
+        (idx < 0 || entry.line > this.#jumpEntries[idx].line)
+      ) {
+        idx = i;
+      }
     }
-    return idx;
+    return Math.max(0, idx);
   }
 
   #handleJumpList(key: Key): void {
@@ -5575,6 +5598,10 @@ export class Session {
       case "D":
         this.#cycleJumpCountMode();
         return;
+      case "S":
+        this.#jumpByNetChange = !this.#jumpByNetChange;
+        this.#rebuildJumpEntries();
+        return;
     }
   }
 
@@ -5631,10 +5658,19 @@ export class Session {
     }
   }
 
-  /** Rebuilds jump rows after visibility or count settings change. */
+  /**
+   * Rebuilds jump rows after visibility, count, or order settings change,
+   * keeping the highlighted entry selected wherever it moves to.
+   */
   #rebuildJumpEntries(): void {
+    const selected = this.#jumpEntries[this.#jumpSel]?.line;
     this.#jumpAll = this.#buildJumpEntries();
     this.#refreshJump();
+    const index = this.#jumpEntries.findIndex((e) => e.line === selected);
+    if (index >= 0) {
+      this.#jumpSel = index;
+      this.#scrollJumpToSelection(index);
+    }
   }
 
   /** Advances to the next diff-count policy and refreshes every count shown. */
@@ -5703,7 +5739,7 @@ export class Session {
     );
     lines.push(
       { text: "", spans: [] },
-      jumpCountModeLine(this.#jumpCountMode),
+      jumpCountModeLine(this.#jumpCountMode, this.#jumpByNetChange),
       jumpCountSummaryLine(counts.totals, shown),
     );
     const commitHint = this.#commitHeaders().length > 1 ? " · <> commits" : "";
@@ -5713,7 +5749,7 @@ export class Session {
       scroll: this.#overlayScroll,
       footer: this.#jumpSearching
         ? "type · ↑↓ select · Space page · Enter jump · Esc list"
-        : `↑↓ g G${commitHint} · / filter · f F E T M · D · Enter · Esc`,
+        : `↑↓ g G${commitHint} · / filter · f F E T M · D S · Enter · Esc`,
       selectedLine: this.#jumpEntries.length > 0 ? this.#jumpSel : undefined,
     };
   }
@@ -5858,9 +5894,13 @@ function fileJumpLine(
   };
 }
 
-/** Builds the jump-list row naming its current count policy. */
-function jumpCountModeLine(mode: DiffCountMode): Line {
-  const text = `Counts: ${diffCountModeLabel(mode)}`;
+/**
+ * Builds the jump-list row naming its current count policy, and the file
+ * order when that is not the diff's own.
+ */
+function jumpCountModeLine(mode: DiffCountMode, byNetChange: boolean): Line {
+  const order = byNetChange ? " · Files sorted by net line change" : "";
+  const text = `Counts: ${diffCountModeLabel(mode)}${order}`;
   return { text, spans: [{ col: 0, text, cls: "diffMeta" }] };
 }
 
@@ -5925,6 +5965,7 @@ export function helpOverlay(hasMultipleCommits: boolean): {
     ["  f", "hide / show a file or commit"],
     ["  /", "filter the list"],
     ["  D", "cycle its diff counts"],
+    ["  S", "order files by net line change / as in the diff"],
     ["", ""],
     ["Structure tree", ""],
     ["  W / S", "previous / next sibling (W → parent, S → out, at ends)"],

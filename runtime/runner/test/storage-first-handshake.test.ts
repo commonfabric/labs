@@ -178,7 +178,10 @@ describe("storage-first-handshake", () => {
       expect(dialed).toHaveLength(MEMORY_FIRST_HANDSHAKE_ATTEMPTS);
 
       expect(manager.unreachableSpaces()).toEqual([SPACE]);
+      const changed: MemorySpace[] = [];
+      manager.subscribeSpaceAccessChange((space) => changed.push(space));
       await manager.retrySpaceAccess(SPACE);
+      expect(changed).toEqual([SPACE]);
       expect(dialed).toHaveLength(MEMORY_FIRST_HANDSHAKE_ATTEMPTS + 1);
       expect(manager.spaceSessionError(SPACE)).toBeUndefined();
       expect(manager.unreachableSpaces()).toEqual([]);
@@ -192,12 +195,15 @@ describe("storage-first-handshake", () => {
       const manager = new TestStorageManager(factory);
       cleanups.push(() => manager.close());
       await manager.open(SPACE).sync(`of:${SPACE}`);
+      const changed: MemorySpace[] = [];
+      manager.subscribeSpaceAccessChange((space) => changed.push(space));
 
       const error = await manager.retrySpaceAccess(SPACE).then(
         () => undefined,
         (error: Error) => error,
       );
       expect(isFirstHandshakeFailure(error)).toBe(true);
+      expect(changed).toEqual([]);
       expect(dialed).toHaveLength(2 * MEMORY_FIRST_HANDSHAKE_ATTEMPTS);
       expect(isFirstHandshakeFailure(manager.spaceSessionError(SPACE)))
         .toBe(true);
@@ -287,8 +293,11 @@ describe("storage-first-handshake", () => {
       cleanups.push(() => manager.close());
       const load = await manager.open(SPACE).sync(`of:${SPACE}`);
       expect(load.error).toBeUndefined();
+      const changed: MemorySpace[] = [];
+      manager.subscribeSpaceAccessChange((space) => changed.push(space));
       await manager.retrySpaceAccess(SPACE);
       expect(dialed).toHaveLength(1);
+      expect(changed).toEqual([]);
     });
   });
 

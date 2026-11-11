@@ -646,6 +646,17 @@ only whitespace or comments. It compares the remaining lines without comments or
 whitespace across the complete diff, so code moved between files does not count
 as an addition and a removal.
 
+Press `S` in that list to order the files within each commit, or all the files
+of a diff with no commit, by net line change. Press it again to restore the
+order of the diff. The list keeps its order when it is closed and opened again.
+The files that add the most lines beyond those they remove come first, and the
+files that remove the most beyond those they add come last, so a file with 100
+added and 10 removed lines precedes one with 1,000 of each, which precedes one
+with 10 added and 100 removed. Between files with the same net change, the one
+with more changed lines in total comes first. The order uses the counts of the
+selected count policy, and the policy line in the summary says when the list is
+sorted.
+
 Press `C` in a diff or in its list to hide the files whose changes touch only
 comments, and press it again to show them. `C` compares the complete file before
 and after the change, using the comments that syntax highlighting finds. It
