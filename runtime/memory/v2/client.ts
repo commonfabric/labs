@@ -2810,6 +2810,9 @@ export class Client {
   ): void {
     void this.#fetchCidBodies(hold.session, hashes).then(
       ({ unresolved, fetched, lost }) => {
+        // A hold its connection's end already discarded has nothing to hand
+        // on.
+        if (this.#cidReferenceHolds.get(key) !== hold) return;
         for (const hash of fetched) hold.fetched.add(hash);
         if (lost) {
           this.#dropCidReferenceHold(key, hold);
@@ -2841,7 +2844,6 @@ export class Client {
    * replica actually holds, and the resume delivers them again.
    */
   #dropCidReferenceHold(key: string, hold: CidReferenceHold): void {
-    if (this.#cidReferenceHolds.get(key) !== hold) return;
     this.#cidReferenceHolds.delete(key);
     hold.turn?.cancel();
     hold.ended.resolve();
@@ -2864,7 +2866,6 @@ export class Client {
    * discarded by `#hello()`, and every hold by `close()`.
    */
   #drainCidReferenceHold(key: string, hold: CidReferenceHold): void {
-    if (this.#cidReferenceHolds.get(key) !== hold) return;
     hold.turn = undefined;
     // Every held sync was checked as it arrived (`#admitCidReferences()`),
     // so resolving one cannot throw.

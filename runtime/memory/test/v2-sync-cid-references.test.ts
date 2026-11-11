@@ -1165,17 +1165,17 @@ describe("sync-cid-references", () => {
         return connection;
       };
       let active: Transport | null = reach();
+      let lost: Transport | null = null;
       let queries = 0;
       const outage = Promise.withResolvers<void>();
       const transport: Transport = {
         async send(payload) {
           if (active === null) throw connectionError("connection refused");
           if (payload.includes('"graph.query"') && queries++ === 0) {
-            // The fetch's own send fails as its connection goes.
-            const down = active;
+            // The fetch's own send fails as its connection goes; the close
+            // is reported once the client has dealt with the failed fetch.
+            lost = active;
             active = null;
-            await down.close();
-            disconnected(new Error("synthetic outage"));
             outage.resolve();
             throw connectionError("connection lost");
           }
@@ -1223,6 +1223,10 @@ describe("sync-cid-references", () => {
           },
         }]).catch(() => undefined);
         await outage.promise;
+        // The lost fetch ends the session's hold.
+        await watcherClient.delivered(watcher);
+        await lost!.close();
+        disconnected(new Error("synthetic outage"));
         await watcherClient.restoreConnection();
         await watching;
         const view = (await watcher.watchAddSync([])).view;
