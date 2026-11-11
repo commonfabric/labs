@@ -1,26 +1,34 @@
 /**
- * Starts the serving loop in a Worker of this process and keeps it running
- * (serving-loop-worker.md): one `ServingPortBridge` per worker over the
- * worker's own port, the service key and the host's options handed over as
- * the first request, and a fresh worker, under a fresh lease-holder process
- * component, when one dies or its watchdog finds it stalled.
+ * Runs the serving loop in Workers of this process, one per served space
+ * (serving-loop-worker.md, "One worker per space"): a pool that places each
+ * space on a worker of its own when the space first has something to serve,
+ * routes the memory server's observer events to the worker a space is placed
+ * on, closes a worker once its host holds nothing, and starts another, under
+ * a fresh lease-holder component, for the spaces of one that died or that
+ * its watchdog found stalled.
  */
 
 import { type Identity, realmValueFromKeyPair } from "@commonfabric/identity";
-import {
-  adoptProcessInstanceId,
-  executionLeaseHolder,
-} from "@commonfabric/memory/v2/execution-lease";
-import type { Server } from "@commonfabric/memory/v2/server";
 import { getLogger } from "@commonfabric/logger";
+import { acquireServerExecutionEnabler } from "@commonfabric/memory/v2";
+import { executionLeaseHolder } from "@commonfabric/memory/v2/execution-lease";
+import type {
+  AdmittedCommitNotice,
+  Server,
+} from "@commonfabric/memory/v2/server";
 import { terminateWorker } from "@commonfabric/platform/worker-lifetime";
 import type { CollectedMemory } from "../collected-memory.ts";
 import type { ExperimentalOptions } from "../runtime.ts";
 import type { MemorySpace } from "../storage/interface.ts";
+import { mergeServingLoopDiagnostics } from "./diagnostics-merge.ts";
 import {
+  admissionActivates,
+  DEFAULT_MAX_PARKED_RUNTIMES,
   type ExecutorHost,
   failureParkBackoffDelayMs,
+  type HostOccupancy,
   SpaceNotServedError,
+  writesSpaceAcl,
 } from "./host.ts";
 import { ServingPortBridge } from "./serving-port-bridge.ts";
 import type {
@@ -35,6 +43,10 @@ import {
   registerServingLoopStatsProvider,
   type ServingLoopStats,
 } from "./stats.ts";
+import {
+  closedHostServingLoopStats,
+  mergeServingLoopStats,
+} from "./stats-merge.ts";
 
 const logger = getLogger("serving-worker-host", {
   enabled: true,
@@ -51,20 +63,28 @@ const WATCHDOG_INTERVAL_MS = 10_000;
 const WATCHDOG_SILENT_INTERVALS = 6;
 
 /**
+ * How many workers a pool places spaces on unless told otherwise. Each one
+ * is an isolate holding the serving runtime's whole module graph, so the cap
+ * bounds what the pool costs before any space's own state is counted.
+ */
+export const DEFAULT_MAX_SERVING_WORKERS = 16;
+
+/**
  * The serving loop as whatever starts it hands it back, whichever thread
  * runs it: a toolshed's bootstrap, or the serving memory server tests build.
  */
 export type ServingLoopHandle = {
-  /** The loop's counters: the host's, or the last the worker posted. */
+  /** The loop's counters: the host's, or the last its workers posted. */
   stats(): ServingLoopStats | undefined;
 
   /**
    * What the loop's realm logged: this process's loggers where the loop
-   * runs on its main thread, the worker's where it runs there.
+   * runs on its main thread, its workers' taken together where it runs
+   * there.
    */
   diagnostics(): Promise<ServingLoopDiagnostics>;
 
-  /** The host, when the loop runs on this thread; `undefined` in a worker. */
+  /** The host, when the loop runs on this thread; `undefined` in workers. */
   readonly host: ExecutorHost | undefined;
 
   close(): Promise<void>;
@@ -72,18 +92,18 @@ export type ServingLoopHandle = {
 
 export type { ServingLoopDiagnostics } from "./serving-port-protocol.ts";
 
-/** What a serving worker is built from, and the observers of its host. */
-export type ServingWorkerOptions = {
+/** What a pool builds its serving workers from, and the observers of them. */
+export type ServingWorkerPoolOptions = {
   server: Server;
 
-  /** The service identity the worker's host serves as; its key crosses. */
+  /** The service identity each worker's host serves as; its key crosses. */
   identity: Identity;
 
   /** The serving runtimes' patterns and compile base. */
   apiUrl: URL;
 
   /**
-   * The worker's entry module. Default: the runner's own, which builds no
+   * The workers' entry module. Default: the runner's own, which builds no
    * lifecycle verbs; a deployment names an entry of its own that calls
    * `serveFromPort()` with the verbs and fetch it uses.
    */
@@ -92,230 +112,696 @@ export type ServingWorkerOptions = {
   /** The loop's policy, its data fields alone, since a closure cannot cross. */
   policy?: ServingWorkerPolicy;
 
-  /** The host's space-root ensure switch (`ExecutorHostOptions`). */
+  /** The hosts' space-root ensure switch (`ExecutorHostOptions`). */
   ensureSpaceRoots?: boolean;
 
   /** The serving runtimes' experimental options. */
   experimental?: ExperimentalOptions;
 
   /**
-   * The deployment's memory endpoint, through which the worker's host
-   * reaches each space's owner (`ExecutorHostOptions.route`). The worker
-   * dials it itself, signing its sessions with the key that crosses.
+   * The deployment's memory endpoint, through which each worker's host
+   * reaches the owner of a space it does not serve
+   * (`ExecutorHostOptions.route`). A worker dials it itself, signing its
+   * sessions with the key that crosses.
    */
   route?: URL;
 
   /**
-   * How often the worker posts a heartbeat and the watchdog checks for
+   * How many workers spaces are placed on at most. A space gets a worker of
+   * its own while fewer are placed on; at the cap it joins the worker that
+   * serves the fewest spaces, one holding only parked runtimes first. `1`
+   * serves every space from one worker. Default:
+   * {@link DEFAULT_MAX_SERVING_WORKERS}.
+   */
+  maxWorkers?: number;
+
+  /**
+   * How many workers the pool keeps started with no space placed on them,
+   * so that a placement finds one whose modules have loaded. They do not
+   * count toward `maxWorkers`. Default: none.
+   */
+  spareWorkers?: number;
+
+  /**
+   * How large the workers' JavaScript heaps may be together, in bytes, as
+   * their heartbeats report them, before the pool closes workers that hold
+   * only parked runtimes, the longest parked first. Workers serving a space
+   * are never closed for it. Default: no budget.
+   */
+  heapBudgetBytes?: number;
+
+  /**
+   * How often a worker posts a heartbeat and the watchdog checks for
    * messages; a worker is killed after six such intervals in which it sent
    * none. Default: ten seconds. A test shortens it, to see a kill in less time
    * than the test is allowed.
    */
   watchdogIntervalMs?: number;
 
-  /** DIAGNOSTIC (tests): the worker's activation outcomes. */
+  /** DIAGNOSTIC (tests): the workers' activation outcomes. */
   onActivationSettled?: (
     space: MemorySpace,
     outcome: "active" | "refused" | "failed",
   ) => void;
 
-  /** DIAGNOSTIC (tests): the worker's parks. */
+  /** DIAGNOSTIC (tests): the workers' parks. */
   onSpaceParked?: (space: MemorySpace, reason: string) => void;
+
+  /**
+   * DIAGNOSTIC (tests): each worker taken out of the pool while the pool is
+   * open, with the spaces that were placed on it and why it went: its host
+   * `retired` holding nothing, was `evicted` holding only parked runtimes,
+   * or the worker `failed`.
+   */
+  onWorkerClosed?: (
+    spaces: readonly string[],
+    cause: "retired" | "evicted" | "failed",
+  ) => void;
 };
 
-/** One running worker and the bridge serving it. */
-type WorkerGeneration = {
+/** One isolate's collected memory, with the spaces placed on its worker. */
+export type CollectedWorkerMemory = CollectedMemory & {
+  /** The spaces placed on the worker; none for a spare. */
+  spaces: string[];
+};
+
+/** One running worker, the bridge serving it, and what is placed on it. */
+type PoolWorker = {
   worker: Worker;
   bridge: ServingPortBridge;
+
   /** The lease holder this worker's leases name. */
   holder: string;
 
-  /** Settles once the worker's host serves. */
+  /** Settles once the worker's host serves; rejects when it cannot. */
   ready: Promise<void>;
 
   /** Whether `ready` has settled with the worker's host serving. */
   serving: boolean;
+
+  /** Whether the worker has failed or been closed, and is out of the pool. */
+  gone: boolean;
 
   /** The lifetime lock the worker's host holds, if it holds one. */
   lifetimeLock: string | undefined;
 
   /** The timer that watches this worker for silence. */
   watchdog: ReturnType<typeof setInterval> | undefined;
+
+  /** The spaces placed on this worker; none for a spare. */
+  spaces: Set<string>;
+
+  /** Commits admitted for its spaces before its host served, in order. */
+  backlog: AdmittedCommitNotice[];
+
+  /** What the worker's host last said it holds, once it has said. */
+  occupancy: HostOccupancy | undefined;
+
+  /** The pool's park count when the host last said `parked`. */
+  parkedAt: number;
+
+  /** The worker's heap as its last heartbeat reported it, in bytes. */
+  heapUsed: number;
+
+  /**
+   * The request that closes the worker's host if it holds nothing, while it
+   * is in flight; settles with whether the host closed.
+   */
+  retiring: Promise<boolean> | undefined;
+
+  /**
+   * The commits sent to the worker while `retiring` that would start a
+   * tenure, which a host that closed did not take.
+   */
+  sentWhileRetiring: AdmittedCommitNotice[];
+
+  /** Whether the host said what it holds while `retiring`. */
+  reportedWhileRetiring: boolean;
+};
+
+/** A space between two workers: its last one is being torn down. */
+type WaitingSpace = {
+  /** The commits admitted meanwhile that would start a tenure. */
+  notices: AdmittedCommitNotice[];
+
+  /** Whether the space's last worker failed. */
+  failed: boolean;
+
+  /** Settles once the space has been placed again or left unplaced. */
+  resumed: Promise<void>;
 };
 
 /**
- * The serving loop running in a Worker. Constructing one spawns it; `ready`
- * settles once the worker's host serves; `close()` closes the host and the
- * worker. A worker that fails is replaced after the same backoff the host
- * applies to a space whose tenures keep failing, widening until a worker
- * commits a wave, and the replacement adopts a new lease-holder process
- * component, so its commits never meet its predecessor's under the engine's
- * replay keying. A worker counts as failed when it reports an error it did not
- * handle, and when it stops sending messages (`#watch()`).
+ * The serving loop running in Workers, one per served space. A space is
+ * placed on a worker when it first meets the serving loop's ACTIVE criteria
+ * (serving-loop.md §1) or is named by a lifecycle verb, and stays placed
+ * there until that worker is gone. A worker's host parks its spaces as an
+ * in-process host does, and the pool closes the worker once its host holds
+ * nothing: no tenure, no runtime kept from an idle park, no notice owed to a
+ * tenure to come. It closes one that holds only kept runtimes to stay within
+ * `maxParkedRuntimes` such workers and within the heap budget.
+ *
+ * A worker counts as failed when it reports an error it did not handle, when
+ * its host cannot start, and when it stops sending messages (`#watch()`).
+ * Only its own spaces are affected. Once it is gone and the leases it held
+ * are released, each of them is placed again if it still has something to
+ * serve, after the backoff the host applies to a space whose tenures keep
+ * failing, widening until a worker commits a wave for the space. Every
+ * worker acquires under a lease-holder component of its own, so a
+ * successor's commits never share a replay key with its predecessor's in
+ * the engine.
  */
-export class ServingWorker {
-  readonly #options: ServingWorkerOptions;
-  #generation: WorkerGeneration | undefined;
+export class ServingWorkerPool {
+  readonly #options: ServingWorkerPoolOptions;
+  readonly #maxWorkers: number;
+  readonly #spareWorkers: number;
+  readonly #maxParkedWorkers: number;
 
-  /** The teardown of the last worker that failed, while it runs. */
-  #terminating: Promise<void> | undefined;
+  /** Every worker running, spares included, in the order they started. */
+  readonly #workers = new Set<PoolWorker>();
 
-  /** The timer that starts the next worker, while it is pending. */
-  #respawn: ReturnType<typeof setTimeout> | undefined;
+  /** The worker each placed space is on. */
+  readonly #placements = new Map<string, PoolWorker>();
+
+  /** The spaces whose last worker is being torn down. */
+  readonly #waiting = new Map<string, WaitingSpace>();
+
+  /**
+   * Consecutive worker failures per space, which pace the space's next
+   * placement. A wave committed for the space, or a worker of its own
+   * closed with nothing left to serve, clears it.
+   */
+  readonly #failures = new Map<string, number>();
+
+  /** Teardowns of workers that failed or were closed, while they run. */
+  readonly #teardowns = new Set<Promise<void>>();
+
+  /**
+   * The timers that pace placements after a failure, while pending, each
+   * with what ends its wait early.
+   */
+  readonly #backoffs = new Map<ReturnType<typeof setTimeout>, () => void>();
+
+  /** The counters of every host that has closed, taken together. */
+  #closedStats: ServingLoopStats = emptyServingLoopStats();
+
+  /** What the realms of the hosts that closed in order had logged. */
+  #closedDiagnostics: ServingLoopDiagnostics | undefined;
+
+  /** The pool's own counters, the `workers` block's accumulating half. */
+  readonly #counts = {
+    started: 0,
+    retired: 0,
+    evicted: 0,
+    failed: 0,
+    shared: 0,
+  };
 
   /** The leases the watchdog released, across every worker it killed. */
   #leasesLost = 0;
 
-  #failures = 0;
+  /**
+   * Consecutive failures of workers no space was placed on, which pace the
+   * next spare. A worker that starts to serve clears it.
+   */
+  #spareFailures = 0;
+
+  /** How many failed spares' backoffs are pending, which hold spares back. */
+  #spareBackoffs = 0;
+
+  /** How many times a worker's host has reported `parked`. */
+  #parks = 0;
+
+  readonly #ready: Promise<void>;
+  readonly #releaseServerExecution: () => void;
   #closed = false;
 
-  constructor(options: ServingWorkerOptions) {
-    this.#options = options;
-    this.#generation = this.#spawn();
-  }
-
-  /** Settles once the current worker's host serves; rejects when it cannot. */
-  get ready(): Promise<void> {
-    return this.#generation?.ready ?? Promise.reject(this.#notRunning());
-  }
-
-  /** The counters the worker last posted, or none before its first. */
-  stats(): ServingLoopStats | undefined {
-    return this.#generation?.bridge.stats();
-  }
-
-  /** The worker's counters as of now, once its host serves. */
-  async requestStats(): Promise<ServingLoopStats> {
-    await this.ready;
-    return await this.#bridge().requestStats();
-  }
-
-  /** What the worker's realm logged, as of now, once its host serves. */
-  async diagnostics(): Promise<ServingLoopDiagnostics> {
-    await this.ready;
-    return await this.#bridge().requestDiagnostics();
-  }
-
   /**
-   * Collects the worker's whole heap, once its host serves, and returns the
-   * memory its isolate still holds. Rejects unless `exposeGarbageCollector()`
-   * has run in this process.
+   * Constructs an instance which serves `options.server`'s spaces: it
+   * installs the server's execution observer, starts the spare workers, and
+   * places every space a client session is already live on.
    */
-  async collectedMemory(): Promise<CollectedMemory> {
-    await this.ready;
-    return await this.#bridge().requestCollectedMemory();
+  constructor(options: ServingWorkerPoolOptions) {
+    const maxWorkers = options.maxWorkers ?? DEFAULT_MAX_SERVING_WORKERS;
+    const spareWorkers = options.spareWorkers ?? 0;
+    if (!Number.isInteger(maxWorkers) || maxWorkers < 1) {
+      throw new Error(
+        `\`maxWorkers\` is ${maxWorkers}; a pool places spaces on one worker or more`,
+      );
+    }
+    if (!Number.isInteger(spareWorkers) || spareWorkers < 0) {
+      throw new Error(
+        `\`spareWorkers\` is ${spareWorkers}; a pool keeps none or more`,
+      );
+    }
+    this.#options = options;
+    this.#maxWorkers = maxWorkers;
+    this.#spareWorkers = spareWorkers;
+    this.#maxParkedWorkers = options.policy?.maxParkedRuntimes ??
+      DEFAULT_MAX_PARKED_RUNTIMES;
+    // The pool's own claim on the ambient flag, which stands while no worker
+    // runs: the server's admission of derived commits reads it.
+    this.#releaseServerExecution = acquireServerExecutionEnabler();
+    registerServingLoopStatsProvider(() => this.stats());
+    // Installing the observer replays the server's sessions. No space is
+    // placed yet, so the replay reaches no worker; what it tells the pool is
+    // which spaces were opened before this, each of which then gets the
+    // activation trigger its open would have been.
+    const replayed = new Set<string>();
+    let replaying = true;
+    options.server.setServerExecutionObserver({
+      commitAdmitted: (notice) => this.#onCommitAdmitted(notice),
+      sessionOpened: (space) => this.#onSessionOpened(space),
+      demandChanged: (space, reason, principal, sessionId) => {
+        this.#servingWorkerOf(space)?.bridge.observer.demandChanged(
+          space,
+          reason,
+          principal,
+          sessionId,
+        );
+      },
+      viewsChanged: (space, sessionId) => {
+        this.#servingWorkerOf(space)?.bridge.observer.viewsChanged(
+          space,
+          sessionId,
+        );
+      },
+      sessionChanged: (event) => {
+        if (replaying && event.kind === "opened") replayed.add(event.space);
+        this.#servingWorkerOf(event.space)?.bridge.observer.sessionChanged(
+          event,
+        );
+      },
+    });
+    replaying = false;
+    const spares: Promise<void>[] = [];
+    for (let spare = 0; spare < this.#spareWorkers; spare += 1) {
+      spares.push(this.#spawn().ready);
+    }
+    this.#ready = Promise.all(spares).then(() => {});
+    this.#ready.catch(() => {});
+    for (const space of replayed) this.#onSessionOpened(space);
   }
 
   /**
-   * Runs a lifecycle verb on the worker's host, once it serves. Throws
-   * {@link SpaceNotServedError} while no worker runs: once closed, and between
-   * a worker that failed and its replacement.
+   * The worker each placed space is on, and the spaces between workers,
+   * each with the promise that settles once it has been placed again or
+   * left unplaced.
+   */
+  get accessForTestingOnly(): {
+    readonly placements: ReadonlyMap<string, PoolWorker>;
+    readonly waiting: ReadonlyMap<string, WaitingSpace>;
+  } {
+    return { placements: this.#placements, waiting: this.#waiting };
+  }
+
+  /**
+   * Settles once the spare workers started at construction serve, and at
+   * once for a pool that keeps none; rejects when one of them cannot start.
+   */
+  get ready(): Promise<void> {
+    return this.#ready;
+  }
+
+  /**
+   * The counters the workers last posted, taken together with those of
+   * every host that has closed, and the pool's own `workers` block.
+   */
+  stats(): ServingLoopStats {
+    const live = [...this.#workers].flatMap((worker) =>
+      worker.bridge.stats() ?? []
+    );
+    const stats = mergeServingLoopStats([this.#closedStats, ...live]);
+    stats.lease.lost += this.#leasesLost;
+    let serving = 0;
+    let spare = 0;
+    let parked = 0;
+    let heapUsed = 0;
+    for (const worker of this.#workers) {
+      heapUsed += worker.heapUsed;
+      if (worker.spaces.size === 0) spare += 1;
+      else serving += 1;
+      if (worker.spaces.size > 0 && worker.occupancy === "parked") parked += 1;
+    }
+    stats.workers = { serving, spare, parked, heapUsed, ...this.#counts };
+    return stats;
+  }
+
+  /**
+   * The counters as of now, each worker asked for its own once those that
+   * are starting serve. Rejects once the pool is closed.
+   */
+  async requestStats(): Promise<ServingLoopStats> {
+    const workers = await this.#startedWorkers();
+    await Promise.allSettled(
+      workers.map((worker) => worker.bridge.requestStats()),
+    );
+    return this.stats();
+  }
+
+  /**
+   * What the workers' realms logged, as of now, once those that are
+   * starting serve, taken together with what the realm of each host that
+   * closed in order had logged. A worker that fails takes what its realm
+   * logged with it. Rejects once the pool is closed.
+   */
+  async diagnostics(): Promise<ServingLoopDiagnostics> {
+    const workers = await this.#startedWorkers();
+    const answers = await Promise.allSettled(
+      workers.map((worker) => worker.bridge.requestDiagnostics()),
+    );
+    return mergeServingLoopDiagnostics([
+      ...(this.#closedDiagnostics === undefined
+        ? []
+        : [this.#closedDiagnostics]),
+      ...answers.flatMap((answer) =>
+        answer.status === "fulfilled" ? [answer.value] : []
+      ),
+    ]);
+  }
+
+  /**
+   * Collects the whole heap of each worker, once those that are starting
+   * serve, and returns the memory each isolate still holds with the spaces
+   * placed on it. Rejects once the pool is closed, and unless
+   * `exposeGarbageCollector()` has run in this process.
+   */
+  async collectedMemory(): Promise<CollectedWorkerMemory[]> {
+    const workers = await this.#startedWorkers();
+    return await Promise.all(
+      workers.map(async (worker) => ({
+        ...await worker.bridge.requestCollectedMemory(),
+        spaces: [...worker.spaces],
+      })),
+    );
+  }
+
+  /**
+   * Runs a lifecycle verb on the host of the worker `space` is placed on,
+   * placing the space first if it is on none: a verb is an activation
+   * trigger of its own. Throws {@link SpaceNotServedError} once the pool is
+   * closed, while the space waits for a successor to a worker that failed,
+   * and when the worker it is placed on cannot start.
    */
   async runLifecycleVerb(
     space: MemorySpace,
     verb: LifecycleVerbDescriptor,
   ): Promise<LifecycleVerbRun> {
-    const generation = this.#generation;
-    if (generation === undefined) throw new SpaceNotServedError(space);
-    await generation.ready;
-    return await generation.bridge.runLifecycleVerb(space, verb);
+    for (;;) {
+      if (this.#closed) throw new SpaceNotServedError(space);
+      const waiting = this.#waiting.get(space);
+      if (waiting !== undefined) {
+        if (waiting.failed) throw new SpaceNotServedError(space);
+        await waiting.resumed;
+        continue;
+      }
+      const worker = this.#placements.get(space) ?? this.#place(space, []);
+      if (worker.retiring !== undefined) {
+        await worker.retiring;
+        continue;
+      }
+      try {
+        await worker.ready;
+      } catch {
+        throw new SpaceNotServedError(space);
+      }
+      // The wait let other work run, which may have closed the worker's
+      // host or moved the space.
+      if (
+        this.#placements.get(space) !== worker || worker.retiring !== undefined
+      ) {
+        continue;
+      }
+      return await worker.bridge.runLifecycleVerb(space, verb);
+    }
   }
 
   /**
-   * Closes the worker's host, then the worker; settles once both are gone,
-   * and once a worker that failed before the call has been torn down. A
-   * worker whose host has not yet reported serving is terminated without
-   * asking its host to close, since one that stalls in its startup never
-   * answers; a host that stalls in closing is the watchdog's to fail. A host
-   * that does not close, for either reason or because the worker fails first,
-   * leaves the leases its worker held to be released here.
+   * Closes every worker's host, then the worker; settles once all are gone,
+   * and once every worker that failed or was closed before the call has been
+   * torn down. A worker whose host has not yet reported serving is
+   * terminated without asking its host to close, since one that stalls in
+   * its startup never answers; a host that stalls in closing is the
+   * watchdog's to fail. A host that does not close, for either reason or
+   * because the worker fails first, leaves the leases its worker held to be
+   * released here.
    */
   async close(): Promise<void> {
     if (this.#closed) return;
     this.#closed = true;
-    clearTimeout(this.#respawn);
-    this.#respawn = undefined;
-    const generation = this.#generation;
-    this.#generation = undefined;
-    await this.#terminating;
-    if (generation === undefined) {
-      registerServingLoopStatsProvider(undefined);
-      return;
+    this.#options.server.setServerExecutionObserver(undefined);
+    // A pending backoff ends now, so that the teardown waiting behind it
+    // settles.
+    for (const [timer, wake] of [...this.#backoffs]) {
+      clearTimeout(timer);
+      wake();
     }
+    this.#backoffs.clear();
+    await Promise.all(
+      [...this.#workers].map((worker) => this.#closeWorker(worker)),
+    );
+    await Promise.allSettled([...this.#teardowns]);
+    this.#placements.clear();
+    this.#waiting.clear();
+    registerServingLoopStatsProvider(undefined);
+    this.#releaseServerExecution();
+  }
+
+  /** Helper for `close()`, which closes one worker's host and the worker. */
+  async #closeWorker(worker: PoolWorker): Promise<void> {
+    await worker.retiring;
+    if (worker.gone) return;
     let hostClosed = false;
     try {
-      if (generation.serving) {
-        await generation.bridge.closeHost();
+      if (worker.serving) {
+        await worker.bridge.closeHost();
         hostClosed = true;
       }
     } catch (error) {
       logger.warn("worker-close-failed", () => [
-        "closing the serving worker's host failed; terminating the worker",
+        "closing a serving worker's host failed; terminating the worker",
         error,
       ]);
-    } finally {
-      clearInterval(generation.watchdog);
-      generation.bridge.close();
-      await terminateWorker(generation.worker, generation.lifetimeLock);
     }
-    if (!hostClosed) generation.bridge.releaseLeasesOf(generation.holder);
+    // A worker that failed while its host closed is the failure path's to
+    // tear down, leases included.
+    if (worker.gone) return;
+    this.#forget(worker);
+    await terminateWorker(worker.worker, worker.lifetimeLock);
+    if (!hostClosed) worker.bridge.releaseLeasesOf(worker.holder);
   }
 
-  #bridge(): ServingPortBridge {
-    const generation = this.#generation;
-    if (generation === undefined) throw this.#notRunning();
-    return generation.bridge;
-  }
-
-  /** Helper for `ready` and `#bridge()`, which says why no worker runs. */
-  #notRunning(): Error {
-    return new Error(
-      this.#closed
-        ? "the serving worker is closed"
-        : "the serving worker failed, and its replacement has not started",
+  /**
+   * Helper for the methods that ask every worker something, which waits for
+   * the workers that are starting and returns those whose hosts serve and
+   * are not being asked to close. Throws once the pool is closed.
+   */
+  async #startedWorkers(): Promise<PoolWorker[]> {
+    if (this.#closed) throw new Error("the serving workers are closed");
+    await Promise.allSettled([...this.#workers].map((worker) => worker.ready));
+    return [...this.#workers].filter((worker) =>
+      worker.serving && worker.retiring === undefined
     );
   }
 
-  #spawn(): WorkerGeneration {
+  /** The worker `space` is placed on, if its host serves. */
+  #servingWorkerOf(space: string): PoolWorker | undefined {
+    const worker = this.#placements.get(space);
+    return worker?.serving === true ? worker : undefined;
+  }
+
+  /** Whether a session other than the serving loop's own is live on `space`. */
+  #hasClientSessions(space: string): boolean {
+    return this.#options.server.hasLiveSessionsForSpace(space, {
+      excludePrincipal: this.#options.identity.did(),
+    });
+  }
+
+  /**
+   * The server's `commitAdmitted`: the commit goes to the worker its space
+   * is placed on, and a commit that would start a tenure in a space placed
+   * nowhere places it (serving-loop.md §1's admission-side hook).
+   */
+  #onCommitAdmitted(notice: AdmittedCommitNotice): void {
+    if (this.#closed) return;
+    const worker = this.#placements.get(notice.space);
+    if (writesSpaceAcl(notice)) {
+      // The space's own worker hears of the commit itself; the others may
+      // hold a session on the space as a cross-space replica.
+      for (const other of this.#workers) {
+        if (other !== worker && other.serving) {
+          other.bridge.noteSpaceAclChanged(notice.space);
+        }
+      }
+    }
+    const activates = () =>
+      admissionActivates(notice, () => this.#hasClientSessions(notice.space));
+    if (worker !== undefined) {
+      if (!worker.serving) {
+        worker.backlog.push(notice);
+        return;
+      }
+      if (worker.retiring !== undefined && activates()) {
+        worker.sentWhileRetiring.push(notice);
+      }
+      worker.bridge.observer.commitAdmitted(notice);
+      return;
+    }
+    if (!activates()) return;
+    const waiting = this.#waiting.get(notice.space);
+    if (waiting !== undefined) waiting.notices.push(notice);
+    else this.#place(notice.space, [notice]);
+  }
+
+  /**
+   * The server's `sessionOpened`: a first client session on a space placed
+   * nowhere places it; one on a placed space is the worker's host's to
+   * weigh.
+   */
+  #onSessionOpened(space: string): void {
+    if (this.#closed) return;
+    const worker = this.#placements.get(space);
+    if (worker !== undefined) {
+      // A worker not yet serving is told of its spaces' sessions as it
+      // starts to (`#introduce()`).
+      if (worker.serving) worker.bridge.observer.sessionOpened(space);
+      return;
+    }
+    // A space between workers is weighed again once its wait ends.
+    if (this.#waiting.has(space) || !this.#hasClientSessions(space)) return;
+    this.#place(space, []);
+  }
+
+  /**
+   * Places `space` on a worker and hands it `notices`, the commits admitted
+   * for the space that its tenure is owed. Returns the worker.
+   */
+  #place(space: string, notices: readonly AdmittedCommitNotice[]): PoolWorker {
+    const worker = this.#workerToPlaceOn();
+    worker.spaces.add(space);
+    this.#placements.set(space, worker);
+    if (worker.serving) this.#introduce(worker, [space], notices);
+    else for (const notice of notices) worker.backlog.push(notice);
+    this.#keepSpares();
+    return worker;
+  }
+
+  /**
+   * Helper for `#place()`, which picks the worker a space is placed on next:
+   * a spare, or a fresh one, while fewer than `maxWorkers` are placed on;
+   * at the cap, the placed-on worker with the fewest spaces, one that holds
+   * only parked runtimes first.
+   */
+  #workerToPlaceOn(): PoolWorker {
+    const usable = [...this.#workers].filter((worker) =>
+      worker.retiring === undefined
+    );
+    const placedOn = usable.filter((worker) => worker.spaces.size > 0);
+    if (placedOn.length < this.#maxWorkers) {
+      const spares = usable.filter((worker) => worker.spaces.size === 0);
+      return spares.find((worker) => worker.serving) ?? spares[0] ??
+        this.#spawn();
+    }
+    this.#counts.shared += 1;
+    const rank = (worker: PoolWorker) =>
+      (worker.occupancy === "parked" ? 0 : 1) + 2 * worker.spaces.size;
+    return placedOn.reduce((best, worker) =>
+      rank(worker) < rank(best) ? worker : best
+    );
+  }
+
+  /**
+   * Starts spares until the pool keeps `spareWorkers` of them. A pool at
+   * its cap starts none, since no placement would take one, and neither
+   * does one waiting out a failed spare's backoff.
+   */
+  #keepSpares(): void {
+    if (this.#closed || this.#spareBackoffs > 0) return;
+    let spares = 0;
+    let placedOn = 0;
+    for (const worker of this.#workers) {
+      if (worker.spaces.size > 0) placedOn += 1;
+      else if (worker.retiring === undefined) spares += 1;
+    }
+    if (placedOn >= this.#maxWorkers) return;
+    for (; spares < this.#spareWorkers; spares += 1) this.#spawn();
+  }
+
+  /**
+   * Tells a serving worker of `spaces`, placed on it: each space's sessions
+   * as the server holds them, which brings the worker's mirror up to date,
+   * then `notices`, then the activation trigger a client session's open
+   * would have been, once per space that has one.
+   */
+  #introduce(
+    worker: PoolWorker,
+    spaces: readonly string[],
+    notices: readonly AdmittedCommitNotice[],
+  ): void {
+    const { observer } = worker.bridge;
+    for (const space of spaces) {
+      for (const event of this.#options.server.sessionSnapshot(space)) {
+        observer.sessionChanged(event);
+      }
+    }
+    for (const notice of notices) observer.commitAdmitted(notice);
+    for (const space of spaces) {
+      if (this.#hasClientSessions(space)) observer.sessionOpened(space);
+    }
+  }
+
+  /** Starts a worker, which serves once its host answers `worker.init`. */
+  #spawn(): PoolWorker {
     const { server, identity } = this.#options;
-    // Both realms adopt the component before the worker acquires a lease
-    // under it: the server's synchronous lease read matches it from here.
+    // The component is this worker's own: its loopback connections name it
+    // to the server, whose lease read then matches the holder the worker's
+    // host acquires under.
     const processInstanceId = crypto.randomUUID();
-    adoptProcessInstanceId(processInstanceId);
     const worker = new Worker(
       this.#options.workerModule ??
         new URL("./serving-worker.ts", import.meta.url),
       { type: "module", name: "serving-loop" },
     );
-    const bridge = new ServingPortBridge({
-      server,
-      port: worker,
-      // A committed wave is the progress a worker that keeps failing never
-      // makes, as the host's own failure streak counts it: an activation is
-      // not, since a worker can activate a space and fail at its first wave.
-      onWaveCommitted: () => {
-        this.#failures = 0;
-      },
-      leasesLostEarlier: () => this.#leasesLost,
-      ...(this.#options.onActivationSettled === undefined
-        ? {}
-        : { onActivationSettled: this.#options.onActivationSettled }),
-      ...(this.#options.onSpaceParked === undefined
-        ? {}
-        : { onSpaceParked: this.#options.onSpaceParked }),
-    });
     const intervalMs = this.#options.watchdogIntervalMs ??
       WATCHDOG_INTERVAL_MS;
-    const generation: WorkerGeneration = {
+    const started: PoolWorker = {
       worker,
-      bridge,
+      bridge: new ServingPortBridge({
+        server,
+        port: worker,
+        leaseHolderInstance: processInstanceId,
+        // A committed wave is the progress a space whose workers keep
+        // failing never makes, as the host's own failure streak counts it:
+        // an activation is not, since a worker can activate a space and
+        // fail at its first wave.
+        onWaveCommitted: (space) => {
+          this.#failures.delete(space);
+        },
+        onOccupancy: (occupancy) => this.#onOccupancy(started, occupancy),
+        onHeartbeat: (heapUsed) => this.#onHeartbeat(started, heapUsed),
+        ...(this.#options.onActivationSettled === undefined
+          ? {}
+          : { onActivationSettled: this.#options.onActivationSettled }),
+        ...(this.#options.onSpaceParked === undefined
+          ? {}
+          : { onSpaceParked: this.#options.onSpaceParked }),
+      }),
       holder: executionLeaseHolder(identity.did(), processInstanceId),
-      lifetimeLock: undefined,
       ready: Promise.resolve(),
       serving: false,
+      gone: false,
+      lifetimeLock: undefined,
       watchdog: undefined,
+      spaces: new Set(),
+      backlog: [],
+      occupancy: undefined,
+      parkedAt: 0,
+      heapUsed: 0,
+      retiring: undefined,
+      sentWhileRetiring: [],
+      reportedWhileRetiring: false,
     };
-    generation.watchdog = this.#watch(generation, intervalMs);
+    started.watchdog = this.#watch(started, intervalMs);
     const init: ServingWorkerInit = {
       serviceKeyPair: realmValueFromKeyPair(identity.keyPair),
       processInstanceId,
@@ -326,22 +812,29 @@ export class ServingWorker {
       experimental: this.#options.experimental,
       route: this.#options.route?.href,
     };
-    generation.ready = bridge.init(init).then(({ lifetimeLock }) => {
-      generation.lifetimeLock = lifetimeLock;
-      generation.serving = true;
+    started.ready = started.bridge.init(init).then(({ lifetimeLock }) => {
+      if (started.gone) return;
+      started.lifetimeLock = lifetimeLock;
+      started.serving = true;
+      this.#spareFailures = 0;
+      const backlog = started.backlog;
+      started.backlog = [];
+      this.#introduce(started, [...started.spaces], backlog);
     });
-    generation.ready.catch((error) => {
-      this.#onWorkerFailed(generation, String(error));
+    started.ready.catch((error) => {
+      this.#onWorkerFailed(started, String(error));
     });
     worker.onerror = (event) => {
       event.preventDefault();
-      this.#onWorkerFailed(generation, event.message);
+      this.#onWorkerFailed(started, event.message);
     };
-    return generation;
+    this.#workers.add(started);
+    this.#counts.started += 1;
+    return started;
   }
 
   /**
-   * Helper for `#spawn()`, which starts the timer that watches `generation`
+   * Helper for `#spawn()`, which starts the timer that watches `watched`
    * for silence (serving-loop.md §2). It counts its own firings instead of
    * reading a clock, so nothing but the worker's silence moves the count: a
    * main thread that itself stalled, or a process that was suspended, fires the
@@ -350,13 +843,13 @@ export class ServingWorker {
    * have loaded a worker has no timer to post from and no lease to release.
    */
   #watch(
-    generation: WorkerGeneration,
+    watched: PoolWorker,
     intervalMs: number,
   ): ReturnType<typeof setInterval> {
     let lastSeen = 0;
     let silentIntervals = 0;
     return setInterval(() => {
-      const seen = generation.bridge.messagesReceived;
+      const seen = watched.bridge.messagesReceived;
       if (seen === 0) return;
       if (seen !== lastSeen) {
         lastSeen = seen;
@@ -366,7 +859,7 @@ export class ServingWorker {
       silentIntervals += 1;
       if (silentIntervals < WATCHDOG_SILENT_INTERVALS) return;
       this.#onWorkerFailed(
-        generation,
+        watched,
         `no message in ${silentIntervals} watchdog intervals`,
         { killed: true },
       );
@@ -374,13 +867,217 @@ export class ServingWorker {
   }
 
   /**
-   * Replaces a worker that failed, as the class's doc comment describes. Its
-   * bridge closes first, which closes the loopback connections its runtimes
-   * held, so the server sees their sessions detach, and fails whatever still
-   * waits on the worker, a `close()` already under way included; once the
-   * worker is gone, the leases it held are released, so its successor, which
-   * carries a holder of its own, acquires them at once. The leases of a worker
-   * the watchdog `killed` count as lost.
+   * What a worker's host says it holds. A host that holds nothing is asked
+   * to close; one that holds only parked runtimes counts toward the cap on
+   * such workers. A spare's host holds nothing by design and is kept.
+   */
+  #onOccupancy(worker: PoolWorker, occupancy: HostOccupancy): void {
+    if (worker.gone) return;
+    worker.occupancy = occupancy;
+    if (occupancy === "parked") {
+      this.#parks += 1;
+      worker.parkedAt = this.#parks;
+    }
+    if (worker.retiring !== undefined) worker.reportedWhileRetiring = true;
+    this.#actOnOccupancy(worker);
+  }
+
+  /**
+   * Helper for `#onOccupancy()`, which does what the host's last report
+   * calls for: a request to close for `vacant`, and a look at the cap on
+   * parked workers for `parked`.
+   */
+  #actOnOccupancy(worker: PoolWorker): void {
+    if (worker.spaces.size === 0) return;
+    if (worker.occupancy === "vacant") {
+      this.#retire(worker, { evenIfParked: false });
+    } else if (worker.occupancy === "parked") {
+      this.#evictParkedWorkers();
+    }
+  }
+
+  /** A worker's heartbeat: its heap, which the heap budget adds up. */
+  #onHeartbeat(worker: PoolWorker, heapUsed: number): void {
+    if (worker.gone) return;
+    worker.heapUsed = heapUsed;
+    this.#evictParkedWorkers();
+  }
+
+  /**
+   * Asks the workers that hold only parked runtimes to close, the longest
+   * parked first, until no more than `maxParkedRuntimes` remain and the
+   * workers' heaps fit the heap budget, as far as closing such workers can
+   * make them.
+   */
+  #evictParkedWorkers(): void {
+    const parked = [...this.#workers].filter((worker) =>
+      worker.spaces.size > 0 && worker.occupancy === "parked" &&
+      worker.retiring === undefined
+    ).sort((a, b) => a.parkedAt - b.parkedAt);
+    const budget = this.#options.heapBudgetBytes;
+    let overBudget = 0;
+    if (budget !== undefined) {
+      for (const worker of this.#workers) overBudget += worker.heapUsed;
+      overBudget -= budget;
+    }
+    let kept = parked.length;
+    for (const worker of parked) {
+      if (kept <= this.#maxParkedWorkers && overBudget <= 0) break;
+      this.#retire(worker, { evenIfParked: true });
+      kept -= 1;
+      overBudget -= worker.heapUsed;
+    }
+  }
+
+  /**
+   * Asks `worker`'s host to close if it holds nothing, or with
+   * `evenIfParked` nothing but parked runtimes, and tears the worker down
+   * once it has. The host decides as of every message sent to it before the
+   * request, so a trigger already on its way keeps it open. What is sent to
+   * it while the request is in flight reaches a host that may have closed,
+   * so the commits among it that would start a tenure are kept for the
+   * spaces' next placement.
+   */
+  #retire(
+    worker: PoolWorker,
+    { evenIfParked }: { evenIfParked: boolean },
+  ): void {
+    if (
+      this.#closed || worker.gone || !worker.serving ||
+      worker.retiring !== undefined
+    ) {
+      return;
+    }
+    worker.reportedWhileRetiring = false;
+    worker.retiring = (async () => {
+      let diagnostics: ServingLoopDiagnostics | undefined;
+      try {
+        diagnostics = await worker.bridge.retireHost({ evenIfParked });
+      } catch {
+        // The worker failed with the request in flight, which the failure
+        // path has taken up.
+        return false;
+      }
+      worker.retiring = undefined;
+      if (diagnostics === undefined || worker.gone) {
+        worker.sentWhileRetiring = [];
+        // A report that arrived with the request in flight asked for
+        // nothing then, so it is acted on now that the host has stayed.
+        if (!worker.gone && worker.reportedWhileRetiring) {
+          this.#actOnOccupancy(worker);
+        }
+        return false;
+      }
+      const cause = evenIfParked && worker.occupancy === "parked"
+        ? "evicted"
+        : "retired";
+      this.#counts[cause] += 1;
+      this.#closedDiagnostics = mergeServingLoopDiagnostics([
+        ...(this.#closedDiagnostics === undefined
+          ? []
+          : [this.#closedDiagnostics]),
+        diagnostics,
+      ]);
+      // The host served every space it held until nothing was left, as an
+      // idle park says of one tenure.
+      for (const space of worker.spaces) this.#failures.delete(space);
+      const owed = worker.sentWhileRetiring;
+      this.#forget(worker);
+      this.#resumeAfter(
+        worker,
+        owed,
+        terminateWorker(worker.worker, worker.lifetimeLock).then(() => {
+          worker.bridge.releaseLeasesOf(worker.holder);
+        }),
+        { failed: false },
+      );
+      this.#reportWorkerClosed(worker, cause);
+      return true;
+    })();
+  }
+
+  /**
+   * Takes `worker` out of the pool: its watchdog stops, its bridge closes,
+   * which closes the loopback connections its runtimes held and fails
+   * whatever still waits on the worker, and its host's counters join those
+   * of the hosts that closed before it. Its spaces stay placed on it for the
+   * caller to move.
+   */
+  #forget(worker: PoolWorker): void {
+    worker.gone = true;
+    clearInterval(worker.watchdog);
+    this.#closedStats = mergeServingLoopStats([
+      this.#closedStats,
+      closedHostServingLoopStats(
+        worker.bridge.stats() ?? emptyServingLoopStats(),
+      ),
+    ]);
+    worker.bridge.close();
+    this.#workers.delete(worker);
+  }
+
+  /** Tells the `onWorkerClosed` observer that `worker` left the pool. */
+  #reportWorkerClosed(
+    worker: PoolWorker,
+    cause: "retired" | "evicted" | "failed",
+  ): void {
+    try {
+      this.#options.onWorkerClosed?.([...worker.spaces], cause);
+    } catch (error) {
+      logger.warn("worker-closed-observer-failed", () => [
+        "worker-closed observer threw",
+        error,
+      ]);
+    }
+  }
+
+  /**
+   * Leaves the spaces placed on `worker`, which is gone, waiting until
+   * `teardown` has settled, and then places each one that still has
+   * something to serve: a commit among `owed` or admitted meanwhile that
+   * would start a tenure, or a live client session.
+   */
+  #resumeAfter(
+    worker: PoolWorker,
+    owed: readonly AdmittedCommitNotice[],
+    teardown: Promise<void>,
+    { failed }: { failed: boolean },
+  ): void {
+    const spaces = [...worker.spaces];
+    const resumed = teardown.catch((error) => {
+      logger.warn("worker-teardown-failed", () => [
+        "tearing down a serving worker failed",
+        error,
+      ]);
+    }).then(() => {
+      this.#teardowns.delete(resumed);
+      for (const space of spaces) {
+        const waiting = this.#waiting.get(space);
+        this.#waiting.delete(space);
+        if (this.#closed || waiting === undefined) continue;
+        if (waiting.notices.length > 0 || this.#hasClientSessions(space)) {
+          this.#place(space, waiting.notices);
+        }
+      }
+      this.#keepSpares();
+    });
+    this.#teardowns.add(resumed);
+    for (const space of spaces) {
+      this.#placements.delete(space);
+      this.#waiting.set(space, {
+        notices: owed.filter((notice) => notice.space === space),
+        failed,
+        resumed,
+      });
+    }
+  }
+
+  /**
+   * Takes a worker that failed out of the pool, as the class's doc comment
+   * describes. Once the worker is gone, the leases it held are released, so
+   * that the workers its spaces are placed on next, which carry holders of
+   * their own, acquire them at once. The leases of a worker the watchdog
+   * `killed` count as lost.
    *
    * `terminate()` takes effect when a worker's thread next reaches its event
    * loop, and a stalled thread may never do so, nor release its lifetime lock.
@@ -389,55 +1086,65 @@ export class ServingWorker {
    * commits it left in flight name a holder no lease is held under.
    */
   #onWorkerFailed(
-    generation: WorkerGeneration,
+    worker: PoolWorker,
     message: string,
     { killed }: { killed: boolean } = { killed: false },
   ): void {
-    clearInterval(generation.watchdog);
-    if (killed) generation.lifetimeLock = undefined;
-    const stats = generation.bridge.stats();
-    generation.bridge.close();
-    if (this.#generation !== generation) return;
-    this.#generation = undefined;
-    this.#terminating = terminateWorker(
-      generation.worker,
-      generation.lifetimeLock,
-    ).then(() => {
-      const released = generation.bridge.releaseLeasesOf(generation.holder);
-      if (killed) this.#leasesLost += released;
-    }).catch((error) => {
-      logger.warn("worker-teardown-failed", () => [
-        "tearing down the failed serving worker failed",
-        error,
-      ]);
-    });
-    if (this.#closed) return;
-    // The health route reads a process with no serving-loop counters as one
-    // whose loop is off, so until the next worker's bridge reports its own,
-    // the failed worker's last counters stand in.
-    registerServingLoopStatsProvider(() => {
-      const last = stats ?? emptyServingLoopStats();
-      return {
-        ...last,
-        lease: { ...last.lease, lost: this.#leasesLost },
-      };
-    });
-    this.#failures += 1;
-    const delayMs = failureParkBackoffDelayMs(
-      this.#failures,
-      this.#options.policy,
+    if (worker.gone) return;
+    if (killed) worker.lifetimeLock = undefined;
+    // A commit the worker never took, since its host never served, is owed
+    // to the space's next placement like one sent to a host that closed.
+    const owed = [...worker.backlog, ...worker.sentWhileRetiring].filter(
+      (notice) =>
+        admissionActivates(notice, () => this.#hasClientSessions(notice.space)),
     );
+    this.#forget(worker);
+    this.#counts.failed += 1;
+    const terminated = terminateWorker(worker.worker, worker.lifetimeLock)
+      .then(() => {
+        const released = worker.bridge.releaseLeasesOf(worker.holder);
+        if (killed) this.#leasesLost += released;
+      });
+    const spare = worker.spaces.size === 0;
+    let streak: number;
+    if (spare) {
+      this.#spareFailures += 1;
+      streak = this.#spareFailures;
+    } else {
+      streak = 0;
+      for (const space of worker.spaces) {
+        const failures = (this.#failures.get(space) ?? 0) + 1;
+        this.#failures.set(space, failures);
+        streak = Math.max(streak, failures);
+      }
+    }
+    if (this.#closed) {
+      this.#resumeAfter(worker, [], terminated, { failed: true });
+      return;
+    }
+    const delayMs = failureParkBackoffDelayMs(streak, this.#options.policy);
     logger.error(
       "worker-failed",
-      `the serving worker failed (${message}); starting another in ${delayMs}ms`,
+      `a serving worker failed (${message}); ` +
+        (spare
+          ? `starting another spare in ${delayMs}ms`
+          : `placing its ${worker.spaces.size} space(s) again in ${delayMs}ms`),
     );
-    const terminating = this.#terminating;
-    this.#respawn = setTimeout(() => {
-      this.#respawn = undefined;
-      terminating.then(() => {
-        if (this.#closed) return;
-        this.#generation = this.#spawn();
-      });
+    this.#reportWorkerClosed(worker, "failed");
+    const { promise: waited, resolve: wake } = Promise.withResolvers<void>();
+    const backoff = setTimeout(() => {
+      this.#backoffs.delete(backoff);
+      wake();
     }, delayMs);
+    this.#backoffs.set(backoff, wake);
+    if (spare) this.#spareBackoffs += 1;
+    this.#resumeAfter(
+      worker,
+      owed,
+      Promise.all([terminated, waited]).then(() => {
+        if (spare) this.#spareBackoffs -= 1;
+      }),
+      { failed: true },
+    );
   }
 }

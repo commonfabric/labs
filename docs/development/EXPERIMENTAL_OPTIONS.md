@@ -2201,16 +2201,27 @@ the per-epic implementation notes).
   ([`serverExecution`](#serverexecution) on).
 - **Added by.** Bernhard Seefeld, in the change that moves the serving loop
   off the request thread.
-- **Purpose.** The serving loop, its host and every serving runtime run in a Web
-  Worker of the toolshed process instead of on the thread that answers the
+- **Purpose.** The serving loop's hosts and serving runtimes run in Web
+  Workers of the toolshed process, one worker per served space, instead of on
+  the thread that answers the
   memory server's frames and the HTTP routes. A wave's settle step is a run of
   synchronous scheduler actions, and on one thread every client round trip waits
-  behind it. The worker reads the store through its own SQLite connections and
+  behind it, as on one worker every other space's wave does. A worker reads the
+  store through its own SQLite connections and
   reaches the memory server over a port: wave commits cross to a sink on the
   main thread, which applies every commit the server fans out; the serving
   runtimes' storage sessions cross as frames; and the server's observer crosses
   as events. The memory server's store has to be a file for the worker to open
   it. The pattern-lifecycle verbs reach the loop as descriptors on both arms.
+  The pool that places spaces on workers takes three more variables from the
+  same bootstrap, each a whole number: `SERVER_EXECUTION_MAX_WORKERS`, how
+  many workers spaces are placed on before a space joins a worker that
+  already serves one (default 16; `1` serves every space from one worker),
+  `SERVER_EXECUTION_SPARE_WORKERS`, how many workers are kept started ahead
+  of a placement (default 1 in the toolshed; `0` keeps none), and
+  `SERVER_EXECUTION_WORKER_HEAP_BUDGET_MB`, how large the workers' heaps may
+  be together before workers kept only for parked runtimes are closed
+  (default none). The serving memory server tests build reads the first.
   [`docs/plans/serving-loop-worker.md`](../plans/serving-loop-worker.md) is the
   design and its stages.
 - **Current default and planned end state.** On by default in the toolshed

@@ -19,8 +19,8 @@ import {
   getSlowQueries,
 } from "@commonfabric/memory/v2/server";
 import { getServingLoopStats } from "@commonfabric/runner/executor/stats";
+import type { CollectedWorkerMemory } from "@commonfabric/runner/executor/serving-worker-host";
 import {
-  type CollectedMemory,
   collectedMemory as collectThisThread,
   garbageCollectorExposed,
 } from "@commonfabric/runner/collected-memory";
@@ -106,9 +106,9 @@ export const stats: AppRouteHandler<StatsRoute> = (c) => {
 /**
  * The serving loop's realm's loggers: the worker's where the loop runs
  * there, which `stats` cannot read, and this process's own where the loop
- * runs on this thread. The answer waits for the realm's turn; a worker
- * between a failure and its replacement answers nothing, and the route says
- * so rather than wait for the replacement.
+ * runs on this thread. Where the loop runs in several workers, the answer is
+ * what their realms logged taken together, with what the realm of each
+ * worker closed in order had logged. The answer waits for each realm's turn.
  */
 export const servingLoopRealm: AppRouteHandler<ServingLoopRealmRoute> = async (
   c,
@@ -135,14 +135,15 @@ export const servingLoopRealm: AppRouteHandler<ServingLoopRealmRoute> = async (
 /** The answer that says why the serving loop's worker did not answer. */
 function notServing(error: unknown): { error: string } {
   return {
-    error: "The serving loop's worker is not serving: " +
+    error: "The serving loop's workers are not serving: " +
       describeFailure(error),
   };
 }
 
 /**
- * Collects the serving loop's worker, where the loop runs in one, and then
- * this thread, and reports what each still holds.
+ * Collects the serving loop's workers, where the loop runs in them, and
+ * then this thread, and reports what each still holds: the workers one by
+ * one with the spaces placed on each, and taken together.
  */
 export const collectedMemory: AppRouteHandler<CollectedMemoryRoute> = async (
   c,
@@ -154,9 +155,9 @@ export const collectedMemory: AppRouteHandler<CollectedMemoryRoute> = async (
       HttpStatusCodes.NOT_FOUND,
     );
   }
-  let servingLoopWorker: CollectedMemory | undefined;
+  let servingLoopWorkers: CollectedWorkerMemory[] | undefined;
   try {
-    servingLoopWorker = await serverExecutionHost()?.collectedWorkerMemory();
+    servingLoopWorkers = await serverExecutionHost()?.collectedWorkerMemory();
   } catch (error) {
     return c.json(notServing(error), HttpStatusCodes.SERVICE_UNAVAILABLE);
   }
@@ -164,7 +165,19 @@ export const collectedMemory: AppRouteHandler<CollectedMemoryRoute> = async (
     {
       timestamp: Date.now(),
       mainThread: collectThisThread(),
-      ...(servingLoopWorker === undefined ? {} : { servingLoopWorker }),
+      ...(servingLoopWorkers === undefined ? {} : {
+        servingLoopWorker: {
+          heapUsed: servingLoopWorkers.reduce(
+            (sum, worker) => sum + worker.heapUsed,
+            0,
+          ),
+          external: servingLoopWorkers.reduce(
+            (sum, worker) => sum + worker.external,
+            0,
+          ),
+        },
+        servingLoopWorkers,
+      }),
     },
     HttpStatusCodes.OK,
   );

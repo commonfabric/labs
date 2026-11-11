@@ -187,9 +187,16 @@ it finds, rather than skip it, is a change in that repository.
 The toolshed binary is built with `--v8-flags=--max-old-space-size=8192`
 (`tasks/build-binaries.ts`), and `scripts/start-local-dev.sh` and the package's
 `dev` and `production` tasks run with the same flag. V8 applies the limit to each
-isolate rather than to the process, so the main thread and the serving worker
-can each reach 8 GiB, and a host's memory has to cover both for every instance
-it runs.
+isolate rather than to the process, so the main thread and every serving worker
+can each reach 8 GiB. A toolshed runs a serving worker per served space, up to
+`SERVER_EXECUTION_MAX_WORKERS` of them (default 16) and
+`SERVER_EXECUTION_SPARE_WORKERS` more kept started (default 1), and each holds
+about 110 MB before it serves anything
+([`serving-loop.md`](../specs/server-side-execution/serving-loop.md) §1,
+"Workers"). `SERVER_EXECUTION_WORKER_HEAP_BUDGET_MB` bounds what the workers'
+heaps come to together by closing the workers kept only for a parked space's
+runtime; it closes no worker that serves a space, so it does not bound a space
+that grows.
 
 A worker that reaches the limit takes its process down. Events still queued
 survive that, and the restarted process handles them.

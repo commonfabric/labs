@@ -283,12 +283,14 @@ export class SessionRegistry {
   /**
    * The events that would bring an observer installed now up to date: an
    * `opened` for every session held, followed by a `detached` for each one
-   * whose connection is gone.
+   * whose connection is gone. Given `space`, the events of that space's
+   * sessions alone.
    */
-  snapshot(): SessionLifecycleEvent[] {
+  snapshot(space?: string): SessionLifecycleEvent[] {
     this.#prune();
     const events: SessionLifecycleEvent[] = [];
     for (const session of this.#sessions.values()) {
+      if (space !== undefined && session.space !== space) continue;
       events.push(openedEvent(session));
       if (session.expiresAt !== null) {
         events.push({

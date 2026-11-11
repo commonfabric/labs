@@ -191,6 +191,7 @@ import { readWatermarkSeq } from "./watermark-engine.ts";
 import {
   bumpDerivedCommits,
   type ServingLoopStats,
+  SETTLE_SERIES_MAX,
   updateDeliveryCheckpointStats,
 } from "./stats.ts";
 import { type SealedEffectBatch, SpaceOutbox } from "./outbox.ts";
@@ -2267,9 +2268,9 @@ export class SpaceServer implements TransactionSealDestination {
         wavesAtCoverage: this.#wavesCommitted,
       };
     }
-    if (series.length > 4000) {
-      this.#options.stats.settle.dropped += series.length - 4000;
-      series.splice(0, series.length - 4000);
+    if (series.length > SETTLE_SERIES_MAX) {
+      this.#options.stats.settle.dropped += series.length - SETTLE_SERIES_MAX;
+      series.splice(0, series.length - SETTLE_SERIES_MAX);
     }
   }
 
@@ -8233,12 +8234,12 @@ export class SpaceServer implements TransactionSealDestination {
             to: advanceTo,
             at: performance.now(),
           });
-          if (stats.settleAdvances.series.length > 4000) {
+          if (stats.settleAdvances.series.length > SETTLE_SERIES_MAX) {
             stats.settleAdvances.dropped += stats.settleAdvances.series.length -
-              4000;
+              SETTLE_SERIES_MAX;
             stats.settleAdvances.series.splice(
               0,
-              stats.settleAdvances.series.length - 4000,
+              stats.settleAdvances.series.length - SETTLE_SERIES_MAX,
             );
           }
           logger.debug?.("settle-advance", () => [

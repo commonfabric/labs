@@ -751,7 +751,37 @@ export type ServingLoopStats = {
     discarded: number;
     held: number;
   };
+
+  /**
+   * The serving workers of a process whose loop runs in workers
+   * (serving-loop.md §1, "Workers"), counted by the pool that starts them;
+   * all zero where the loop runs on the process's main thread. `serving`,
+   * `spare` and `parked` are how many there are now: workers a space is
+   * placed on, workers started ahead of a placement, and, among the serving
+   * ones, those whose host holds nothing but runtimes kept from idle parks.
+   * `heapUsed` is the sum of the JavaScript heaps the workers last reported,
+   * in bytes. The rest accumulate: `started` workers spawned, `retired`
+   * those closed once their host held nothing, `evicted` those closed while
+   * parked to stay within the parked-worker cap or the heap budget,
+   * `failed` those that reported an error, failed to start or were killed
+   * by the watchdog, and `shared` the placements that joined a worker
+   * already serving another space because the pool was at its cap.
+   */
+  workers: {
+    serving: number;
+    spare: number;
+    parked: number;
+    heapUsed: number;
+    started: number;
+    retired: number;
+    evicted: number;
+    failed: number;
+    shared: number;
+  };
 };
+
+/** How many rows each of the bounded settle series keeps. */
+export const SETTLE_SERIES_MAX = 4000;
 
 export const emptyServingLoopStats = (): ServingLoopStats => ({
   activeSpaces: 0,
@@ -865,6 +895,17 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
   },
   lifecycleVerbs: { runs: 0, failures: 0 },
   parkedRuntimes: { retained: 0, reused: 0, discarded: 0, held: 0 },
+  workers: {
+    serving: 0,
+    spare: 0,
+    parked: 0,
+    heapUsed: 0,
+    started: 0,
+    retired: 0,
+    evicted: 0,
+    failed: 0,
+    shared: 0,
+  },
 });
 
 type ActiveDeliveryCheckpointStat = {

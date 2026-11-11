@@ -19,8 +19,9 @@
  *   verified signatures, as toolshed's are.
  *
  * Either runs its loop on this thread over a non-persistent store, or, as a
- * toolshed does over its file store, in a Worker of this process over a store
- * in a temporary directory ({@link ServingMemoryServerOptions}' `worker`).
+ * toolshed does over its file store, in Workers of this process, one per
+ * served space, over a store in a temporary directory
+ * ({@link ServingMemoryServerOptions}' `worker`).
  * Unlike a toolshed, it keeps the worker and the store read-through off
  * unless the environment turns them on, so a run chooses its arm.
  *
@@ -55,7 +56,7 @@ import {
 } from "./serving-runtime.ts";
 import {
   type ServingLoopHandle,
-  ServingWorker,
+  ServingWorkerPool,
 } from "./serving-worker-host.ts";
 import type { SpaceServerPolicy } from "./space-server.ts";
 
@@ -132,7 +133,7 @@ export type ServingMemoryServerOptions =
     ensureSpaceRoots?: boolean;
 
     /**
-     * Whether the serving loop runs in a Worker of this process, over a store
+     * Whether the serving loop runs in Workers of this process, over a store
      * in a temporary directory, as a toolshed's does over its file store.
      * Default: `true` when `SERVER_EXECUTION_WORKER` is the literal `true` in
      * this process's environment, so a run with it set runs every test that
@@ -154,6 +155,15 @@ export type ServingMemoryServerOptions =
      * decimal integers.
      */
     worker?: boolean;
+
+    /**
+     * How many workers the loop places spaces on at most, under `worker`
+     * (`ServingWorkerPoolOptions.maxWorkers`); `1` serves every space from
+     * one worker. Default: `SERVER_EXECUTION_MAX_WORKERS` when it is a
+     * positive decimal integer in this process's environment, else the
+     * pool's own default.
+     */
+    maxWorkers?: number;
   }
   & Omit<
     ExecutorHostOptions,
@@ -383,6 +393,7 @@ async function attachServingLoop(params: {
   const {
     serviceIdentity: _serviceIdentity,
     worker: _worker,
+    maxWorkers: requestedMaxWorkers,
     experimental,
     prepareStorageManager,
     fetch,
@@ -408,13 +419,21 @@ async function attachServingLoop(params: {
           "pass `worker: false` to run the loop on this thread",
       );
     }
-    let worker: ServingWorker | undefined;
+    const environmentMaxWorkers =
+      Deno.env.get("SERVER_EXECUTION_MAX_WORKERS") ??
+        "";
+    const maxWorkers = requestedMaxWorkers ??
+      (/^[1-9]\d*$/.test(environmentMaxWorkers)
+        ? Number.parseInt(environmentMaxWorkers, 10)
+        : undefined);
+    let worker: ServingWorkerPool | undefined;
     try {
-      worker = new ServingWorker({
+      worker = new ServingWorkerPool({
         server: params.server,
         identity: serviceIdentity,
         apiUrl: params.apiUrl,
         ensureSpaceRoots,
+        ...(maxWorkers === undefined ? {} : { maxWorkers }),
         ...(policy === undefined ? {} : { policy }),
         ...(experimental === undefined ? {} : { experimental }),
         ...(hostOptions.onActivationSettled === undefined

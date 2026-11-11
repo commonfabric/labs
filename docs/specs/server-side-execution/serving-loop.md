@@ -29,20 +29,23 @@ MUST/NEVER language is binding on implementers.
 
 ```
 toolshed process
-└─ ExecutorHost (one per process)
-   ├─ SpaceServer (one per ACTIVE space)
-   │  ├─ lease        (an entry in the memory server's map, §2)
-   │  ├─ runtime      (ordinary Runtime, flag ON, server posture)
-   │  ├─ subscription (accepted-commit feed for the space, from the
-   │  │                activation scan's head — §3, §6)
-   │  └─ outbox       (post-commit external effects, at-least-once)
-   └─ activation policy (which spaces are active)
+├─ serving-worker pool (placement: which worker serves which space)
+└─ serving worker (one per placed space, up to a cap)
+   └─ ExecutorHost (one per worker)
+      ├─ SpaceServer (one per ACTIVE space the worker serves)
+      │  ├─ lease        (an entry in the memory server's map, §2)
+      │  ├─ runtime      (ordinary Runtime, flag ON, server posture)
+      │  ├─ subscription (accepted-commit feed for the space, from the
+      │  │                activation scan's head — §3, §6)
+      │  └─ outbox       (post-commit external effects, at-least-once)
+      └─ activation policy (which of its spaces are active)
 ```
 
-*(AMENDED 2026-10-11: under `SERVER_EXECUTION_WORKER` the `ExecutorHost`
-and everything under it run in a Web Worker of the toolshed process, and
+*(AMENDED 2026-10-11, and 2026-11-11 for one worker per space: under
+`SERVER_EXECUTION_WORKER` an `ExecutorHost` and everything under it run in a
+Web Worker of the toolshed process, and
 the memory server, the HTTP routes and the commits the server fans out
-stay on the main thread. The worker reads the store through SQLite
+stay on the main thread. A worker reads the store through SQLite
 connections of its own and reaches the memory server over a port: its wave
 commits cross to a sink on the main thread (plane (a)'s commits, applied
 where the server sees each one land), its serving runtimes' storage
@@ -52,16 +55,72 @@ mirror the server's session lifecycle keeps current. Lease acquire and
 release (plane (c)) cross the port as requests, since the map is the memory
 server's, and so does the outbox's notice of a refused append, a derived commit
 admitted against that map. The outbox's retirement of a delivered row stays the
-worker's own write. The lease holder's process component is minted by the main thread per worker
-start, so a worker started in place of one that died never shares its
-predecessor's holder.
+worker's own write. The lease holder's process component is minted by the main
+thread per worker start, so no two workers share a holder, and a worker that
+serves a space after one that died never shares its predecessor's.
 [`docs/plans/serving-loop-worker.md`](../../plans/serving-loop-worker.md)
 places each crossing. A host with the loop on its main thread
-(`SERVER_EXECUTION_WORKER=false`) does the same work without the port.
+(`SERVER_EXECUTION_WORKER=false`) is the one host of its process and does the
+same work without the port.
 Either way, the loop's crossings into other spaces go to those spaces'
 owners over the deployment's route
 ([owner routing](#2-the-lease-single-deriver-operationally), on by
 default); a host given no route keeps them on its own memory server.)*
+
+**Workers.** The main thread's serving-worker pool
+(`ServingWorkerPool`, `serving-worker-host.ts`) holds the memory server's one
+execution observer and decides which worker serves which space:
+
+- A space is PLACED on a worker when it first meets the ACTIVE criteria
+  below, or is named by a pattern-lifecycle verb, while no worker serves it.
+  The pool applies the admission-side criteria itself (`admissionActivates`
+  in `host.ts`, the function the host applies too), so an authored write into
+  a space with nothing to serve starts no worker. A placed space's commits,
+  session changes, demand changes and view changes go to its worker and to no
+  other, and that worker's host decides what to activate as a host on the
+  main thread does.
+- A space gets a worker of its own while fewer than `maxWorkers` workers are
+  placed on (default 16; `SERVER_EXECUTION_MAX_WORKERS` in the toolshed
+  bootstrap). At the cap a space joins the placed-on worker that serves the
+  fewest spaces, one holding only parked runtimes first, and that worker's
+  host serves several spaces as the diagram allows. `1` serves every space
+  from one worker.
+- The pool keeps `spareWorkers` workers started with no space placed on them
+  (default none; one in the toolshed, `SERVER_EXECUTION_SPARE_WORKERS`), so
+  that a placement finds a worker whose modules have loaded. Spares do not
+  count toward the cap.
+- A host reports what it holds (`ExecutorHost.occupancy`): `busy` while it
+  serves, starts, ends or re-evaluates a tenure or holds a notice for a
+  tenure to come, `parked` while it holds nothing but runtimes kept from
+  idle parks (Parking below), and `vacant` while it holds nothing. The pool
+  asks a worker whose host reports `vacant` to close. The host decides again
+  as it handles the request, after every message sent ahead of it, so a
+  trigger already on its way keeps the worker; a commit that would start a
+  tenure, sent while the request is in flight, is kept for the space's next
+  placement. Once the host has closed, the worker is terminated, the space is
+  placed nowhere, and its next trigger places it on a fresh worker.
+- The pool keeps at most `maxParkedRuntimes` workers whose hosts report
+  `parked`, closing the longest-parked beyond that, and with a heap budget
+  (`heapBudgetBytes`; `SERVER_EXECUTION_WORKER_HEAP_BUDGET_MB`, default none)
+  it closes such workers, the longest-parked first, while the JavaScript
+  heaps the workers' heartbeats report exceed the budget together. A worker
+  that serves a space is never closed for either.
+- A commit that writes a space's access-list document is announced to every
+  worker but the space's own, which hears of the commit itself: another
+  worker's tenure may hold a session on that space as a cross-space replica
+  ("A deleted space" below).
+- A worker that reports an error, cannot start, or is killed by the watchdog
+  (§2) is taken out of the pool alone. Its leases are released once it is
+  gone, and each of its spaces is placed again, if it still has a client
+  session or a commit that would start a tenure arrived meanwhile, after the
+  failure-park backoff below counted per space across its workers'
+  consecutive failures; a wave committed for the space clears the count, as
+  does a worker of its own closing with nothing left to serve. A
+  pattern-lifecycle verb for a space waiting out that backoff is refused as
+  not served.
+
+A space stays placed on its worker for as long as the worker runs. Counted:
+`workers` (§7).
 
 A space is ACTIVE when it has ≥1 live client session or undelivered
 events; otherwise it MAY be parked (lease released, loop stopped, and
@@ -244,7 +303,9 @@ space's next tenure — for `SpaceServerPolicy.parkedRuntimeRetentionMs` (defaul
 10 minutes; `SERVER_EXECUTION_PARKED_RUNTIME_RETENTION_MS` in the
 toolshed bootstrap, where the literal `0` disposes at every park), and
 at most `maxParkedRuntimes` (default 8) across the host, the
-longest-kept disposed first. A tenure that takes a kept runtime serves
+longest-kept disposed first. Where each space has a worker of its own, a
+kept runtime is what keeps that worker running once its space has parked,
+and the pool bounds such workers by the same number (Workers above). A tenure that takes a kept runtime serves
 with it as it stands: no compile, no module evaluation, no piece
 restart and no pre-sync, where a fresh runtime pays all four for every
 demanded piece. It takes one only when the runtime holds exactly the
@@ -278,7 +339,8 @@ runtime is what every other activation builds. The cost is
 the memory the kept runtimes hold, which is what their tenures held
 while active: measured on 30 small pieces, about 3 MB of post-GC heap
 per kept runtime (1.2 MB on 10), so the defaults bound the extra at
-eight such runtimes for ten minutes each. A visit after the window
+eight such runtimes for ten minutes each. A worker kept for its runtime
+also holds its isolate's own module graph. A visit after the window
 closes pays the fresh build. Counted: `parkedRuntimes` (§7).
 
 Wiring, by plane. Every byte between these components travels on
@@ -407,12 +469,16 @@ it holds through two things: each space's owner, and the lease.
   `runtime/memory/v2/execution-lease.ts`.
 - **`holder` is a PER-START identity (DR1, RULED 2026-08-03):**
   the SpaceServer's service identity plus a process-instance
-  component minted at process start, or at each serving-worker generation
-  when the loop runs in a worker. Both realms adopt that component before
-  leases are acquired. A replacement worker adopts a fresh component, after
+  component minted at process start, or at each serving worker's start
+  when the loop runs in workers. A worker's realm adopts its component before
+  it acquires a lease, and the worker's loopback connections name the
+  component to the memory server, which is how the server tells a space's
+  serving session from another worker's session of the same principal
+  (protocol.md §2's read row). A space placed again after its worker failed
+  is served under a fresh component, after
   waiting for its predecessor's teardown and lease release unless the watchdog
-  below killed that predecessor. Within a serving
-  generation it is stable across every reacquire (it stays a nameable,
+  below killed that predecessor. Within one worker's
+  life it is stable across every reacquire (it stays a nameable,
   attestable identity, so protocol.md §1's "the envelope principal
   IS the lease holder" reads literally). The component keys commit replay, and
   the equality check below fences the in-flight commits of a replaced worker.
@@ -429,8 +495,11 @@ it holds through two things: each space's owner, and the lease.
   worker makes them across the port as requests, so `SpaceServer.activate()`
   awaits its acquire. An acquire takes a free space and keeps the holder's own;
   another holder's lease refuses it. A second `ExecutorHost` on the same memory
-  server is a rival refused this way, and the host leaves a space parked on a
-  rival's lease to the rival rather than retrying.
+  server that tries a space another holds is a rival refused this way, and the
+  host leaves a space parked on a rival's lease to the rival rather than
+  retrying. The workers of one pool are several hosts on one memory server
+  and never rivals: the pool routes a space's triggers to the one worker it
+  is placed on.
 - **Holding has no expiry and no renewal.** A tenure ends at a park, and only
   there. Nothing reads a clock to keep one or end one, so a settle, a compile or
   a stall of any length costs the lease nothing. The worker's watchdog below is
@@ -478,10 +547,11 @@ holds its leases with nothing else to take them back. It is the only timer in
 the lease:
 
 - The worker posts a heartbeat every 10 s from a timer of its own.
-- The main thread checks every 10 s. After six consecutive intervals with no
-  message of any kind from the worker, which is at least 60 s of silence, it
-  terminates the worker and releases the worker's leases, then starts a successor
-  under a fresh component through the replacement path a worker failure takes.
+- The main thread checks each worker every 10 s. After six consecutive
+  intervals with no message of any kind from a worker, which is at least 60 s
+  of silence, it terminates that worker and releases its leases, then places
+  its spaces again under a fresh component through the path a worker failure
+  takes (§1, Workers). The other workers are not affected.
 - The check counts its own firings rather than reading a clock, so nothing but
   the worker's silence moves the count: a main thread that itself stalled, or a
   process that was suspended, fires it once on waking.
@@ -502,11 +572,11 @@ the lease:
   such a thread keeps whatever core it was spinning on until the process restarts.
   A thread that does wake has lost its port to the memory server, so no commit of
   its own reaches the store.
-- Each lease a kill releases counts in `lease.lost` (§7), summed across the
-  worker's successors. A commit the killed worker left in flight reaches
+- Each lease a kill releases counts in `lease.lost` (§7), summed across every
+  worker killed. A commit the killed worker left in flight reaches
   admission naming a holder the map no longer holds, and is refused.
-- A stalled worker's spaces wait up to the watchdog's limit for a successor, and
-  no two workers serve one space in between.
+- A stalled worker's spaces wait up to the watchdog's limit to be placed
+  again, and no two workers serve one space in between.
 - The in-process arrangement has no watchdog: the thread that would watch is the
   thread that stopped.
 
@@ -528,7 +598,9 @@ successor tenure could have it admitted.
 - A tenure reads and commits its own space engine-direct, and holds no session
   on it, so no session revocation tells it of the deletion. What tells it is the
   host's notice that an admitted commit wrote the space's ACL document
-  (`noteSpaceAclChanged()`), which the host fans out to every tenure it runs. On
+  (`noteSpaceAclChanged()`), which the host fans out to every tenure it runs,
+  and which the serving-worker pool sends to every worker but the one that
+  hears of the commit itself. On
   that notice for its own space the SpaceServer reads the ACL document, and when
   it holds a deletion tombstone it ends the tenure for good. It stops committing
   at once, as on a lease loss, disposes of the runtime, releases the lease, and
@@ -2192,9 +2264,25 @@ deliveryFailureWakesFired, needsAttention: {total, byPhase},
 needsAttentionSealFailures, deliveryCheckpointWriteFailures, explicitRetries,
 dropped}, memo: {hits, misses, inflight}, outbox: {queued, completed, failed,
 budgetDeferrals}, lease: {held, lost}, parkedRuntimes: {retained, reused,
-discarded, held}, push: {prioritizedSessions, followerSessions,
-mixedFlushes} }`
-(`parkedRuntimes` counts the runtimes idle parks kept, those a successor
+discarded, held}, workers: {serving, spare, parked, heapUsed, started,
+retired, evicted, failed, shared}, push: {prioritizedSessions,
+followerSessions, mixedFlushes} }`
+(where the loop runs in workers, the block is every worker's counters taken
+together with the last counters of each worker that has closed
+(`stats-merge.ts`): counters add, a count of what hosts hold now adds across
+the running workers and is nothing for a closed one, a peak is the largest
+any worker reached, and the rows of a bounded series are joined worker by
+worker and bounded again, so their order is not one clock's;
+`workers` is the pool's own, all zero where the loop runs on the main
+thread: `serving`, `spare` and `parked` are the workers a space is placed
+on, those started ahead of a placement, and, among the serving ones, those
+whose hosts hold only parked runtimes; `heapUsed` adds the JavaScript heaps
+the workers' heartbeats last reported, in bytes; `started`, `retired`,
+`evicted` and `failed` count workers spawned, closed once vacant, closed
+while parked for the parked-worker cap or the heap budget, and failed or
+killed; `shared` counts placements that joined a worker already serving
+another space at the cap; §1's Workers;
+`parkedRuntimes` counts the runtimes idle parks kept, those a successor
 tenure served with, and those disposed unused — expired, evicted, tainted,
 or turned down at activation because the store head moved — with `held`
 the number kept now; §1's Parking;

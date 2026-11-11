@@ -4,7 +4,7 @@
  * lifecycle verbs, and with one compiled-module cache for every space the
  * worker serves, as a toolshed's own entry has; `serving-worker-main.ts` has
  * the rest. Nothing outside a worker imports a value from here;
- * `serving-worker-host.ts` starts one.
+ * `serving-worker-host.ts` starts one per served space.
  */
 
 import { ProcessModuleByteCache } from "@commonfabric/test-support/compile-byte-cache";

@@ -1,8 +1,8 @@
 // Server-execution v2 stage F (docs/specs/server-side-execution/
 // serving-loop.md §1): the ExecutorHost bootstrap. Under
 // EXPERIMENTAL_SERVER_EXECUTION this process hosts one committing runtime
-// per ACTIVE space — the serving loop — wired to the co-hosted memory
-// server: the admission-side observer (plane b) activates spaces, lease
+// per ACTIVE space — the serving loop, in a Worker per space over a file
+// store — wired to the co-hosted memory server: the admission-side observer (plane b) activates spaces, lease
 // writes ride the direct engine plane (plane c), and the serving
 // runtimes' storage sessions are in-process loopback connections with the
 // SAME signed session-open production clients present (plane a). OFF,
@@ -28,11 +28,12 @@ import {
   servingRuntimeFactory,
 } from "@commonfabric/runner/executor/serving-runtime";
 import {
+  type CollectedWorkerMemory,
   type ServingLoopHandle,
-  ServingWorker,
+  ServingWorkerPool,
+  type ServingWorkerPoolOptions,
 } from "@commonfabric/runner/executor/serving-worker-host";
 import type { Server as MemoryServer } from "@commonfabric/memory/v2/server";
-import type { CollectedMemory } from "@commonfabric/runner/collected-memory";
 import type { Identity } from "@commonfabric/identity";
 import {
   servedLifecycleRunner,
@@ -51,11 +52,11 @@ import { ProcessModuleByteCache } from "@commonfabric/test-support/compile-byte-
  */
 export type ServingLoop = ServedLifecycleVerbRunner & ServingLoopHandle & {
   /**
-   * Collects the loop's worker, and returns the memory its isolate still
-   * holds; `undefined` where the loop runs on this thread, which the caller
-   * collects itself.
+   * Collects each of the loop's serving workers, and returns the memory
+   * each isolate still holds with the spaces placed on it; `undefined`
+   * where the loop runs on this thread, which the caller collects itself.
    */
-  collectedWorkerMemory(): Promise<CollectedMemory | undefined>;
+  collectedWorkerMemory(): Promise<CollectedWorkerMemory[] | undefined>;
 };
 
 let loop: ServingLoop | undefined;
@@ -290,6 +291,65 @@ export function serverExecutionWorkerFromEnv(
   return fileStore;
 }
 
+/** How many spare serving workers a toolshed keeps started unless told. */
+export const DEFAULT_SPARE_SERVING_WORKERS = 1;
+
+/** The serving-worker pool's knobs a toolshed reads from its environment. */
+export type ServingWorkerPoolEnv = Pick<
+  ServingWorkerPoolOptions,
+  "maxWorkers" | "spareWorkers" | "heapBudgetBytes"
+>;
+
+/**
+ * Resolves the serving-worker pool's knobs from env (serving-loop.md §1,
+ * "Workers"), each absent from the result where the pool's own default
+ * stands:
+ * - `SERVER_EXECUTION_MAX_WORKERS`, a positive integer: how many workers
+ *   spaces are placed on at most, a space joining a worker that already
+ *   serves another once that many are. `1` serves every space from one
+ *   worker;
+ * - `SERVER_EXECUTION_SPARE_WORKERS`, a non-negative integer: how many
+ *   workers are kept started ahead of a placement. Default
+ *   {@link DEFAULT_SPARE_SERVING_WORKERS}; the literal `0` keeps none;
+ * - `SERVER_EXECUTION_WORKER_HEAP_BUDGET_MB`, a positive integer: how
+ *   large the workers' heaps may be together, in megabytes, before workers
+ *   holding only parked runtimes are closed. Default: no budget.
+ *
+ * Anything else warns and takes the default.
+ */
+export function servingWorkerPoolFromEnv(
+  envGet: EnvReader,
+  warn: (message: string) => void = (message) => console.warn(message),
+): ServingWorkerPoolEnv {
+  const read = (
+    name: string,
+    { least }: { least: number },
+  ): number | undefined => {
+    const raw = envGet(name);
+    if (raw === undefined || raw === "") return undefined;
+    const value = /^\d+$/.test(raw) ? Number.parseInt(raw, 10) : undefined;
+    if (value !== undefined && value >= least) return value;
+    warn(
+      `Server-execution v2: ignoring ${name}=${JSON.stringify(raw)} ` +
+        `(expected an integer of ${least} or more); using the default`,
+    );
+    return undefined;
+  };
+  const maxWorkers = read("SERVER_EXECUTION_MAX_WORKERS", { least: 1 });
+  const spareWorkers = read("SERVER_EXECUTION_SPARE_WORKERS", { least: 0 }) ??
+    DEFAULT_SPARE_SERVING_WORKERS;
+  const heapBudgetMb = read("SERVER_EXECUTION_WORKER_HEAP_BUDGET_MB", {
+    least: 1,
+  });
+  return {
+    ...(maxWorkers === undefined ? {} : { maxWorkers }),
+    spareWorkers,
+    ...(heapBudgetMb === undefined
+      ? {}
+      : { heapBudgetBytes: heapBudgetMb * 1024 * 1024 }),
+  };
+}
+
 /**
  * Whether the serving loop reaches every space but the ones it serves through
  * that space's owner (`SERVER_EXECUTION_OWNER_ROUTING`,
@@ -315,9 +375,9 @@ export function ownerRoutingFromEnv(
 }
 
 /**
- * Start the serving loop when the flag is on: in a Worker of this process
- * when {@link serverExecutionWorkerFromEnv} says so, which by default it does
- * over a file store, and on this thread otherwise. Called once from toolshed
+ * Start the serving loop when the flag is on: in Workers of this process,
+ * one per served space, when {@link serverExecutionWorkerFromEnv} says so,
+ * which by default it does over a file store, and on this thread otherwise. Called once from toolshed
  * startup, after the memory server exists. Returns the loop (or
  * undefined off the flag) so shutdown can close it.
  */
@@ -434,16 +494,22 @@ export function startServerExecutionHost(options: {
   }
   const fileStore = options.store?.protocol === "file:";
   if (serverExecutionWorkerFromEnv(envGet, fileStore)) {
+    const pool = servingWorkerPoolFromEnv(envGet);
     console.log(
-      "Server-execution v2: serving loop in a Worker " +
+      "Server-execution v2: serving loop in a Worker per space " +
         (envGet("SERVER_EXECUTION_WORKER") === "true"
           ? "by SERVER_EXECUTION_WORKER=true"
           : "(the default over a file store; SERVER_EXECUTION_WORKER=false " +
-            "keeps it on the main thread)"),
+            "keeps it on the main thread)") +
+        (pool.maxWorkers === undefined
+          ? ""
+          : `, on ${pool.maxWorkers} worker(s) at most by ` +
+            "SERVER_EXECUTION_MAX_WORKERS") +
+        `, with ${pool.spareWorkers} spare`,
     );
-    // The worker's entry adds the lifecycle verbs, the self-directed fetch
+    // The workers' entry adds the lifecycle verbs, the self-directed fetch
     // and the module cache itself (lib/serving-worker.ts).
-    const worker = new ServingWorker({
+    const worker = new ServingWorkerPool({
       server: options.server,
       identity: options.identity,
       apiUrl: options.apiUrl,
@@ -451,6 +517,7 @@ export function startServerExecutionHost(options: {
       policy,
       ensureSpaceRoots,
       experimental,
+      ...pool,
       ...(memoryUrl === undefined ? {} : { route: memoryUrl }),
     });
     loop = {

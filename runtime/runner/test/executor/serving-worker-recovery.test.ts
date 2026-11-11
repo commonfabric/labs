@@ -1,5 +1,12 @@
-import { describe, it } from "@std/testing/bdd";
+/**
+ * What a `ServingWorkerPool` does when one of its workers fails, cannot
+ * start, or goes silent, over stand-in workers and a stand-in memory server:
+ * which spaces are placed again, when, and what becomes of the leases the
+ * worker held.
+ */
+
 import { expect } from "@std/expect";
+import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { toFileUrl } from "@std/path";
 import { stub } from "@std/testing/mock";
 import { defer } from "@commonfabric/async/defer";
@@ -10,655 +17,437 @@ import {
   encodeMemoryBoundary,
 } from "@commonfabric/memory/v2";
 import * as Engine from "@commonfabric/memory/v2/engine";
-import {
-  executionLeaseHolder,
-  ExecutionLeases,
-} from "@commonfabric/memory/v2/execution-lease";
-import type { Server } from "@commonfabric/memory/v2/server";
+import { executionLeaseHolder } from "@commonfabric/memory/v2/execution-lease";
 import { EngineWaveCommitSink } from "../../src/executor/engine-wave-sink.ts";
 import { SpaceNotServedError } from "../../src/executor/host.ts";
-import { ServingPortBridge } from "../../src/executor/serving-port-bridge.ts";
-import { ServingWorker } from "../../src/executor/serving-worker-host.ts";
 import {
-  emptyServingLoopStats,
-  getServingLoopStats,
-} from "../../src/executor/stats.ts";
+  ServingWorkerPool,
+  type ServingWorkerPoolOptions,
+} from "../../src/executor/serving-worker-host.ts";
+import { emptyServingLoopStats } from "../../src/executor/stats.ts";
 import type { MemorySpace } from "../../src/storage/interface.ts";
+import {
+  admittedNotice,
+  FakeMemoryServer,
+  type FakeServingWorker,
+  fakeServingWorkers,
+} from "../support/fake-serving-workers.ts";
 
 const identity = await Identity.fromPassphrase("serving-worker-recovery");
 const space = "did:key:z6MkServingWorkerRecovery" as MemorySpace;
-
-/** The stand-ins spawned since `fakeWorkers()` last installed them. */
-let spawned: FakeWorker[] = [];
-
-/** Called with each stand-in as it is spawned. */
-let onSpawned: ((worker: FakeWorker) => void) | undefined;
-
-/**
- * A `Worker` stand-in: it records the answers the bridge posts to it, and a
- * test fails it, or posts for the worker's host, by hand.
- */
-class FakeWorker extends EventTarget {
-  onerror: ((event: ErrorEvent) => void) | null = null;
-  terminated = false;
-  readonly #answers = new Map<number, (envelope: unknown) => void>();
-
-  constructor() {
-    super();
-    spawned.push(this);
-    onSpawned?.(this);
-  }
-
-  postMessage(envelope: { t: string; id?: number }): void {
-    if (envelope.t === "ok" || envelope.t === "err") {
-      this.#answers.get(envelope.id!)?.(envelope);
-    }
-  }
-
-  terminate(): void {
-    this.terminated = true;
-  }
-
-  /** Fails the worker as an error it did not handle does. */
-  fail(): void {
-    this.onerror!(
-      new ErrorEvent("error", { message: "worker failed", cancelable: true }),
-    );
-  }
-
-  /** Posts `envelope` to the bridge, as the worker's side of the port. */
-  post(envelope: unknown): void {
-    this.dispatchEvent(new MessageEvent("message", { data: envelope }));
-  }
-
-  /** Settles once the bridge has answered the request numbered `id`. */
-  answered(id: number): Promise<unknown> {
-    return new Promise((resolve) => this.#answers.set(id, resolve));
-  }
-}
-
-/**
- * Installs `FakeWorker` as the global `Worker` until the result is disposed.
- * `next()` settles with the next stand-in spawned.
- */
-function fakeWorkers(): Disposable & {
-  workers: FakeWorker[];
-  next(): Promise<FakeWorker>;
-} {
-  const original = globalThis.Worker;
-  spawned = [];
-  globalThis.Worker = FakeWorker as unknown as typeof Worker;
-  return {
-    workers: spawned,
-    next: () =>
-      new Promise((resolve) => {
-        onSpawned = (worker) => {
-          onSpawned = undefined;
-          resolve(worker);
-        };
-      }),
-    [Symbol.dispose]: () => {
-      onSpawned = undefined;
-      globalThis.Worker = original;
-    },
-  };
-}
-
-/** A memory server stand-in with what a bridge over a fake worker reaches. */
-const server = {
-  setServerExecutionObserver() {},
-  engineForSpace: () => Promise.resolve({}),
-  executionLeases: new ExecutionLeases(),
-} as unknown as Server;
-
-/** One note of any kind from the worker's side of the port. */
-const anyMessage = {
-  t: "note",
-  method: "host.activationSettled",
-  params: { space, outcome: "active" },
-};
+const other = "did:key:z6MkServingWorkerRecoveryOther" as MemorySpace;
 
 describe("serving-worker-recovery", () => {
-  for (const source of ["init", "error"] as const) {
-    for (const closing of [false, true]) {
-      it(`${closing ? "suppresses replacement after close" : "releases the worker's leases before replacement"} when ${source} fails`, async () => {
-        using fakes = fakeWorkers();
-        const { workers } = fakes;
-        const init = Promise.withResolvers<{ lifetimeLock: undefined }>();
-        const releasing = Promise.withResolvers<void>();
-        let restart: (() => void) | undefined;
-        using _timer = stub(
-          globalThis,
-          "setTimeout",
-          ((callback: () => void) => {
-            restart = callback;
-            return 1;
-          }) as typeof setTimeout,
-        );
-        using _init = stub(
-          ServingPortBridge.prototype,
-          "init",
-          () =>
-            workers.length === 1
-              ? init.promise
-              : Promise.resolve({ lifetimeLock: undefined }),
-        );
-        using _release = stub(
-          ServingPortBridge.prototype,
-          "releaseLeasesOf",
-          () => {
-            releasing.resolve();
-            return 0;
-          },
-        );
-        using _close = stub(
-          ServingPortBridge.prototype,
-          "closeHost",
-          () => Promise.resolve(),
-        );
-        const host = new ServingWorker({
-          server,
-          identity,
-          apiUrl: new URL(import.meta.url),
-        });
-        try {
-          const ready = host.ready;
-          if (source === "init") {
-            init.reject(new Error("init failed"));
-            await expect(ready).rejects.toThrow("init failed");
-          } else {
-            init.resolve({ lifetimeLock: undefined });
-            await ready;
-            workers[0].fail();
-          }
-          await releasing.promise;
-          expect(workers[0].terminated).toBe(true);
-          await expect(
-            host.runLifecycleVerb(space, { name: "upload", request: {} }),
-          ).rejects.toThrow(SpaceNotServedError);
-          expect(restart).toBeDefined();
-          expect(workers).toHaveLength(1);
-          const closed = closing ? host.close() : undefined;
-          const replacement = fakes.next();
-          restart!();
-          if (closing) {
-            await closed;
-            expect(workers).toHaveLength(1);
-          } else {
-            await replacement;
-            await host.ready;
-            expect(workers).toHaveLength(2);
-          }
-        } finally {
-          await host.close();
-        }
+  let fakes: ReturnType<typeof fakeServingWorkers>;
+  let server: FakeMemoryServer;
+  let pool: ServingWorkerPool | undefined;
+
+  /** The stand-in workers spawned so far. */
+  const workers = (): FakeServingWorker[] => fakes.workers;
+
+  /** Starts the pool under test, whose first failure backs off 10 ms. */
+  const start = (
+    over: Partial<ServingWorkerPoolOptions> = {},
+  ): ServingWorkerPool => {
+    pool = new ServingWorkerPool({
+      server: server.asServer,
+      identity,
+      apiUrl: new URL(import.meta.url),
+      policy: { failureParkBackoffBaseMs: 10 },
+      ...over,
+    });
+    return pool;
+  };
+
+  /** The lease holder `worker`'s host acquires under. */
+  const holderOf = (worker: FakeServingWorker): string =>
+    executionLeaseHolder(identity.did(), worker.processInstanceId);
+
+  beforeEach(() => {
+    fakes = fakeServingWorkers();
+    server = new FakeMemoryServer();
+    pool = undefined;
+  });
+
+  afterEach(async () => {
+    await pool?.close();
+    fakes[Symbol.dispose]();
+  });
+
+  describe("a worker that fails", () => {
+    it("is terminated, has its leases released, and has its space placed on a fresh worker after the backoff", async () => {
+      const closed: unknown[] = [];
+      const started = start({
+        onWorkerClosed: (spaces, cause) => closed.push([spaces, cause]),
       });
-    }
-  }
+      server.openSession(space, "session-1");
+      await clock.settle();
+      const [failing] = workers();
+      const holder = holderOf(failing);
+      expect(server.executionLeases.acquire(space, holder)).toBe(true);
 
-  it("settles a close when the worker fails while its host closes", async () => {
-    using fakes = fakeWorkers();
-    const { workers } = fakes;
-    const closingHost = Promise.withResolvers<void>();
-    const closeHost = ServingPortBridge.prototype.closeHost;
-    using _init = stub(
-      ServingPortBridge.prototype,
-      "init",
-      () => Promise.resolve({ lifetimeLock: undefined }),
-    );
-    using _close = stub(
-      ServingPortBridge.prototype,
-      "closeHost",
-      function (this: ServingPortBridge) {
-        closingHost.resolve();
-        return closeHost.call(this);
-      },
-    );
-    const released: string[] = [];
-    using _release = stub(
-      ServingPortBridge.prototype,
-      "releaseLeasesOf",
-      (holder: string) => {
-        released.push(holder);
-        return 0;
-      },
-    );
-    const host = new ServingWorker({
-      server,
-      identity,
-      apiUrl: new URL(import.meta.url),
-    });
-    await host.ready;
-    const closed = host.close();
-    await closingHost.promise;
-    workers[0].fail();
-    await closed;
-    expect(workers[0].terminated).toBe(true);
-    expect(workers).toHaveLength(1);
-    expect(released).toHaveLength(1);
-  });
+      failing.fail();
+      await clock.settle();
+      expect(failing.terminated).toBe(true);
+      expect(server.executionLeases.holderOf(space)).toBeUndefined();
+      expect(closed).toEqual([[[space], "failed"]]);
+      expect(workers()).toHaveLength(1);
+      expect(started.stats().workers).toMatchObject({ serving: 0, failed: 1 });
 
-  it("settles a close while the worker has not reported serving", async () => {
-    using fakes = fakeWorkers();
-    const { workers } = fakes;
-    using _init = stub(
-      ServingPortBridge.prototype,
-      "init",
-      () => new Promise<never>(() => {}),
-    );
-    let hostCloses = 0;
-    using _close = stub(
-      ServingPortBridge.prototype,
-      "closeHost",
-      () => {
-        hostCloses += 1;
-        return Promise.resolve();
-      },
-    );
-    const released: string[] = [];
-    using _release = stub(
-      ServingPortBridge.prototype,
-      "releaseLeasesOf",
-      (holder: string) => {
-        released.push(holder);
-        return 0;
-      },
-    );
-    const host = new ServingWorker({
-      server,
-      identity,
-      apiUrl: new URL(import.meta.url),
+      await clock.tick(9);
+      expect(workers()).toHaveLength(1);
+      await clock.tick(1);
+      expect(workers()).toHaveLength(2);
+      await clock.settle();
+      expect(workers()[1].receivedOf("observer.sessionOpened")).toEqual([
+        { space },
+      ]);
+      expect(holderOf(workers()[1])).not.toBe(holder);
     });
 
-    await host.close();
-
-    expect(workers[0].terminated).toBe(true);
-    expect(hostCloses).toBe(0);
-    expect(released).toHaveLength(1);
-  });
-
-  it("cancels a pending replacement when closed", async () => {
-    using fakes = fakeWorkers();
-    const { workers } = fakes;
-    const cleared: unknown[] = [];
-    using _timer = stub(
-      globalThis,
-      "setTimeout",
-      (() => 7) as unknown as typeof setTimeout,
-    );
-    using _clear = stub(
-      globalThis,
-      "clearTimeout",
-      (id?: Parameters<typeof clearTimeout>[0]) => {
-        cleared.push(id);
-      },
-    );
-    using _init = stub(
-      ServingPortBridge.prototype,
-      "init",
-      () => Promise.resolve({ lifetimeLock: undefined }),
-    );
-    using _release = stub(
-      ServingPortBridge.prototype,
-      "releaseLeasesOf",
-      () => 0,
-    );
-    const host = new ServingWorker({
-      server,
-      identity,
-      apiUrl: new URL(import.meta.url),
+    it("leaves a space with nothing to serve unplaced once the backoff has passed", async () => {
+      start();
+      server.openSession(space, "session-1");
+      await clock.settle();
+      server.closeSession(space, "session-1");
+      workers()[0].fail();
+      await clock.tick(10);
+      await clock.settle();
+      expect(workers()).toHaveLength(1);
     });
-    await host.ready;
-    workers[0].fail();
-    await host.close();
-    expect(cleared).toEqual([7]);
-    expect(workers).toHaveLength(1);
-  });
 
-  it("reports the failed worker's last counters while its replacement waits, and none once closed", async () => {
-    using fakes = fakeWorkers();
-    const { workers } = fakes;
-    using _timer = stub(
-      globalThis,
-      "setTimeout",
-      (() => 1) as unknown as typeof setTimeout,
-    );
-    using _init = stub(
-      ServingPortBridge.prototype,
-      "init",
-      () => Promise.resolve({ lifetimeLock: undefined }),
-    );
-    using _release = stub(
-      ServingPortBridge.prototype,
-      "releaseLeasesOf",
-      () => 0,
-    );
-    const host = new ServingWorker({
-      server,
-      identity,
-      apiUrl: new URL(import.meta.url),
+    it("leaves the other spaces' workers serving", async () => {
+      const started = start();
+      server.openSession(space, "session-1");
+      server.openSession(other, "session-2");
+      await clock.settle();
+      const [failing, healthy] = workers();
+      failing.fail();
+      await clock.settle();
+      expect(healthy.terminated).toBe(false);
+      expect(started.stats().workers.serving).toBe(1);
+
+      const notice = admittedNotice(other, { seq: 3 });
+      server.admit(notice);
+      await clock.settle();
+      expect(healthy.receivedOf("observer.commitAdmitted")).toEqual([
+        { notice },
+      ]);
     });
-    try {
-      await host.ready;
-      workers[0].post({
-        t: "note",
-        method: "host.stats",
-        params: { stats: { ...emptyServingLoopStats(), activeSpaces: 1 } },
+
+    it("has a commit that would start a tenure, admitted during the backoff, handed to the space's next worker", async () => {
+      start();
+      server.admit(admittedNotice(space, { warm: true, seq: 1 }));
+      await clock.settle();
+      workers()[0].fail();
+      await clock.settle();
+      const during = admittedNotice(space, { warm: true, seq: 2 });
+      server.admit(during);
+      await clock.tick(10);
+      await clock.settle();
+      expect(workers()).toHaveLength(2);
+      expect(workers()[1].receivedOf("observer.commitAdmitted")).toEqual([
+        { notice: during },
+      ]);
+    });
+
+    it("has a lifecycle verb for its space refused with `SpaceNotServedError` until the space is placed again", async () => {
+      const started = start();
+      server.openSession(space, "session-1");
+      await clock.settle();
+      workers()[0].fail();
+      await clock.settle();
+      await expect(
+        started.runLifecycleVerb(space, { name: "upload", request: {} }),
+      ).rejects.toThrow(SpaceNotServedError);
+    });
+
+    it("keeps the counters its host last posted in the pool's, with its levels at zero", async () => {
+      const started = start();
+      server.openSession(space, "session-1");
+      await clock.settle();
+      workers()[0].host.notify("host.stats", {
+        stats: { ...emptyServingLoopStats(), waves: 3, activeSpaces: 1 },
       });
-      workers[0].fail();
-      expect(host.stats()).toBeUndefined();
-      expect(getServingLoopStats()?.activeSpaces).toBe(1);
-    } finally {
-      await host.close();
-    }
-    expect(getServingLoopStats()).toBeUndefined();
+      await clock.settle();
+      workers()[0].fail();
+      expect(started.stats()).toMatchObject({ waves: 3, activeSpaces: 0 });
+    });
+
+    it("places nothing again once the pool has closed during the backoff", async () => {
+      const started = start();
+      server.openSession(space, "session-1");
+      await clock.settle();
+      workers()[0].fail();
+      await started.close();
+      await clock.tick(1_000);
+      expect(workers()).toHaveLength(1);
+      expect(workers()[0].terminated).toBe(true);
+    });
   });
 
-  it("widens the replacement backoff across activations, and resets it once a worker commits a wave", async () => {
-    using fakes = fakeWorkers();
-    const { workers } = fakes;
-    const delays: number[] = [];
-    let restart: (() => void) | undefined;
-    using _timer = stub(
-      globalThis,
-      "setTimeout",
-      ((callback: () => void, delay: number) => {
-        restart = callback;
-        delays.push(delay);
-        return 1;
-      }) as typeof setTimeout,
-    );
-    using _init = stub(
-      ServingPortBridge.prototype,
-      "init",
-      () => Promise.resolve({ lifetimeLock: undefined }),
-    );
-    using _release = stub(
-      ServingPortBridge.prototype,
-      "releaseLeasesOf",
-      () => 0,
-    );
-    using _close = stub(
-      ServingPortBridge.prototype,
-      "closeHost",
-      () => Promise.resolve(),
-    );
-    using _commit = stub(
-      EngineWaveCommitSink.prototype,
-      "commitWave",
-      () => Promise.resolve({ ok: { seq: 1 } }),
-    );
-    const policy = { failureParkBackoffBaseMs: 10 };
-    const host = new ServingWorker({
-      server,
-      identity,
-      apiUrl: new URL(import.meta.url),
-      policy,
+  describe("a worker whose host cannot start", () => {
+    it("is terminated, and its space is placed on a fresh worker after the backoff", async () => {
+      let starts = 0;
+      fakes[Symbol.dispose]();
+      fakes = fakeServingWorkers((worker) => {
+        starts += 1;
+        if (starts === 1) worker.refuse("init failed");
+        else worker.serve();
+      });
+      const started = start();
+      server.openSession(space, "session-1");
+      await clock.settle();
+      expect(workers()[0].terminated).toBe(true);
+      expect(started.stats().workers.failed).toBe(1);
+
+      await clock.tick(10);
+      await clock.settle();
+      expect(workers()).toHaveLength(2);
+      expect(workers()[1].receivedOf("observer.sessionOpened")).toEqual([
+        { space },
+      ]);
     });
-    /** Fails the current worker and waits for its replacement to serve. */
-    const replace = async () => {
-      await host.ready;
-      const replacement = fakes.next();
-      workers.at(-1)!.fail();
-      restart!();
-      await replacement;
-      await host.ready;
+
+    it("has a lifecycle verb that placed its space refused with `SpaceNotServedError`", async () => {
+      fakes[Symbol.dispose]();
+      fakes = fakeServingWorkers((worker) => worker.refuse("init failed"));
+      const started = start();
+      await expect(
+        started.runLifecycleVerb(space, { name: "upload", request: {} }),
+      ).rejects.toThrow(SpaceNotServedError);
+    });
+
+    it("rejects `ready` when it is a spare started with the pool", async () => {
+      fakes[Symbol.dispose]();
+      fakes = fakeServingWorkers((worker) => worker.refuse("init failed"));
+      const started = start({ spareWorkers: 1 });
+      await expect(started.ready).rejects.toThrow("init failed");
+    });
+  });
+
+  describe("the backoff", () => {
+    /** Fails the worker `space` is on, and returns the one it is placed on next. */
+    const replaceAfter = async (ms: number): Promise<FakeServingWorker> => {
+      const before = workers().length;
+      workers().at(-1)!.fail();
+      await clock.tick(ms - 1);
+      expect(workers()).toHaveLength(before);
+      await clock.tick(1);
+      await clock.settle();
+      expect(workers()).toHaveLength(before + 1);
+      return workers().at(-1)!;
     };
-    try {
-      await replace();
-      workers[1].post({
-        t: "note",
-        method: "host.activationSettled",
-        params: { space, outcome: "active" },
+
+    it("widens across a space's consecutive failures, and starts over once a worker commits a wave for the space", async () => {
+      using _commit = stub(
+        EngineWaveCommitSink.prototype,
+        "commitWave",
+        () => Promise.resolve({ ok: { seq: 1 } }),
+      );
+      server.openEngine = () => Promise.resolve({} as Engine.Engine);
+      start();
+      server.openSession(space, "session-1");
+      await clock.settle();
+      await replaceAfter(10);
+      const second = await replaceAfter(20);
+      await second.host.request("sink.commitWave", {
+        sessionId: holderOf(second),
+        localSeq: 1,
+        batch: encodeMemoryBoundary({ space } as unknown as FabricValue),
       });
-      await replace();
-      const answered = workers[2].answered(1);
-      workers[2].post({
-        t: "req",
-        id: 1,
-        method: "sink.commitWave",
-        params: {
-          sessionId: "holder",
-          localSeq: 1,
-          batch: encodeMemoryBoundary({ space } as unknown as FabricValue),
-        },
+      await replaceAfter(10);
+    });
+
+    it("keeps widening past a wave the store refused", async () => {
+      using _commit = stub(
+        EngineWaveCommitSink.prototype,
+        "commitWave",
+        () =>
+          Promise.resolve({
+            error: { name: "ConflictError", message: "refused" } as never,
+          }),
+      );
+      server.openEngine = () => Promise.resolve({} as Engine.Engine);
+      start();
+      server.openSession(space, "session-1");
+      await clock.settle();
+      const first = await replaceAfter(10);
+      await first.host.request("sink.commitWave", {
+        sessionId: holderOf(first),
+        localSeq: 1,
+        batch: encodeMemoryBoundary({ space } as unknown as FabricValue),
       });
-      await answered;
-      await replace();
-      expect(delays).toEqual([10, 20, 10]);
-    } finally {
-      await host.close();
-    }
+      await replaceAfter(20);
+    });
+
+    it("of one space leaves another space's first failure at the base delay", async () => {
+      start();
+      server.openSession(space, "session-1");
+      await clock.settle();
+      await replaceAfter(10);
+      await replaceAfter(20);
+
+      server.openSession(other, "session-2");
+      await clock.settle();
+      await replaceAfter(10);
+    });
+
+    it("paces a spare's replacement, and widens while spares keep failing", async () => {
+      fakes[Symbol.dispose]();
+      fakes = fakeServingWorkers((worker) => worker.refuse("init failed"));
+      const started = start({ spareWorkers: 1 });
+      await started.ready.catch(() => {});
+      await clock.settle();
+      expect(workers()).toHaveLength(1);
+      await clock.tick(10);
+      await clock.settle();
+      expect(workers()).toHaveLength(2);
+      await clock.tick(19);
+      await clock.settle();
+      expect(workers()).toHaveLength(2);
+      await clock.tick(1);
+      await clock.settle();
+      expect(workers()).toHaveLength(3);
+    });
   });
 
   describe("the watchdog", () => {
-    /** Lets `intervals` of the worker's watchdog intervals pass. */
+    /** Lets `intervals` of the workers' watchdog intervals pass. */
     const pass = (intervals: number) => clock.tick(intervals * 10_000);
 
-    /** A running worker whose memory server keeps `leases`. */
-    const serving = async (
-      leases: ExecutionLeases,
-      over: Partial<Server> = {},
-    ) => {
-      const host = new ServingWorker({
-        server: {
-          ...server,
-          executionLeases: leases,
-          ...over,
-        } as unknown as Server,
-        identity,
-        apiUrl: new URL(import.meta.url),
+    it("kills a worker after six intervals without a message, releases its leases, counts them lost, and places its space under a fresh holder", async () => {
+      const started = start();
+      server.openSession(space, "session-1");
+      await clock.settle();
+      const [silent] = workers();
+      const holder = holderOf(silent);
+      expect(server.executionLeases.acquire(space, holder)).toBe(true);
+
+      // The first check reads the messages; five silent ones are not enough.
+      await pass(6);
+      expect(silent.terminated).toBe(false);
+      expect(server.executionLeases.holderOf(space)).toBe(holder);
+
+      await pass(1);
+      await clock.settle();
+      expect(silent.terminated).toBe(true);
+      expect(server.executionLeases.holderOf(space)).toBeUndefined();
+      expect(started.stats().lease.lost).toBe(1);
+      expect(started.stats().workers.failed).toBe(1);
+
+      await clock.tick(10);
+      await clock.settle();
+      expect(workers()).toHaveLength(2);
+      const successor = holderOf(workers()[1]);
+      expect(successor).not.toBe(holder);
+      expect(server.executionLeases.acquire(space, successor)).toBe(true);
+
+      // A successor's counters start over, and the loss still shows.
+      workers()[1].host.notify("host.stats", {
+        stats: emptyServingLoopStats(),
       });
-      await host.ready;
-      return host;
-    };
-
-    it("kills a worker after six intervals without a message, releases its leases, counts them lost, and starts a successor under a fresh holder", async () => {
-      using fakes = fakeWorkers();
-      const { workers } = fakes;
-      let restart: (() => void) | undefined;
-      using _timer = stub(
-        globalThis,
-        "setTimeout",
-        ((callback: () => void) => {
-          restart = callback;
-          return 1;
-        }) as typeof setTimeout,
-      );
-      using _init = stub(
-        ServingPortBridge.prototype,
-        "init",
-        () => Promise.resolve({ lifetimeLock: undefined }),
-      );
-      using _close = stub(
-        ServingPortBridge.prototype,
-        "closeHost",
-        () => Promise.resolve(),
-      );
-      const leases = new ExecutionLeases();
-      const host = await serving(leases);
-      try {
-        const holder = executionLeaseHolder(identity.did());
-        expect(leases.acquire(space, holder)).toBe(true);
-        workers[0].post(anyMessage);
-
-        // The first check reads the message; five silent ones are not enough.
-        await pass(6);
-        expect(workers[0].terminated).toBe(false);
-        expect(leases.holderOf(space)).toBe(holder);
-
-        await pass(1);
-        expect(workers[0].terminated).toBe(true);
-        expect(leases.holderOf(space)).toBeUndefined();
-        expect(getServingLoopStats()?.lease.lost).toBe(1);
-
-        const replacement = fakes.next();
-        restart!();
-        await replacement;
-        await host.ready;
-        const successor = executionLeaseHolder(identity.did());
-        expect(successor).not.toBe(holder);
-        expect(leases.acquire(space, successor)).toBe(true);
-
-        // A successor's counters start over, and the loss still shows.
-        workers[1].post({
-          t: "note",
-          method: "host.stats",
-          params: { stats: emptyServingLoopStats() },
-        });
-        expect(host.stats()?.lease.lost).toBe(1);
-        expect(getServingLoopStats()?.lease.lost).toBe(1);
-      } finally {
-        await host.close();
-      }
+      await clock.settle();
+      expect(started.stats().lease.lost).toBe(1);
     });
 
     it("restarts its count at a message of any kind", async () => {
-      using fakes = fakeWorkers();
-      const { workers } = fakes;
-      using _timer = stub(
-        globalThis,
-        "setTimeout",
-        (() => 1) as unknown as typeof setTimeout,
-      );
-      using _init = stub(
-        ServingPortBridge.prototype,
-        "init",
-        () => Promise.resolve({ lifetimeLock: undefined }),
-      );
-      using _close = stub(
-        ServingPortBridge.prototype,
-        "closeHost",
-        () => Promise.resolve(),
-      );
-      const host = await serving(new ExecutionLeases());
-      try {
-        workers[0].post(anyMessage);
-        await pass(6);
-        workers[0].post({
-          t: "note",
-          method: "worker.heartbeat",
-          params: null,
-        });
-        await pass(6);
-        workers[0].post({
-          t: "req",
-          id: 1,
-          method: "server.idle",
-          params: null,
-        });
-        await pass(6);
-        expect(workers[0].terminated).toBe(false);
-        await pass(1);
-        expect(workers[0].terminated).toBe(true);
-      } finally {
-        await host.close();
-      }
+      start();
+      server.openSession(space, "session-1");
+      await clock.settle();
+      const [worker] = workers();
+      await pass(6);
+      worker.beat(1);
+      await pass(6);
+      worker.host.notify("host.activationSettled", {
+        space,
+        outcome: "active",
+      });
+      await pass(6);
+      expect(worker.terminated).toBe(false);
+      await pass(1);
+      expect(worker.terminated).toBe(true);
     });
 
     it("counts nothing before a worker's first message, since its modules may still be loading", async () => {
-      using fakes = fakeWorkers();
-      const { workers } = fakes;
-      using _init = stub(
-        ServingPortBridge.prototype,
-        "init",
-        () => new Promise<never>(() => {}),
-      );
-      using _release = stub(
-        ServingPortBridge.prototype,
-        "releaseLeasesOf",
-        () => 0,
-      );
-      const host = new ServingWorker({
-        server,
-        identity,
-        apiUrl: new URL(import.meta.url),
-      });
-      try {
-        await pass(100);
-        expect(workers[0].terminated).toBe(false);
-      } finally {
-        await host.close();
+      fakes[Symbol.dispose]();
+      fakes = fakeServingWorkers(() => {});
+      start();
+      server.openSession(space, "session-1");
+      await pass(100);
+      expect(workers()[0].terminated).toBe(false);
+    });
+
+    it("leaves the other spaces' workers alone", async () => {
+      start();
+      server.openSession(space, "session-1");
+      server.openSession(other, "session-2");
+      await clock.settle();
+      const [silent, talking] = workers();
+      for (let interval = 0; interval < 7; interval += 1) {
+        await pass(1);
+        talking.beat(1);
+        await clock.settle();
       }
+      expect(silent.terminated).toBe(true);
+      expect(talking.terminated).toBe(false);
     });
 
     it("fences a commit the killed worker left in flight", async () => {
-      using fakes = fakeWorkers();
-      const { workers } = fakes;
-      using _timer = stub(
-        globalThis,
-        "setTimeout",
-        (() => 1) as unknown as typeof setTimeout,
-      );
-      using _init = stub(
-        ServingPortBridge.prototype,
-        "init",
-        () => Promise.resolve({ lifetimeLock: undefined }),
-      );
-      const leases = new ExecutionLeases();
       const path = await Deno.makeTempFile({ suffix: ".sqlite" });
       const engine = await Engine.open({
         url: toFileUrl(path),
-        executionLeases: leases,
+        executionLeases: server.executionLeases,
       });
       let opening = Promise.resolve();
-      const host = await serving(leases, {
-        engineForSpace: async () => {
-          await opening;
-          return engine;
-        },
-        noteExecutorCommit: () => {},
-      });
-      const commit = async (id: number, doc: string) => {
-        const answered = workers[0].answered(id);
-        workers[0].post({
-          t: "req",
-          id,
-          method: "sink.commitWave",
-          params: {
-            sessionId: holder,
-            localSeq: id,
-            batch: encodeMemoryBoundary({
-              space,
-              home: true,
-              basisSeq: Engine.serverSeq(engine),
-              rebasedHeads: [],
-              operations: [{ op: "set", id: doc, value: { value: { id } } }],
-              preconditions: [],
-              holder,
-              annotations: [],
-              consequenceOf: [],
-              basisInstances: [],
-            } as unknown as FabricValue),
-          },
-        });
-        return await answered as {
-          result: { ok?: unknown; error?: { message: string } };
-        };
+      server.openEngine = async () => {
+        await opening;
+        return engine;
       };
-      const holder = executionLeaseHolder(identity.did());
-      // A process's own claim on the flag, which outlasts the killed worker's
-      // bridge, so that the lease is what refuses the commit.
+      start();
+      server.openSession(space, "session-1");
+      await clock.settle();
+      const [worker] = workers();
+      const holder = holderOf(worker);
+      const commit = (localSeq: number, doc: string) =>
+        worker.host.request("sink.commitWave", {
+          sessionId: holder,
+          localSeq,
+          batch: encodeMemoryBoundary({
+            space,
+            home: true,
+            basisSeq: Engine.serverSeq(engine),
+            rebasedHeads: [],
+            operations: [{ op: "set", id: doc, value: { value: { doc } } }],
+            preconditions: [],
+            holder,
+            annotations: [],
+            consequenceOf: [],
+            basisInstances: [],
+          } as unknown as FabricValue),
+        });
+      // A process's own claim on the flag, which outlasts the pool, so that
+      // the lease is what refuses the commit.
       const releaseServerExecution = acquireServerExecutionEnabler();
       try {
-        expect(leases.acquire(space, holder)).toBe(true);
-        expect((await commit(1, "of:before-the-kill")).result.ok).toBeDefined();
+        expect(server.executionLeases.acquire(space, holder)).toBe(true);
+        expect((await commit(1, "of:before-the-kill")).ok).toBeDefined();
         const head = Engine.serverSeq(engine);
 
-        // The commit waits on the engine past the kill, and the lease has gone
-        // by the time it reaches admission.
+        // The commit waits on the engine past the kill, and the lease has
+        // gone by the time it reaches admission. Its answer has no worker to
+        // go to; what shows the refusal is the store.
         const held = defer<void>();
         opening = held.promise;
-        const inFlight = commit(2, "of:after-the-kill");
+        commit(2, "of:after-the-kill").catch(() => {});
+        await clock.settle();
         await pass(7);
-        expect(workers[0].terminated).toBe(true);
+        expect(worker.terminated).toBe(true);
         held.resolve();
-        const { result } = await inFlight;
-        expect(result.ok).toBeUndefined();
-        expect(result.error?.message).toContain("execution lease");
+        await clock.settle();
         expect(Engine.serverSeq(engine)).toBe(head);
       } finally {
-        await host.close();
+        await pool?.close();
         releaseServerExecution();
         Engine.close(engine);
         await Deno.remove(path);
@@ -666,26 +455,53 @@ describe("serving-worker-recovery", () => {
     });
 
     it("settles a close whose worker stalled before its host could answer", async () => {
-      using fakes = fakeWorkers();
-      const { workers } = fakes;
-      using _init = stub(
-        ServingPortBridge.prototype,
-        "init",
-        () => Promise.resolve({ lifetimeLock: undefined }),
-      );
-      const leases = new ExecutionLeases();
-      const host = await serving(leases);
-      const holder = executionLeaseHolder(identity.did());
-      expect(leases.acquire(space, holder)).toBe(true);
-      workers[0].post(anyMessage);
+      fakes[Symbol.dispose]();
+      fakes = fakeServingWorkers((worker) => {
+        worker.host.onRequest("host.close", () => new Promise<never>(() => {}));
+        worker.serve();
+      });
+      const started = start();
+      server.openSession(space, "session-1");
+      await clock.settle();
+      const [worker] = workers();
+      const holder = holderOf(worker);
+      expect(server.executionLeases.acquire(space, holder)).toBe(true);
 
-      const closed = host.close();
+      const closing = started.close();
       await pass(7);
-      await closed;
+      await closing;
 
-      expect(workers[0].terminated).toBe(true);
-      expect(workers).toHaveLength(1);
-      expect(leases.holderOf(space)).toBeUndefined();
+      expect(worker.terminated).toBe(true);
+      expect(workers()).toHaveLength(1);
+      expect(server.executionLeases.holderOf(space)).toBeUndefined();
+    });
+  });
+
+  describe("a close", () => {
+    it("settles when a worker fails while its host closes, and releases the worker's leases", async () => {
+      const closingHost = defer<void>();
+      fakes[Symbol.dispose]();
+      fakes = fakeServingWorkers((worker) => {
+        worker.host.onRequest("host.close", () => {
+          closingHost.resolve();
+          return new Promise<never>(() => {});
+        });
+        worker.serve();
+      });
+      const started = start();
+      server.openSession(space, "session-1");
+      await clock.settle();
+      const [worker] = workers();
+      expect(server.executionLeases.acquire(space, holderOf(worker))).toBe(
+        true,
+      );
+      const closing = started.close();
+      await closingHost.promise;
+      worker.fail();
+      await closing;
+      expect(worker.terminated).toBe(true);
+      expect(workers()).toHaveLength(1);
+      expect(server.executionLeases.holderOf(space)).toBeUndefined();
     });
   });
 });
