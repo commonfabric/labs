@@ -13,6 +13,7 @@ import {
 import { Server } from "../v2/server.ts";
 import {
   hasServerMessageCidReferences,
+  namesPrincipal,
   referenceServerMessageSchemaDocuments,
   resolveServerMessageCidReferences,
   type SchemaDocumentLookup,
@@ -407,6 +408,17 @@ describe("sync-cid-references", () => {
       }]);
     });
 
+    it("keeps a `cid:` upsert that carries no document as it is", () => {
+      const message = responseWith([{
+        branch: "",
+        id: `cid:${leafHash}`,
+        seq: 3,
+      }]);
+      expect(referenceServerMessageSchemaDocuments(message, lookup)).toBe(
+        message,
+      );
+    });
+
     it("keeps deleted and non-`cid:` upserts as they are", () => {
       const message = responseWith([
         { branch: "", id: `cid:${leafHash}`, seq: 5, deleted: true },
@@ -415,6 +427,19 @@ describe("sync-cid-references", () => {
       expect(referenceServerMessageSchemaDocuments(message, lookup)).toBe(
         message,
       );
+    });
+  });
+
+  describe("namesPrincipal()", () => {
+    it("returns `true` for a schema holding a DID and `false` for one holding a placeholder", () => {
+      expect(namesPrincipal(boundSchema as unknown as JSONSchema)).toBe(true);
+      expect(namesPrincipal(placeholderSchema as unknown as JSONSchema)).toBe(
+        false,
+      );
+    });
+
+    it("returns `false` for a boolean schema", () => {
+      expect(namesPrincipal(true)).toBe(false);
     });
   });
 
@@ -741,6 +766,255 @@ describe("sync-cid-references", () => {
         expect(counts.references).toBe(0);
         expect(documentIn(view, `cid:${boundHash}`)).toEqual({
           value: boundSchema,
+        });
+      } finally {
+        await writerClient.close();
+        await watcherClient.close();
+        await server.close();
+      }
+    });
+
+    it("hands on a session's later syncs after its held one, in order", async () => {
+      // A write lands while the watch's answer waits for a body. The effect
+      // carrying it is held behind that answer, and both apply once the
+      // body arrives, the write last.
+      const server = new Server({
+        ...testSessionOpenServerOptions,
+        store: new URL("memory://sync-cid-references-queued"),
+        subscriptionRefreshDelayMs: 0,
+      });
+      const referenced = Promise.withResolvers<void>();
+      const effected = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const inner = loopback(server);
+      const transport: Transport = {
+        ...inner,
+        send: (payload: string) => inner.send(payload),
+        close: () => inner.close(),
+        setReceiver(receiver: (payload: string) => void) {
+          inner.setReceiver((payload: string) => {
+            if (payload.includes('"byReference":true')) {
+              acquireSchemaRegistryLease()();
+              referenced.resolve();
+            }
+            if (payload.includes('"session/effect"')) effected.resolve();
+            if (payload.includes('"entities"')) {
+              void release.promise.then(() => receiver(payload));
+            } else {
+              receiver(payload);
+            }
+          });
+        },
+      };
+      const writerClient = await connect({ transport: loopback(server) });
+      const watcherClient = await connect({
+        transport,
+        syncCidReferences: true,
+      });
+      const space = "did:key:z6Mk-sync-cid-references-queued";
+      const carrier = "of:sync-cid-references-queued";
+      try {
+        const writer = await writerClient.mount(
+          space,
+          {},
+          testSessionOpenAuthFactory,
+        );
+        await writer.transact({
+          localSeq: 1,
+          reads: { confirmed: [], pending: [] },
+          operations: closureOperations(carrier),
+        });
+        const watcher = await watcherClient.mount(
+          space,
+          {},
+          testSessionOpenAuthFactory,
+        );
+        const watching = watcher.watchSet([{
+          id: "carrier",
+          kind: "graph",
+          query: {
+            roots: [{ id: carrier, selector: { path: [], schema: false } }],
+          },
+        }]);
+        await referenced.promise;
+        await writer.transact({
+          localSeq: 2,
+          reads: { confirmed: [], pending: [] },
+          operations: [{
+            op: "set",
+            id: carrier,
+            value: { value: { x: linkWithSchemaRef(outerHash), second: true } },
+          }],
+        });
+        await effected.promise;
+        release.resolve();
+        await watching;
+        const view = (await watcher.watchAddSync([])).view;
+        expect(documentIn(view, carrier)?.value).toEqual({
+          x: linkWithSchemaRef(outerHash),
+          second: true,
+        });
+        expect(documentIn(view, `cid:${outerHash}`)).toEqual({
+          value: outerSchema,
+        });
+      } finally {
+        await writerClient.close();
+        await watcherClient.close();
+        await server.close();
+      }
+    });
+
+    it("ends a sync's wait for a body when the client closes", async () => {
+      const server = new Server({
+        ...testSessionOpenServerOptions,
+        store: new URL("memory://sync-cid-references-closed"),
+        subscriptionRefreshDelayMs: 0,
+      });
+      const referenced = Promise.withResolvers<void>();
+      const inner = loopback(server);
+      const transport: Transport = {
+        ...inner,
+        send: (payload: string) => inner.send(payload),
+        close: () => inner.close(),
+        setReceiver(receiver: (payload: string) => void) {
+          inner.setReceiver((payload: string) => {
+            if (payload.includes('"byReference":true')) {
+              acquireSchemaRegistryLease()();
+              referenced.resolve();
+            }
+            // The body fetch is never answered.
+            if (!payload.includes('"entities"')) receiver(payload);
+          });
+        },
+      };
+      const writerClient = await connect({ transport: loopback(server) });
+      const watcherClient = await connect({
+        transport,
+        syncCidReferences: true,
+      });
+      const space = "did:key:z6Mk-sync-cid-references-closed";
+      const carrier = "of:sync-cid-references-closed";
+      try {
+        const writer = await writerClient.mount(
+          space,
+          {},
+          testSessionOpenAuthFactory,
+        );
+        await writer.transact({
+          localSeq: 1,
+          reads: { confirmed: [], pending: [] },
+          operations: closureOperations(carrier),
+        });
+        const watcher = await watcherClient.mount(
+          space,
+          {},
+          testSessionOpenAuthFactory,
+        );
+        let failure: unknown;
+        const watching = watcher.watchSet([{
+          id: "carrier",
+          kind: "graph",
+          query: {
+            roots: [{ id: carrier, selector: { path: [], schema: false } }],
+          },
+        }]).catch((error) => {
+          failure = error;
+        });
+        await referenced.promise;
+        await watcherClient.close();
+        await watching;
+        await watcherClient.delivered();
+        expect((failure as Error | undefined)?.message).toBe(
+          "memory client closed",
+        );
+      } finally {
+        await writerClient.close();
+        await server.close();
+      }
+    });
+
+    it("fetches a body again from its own space when the fetch it shared returns none", async () => {
+      // Two spaces' frames name the same bodies on one direct connection.
+      // The first space's fetch comes back empty, after the second's frame
+      // has begun to wait on it, so the second asks its own space.
+      const server = new Server({
+        ...testSessionOpenServerOptions,
+        store: new URL("memory://sync-cid-references-shared-empty"),
+        subscriptionRefreshDelayMs: 0,
+      });
+      let references = 0;
+      let answers = 0;
+      let queries = 0;
+      const bothFramesArrived = Promise.withResolvers<void>();
+      const inner = loopback(server);
+      const transport: Transport = {
+        ...inner,
+        send: (payload: string) => {
+          if (payload.includes('"graph.query"')) queries++;
+          return inner.send(payload);
+        },
+        close: () => inner.close(),
+        setReceiver(receiver: (payload: string) => void) {
+          inner.setReceiver((payload: string) => {
+            if (payload.includes('"byReference":true')) {
+              acquireSchemaRegistryLease()();
+              if (++references === 2) bothFramesArrived.resolve();
+            }
+            if (payload.includes('"entities"') && answers++ === 0) {
+              // The first fetch's answer, emptied, once both frames wait.
+              const message = JSON.parse(payload.slice("fvj1:".length));
+              message.ok.entities = [];
+              const emptied = `fvj1:${JSON.stringify(message)}`;
+              void bothFramesArrived.promise.then(() => receiver(emptied));
+            } else {
+              receiver(payload);
+            }
+          });
+        },
+      };
+      const writerClient = await connect({ transport: loopback(server) });
+      const watcherClient = await connect({
+        transport,
+        syncCidReferences: true,
+      });
+      const spaces = [
+        "did:key:z6Mk-sync-cid-references-shared-empty-a",
+        "did:key:z6Mk-sync-cid-references-shared-empty-b",
+      ];
+      const carrier = "of:sync-cid-references-shared-empty";
+      try {
+        for (const space of spaces) {
+          const writer = await writerClient.mount(
+            space,
+            {},
+            testSessionOpenAuthFactory,
+          );
+          await writer.transact({
+            localSeq: 1,
+            reads: { confirmed: [], pending: [] },
+            operations: closureOperations(carrier),
+          });
+        }
+        const [a, b] = await Promise.all(
+          spaces.map((space) =>
+            watcherClient.mount(space, {}, testSessionOpenAuthFactory)
+          ),
+        );
+        const watch = [{
+          id: "carrier",
+          kind: "graph" as const,
+          query: {
+            roots: [{ id: carrier, selector: { path: [], schema: false } }],
+          },
+        }];
+        const [viewA, viewB] = await Promise.all([
+          a.watchSet(watch),
+          b.watchSet(watch),
+        ]);
+        expect(queries).toBe(2);
+        expect(documentIn(viewA, `cid:${outerHash}`)).toBeUndefined();
+        expect(documentIn(viewB, `cid:${outerHash}`)).toEqual({
+          value: outerSchema,
         });
       } finally {
         await writerClient.close();

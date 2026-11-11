@@ -151,6 +151,18 @@ export const hasServerMessageCidReferences = (message: unknown): boolean =>
   ) ?? false;
 
 /**
+ * Throws as {@link resolveServerMessageCidReferences} does when `message`'s
+ * sync holds a malformed reference, and returns otherwise, resolving
+ * nothing. The client checks a sync it holds back this way when it arrives,
+ * so one it hands on later cannot fail.
+ *
+ * @throws TypeError when a reference is not a live `cid:` upsert.
+ */
+export const assertCidReferencesWellFormed = (message: unknown): void => {
+  resolveServerMessageCidReferences(message, () => undefined);
+};
+
+/**
  * Resolves the references in `message`'s sync through `lookup`. A hash in
  * `unresolvable` is one the client could not fetch: its reference is dropped,
  * which leaves arrival validation to quarantine every document whose refs

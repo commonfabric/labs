@@ -108,6 +108,7 @@ import {
   hasServerMessageLabelMetadata,
 } from "./sync-label-table.ts";
 import {
+  assertCidReferencesWellFormed,
   fetchedSchemaDocument,
   hasServerMessageCidReferences,
   namesPrincipal,
@@ -216,7 +217,9 @@ type CidReferenceHold = {
    * schema that names a principal needs before it resolves.
    */
   readonly fetched: Set<string>;
-  readonly epoch: number;
+
+  /** The turn the next held message is handed on in, while one is armed. */
+  turn?: ArmedTurn;
 
   /** Resolved once the hold ends, its syncs handed on or discarded. */
   readonly ended: PromiseWithResolvers<void>;
@@ -1110,6 +1113,7 @@ export class Client {
     this.#cancelRenewals();
     this.#endRenewals(new Error("memory client closed"));
     this.#endHeldMounts(new Error("memory client closed"));
+    this.#dropCidReferenceHolds();
     this.#rejectPending(new Error("memory client closed"));
     // Session background sends may be waiting for peer upload credit. Closing
     // the transport rejects those waits before session teardown awaits them.
@@ -2766,6 +2770,9 @@ export class Client {
     const key = this.#holdKey(message);
     const held = this.#cidReferenceHolds.get(key);
     if (held !== undefined) {
+      // Checked now, so that a malformed sync fails as it arrives, as any
+      // undecodable message does, rather than when the hold hands it on.
+      assertCidReferencesWellFormed(message);
       held.queue.push(message);
       return undefined;
     }
@@ -2778,7 +2785,6 @@ export class Client {
       queue: [message],
       unresolvable: new Set(),
       fetched: new Set(),
-      epoch: this.#connectionEpoch,
       ended: Promise.withResolvers(),
     };
     this.#cidReferenceHolds.set(key, hold);
@@ -2845,6 +2851,7 @@ export class Client {
   #dropCidReferenceHold(key: string, hold: CidReferenceHold): void {
     if (this.#cidReferenceHolds.get(key) !== hold) return;
     this.#cidReferenceHolds.delete(key);
+    hold.turn?.cancel();
     hold.ended.resolve();
     const error = connectionError(
       "Memory connection closed while syncs waited for schema documents",
@@ -2858,54 +2865,45 @@ export class Client {
 
   /**
    * Helper for the reference hold, which hands on the held syncs of one
-   * session in order, as far as the registry now resolves them, and fetches
-   * again for the first that names a body still missing. A reference whose
-   * fetch failed is dropped, so arrival validation quarantines what reaches
-   * it. A hold the connection outlived is discarded by `#hello()`.
+   * session in order, one a turn, as far as the registry now resolves them,
+   * and fetches again for the first that names a body still missing. A
+   * reference whose fetch failed is dropped, so arrival validation
+   * quarantines what reaches it. A hold the connection outlived is
+   * discarded by `#hello()`, and every hold by `close()`.
    */
   #drainCidReferenceHold(key: string, hold: CidReferenceHold): void {
     if (this.#cidReferenceHolds.get(key) !== hold) return;
-    // A hold whose connection was replaced hands nothing on: its syncs came
-    // over a connection that is gone, and the resume delivers them again.
-    if (hold.epoch !== this.#connectionEpoch || !this.#connected) {
-      this.#dropCidReferenceHold(key, hold);
+    hold.turn = undefined;
+    // Every held sync was checked as it arrived (`#admitCidReferences()`),
+    // so resolving one cannot throw.
+    const resolved = resolveServerMessageCidReferences(
+      hold.queue[0],
+      lookupSchemaDocument,
+      hold.unresolvable,
+      hold.fetched,
+    );
+    if (resolved.missing.length > 0) {
+      this.#fetchHeldCidBodies(key, hold, resolved.missing);
       return;
     }
-    while (hold.queue.length > 0) {
-      let resolved;
-      try {
-        resolved = resolveServerMessageCidReferences(
-          hold.queue[0],
-          lookupSchemaDocument,
-          hold.unresolvable,
-          hold.fetched,
-        );
-      } catch (cause) {
-        this.#cidReferenceHolds.delete(key);
-        hold.ended.resolve();
-        const error = new Error("Unable to parse memory server message", {
-          cause,
-        });
-        error.name = "InvalidMessageError";
-        for (const session of this.#spaces) session.invalidateDelivery(error);
-        this.restartConnection(error);
-        return;
-      }
-      if (resolved.missing.length > 0) {
-        this.#fetchHeldCidBodies(key, hold, resolved.missing);
-        return;
-      }
-      hold.queue.shift();
-      this.#dispatchMessage(resolved.message);
+    hold.queue.shift();
+    this.#dispatchMessage(resolved.message);
+    if (hold.queue.length === 0) {
+      this.#cidReferenceHolds.delete(key);
+      hold.ended.resolve();
+      return;
     }
-    this.#cidReferenceHolds.delete(key);
-    hold.ended.resolve();
+    // One held message a turn, as a transport hands messages over: a
+    // message's continuations — a watch answer's, which installs the view an
+    // effect after it applies to — run before the next one is handled.
+    hold.turn = armTurn(() => this.#drainCidReferenceHold(key, hold));
   }
 
   /**
-   * Helper for `#hello()`, which discards the holds of a connection being
-   * replaced. Its server recorded their syncs as delivered, so each held
-   * session's next restore declares what its replica actually holds.
+   * Helper for `#hello()` and `close()`, which discards the holds of a
+   * connection being replaced or closed. Its server recorded their syncs as
+   * delivered, so each held session's next restore declares what its replica
+   * actually holds.
    */
   #dropCidReferenceHolds(): void {
     if (this.#cidReferenceHolds.size === 0) return;
@@ -2917,7 +2915,10 @@ export class Client {
         session.invalidateDelivery(error);
       }
     }
-    for (const hold of this.#cidReferenceHolds.values()) hold.ended.resolve();
+    for (const hold of this.#cidReferenceHolds.values()) {
+      hold.turn?.cancel();
+      hold.ended.resolve();
+    }
     this.#cidReferenceHolds.clear();
   }
 
@@ -3048,7 +3049,8 @@ export class Client {
         },
       });
       for (const entity of result.entities) {
-        if (!entity.id.startsWith("cid:")) continue;
+        // An entity that is not the `cid:` document it is read as fails the
+        // identity check below.
         const hash = entity.id.slice("cid:".length);
         const schema = fetchedSchemaDocument(hash, entity.document);
         if (schema === undefined) continue;
