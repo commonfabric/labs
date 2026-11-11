@@ -71,7 +71,8 @@ next.
 
 ## Decided
 
-Each ruling is written into the documents. This list exists so that none is
+Each ruling is written into the documents, except the ones marked *pending*,
+which the reconciliation pass writes in. This list exists so that none is
 relitigated.
 
 **Architecture**
@@ -85,10 +86,17 @@ relitigated.
   subset the compiler's statelessness check is the enforcement; the load-time
   verifier runs only on imported TypeScript modules.
 - Execution is authoritative on the server. Clients speculate from the same
-  compiled artifact, evaluate the same gates, and never request effects.
+  compiled artifact, evaluate the same gates, and never request effects,
+  with one exception: a client enacts `navigateTo` from its speculative run,
+  reconciled with the server's result as it is today. *(The exception is
+  pending.)*
 - One transaction per cause. A failed constraint rejects the cause's whole
   transaction. A failed cone takes a labeled error state and the rest
   commits.
+- Several events are handled in one batch. Before a handler body runs, the
+  stale cones it reads are evaluated, the ones an earlier event of the batch
+  made stale included. Every other derivation the batch made stale settles
+  once behind the batch, not once per event. *(Pending.)*
 
 **Language**
 
@@ -127,6 +135,12 @@ relitigated.
 - The keep set of an instance is everything reachable from its result cell,
   the rendered `[UI]` tree included. Interim values are not stored and not
   labeled.
+- The keep set is stored in as many documents as serve its readers, not in
+  one. A kept subtree, such as a row of a kept collection or a part of the
+  rendered tree, can have a document of its own, linked from the result, so
+  that a reader loads and subscribes to the parts it uses. One evaluation
+  writes all the documents it changed in one transaction. The split can be
+  fine, and the runtime decides it by a rule about size. *(Pending.)*
 - A state cell's identifier derives from its cause, with the name taken from
   the assigned variable as the transformer's `.for(...)` does.
 - A `map` element is keyed by its value when it is a plain value and by its
@@ -139,9 +153,12 @@ relitigated.
 
 **Labels**
 
-- Template labels are equal to or tighter than today's, with one deliberate
-  exception: the collection index, where the keys of absent elements join a
-  bucket's membership label.
+- Template labels are equal to or tighter than today's, with two deliberate
+  exceptions. One is the collection index, where the keys of absent elements
+  join a bucket's membership label. The other is a read through a handle
+  that is static because every run that returns normally makes it: a run
+  that throws before the read carries the read's label all the same.
+  *(The second is pending.)*
 - `findIndex`, `some`, and `every` use the prefix rule: elements after the
   deciding one do not join the label.
 - A factory value that changes under a child tears the child down and starts
@@ -157,32 +174,20 @@ documents make until it is answered. "ES", "SS", and "FA" are
 open-questions section, and the other numbers are findings of the cross-read
 record.
 
-**Findings that argue against a ruling.** The documents apply each ruling as
-written. The owner decides whether it stands.
+**A finding that argues against a ruling.**
 
-1. **How far a rejection reaches** (SS question 1). A cause's transaction
-   covers every demanded instance of the space, for every demanding
-   principal, so a send can be refused because an unrelated instance that
-   reads the same list fails a constraint, and whether it is refused depends
-   on which sessions have that instance open. Today a failing node's write
-   is dropped alone.
-2. **Derivations inside each event's transaction** (SS question 3). A body
-   that reads a whole collection is evaluated once per event of a burst,
-   where the serving loop today settles once behind several events.
-   *Assumed:* accepted, and the storage changes of one drained batch are one
-   cause.
-3. **The size of a result document** (ES question 1). With the rendered tree
-   as path entries of one document, a room's result holds every row's tree
-   and a reader loads all of it. *Assumed:* one document, written by
-   path-level patches, measured at stage 4.
-4. **A client and `navigateTo`** (finding 23). SS has a client enact
-   navigation from a speculative run; the ruling says clients never request
-   effects.
-5. **Runs that throw** (F9). A read through a handle is static when it is
-   unconditional among the runs that return normally. On a run that throws
-   before the read, today's transaction never makes it, and the labeled
-   outcome then holds a label today's does not. This would be a second
-   exception to "equal to or tighter".
+1. **How far a rejection reaches** (SS question 1, SS §5.6). With
+   derivations settling once behind a batch, an event's transaction holds
+   the handler's reads, its body, and its writes. A constraint on one of
+   those writes rejects the event, as ruled. What is open is the
+   transaction behind the batch, which derives the stale outputs of every
+   demanded instance of the space for every demanding principal. If one
+   kept output there fails a constraint, the ruling as written rejects all
+   of that transaction, so no instance's outputs are derived while one
+   instance's constraint fails, and which instances are in the transaction
+   depends on which sessions have them open. The alternative is that the
+   failing output alone is not written, as a failed cone's is not, and the
+   rest commits. Today a failing node's write is dropped alone.
 
 **Label rules.** Each changes what Contextual Flow Control decides, so the
 answer goes to the specification with the document.
@@ -270,6 +275,9 @@ answer goes to the specification with the document.
     the language subset.
 29. **Two senses of "cause"** (A17): what a transaction is opened for, and
     the seed of an identifier, as in `.for(cause)`.
+30. **`inspectConfLabel` on an interim value** (K3). The plan document
+    instantiates the value's template when asked; the inventory answers
+    `notAvailable`. The ruling says an interim value is not labeled.
 
 ## Open, and not needing the owner
 
@@ -305,6 +313,14 @@ correction. The ones more depends on:
   parameter in the element key (A1), when a received handler's writer
   policy is checked (A3), the durable state of `reduce` (A4), diagnostics
   with no catalog entry (A6, A13), and fourteen sentences of the overview.
+- **Where a result is split into documents.** The ruling leaves the rule
+  about size to `execution-and-storage.md`: which subtrees get a document
+  of their own, how such a document is identified so that a reorder moves
+  a link and not a subtree, and what a reader of a part demands.
+- **The pattern closure's remaining gaps** (K12): which output or argument
+  path holds which entry of `Plan.closures`, a conditional between two
+  closures, a closure called through `inSpace`, and the private parameters
+  of an inline pattern instantiated from a function body.
 - **Corpus counts** differ among `language-subset.md`,
   `builtin-inventory.md`, and `footprint-analysis.md` (K4, K5, A16, F20).
 
@@ -351,7 +367,8 @@ The open questions each document ends with stay where they are.
    [Decided](#decided) and the question removed.
 2. **One reconciliation pass per document,** each by one author, applying
    the corrections of the cross-read record that need no ruling and the
-   rulings that exist by then. The order follows what governs:
+   rulings that exist by then, the pending ones of the Decided list first.
+   The order follows what governs:
    `plan-and-label-templates.md` first, because most requests are addressed
    to it, with specs pull request #91 changed in the same pass; then
    `builtin-inventory.md` and `language-subset.md`; then the three newer
