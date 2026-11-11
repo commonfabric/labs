@@ -810,6 +810,17 @@ export interface ComposerAttachment {
 }
 
 /**
+ * A file taken out of a composer before a send, whose entry the composer is
+ * removing from the store again: the request adding it, and whether the
+ * composer has sent the store's `remove` for the entry yet, under
+ * `removalRequestId()` of that request.
+ */
+export interface TakenOutAttachment extends ComposerAttachment {
+  /** Whether the composer has sent the store's `remove` for the entry. */
+  removing?: boolean;
+}
+
+/**
  * Where a rendered composer keeps its drafts, reply, edit, and attachments.
  */
 export interface ComposerState {
@@ -824,6 +835,14 @@ export interface ComposerState {
    * the request adding it to the space's store.
    */
   attaching?: ComposerAttachment[];
+
+  /**
+   * The files taken out of the composer whose removal from the store has not
+   * settled: each whose `add` has yet to answer, whose `remove` has yet to
+   * answer, or whose `remove` the store refused, which the composer shows
+   * until the person dismisses it.
+   */
+  takenOut?: TakenOutAttachment[];
 
   /** The message being edited. */
   editing?: MessageCell;
@@ -1433,10 +1452,67 @@ const composedAttachments = (
 };
 
 /**
+ * The request id under which a composer removes the entry that its request
+ * `requestId` added. It is the same on every run, so the store acts on one
+ * `remove` for an entry however often it is sent, and never on a second one
+ * after refusing the first.
+ */
+export const removalRequestId = (requestId: string): string =>
+  `${requestId}-remove`;
+
+/**
+ * Whether `outcome`, of a composer's `remove`, leaves the entry out of the
+ * store: done, or refused because the store holds no such entry.
+ */
+const isRemoved = (outcome: FileRequestOutcome): boolean =>
+  outcome.status === "done" || outcome.code === "not-found";
+
+/**
+ * Helper for the composer's handlers, which moves each file in `takenOut` on
+ * as far as the store's outcomes allow, and keeps what is left as the
+ * composer's files taken out. A file whose `add` is done has its entry
+ * removed with the store's `remove`; one whose `add` was refused added
+ * nothing, and one whose removal is done, or found no entry, is removed, and
+ * neither is kept. One whose `add` or `remove` has yet to answer is kept, and
+ * so is one whose `remove` was refused otherwise, which the composer shows
+ * and never sends again. Each request's outcome is read by its id alone.
+ */
+const settleTakenOut = (
+  composer: ComposerCell,
+  store: Cell<FileStoreOutput> | undefined,
+  takenOut: readonly TakenOutAttachment[],
+): void => {
+  const target = store?.resolveAsCell();
+  if (target === undefined) {
+    composer.key("takenOut").set(
+      takenOut.length === 0 ? undefined : [...takenOut],
+    );
+    return;
+  }
+  const requests = target.key("requests");
+  const outcomeOf = (requestId: string) =>
+    requests.key(requestId).get() as FileRequestOutcome | undefined;
+  const kept = takenOut.flatMap((file): TakenOutAttachment[] => {
+    const removalId = removalRequestId(file.requestId);
+    if (file.removing === true) {
+      const removal = outcomeOf(removalId);
+      return removal !== undefined && isRemoved(removal) ? [] : [file];
+    }
+    const added = outcomeOf(file.requestId);
+    if (added === undefined) return [file];
+    if (added.status !== "done") return [];
+    target.key("remove").send({ requestId: removalId, entry: added.entry });
+    return [{ ...file, removing: true }];
+  });
+  composer.key("takenOut").set(kept.length === 0 ? undefined : kept);
+};
+
+/**
  * Sends a rendered composer's text, from `ChatSendSurface`, replying in the
  * main conversation to the message the composer holds, if any, and attaching
  * the files the store added for it. Ends that reply and those attachments, and
- * clears the draft only if it still identifies the submitted edit.
+ * clears the draft only if it still identifies the submitted edit. Moves the
+ * composer's files taken out on, as `settleTakenOut()` does.
  */
 export const commitComposerSend = handler<RoomStreamEvent, ComposerSendState>(
   (event, { myProfile, messages, composer, store, joined }) => {
@@ -1445,6 +1521,7 @@ export const commitComposerSend = handler<RoomStreamEvent, ComposerSendState>(
     const reply = link?.get() === undefined ? undefined : link;
     if (reply !== undefined) checkComposedQuote(reply, "main");
     const attaching = composer.get()?.attaching ?? [];
+    const takenOut = composer.get()?.takenOut ?? [];
     sendInto(
       event,
       composedAttachments(attaching, store),
@@ -1456,6 +1533,7 @@ export const commitComposerSend = handler<RoomStreamEvent, ComposerSendState>(
     clearSubmittedDraft(event, composer.key("draft"));
     if (reply !== undefined) composer.key("replyTo").set(undefined);
     if (attaching.length > 0) composer.key("attaching").set(undefined);
+    if (takenOut.length > 0) settleTakenOut(composer, store, takenOut);
   },
 );
 
@@ -1521,7 +1599,22 @@ export interface DropAttachmentState {
   /** The session's composer state, whose attachment the control removes. */
   composer: ComposerCell;
 
+  /**
+   * The space's file store, from which the control removes the entry the
+   * request added; absent while the space keeps none.
+   */
+  store?: Cell<FileStoreOutput>;
+
   /** The request adding the attachment removed. */
+  requestId: string;
+}
+
+/** What a composer's control dismissing a refused removal is bound to. */
+export interface DismissRemovalState {
+  /** The session's composer state, whose file taken out the control drops. */
+  composer: ComposerCell;
+
+  /** The request that added the file whose removal was refused. */
   requestId: string;
 }
 
@@ -1542,7 +1635,9 @@ export const prepareAttach = handler<unknown, PrepareAttachState>(
  * the request adding it. The store's outcome for each request says which
  * entry it added, or why it refused, and the composer's send reads that. Each
  * request is named by the event's key and the file's place in it, so every
- * run of one event names the same requests, and the store adds each file once.
+ * run of one event names the same requests, and the store adds each file once:
+ * a file attached again is a new request, whatever became of the last. Moves
+ * the composer's files taken out on, as `settleTakenOut()` does.
  *
  * @throws If the space has no store, or the files would make more
  *   attachments than the room's policy allows.
@@ -1574,19 +1669,44 @@ export const commitAttach = handler<UploadEvent, AttachState>(
       });
       return { requestId, name: file.name };
     });
+    const takenOut = composer.get()?.takenOut ?? [];
     composer.key("attaching").set([...attaching, ...added]);
+    if (takenOut.length > 0) settleTakenOut(composer, store, takenOut);
   },
 );
 
 /**
- * Takes one file out of the composer's attachments. Its entry stays in the
- * store, where the request put it.
+ * Takes one file out of the composer's attachments, and removes the entry its
+ * request added from the store: at once where the request is done, and
+ * otherwise once a later run of one of the composer's handlers finds it done,
+ * as `settleTakenOut()` does. A request the store refused added nothing to
+ * remove.
  */
 export const dropAttachment = handler<unknown, DropAttachmentState>(
-  (_event, { composer, requestId }) => {
+  (_event, { composer, store, requestId }) => {
     const attaching = composer.get()?.attaching ?? [];
+    const dropped = attaching.find((file) => file.requestId === requestId);
+    if (dropped === undefined) return;
     const kept = attaching.filter((file) => file.requestId !== requestId);
+    const takenOut = composer.get()?.takenOut ?? [];
     composer.key("attaching").set(kept.length === 0 ? undefined : kept);
+    settleTakenOut(composer, store, [...takenOut, {
+      requestId: dropped.requestId,
+      name: dropped.name,
+    }]);
+  },
+);
+
+/**
+ * Drops a file taken out of the composer whose removal the store refused, so
+ * that the composer stops showing the refusal. The composer never sends that
+ * removal again, and the entry stays in the store.
+ */
+export const dismissRemoval = handler<unknown, DismissRemovalState>(
+  (_event, { composer, requestId }) => {
+    const takenOut = composer.get()?.takenOut ?? [];
+    const kept = takenOut.filter((file) => file.requestId !== requestId);
+    composer.key("takenOut").set(kept.length === 0 ? undefined : kept);
   },
 );
 

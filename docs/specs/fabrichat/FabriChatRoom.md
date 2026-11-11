@@ -94,14 +94,33 @@ the time a file is picked. Each file it stores in the blob store it adds to the
 space's store with `add`, under its own name or a free one
 ([FabriFile's clients](../fabrifile/clients.md#adding-a-file)), and keeps in the
 composer as that request, which the composer shows as being attached, attached,
-or refused with the store's reason. A file can be taken out before the send,
-and its entry stays in the store. The composer's send attaches the entries the
-store added, in the order the files were picked, leaves out any the store
+or refused with the store's reason. The composer's send attaches the entries
+the store added, in the order the files were picked, leaves out any the store
 refused, and waits, refusing the send, while a file is still being added; it
 reads each request's outcome by its id alone. A send ends the composer's
-attachments. Picking more files than the room's `maxAttachments`, or picking
+attachments, and the entries it attaches stay in the store; a refused send
+keeps both. Picking more files than the room's `maxAttachments`, or picking
 any in a space that still has no store, is refused. The thread composer
 attaches nothing.
+
+A file can be taken out before the send, and the composer then removes the
+entry its request added, as
+[FabriFile's clients](../fabrifile/clients.md#attaching-a-file) require: with
+the store's `remove`, under the request id `<add's request id>-remove`, and
+only for an entry the outcome of its own `add` names. A file the store has
+added is removed as it is taken out. A file still being added leaves the list
+and the send at once, and is kept in the composer's session state until the
+store answers: nothing in a pattern runs when an outcome lands, so the
+composer sends its `remove` at the first run of one of its own handlers, an
+attach, a take-out or a send, that finds the `add` done, and drops it once the
+`add` is refused. A `remove` refused as `not-found` counts as done. Any other
+refusal the composer shows once, as the file's name and the store's reason,
+until the person dismisses it, and never sends that `remove` again, so the
+entry stays. Attaching the same file again is a new `add`. The composer
+removes nothing when its room leaves the client, as when the person forgets
+it, since nothing it can observe marks that: a file in a draft left that way,
+and one taken out while being added with no later run of the composer's
+handlers in its session, keeps its entry.
 
 ## Writers
 
