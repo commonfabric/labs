@@ -8,15 +8,21 @@ standard-library surface the subset type checker has to type. It ends with a
 measurement of the pattern corpus against these rules and with the questions
 that remain open.
 
-Three documents beside this one own their subjects.
+Five documents beside this one, and the overview, own their subjects.
 This document refers to them and does not define their content.
 
 - `plan-and-label-templates.md` owns the plan format, slots, observation
   classes, the footprint record, and the label rule of every operation.
-- `footprint-analysis.md`, which is not yet written, owns the analysis that
-  computes a function body's footprint.
+- `footprint-analysis.md` owns the analysis that computes a function body's
+  footprint, the causes of a widening, and what makes a computation a
+  materializer.
 - `builtin-inventory.md` owns the classification of each built-in as a
   structural or an effectful operation, and each built-in's label rule.
+- `execution-and-storage.md` owns the transaction of one cause, cone
+  evaluation, causal identifiers, cache promotion, and the migration of
+  stored instances.
+- `scheduler-and-serving-loop.md` owns what remains of the scheduler across
+  instances, the convergence bounds among them, and the serving loop.
 
 Where this document needs a fact that belongs to one of them, it states the
 assumption it made and lists it under [Open questions](#13-open-questions).
@@ -116,8 +122,9 @@ at the call, or the name of a function or function-valued constant declared
 in the same module. A callback reached through a property, an import, or a
 call is refused (`builder-callback:indirect-reference`).
 
-The other builders are not module-scope builders. `computed`, `action`, and
-`assert` take a function and are written in tier R only (§4.4).
+The other builders are not module-scope builders. `computed` and `assert`
+take a function and are written in tier R only (§4.4). `action` takes a
+function and is written in tier R or in tier F (§5.2).
 
 Every other API function called at module scope is a plain function whose
 result is frozen data, or a compile-time intrinsic: `exchangeRule(...)` and
@@ -280,7 +287,11 @@ property in an object literal; and `instanceof`.
 ### 4.4 Calls
 
 A call in tier R is classified by its callee, in this order. A call that
-matches none of the rows is refused (`reactive:unsupported-call`).
+matches none of the rows is refused (`reactive:unsupported-call`). A read of
+the ambient clock or entropy and a call of a removed form are refused under
+their own identifiers instead (`function-body:ambient-read`, §5.1; the
+`removed-form:` entries, §4.4.3), because wrapping either in `computed` does
+not make it legal.
 
 | Callee | Arguments | Meaning |
 | --- | --- | --- |
@@ -385,9 +396,11 @@ For this rule the checker decides "plain value" statically, from the
 element type and from where the collection comes from.
 
 - **Always plain:** an element type that is a primitive, a literal, `null`,
-  `undefined`, or a union of those.
-- **Never plain:** an element type that is a cell handle type, a pattern
-  instance, or a factory type. Such an element is identified by its cell.
+  `undefined`, a factory type, or a union of those. A factory value is a
+  reference to a compiled definition (§7.2) and has no cell of its own, so
+  two equal factories in a list have one key.
+- **Never plain:** an element type that is a cell handle type or a pattern
+  instance. Such an element is identified by its cell.
 - **An object, array, or tuple element type** is plain when the collection
   is a value computed in the program: an array literal, a module-scope
   constant, the result of a tier-R construction such as another `map` that
@@ -424,9 +437,11 @@ const rows = glazes.map((glaze, index) => {
 
 One case is outside what the checker can decide: an input declared with an
 object element type whose stored array holds inline records, because a
-computation elsewhere produced it. The checker treats it as not plain. What
-the runtime does on finding an inline record there is a question for
-`plan-and-label-templates.md` ([§13](#13-open-questions)).
+computation elsewhere produced it. The checker treats it as not plain.
+*Assumed:* a body over such a list that declares a state cell or binds a
+handler without the index compiles, and the cone of an element that arrives
+inline fails at run time (`plan-and-label-templates.md`, §1.3;
+[§13](#13-open-questions)).
 
 #### 4.4.2 Patterns and handlers as callees
 
@@ -558,6 +573,19 @@ the same way, by writing the pattern inline where the bound values are in
 scope, or by an inline closure that calls the module-scope pattern with
 them.
 
+The other forms that `builtin-inventory.md` classifies as removed are
+refused in every tier, also with no interim acceptance
+(`removed-form:builtin`). Each has a replacement, which the message names.
+
+| Removed form | Write instead |
+| --- | --- |
+| `llm(...)` | `generateText(...)`, or `generateObject(...)` for a structured result |
+| `streamData(...)` | A built-in of the fetch family, such as `fetchJson(...)`, for a request and its response. A stream of partial results has no form in the language |
+| `cell(value)` | `Cell.of(value)` or `new Cell(value)` (§4.7) |
+| `byRef(name)` | The built-in imported by name from `commonfabric` |
+| `nameInstance(value, name)` | `const name = Child({ ... })`. The compiler records the name of the binding |
+| `xs.mapWithPattern(...)` and the other seven `...WithPattern` methods | The method without the suffix, with a callback written at the call that calls the pattern: `xs.map((donut) => DonutRow({ donut }))` |
+
 ### 4.5 JSX
 
 JSX elements and fragments are tier-R expressions wherever a tier-R
@@ -609,7 +637,7 @@ to the handle's cell: reads its value, writes it, or neither.
 | `resolveAsCell()` | `Cell` | R, F | Neither. Follows the cell's link and yields the handle it reaches; observes identity |
 | `getArgumentCell()` | `Cell` | F | Neither. Yields the handle of the argument of the piece the cell belongs to |
 | `equals(other)`, `equalLinks(other)` | `Cell`, `ReadonlyCell`, `ComparableCell` | R, F | Neither. Compares identity |
-| `for(cause)` | Every handle type, `Stream` included | R, F | Neither. Sets the causal identity of a cell that has none yet |
+| `for(cause)` | Every handle type, `Stream` included; and the value a pattern instantiation returns | R, F on a handle. On an instantiation, F in a `handler`, an `action`, or an inline event handler | Neither. On a handle, sets the causal identity of a cell that has none yet. On an instantiation, `Box({ flavor }).for(tag)`, supplies an explicit tag for the instance's identifier |
 | `set(value)`, `update(partial)` | `Cell`, `WriteonlyCell` | F | Writes |
 | `push(...values)`, `pushAll(values)`, `addUnique(...values)`, `remove(...)`, `removeByValue(ref)`, `removeAll(...)` | `Cell`, `WriteonlyCell`, of an array | F | Writes. `push`, `pushAll`, `addUnique`, and `removeByValue` are mergeable |
 | `increment(by?)` | `Cell`, `WriteonlyCell`, of a number | F | Writes, mergeable |
@@ -623,8 +651,12 @@ to the handle's cell: reads its value, writes it, or neither.
 | `X.equals(a, b)`, `X.equalLinks(a, b)` | The constructor | R, F | Neither. Compares identity |
 | `asScope(scope)`, `inSpace(space, options)` | A pattern factory | Where the instantiation they modify is legal | Neither |
 
-Four notes on the table.
+Five notes on the table.
 
+- **`for` on an instantiation.** This document states only that the form
+  exists and where it is legal. What the tag identifies from one event to
+  the next is not defined here: `plan-and-label-templates.md` (§1.3) owns
+  the identifiers of what a function body creates.
 - **Writes are tier F.** A write in a `handler`, an `action`, or an inline
   event handler is the body's purpose. A write in a `lift` or a `computed`
   is a side-write in the overview's sense, and the idempotency contract
@@ -633,8 +665,8 @@ Four notes on the table.
 - **`ComparableCell` and `OpaqueCell` cannot be read.** A handle whose type
   is one of them supports projection and, for `ComparableCell`, comparison.
 - **Removed.** The `...WithPattern` methods the transformer emits
-  (`mapWithPattern` and its siblings) and the deprecated `setSchema` are not
-  part of the language.
+  (`mapWithPattern` and its siblings; `removed-form:builtin`, §4.4.3) and
+  the deprecated `setSchema` are not part of the language.
 
 ## 5. Function tier (tier F)
 
@@ -672,7 +704,7 @@ object and array destructuring assignment.
 | Getters, setters, and methods in object literals | `function-body:accessor` | A property holding an arrow function is the supported form for a code-typed object |
 | `Proxy`, `Reflect`, `Symbol(...)`, `WeakMap`, `WeakSet`, `WeakRef` | `function-body:unsupported-global` | Not typed by the subset ([§9](#9-standard-library-surface)) |
 | A write to a module-scope constant, an import, or a global | `module-scope:frozen-data-write`, `function-body:global-write` | Statelessness ([§3.3](#33-the-statelessness-rule)) |
-| `Date.now()`, `new Date()` with no argument, `Math.random()` in a `lift`, a `computed`, or an authored function they call | `function-body:ambient-read` | A computation is a function of its inputs. The read is allowed in a `handler`, an `action`, and an inline event handler |
+| `Date.now()`, `new Date()` with no argument, `Math.random()` in a `lift`, a `computed`, or an authored function they call | `function-body:ambient-read` | A computation is a function of its inputs. The read is allowed in a `handler`, an `action`, and an inline event handler. Written in tier R, the same read is refused under the same identifier (§4.4) |
 | `pattern`, `lift`, `handler`, `computed` called in tier F | `function-body:builder-call` | Builders define nodes at module scope or in tier R. The exceptions are an inline `pattern(...)` used directly as the callee of an instantiation, which the compiler hoists, and `action` (§5.2) |
 
 ### 5.2 Runtime calls
@@ -688,13 +720,18 @@ binds.
 | Instantiate a pattern | §4.4.2, with a statically resolved pattern or a pattern factory value | Yes | No. Selecting among patterns is done in tier R |
 | Create a cell | The constructors of §4.7 | Yes, with no cause needed | Yes, with an explicit cause (`X.for(cause)`) |
 | Request an effectful built-in | As `builtin-inventory.md` lists | Yes | No. A `lift` or a `computed` does not instantiate a pattern either, so it has no indirect way to. An effect that depends on computed data is requested in tier R, with the computed value as its input |
-| Read context | `eventKey()`, `currentPrincipal()`; `principalOf` and its siblings; `spaceOf` and its siblings; `linksOf`; `getPatternEnvironment()` | Yes | All except `eventKey()` and `currentPrincipal()`: a computation has no event |
+| Read context | `eventKey()`, `currentPrincipal()`; `principalOf` and its siblings; `spaceOf` and its siblings; `linksOf`; `equals(a, b)`; `getPatternEnvironment()` | Yes | All except `eventKey()` and `currentPrincipal()`: a computation has no event |
 | Bind a handler | Below | Yes | Yes |
 
 The table is the one in `builtin-inventory.md` ("Which body may make which
 call"), which gives the reasons row by row. Each "No" has a diagnostic in
 [§10.3](#103-function-tier). An authored function is held to the rules of
 the bodies that call it.
+
+`equals(a, b)` is a context read because it observes the identity of both
+operands and reads neither value (`plan-and-label-templates.md`, §3.16). It
+is the function form of the comparison that §4.7 lists as the methods
+`a.equals(b)` and `X.equals(a, b)`, and the three forms mean the same.
 
 Two causes of the difference between the columns come from the overview. A
 handler invocation is a new frame for each event, so what it creates is new
@@ -769,21 +806,46 @@ refused (`verb-result:undeclared-return`), as today.
 
 ### 5.4 What footprint analysis needs from the grammar
 
-The footprint record is defined in `plan-and-label-templates.md`. The
-analysis that computes it is the subject of `footprint-analysis.md`, which
-is not yet written. The grammar above is chosen so that the analysis rarely
-gives up. The compiler reports each place
-it does, as a hint (`footprint:widened`), naming the expression and the
-subtree the footprint widened to. The causes visible in syntax are:
+The footprint record is defined in `plan-and-label-templates.md` (§1.1).
+The analysis that fills it in is the subject of `footprint-analysis.md`,
+which takes the following from this document as given (its §1.3).
 
-- a dynamic key on an input (`input[key]`), which widens to the keyed
-  container;
-- an input, or a subtree of one, passed to a tier-I function, to
-  `JSON.stringify`, or to another function whose body is not analyzed;
-- an input spread into an object or an array, or destructured with a rest
-  element, which widens to that subtree;
-- an input captured by a closure that is passed to a function whose body is
-  not analyzed.
+- **The grammar of a body.** A body holds the statements and expressions of
+  §5.1 and nothing else. It has no classes, no `this`, no `async` code, no
+  generators, no `for...in`, no dynamic code, and no write to module scope
+  or to a global.
+- **A closed surface.** The methods of a cell handle are those of §4.7, and
+  the standard-library members a body can use are those of §9. The
+  analysis has a rule for each, and a use of a member that is not listed is
+  refused (`cell:unsupported-method`, `stdlib:unsupported-member`).
+- **Types.** The analysis runs after the type checker of §7. Every
+  expression has a concrete type, because the checker has no deferred types
+  and refuses `any` (§7.3, §7.8). A generic function is analyzed once per
+  instantiation, as it is checked.
+- **Statelessness.** No binding that outlives a call holds mutable state
+  (§3.3). Everything a body can reach is therefore its inputs, the
+  module-scope constants, and what it creates.
+- **The signatures of imported functions.** The parameters and the result
+  of a tier-I function are data types (§5.5). Such a function receives no
+  cell handle and no function, and a call of it reads each argument in
+  full.
+
+The grammar is chosen so that the analysis rarely gives up. Where it does,
+it widens the footprint, and the compiler reports each widening as a hint
+(`footprint:widened`) that names the expression, the cause, and the input
+path the footprint widened to. `footprint-analysis.md` §5.2 lists the
+causes of a widening, and the list is complete: a construct that is not on
+it does not widen.
+
+The analysis has two more outcomes that are not widenings and not errors,
+each with a hint: a read through a cell handle that stays dynamic
+(`footprint:dynamic-read`, that document's §7.2), and a `lift` or a
+`computed` whose write makes it a materializer (`footprint:materializer`,
+its §6.3). It also supplies the read and write sets from which two warnings
+are computed: a computation whose write cannot be idempotent
+(`side-write:not-idempotent`, its §6.6), and a cycle through a side-write
+that is visible in the plan (`side-write:cycle`,
+`scheduler-and-serving-loop.md` §8.2).
 
 ### 5.5 Imported TypeScript (tier I)
 
@@ -818,10 +880,13 @@ export function unitPrice(basePrice: number, glaze: string): number {
   the freezing wrappers of the current system stay in force for these
   modules, and a write to frozen data throws at run time.
 - **Authority.** It imports only types from `commonfabric`. It cannot call a
-  builder or a built-in.
+  builder or a built-in. An import of a value from `commonfabric` is refused
+  (`import:commonfabric-value`).
 - **Parameters and results are data types.** A cell passed to such a function
   could be written without the plan knowing, so cell-typed parameters are
-  refused until [§13](#13-open-questions) is settled.
+  refused (`import:signature-not-data`) until
+  [§13](#13-open-questions) is settled. A function-typed parameter is
+  refused by the same rule, because a function type is a code type.
 
 ## 6. Promotion of `computed`
 
@@ -1250,8 +1315,14 @@ assignable to a position declared `Confidential<string, L>`, and the reverse
 is also assignable: the type system does not police flows. Flows are checked
 against label templates and declared constraints, by the rules of
 `plan-and-label-templates.md`. This document only reserves the identifiers
-those checks report under: `cfc-flow:max-confidentiality`,
-`cfc-flow:required-integrity`, and `cfc-flow:write-policy`.
+those checks report under. There is one for each kind of constraint that
+document's §4.4 can fail at compile time: `cfc-flow:required-integrity`,
+`cfc-flow:max-confidentiality`, `cfc-flow:write-floor`,
+`cfc-flow:writer-fit`, and `cfc-flow:write-policy`, for a writer the policy
+does not name. A sixth, `cfc-flow:ui-contract`, is a warning: it reports a
+handler whose policy requires a UI contract when no element of the pattern
+that binds the handler sits under a surface that carries the contract's
+pattern.
 
 A cast cannot move a label. In `e as T`, annotations in `T` that differ from
 those of the type of `e` have no effect, and writing them draws a warning
@@ -1402,6 +1473,8 @@ R: `abs`, `atan2`, `ceil`, `cos`†, `floor`, `hypot`, `imul`, `log`†, `max`,
 `min`, `pow`, `round`, `sign`†, `sin`, `sqrt`†, `trunc`†, `PI`, `E`†.
 
 F only, and only where an ambient read is allowed (§5.1): `Math.random`.
+Anywhere else, tier R included, the call is refused as
+`function-body:ambient-read`.
 
 ### 9.6 Date
 
@@ -1412,8 +1485,9 @@ R: `Date.parse`, `Date.UTC`; on a `Date` value: `getDate`, `getDay`,
 
 F only: `new Date(value)` and `new Date(year, month, ...)`; the mutators
 `setDate`, `setMonth`†, `setFullYear`†, `setHours`†, `setMinutes`†,
-`setTime`†; and, where an ambient read is allowed, `Date.now()` and
-`new Date()`.
+`setTime`†; and, where an ambient read is allowed (§5.1), `Date.now()` and
+`new Date()`. Anywhere else, tier R included, those two are refused as
+`function-body:ambient-read`.
 
 `Date` is a code type. A `Date` cannot appear in a tier-R expression except
 as the receiver of an R member, which in practice means inside a `computed`
@@ -1425,7 +1499,8 @@ R: `JSON.stringify` with one argument, or with an indent. F only:
 `JSON.parse`, whose result has type `unknown`, and `JSON.stringify` with a
 replacer.
 
-`JSON.stringify(x)` reads `x` in full (§5.4).
+`JSON.stringify(x)` reads `x` in full (`footprint-analysis.md` §5.2, cause
+W2).
 
 ### 9.8 RegExp
 
@@ -1473,9 +1548,12 @@ Severity is **error** (the program is refused), **warning** (accepted, and
 the report is shown by default), or **hint** (accepted, shown on request).
 Under the stored-source option of the current pipeline
 (`TransformationOptions.storedSource`), some authoring-shape errors are
-demoted to warnings so that already-deployed source reloads. Whether the
-compiled language keeps that mode is a migration question
-([§13](#13-open-questions)); the catalog gives authoring severities.
+demoted to warnings so that already-deployed source reloads. In this
+design, `execution-and-storage.md` §9.4 compiles an instance's stored source
+when it migrates the instance, and an instance whose source is refused
+stays on the builder path. The catalog gives authoring severities, and this
+document assumes the same severities for stored source
+([§13](#13-open-questions)).
 
 "Status" compares with the diagnostics of
 `ts_transformers_current_behavior_spec.md` §6 and the unsupported rows of
@@ -1516,14 +1594,15 @@ construct found and the replacement given here.
 | `pattern-context:parameter-form` | error | A default value or a rest element in the pattern parameter, or a dynamic key in its destructuring | Declare the default in the input type (`glaze: Default<string, "plain">`). Read remaining properties from the undestructured parameter | new |
 | `pattern-context:builder-placement` | error | `lift(...)` or `handler(...)` called in tier R | Define it at module scope, or use `computed(() => ...)` for an immediate `lift(fn)(args)` and `action(() => ...)` for a handler that needs no separate state | carries |
 | `pattern-context:callback-container` | error | An arrow function passed to a method or function that §4.4 does not give a callback position (`forEach`, `toSorted`, `findLast`, `replace`, `then`) | Wrap the whole expression: `computed(() => xs.toSorted((a, b) => a.price - b.price))` | changes (now covers every non-structural callback, in every tier-R site, not only JSX) |
-| `reactive:unsupported-call` | error | A call in tier R whose callee matches no row of §4.4, such as a method the standard-library table does not mark "R" | Wrap the expression in `computed(() => ...)`, or call an authored function that does the work | new (replaces `pattern-context:receiver-method-call`, `pattern-context:inline-reactive-root-access`, `reactive:call-argument-computation`) |
-| `reactive:unsupported-expression` | error | `new` of a non-cell constructor, `await`, `yield`, `this`, `instanceof`, a tagged template, `void`, or the comma operator in tier R | Wrap the expression in `computed(() => ...)` | new (replaces the remaining cases of `pattern-context:computation`) |
-| `opaque-get:invalid-call` | error | `.get()` on a value whose type is not a cell or stream type | Read the value directly: `donut.name`, not `donut.get().name`. Only `Writable<T>` and `Cell<T>` are read with `.get()` | carries |
+| `reactive:unsupported-call` | error | A call in tier R whose callee matches no row of §4.4, such as a method the standard-library table does not mark "R". An ambient read and a removed form are not reported here: they are `function-body:ambient-read` and the `removed-form:` entries | Wrap the expression in `computed(() => ...)`, or call an authored function that does the work | new (replaces `pattern-context:receiver-method-call`, `pattern-context:inline-reactive-root-access`, `reactive:call-argument-computation`) |
+| `reactive:unsupported-expression` | error | `new` of a non-cell constructor other than `new Date()` with no argument (which is `function-body:ambient-read`), `await`, `yield`, `this`, `instanceof`, a tagged template, `void`, or the comma operator in tier R | Wrap the expression in `computed(() => ...)` | new (replaces the remaining cases of `pattern-context:computation`) |
+| `opaque-get:invalid-call` | error | `.get()` on a value whose type is not `Cell`, `Writable`, or `ReadonlyCell` | Read the value directly: `donut.name`, not `donut.get().name`. Only `Cell<T>`, `Writable<T>`, and `ReadonlyCell<T>` are read with `.get()` | carries |
 | `pattern-context:self-access` | error | `x[SELF]` where `x` is not the pattern's own input parameter, or anywhere in tier F | Read `const self = input[SELF]` in the pattern body, or destructure `[SELF]: self`, and capture `self` | carries |
 | `ses-callback:callable-capture` | error | A tier-F body inside tier R captures a function value from an enclosing function scope | Move the function to module scope | carries |
 | `removed-form:helper` | warning | A direct call of `ifElse`, `when`, or `unless`, or a `str` tagged template, in tier R (§4.4.3). An error once the builder form is retired | The rewrite: `c ? a : b` for `ifElse(c, a, b)`, `c && v` for `when(c, v)`, `c \|\| f` for `unless(c, f)`, a plain template literal for `str` | new |
 | `removed-form:helper-unsupported` | error | One of those four in any other form: with schema arguments, passed as a value, or through an alias | The same rewrite | new |
 | `removed-form:pattern-tool` | error | A call of `patternTool` | Write an inline `pattern(...)` that captures the bound values, and pass it as the tool (§4.4.3) | new (replaces `pattern-context:patterntool-requires-pattern`, which is retired) |
+| `removed-form:builtin` | error | A call, in any tier, of `llm`, `streamData`, `cell`, `byRef`, `nameInstance`, or a `...WithPattern` method (§4.4.3) | The replacement for the form found: `generateText` or `generateObject` for `llm`; a built-in of the fetch family for `streamData`; `Cell.of(value)` for `cell(value)`; the built-in imported by name for `byRef`; a `const` binding of the instance for `nameInstance`; the method without the suffix, with a callback written at the call, for a `...WithPattern` method | new |
 | `collection:callback-parameters` | error | A reactive collection callback that is not an arrow function written at the call, or that takes the whole array as a parameter | Write the arrow at the call, with the element and at most the index. Capture the array by name if the body needs it | new |
 | `collection:reduce-callback` | error | A `reduce` in tier R whose callback has a block body | Write the step as one expression, `(sum, donut) => sum + donut.price`. A step that needs statements is a loop inside `computed(() => ...)` | new |
 | `collection:reduce-initial` | error | A `reduce` in tier R without an initial value | Pass the initial value as the second argument | new |
@@ -1552,7 +1631,7 @@ construct found and the replacement given here.
 | `function-body:accessor` | error | A getter, setter, or method in an object literal | Write a property that holds an arrow function, or compute the value eagerly | new |
 | `function-body:unsupported-global` | error | A reference to a global §9 lists as not typed | The built-in named in the message, where one replaces it; otherwise remove the use | new |
 | `function-body:global-write` | error | A write to a global or to a member of one | Keep the state in a cell | new |
-| `function-body:ambient-read` | error | `Date.now()`, `new Date()` without arguments, or `Math.random()` in a `lift`, a `computed`, a promoted expression, or the pattern body, directly or through an authored function they call | Read the clock in a `handler` or `action` and store the value in a cell, or take the time as an input | new (the sandbox gate refuses the same read at run time) |
+| `function-body:ambient-read` | error | `Date.now()`, `new Date()` without arguments, or `Math.random()` in a `lift`, a `computed`, or tier R, directly or through an authored function they call | Read the clock in a `handler` or `action` and store the value in a cell, or take the time as an input | new (the sandbox gate refuses the same read at run time) |
 | `function-body:builder-call` | error | `pattern`, `lift`, `handler`, or `computed` called in tier F, other than an inline `pattern(...)` as the callee of an instantiation | Define the builder at module scope and call its result. A function body that needs a reactive value instantiates a pattern | new |
 | `function-body:handler-capture` | error | An inline event handler or an `action` in tier F captures a `let` binding | Copy the value into a `const` before the handler and capture that | new |
 | `function-body:instantiation-in-computation` | error | A pattern instantiated in a `lift` or a `computed`, directly or through an authored function they call | Select among patterns in the pattern body: `kind === "box" ? Box({ ... }) : Bag({ ... })` | new |
@@ -1562,7 +1641,11 @@ construct found and the replacement given here.
 | `collection:shared-element-state` | error | The body of a per-element construct over a collection of plain values (§4.4.1) declares a state cell or binds a handler without using the index parameter, so elements with equal values would share it | Take the index parameter and use it, for example in the cell's cause. Or make the elements cells: keep the list in a cell that a handler writes records into | new |
 | `verb-result:undeclared-return` | error | A `handler` or `action` without a result type argument returns a plain value from a block body | Declare the result (`action<Event, Result>(...)`, `handler<Event, State, Result>(...)`), or use a bare `return;` | carries |
 | `mergeable-push:read-then-push` | warning | A handler reads a mergeable collection and then pushes to it | Push without reading, or use the merge-safe operation the message names | carries |
-| `footprint:widened` | hint | Footprint analysis gave up on an expression (§5.4) | The rewrite for the cause: a static key, a narrower argument, named properties in place of a spread | new |
+| `footprint:widened` | hint | Footprint analysis gave up on an expression, for one of the causes of `footprint-analysis.md` §5.2 (§5.4) | The rewrite for the cause, as that document's §5.3 gives it: named properties in place of a key that is not static, the properties that are needed in place of a whole value that is converted or passed to an imported function, a copy in place of an update of an input | new |
+| `footprint:dynamic-read` | hint | A read through a cell handle in a function body fails one of the three conditions of `footprint-analysis.md` §7.2, so it is journaled when the body runs and is no static entry of the footprint: the handle is one of several alternatives, the path below it is not static, or the `get()` or `sample()` is conditional | The condition that failed and the static form where one exists: read through one handle in place of a choice between two, use a static key, or move the `get()` ahead of the branch when every path reads the cell | new |
+| `footprint:materializer` | hint | A `lift` or a `computed` has a side-write whose target is dynamic or too broad to predict (`footprint-analysis.md` §6.2), so the body is a materializer for all of its writes (its §6.3) | The write and why its target is not static. Write through a handle the body is given, at a static path (`counts.key("glazed").set(n)`), or move the write into a `handler` or an `action` | new |
+| `side-write:not-idempotent` | warning | A `lift` or a `computed` contains one of the three shapes of `footprint-analysis.md` §6.6, which write something else on a second run whatever the data: `push`, `pushAll`, or `increment`; `send` on a stream; or a read of a path at or below one the body writes, through the same anchored handle | For an append or an increment, `set` the whole value computed from the inputs, or use `addUnique`. For a send, move it into a `handler` or an `action`. For a read of its own target, compute the value from other inputs, or move the update into a `handler` or an `action` (`count.set(count.get() + 1)` belongs there); a write that leaves a settled value unchanged (`name.set(name.get().trim())`) writes the same on the second run and can stay | new (the idempotency validator checks the same contract at run time) |
+| `side-write:cycle` | warning | The edges of the plan form a cycle through a static side-write of a `lift` or a `computed`: a cone reads a cell that a cone depending on it writes (`scheduler-and-serving-loop.md` §8.2). A body that reads its own write target is reported as `side-write:not-idempotent` and not here | The side-write and the cells on the cycle. Make the write leave a settled value unchanged, so that the second evaluation writes what the first did, or move it into a `handler` or an `action` | new |
 | `computed:not-promoted` | hint | A `computed` used as a value fails the criterion of §6.1 | The first disqualifying construct and its promotable form, where one exists | new |
 | `computed:redundant` | hint | A `computed` meets the criterion of §6.1, so the wrapper changes nothing | Write the body in place of the call ([§12.2](#122-drop-computed-around-a-promotable-expression)) | new |
 
@@ -1592,6 +1675,8 @@ construct found and the replacement given here.
 | `stdlib:unsupported-member` | error | A standard-library member §9 does not list | The nearest listed member | new |
 | `import:signature-not-in-subset` | error | An export imported from a tier-I module lacks a full annotation, or its signature uses a type the subset refuses | Annotate every parameter and the return type with subset types | new |
 | `import:not-a-function` | error | A value imported from a tier-I module is not a function or a type | Move the constant into a subset module | new |
+| `import:signature-not-data` | error | A parameter or the result of a function imported from a tier-I module has a type that is or contains a cell handle type, a function type, or another code type (§5.5) | Pass and return data: read the cell in the caller and pass the value (`unitPrice(price.get(), glaze)`), and write the result in the caller. A function that needs the handle or a callback belongs in a subset module | new |
+| `import:commonfabric-value` | error | A tier-I module imports a value from `commonfabric` or `commonfabric/<name>`, and not only types (§5.5) | Use `import type`. Move the code that calls a builder, a built-in, or a cell constructor into a subset module, and give the imported function the data it needs as arguments | new |
 
 ### 10.5 Labels, defaults, and scopes
 
@@ -1607,6 +1692,9 @@ construct found and the replacement given here.
 | `cfc-label:unread` | — | — | — | retired: replaced by `cfc-label:not-static` |
 | `cfc-schema:recursion-limit`, `cfc-schema:recursive-alias-of-any` | — | — | — | retired (§8.7) |
 | `cfc-flow:max-confidentiality`, `cfc-flow:required-integrity`, `cfc-flow:write-policy` | error | A declared constraint that the declared labels of a template's slots cannot satisfy. The conditions are defined in `plan-and-label-templates.md` | The slot whose label violates the constraint, and the declaration to change | new (reserved here, specified there) |
+| `cfc-flow:write-floor` | error | The declared integrity of the value a write edge writes cannot satisfy the write floor of its target. The condition is defined in `plan-and-label-templates.md` §4.4 | The write, the slot whose declared integrity falls short, and the declaration to change: the integrity declared on the source, or the floor declared on the target | new (reserved here, specified there) |
+| `cfc-flow:writer-fit` | error | The declared confidentiality of the value a write edge writes does not fit the confidentiality declared on its target. The condition is defined in `plan-and-label-templates.md` §4.4 | The write, the slot whose declared confidentiality exceeds the target's, and the declaration to change: declare the confidentiality on the target, or write a value that does not derive from that slot | new (reserved here, specified there) |
+| `cfc-flow:ui-contract` | warning | A handler whose write policy requires a UI contract is bound by elements of the pattern, and none of them sits under a surface that carries the pattern and integrity names the contract requires, so no event from this pattern's UI can satisfy the policy (`plan-and-label-templates.md` §4.4) | The handler, the contract, and the elements that bind it. Bind the handler on an element inside the surface the contract names, or name in the policy the handler that the surface's control does bind | new (reserved here, specified there) |
 | `default:not-static` | error | A `Default` value that is not literal-like or not assignable to its type | Write a literal value of the declared type | changes (was the warning `schema-default:unresolved`) |
 | `scope:union-member` | error | A scope wrapper on a member of a union that has a member other than `null` and `undefined` | Put the scope around the union: `PerUser<A \| B>` | new |
 
@@ -2018,11 +2106,11 @@ now. Each names the document it is addressed to.
 2. **Inline records in a stored list** (to `plan-and-label-templates.md`).
    The checker treats an object-typed element of a list read from an input
    or a cell as identified by its cell (§4.4.1). A stored array can still
-   hold inline records, when a computation elsewhere produced it. The
-   runtime then keys them by value, and a body that declares state over
-   them shares it between equal records, which the rule exists to prevent.
-   The plan has to say what the runtime does there: add an ordinal among
-   equals to the key, or fail the cone.
+   hold inline records, when a computation elsewhere produced it.
+   *Assumed,* as that document's §1.3 has it: a body over such a list that
+   declares a state cell or binds a handler without the index compiles,
+   and the cone of an element that arrives inline fails at run time, with
+   the error state of its §5.2.
 3. **A pattern closure written in a function body** (to the prototype).
    §4.4.2 allows a pattern closure as a value in tier R only. A handler that
    wants to store a closure over its own locals has no form for it. No
@@ -2037,12 +2125,44 @@ now. Each names the document it is addressed to.
    iframe guests import several, and they are not patterns. Whether tier I
    ever reaches beyond the program's own modules is deferred with the
    sandbox's dynamic-import question.
-7. **Stored source.** Today some authoring errors are demoted to warnings
-   when stored source is recompiled. Whether the new compiler ever compiles
-   source that an older compiler admitted, and with which severities, is
-   part of the overview's migration question.
+7. **Stored source** (to `execution-and-storage.md`). Today some authoring
+   errors are demoted to warnings when stored source is recompiled. That
+   document's §9.4 compiles an instance's stored source when it migrates
+   the instance, and leaves an instance whose source the compiler refuses
+   on the builder path. *Assumed,* with its open question 27: stored source
+   is compiled with the authoring severities of §10, the interim acceptance
+   of the removed forms (§4.4.3) included, and no error is demoted.
 8. **Per-instantiation checking of generic functions** (to the prototype).
    §7.3 checks a generic function body once per instantiation. That is
    simple and exact, and it reports an error in a generic helper at each
    call that triggers it. The prototype should confirm that the messages
    stay usable.
+9. **The severity of `cfc-flow:ui-contract`** (to
+   `plan-and-label-templates.md`). That document's §4.4 says the compiler
+   can report a handler whose UI contract no element of the pattern can
+   satisfy, and gives the report no severity. *Assumed:* a warning. The
+   report covers the pattern's own UI only, and whether an event satisfies
+   a contract is decided for each event when it arrives, so the report
+   does not show that every event will be refused.
+10. **How an author writes the cache-promotion directive** (from
+    `execution-and-storage.md`, §8.5 and open question 26). That document
+    assumes the plan records one of three directives for a cone (none,
+    always, never) and that this document defines how an author writes
+    them. This document has no form for it. *Assumed:* until one is
+    defined, no program states a directive, every cone has the directive
+    "none", and the runtime decides.
+11. **Whether the inputs of a function body have read-only types** (from
+    `footprint-analysis.md`, request 6). If the value a body receives had a
+    deeply read-only type, as module-scope data has (§3.3), an update in
+    place of an input would be a type error, and the widening cause W5 of
+    that document would have no instance. *Assumed:* inputs are mutable in
+    the type system, and W5 stands.
+12. **`cell.get() === undefined` on a cell whose type does not admit
+    `undefined`** (from `footprint-analysis.md`, request 14; to the
+    prototype). The corpus tests whether a link has resolved by comparing
+    `cell.get()` with `undefined`, on cells whose declared value type
+    excludes it. Under `plan-and-label-templates.md` §5.2 such a read fails
+    its cone and does not return `undefined`. *Assumed:* the type has to
+    say so, `Cell<Profile | undefined>`, and the checker does not report
+    the comparison where the type excludes `undefined`. The prototype has
+    to measure how many cells the idiom is used on.
