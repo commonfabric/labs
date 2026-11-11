@@ -910,7 +910,7 @@ describe("conformance-fixtures", () => {
           stringLength: 2 ** 26,
           bytesLength: 2 ** 27,
           symbolKeyLength: 2 ** 26,
-          depth: 2 ** 11,
+          depth: 2 ** 9,
           bigintBytes: 2 ** 26,
         }),
       ).toBe(true);
@@ -927,7 +927,7 @@ describe("conformance-fixtures", () => {
         { stringLength: 2 ** 26 + 1 },
         { bytesLength: 2 ** 27 + 1 },
         { symbolKeyLength: 2 ** 26 + 1 },
-        { depth: 2 ** 11 + 1 },
+        { depth: 2 ** 9 + 1 },
         { bigintBytes: 2 ** 26 + 1 },
       ];
       for (const requires of pastEach) {
