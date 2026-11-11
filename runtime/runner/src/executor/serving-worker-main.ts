@@ -74,7 +74,10 @@ export function serveFromPort(
     // A timer on this thread, so that the watchdog on the server's thread hears
     // nothing once this thread stops (serving-loop.md §2).
     const heartbeat = setInterval(
-      () => endpoint.notify("worker.heartbeat", null),
+      () =>
+        endpoint.notify("worker.heartbeat", {
+          heapUsed: Deno.memoryUsage().heapUsed,
+        }),
       init.heartbeatIntervalMs,
     );
     // The environment a served handler's `fetch` resolves against is this
@@ -129,6 +132,7 @@ export function serveFromPort(
         plane.reportSpaceParked(space, reason);
         plane.reportStats(host.stats());
       },
+      onOccupancyChanged: (occupancy) => plane.reportOccupancy(occupancy),
     });
     plane.serve({
       stats: () => host.stats(),
@@ -137,6 +141,8 @@ export function serveFromPort(
       // the compile worker's timings, which hold the compiler's phases.
       diagnostics: () => servingLoopDiagnostics(options.moduleCompiler),
       collectedMemory,
+      occupancy: () => host.occupancy,
+      noteSpaceAclChanged: (space) => host.noteSpaceAclChanged(space),
       runLifecycleVerb: (space, verb) => {
         if (options.runLifecycleVerb === undefined) {
           return Promise.reject(

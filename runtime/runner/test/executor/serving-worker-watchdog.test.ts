@@ -5,7 +5,7 @@ import { defer } from "@commonfabric/async/defer";
 import { Identity } from "@commonfabric/identity";
 import * as Engine from "@commonfabric/memory/v2/engine";
 
-import { ServingWorker } from "../../src/executor/serving-worker-host.ts";
+import { ServingWorkerPool } from "../../src/executor/serving-worker-host.ts";
 import { getServingLoopStats } from "../../src/executor/stats.ts";
 import type { MemorySpace } from "../../src/storage/interface.ts";
 import { newSharedServer } from "../memory-v2-test-utils.ts";
@@ -22,7 +22,7 @@ describe("serving-worker-watchdog", () => {
       subscriptionRefreshDelayMs: 0,
       store: toFileUrl(`${directory}/`),
     });
-    const worker = new ServingWorker({
+    const worker = new ServingWorkerPool({
       server,
       identity: serviceSigner,
       apiUrl: new URL(import.meta.url),
@@ -34,7 +34,6 @@ describe("serving-worker-watchdog", () => {
       policy: { flushDeadlineMs: 5_000, idleParkMs: 600_000 },
     });
     try {
-      await worker.ready;
       const { receipt } = await worker.runLifecycleVerb(space, {
         name: verb,
         request: {},
@@ -60,7 +59,7 @@ describe("serving-worker-watchdog", () => {
     expect(other).toBe(0);
   });
 
-  it("replaces a worker whose thread stalled holding a lease, and refuses its commits", async () => {
+  it("kills a worker whose thread stalled holding a lease, serves its space from a fresh one, and refuses its commits", async () => {
     // A real worker's thread, stopped: the part a stand-in cannot show is that
     // a thread that has stopped can be terminated at all, and that its
     // successor then serves the space. The short interval keeps the kill inside
@@ -71,16 +70,8 @@ describe("serving-worker-watchdog", () => {
       subscriptionRefreshDelayMs: 0,
       store: toFileUrl(`${directory}/`),
     });
-    const respawned = defer<void>();
-    let spawned = 0;
-    const RealWorker = globalThis.Worker;
-    globalThis.Worker = class extends RealWorker {
-      constructor(...args: ConstructorParameters<typeof Worker>) {
-        super(...args);
-        if (++spawned === 2) respawned.resolve();
-      }
-    };
-    const worker = new ServingWorker({
+    const killed = defer<void>();
+    const worker = new ServingWorkerPool({
       server,
       identity: serviceSigner,
       apiUrl: new URL(import.meta.url),
@@ -95,9 +86,11 @@ describe("serving-worker-watchdog", () => {
         failureParkBackoffBaseMs: 0,
       },
       watchdogIntervalMs: 1_000,
+      onWorkerClosed: (_spaces, cause) => {
+        if (cause === "failed") killed.resolve();
+      },
     });
     try {
-      await worker.ready;
       const engine = await server.engineForSpace(space);
       expect(
         (await worker.runLifecycleVerb(space, { name: "serve", request: {} }))
@@ -109,8 +102,10 @@ describe("serving-worker-watchdog", () => {
       await expect(
         worker.runLifecycleVerb(space, { name: "stall", request: {} }),
       ).rejects.toThrow();
-      await respawned.promise;
-      await worker.ready;
+      await killed.promise;
+      // The space waits out its worker's teardown, and is then left unplaced,
+      // since nothing but the verbs asks for it.
+      await worker.accessForTestingOnly.waiting.get(space)?.resumed;
 
       expect(getServingLoopStats()?.lease.lost).toBe(1);
       expect(
@@ -141,7 +136,6 @@ describe("serving-worker-watchdog", () => {
       ).toThrow("execution lease");
       expect(Engine.serverSeq(engine)).toBe(head);
     } finally {
-      globalThis.Worker = RealWorker;
       await worker.close();
       await server.close();
       await Deno.remove(directory, { recursive: true });

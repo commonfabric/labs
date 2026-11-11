@@ -291,10 +291,13 @@ deno run --allow-read skills/perf-investigation/scripts/attribute-measures.ts \
 
 ### Attribute refresh frequency to its inputs
 
-When serving runs in a worker, `/api/health/serving-loop-realm` answers with
-the worker's `loggerCounts` and `timingStats`; `/api/health/stats` reads only
+When serving runs in workers, `/api/health/serving-loop-realm` answers with
+the running workers' `loggerCounts` added up and their `timingStats` mixed,
+each key's distribution weighted by its measurements, together with those of
+each worker closed in order; what a failed worker's realm logged is lost.
+`/api/health/stats` reads only
 the memory server's thread, and its `servingLoop` block holds executor counters
-rather than worker logger rows. The realm route asks the worker and waits for
+rather than worker logger rows. The realm route asks each worker and waits for
 its turn, which is why it is not part of `stats`; with the loop on this thread
 it answers with the process's own loggers, and with the loop off it answers
 404. Collect both routes to account for the serving loop's work.
@@ -304,7 +307,10 @@ A serving runtime's type-check, transform and emit run in a compile worker
 and timing statistics beside the realm's own, under logger names prefixed
 `compile-worker:`; `compile-worker:js-compiler`'s `phase/*` keys are the
 compiler's phase timings. They are a snapshot taken after the worker's latest
-compile, so reading them never waits on the worker. Their `performance.now()`
+compile, so reading them never waits on the worker. With serving in workers,
+each serving worker starts a compile worker of its own, and the route takes
+their snapshots together as it does the serving workers' own loggers. Their
+`performance.now()`
 timestamps, `lastTimestamp` and `slowest[].at`, are moved onto the realm's
 clock; `slowest[].epochMs` stays in epoch milliseconds. A realm `js-compiler`
 entry

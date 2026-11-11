@@ -1394,6 +1394,14 @@ export type ServerConnectOptions = {
    * process's, leaves it unset.
    */
   inProcess?: boolean;
+
+  /**
+   * The process-instance component of the lease holder the peer's host
+   * acquires under (`executionLeaseHolder`), where the peer is a serving
+   * worker started with a component of its own. Absent, the component this
+   * realm mints holders with.
+   */
+  leaseHolderInstance?: string;
 };
 
 class Connection {
@@ -1472,6 +1480,7 @@ class Connection {
   readonly #sendRaw: Send;
   readonly #syncPartLimits: PartLimits | undefined;
   readonly #inProcess: boolean;
+  readonly #leaseHolderInstance: string | undefined;
 
   constructor(
     readonly id: string,
@@ -1480,12 +1489,14 @@ class Connection {
     routedOwns?: (space: string) => boolean,
     syncPartLimits?: PartLimits,
     inProcess = false,
+    leaseHolderInstance?: string,
   ) {
     this.#server = server;
     this.#sendRaw = sendRaw;
     this.#routedOwns = routedOwns;
     this.#syncPartLimits = syncPartLimits;
     this.#inProcess = inProcess;
+    this.#leaseHolderInstance = leaseHolderInstance;
   }
 
   /**
@@ -1797,6 +1808,15 @@ class Connection {
    */
   get inProcess(): boolean {
     return this.#inProcess;
+  }
+
+  /**
+   * The process-instance component of the lease holder this connection's
+   * peer acquires under (`ServerConnectOptions.leaseHolderInstance`), or
+   * `undefined` for the component this realm mints holders with.
+   */
+  get leaseHolderInstance(): string | undefined {
+    return this.#leaseHolderInstance;
   }
 
   /** Whether this routed session still has its lease and fenced owner. */
@@ -4902,7 +4922,8 @@ export class Server {
    * parts; without it, every sync goes whole. `options.inProcess` says the
    * peer runs in this process; a connection from another process leaves it
    * unset, and the read row (protocol.md §2) treats its sessions as another
-   * process's.
+   * process's. `options.leaseHolderInstance` names the holder component of
+   * a peer that acquires leases under one of its own.
    */
   connect(
     send: Send,
@@ -4916,6 +4937,7 @@ export class Server {
       undefined,
       syncParts,
       options.inProcess === true,
+      options.leaseHolderInstance,
     );
     this.#connections.set(connection.id, connection);
     return connection;
@@ -11614,6 +11636,14 @@ export class Server {
   }
 
   /**
+   * The session lifecycle events that bring a mirror of `space`'s sessions
+   * up to date, as installing an observer replays them for every space.
+   */
+  sessionSnapshot(space: string): SessionLifecycleEvent[] {
+    return this.#sessions.snapshot(space);
+  }
+
+  /**
    * Installs what runs `pattern.lifecycle` requests, or with `undefined`
    * removes it. The server advertises `patternLifecycle` from the next
    * `hello` on while one is installed. Connections that said `hello` before
@@ -11773,8 +11803,9 @@ export class Server {
    * Whether `session` is `space`'s serving session on this server: the
    * SpaceServer's own loopback session, which reached the server from this
    * process and whose principal holds the space's lease (protocol.md §2's
-   * read row). A session from another process carries the same principal, so
-   * the connection decides.
+   * read row) under the holder component its connection names. A session
+   * from another process carries the same principal, as does one from
+   * another serving worker of this process, so the connection decides.
    */
   #isServingSession(space: string, session: SessionState): boolean {
     if (session.principal === undefined) return false;
@@ -11783,7 +11814,10 @@ export class Server {
       : this.#connections.get(session.ownerConnectionId);
     return connection?.inProcess === true &&
       this.#executionLeases.holderOf(space) ===
-        executionLeaseHolder(session.principal);
+        executionLeaseHolder(
+          session.principal,
+          connection.leaseHolderInstance,
+        );
   }
 
   /**
@@ -12447,6 +12481,16 @@ export class Server {
    */
   engineForSpace(space: string): Promise<Engine.Engine> {
     return this.#openEngine(space);
+  }
+
+  /**
+   * Whether `space`'s store holds stream events no serving loop has
+   * delivered, read from the store as it stands (serving-loop.md §1's second
+   * ACTIVE criterion). Rejects when the store cannot be opened or read.
+   */
+  async hasUndeliveredEvents(space: string): Promise<boolean> {
+    const engine = await this.#openEngine(space);
+    return Engine.selectPendingStreamEventDocs(engine).length > 0;
   }
 
   /**
