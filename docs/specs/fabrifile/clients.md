@@ -53,9 +53,8 @@ private as the room, and not as the space it came from.
 
 A client that adds a file to a store for a message, and does not send that
 message, removes the entry again with `remove`, under a request id of its own
-that it derives from the request id of its own `add`, since a store acts on a
-request id once, and the `add` has used its own. It removes only entries whose
-`add` outcome it received. It removes nothing else in the store. A file taken
+rather than its `add`'s, since a store acts on a request id once. It removes
+only entries whose `add` outcome it received. It removes nothing else in the store. A file taken
 out of a draft is removed once its `add` is done; an `add` refused, or never
 sent, added nothing. A client SHOULD say, once, a `remove` the store refuses,
 other than `not-found`, and MUST NOT retry it. Re-attaching a removed file is a
