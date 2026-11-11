@@ -233,6 +233,18 @@ describe("fabrichat-room-list", () => {
   const arrivedIn = (client: Client, spaces: readonly DID[]): number[] =>
     spaces.map((space) => client.arrived.get(space)?.size ?? 0);
 
+  /**
+   * Which of `spaces` `client` has opened a session to. The storage manager
+   * keeps each space it opens for its runtime's lifetime, so this is every
+   * space opened since the client began, through Home's bring-up as well.
+   */
+  const openedOf = (client: Client, spaces: readonly DID[]): DID[] => {
+    const opened = new Set<string>(
+      client.controller.runtime.storageManager.openedSpaces?.() ?? [],
+    );
+    return spaces.filter((space) => opened.has(space));
+  };
+
   /** How many documents `client` holds now in each of `spaces`. */
   function heldIn(client: Client, spaces: readonly DID[]): number[] {
     const sizes = client.controller.runtime.getSizes().storage as
@@ -328,6 +340,10 @@ describe("fabrichat-room-list", () => {
       expect([...client.refused.keys()]).toEqual([]);
     });
 
+    it("opens no session to any room's space, from bring-up on", () => {
+      expect(openedOf(client, [...kept, deleted, revoked])).toEqual([]);
+    });
+
     it("receives no document from another room's space when it creates a group", async () => {
       const created = await createGroup(
         memberOf(client),
@@ -379,6 +395,7 @@ describe("fabrichat-room-list", () => {
     it("receives no document from any room's space either", () => {
       const spaces = [...kept, deleted, revoked];
       expect(arrivedIn(client, spaces)).toEqual(spaces.map(() => 0));
+      expect(openedOf(client, spaces)).toEqual([]);
     });
   });
 
@@ -402,6 +419,7 @@ describe("fabrichat-room-list", () => {
       const spaces = [...kept, deleted, revoked];
       expect(arrivedIn(client, spaces)).toEqual(spaces.map(() => 0));
       expect(heldIn(client, spaces)).toEqual(spaces.map(() => 0));
+      expect(openedOf(client, spaces)).toEqual([]);
     });
   });
 
@@ -499,6 +517,12 @@ describe("fabrichat-room-list", () => {
 
     it("receives no document from the rooms it didn't open", () => {
       expect(arrivedIn(client, kept)).toEqual(kept.map(() => 0));
+    });
+
+    it("has opened a session to the rooms it opened, and to no other room", () => {
+      expect(openedOf(client, [...kept, deleted, revoked]).sort()).toEqual(
+        [deleted, revoked].sort(),
+      );
     });
   });
 });
