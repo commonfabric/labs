@@ -1947,8 +1947,9 @@ Pattern closures replace `patternTool`: the bound parameters become
 captures of an inline pattern, private to it, so a model that is given the
 closure as a tool supplies the public input only. Pattern factory values
 also give `compileAndRun` an ordinary reading: compilation returns a pattern
-factory value, and the author instantiates it. The corpus has no source site that calls or binds a
-received factory in a body, so nothing has to be rewritten.
+factory value, and the author instantiates it. The corpus has no source
+site that calls or binds a received factory in a body, so nothing has to be
+rewritten.
 
 ### Binding a handler received by reference
 
