@@ -81,7 +81,7 @@ resolves ([Following an origin](#following-an-origin) below).
 | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `upload`      | `program`                                                                                                                                         | `{ pattern }` — the pointer the space now holds the program under                                                                                                                                          |
 | `instantiate` | `program` or `pattern`; optional `argument`, `repository`, `slug`, `force`, `register`, `start`, `requestKey`                                     | `{ pieceId, pattern, slug?, requestKey, registration: { status, error?, attempt?, terminal? }, timings? }`                                                                                                 |
-| `setsrc`      | `piece`; `program` or `pattern`; optional `repository`, `dangerouslyAllowIncompatibleSchema`, `expectedPattern`, `start`                          | `{ pieceId, pattern, revisionId, seq, detachedOrigin }` — the accepted setup transaction's receipt, `seq` its position in the space's commit log                                                           |
+| `setsrc` | `piece`; `program` or `pattern`; optional `repository`, `dangerouslyAllowIncompatibleSchema`, `expectedPattern`, `origin`, `start` | `{ pieceId, pattern, revisionId, seq, detachedOrigin, origin? }` — the accepted setup transaction's receipt, `seq` its position in the space's commit log, `origin` the origin it records when the request named one |
 | `follow`      | `piece`, `origin`; optional `expectedPattern`, `expectedRevision` (`null` for an empty source log), `dangerouslyAllowIncompatibleSchema`, `start` | `{ pieceId, pattern, origin, revisionId, acceptedIncompatibility? }` — the pointer and the origin the piece now holds, the revision the transition appended, and the incompatibility the override accepted |
 
 Once creation commits, a preparation or completion refusal returns the created
@@ -118,7 +118,7 @@ stable and is what a client branches on; its `message` is prose for a person.
 | `forbidden`                                      | the caller is not a writer of the space, or there is no such space                                                                                                                                                     |
 | `pattern-not-found`, `piece-not-found`           | the named pattern, or the named piece, is not in the space                                                                                                                                                             |
 | `slug-taken`, `source-moved`                     | the slug names something and `force` was not set; the piece is not on the pattern the update was proved against, or for `follow` not at the source-log head it was pinned to, or moved between the follow's two cycles |
-| `origin-unreachable`                             | the origin a `follow` names is not one a piece can follow, or the source it names could not be read or compiled                                                                                                        |
+| `origin-unreachable`                             | the origin a `follow` or a `setsrc` names is not one a piece can follow, or the source it names could not be read or compiled                                                                                                        |
 | `compile-failed`, `setup-failed`, `incompatible` | the program did not compile; setup refused the pattern or the argument; the candidate cannot run over the piece's retained state and the override was not set                                                          |
 | `server-execution-off`                           | the memory server has no handler installed: no serving loop runs on this deployment                                                                                                                                    |
 | `space-not-served`                               | the serving loop on this process cannot serve the space                                                                                                                                                                |
@@ -350,6 +350,12 @@ following the origin concluded is then recorded on the piece as the serving
 loop's bookkeeping, as the source reconciler records its own. Unless `start` is
 `false`, the verb names the piece's root as its demand.
 
+A served `setsrc` that names an `origin` records it with the update's revision
+instead of detaching the piece. The source it writes is the request's program
+either way, and the origin's own source reaches the piece the next time the
+serving loop opens it, as any origin's does. The origin is checked as `follow`
+checks one, without being read.
+
 The `servingLoop.lifecycleVerbs` block of `/api/health/stats` counts verbs whose
 run completed (`runs`) and verbs whose run threw or whose durable confirmation
 failed (`failures`).
@@ -388,6 +394,10 @@ commit. The start waits for the commit of the started graph's setup writes,
 since a refused one retires the graph in the command's process, whatever the
 serving loop goes on serving; that refusal is a failed refresh too. A piece addressed at a scope keeps the
 client-side path, since the verb takes the piece's id alone.
+`cf piece setsrc --origin <origin>` sends the origin with the program. A server
+from before `setsrc` took an origin drops the field and detaches the piece; its
+receipt then names no origin, and the command fails, saying the source update
+committed but the piece follows nothing.
 
 `cf piece follow` sends the `follow` verb against a serving deployment, with the
 piece's id, the origin, and the pins and override it was given, and answers as a

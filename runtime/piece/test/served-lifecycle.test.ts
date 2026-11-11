@@ -1153,6 +1153,76 @@ export default pattern(() => {
       expect(refusal.code).toBe("pattern-not-found");
     });
 
+    it("records the origin the update names, so the piece follows it from then on", async () => {
+      const created = await instantiate({ program: BASE_PROGRAM });
+      const receipt = await setSource(
+        created.pieceId,
+        { program: programOf(RELEASED_SOURCE) },
+        { origin: "system:followed.tsx" },
+      );
+      expect(receipt.origin).toBe("system:followed.tsx");
+      expect(receipt.detachedOrigin).toBeNull();
+
+      const pieces = await clientPieces();
+      const cell = (await pieces.get(created.pieceId)).getCell();
+      expect(getPatternIdentityRef(cell)).toEqual(receipt.pattern);
+      expect(getPatternSource(cell)).toBe("system:followed.tsx");
+      expect(getPieceSourceRevisions(cell).at(-1)).toMatchObject({
+        revisionId: receipt.revisionId,
+        operation: "edit",
+        origin: "system:followed.tsx",
+      });
+    });
+
+    it("refuses an origin no piece can follow, and leaves the piece as it was", async () => {
+      const created = await instantiate({ program: BASE_PROGRAM });
+      const refusal = await refusalOf(
+        setSource(
+          created.pieceId,
+          { program: programOf(RELEASED_SOURCE) },
+          { origin: "https://source.test/pattern.tsx" },
+        ),
+      );
+      expect(refusal.code).toBe("origin-unreachable");
+      const pieces = await clientPieces();
+      const cell = (await pieces.get(created.pieceId)).getCell();
+      expect(getPatternIdentityRef(cell)).toEqual(created.pattern);
+      expect(getPatternSource(cell)).toBeUndefined();
+    });
+
+    it("leaves a client with server execution on able to change a user-scoped piece's source itself", async () => {
+      // What `cf piece setsrc` does for a piece addressed at a scope, which
+      // the served verb, taking the piece's id alone, cannot address.
+      const pieces = await clientPieces();
+      const runtime = pieces.runtime;
+      const pattern = await runtime.patternManager.compilePattern(
+        BASE_PROGRAM,
+        { space },
+      );
+      const id = runtime.getCell(space, "a user-scoped piece")
+        .getAsNormalizedFullLink().id;
+      await runtime.runSynced(
+        runtime.getCellFromEntityId(
+          space,
+          id,
+          [],
+          undefined,
+          undefined,
+          "user",
+        ),
+        pattern,
+        {},
+      );
+      const piece = await pieces.get(id, false, undefined, "user");
+
+      const receipt = await piece.setPattern(programOf(RELEASED_SOURCE));
+
+      expect(receipt.refresh).toEqual({ status: "completed" });
+      const reader = await clientPieces();
+      const read = await reader.get(id, false, undefined, "user");
+      expect(getPatternIdentityRef(read.getCell())).toEqual(receipt.ref);
+    });
+
     it("reports the refresh as deferred on the receipt the served update is built on", async () => {
       // The served option on the client's own runtime: the commit is the
       // store's as always there, and the piece is left to whoever runs it.

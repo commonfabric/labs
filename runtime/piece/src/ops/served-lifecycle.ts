@@ -46,6 +46,7 @@ import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { pieceId as pieceIdOf } from "../piece-id.ts";
 import { claimSlugInTx, prepareSlugClaim } from "../slugs.ts";
 import { prepareSourceClosureVerification } from "../../../runner/src/compilation-cache/cell-cache.ts";
+import { PieceOriginError } from "./piece-origin.ts";
 import {
   isPieceSourceCompatibilityRefusal,
   type PatternUpdateReceipt,
@@ -191,6 +192,12 @@ export interface ServedSetSourceRequest {
   expectedPattern?: ServedPatternRef;
 
   /**
+   * The origin the piece follows from then on, recorded with the revision;
+   * absent, the update detaches the piece.
+   */
+  origin?: string;
+
+  /**
    * The principal the verb acts for. The setup transaction carries this
    * principal's trust snapshot, as a creation's does
    * ({@link ServedInstantiateRequest}).
@@ -215,8 +222,14 @@ export type ServedSetSourceReceipt = {
    */
   seq: number;
 
-  /** The origin the update detached, `null` when the piece had none. */
+  /**
+   * The origin the update detached, `null` when the piece had none or keeps
+   * following it.
+   */
   detachedOrigin: string | null;
+
+  /** The origin the revision records, when the request named one. */
+  origin?: string;
 };
 
 /**
@@ -914,10 +927,15 @@ export async function servedSetPieceSource(
       ...(request.expectedPattern === undefined
         ? {}
         : { expectedPattern: request.expectedPattern }),
+      ...(request.origin === undefined ? {} : { origin: request.origin }),
       served: { actingUser: request.actingUser },
     });
   } catch (error) {
-    throw setSourceRefusal(error);
+    throw error instanceof PieceOriginError
+      ? new ServedLifecycleRefusal("origin-unreachable", error.message, {
+        cause: error,
+      })
+      : setSourceRefusal(error);
   }
   return {
     pieceId: request.pieceId,
@@ -925,6 +943,7 @@ export async function servedSetPieceSource(
     revisionId: receipt.revisionId,
     seq: receipt.seq,
     detachedOrigin: receipt.detachedOrigin,
+    ...(receipt.origin === undefined ? {} : { origin: receipt.origin }),
   };
 }
 
@@ -987,7 +1006,7 @@ function setSourceRefusal(error: unknown): ServedLifecycleRefusal {
 /**
  * The durability read behind {@link servedSetPieceSource}: the piece
  * document holds the pattern pointer the transaction wrote and the
- * revision it appended.
+ * revision it appended, with the origin it records when it named one.
  */
 export async function confirmServedSetSource(
   runtime: Runtime,
@@ -1005,7 +1024,8 @@ export async function confirmServedSetSource(
     stored.identity !== receipt.pattern.identity ||
     stored.symbol !== receipt.pattern.symbol ||
     !getPieceSourceRevisions(piece).some((revision) =>
-      revision.revisionId === receipt.revisionId
+      revision.revisionId === receipt.revisionId &&
+      (receipt.origin === undefined || revision.origin === receipt.origin)
     )
   ) {
     throw new Error(

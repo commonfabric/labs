@@ -1739,11 +1739,18 @@ export class PiecesController<T = unknown> {
       ) => void;
       repository?: string;
       sourceTransition?: PieceSourceTransition;
+
+      /** The scope the piece is addressed at; absent, its space instance. */
+      scope?: CellScope;
     },
   ): Promise<Cell<unknown>> {
     const piece = this.runtime.getCellFromEntityId(
       this.#space,
       entityIdFrom(pieceId),
+      [],
+      undefined,
+      undefined,
+      options?.scope,
     );
     await piece.sync();
     const start = options?.start ?? true;
@@ -1812,6 +1819,9 @@ export class PiecesController<T = unknown> {
        * commit itself reconciled.
        */
       served?: { actingUser: string };
+
+      /** The scope the piece is addressed at; absent, its space instance. */
+      scope?: CellScope;
     },
   ): Promise<{
     /** Cell view reconciled to the pattern current after post-commit work. */
@@ -1822,6 +1832,10 @@ export class PiecesController<T = unknown> {
     const piece = this.runtime.getCellFromEntityId(
       this.#space,
       entityIdFrom(pieceId),
+      [],
+      undefined,
+      undefined,
+      options.scope,
     );
     const result = await this.runtime.runSyncedWithCommit(
       piece,

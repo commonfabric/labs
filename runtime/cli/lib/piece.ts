@@ -263,6 +263,12 @@ export interface PieceConfig extends SpaceConfig {
 
 export interface SetPiecePatternOptions {
   dangerouslyAllowIncompatibleSchema?: boolean;
+
+  /**
+   * The origin the piece follows from then on, recorded with the revision;
+   * absent, the update detaches the piece.
+   */
+  origin?: string;
 }
 
 export interface GetCellValueOptions {
@@ -2228,8 +2234,18 @@ async function updateOnServer(
       ...(options.dangerouslyAllowIncompatibleSchema
         ? { dangerouslyAllowIncompatibleSchema: true }
         : {}),
+      ...(options.origin === undefined ? {} : { origin: options.origin }),
     });
   noteWroteTo(config.space);
+  // A server from before `setsrc` took an origin drops the field and
+  // detaches the piece, and its receipt names no origin.
+  if (options.origin !== undefined && receipt.origin === undefined) {
+    throw new Error(
+      `The source update committed as revision ${receipt.revisionId}, but ` +
+        `this deployment does not record an origin with \`setsrc\` yet, ` +
+        `so the piece follows nothing.`,
+    );
+  }
   let refresh: PatternUpdateReceipt["refresh"];
   try {
     const cell = await pieces.getPieceCell(receipt.pieceId, false);
@@ -2248,6 +2264,7 @@ async function updateOnServer(
     seq: receipt.seq,
     revisionId: receipt.revisionId,
     detachedOrigin: receipt.detachedOrigin,
+    ...(receipt.origin === undefined ? {} : { origin: receipt.origin }),
     refresh,
   };
 }
@@ -2486,6 +2503,7 @@ export async function setPiecePattern(
     ...(options.dangerouslyAllowIncompatibleSchema
       ? { dangerouslyAllowIncompatibleSchema: true }
       : {}),
+    ...(options.origin === undefined ? {} : { origin: options.origin }),
   });
   noteWroteTo(config.space);
   return receipt;

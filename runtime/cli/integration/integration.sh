@@ -438,6 +438,21 @@ run_piece_values() {
     error "The follow appended no revision: $follow_state"
   fi
 
+  # `setsrc --origin` writes the source it is given and records the origin, so
+  # the piece follows it from then on rather than being detached.
+  echo "Recording an origin with a source update."
+  local claimed_piece_id claimed_origin
+  claimed_piece_id=$(cf piece new --no-start $SPACE_ARGS "$FOLLOWED_PATTERN_SRC")
+  cf piece setsrc --quiet $SPACE_ARGS --piece "$claimed_piece_id" \
+    --origin "$FOLLOWED_ORIGIN" "$FOLLOWED_PATTERN_SRC"
+  claimed_origin=$(
+    cf piece inspect --pattern-identity --json $SPACE_ARGS \
+      --piece "$claimed_piece_id" | jq -r '.origin'
+  )
+  if [ "$claimed_origin" != "$FOLLOWED_ORIGIN" ]; then
+    error "setsrc --origin did not record the origin: $claimed_origin"
+  fi
+
   echo "Applying piece input."
 
   # Apply new input to piece

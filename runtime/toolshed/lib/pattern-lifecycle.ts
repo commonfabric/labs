@@ -94,6 +94,7 @@ const lifecycleBodies = {
     repository: z.string().optional(),
     dangerouslyAllowIncompatibleSchema: z.boolean().optional(),
     expectedPattern: patternRefSchema.optional(),
+    origin: z.string().min(1).optional(),
     start: z.boolean().optional(),
   }).refine(oneSource, oneSourceMessage),
   follow: z.object({
@@ -624,6 +625,7 @@ export async function processSetSource(
     repository?: string;
     dangerouslyAllowIncompatibleSchema?: boolean;
     expectedPattern?: ServedPatternRef;
+    origin?: string;
     start?: boolean;
   },
 ): Promise<LifecycleResult<ServedSetSourceReceipt>> {
@@ -660,6 +662,7 @@ export async function processSetSource(
       ...(input.expectedPattern === undefined
         ? {}
         : { expectedPattern: input.expectedPattern }),
+      ...(input.origin === undefined ? {} : { origin: input.origin }),
       actingUser: callerDid,
       start: input.start !== false,
     },

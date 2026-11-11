@@ -1314,6 +1314,13 @@ directly to the store (see
 [Where a piece is created](#where-a-piece-is-created)). The check stays in this
 process on every deployment.
 
+A source update detaches the piece from the origin it follows. With
+`--origin <origin>`, a `system:` ref or a fabric URL, the update records that
+origin with its revision instead: the piece runs the source the command names,
+and takes what the origin serves the next time it is opened. An embedder that
+deploys its own copy of a first-party pattern uses this to keep the piece on the
+pattern's later releases.
+
 Preflight uses setup's stored-argument validation: optional fields holding
 `undefined` count as absent, and unreadable linked values defer to reactive
 reads. A compatible verdict therefore does not prove that every linked value has

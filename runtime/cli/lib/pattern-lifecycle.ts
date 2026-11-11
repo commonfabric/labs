@@ -207,10 +207,12 @@ export async function instantiatePieceOnServer(
 /**
  * Replace `piece`'s source in `space` with `program`, through the same
  * compatibility checks a client-side update runs, in a setup transaction
- * the serving runtime commits to the store on its own. The receipt is that
- * transaction's: the pointer the piece now holds, the revision it appended,
- * and the origin it detached. Unless `start` is `false`, the serving loop
- * derives the updated piece in the cycle after.
+ * the serving runtime commits to the store on its own. With `origin`, the
+ * piece follows that origin from then on rather than being detached. The
+ * receipt is that transaction's: the pointer the piece now holds, the
+ * revision it appended, the origin it detached, and the origin it records,
+ * which a server that does not take one leaves out. Unless `start` is
+ * `false`, the serving loop derives the updated piece in the cycle after.
  */
 export async function setPieceSourceOnServer(
   config: LifecycleClientConfig,
@@ -220,6 +222,7 @@ export async function setPieceSourceOnServer(
     program: RuntimeProgram;
     repository?: string;
     dangerouslyAllowIncompatibleSchema?: boolean;
+    origin?: string;
     start?: boolean;
   },
 ): Promise<{
@@ -228,12 +231,14 @@ export async function setPieceSourceOnServer(
   revisionId: string;
   seq: number;
   detachedOrigin: string | null;
+  origin?: string;
 }> {
   return await call(config, "setsrc", {
     space: input.space,
     piece: input.piece,
     program: wireProgram(input.program),
     ...(input.repository === undefined ? {} : { repository: input.repository }),
+    ...(input.origin === undefined ? {} : { origin: input.origin }),
     ...(input.dangerouslyAllowIncompatibleSchema === undefined ? {} : {
       dangerouslyAllowIncompatibleSchema:
         input.dangerouslyAllowIncompatibleSchema,

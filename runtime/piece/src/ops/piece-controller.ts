@@ -1,4 +1,9 @@
-import type { CellKind, FabricValue, LinkScope } from "@commonfabric/api";
+import type {
+  CellKind,
+  CellScope,
+  FabricValue,
+  LinkScope,
+} from "@commonfabric/api";
 import {
   debugStr,
   fabricAwareEqual,
@@ -478,7 +483,7 @@ export type PieceSourceAction =
 export interface PieceSourceSetResult {
   /**
    * The origin the write detached, and null when the piece was already
-   * detached.
+   * detached or the write left it following that same origin.
    *
    * Taken from the snapshot the transition committed against, not from a
    * read beside the call. `applyPieceSourceTransition` refuses inside the
@@ -581,6 +586,14 @@ export interface PatternUpdateOptions {
   expectedPattern?: { identity: string; symbol: string };
 
   /**
+   * The origin the piece follows from then on, a `system:` ref or a fabric
+   * URL, recorded with the revision the write appends; absent, the write
+   * detaches the piece. The source written is the candidate either way, and
+   * the origin's own source reaches the piece the next time it is opened.
+   */
+  origin?: string;
+
+  /**
    * The update as a serving runtime performs it on `actingUser`'s behalf
    * (docs/features/server-pattern-lifecycle.md): the setup transaction
    * carries that principal's trust snapshot and commits directly to the
@@ -607,6 +620,8 @@ export interface PatternUpdateReceipt extends PieceSourceSetResult {
   seq: number;
   /** Source-history revision written atomically with `.ref`. */
   revisionId: string;
+  /** The origin the revision records, when the write named one. */
+  origin?: string;
   /**
    * Outcome of work which refreshes the running piece after commit;
    * `deferred` when this call ran none, leaving the piece to its runtime's
@@ -4227,7 +4242,11 @@ export class PieceController<T = unknown> {
             this.id,
             pattern,
             input,
-            { start: true, expectedPatternIdentity: ref },
+            {
+              start: true,
+              expectedPatternIdentity: ref,
+              scope: this.#cell.getAsNormalizedFullLink().scope,
+            },
           ) as Cell<T>;
         } catch (error) {
           if (error instanceof Error) {
@@ -4993,6 +5012,7 @@ export class PieceController<T = unknown> {
             candidate,
             undefined,
             {
+              scope: this.#cell.getAsNormalizedFullLink().scope,
               expectedPatternIdentity: previousRef,
               validateCurrentArgument: acceptedReview === undefined
                 ? undefined
@@ -5216,7 +5236,8 @@ export class PieceController<T = unknown> {
   /**
    * Replace the piece's source with `program`, detaching the piece from the
    * origin it follows: what it runs afterwards is `program` and stays
-   * `program` until something writes it again.
+   * `program` until something writes it again. With `origin`, the piece runs
+   * `program` and follows `origin` from then on instead.
    *
    * `expectedPattern` pins the reference this write may run over, exactly as
    * {@link changeSource}'s does and for the same window. The snapshot read
@@ -5282,6 +5303,11 @@ export class PieceController<T = unknown> {
     compile: () => Promise<Pattern>,
     options?: PatternUpdateOptions,
   ): Promise<PatternUpdateReceipt> {
+    const origin = options?.origin === undefined ? null : acceptEnteredOrigin(
+      this.#pieces.runtime,
+      this.#pieces.getSpace(),
+      options.origin,
+    );
     const mutationVersion = ++this.#mutationVersion;
     let transition: PieceSourceTransition | undefined;
     let commit: PatternSetupCommitReceipt | undefined;
@@ -5365,16 +5391,12 @@ export class PieceController<T = unknown> {
           // without the flag rethrows there.
           assertPatternSchemasBackwardCompatible(previousPattern!, pattern);
         }
-        // The `null` is the origin: this transition detaches. A caller
-        // supplying the source has chosen what the piece runs, and a piece
-        // still carrying its origin could be repointed afterwards to
-        // whatever that origin ships, which is not what this caller named.
-        transition = pieceSourceTransition(
-          expected,
-          "edit",
-          null,
-          baseline,
-        );
+        // Without an origin this transition detaches. A caller supplying
+        // the source has chosen what the piece runs, and a piece still
+        // carrying its origin could be repointed afterwards to whatever that
+        // origin ships, which is not what this caller named unless it named
+        // that origin.
+        transition = pieceSourceTransition(expected, "edit", origin, baseline);
         try {
           const result = await executePatternUpdate(
             this.#pieces,
@@ -5382,6 +5404,7 @@ export class PieceController<T = unknown> {
             pattern,
             undefined,
             {
+              scope: this.#cell.getAsNormalizedFullLink().scope,
               expectedPatternIdentity: previousRef,
               validateArgumentLinks: options?.dangerouslyAllowIncompatibleSchema
                 ? undefined
@@ -5441,7 +5464,7 @@ export class PieceController<T = unknown> {
           space: commit.space,
           seq: commit.seq,
           revisionId: transition.revisionId,
-          detachedOrigin: transition.expected.origin,
+          ...originFields(transition),
           refresh: { status: "failed", warning },
         };
       }
@@ -5458,7 +5481,7 @@ export class PieceController<T = unknown> {
       space: commit!.space,
       seq: commit!.seq,
       revisionId: transition!.revisionId,
-      detachedOrigin: transition!.expected.origin,
+      ...originFields(transition!),
       refresh: {
         status: options?.served === undefined ? "completed" : "deferred",
       },
@@ -6089,6 +6112,21 @@ async function preparePinnedBaseline(
 }
 
 /**
+ * Helper for `#updatePattern()`, which says what a direct edit's transition
+ * did to the piece's origin: the origin it detached, which is none when the
+ * piece keeps following the one it followed, and the origin it records.
+ */
+function originFields(
+  transition: PieceSourceTransition,
+): Pick<PatternUpdateReceipt, "detachedOrigin" | "origin"> {
+  const before = transition.expected.origin;
+  return {
+    detachedOrigin: before === transition.origin ? null : before,
+    ...(transition.origin === null ? {} : { origin: transition.origin }),
+  };
+}
+
+/**
  * Helper for `changeSource()`'s revision pin, which says where a source log
  * stands: empty, or ending at the revision `revisionId` names.
  */
@@ -6141,6 +6179,7 @@ async function execute(
   options?: {
     start?: boolean;
     expectedPatternIdentity?: { identity: string; symbol: string };
+    scope?: CellScope;
   },
 ): Promise<Cell<unknown>> {
   return await pieces.runWithPattern(pattern, pieceId, input, options);
@@ -6165,6 +6204,7 @@ async function executePatternUpdate(
     repository?: string;
     sourceTransition: PieceSourceTransition;
     served?: { actingUser: string };
+    scope?: CellScope;
   },
 ): Promise<{
   cell: Cell<unknown>;

@@ -308,6 +308,27 @@ describe("piece source lifecycle", () => {
     restoreFetch();
   });
 
+  /**
+   * A piece whose user-scoped instance runs `program`, its space instance
+   * holding none, opened at that scope.
+   */
+  async function userScopedPiece(
+    program: RuntimeProgram,
+  ): Promise<{ piece: PieceController; id: string }> {
+    const space = pieces.getSpace();
+    const pattern = await runtime.patternManager.compilePattern(program, {
+      space,
+    });
+    const id = runtime.getCell(space, `user-scoped-${crypto.randomUUID()}`)
+      .getAsNormalizedFullLink().id;
+    await runtime.runSynced(
+      runtime.getCellFromEntityId(space, id, [], undefined, undefined, "user"),
+      pattern,
+      {},
+    );
+    return { piece: await pieces.get(id, false, undefined, "user"), id };
+  }
+
   async function stampOrigin(
     piece: Awaited<ReturnType<PiecesController["create"]>>,
     origin: string,
@@ -482,6 +503,112 @@ describe("piece source lifecycle", () => {
     expect(state.history.map((revision) => revision.operation)).toEqual([
       "create",
     ]);
+  });
+
+  it("follows the origin a direct edit names, and takes what it serves when reconciled", async () => {
+    // The route serves a release and advertises the identity it compiles to
+    // there, which is what reconciliation asks for first.
+    const route = "/api/patterns/entered.tsx";
+    webSources[route] = versionProgram("entered-v2");
+    webIdentities[route] = runtime.patternManager.getArtifactEntryRef(
+      await runtime.patternManager.compilePattern(
+        routedVersionProgram(route, "entered-v2"),
+        { space: pieces.getSpace(), persist: false },
+      ),
+    )!.identity;
+    const piece = await pieces.create(versionProgram("v1"), { input: {} });
+
+    const edit = await piece.setPattern(versionProgram("vendored"), {
+      origin: "system:entered.tsx",
+    });
+    expect(edit).toMatchObject({
+      status: "committed",
+      origin: "system:entered.tsx",
+      detachedOrigin: null,
+    });
+    // The edit runs what it was given; the origin is not read for it.
+    expect(webFetches).toBe(0);
+    expect(await piece.result.get(["version"])).toBe("vendored");
+    expect(getPatternSource(piece.getCell())).toBe("system:entered.tsx");
+    expect(getPieceSourceRevisions(piece.getCell()).at(-1)).toMatchObject({
+      operation: "edit",
+      origin: "system:entered.tsx",
+      pattern: edit.ref,
+    });
+
+    expect(await reconcilePieceSource(runtime, piece.getCell())).toBe(
+      "updated",
+    );
+    expect(await piece.result.get(["version"])).toBe("entered-v2");
+    expect(getPatternSource(piece.getCell())).toBe("system:entered.tsx");
+  });
+
+  it("says what a direct edit did to the origin: kept, replaced, or detached", async () => {
+    const piece = await pieces.create(versionProgram("v1"), { input: {} });
+    await piece.setPattern(versionProgram("v2"), {
+      origin: "system:entered.tsx",
+    });
+
+    const kept = await piece.setPattern(versionProgram("v3"), {
+      origin: "system:entered.tsx",
+    });
+    expect(kept.detachedOrigin).toBeNull();
+    expect(kept.origin).toBe("system:entered.tsx");
+
+    const replaced = await piece.setPattern(versionProgram("v4"), {
+      origin: "system:other.tsx",
+    });
+    expect(replaced.detachedOrigin).toBe("system:entered.tsx");
+    expect(replaced.origin).toBe("system:other.tsx");
+
+    const detached = await piece.setPattern(versionProgram("v5"));
+    expect(detached.detachedOrigin).toBe("system:other.tsx");
+    expect(detached.origin).toBeUndefined();
+    expect(getPatternSource(piece.getCell())).toBeUndefined();
+  });
+
+  it("refuses a direct edit naming an origin the source URL policy does not allow, writing nothing", async () => {
+    const piece = await pieces.create(versionProgram("v1"), { input: {} });
+    const before = getPatternIdentityRef(piece.getCell());
+
+    await expect(
+      piece.setPattern(versionProgram("v2"), {
+        origin: "https://source.test/pattern.tsx",
+      }),
+    ).rejects.toThrow("not a source origin");
+
+    expect(getPatternIdentityRef(piece.getCell())).toEqual(before);
+    expect(getPatternSource(piece.getCell())).toBeUndefined();
+    expect(await piece.result.get(["version"])).toBe("v1");
+  });
+
+  it("changes the source of a piece addressed at a scope on that scope's instance", async () => {
+    const { piece, id } = await userScopedPiece(versionProgram("v1"));
+
+    const receipt = await piece.setPattern(versionProgram("v2"));
+
+    expect(await piece.result.get(["version"])).toBe("v2");
+    const reopened = await pieces.get(id, false, undefined, "user");
+    expect(getPatternIdentityRef(reopened.getCell())).toEqual(receipt.ref);
+    expect(getPieceSourceRevisions(reopened.getCell()).at(-1)?.revisionId)
+      .toBe(receipt.revisionId);
+    // The space instance of the same id is a different piece, left alone.
+    const spaceInstance = runtime.getCellFromEntityId(pieces.getSpace(), id);
+    await spaceInstance.sync();
+    expect(getPatternIdentityRef(spaceInstance)).toBeUndefined();
+  });
+
+  it("points a piece addressed at a scope at an origin on that scope's instance", async () => {
+    webSources["/api/patterns/entered.tsx"] = versionProgram("entered-v1");
+    const { piece, id } = await userScopedPiece(versionProgram("v1"));
+
+    expect(
+      await piece.changeSource({ kind: "repoint", url: "system:entered.tsx" }),
+    ).toEqual({ status: "applied" });
+
+    expect(await piece.result.get(["version"])).toBe("entered-v1");
+    const reopened = await pieces.get(id, false, undefined, "user");
+    expect(getPatternSource(reopened.getCell())).toBe("system:entered.tsx");
   });
 
   it("refuses to point a piece at itself", async () => {

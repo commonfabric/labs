@@ -788,6 +788,19 @@ export default pattern(() => {
       }),
     );
     expect(restored.pattern).toEqual(created.pattern);
+    expect(restored.origin).toBeUndefined();
+
+    // Naming an origin records it, and the piece follows it from then on.
+    const followed = ok(
+      await processSetSource(deps, alice.did(), {
+        space,
+        piece: created.pieceId,
+        pattern: created.pattern,
+        origin: "system:released.tsx",
+      }),
+    );
+    expect(followed.origin).toBe("system:released.tsx");
+    expect(followed.detachedOrigin).toBeNull();
 
     const sourceless = refused(
       await processSetSource(deps, alice.did(), {
