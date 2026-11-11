@@ -114,7 +114,7 @@ describe("profile-suggestion-multi-runtime", () => {
           { piece: surface },
         ) as { props?: Record<string, FabricValue> } | undefined;
         expect(shown?.props?.["data-ui-region"]).toBe(
-          "profile-create-suggested-picture",
+          "profile-create-picture-preview",
         );
       });
     });

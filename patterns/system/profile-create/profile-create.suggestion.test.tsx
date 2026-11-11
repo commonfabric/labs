@@ -97,7 +97,7 @@ export default pattern(() => {
     ) === "Sam Lee"
   );
   const assert_suggested_picture_is_shown = assert(() =>
-    find(surface[UI], byRegion("profile-create-suggested-picture")) !==
+    find(surface[UI], byRegion("profile-create-picture-preview")) !==
       undefined
   );
   const assert_create_stays_the_trusted_click = assert(() => {
@@ -115,7 +115,7 @@ export default pattern(() => {
   );
 
   const assert_removed_picture_is_not_shown = assert(() =>
-    find(surface[UI], byRegion("profile-create-suggested-picture")) ===
+    find(surface[UI], byRegion("profile-create-picture-preview")) ===
       undefined
   );
   // The host's suggestion is the host's: removing the picture leaves it.
@@ -141,11 +141,10 @@ export default pattern(() => {
   const assert_chosen_picture_is_shown = assert(() => {
     const shown = find(
       chooser[UI],
-      byRegion("profile-create-suggested-picture"),
+      byRegion("profile-create-picture-preview"),
     );
     return bytesAre(propValue(shown?.props.bytes) as FabricBytes, OWN);
   });
-  // A change without bytes decides nothing.
 
   // A surface handed no suggestion (the picker's) offers the choice too.
   const bare = ProfileCreate({
@@ -153,11 +152,17 @@ export default pattern(() => {
   });
   const assert_bare_surface_shows_no_picture = assert(() =>
     find(bare[UI], byTag("cf-avatar-input")) !== undefined &&
-    find(bare[UI], byRegion("profile-create-suggested-picture")) === undefined
+    find(bare[UI], byRegion("profile-create-picture-preview")) === undefined
   );
   const barePicture = { picture: new FabricBytes(new Uint8Array(OWN)) };
   const assert_bare_surface_shows_chosen_picture = assert(() =>
-    find(bare[UI], byRegion("profile-create-suggested-picture")) !== undefined
+    bytesAre(
+      propValue(
+        find(bare[UI], byRegion("profile-create-picture-preview"))?.props
+          .bytes,
+      ) as FabricBytes,
+      OWN,
+    )
   );
 
   // An empty picture is no picture: nothing would apply it, so none shows.
@@ -172,7 +177,7 @@ export default pattern(() => {
     propValue(
         find(emptyPicture[UI], byTag("cf-submit-input"))?.props.initialValue,
       ) === "Sam Lee" &&
-    find(emptyPicture[UI], byRegion("profile-create-suggested-picture")) ===
+    find(emptyPicture[UI], byRegion("profile-create-picture-preview")) ===
       undefined
   );
 
@@ -195,11 +200,12 @@ export default pattern(() => {
   // A choice the user made wins over the suggestion: their own picture, or
   // none at all once they removed it.
   const chose = ProfileHome({});
+  const choice = new Writable<PictureChoice | undefined>({
+    picture: new FabricBytes(new Uint8Array(OWN)),
+  });
   const choseSeed = seedProfileName({
     profileSuggestion: withPicture,
-    pictureChoice: new Writable<PictureChoice | undefined>({
-      picture: new FabricBytes(new Uint8Array(OWN)),
-    }),
+    pictureChoice: choice,
   });
   const action_seed_with_choice = action(() => {
     // deno-lint-ignore no-explicit-any
@@ -249,6 +255,7 @@ export default pattern(() => {
         event: chosenPicture,
       },
       { assertion: assert_chosen_picture_is_shown },
+      // A change without bytes decides nothing.
       {
         action: chooser.choosePicture,
         event: { detail: {} },

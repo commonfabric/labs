@@ -727,9 +727,6 @@ export type ProfileCreateOutput = {
   [UI]: VNode;
   createProfile: Stream<CreateProfileEvent>;
 
-  /** The picture the created profile will start with, if any. */
-  picture?: FabricBytes;
-
   /** Chooses that picture (ungated: see README.md, "CFC debt"). */
   choosePicture: Stream<SetProfilePictureEvent>;
 
@@ -768,7 +765,6 @@ export default pattern<ProfileCreateInput, ProfileCreateOutput>(
     return {
       [NAME]: "Create Profile",
       createProfile,
-      picture: shownPicture,
       choosePicture: chooseOwnPicture,
       removePicture,
       [UI]: (
@@ -802,7 +798,7 @@ export default pattern<ProfileCreateInput, ProfileCreateOutput>(
                 bytes={shownPicture}
                 name={startingName}
                 size="lg"
-                data-ui-region="profile-create-suggested-picture"
+                data-ui-region="profile-create-picture-preview"
               />,
               null,
             )}
