@@ -35,12 +35,14 @@ import {
   deriveModuleDelegations,
   getCompileCacheRuntimeVersion,
   loadCompiledClosure,
+  loadSourceClosure,
   loadVerifiedSourceClosure,
   type ModuleDelegationMap,
   moduleDelegationsFromDocs,
   planCompileCacheWriteChunks,
   recordUndeclarablePolicyStore,
   ROOT_LINK_SPECIFIER,
+  sourceClosureNeedsParser,
   type SourceDoc,
   sourceDocKey,
   stageModuleDelegations,
@@ -53,7 +55,10 @@ import {
   deterministicCompileError,
   isDeterministicCompileFailure,
 } from "./harness/compile-failure.ts";
-import { compilerStack } from "./harness/deferred-compiler-stack.ts";
+import {
+  compilerStack,
+  ensureCompilerStack,
+} from "./harness/deferred-compiler-stack.ts";
 import type {
   CacheableModule,
   CompiledModuleArtifact,
@@ -327,28 +332,30 @@ function cacheEntriesIncludePatternCoverage(
 }
 
 /**
- * Re-derive a stored module's fabric edges from its SOURCE text (source docs
- * deliberately do not store them as links). Unpinned specifiers are skipped:
- * they carry no target identity to link, and they cannot legitimately occur
- * here — the cell-cache write path refuses to persist modules with unpinned
- * fabric imports (`assertNoUnpinnedFabricImports`), so a skip only ever drops
- * an edge from data that predates that guard.
+ * Re-derive a stored module's fabric edges from the module specifiers its
+ * SOURCE text names (source docs deliberately do not store them as links):
+ * the list its compiled document attests, or a parse of the source when it
+ * has none. Unpinned specifiers are skipped: they carry no target identity to
+ * link, and they cannot legitimately occur here — the cell-cache write path
+ * refuses to persist modules with unpinned fabric imports
+ * (`assertNoUnpinnedFabricImports`), so a skip only ever drops an edge from
+ * data that predates that guard.
+ *
+ * Parsing needs the compiler stack, which the caller loads when some module
+ * carries no attested list.
  */
 function fabricImportRefsFromSource(
   doc: SourceDoc,
+  attestedImports: readonly string[] | undefined,
 ): CacheableModule["imports"] {
-  // Deferred compiler stack (parses): source docs only reach this via
-  // loadVerifiedSourceClosure, which awaits ensureCompilerStack().
-  const { collectImportSpecifiers, ts } = compilerStack();
-  const source: Source = { name: doc.filename, contents: doc.code };
+  const specifiers = attestedImports ?? (() => {
+    const { collectImportSpecifiers, ts } = compilerStack();
+    const source: Source = { name: doc.filename, contents: doc.code };
+    return collectImportSpecifiers(source, ts.ScriptTarget.ES2023);
+  })();
   const refs: CacheableModule["imports"] = [];
   const seen = new Set<string>();
-  for (
-    const specifier of collectImportSpecifiers(
-      source,
-      ts.ScriptTarget.ES2023,
-    )
-  ) {
+  for (const specifier of specifiers) {
     if (!isFabricImportSpecifier(specifier)) continue;
     const ref = parseFabricRef(specifier);
     if (ref === undefined) continue;
@@ -1931,12 +1938,9 @@ export class PatternManager {
       let sourceDocs;
       let compiledDocs;
       try {
-        sourceDocs = await loadVerifiedSourceClosure(
-          this.#runtime,
-          origin,
-          entryIdentity,
-          readTx,
-        );
+        // The compiled closure first: reading it registers the import lists
+        // its documents attest, so verifying the source closure below parses
+        // only the modules that carry none.
         if (runtimeVersion === undefined) {
           compiledDocs = undefined;
         } else {
@@ -1949,6 +1953,12 @@ export class PatternManager {
             readTx,
           );
         }
+        sourceDocs = await loadVerifiedSourceClosure(
+          this.#runtime,
+          origin,
+          entryIdentity,
+          readTx,
+        );
       } finally {
         readTx.abort?.("closure-replication read complete");
       }
@@ -2108,6 +2118,21 @@ export class PatternManager {
       throw new ClosureReplicationSupplyError(origin.reason, entryIdentity);
     }
     const { runtimeVersion, sourceDocs, compiledDocs } = origin;
+    // A module whose compiled document carries neither an attested import
+    // list nor a record surface is parsed below, for its fabric edges or by
+    // the write that derives the surface.
+    if (
+      [...sourceDocs.keys()].some((identity) => {
+        const compiled = compiledDocs?.get(identity);
+        return compiled?.kind !== "data" &&
+          (compiled?.sourceImports === undefined ||
+            compiled.exportNames === undefined ||
+            compiled.starTargetSpecs === undefined ||
+            compiled.importSpecs === undefined);
+      })
+    ) {
+      await ensureCompilerStack();
+    }
     const modules: CacheableModule[] = [];
     const fabricDependencies = new Set<string>();
     for (const [identity, doc] of sourceDocs) {
@@ -2115,7 +2140,9 @@ export class PatternManager {
       if (runtimeVersion !== undefined && !compiled) {
         throw new Error(`compiled doc missing for ${identity}`);
       }
-      const fabricImports = fabricImportRefsFromSource(doc);
+      const fabricImports = compiled?.kind === "data"
+        ? []
+        : fabricImportRefsFromSource(doc, compiled?.sourceImports);
       for (const imp of fabricImports) {
         fabricDependencies.add(imp.targetIdentity);
       }
@@ -2125,6 +2152,18 @@ export class PatternManager {
         source: doc.code,
         js: compiled?.code ?? "",
         ...(compiled?.kind === "data" ? { isData: true } : {}),
+        ...(compiled?.sourceImports !== undefined
+          ? { sourceImports: compiled.sourceImports }
+          : {}),
+        ...(compiled?.exportNames !== undefined
+          ? { exportNames: compiled.exportNames }
+          : {}),
+        ...(compiled?.starTargetSpecs !== undefined
+          ? { starTargetSpecs: compiled.starTargetSpecs }
+          : {}),
+        ...(compiled?.importSpecs !== undefined
+          ? { importSpecs: compiled.importSpecs }
+          : {}),
         ...(compiled?.sourceMap !== undefined
           ? { sourceMap: compiled.sourceMap }
           : {}),
@@ -2282,6 +2321,73 @@ export class PatternManager {
     tx.addVerdictCallback((_tx, result) => {
       if (result.ok) this.#runtime.registerModuleDelegations(space, committed);
     });
+  }
+
+  /**
+   * Prepare this runtime to verify the source closures of `identities` in
+   * `space` synchronously, inside a transaction that cannot await: synchronize
+   * each closure, and make sure verifying it can run. Verification parses only
+   * a module whose import list no compiler-stamped compiled document attests,
+   * so a closure that needs one has its compiled closure for this runtime
+   * version read, which registers the lists it carries, and the parser is
+   * loaded only when a list is still missing after that. A runtime that
+   * evaluates only compiled patterns therefore verifies the closures of the
+   * pieces it creates without loading the compiler.
+   *
+   * A read that fails loads the parser instead, so the verification it
+   * prepares runs as it would have, and reports the failure itself.
+   */
+  async prepareSourceClosureVerification(
+    space: MemorySpace,
+    identities: Iterable<string>,
+  ): Promise<void> {
+    const tx = this.#runtime.edit();
+    try {
+      for (const identity of new Set(identities)) {
+        if (PatternManager.isKeylessPatternIdentity(identity)) continue;
+        if (!await this.#closureVerifiesWithoutParser(space, identity, tx)) {
+          await ensureCompilerStack();
+          return;
+        }
+      }
+    } catch (error) {
+      logger.warn("source-closure-preparation-read-failed", () => [
+        `space=${space}`,
+        error,
+      ]);
+      await ensureCompilerStack();
+    } finally {
+      tx.abort("source closure verification prepared");
+    }
+  }
+
+  /**
+   * Helper for `prepareSourceClosureVerification()`, which synchronizes the
+   * source closure of `identity` in `space` and returns whether verifying it
+   * parses nothing, reading the compiled closure for the import lists it
+   * attests when the source closure alone does not settle that. An absent
+   * source closure verifies, as unavailable, without parsing.
+   */
+  async #closureVerifiesWithoutParser(
+    space: MemorySpace,
+    identity: string,
+    tx: IExtendedStorageTransaction,
+  ): Promise<boolean> {
+    const closure = await loadSourceClosure(this.#runtime, space, identity, tx);
+    if (closure === undefined) return true;
+    if (!sourceClosureNeedsParser(this.#runtime, space, closure)) return true;
+    const runtimeVersion = await this.compileCacheRuntimeVersion({
+      patternCoverage: this.#patternCoverageFor() !== undefined,
+    });
+    if (runtimeVersion === undefined) return false;
+    await loadCompiledClosure(
+      this.#runtime,
+      space,
+      identity,
+      { runtimeVersion },
+      tx,
+    );
+    return !sourceClosureNeedsParser(this.#runtime, space, closure);
   }
 
   /**

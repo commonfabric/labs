@@ -4529,11 +4529,13 @@ export class PieceController<T = unknown> {
       if (expected.origin === null) {
         throw new Error("piece is not following a source");
       }
+      // A detach keeps the pattern the piece runs.
       const baseline = await preparePinnedBaseline(
         this.#pieces.runtime,
         this.#cell,
         expected,
         proved,
+        { candidateIdentity: previousRef.identity },
       );
       const transition = pieceSourceTransition(
         expected,
@@ -5902,7 +5904,7 @@ async function preparePinnedBaseline(
   cell: Cell<unknown>,
   expected: PieceSourceSnapshot,
   proved: { identity: string; symbol: string } | undefined,
-  options: { allowUnavailable?: boolean } = {},
+  options: { allowUnavailable?: boolean; candidateIdentity?: string } = {},
 ): Promise<PieceSourceTransitionBaseline> {
   try {
     return await preparePieceSourceTransitionBaseline(

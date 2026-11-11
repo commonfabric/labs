@@ -62,6 +62,11 @@ export function ensureCompilerStack(
     });
 }
 
+/** Whether some flow has loaded the compiler stack in this process. */
+export function compilerStackLoaded(): boolean {
+  return loaded !== undefined;
+}
+
 /**
  * The loaded compiler stack. Throws when no flow has awaited
  * {@link ensureCompilerStack} yet — a missed ensure on a new flow fails loud

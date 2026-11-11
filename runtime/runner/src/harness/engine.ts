@@ -497,15 +497,26 @@ export class Engine extends EventTarget {
     return await attachDeclaredDataFiles(resolved, program);
   }
 
-  /** Resolve the module closure an entry's imports reach. */
+  /**
+   * Resolve the module closure an entry's imports reach. Resolution only
+   * scans imports, so it takes the resolver from the compiler stack without
+   * building this engine's compiler, whose TypeScript environment types a
+   * runtime that compiles elsewhere would otherwise hold for nothing. The
+   * options are the ones `TypeScriptCompiler.resolveProgram()` passes.
+   */
   async #resolveModules(
     program: ProgramResolver,
   ): Promise<RuntimeProgram> {
-    const { compiler } = await this.#getCompilerInternals();
+    const { resolveProgram, TARGET } = await ensureCompilerStack();
     logger.timeStart("resolve");
     try {
-      return await compiler.resolveProgram(program, {
-        runtimeModules: Engine.runtimeModuleNames(),
+      return await resolveProgram(program, {
+        unresolvedModules: {
+          type: "allow",
+          identifiers: Engine.runtimeModuleNames(),
+        },
+        resolveUnresolvedModuleTypes: true,
+        target: TARGET,
       });
     } finally {
       logger.timeEnd("resolve");
@@ -982,12 +993,16 @@ export class Engine extends EventTarget {
         const record = specifier === undefined
           ? undefined
           : graph.records.get(specifier);
+        const sourceImports = isData
+          ? undefined
+          : declarations.get(file.name)?.imports;
         return {
           identity,
           filename: storedFilenameFor(file.name, id, mounts),
           source: file.contents,
           js: isData ? file.contents : (emittedBody ?? ""),
           ...(isData ? { isData: true } : {}),
+          ...(sourceImports === undefined ? {} : { sourceImports }),
           ...(sourceMap === undefined ? {} : { sourceMap }),
           ...(record === undefined ? {} : { importSpecs: [...record.imports] }),
           ...(emittedBody === undefined ||
@@ -1465,12 +1480,16 @@ export class Engine extends EventTarget {
         ? undefined
         : validatePolicyManifestsForModule(identity, out.policyManifests);
       const isData = dataFileSet.has(file.name);
+      const sourceImports = isData
+        ? undefined
+        : declarations.get(file.name)?.imports;
       return {
         identity,
         filename: storedFilenameFor(file.name, undefined, mounts),
         source: file.contents,
         js: isData ? file.contents : (out?.js ?? ""),
         ...(isData ? { isData: true } : {}),
+        ...(sourceImports === undefined ? {} : { sourceImports }),
         ...(out?.sourceMap === undefined ? {} : { sourceMap: out.sourceMap }),
         ...(out?.builderSourceSites === undefined
           ? {}

@@ -538,7 +538,14 @@ linked data:
    set when `runtimeFingerprint` changes. It is **self-verifying**: a reader
    recomputes the identity from the source, import graph, and recorded identity
    fingerprint ([`verifySourceDocs`][c14]). Content addressing is the integrity
-   check, so no separate label is needed.
+   check, so no separate label is needed. The recomputation needs each module's
+   import list. A compiled document stores that list as the identity scan read
+   it (`sourceImports`), under the compiler's stamp, and a runtime that has read
+   the document in a space takes the list from it when verifying that space's
+   source set, instead of parsing the source. The hash is the same either way
+   and still folds the source bytes, so a forged source fails as it would under
+   a parse, and a runtime that only evaluates compiled patterns verifies the
+   source closures of the pieces it creates without loading the compiler.
 2. **Compiled set — `compileCache:<runtimeVersion>/<identity>`.** Compiled and
    verified JS, keyed by `(runtimeVersion, identity)` ([`compiledDocKey`][c14]).
    `runtimeVersion` is the compile-cache version
