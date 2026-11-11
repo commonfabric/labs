@@ -2481,12 +2481,11 @@ segment;
 `pushGrowthWakes`/`watchWakes`/`warmWakes` count NOTIFIES (the push-time
 `demandChanged`, the `session.watch.set`/`.add` notifies, and the warm
 request's staged-instance captures — the third kept apart so
-`watchWakes` keeps meaning exactly the session-watch notifies) BEFORE the
-300 ms grace coalesces notifications into one pending callback. Each
-notification advances the demand generation; a notification racing a pass
-can require another pass after it completes. Input-driven cycles reconcile
-demand before a held grace callback fires, so 300 ms is not a universal
-cold-session latency floor. Count notifications, callbacks, passes, wave
+`watchWakes` keeps meaning exactly the session-watch notifies). Each
+notification latches a cycle and wakes a loop waiting on input; the
+notifications that arrive before that cycle's demand pass share it. Each
+also advances the demand generation, so a notification racing a pass
+requires another pass after it completes. Count notifications, passes, wave
 closures, and durable commits separately. The service (loopback) session's
 notifies are DROPPED — its tracked-set growth is the serving
 graph's own reads, not client demand (review MINOR-4). `demandArrivals`
