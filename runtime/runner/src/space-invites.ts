@@ -26,6 +26,7 @@ export {
   INVITE_ACCESS,
   inviteCodeVerifier,
   isInviteAccess,
+  isInviteProfileSuggestion,
   normalizeInviteHost,
   parseInviteLink,
   SPACE_INVITE_CAPABILITY,
@@ -36,6 +37,7 @@ export type {
   InviteAccess,
   InviteLink,
   InviteMetadata,
+  InviteProfileSuggestion,
   InviteRedemption,
   RedeemReceipt,
 } from "@commonfabric/memory/space-invites";
@@ -58,7 +60,10 @@ function usesHttpAfter(error: unknown): boolean {
 
 /** Creation settings with optional credentials for an exact retry. */
 export type CreateSpaceInviteOptions =
-  & Pick<CreateInvite, "access" | "ttlSeconds" | "maxUses">
+  & Pick<
+    CreateInvite,
+    "access" | "ttlSeconds" | "maxUses" | "suggestedProfile"
+  >
   & { inviteId?: string; code?: string };
 
 /** A failed creation attempt retaining caller-only credentials for an exact retry. */
@@ -158,6 +163,9 @@ export class SpaceInviteClient {
       access: options.access,
       ttlSeconds: options.ttlSeconds,
       ...(options.maxUses === undefined ? {} : { maxUses: options.maxUses }),
+      ...(options.suggestedProfile === undefined
+        ? {}
+        : { suggestedProfile: options.suggestedProfile }),
     };
     try {
       const metadata = await this.issue(request);
@@ -173,6 +181,9 @@ export class SpaceInviteClient {
           ...(request.maxUses === undefined
             ? {}
             : { maxUses: request.maxUses }),
+          ...(request.suggestedProfile === undefined
+            ? {}
+            : { suggestedProfile: request.suggestedProfile }),
           ...credentials,
         },
       );
@@ -189,6 +200,9 @@ export class SpaceInviteClient {
         access: request.access,
         ttlSeconds: request.ttlSeconds,
         ...(request.maxUses === undefined ? {} : { maxUses: request.maxUses }),
+        ...(request.suggestedProfile === undefined
+          ? {}
+          : { suggestedProfile: request.suggestedProfile }),
       },
     });
   }

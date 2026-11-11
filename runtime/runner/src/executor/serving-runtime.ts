@@ -10,6 +10,7 @@
 import type { MemorySpace, Signer } from "@commonfabric/memory/interface";
 import type { ClientBuild } from "@commonfabric/memory/v2/client-info";
 import { CompileTurns } from "../harness/compile-interleave.ts";
+import type { ModuleCompiler } from "../harness/module-compile.ts";
 import {
   type ExperimentalOptions,
   type ModuleByteCache,
@@ -74,6 +75,14 @@ export type ServingRuntimeFactoryOptions = {
   moduleByteCache?: ModuleByteCache;
 
   /**
+   * Where every serving runtime the factory builds runs the type-check,
+   * transform and emit step of its compiles: a compile worker, which keeps
+   * that step and its heap off the thread the serving loop runs on. Absent,
+   * each runtime compiles on that thread.
+   */
+  moduleCompiler?: ModuleCompiler;
+
+  /**
    * Called with each serving runtime's storage manager before the runtime
    * that uses it is constructed, so a test can replace one of its providers'
    * methods. The returned function, if any, runs once the runtime, and with
@@ -133,6 +142,9 @@ export function servingRuntimeFactory(
         ...SERVING_RUNTIME_EXPERIMENTAL,
       },
       ...sharedByteCache,
+      ...(options.moduleCompiler === undefined
+        ? {}
+        : { moduleCompiler: options.moduleCompiler }),
     });
     return Promise.resolve({
       runtime,

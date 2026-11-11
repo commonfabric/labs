@@ -10,8 +10,8 @@
  */
 
 import {
+  type Cell,
   computed,
-  type FabricBytes,
   handler,
   NAME,
   pattern,
@@ -21,7 +21,10 @@ import {
   type VNode,
   wish,
 } from "commonfabric";
-import { profileLook } from "../../../system/profile-look/profile-look.ts";
+import {
+  profileFace,
+  type ProfileFaceFields,
+} from "../../../system/profile-face/profile-face.ts";
 
 import BattleshipRoom from "./room.tsx";
 import {
@@ -134,15 +137,16 @@ const joinAvailableSlot = (
   return true;
 };
 
-// Join with the viewer's resolved profile. `name`/`picture`/`avatar` arrive as
-// plain values (named `computed` values auto-unwrap as handler state). The
-// player is drawn with their picture, or else their avatar text.
+// Join with the viewer's resolved profile. `name` arrives as a plain value
+// (named `computed` values auto-unwrap as handler state), and `profile` as the
+// live profile cell. The player is drawn with their picture, or else their
+// avatar text, as their profile holds it for its owner.
 const joinGame = handler<
   void,
   {
     name: string;
-    picture?: FabricBytes;
-    avatar?: string;
+    // May be undefined until the viewer's `#profile` wish resolves.
+    profile: Cell<{ name?: string } & ProfileFaceFields> | undefined;
     myName: PlayerNameCell;
     myPlayerNumber: PlayerNumberCell;
     player1: PlayerCell;
@@ -154,8 +158,7 @@ const joinGame = handler<
   _event,
   {
     name,
-    picture,
-    avatar,
+    profile,
     myName,
     myPlayerNumber,
     player1,
@@ -165,11 +168,13 @@ const joinGame = handler<
   },
 ) => {
   const trimmed = trimmedName(name);
-  if (!trimmed) return; // No resolved profile name yet.
+  // Neither the name nor the profile, whose face the player is drawn with,
+  // has resolved yet.
+  if (!trimmed || profile === undefined) return;
 
   joinAvailableSlot(
     trimmed,
-    profileLook(picture, avatar),
+    profileFace(profile),
     myName,
     myPlayerNumber,
     player1,
@@ -259,17 +264,13 @@ const BattleshipLobby = pattern<LobbyState, LobbyOutput>(
     // Resolve THIS viewer's shared profile. The `#profile` wish's built-in UI
     // covers the whole lifecycle: a create surface when the viewer has no
     // profile, a link when they have one, and a picker (with inline create)
-    // when they have several. The field targets give the snapshot values.
-    const profileWish = wish<{ name?: string; avatar?: string }>({
+    // when they have several. Joining reads the face for the snapshot from it.
+    const profileWish = wish<{ name?: string }>({
       query: "#profile",
     });
     const profileNameWish = wish<string>({ query: "#profileName" });
-    const profilePictureWish = wish<FabricBytes>({ query: "#profilePicture" });
-    const profileAvatarWish = wish<string>({ query: "#profileAvatar" });
 
     const profileName = computed(() => profileNameWish.result ?? "");
-    const profilePicture = computed(() => profilePictureWish.result);
-    const profileAvatar = computed(() => profileAvatarWish.result);
     const hasProfile = computed(() =>
       (profileNameWish.result ?? "").trim() !== ""
     );
@@ -280,8 +281,7 @@ const BattleshipLobby = pattern<LobbyState, LobbyOutput>(
     const sharedCells = { player1, player2, shots, gameState };
     const join = joinGame({
       name: profileName,
-      picture: profilePicture,
-      avatar: profileAvatar,
+      profile: profileWish.result,
       myName,
       myPlayerNumber,
       ...sharedCells,

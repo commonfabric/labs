@@ -751,7 +751,8 @@ Each measure has a floor, the smallest guarantee an implementation may state:
 | Length of a string | 2^24 (16,777,216) code points |
 | Length of a byte sequence | 2^24 (16,777,216) bytes |
 | Length of a registered symbol's key | 2^10 (1,024) code points |
-| Depth | 2^10 (1,024) containers |
+| Depth | 2^9 (512) containers |
+| Size of a bigint, in bytes of its two's-complement representation | 2^21 (2,097,152) bytes (2^24 bits) |
 
 A guarantee covers one measure taken alone. The format sets no floor on a
 value's size as a whole, and an implementation may fail a value that is within
@@ -795,6 +796,15 @@ holds no container has depth 2. Depth is the value's, not the text's: an escape
 wrapper, `/object` or `/quote`, adds nothing, and nor does a `hole` entry; the
 single-key object wrapping an instance is the instance; and a primitive adds
 nothing, whatever the shape of its state in the text.
+
+**Bigints.** A bigint's size is the length of its minimal two's-complement
+representation in bytes, the bytes `BigInt@1` writes (Section 3): at least one
+byte, and no leading `0x00` or `0xFF` byte that only repeats the sign the next
+byte carries. `0n`, `-1n`, `127n` and `-128n` are 1 byte each, and `128n` and
+`-129n` are 2. The size is the value's, not the text's: it counts the bytes, not
+the base64url characters of the state that writes them. The guarantee covers
+every bigint the value holds: a `BigInt@1` value, and the bigint each temporal
+quantity carries.
 
 **What the floors do not bind.** The floors bind only the guarantees an
 implementation states. A caller reading untrusted text may set a lower bound

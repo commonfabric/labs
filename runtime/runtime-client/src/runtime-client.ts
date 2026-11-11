@@ -178,9 +178,11 @@ export type RuntimeClientEvents = {
   spaceaccesslost: [{ space: DID; deleted?: true }];
 
   /**
-   * A space that refused the runtime principal admitted it again. A load the
-   * refusal failed may succeed if asked again, and this is the word to ask
-   * on for that space.
+   * A space that refused the runtime principal admitted it again, or a retry
+   * reached a space the runtime had never reached (see
+   * `retryUnreachableSpaces()`). A load the refusal or the failed connection
+   * failed may succeed if asked again, and this is the word to ask on for
+   * that space.
    */
   spaceaccessrestored: [{ space: DID }];
 
@@ -1000,6 +1002,26 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
       throw new Error("Home's root is missing from the worker's response.");
     }
     return new CellHandle(this, response.cell);
+  }
+
+  /**
+   * Stores `suggestion` as the profile suggested for this runtime's user, to
+   * be offered by the create surface the `#profile` wish shows while the user
+   * has no profile, and resolves once it is stored. It replaces any
+   * suggestion stored before, so a host offers one once, when it learns it,
+   * as Web Weaver does from the receipt of an invitation that carries one.
+   * `picture` is copied into the value that crosses.
+   */
+  async offerProfileSuggestion(
+    suggestion: { name: string; picture?: Uint8Array },
+  ): Promise<void> {
+    await this.#conn.request<RequestType.OfferProfileSuggestion>({
+      type: RequestType.OfferProfileSuggestion,
+      name: suggestion.name,
+      ...(suggestion.picture === undefined
+        ? {}
+        : { picture: new FabricBytes(suggestion.picture) }),
+    });
   }
 
   /**

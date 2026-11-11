@@ -11,12 +11,15 @@
  * The plain-object entry point additionally refuses anything that decoded to
  * something else, so a caller that asked for a record is not handed an array
  * or an instance instead.
+ *
+ * The depth this package's README guarantees is held here too, through every
+ * path a value takes: encoding, decoding, hashing and comparing.
  */
 
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import { isValidFabricValue } from "@";
+import { hashStringOf, isValidFabricValue, valueEqual } from "@";
 import type { FabricValue } from "@";
 import { BaseLiveEnvironment } from "@/codec-common";
 import { JsonCodecEngine } from "@/codec-json";
@@ -29,6 +32,7 @@ import {
 } from "@/codecs.ts";
 import { FabricError } from "@/fabric-instances";
 import { FabricKeyPair } from "@/fabric-primitives";
+import { SIZE_GUARANTEES_FOR_TESTING_ONLY } from "@/for-testing-only.ts";
 
 /** Mock runtime for decode calls. */
 class MockRuntime extends BaseLiveEnvironment {
@@ -54,6 +58,62 @@ function expectEncodedFormat(value: FabricValue, expected: unknown): void {
   expect(
     JSON.parse(JsonCodecEngine.unwrapEncodedValueForTesting(json)),
   ).toEqual(expected);
+}
+
+/**
+ * Returns `count` arrays, each but the innermost holding the next as its one
+ * element, and the innermost holding `innermost`.
+ */
+function nestedArraysOf(
+  count: number,
+  innermost: readonly FabricValue[],
+): FabricValue {
+  let value: FabricValue = innermost;
+  for (let made = 1; made < count; made++) {
+    value = [value];
+  }
+  return value;
+}
+
+/**
+ * Returns `count` errors, each but the innermost the cause of the next one out,
+ * and the innermost having `message` and no cause.
+ */
+function nestedErrorsOf(count: number, message: string): FabricValue {
+  let value = new FabricError({
+    type: "Error",
+    name: "Error",
+    message,
+    stack: undefined,
+    cause: undefined,
+  });
+  for (let made = 1; made < count; made++) {
+    value = new FabricError({
+      type: "Error",
+      name: "Error",
+      message: "m",
+      stack: undefined,
+      cause: value,
+    });
+  }
+  return value;
+}
+
+/**
+ * Asserts that `value` encodes to a text that decodes to a value equal to it,
+ * which hashes as it does and encodes to the same text, and that `other`, which
+ * differs from it only at its innermost level, neither compares nor hashes
+ * equal to it.
+ */
+function expectEveryPathHolds(value: FabricValue, other: FabricValue): void {
+  const text = jsonFromFabricValue(value);
+  const decoded = fabricFromJsonValue(text, mockRuntime);
+
+  expect(valueEqual(decoded, value)).toBe(true);
+  expect(hashStringOf(decoded)).toBe(hashStringOf(value));
+  expect(jsonFromFabricValue(decoded)).toBe(text);
+  expect(valueEqual(other, value)).toBe(false);
+  expect(hashStringOf(other)).not.toBe(hashStringOf(value));
 }
 
 describe("codecs", () => {
@@ -324,5 +384,27 @@ describe("codecs", () => {
         expect(() => plainObjectFromJson(json)).toThrow(/primitive/);
       });
     }
+  });
+
+  describe("values as deep as this package guarantees", () => {
+    // The README states the guarantee of depth, which every path a value
+    // takes here holds to: encoding, decoding, hashing and comparing. An
+    // error and its state count as two levels.
+
+    const depth = SIZE_GUARANTEES_FOR_TESTING_ONLY.depth;
+
+    it("encodes, decodes, hashes and compares nested arrays that deep", () => {
+      expectEveryPathHolds(
+        nestedArraysOf(depth, []),
+        nestedArraysOf(depth, [0]),
+      );
+    });
+
+    it("encodes, decodes, hashes and compares a chain of error causes that deep", () => {
+      expectEveryPathHolds(
+        nestedErrorsOf(depth / 2, "m"),
+        nestedErrorsOf(depth / 2, "n"),
+      );
+    });
   });
 });

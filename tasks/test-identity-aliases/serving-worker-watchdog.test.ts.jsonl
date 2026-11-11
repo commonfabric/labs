@@ -1,0 +1,1 @@
+{"date":"2026-11-11","from":{"k":"unit","s":"runner","n":"serving-worker-watchdog > replaces a worker whose thread stalled holding a lease, and refuses its commits"},"to":{"k":"unit","s":"runner","n":"serving-worker-watchdog > kills a worker whose thread stalled holding a lease, serves its space from a fresh one, and refuses its commits"}}

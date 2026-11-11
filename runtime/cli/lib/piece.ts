@@ -49,6 +49,7 @@ import {
   type PiecePatternRef,
   PiecesController,
   type PieceSourceActionResult,
+  PieceSourceChangedError,
   servedInstantiatePiece,
   ServedLifecycleRefusal,
 } from "@commonfabric/piece/ops";
@@ -168,9 +169,11 @@ import { loadIdentity } from "./identity.ts";
 import { stderrConsoleHandler } from "./json-output.ts";
 import { validateEmbeddedSpaces } from "./llm-friendly-ref.ts";
 import {
+  followPieceOnServer,
   instantiatePieceOnServer,
   type LifecycleClientConfig,
   ServedLifecycleError,
+  type ServedPieceScope,
   setPieceSourceOnServer,
 } from "./pattern-lifecycle.ts";
 import { claimProcessDeployment } from "./process-deployment.ts";
@@ -261,6 +264,12 @@ export interface PieceConfig extends SpaceConfig {
 
 export interface SetPiecePatternOptions {
   dangerouslyAllowIncompatibleSchema?: boolean;
+
+  /**
+   * The origin the piece follows from then on, recorded with the revision;
+   * absent, the update detaches the piece.
+   */
+  origin?: string;
 }
 
 export interface GetCellValueOptions {
@@ -552,6 +561,7 @@ interface PieceOperationDependencies extends PieceResolutionDeps {
   getPinnedProgramFromFile?: typeof getPinnedProgramFromFile;
   instantiatePieceOnServer?: typeof instantiatePieceOnServer;
   setPieceSourceOnServer?: typeof setPieceSourceOnServer;
+  followPieceOnServer?: typeof followPieceOnServer;
 
   /** Where creation's phases report; the process-wide trace by default. */
   phaseTrace?: PhaseTrace;
@@ -1786,7 +1796,25 @@ function lifecycleClient(pieces: PiecesController): LifecycleClientConfig {
       }
       return storageManager.runPatternLifecycle(space, verb, body);
     },
+    takesOrigins: async (space) => {
+      const flags = await storageManager?.serverFlags?.(space);
+      return flags === undefined
+        ? undefined
+        : flags?.patternLifecycleOrigins === true;
+    },
+    takesScopes: async (space) =>
+      (await storageManager?.serverFlags?.(space))?.patternLifecycleScopes,
   };
+}
+
+/**
+ * The scope a served verb names `scope`'s requester instance at: none for a
+ * piece's space instance, which the verb addresses by its id alone.
+ */
+function servedScope(
+  scope: PieceConfig["pieceScope"],
+): ServedPieceScope | undefined {
+  return scope === undefined || scope === "space" ? undefined : scope;
 }
 
 /**
@@ -2209,15 +2237,18 @@ async function updateOnServer(
   config: PieceConfig,
   pieces: PiecesController,
   pieceId: string,
+  scope: PieceConfig["pieceScope"],
   program: RuntimeProgram,
   entry: EntryConfig,
   options: SetPiecePatternOptions,
   deps: PieceOperationDependencies,
 ): Promise<PatternUpdateReceipt> {
+  const served = servedScope(scope);
   const receipt = await (deps.setPieceSourceOnServer ??
     setPieceSourceOnServer)(lifecycleClient(pieces), {
       space: pieces.getSpace(),
       piece: pieceId,
+      ...(served === undefined ? {} : { scope: served }),
       program,
       ...(entry.repository === undefined
         ? {}
@@ -2225,11 +2256,26 @@ async function updateOnServer(
       ...(options.dangerouslyAllowIncompatibleSchema
         ? { dangerouslyAllowIncompatibleSchema: true }
         : {}),
+      ...(options.origin === undefined ? {} : { origin: options.origin }),
     });
   noteWroteTo(config.space);
+  // A server from before `setsrc` took an origin drops the field and
+  // detaches the piece, and its receipt names no origin.
+  if (options.origin !== undefined && receipt.origin === undefined) {
+    throw new Error(
+      `The source update committed as revision ${receipt.revisionId}, but ` +
+        `this deployment does not record an origin with \`setsrc\` yet, ` +
+        `so the piece follows nothing.`,
+    );
+  }
   let refresh: PatternUpdateReceipt["refresh"];
   try {
-    const cell = await pieces.getPieceCell(receipt.pieceId, false);
+    const cell = await pieces.getPieceCell(
+      receipt.pieceId,
+      false,
+      undefined,
+      scope,
+    );
     await (deps.pullServed ?? pullServed)(pieces, pieces.getResult(cell));
     refresh = { status: "completed" };
   } catch (error) {
@@ -2245,6 +2291,7 @@ async function updateOnServer(
     seq: receipt.seq,
     revisionId: receipt.revisionId,
     detachedOrigin: receipt.detachedOrigin,
+    ...(receipt.origin === undefined ? {} : { origin: receipt.origin }),
     refresh,
   };
 }
@@ -2267,10 +2314,18 @@ export interface FollowPieceSourceOptions
 
 /** A follow receipt includes the incompatibility this invocation accepted. */
 export type FollowPieceSourceResult =
-  | Extract<PieceSourceActionResult, { status: "incompatible" }>
+  | { status: "incompatible"; message: string }
   | (Extract<PieceSourceActionResult, { status: "applied" }> & {
     acceptedIncompatibility?: string;
   });
+
+/**
+ * What a follow sent to a deployment whose memory server cannot read a
+ * `follow` request is refused with.
+ */
+const FOLLOW_NOT_SERVED =
+  "This deployment serves piece lifecycle verbs, and `follow` is not " +
+  "served yet: its memory server could not read the request.";
 
 /**
  * Points a piece at `origin` and adopts what that origin currently serves,
@@ -2279,14 +2334,25 @@ export type FollowPieceSourceResult =
  *
  * This is how a piece created detached — a profile made before the runtime
  * claimed origins for children of system pieces, say — is put on the
- * lifecycle a release reaches. Unlike `setsrc`, which detaches, the origin
- * is recorded with the revision. The transition carries the same writer
- * delegation a `setsrc` does, since it is the owner's explicit act.
+ * lifecycle a release reaches. The origin is recorded with the revision, and
+ * the source adopted is what the origin serves now; a `setsrc` that names an
+ * origin records it over source the caller supplies instead, and one that
+ * names none detaches. The transition carries the same writer delegation a
+ * `setsrc` does, since it is the owner's explicit act.
  *
- * @throws Error when the deployment serves piece lifecycle verbs (the served
- * update takes no origin), when the piece cannot be resolved, or when the
- * origin cannot be read or does not compile; `PieceSourceChangedError` when
- * the piece is off a pin `options` names.
+ * Against a deployment that serves piece lifecycle verbs, the serving runtime
+ * resolves the origin, reviews the candidate and commits the transition
+ * (docs/features/server-pattern-lifecycle.md), on this identity's instance
+ * of a piece addressed at a scope, and this connection then asks the server
+ * for the piece's result, reporting a failure of that as `executionWarning`.
+ * Nothing changes the source in this process there.
+ *
+ * @throws Error when the piece cannot be resolved, or when the origin cannot
+ * be read or does not compile; against a serving deployment, also when its
+ * memory server cannot read a `follow` request;
+ * `ServedLifecycleError` (`scope-unsupported`) for a piece addressed at a
+ * scope on a deployment whose verbs do not take one;
+ * `PieceSourceChangedError` when the piece is off a pin `options` names.
  */
 export async function followPieceSource(
   config: PieceConfig,
@@ -2295,20 +2361,25 @@ export async function followPieceSource(
   deps: PieceOperationDependencies = {},
 ): Promise<FollowPieceSourceResult> {
   const pieces = await (deps.loadPieces ?? loadPieces)(config);
-  // Against a serving deployment a source transition is the serving
-  // runtime's to commit, and the served update verb carries no origin yet;
-  // a client-side repoint there would commit outside the served lifecycle.
-  if (servesLifecycleVerbs(pieces)) {
-    throw new Error(
-      "This deployment serves piece lifecycle verbs, and `follow` is not " +
-        "served yet; the served update takes no origin.",
-    );
-  }
   const resolvedConfig = await resolvePieceConfigWithPieces(
     config,
     pieces,
     deps,
   );
+  // Against a serving deployment a source transition is the serving
+  // runtime's to commit; a client-side repoint there would commit outside
+  // the served lifecycle.
+  if (servesLifecycleVerbs(pieces)) {
+    return await followOnServer(
+      config,
+      pieces,
+      resolvedConfig.piece,
+      resolvedConfig.pieceScope,
+      origin,
+      options,
+      deps,
+    );
+  }
   const piece = await pieces.get(
     resolvedConfig.piece,
     false,
@@ -2316,7 +2387,32 @@ export async function followPieceSource(
     resolvedConfig.pieceScope,
   );
   const action = { kind: "repoint" as const, url: origin };
-  const pins = {
+  const pins = followPins(options);
+  const reviewed = await piece.changeSource(action, pins);
+  if (
+    reviewed.status === "incompatible" &&
+    options.dangerouslyAllowIncompatibleSchema
+  ) {
+    // Confirm only this review and its pinned candidate. Changed source
+    // state or retained input may require a new review by the caller.
+    const confirmed = await piece.changeSource(action, {
+      ...pins,
+      confirmedChange: reviewed.prepared,
+    });
+    if (confirmed.status !== "applied") return confirmed;
+    noteWroteTo(config.space);
+    return { ...confirmed, acceptedIncompatibility: reviewed.message };
+  }
+  if (reviewed.status === "applied") noteWroteTo(config.space);
+  return reviewed;
+}
+
+/** The pins `options` names, as a source change takes them. */
+function followPins(options: FollowPieceSourceOptions): {
+  expectedPattern?: { identity: string; symbol: string };
+  expectedRevision?: string | null;
+} {
+  return {
     ...(options.expectedPattern === undefined
       ? {}
       : { expectedPattern: options.expectedPattern }),
@@ -2324,31 +2420,88 @@ export async function followPieceSource(
       ? {}
       : { expectedRevision: options.expectedRevision }),
   };
-  let result: FollowPieceSourceResult = await piece.changeSource(action, pins);
-  if (
-    result.status === "incompatible" &&
-    options.dangerouslyAllowIncompatibleSchema
-  ) {
-    // Confirm only this review and its pinned candidate. Changed source
-    // state or retained input may require a new review by the caller.
-    const acceptedIncompatibility = result.message;
-    result = await piece.changeSource(action, {
-      ...pins,
-      confirmedChange: result.prepared,
-    });
-    if (result.status === "applied") {
-      result = { ...result, acceptedIncompatibility };
+}
+
+/**
+ * The served half of `followPieceSource`: the serving runtime reviews the
+ * candidate and commits the follow, and this connection then asks the
+ * server for the piece's result, which is what makes the new source run,
+ * reporting a failure of that as `executionWarning`, since the follow is
+ * durable whatever the refresh did. A refusal the review answers with
+ * comes back as it does from a client-side follow: an incompatible
+ * candidate as the result, a piece off a pin as `PieceSourceChangedError`.
+ */
+async function followOnServer(
+  config: PieceConfig,
+  pieces: PiecesController,
+  pieceId: string,
+  scope: PieceConfig["pieceScope"],
+  origin: string,
+  options: FollowPieceSourceOptions,
+  deps: PieceOperationDependencies,
+): Promise<FollowPieceSourceResult> {
+  const served = servedScope(scope);
+  let receipt: Awaited<ReturnType<typeof followPieceOnServer>>;
+  try {
+    receipt = await (deps.followPieceOnServer ?? followPieceOnServer)(
+      lifecycleClient(pieces),
+      {
+        space: pieces.getSpace(),
+        piece: pieceId,
+        ...(served === undefined ? {} : { scope: served }),
+        origin,
+        ...followPins(options),
+        ...(options.dangerouslyAllowIncompatibleSchema
+          ? { dangerouslyAllowIncompatibleSchema: true }
+          : {}),
+      },
+    );
+  } catch (error) {
+    if (error instanceof ServedLifecycleError) {
+      if (error.code === "incompatible") {
+        return { status: "incompatible", message: error.message };
+      }
+      if (error.code === "source-moved") {
+        throw new PieceSourceChangedError(error.message);
+      }
     }
+    // A memory server that predates the verb refuses the frame unread.
+    if (error instanceof Error && error.name === "InvalidMessageError") {
+      throw new Error(FOLLOW_NOT_SERVED, { cause: error });
+    }
+    throw error;
   }
-  if (result.status === "applied") noteWroteTo(config.space);
-  return result;
+  noteWroteTo(config.space);
+  let executionWarning: string | undefined;
+  try {
+    const cell = await pieces.getPieceCell(
+      receipt.pieceId,
+      false,
+      undefined,
+      scope,
+    );
+    await (deps.pullServed ?? pullServed)(pieces, pieces.getResult(cell));
+  } catch (error) {
+    executionWarning = describeFailure(error);
+  }
+  return {
+    status: "applied",
+    ...(receipt.acceptedIncompatibility === undefined
+      ? {}
+      : { acceptedIncompatibility: receipt.acceptedIncompatibility }),
+    ...(executionWarning === undefined ? {} : { executionWarning }),
+  };
 }
 
 /**
  * Replaces the piece's source and returns its setup transaction receipt.
- * Against a serving deployment the update is the serving runtime's to
- * commit; a piece addressed at a scope keeps the client-side path, since
- * the served verb takes the piece's id alone.
+ * The update detaches the piece unless `options.origin` names the origin it
+ * follows from then on. Against a serving deployment the update is the
+ * serving runtime's to commit, on this identity's instance of a piece
+ * addressed at a scope, and nothing changes the source in this process.
+ *
+ * @throws ServedLifecycleError (`scope-unsupported`) for a piece addressed
+ * at a scope on a serving deployment whose verbs do not take one.
  */
 export async function setPiecePattern(
   config: PieceConfig,
@@ -2364,13 +2517,12 @@ export async function setPiecePattern(
   );
   const program = await (deps.getPinnedProgramFromFile ??
     getPinnedProgramFromFile)(pieces, entry);
-  if (
-    servesLifecycleVerbs(pieces) && resolvedConfig.pieceScope === undefined
-  ) {
+  if (servesLifecycleVerbs(pieces)) {
     return await updateOnServer(
       config,
       pieces,
       resolvedConfig.piece,
+      resolvedConfig.pieceScope,
       program,
       entry,
       options,
@@ -2388,6 +2540,7 @@ export async function setPiecePattern(
     ...(options.dangerouslyAllowIncompatibleSchema
       ? { dangerouslyAllowIncompatibleSchema: true }
       : {}),
+    ...(options.origin === undefined ? {} : { origin: options.origin }),
   });
   noteWroteTo(config.space);
   return receipt;

@@ -370,9 +370,12 @@ For a detached profile with the legacy inbox descriptor, the manual migration is
 `cf piece follow --cell <profile> system:system/profile-home/profile-home.tsx
 --dangerously-allow-incompatible-schema`
 with the profile owner’s identity and API URL. Inspect the incompatibility
-before accepting it; the new inbox contract uses a piece link. The command
-refuses deployments that serve piece lifecycle verbs, where `follow` is not yet
-served.
+before accepting it; the new inbox contract uses a piece link.
+
+Against a deployment that serves piece lifecycle verbs, the serving runtime
+resolves the origin, reviews the candidate and commits the follow, and the
+command reports the same outcomes, pins included
+([Where a piece is created](#where-a-piece-is-created)).
 
 ## Pattern test read costs
 
@@ -645,6 +648,17 @@ whose text differs only in whitespace. The third also removes lines containing
 only whitespace or comments. It compares the remaining lines without comments or
 whitespace across the complete diff, so code moved between files does not count
 as an addition and a removal.
+
+Press `S` in that list to order the files within each commit, or all the files
+of a diff with no commit, by net line change. Press it again to restore the
+order of the diff. The list keeps its order when it is closed and opened again.
+The files that add the most lines beyond those they remove come first, and the
+files that remove the most beyond those they add come last, so a file with 100
+added and 10 removed lines precedes one with 1,000 of each, which precedes one
+with 10 added and 100 removed. Between files with the same net change, the one
+with more changed lines in total comes first. The order uses the counts of the
+selected count policy, and the policy line in the summary says when the list is
+sorted.
 
 Press `C` in a diff or in its list to hide the files whose changes touch only
 comments, and press it again to show them. `C` compares the complete file before
@@ -1300,6 +1314,13 @@ directly to the store (see
 [Where a piece is created](#where-a-piece-is-created)). The check stays in this
 process on every deployment.
 
+A source update detaches the piece from the origin it follows. With
+`--origin <origin>`, a `system:` ref or a fabric URL, the update records that
+origin with its revision instead: the piece runs the source the command names,
+and takes what the origin serves the next time it is opened. An embedder that
+deploys its own copy of a first-party pattern uses this to keep the piece on the
+pattern's later releases.
+
 Preflight uses setup's stored-argument validation: optional fields holding
 `undefined` count as absent, and unreadable linked values defer to reactive
 reads. A compatible verdict therefore does not prove that every linked value has
@@ -1595,9 +1616,22 @@ store, since a source update publishes module update authority that requires a
 transaction committing to storage itself. What stays in this process is the
 refresh a client-side update runs after its commit: the command starts the piece
 it holds and reports that outcome beside the receipt, exiting non-zero when the
-refresh fails over a durable commit. A piece addressed at a scope keeps the
-client-side path. `cf piece setsrc --check` performs every step in this process
-on every deployment. The contract, including the refusals and their codes, is
+refresh fails over a durable commit. A piece addressed at a scope (`<id>@user`,
+`<id>@session`) is sent with its scope, and the serving runtime changes your
+instance of it. `cf piece setsrc --check` performs every step in this process on
+every deployment. `cf piece follow` sends the piece's id and the origin, with
+its pins and override, as the `follow` verb; the serving runtime resolves the
+origin, reviews what it serves, and commits the transition that records it. The
+command then asks the server for the piece's result, and reports a failure of
+that over the durable follow and sends a scoped piece's scope, as `setsrc` does.
+A deployment whose memory server does not advertise that its lifecycle verbs
+take an origin (`patternLifecycleOrigins`) is told, before anything is sent,
+that it does not serve `follow` yet, and `setsrc --origin` is refused there the
+same way, as `origin-unsupported`; one that does not advertise that they take a
+scope (`patternLifecycleScopes`) is sent no scoped `setsrc` or `follow`, which
+is refused as `scope-unsupported`. Under server execution neither command
+changes a piece's source in this process. The contract, including the refusals
+and their codes, is
 [`server-pattern-lifecycle.md`](../../docs/features/server-pattern-lifecycle.md).
 
 ## Piece discovery
@@ -2685,7 +2719,7 @@ cf piece call --cell ID listTopics -- --filter '.status == "open"'
 `wish` writes them beside the target it resolves:
 
 ```bash
-cf wish '#profile' -i ./claude.key --select name,avatar
+cf wish '#profile' -i ./claude.key --select name,bio
 cf wish '#mentionable' -i ./claude.key -s my-space --filter '.status == "open"'
 ```
 

@@ -178,6 +178,45 @@ const WIDE_INTEGERS: readonly (readonly [string, bigint])[] = [
   ["-2^100", -(2n ** 100n)],
 ];
 
+/**
+ * Type tags at the limits of the syntax of `1-fabric-values.md` section 2.5.1,
+ * each beside what it has: ten components, a prefix and a name of 100
+ * characters, and a version of ten digits.
+ */
+const TYPE_TAGS_AT_THE_LIMITS: readonly (readonly [string, string])[] = [
+  ["ten components", "a.b.c.d.e.f.g.h.i.j@1"],
+  ["a prefix of 100 characters", `${"p".repeat(100)}.Boop@1`],
+  ["a name of 100 characters", `${"N".repeat(100)}@1`],
+  ["a version of ten digits", "Abc@1234567890"],
+];
+
+/**
+ * Strings just past those limits, each otherwise a type tag, beside what it
+ * has: eleven components, a prefix and a name of 101 characters, and a version
+ * of eleven digits.
+ */
+const TYPE_TAGS_PAST_THE_LIMITS: readonly (readonly [string, string])[] = [
+  ["eleven components", "a.b.c.d.e.f.g.h.i.j.k@1"],
+  ["a prefix of 101 characters", `${"p".repeat(101)}.Boop@1`],
+  ["a name of 101 characters", `${"N".repeat(101)}@1`],
+  ["a version of eleven digits", "Abc@12345678901"],
+];
+
+/**
+ * A tag in the general syntax at the limit of a name's length, having one
+ * component and no version, beside what it has.
+ */
+const UNVERSIONED_TAG_AT_THE_LIMIT: readonly [string, string] = [
+  "a name of 100 characters and no version",
+  "n".repeat(100),
+];
+
+/** A string just past that limit, otherwise a tag, beside what it has. */
+const UNVERSIONED_TAG_PAST_THE_LIMIT: readonly [string, string] = [
+  "a name of 101 characters and no version",
+  "n".repeat(101),
+];
+
 /** Note shared by the cases with a key this implementation reserves. */
 const RESERVED_KEY_NOTE = "Section 4 lets a record carry any key, and its " +
   "note says this implementation does not yet meet that: it refuses " +
@@ -612,6 +651,11 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     section: SECTION_TAG_SYNTAX,
     text: `fvj1:${JSON.stringify([{ [`/${tag}`]: 1 }])}`,
   })),
+  ...TYPE_TAGS_AT_THE_LIMITS.map(([has, tag]): Fvj1ConformanceCase => ({
+    name: `unknown tag with ${has}`,
+    section: SECTION_TAG_SYNTAX,
+    text: `fvj1:${JSON.stringify({ [`/${tag}`]: 1 })}`,
+  })),
 
   // Decodes the spec refuses.
   { name: "text without the prefix", section: SECTION_PREFIX, text: "42" },
@@ -640,6 +684,11 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     "sys.Boop@01",
   ].map((tag): Fvj1ConformanceCase => ({
     name: `malformed tag ${JSON.stringify(tag)}`,
+    section: SECTION_TAG_SYNTAX,
+    text: `fvj1:${JSON.stringify({ [`/${tag}`]: 1 })}`,
+  })),
+  ...TYPE_TAGS_PAST_THE_LIMITS.map(([has, tag]): Fvj1ConformanceCase => ({
+    name: `malformed tag with ${has}`,
     section: SECTION_TAG_SYNTAX,
     text: `fvj1:${JSON.stringify({ [`/${tag}`]: 1 })}`,
   })),
@@ -721,6 +770,20 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
   })),
   ...["fid-1", "", "sys.sha256", "1sha"].map((tag): Fvj1ConformanceCase => ({
     name: `hash under the algorithm tag ${JSON.stringify(tag)}`,
+    section: SECTION_HASH_TAG,
+    text: `fvj1:${JSON.stringify({ "/Hash@1": { hash: "AQ", tag } })}`,
+  })),
+  ...[...TYPE_TAGS_AT_THE_LIMITS, UNVERSIONED_TAG_AT_THE_LIMIT].map((
+    [has, tag],
+  ): Fvj1ConformanceCase => ({
+    name: `hash under an algorithm tag with ${has}`,
+    section: SECTION_HASH_TAG,
+    make: () => new FabricHash(new Uint8Array([1]), tag),
+  })),
+  ...[...TYPE_TAGS_PAST_THE_LIMITS, UNVERSIONED_TAG_PAST_THE_LIMIT].map((
+    [has, tag],
+  ): Fvj1ConformanceCase => ({
+    name: `hash under an algorithm tag with ${has}`,
     section: SECTION_HASH_TAG,
     text: `fvj1:${JSON.stringify({ "/Hash@1": { hash: "AQ", tag } })}`,
   })),

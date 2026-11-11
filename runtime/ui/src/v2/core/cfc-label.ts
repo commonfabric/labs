@@ -7,7 +7,6 @@
  */
 
 import type { CfcLabelView } from "@commonfabric/runner/cfc";
-import { authorPrincipalCandidates } from "@commonfabric/runner/cfc/represents-principal";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 export type { CfcLabelView };
@@ -79,17 +78,4 @@ export const readCfcLabelView = async (
   return undefined;
 };
 
-/**
- * The principal a label says its value belongs to: the one DID
- * `authorPrincipalCandidates` finds in the `represents-principal` atoms of
- * the entries it reads. `nameWritten` says whether the value holds a name its
- * owner wrote: then the root and `name` count, and otherwise every entry the
- * label holds does. `undefined` when those name no principal or more than one.
- */
-export const ownerPrincipalFromLabel = (
-  view: CfcLabelView | undefined,
-  nameWritten: boolean,
-): string | undefined => {
-  const candidates = authorPrincipalCandidates(view, nameWritten);
-  return candidates.length === 1 ? candidates[0] : undefined;
-};
+export { ownerPrincipalFromLabel } from "@commonfabric/runner/cfc/represents-principal";

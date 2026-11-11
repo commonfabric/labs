@@ -9,6 +9,7 @@ import { entityIdFrom, isStream, Runtime } from "@commonfabric/runner";
 import {
   PiecesController,
   servedLifecycleRunner,
+  type ServedLifecycleVerbDescriptor,
   type ServedLifecycleVerbRunner,
 } from "@commonfabric/piece/ops";
 import { ExecutorHost } from "@commonfabric/runner/executor/host";
@@ -23,6 +24,7 @@ import {
 import {
   type LifecycleDeps,
   type LifecycleResult,
+  processFollow,
   processInstantiate,
   processLifecycleCall,
   processSetSource,
@@ -58,6 +60,41 @@ const NUMERIC_SEED_PROGRAM = {
     ].join("\n"),
   }],
 };
+
+/**
+ * Answers `fetch` for the deployment's patterns route with `routes`, by
+ * path, and a 404 for every other path and every identity request, passing
+ * any other URL through. Returns what puts the original back.
+ */
+function servePatternsRoute(routes: Record<string, string>): () => void {
+  const original = globalThis.fetch;
+  globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+        ? input.href
+        : input.url,
+    );
+    if (!url.pathname.startsWith("/api/patterns/")) {
+      return original(input, init);
+    }
+    const contents = url.searchParams.has("identity")
+      ? undefined
+      : routes[url.pathname];
+    return Promise.resolve(
+      contents === undefined
+        ? new Response("not found", { status: 404 })
+        : new Response(contents, {
+          status: 200,
+          headers: { "content-type": "text/typescript-jsx" },
+        }),
+    );
+  }) as typeof globalThis.fetch;
+  return () => {
+    globalThis.fetch = original;
+  };
+}
 
 /** Narrow a result to its receipt, failing loudly otherwise. */
 const ok = <T>(result: LifecycleResult<T>): T => {
@@ -752,6 +789,19 @@ export default pattern(() => {
       }),
     );
     expect(restored.pattern).toEqual(created.pattern);
+    expect(restored.origin).toBeUndefined();
+
+    // Naming an origin records it, and the piece follows it from then on.
+    const followed = ok(
+      await processSetSource(deps, alice.did(), {
+        space,
+        piece: created.pieceId,
+        pattern: created.pattern,
+        origin: "system:released.tsx",
+      }),
+    );
+    expect(followed.origin).toBe("system:released.tsx");
+    expect(followed.detachedOrigin).toBeNull();
 
     const sourceless = refused(
       await processSetSource(deps, alice.did(), {
@@ -760,6 +810,88 @@ export default pattern(() => {
       }),
     );
     expect(sourceless.code).toBe("invalid-source");
+  });
+
+  it("follows an origin for a writer over two verbs, and refuses each other request with its code", async () => {
+    const restoreFetch = servePatternsRoute({
+      "/api/patterns/released.tsx": PROGRAM.files[0].contents.replace(
+        "'unset'",
+        "'released'",
+      ),
+      "/api/patterns/numeric.tsx": NUMERIC_SEED_PROGRAM.files[0].contents,
+    });
+    try {
+      const created = ok(
+        await processInstantiate(deps, alice.did(), {
+          space,
+          program: PROGRAM,
+          start: false,
+        }),
+      );
+      const runsBefore = host!.stats().lifecycleVerbs.runs;
+
+      const reader = refused(
+        await processFollow(deps, mallory.did(), {
+          space,
+          piece: created.pieceId,
+          origin: "system:released.tsx",
+        }),
+      );
+      expect(reader.code).toBe("forbidden");
+
+      // Refused in the first verb, which counts as a failed run: the second
+      // never runs.
+      const incompatible = refused(
+        await processFollow(deps, alice.did(), {
+          space,
+          piece: created.pieceId,
+          origin: "system:numeric.tsx",
+        }),
+      );
+      expect(incompatible.code).toBe("incompatible");
+      expect(host!.stats().lifecycleVerbs).toEqual({
+        runs: runsBefore + 1,
+        failures: 1,
+      });
+
+      const unreachable = refused(
+        await processFollow(deps, alice.did(), {
+          space,
+          piece: created.pieceId,
+          origin: "system:absent.tsx",
+        }),
+      );
+      expect(unreachable.code).toBe("origin-unreachable");
+
+      const moved = refused(
+        await processFollow(deps, alice.did(), {
+          space,
+          piece: created.pieceId,
+          origin: "system:released.tsx",
+          expectedPattern: { identity: "elsewhere", symbol: "default" },
+        }),
+      );
+      expect(moved.code).toBe("source-moved");
+
+      const runsBeforeFollow = host!.stats().lifecycleVerbs.runs;
+      const followed = ok(
+        await processFollow(deps, bob.did(), {
+          space,
+          piece: created.pieceId,
+          origin: "system:released.tsx",
+          expectedPattern: created.pattern,
+          start: false,
+        }),
+      );
+      expect(followed.pieceId).toBe(created.pieceId);
+      expect(followed.origin).toBe("system:released.tsx");
+      expect(followed.pattern.identity).not.toBe(created.pattern.identity);
+      expect(followed.revisionId).toMatch(/\S/);
+      expect(followed.acceptedIncompatibility).toBeUndefined();
+      expect(host!.stats().lifecycleVerbs.runs).toBe(runsBeforeFollow + 2);
+    } finally {
+      restoreFetch();
+    }
   });
 
   it("refuses a program that does not compile with `compile-failed`", async () => {
@@ -826,10 +958,14 @@ export default pattern(() => {
     }
   });
   describe("processLifecycleCall()", () => {
+    /** The memory session the handed-over calls came on. */
+    const SESSION = "session-of-the-call";
+
     it("returns an `upload` receipt as the outcome's `ok`", async () => {
       const outcome = await processLifecycleCall(deps, {
         space,
         principal: alice.did(),
+        sessionId: SESSION,
         verb: "upload",
         body: { program: PROGRAM },
       });
@@ -843,6 +979,7 @@ export default pattern(() => {
       const outcome = await processLifecycleCall(deps, {
         space,
         principal: bob.did(),
+        sessionId: SESSION,
         verb: "instantiate",
         body: { program: PROGRAM, register: false },
       });
@@ -855,12 +992,32 @@ export default pattern(() => {
       const noPiece = await processLifecycleCall(deps, {
         space,
         principal: alice.did(),
+        sessionId: SESSION,
         verb: "setsrc",
         body: { program: PROGRAM },
+      });
+      const noOrigin = await processLifecycleCall(deps, {
+        space,
+        principal: alice.did(),
+        sessionId: SESSION,
+        verb: "follow",
+        body: { piece: "of:piece" },
+      });
+      const unknownScope = await processLifecycleCall(deps, {
+        space,
+        principal: alice.did(),
+        sessionId: SESSION,
+        verb: "setsrc",
+        body: {
+          piece: "of:piece",
+          pattern: { identity: "x", symbol: "default" },
+          scope: "galaxy",
+        },
       });
       const bothSources = await processLifecycleCall(deps, {
         space,
         principal: alice.did(),
+        sessionId: SESSION,
         verb: "instantiate",
         body: {
           program: PROGRAM,
@@ -871,16 +1028,79 @@ export default pattern(() => {
       expect(noPiece).toEqual({
         refusal: { code: "invalid-request", message: expect.any(String) },
       });
+      expect(noOrigin).toEqual({
+        refusal: { code: "invalid-request", message: expect.any(String) },
+      });
+      expect(unknownScope).toEqual({
+        refusal: { code: "invalid-request", message: expect.any(String) },
+      });
       expect(bothSources).toEqual({
         refusal: { code: "invalid-request", message: expect.any(String) },
       });
       expect(host!.stats().lifecycleVerbs.runs).toBe(0);
     });
 
+    it("names the requester's instance of a user- or session-scoped piece in the verbs `setsrc` and `follow` run, and none for a space piece", async () => {
+      const sent: ServedLifecycleVerbDescriptor[] = [];
+      const recording: ServedLifecycleVerbRunner = {
+        runLifecycleVerb: (_space, verb) => {
+          sent.push(verb);
+          return Promise.resolve({ receipt: {}, timings: [] });
+        },
+      };
+      const recorded = { ...deps, host: () => recording };
+      const pattern = { identity: "p", symbol: "default" };
+      for (const scope of [undefined, "space", "user", "session"] as const) {
+        const scoped = scope === undefined ? {} : { scope };
+        for (
+          const [verb, body] of [
+            ["setsrc", { piece: "of:piece", pattern, ...scoped }],
+            ["follow", {
+              piece: "of:piece",
+              origin: "system:a.tsx",
+              ...scoped,
+            }],
+          ] as const
+        ) {
+          const outcome = await processLifecycleCall(recorded, {
+            space,
+            principal: alice.did(),
+            sessionId: SESSION,
+            verb,
+            body,
+          });
+          assert("ok" in outcome, JSON.stringify(outcome));
+        }
+      }
+
+      const user = { scope: "user", identity: { principal: alice.did() } };
+      const session = {
+        scope: "session",
+        identity: { principal: alice.did(), sessionId: SESSION },
+      };
+      expect(
+        sent.flatMap((verb) =>
+          verb.name === "setsrc" || verb.name === "follow-prepare"
+            ? [[verb.name, verb.request.instance]]
+            : []
+        ),
+      ).toEqual([
+        ["setsrc", undefined],
+        ["follow-prepare", undefined],
+        ["setsrc", undefined],
+        ["follow-prepare", undefined],
+        ["setsrc", user],
+        ["follow-prepare", user],
+        ["setsrc", session],
+        ["follow-prepare", session],
+      ]);
+    });
+
     it("returns a verb's refusal under its own code", async () => {
       const outcome = await processLifecycleCall(deps, {
         space,
         principal: mallory.did(),
+        sessionId: SESSION,
         verb: "instantiate",
         body: { program: PROGRAM },
       });

@@ -33,6 +33,7 @@ import {
   EngineWaveCommitSink,
   waveCommitFailureResult,
 } from "./engine-wave-sink.ts";
+import type { HostOccupancy } from "./host.ts";
 import type { HostMemoryServer } from "./host-memory-server.ts";
 import type { LoopbackPlane } from "./loopback-storage.ts";
 import {
@@ -86,6 +87,13 @@ export type ServingPlaneHost = {
     space: MemorySpace,
     verb: LifecycleVerbDescriptor,
   ) => Promise<LifecycleVerbRun>;
+
+  /** What the host holds, as `ExecutorHost.occupancy` reports it. */
+  occupancy: () => HostOccupancy;
+
+  /** @see ExecutorHost.noteSpaceAclChanged */
+  noteSpaceAclChanged: (space: MemorySpace) => void;
+
   close: () => Promise<void>;
 };
 
@@ -688,6 +696,19 @@ export class ServingPlane {
       ({ space, verb }) => host.runLifecycleVerb(space, verb),
     );
     this.#endpoint.onRequest("host.close", () => host.close());
+    // The check and the start of the close run in this one turn, so no
+    // message read after this one finds a host that is neither.
+    this.#endpoint.onRequest("host.retire", async ({ evenIfParked }) => {
+      const occupancy = host.occupancy();
+      if (occupancy === "busy" || (occupancy === "parked" && !evenIfParked)) {
+        return null;
+      }
+      await host.close();
+      return { stats: host.stats(), diagnostics: host.diagnostics() };
+    });
+    this.#endpoint.onNotice("observer.spaceAclChanged", ({ space }) => {
+      host.noteSpaceAclChanged(space as MemorySpace);
+    });
   }
 
   /** Posts the host's counters for the server's thread to keep. */
@@ -706,6 +727,11 @@ export class ServingPlane {
   /** Posts a space's park and its reason for the server's thread to report. */
   reportSpaceParked(space: MemorySpace, reason: string): void {
     this.#endpoint.notify("host.spaceParked", { space, reason });
+  }
+
+  /** Posts what the host holds for the server's thread to decide by. */
+  reportOccupancy(occupancy: HostOccupancy): void {
+    this.#endpoint.notify("host.occupancy", { occupancy });
   }
 
   /**

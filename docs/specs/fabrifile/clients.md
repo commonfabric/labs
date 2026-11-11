@@ -51,6 +51,15 @@ first, and the message links the entry. A file someone attaches from another
 space is added there again, as a new entry for the same bytes, so that it is as
 private as the room, and not as the space it came from.
 
+A client that adds a file to a store for a message, and does not send that
+message, removes the entry again with `remove`, under a request id of its own
+rather than its `add`'s, since a store acts on a request id once. It removes
+only entries whose `add` outcome it received. It removes nothing else in the store. A file taken
+out of a draft is removed once its `add` is done; an `add` refused, or never
+sent, added nothing. A client SHOULD say, once, a `remove` the store refuses,
+other than `not-found`, and MUST NOT retry it. Re-attaching a removed file is a
+new `add`.
+
 ## Showing a file
 
 A client fetches a file's bytes from its blob's space's blob store, by
@@ -89,3 +98,14 @@ make that safe without renaming: a name is one path segment, and never `.`,
   can share. A file is its entry, compared with `equals()`.
 - Copy an entry's fields into another record, rather than linking the entry.
 - Load the store's view to use a store.
+
+## Open questions
+
+- **An entry no message links.** A client removes what it added for a message
+  it did not send, but a client that quits or crashes with a draft open leaves
+  that draft's entries in the store, listed like any other. Such an entry is
+  acceptable: a store is meant to be reachable and managed directly, through
+  its view ([`FileStoreView`](FileStoreView.md)) or a client's own rendering
+  of it, where a person can remove it like any other entry. Whether a store
+  does anything more about an entry no message links, and how it would know,
+  is not decided.

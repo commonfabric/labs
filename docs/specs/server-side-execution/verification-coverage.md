@@ -4123,13 +4123,32 @@ Delta 2026-11-01 — stage L (the lease in memory,
   `executor-cooperative-yield.test.ts` (ii) runs the same property on a real
   1.8-s settle.
 - §2's watchdog: `executor/serving-worker-recovery.test.ts` ("the watchdog", over
-  a stand-in worker and the fake clock): the six-interval limit, any message
+  stand-in workers and the fake clock): the six-interval limit, any message
   restarting the count, no count before the first message, the leases released and counted
-  in `lease.lost` across a successor, a commit left in flight refused at admission,
+  in `lease.lost` across a successor, another space's worker left alone, a commit
+  left in flight refused at admission,
   and a close under a stalled host. `executor/serving-worker-watchdog.test.ts`
-  stops a real worker's thread holding a lease and serves the space from its
-  successor; a stand-in cannot show that nothing waits for a stalled thread's
+  stops a real worker's thread holding a lease and serves the space from a
+  fresh worker; a stand-in cannot show that nothing waits for a stalled thread's
   teardown, which Deno does not finish.
+- §1's Workers: `executor/ServingWorkerPool.test.ts` (stand-in workers and a
+  stand-in memory server): a space placed on a worker of its own by the
+  admission-side criteria and by nothing less, its events routed to that
+  worker alone, an access-list commit announced to the others, a vacant host
+  closed unless it holds something again by the time it is asked, a commit
+  sent meanwhile handed to the space's next worker, a session live at the
+  close placing nothing where one opened meanwhile does, a space leased to
+  another holder left unplaced, spares, the cap on
+  workers and on parked workers, the heap budget, and the counters of
+  several workers taken together. `executor/serving-worker-recovery.test.ts`
+  holds a failed worker's spaces alone to the per-space backoff.
+  `serving-worker.test.ts` serves two spaces from a real worker each, under a
+  holder each, closes a parked space's worker and serves its next visit from
+  a fresh one, and serves both spaces from one worker under `maxWorkers: 1`.
+  `executor/parked-runtime.test.ts` ("the host's occupancy") pins what a
+  host reports it holds. The memory server's half, a serving session told
+  from another worker's by the holder component its connection names, is
+  `runtime/memory/test/v2-explicit-read.test.ts`.
 
 Delta 2026-08-16 — fan-out stage A (OW17 leg 1: the instance-keyed
 serving replica + wire; the client arrival gate):

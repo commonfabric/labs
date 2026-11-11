@@ -1,8 +1,7 @@
 /**
  * A deferred piece start whose transaction is refused for a stale confirmed
  * read: the catch-up-and-start recovery the runner performs with the
- * server-execution flag on, and the terminal refusal it keeps with the flag
- * off.
+ * server-execution flag on and with it off.
  */
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
@@ -1188,10 +1187,9 @@ describe("deferred-start-catchup-start", () => {
 
     beforeEach(() => {
       storageManager = StorageManager.emulate({ as: signer });
-      // The first-party default: no server-execution flag. Under OFF a stale
-      // confirmed read on a deferred start means another CLIENT raced, and
-      // the cross-tab mutex semantics own that story — the refusal stays
-      // terminal, byte-for-byte today's behavior.
+      // The first-party default: no server-execution flag. A stale confirmed
+      // read on a deferred start then means another client set the piece up
+      // first, a second tab of the same user among them.
       runtime = new Runtime({
         apiUrl: new URL(import.meta.url),
         storageManager,
@@ -1203,7 +1201,7 @@ describe("deferred-start-catchup-start", () => {
       await storageManager.close();
     });
 
-    it("stays terminal: one attempt, no recovery, no registration", async () => {
+    it("starts the piece from stored state, re-committing no start", async () => {
       const { lift, pattern } = createTrustedBuilder(runtime).commonfabric;
       const Piece = pattern<{ value: number }>(({ value }) => ({
         doubled: lift((input: number) => input * 2)(value),
@@ -1211,7 +1209,7 @@ describe("deferred-start-catchup-start", () => {
       const tx = gatedTxOn(runtime);
       const result = runtime.getCell<{ doubled?: number }>(
         space,
-        "terminal under OFF",
+        "started from stored state without the flag",
         undefined,
         tx,
       );
@@ -1229,12 +1227,19 @@ describe("deferred-start-catchup-start", () => {
           injector.refusalsReach(1),
           "the start's transaction being refused",
         );
+        await waitForSignal(
+          installed.nth(2),
+          "the catch-up recovery assembling the piece context",
+        );
         await runtime.runner.idleDeferredStartCatchUps();
         await runtime.idle();
 
+        // Refused once, and never re-committed: a second start transaction
+        // would have been refused and counted.
         expect(injector.refusals()).toBe(1);
-        expect(installed.installs()).toBe(1);
-        expect(runtime.runner.cancels.has(key(result))).toBe(false);
+        expect(runtime.runner.cancels.has(key(result))).toBe(true);
+        await result.pull();
+        expect(result.get()?.doubled).toBe(6);
       } finally {
         installed.restore();
         injector.restore();
