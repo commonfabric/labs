@@ -1769,6 +1769,18 @@ export class Runtime {
   readonly #moduleDelegations = new ModuleDelegationRegistry();
 
   /**
+   * The authored import list each module identity's compiled document
+   * attests, by the space whose compiler-stamped document this runtime read
+   * it from. Verifying a source closure in a space takes a module's list from
+   * here in place of parsing its source, and only from that space, since the
+   * stamp is trusted where it was read, as the compiled bodies are.
+   */
+  readonly #sourceImportAttestations = new Map<
+    MemorySpace,
+    Map<string, readonly string[]>
+  >();
+
+  /**
    * Records that, in `space`, each successor identity in `delegations`
    * inherits the writer authority of its predecessors. A registration that
    * adds nothing leaves the published snapshot as it was; one that adds a
@@ -1781,6 +1793,36 @@ export class Runtime {
     delegations: ReadonlyMap<string, ReadonlySet<string>>,
   ): void {
     this.#moduleDelegations.register(space, delegations);
+  }
+
+  /**
+   * Records, for `space`, the authored import list a compiler-stamped compiled
+   * document there attests for each identity in `attestations`.
+   */
+  registerSourceImportAttestations(
+    space: MemorySpace,
+    attestations: ReadonlyMap<string, readonly string[]>,
+  ): void {
+    if (attestations.size === 0) return;
+    let bySpace = this.#sourceImportAttestations.get(space);
+    if (bySpace === undefined) {
+      bySpace = new Map();
+      this.#sourceImportAttestations.set(space, bySpace);
+    }
+    for (const [identity, imports] of attestations) {
+      bySpace.set(identity, imports);
+    }
+  }
+
+  /**
+   * The authored import list a compiled document read in `space` attests for
+   * `identity`, or `undefined` when this runtime has read none.
+   */
+  attestedSourceImports(
+    space: MemorySpace,
+    identity: string,
+  ): readonly string[] | undefined {
+    return this.#sourceImportAttestations.get(space)?.get(identity);
   }
 
   /**
