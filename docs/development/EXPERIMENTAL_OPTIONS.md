@@ -1899,6 +1899,15 @@ the per-epic implementation notes).
 >   expanded when compressed, 8 MiB as text), in parts of 1 MiB. A direct server advertises it and
 >   sends every sync whole. A peer that omits it parses as `false`, and is
 >   sent every sync whole. It is permanent.
+> - **`syncCidReferencesV1`** is a build-inherent capability, hardwired to
+>   `true` on both peers. On a connection where both advertise it, a server
+>   names a `cid:` schema document its realm registry holds by id and seq
+>   alone, and the client takes the body from its own registry, fetching any
+>   it lacks once per hash with a one-shot `graph.query` (the memory protocol
+>   chapter's section 4.2.3, and "Delivery by reference" in
+>   [`content-addressed-schemas.md`](../specs/content-addressed-schemas.md)).
+>   A peer that omits it parses as `false`, and is sent every schema document
+>   with its body. It is permanent.
 > - **`watchSetPartsV1`** is a build-inherent capability, hardwired to
 >   `true`. It advertises that the server applies a `session.watch.set` staged
 >   in parts as one set (the memory protocol chapter's section 4.3.5). Only
