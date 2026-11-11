@@ -59,11 +59,13 @@ never admitted, which is the change itself.
 
 ## The decision
 
-PENDING: @danfuzz's ruling on this break, quoted, with its date, which
-Home's entry in `tasks/pattern-compat-accepted-breaks.ts` carries as its
-`requiredPatternOverride`. FabriChat compatibility breaks are acceptable
-until FabriChat is deployed, per his 2026-10-05 ruling: "in general it's okay
-to break compatibility with pre-existing fabrichat stuff. this system has not
-yet been deployed 'for realsies'". The entries forgive only the room-link
-paths, and only against the baselines named. The contracts recorded with this
-change are gated as usual from then on.
+@danfuzz, 2026-11-11, accepting the break: "This changes a type parameter in a
+way that makes it possible to avoid unnecessarily sending large amounts of
+unnecessary data. It doesn't affect the actual stored data, so it's a safe
+change." Home is a required pattern, so its entry carries that ruling as its
+`requiredPatternOverride`. FabriChat compatibility breaks are acceptable until
+FabriChat is deployed, per his 2026-10-05 ruling: "in general it's okay to break
+compatibility with pre-existing fabrichat stuff. this system has not yet been
+deployed 'for realsies'". The entries forgive only the room-link paths, and only
+against the baselines named. The contracts recorded with this change are gated
+as usual from then on.
