@@ -27,8 +27,8 @@ reference at rest never needs transport compression. Code documents
 (§ Code documents) share the namespace and its rules: the compile cache
 stores each module's text as one, and its records link to them.
 Delivery by reference (§ Delivery by reference) is specified and not yet
-implemented: no build advertises its capability, so every schema document
-travels with its body.
+implemented. It is to ship as an experimental option, off by default, so
+until a deployment turns it on every schema document travels with its body.
 
 ## Last Updated
 
@@ -737,7 +737,14 @@ schema it already knows it has.
 - **Negotiation.** Both peers advertise `syncCidReferencesV1`
   ([memory-v2/04-protocol.md](memory-v2/04-protocol.md) §4.1.1). A
   connection where either peer does not delivers every schema document with
-  its body, as the rest of this document describes.
+  its body, as the rest of this document describes. It is an experimental
+  option
+  ([`EXPERIMENTAL_OPTIONS.md`](../development/EXPERIMENTAL_OPTIONS.md)), off
+  by default and switchable per deployment: a peer advertises it only while
+  enabled, and a deployment whose server leaves it off delivers bodies to
+  every client. It stays an option until a measurement settles whether the
+  bandwidth saved outweighs the round trip a frame pays for a body its
+  client lacks.
 - **What travels by reference.** A `cid:` document in a session frame may
   travel as a reference — its id and the seq the space holds it at, without
   its body (memory-v2/04-protocol.md §4.2.3) — when the copy the delivering
@@ -808,6 +815,17 @@ schema it already knows it has.
   reconnecting client declares it at the seq its reference carried
   (memory-v2/04-protocol.md §4.1.2), and the server elides it as it elides
   any held document.
+- **Why a reference carries a seq.** A `cid:` document never changes once
+  installed, and one eligible to travel by reference is exactly its value,
+  so the seq adds nothing the id does not already fix. It is there because
+  a reference stands in for an upsert, and everything that handles one
+  names a document by its id and the seq its space holds it at: the
+  replica's record of what it holds, the holdings a reconnect declares, the
+  server's elision of what is held, the range a frame covers, and the reads
+  a commit records. Carrying the seq lets a referenced document be held
+  exactly like any other, with no path of its own. Holdings without a seq
+  belong with lasting holdings (§ Open questions, 9), and garbage
+  collection (question 4) is what would give the seq a meaning of its own.
 - **What a fetch discloses.** A body fetch tells a space which hashes the
   client lacks, and so, by their absence, which it already holds from the
   other spaces it reads. A schema the schema generator derives from pattern

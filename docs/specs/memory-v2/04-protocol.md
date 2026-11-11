@@ -54,8 +54,9 @@ rewrite. In particular:
   document a write left no watch reaching, and a client shrinks its watch set
   explicitly
 - delivering schema documents by reference (`syncCidReferencesV1`, sections
-  4.1.1 and 4.2.3) is specified and not yet implemented: no build advertises
-  the flag, so every frame carries each schema document with its body
+  4.1.1 and 4.2.3) is specified and not yet implemented. It is to ship as an
+  experimental option, off by default, so until a deployment turns it on
+  every frame carries each schema document with its body
 
 ## 4.1 Transport
 
@@ -285,8 +286,11 @@ It defaults to `false` when absent. The server sends an upsert marked
 `byReference` (section 4.2.3) only on a connection where both peers advertised
 it, and a client refuses a sync carrying one otherwise. A client connected to
 an older server, and an older client connected to any server, receive every
-schema document with its body, as without the flag. The flag is not yet
-implemented, and no build advertises it.
+schema document with its body, as without the flag. It is an experimental
+option, off by default and switchable per deployment
+([`EXPERIMENTAL_OPTIONS.md`](../../development/EXPERIMENTAL_OPTIONS.md)): a
+peer advertises it only while enabled, so a server with it off delivers bodies
+to every client. It is not yet implemented.
 
 `commitLabelTableV1` independently advertises label and label-path tables for
 client `transact` requests and server transaction acknowledgments. This build
