@@ -14,7 +14,8 @@
  * byte-for-byte. This value is the truth about the current default; the
  * registry entry in `docs/development/EXPERIMENTAL_OPTIONS.md` carries the
  * dated history (flipped ON 2026-08-28 by #6535 after the plan's Phase 7
- * ordered gates; rolled back 2026-09-03 by #6840) and its summary cell is
+ * ordered gates; rolled back 2026-09-03 by #6840; flipped ON again
+ * 2026-11-11) and its summary cell is
  * pinned to this value by a test. An explicit `EXPERIMENTAL_SERVER_EXECUTION=true|false`
  * (or `experimental.serverExecution`) selects an arm regardless of this
  * value. CI's stable `default` / `opposite` roles derive both postures
@@ -39,4 +40,4 @@
  * serving host, so they resolve the ambient baseline (OFF) by construction
  * (see the ambient flag in `../v2.ts`).
  */
-export const SERVER_EXECUTION_DEFAULT_ENABLED = false;
+export const SERVER_EXECUTION_DEFAULT_ENABLED = true;

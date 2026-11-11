@@ -12,10 +12,10 @@ mapping pass is due.
 
 ## Current status
 
-The first-party default is OFF and the ON soak is paused. The
+The first-party default is ON (re-flipped 2026-11-11) and the ON soak runs
+on main. The
 [`serverExecution` registry](../../development/EXPERIMENTAL_OPTIONS.md#serverexecution)
-owns the current default and flip records. A renewed ON rollout must satisfy
-the plan's ordered gates. OW28 tracks served compilation and its scoped child
+owns the current default and flip records. OW28 tracks served compilation and its scoped child
 execution coverage; implementing that path does not discharge the other gates.
 
 The status corrections in this register are bounded to the rows below:

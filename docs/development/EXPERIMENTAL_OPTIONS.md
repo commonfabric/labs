@@ -37,7 +37,7 @@ was last checked against the code.
 | [`readerSchemaPrecedence`](#readerschemaprecedence)                         | `EXPERIMENTAL_READER_SCHEMA_PRECEDENCE` env, or `RuntimeOptions.experimental`                                                                   | on                                                                                   | Robin McCollum (#6338)                                | graduate to unconditional behavior, then delete flag                                                                                                                                                                              | implemented, on by default                                                      |
 | [`viewScopedReplication` / `webViewScopedReplication`](#viewscopedreplication--webviewscopedreplication) | `EXPERIMENTAL_VIEW_SCOPED_REPLICATION` / `EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION`, or `RuntimeOptions.experimental`; the shell adopts both from its deployment, and an explicit build define overrides it | on for a web client under server execution, no effect without it; web inherits global | Bernhard Seefeld (2026-09-09) | validate view selection and guarded previews, then graduate per client class | experimental, on by default under server execution |
 | [`viewScopedReplicationV1`](#viewscopedreplicationv1) | Memory hello capability | available when server execution is on | Bernhard Seefeld (2026-09-09) | retain as protocol negotiation until older clients and servers retire | optional capability |
-| [`serverExecution`](#serverexecution) | `EXPERIMENTAL_SERVER_EXECUTION` env, or `RuntimeOptions.experimental`; the shell adopts it from its deployment, and an explicit build define overrides it | **off** (`SERVER_EXECUTION_DEFAULT_ENABLED = false`; explicit `true` selects the other arm) | Bernhard Seefeld (#5339, server-execution v2 plan Phase 1 stage A; Phase 7 flip-ready #5849) | soak on main at the ON default, then delete the flag and OFF path | Serving stack and OW28 scoped compilation have direct coverage; Phase-7 gate dispositions govern a renewed rollout; the section's dated entries carry each flip; stable `default`/`opposite` CI roles keep both postures guarded and make a default flip data-only |
+| [`serverExecution`](#serverexecution) | `EXPERIMENTAL_SERVER_EXECUTION` env, or `RuntimeOptions.experimental`; the shell adopts it from its deployment, and an explicit build define overrides it | **on** (`SERVER_EXECUTION_DEFAULT_ENABLED = true`; explicit `false` selects the other arm) | Bernhard Seefeld (#5339, server-execution v2 plan Phase 1 stage A; Phase 7 flip-ready #5849) | soak on main at the ON default, then delete the flag and OFF path | Serving stack and OW28 scoped compilation have direct coverage; the ON soak runs on main; the section's dated entries carry each flip; stable `default`/`opposite` CI roles keep both postures guarded and make a default flip data-only |
 | [`localSessionDocuments`](#localsessiondocuments) | `EXPERIMENTAL_LOCAL_SESSION_DOCUMENTS` env / shell build define, or `RuntimeOptions.experimental`; clients adopt the deployment value | off | Bernhard Seefeld (#8919) | validate local session semantics and performance, then graduate for client execution | implemented, opt-in; requires validation-only commit support |
 | [`sharedMemoryConnection`](#sharedmemoryconnection) | `EXPERIMENTAL_SHARED_MEMORY_CONNECTION` env, or `RuntimeOptions.experimental`; the shell adopts it from its deployment, and an explicit build define of the same name overrides it | off | Bernhard Seefeld (2026-09-29) | turn on once a deployment's routing serves a connection carrying several spaces, then delete the flag and the connection-per-space path | implemented, off by default |
 | [`localFold`](#localfold) | `EXPERIMENTAL_LOCAL_FOLD` env / shell build define, or `RuntimeOptions.experimental` | off | Robin McCollum (2026-10-14) | decide between the fold and reverting a refused derived write, then delete the flag and the losing arm | implemented, off by default |
@@ -422,7 +422,8 @@ flags it adopts from the deployment it runs against.
   [`runtime/memory/v2/server-execution-default.ts`](../../runtime/memory/v2/server-execution-default.ts)
   (a test pins the cell to the constant); the dated status entries below
   carry its history (landed flip-ready dark at `false` 2026-08-16; flipped
-  ON 2026-08-28; each later flip has its own entry). OW28's served
+  ON 2026-08-28; rolled back 2026-09-03; flipped ON again 2026-11-11; each
+  flip has its own entry). OW28's served
   `compileAndRun` lifecycle has direct acceptance coverage. The Phase-7
   ordered gates still apply; a flip record does not establish their
   current verdicts. The default
@@ -488,6 +489,17 @@ flags it adopts from the deployment it runs against.
   retires and the OFF code path is removed — a separate post-soak PR (the plan's
   Phase 7 task 2; it also removes the opposite suites and the
   `toolshed-baked-opposite` capability).
+- **Status on 2026-11-11 (the re-FLIP).** The constant is `true` again, by
+  the owner's rollout decision. This is the data-only change the 2026-09-02
+  hygiene provides for: the constant, this entry and the summary cell, and a
+  delta in the plan's coordination block, with no workflow, test, role, or
+  build-job edit. The CI roles resolve `default` = ON and `opposite` = OFF:
+  the default lanes run the ON arm with the ON-arm skip registry, the
+  opposite lanes are the explicit-`false` OFF guard on the
+  `toolshed-baked-opposite` build with the `server-execution-off` record
+  variant, and authored-pattern coverage rides the opposite lanes. An
+  explicit `false` selects OFF per deployment and is the rollback lever.
+  The ON soak resumes at this change's merge.
 - **Status on 2026-10-31 (the verbs on the space's memory session).** Under
   ON, the toolshed's memory server runs the verbs as `pattern.lifecycle`
   requests and advertises `patternLifecycle`, and
