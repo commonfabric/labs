@@ -40,10 +40,9 @@ export class ModuleCompileWorker implements ModuleCompiler {
   }
 
   /**
-   * Compiles `request` in the worker.
-   *
-   * @throws Error when this instance is closed, or its worker cannot be
-   * started; both are failures of the place the compile was to run.
+   * Compiles `request` in the worker. The returned promise rejects, as a
+   * failure of the place the compile was to run, when this instance is
+   * closed or its worker cannot be started.
    */
   compile(
     request: ModuleCompileRequest,
