@@ -228,139 +228,163 @@ describe("list-child-upgrade-transaction", () => {
   }
 
   for (
-    const [name, builtin, schema] of [
-      ["map", map, MAP_INPUT_SCHEMA],
-      ["flatMap", flatMap, FLATMAP_INPUT_SCHEMA],
-      ["filter", filter, FILTER_INPUT_SCHEMA],
+    const [name, builtin, schema, resume] of [
+      ["map", map, MAP_INPUT_SCHEMA, false],
+      ["flatMap", flatMap, FLATMAP_INPUT_SCHEMA, false],
+      ["filter", filter, FILTER_INPUT_SCHEMA, false],
+      ["map", map, MAP_INPUT_SCHEMA, true],
+      ["flatMap", flatMap, FLATMAP_INPUT_SCHEMA, true],
+      ["filter", filter, FILTER_INPUT_SCHEMA, true],
     ] as const
   ) {
-    it(`loads a cold ${name} batch larger than the scheduler retry budget`, async () => {
-      const signer = await Identity.fromPassphrase(`list child batch ${name}`);
-      const space = signer.did();
-      const server = newSharedServer();
-      const writerStorage = EmulatedStorageManager.connectTo(server, {
-        as: signer,
-      });
-      const readerStorage = EmulatedStorageManager.connectTo(server, {
-        as: signer,
-      });
-      const writer = new Runtime({
-        apiUrl: new URL(import.meta.url),
-        storageManager: writerStorage,
-      });
-      const reader = new Runtime({
-        apiUrl: new URL(import.meta.url),
-        storageManager: readerStorage,
-      });
-      const [cancel, addCancel] = useCancelGroup();
-      try {
-        const program = rowProgram("candidate", name === "filter");
-        const pattern = await writer.patternManager.compilePattern(program, {
-          space,
+    it(
+      resume
+        ? `keeps every child of a cold ${name} resume batch waiting for sync across its retry`
+        : `loads a cold ${name} batch larger than the scheduler retry budget`,
+      async () => {
+        const signer = await Identity.fromPassphrase(
+          `list child batch ${name}${resume ? " resume" : ""}`,
+        );
+        const space = signer.did();
+        const server = newSharedServer();
+        const writerStorage = EmulatedStorageManager.connectTo(server, {
+          as: signer,
         });
-        await reader.patternManager.compilePattern(program, { space });
-        const ref = writer.patternManager.getArtifactEntryRef(pattern)!;
-        const values = Array.from(
-          { length: MAX_RETRIES_FOR_REACTIVE * 2 },
-          (_, i) => i + 1,
-        );
-        const setup = writer.edit();
-        const inputs = writer.getCell(space, "inputs", undefined, setup);
-        inputs.set({ list: values, op: { $patternRef: ref } });
-        const parent = writer.getCell(space, "parent", undefined, setup);
-        const output = writer.getCell(space, "output")
-          .getAsNormalizedFullLink();
-        const plan = listCoordinatorPlan(
-          writer,
-          setup,
-          name,
-          inputs,
-          schema,
-          parent,
-          output,
-        );
-        const children = values.map((_, index) =>
-          listElementResultCell(
+        const readerStorage = EmulatedStorageManager.connectTo(server, {
+          as: signer,
+        });
+        const writer = new Runtime({
+          apiUrl: new URL(import.meta.url),
+          storageManager: writerStorage,
+        });
+        const reader = new Runtime({
+          apiUrl: new URL(import.meta.url),
+          storageManager: readerStorage,
+        });
+        const [cancel, addCancel] = useCancelGroup();
+        try {
+          const program = rowProgram("candidate", name === "filter");
+          const pattern = await writer.patternManager.compilePattern(program, {
+            space,
+          });
+          await reader.patternManager.compilePattern(program, { space });
+          const ref = writer.patternManager.getArtifactEntryRef(pattern)!;
+          const values = Array.from(
+            { length: MAX_RETRIES_FOR_REACTIVE * 2 },
+            (_, i) => i + 1,
+          );
+          const setup = writer.edit();
+          const inputs = writer.getCell(space, "inputs", undefined, setup);
+          inputs.set({ list: values, op: { $patternRef: ref } });
+          const parent = writer.getCell(space, "parent", undefined, setup);
+          const output = writer.getCell(space, "output")
+            .getAsNormalizedFullLink();
+          const plan = listCoordinatorPlan(
             writer,
             setup,
             name,
-            plan.container,
-            plan.elementKeys.get(index)!,
-          )
-        );
-        plan.container.set([]);
-        expect((await setup.commit().settled).error).toBeUndefined();
-        for (const [index, child] of children.entries()) {
-          await writer.runSynced(child.withTx(), pattern, {
-            element: plan.list![index].withTx(),
-          });
-        }
-        await writer.scheduler.idleWithPendingCommits();
-        await writerStorage.synced();
+            inputs,
+            schema,
+            parent,
+            output,
+          );
+          const children = values.map((_, index) =>
+            listElementResultCell(
+              writer,
+              setup,
+              name,
+              plan.container,
+              plan.elementKeys.get(index)!,
+            )
+          );
+          plan.container.set([]);
+          expect((await setup.commit().settled).error).toBeUndefined();
+          for (const [index, child] of children.entries()) {
+            await writer.runSynced(child.withTx(), pattern, {
+              element: plan.list![index].withTx(),
+            });
+          }
+          await writer.scheduler.idleWithPendingCommits();
+          await writerStorage.synced();
 
-        const readerInputs = reader.getCellFromLink<
-          { list: number[]; op: Pattern }
-        >(inputs.getAsNormalizedFullLink());
-        await readerInputs.asSchema(schema).sync();
-        await reader.getCellFromLink(plan.container.getAsNormalizedFullLink())
-          .asSchema({ type: "array", items: { asCell: ["cell"] } }).sync();
-        await Promise.all(
-          children.map((child) =>
-            reader.getCellFromLink(child.getAsNormalizedFullLink()).asSchema({
-              type: "object",
-              properties: {},
-            }).sync()
-          ),
-        );
-        const named = new Set<string>();
-        reader.runner.accessForTestingOnly.dependencySyncer = async (
-          cell,
-          pattern,
-          argument,
-          sync,
-        ) => {
-          named.add(cell.getAsNormalizedFullLink().id);
-          return await sync(cell, pattern, argument);
-        };
-        const coordinator = builtin(
-          readerInputs,
-          () => {},
-          addCancel,
-          {},
-          reader.getCellFromLink(parent.getAsNormalizedFullLink()),
-          reader,
-          output,
-        );
-        if (typeof coordinator === "function") {
-          throw new Error("Expected coordinator");
+          const readerInputs = reader.getCellFromLink<
+            { list: number[]; op: Pattern }
+          >(inputs.getAsNormalizedFullLink());
+          await readerInputs.asSchema(schema).sync();
+          await reader.getCellFromLink(plan.container.getAsNormalizedFullLink())
+            .asSchema({ type: "array", items: { asCell: ["cell"] } }).sync();
+          await Promise.all(
+            children.map((child) =>
+              reader.getCellFromLink(child.getAsNormalizedFullLink()).asSchema({
+                type: "object",
+                properties: {},
+              }).sync()
+            ),
+          );
+          const named = new Set<string>();
+          reader.runner.accessForTestingOnly.dependencySyncer = async (
+            cell,
+            pattern,
+            argument,
+            sync,
+          ) => {
+            named.add(cell.getAsNormalizedFullLink().id);
+            return await sync(cell, pattern, argument);
+          };
+          const coordinator = builtin(
+            readerInputs,
+            () => {},
+            addCancel,
+            {},
+            reader.getCellFromLink(parent.getAsNormalizedFullLink()),
+            reader,
+            output,
+            resume,
+          );
+          if (typeof coordinator === "function") {
+            throw new Error("Expected coordinator");
+          }
+          // Every child the resume batch starts, on its first pass or on the
+          // fresh pass its loads ask for, waits for sync before its first run.
+          const childWaits: (boolean | undefined)[] = [];
+          const runInTransaction = reader.runner.runInTransaction.bind(
+            reader.runner,
+          );
+          reader.runner.runInTransaction =
+            ((tx, pattern, argument, result, options) => {
+              childWaits.push(options?.awaitSyncBeforeInitialRun);
+              return runInTransaction(tx, pattern, argument, result, options);
+            }) as typeof reader.runner.runInTransaction;
+          coordinator.onActionRegistered?.(coordinator.action);
+          addCancel(
+            reader.scheduler.register(coordinator.action, { isEffect: true }),
+          );
+          await reader.scheduler.idleWithPendingCommits();
+          expect(named.size).toBe(values.length);
+          expect(childWaits.length).toBeGreaterThan(values.length);
+          expect(childWaits.filter((wait) => wait !== resume)).toEqual([]);
+          // The scheduler must finish the reconcile, not merely finish loading
+          // the final child after exhausting its immediate retry budget.
+          const aggregate = reader.getCellFromLink(
+            plan.container.getAsNormalizedFullLink(),
+          );
+          expect(await aggregate.pull()).toEqual(
+            name === "filter"
+              ? values
+              : name === "flatMap"
+              ? values.map((value) => `candidate:${value}`)
+              : values.map((value) => [`candidate:${value}`]),
+          );
+        } finally {
+          reader.runner.accessForTestingOnly.dependencySyncer = undefined;
+          cancel();
+          await reader.dispose({ closeStorage: false });
+          await writer.dispose({ closeStorage: false });
+          await readerStorage.close();
+          await writerStorage.close();
+          await server.close();
         }
-        coordinator.onActionRegistered?.(coordinator.action);
-        addCancel(
-          reader.scheduler.register(coordinator.action, { isEffect: true }),
-        );
-        await reader.scheduler.idleWithPendingCommits();
-        expect(named.size).toBe(values.length);
-        // The scheduler must finish the reconcile, not merely finish loading
-        // the final child after exhausting its immediate retry budget.
-        const aggregate = reader.getCellFromLink(
-          plan.container.getAsNormalizedFullLink(),
-        );
-        expect(await aggregate.pull()).toEqual(
-          name === "filter"
-            ? values
-            : name === "flatMap"
-            ? values.map((value) => `candidate:${value}`)
-            : values.map((value) => [`candidate:${value}`]),
-        );
-      } finally {
-        reader.runner.accessForTestingOnly.dependencySyncer = undefined;
-        cancel();
-        await reader.dispose({ closeStorage: false });
-        await writer.dispose({ closeStorage: false });
-        await readerStorage.close();
-        await writerStorage.close();
-        await server.close();
-      }
-    });
+      },
+    );
   }
 });

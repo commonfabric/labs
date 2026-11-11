@@ -435,8 +435,6 @@ function createFlatMapInstance(
       outputScope,
     );
 
-    if (list.length > 0) resumeBatchAwaitSync = false;
-
     const newArrayValue: any[] = [];
     // Every result the resume pass attaches, whatever it currently reads. The
     // values read here are local: a child that ran in this session has written
@@ -560,6 +558,9 @@ function createFlatMapInstance(
 
     const pendingSetup = childSetup.retry();
     if (pendingSetup !== undefined) return pendingSetup;
+    // The batch is processed only once no child is left to load: the fresh
+    // pass a load asks for is still the resume pass, and its children wait.
+    if (list.length > 0) resumeBatchAwaitSync = false;
 
     // Wait for the whole resume batch before the aggregate moves. Its
     // documents are the ones still catching up, and republishing from them once

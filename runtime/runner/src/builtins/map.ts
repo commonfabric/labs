@@ -412,9 +412,6 @@ function createMapInstance(
       throw new Error("map currently only supports arrays");
     }
 
-    // The resume batch has now been observed; later reconciles are post-resume.
-    if (list.length > 0) resumeBatchAwaitSync = false;
-
     // The whole current key set has to exist before any element is touched:
     // it is what says which children the list has stopped holding.
     const elementKeys = listElementKeys(list);
@@ -511,6 +508,9 @@ function createMapInstance(
     }
     const pendingSetup = childSetup.retry();
     if (pendingSetup !== undefined) return pendingSetup;
+    // The batch is processed only once no child is left to load: the fresh
+    // pass a load asks for is still the resume pass, and its children wait.
+    if (list.length > 0) resumeBatchAwaitSync = false;
     probeScoped(() => resultWithLog.set(newArrayValue));
   };
 
