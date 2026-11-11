@@ -305,6 +305,39 @@ describe("ExperimentalOptions", () => {
       }
     });
 
+    it("refuses a second runtime on one storage manager that declares the other schema-reference choice", async () => {
+      const sm = StorageManager.emulate({ as: signer });
+      const runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: sm,
+        experimental: { syncCidReferences: true },
+      });
+      try {
+        expect(() =>
+          new Runtime({
+            apiUrl: new URL(import.meta.url),
+            storageManager: sm,
+            experimental: { syncCidReferences: false },
+          })
+        ).toThrow("already declared the other choice");
+      } finally {
+        await runtime.dispose();
+        await sm.close();
+      }
+    });
+
+    it("refuses to change the schema-reference choice of a storage manager with a session open", async () => {
+      const sm = StorageManager.emulate({ as: signer });
+      try {
+        await sm.open(signer.did()).sync(`of:${signer.did()}`);
+        expect(() => sm.setSyncCidReferences(true)).toThrow(
+          "a session is already open",
+        );
+      } finally {
+        await sm.close();
+      }
+    });
+
     it("disposing Runtime resets global config to the default", async () => {
       const initial = getModernCellRepConfig();
       const sm = StorageManager.emulate({ as: signer });

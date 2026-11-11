@@ -1770,9 +1770,10 @@ the per-epic implementation notes).
     capability unless it is turned off.
   - **Client:** the runtime's `syncCidReferences` experimental option, from
     `RuntimeOptions.experimental` (how a host that constructs a runtime sets
-    it), `EXPERIMENTAL_SYNC_CID_REFERENCES` (a process that reads env), or, in
-    the labs shell, the per-profile `localStorage` key `syncCidReferences`
-    set to `"true"` (how a host loading the shell in a WebView sets it, or
+    it), `EXPERIMENTAL_SYNC_CID_REFERENCES` (a process that reads env, and
+    the shell's build define of the same name), or, in the labs shell, the
+    per-profile `localStorage` key `syncCidReferences` set to `"true"` (how a
+    host loading a release shell in a WebView sets it, or
     `commonfabric.syncCidReferences(true)` from the console; next runtime).
     The runtime hands it to its memory connections
     (`ConnectOptions.syncCidReferences`), whose `hello` then advertises the
@@ -1782,9 +1783,13 @@ the per-epic implementation notes).
 - **Purpose.** A schema document's bytes are the same in every space that
   stores it, so a client reading many spaces built from one pattern receives
   the same closure from each. On a connection where both sides are on, a server
-  names a `cid:` schema document its registry holds by id and seq alone, and the
-  client takes the body from its own registry, fetching what it lacks with one
-  `graph.query` per frame ("Delivery by reference" in
+  names a `cid:` schema document its registry holds by id and seq alone, unless
+  the schema names a principal (holds a DID), which keeps its body. The client
+  takes the body from its own registry, and fetches what a frame lacks with one
+  `graph.query` for all of it, sharing a fetch already in flight from the same
+  host: any space's on a direct connection, the same space's on a routed one. A
+  schema that names a principal is always fetched from the space that named it
+  ("Delivery by reference" in
   [`content-addressed-schemas.md`](../specs/content-addressed-schemas.md)).
   Measured on a FabriChat fixture, a narrow read of 5 rooms' roots received
   52% fewer bytes, and at 20 rooms the reader's heap grew a third less per room.

@@ -2865,6 +2865,12 @@ export class Client {
    */
   #drainCidReferenceHold(key: string, hold: CidReferenceHold): void {
     if (this.#cidReferenceHolds.get(key) !== hold) return;
+    // A hold whose connection was replaced hands nothing on: its syncs came
+    // over a connection that is gone, and the resume delivers them again.
+    if (hold.epoch !== this.#connectionEpoch || !this.#connected) {
+      this.#dropCidReferenceHold(key, hold);
+      return;
+    }
     while (hold.queue.length > 0) {
       let resolved;
       try {

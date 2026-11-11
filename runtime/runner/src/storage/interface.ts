@@ -416,6 +416,10 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * memory client). A `Runtime` calls this at construction. A manager
    * without the method, or one no runtime has called it on, takes every
    * body.
+   *
+   * @throws If another choice is already declared, or if a session is
+   * already open and the choice would change: the manager's connections are
+   * its runtimes' alike, so they cannot serve both.
    */
   setSyncCidReferences?(enabled: boolean): void;
 

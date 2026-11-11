@@ -92,7 +92,8 @@ export const SHELL_FLAG_SOURCES = {
   // deployment whose spaces it opens.
   instanceNames: "deployment",
   // A client's own opt-in: the deployment's half is its server's offer, so
-  // the shell takes it from its build.
+  // the shell takes it from its build, and a host embedding a release shell
+  // from the shell's host toggle (`runtime/shell/src/lib/host-toggles.ts`).
   syncCidReferences: "build",
 } as const satisfies Record<keyof ExperimentalOptions, ShellFlagSource>;
 

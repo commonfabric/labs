@@ -143,9 +143,10 @@ export type ExperimentalFlagAuthority = "server" | "client";
  * encodings, receipt contents, schema references), in what the server admits
  * (commit preconditions, per-class admission), in which side runs the compute
  * at all, or in which documents a subscription ships. `"client"` is for a
- * flag that gates a purely local choice: `syncCidReferences`, a client's
- * opt-in to a delivery form its server offers on its own, which changes no
- * stored data.
+ * flag whose effect stays with the client that sets it: `syncCidReferences`,
+ * a client's opt-in to a delivery form its server offers on its own. It
+ * changes what crosses that client's own connections, but no stored data and
+ * nothing another client sees.
  */
 export const EXPERIMENTAL_FLAG_AUTHORITY = {
   // Link serialization: the two encodings are a hard mismatch, which the
@@ -201,8 +202,9 @@ export const EXPERIMENTAL_FLAG_AUTHORITY = {
   instanceNames: "server",
   // The one client-side choice: a client opts in to taking schema documents
   // by reference, and the server's own offer (`ServerOptions` of the memory
-  // server) is the deployment's half. Neither changes what is stored, and a
-  // client that does not opt in is delivered every body as before.
+  // server) is the deployment's half. It changes what crosses that client's
+  // connections, references and the body fetches they lead to, but not what
+  // is stored or what any other client receives.
   syncCidReferences: "client",
 } as const satisfies Record<
   keyof ExperimentalOptions,
@@ -296,8 +298,7 @@ export function adoptServerExperimentalOptions(
   env: ExperimentalOptions,
   /**
    * The classification to resolve against. Defaults to the registry, and is
-   * a parameter so the `"client"` arm stays exercised while no first-party
-   * flag carries it.
+   * a parameter so a test can classify any flag either way.
    */
   authorities: Record<
     keyof ExperimentalOptions,
