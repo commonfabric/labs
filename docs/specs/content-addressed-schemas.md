@@ -26,10 +26,10 @@ this design is the storage-side successor for link positions, and a
 reference at rest never needs transport compression. Code documents
 (§ Code documents) share the namespace and its rules: the compile cache
 stores each module's text as one, and its records link to them.
-Delivery by reference (§ Delivery by reference) is specified and not yet
-implemented. It is to ship as an experimental option that servers offer and
-clients take only when they opt in, so every schema document travels with its
-body to a client that has not.
+Delivery by reference (§ Delivery by reference) is implemented as an
+experimental option that servers offer by default and clients take only when
+they opt in, so every schema document travels with its body to a client that
+has not.
 
 ## Last Updated
 
