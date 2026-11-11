@@ -9,6 +9,7 @@
 
 import { deepFreeze, taggedHashStringOf } from "@commonfabric/data-model";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
+import { isCfcLabelReference } from "@commonfabric/memory/v2/cfc-stored-envelope";
 import { canonicalizeCfcLabel } from "./canonical.ts";
 import type { IFCLabel } from "./label-view-core.ts";
 import { onSchemaRegistryClear } from "../schema-registry.ts";
@@ -32,12 +33,12 @@ const utf8 = new TextEncoder();
 
 const CID_PREFIX = "cid:";
 
-/** Whether a stored entry's label is a reference rather than an inline label. */
-export const isCfcLabelReference = (
-  value: unknown,
-): value is CfcLabelReference =>
-  isObjectNotArray(value) && typeof value.$ref === "string" &&
-  Object.keys(value).length === 1;
+/**
+ * Whether a stored entry's label is a reference rather than an inline label.
+ * The check is the one every reader of a stored envelope holds to, so it
+ * lives with the others in Memory's `v2/cfc-stored-envelope`.
+ */
+export { isCfcLabelReference };
 
 /**
  * The document hash a label reference names, or `undefined` for a reference
@@ -68,36 +69,6 @@ export const isCfcLabelDocumentContent = (value: unknown): value is IFCLabel =>
     (LABEL_MEMBERS as readonly string[]).includes(key) &&
     Array.isArray(value[key])
   );
-
-/**
- * Whether `value` has the shape of an inline label as an envelope stores
- * one: a record whose every member is one of the two label members holding
- * an array or `undefined`. Like {@link isCfcLabelDocumentContent}, except
- * that an absent member may be present as `undefined`, which a stored
- * inline label may carry and a document never does.
- */
-export const isInlineCfcLabelShape = (value: unknown): value is IFCLabel =>
-  isObjectNotArray(value) &&
-  Object.keys(value).every((key) =>
-    (LABEL_MEMBERS as readonly string[]).includes(key) &&
-    (value[key] === undefined || Array.isArray(value[key]))
-  );
-
-/**
- * Whether `value` has the shape of a stored entry: a record with a `path`
- * of strings and a `label` that is either a reference or an inline label.
- * An entry of any other shape is one no reader can produce a label from,
- * and the envelope holding it is unreadable. A member beyond those is not
- * such a shape: the spec's entry carries view-specific refinements beside
- * the label (spec §4.6.4), so an entry this build reads fewer members of
- * is one it still reads the label of.
- */
-export const isStoredLabelMapEntry = (
-  value: unknown,
-): value is StoredLabelMapEntry =>
-  isObjectNotArray(value) && Array.isArray(value.path) &&
-  value.path.every((segment) => typeof segment === "string") &&
-  (isCfcLabelReference(value.label) || isInlineCfcLabelShape(value.label));
 
 /**
  * The canonical content of a label document: the label with its clauses

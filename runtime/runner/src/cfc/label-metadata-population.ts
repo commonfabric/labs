@@ -5,10 +5,14 @@ import {
   clauseAlternatives,
   isCfcFieldCommitment,
 } from "@commonfabric/memory/v2/cfc-release-authority";
+import {
+  isLabelMetadataTemplateEntry,
+  LABEL_METADATA_TEMPLATE_ORIGIN,
+} from "@commonfabric/memory/v2/cfc-stored-envelope";
 import { canonicalizeLogicalPath } from "./canonical.ts";
 import { cfcLabelPathPrefixMatches } from "./label-view-core.ts";
 import { uniqueCfcAtoms } from "./observation.ts";
-import type { IFCLabel, LabelEntryOrigin, LabelMapEntry } from "./types.ts";
+import type { IFCLabel, LabelMapEntry } from "./types.ts";
 
 // Template-population Stage B (docs/specs/cfc-template-population.md §5/§6;
 // spec §4.6.4.2): the §4.6.4.2 field-precise label-metadata population
@@ -68,29 +72,14 @@ import type { IFCLabel, LabelEntryOrigin, LabelMapEntry } from "./types.ts";
 //   indices run across the concatenated per-entry clause lists) requires.
 
 /**
- * The dedicated origin of label-metadata population templates. See the module
- * doc for the decision rationale.
+ * The dedicated origin of label-metadata population templates, and whether
+ * an entry is one. Every reader of a stored envelope reads templates by
+ * these, so they live with the other stored-envelope checks in Memory's
+ * `v2/cfc-stored-envelope`, beside the check that a template is keyed and
+ * classed as the mint below produces one. See the module doc for why
+ * templates have an origin of their own.
  */
-export const LABEL_METADATA_TEMPLATE_ORIGIN: LabelEntryOrigin =
-  "label-metadata";
-
-/** Whether a persisted entry is a label-metadata population template. */
-export const isLabelMetadataTemplateEntry = (
-  entry: Pick<LabelMapEntry, "origin">,
-): boolean => entry.origin === LABEL_METADATA_TEMPLATE_ORIGIN;
-
-/**
- * Whether an entry of the template origin is keyed and classed as the mint
- * produces one: under the `["cfc", "labels"]` metadata subtree, and observed
- * by the `labelMetadata` class alone. The origin is what marks an entry as
- * document-rooted, so one keyed anywhere else, or one a payload read class
- * consumes, is a payload label spelled as a template.
- */
-export const isWellFormedLabelMetadataTemplateEntry = (
-  entry: Pick<LabelMapEntry, "path" | "observes">,
-): boolean =>
-  entry.path[0] === "cfc" && entry.path[1] === "labels" &&
-  entry.observes === "labelMetadata";
+export { isLabelMetadataTemplateEntry, LABEL_METADATA_TEMPLATE_ORIGIN };
 
 /**
  * Whether the entry's own effective confidentiality is a sound population

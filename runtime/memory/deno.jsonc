@@ -24,6 +24,7 @@
     "./v2/cfc-label-fields": "./v2/cfc-label-fields.ts",
     "./v2/cfc-owner-release-by-intent": "./v2/cfc-owner-release-by-intent.ts",
     "./v2/cfc-release-authority": "./v2/cfc-release-authority.ts",
+    "./v2/cfc-stored-envelope": "./v2/cfc-stored-envelope.ts",
     "./interface": "./interface.ts",
     "./v2": "./v2.ts",
     "./v2/patch": "./v2/patch.ts",
