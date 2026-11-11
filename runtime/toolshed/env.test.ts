@@ -28,12 +28,12 @@ Deno.test("MEMORY_ACL_DELEGATIONS parses strictly: on by default, off only for '
   expect(() => admits("off")).toThrow();
 });
 
-Deno.test("MEMORY_SYNC_CID_REFERENCES parses strictly: off by default, on only for 'true'/'1', and any other spelling refuses", () => {
+Deno.test("MEMORY_SYNC_CID_REFERENCES parses strictly: on by default, off only for 'false'/'0', and any other spelling refuses", () => {
   const enabled = (v: string | undefined) =>
     EnvSchema.parse(v === undefined ? {} : { MEMORY_SYNC_CID_REFERENCES: v })
       .MEMORY_SYNC_CID_REFERENCES;
 
-  assertEquals(enabled(undefined), false);
+  assertEquals(enabled(undefined), true);
   assertEquals(enabled("false"), false);
   assertEquals(enabled("0"), false);
   assertEquals(enabled("true"), true);

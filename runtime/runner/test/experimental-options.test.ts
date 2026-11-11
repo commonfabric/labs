@@ -70,6 +70,7 @@ describe("ExperimentalOptions", () => {
         readerSchemaPrecedence: false,
         serverExecution: false,
         localSessionDocuments: false,
+        syncCidReferences: false,
       });
       await runtime.dispose();
       await sm.close();
@@ -98,6 +99,7 @@ describe("ExperimentalOptions", () => {
         readerSchemaPrecedence: true,
         serverExecution: false,
         localSessionDocuments: false,
+        syncCidReferences: false,
       });
       await runtime.dispose();
       await sm.close();
@@ -124,6 +126,7 @@ describe("ExperimentalOptions", () => {
         readerSchemaPrecedence: true,
         serverExecution: false,
         localSessionDocuments: false,
+        syncCidReferences: false,
       });
       await runtime.dispose();
       await sm.close();
@@ -268,6 +271,35 @@ describe("ExperimentalOptions", () => {
           experimental: { instanceNames: enabled },
         });
         expect(declared).toEqual([enabled]);
+        await runtime.dispose();
+        await sm.close();
+      }
+    });
+
+    it("constructing Runtime declares whether it takes schema documents by reference", async () => {
+      // Each connection's hello advertises it, so a manager hears it before
+      // any session opens: off unless the runtime, or the host embedding it,
+      // opts in.
+      for (
+        const [experimental, expected] of [
+          [{ syncCidReferences: true }, true],
+          [{ syncCidReferences: false }, false],
+          [{}, false],
+        ] as const
+      ) {
+        const sm = StorageManager.emulate({ as: signer });
+        const declared: boolean[] = [];
+        const manager = Object.assign(sm, {
+          setSyncCidReferences: (value: boolean) => {
+            declared.push(value);
+          },
+        });
+        const runtime = new Runtime({
+          apiUrl: new URL(import.meta.url),
+          storageManager: manager,
+          experimental,
+        });
+        expect(declared).toEqual([expected]);
         await runtime.dispose();
         await sm.close();
       }

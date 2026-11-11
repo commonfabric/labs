@@ -1360,7 +1360,9 @@ export type MemoryProtocolFlags = {
    * body (04-protocol.md section 4.2.3), enabled only when both peers
    * advertise it: the server references a schema its realm registry holds,
    * and the client takes the body from its own registry or fetches it.
-   * Experimental and off unless enabled (`setSyncCidReferencesConfig()`).
+   * Experimental: a server advertises it unless its `syncCidReferences`
+   * option turns it off, and a client only when its
+   * `ConnectOptions.syncCidReferences` turns it on.
    */
   syncCidReferencesV1: boolean;
 
@@ -2862,7 +2864,6 @@ const memoryLiveEnvironment = new NullLiveEnvironment(
 // Update that registry when adding or removing one.
 let commitPreconditionsEnabled = true;
 let syncSchemaTableEnabled = true;
-let syncCidReferencesEnabled = false;
 let messageCompressionEnabled = true;
 let ownWriteEchoEnabled = true;
 
@@ -2999,26 +3000,6 @@ export function resetSyncSchemaTableConfig(): void {
 }
 
 /**
- * Experimental protocol capability for delivering `cid:` schema documents by
- * reference (`syncCidReferencesV1`; `docs/development/EXPERIMENTAL_OPTIONS.md`).
- * Off unless enabled. A peer advertises it only while it is on, and a
- * connection delivers by reference only when both peers advertise it, so a
- * server with it off sends every client every body. Toolshed sets it from
- * `MEMORY_SYNC_CID_REFERENCES` at startup.
- */
-export function setSyncCidReferencesConfig(enabled?: boolean): void {
-  syncCidReferencesEnabled = enabled ?? false;
-}
-
-export function getSyncCidReferencesConfig(): boolean {
-  return syncCidReferencesEnabled;
-}
-
-export function resetSyncCidReferencesConfig(): void {
-  syncCidReferencesEnabled = false;
-}
-
-/**
  * Ambient capability for binary gzip envelopes on memory WebSocket messages.
  * Disabling it keeps both peers on ordinary text frames as a rollout backstop.
  */
@@ -3133,8 +3114,9 @@ export const getMemoryProtocolFlags = (): MemoryProtocolFlags => ({
   // Build-inherent: this build's client handles a sync split across
   // messages, and its routed host splits one for a client that does.
   syncPartsV1: true,
-  // Experimental, off unless enabled (`setSyncCidReferencesConfig()`).
-  syncCidReferencesV1: getSyncCidReferencesConfig(),
+  // Experimental, and each peer advertises its own choice: a `Server` by its
+  // `syncCidReferences` option, a client by `ConnectOptions.syncCidReferences`.
+  syncCidReferencesV1: false,
   // Build-inherent: this build's server applies a watch set staged in parts.
   watchSetPartsV1: true,
 });

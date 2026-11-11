@@ -3742,6 +3742,16 @@ export class Server {
       inviteHost?: string;
 
       /**
+       * Whether this server advertises `syncCidReferencesV1`, delivering
+       * `cid:` schema documents by reference to a client that advertises it
+       * too (`docs/specs/content-addressed-schemas.md`, "Delivery by
+       * reference"). On unless `false`: a client takes references only when
+       * it opts in, so a server that offers them changes nothing for one
+       * that does not, and `false` is how a deployment turns them off.
+       */
+      syncCidReferences?: boolean;
+
+      /**
        * Whether this server's posture names instances (INV-16): the
        * deployment's value of the `instanceNames` experimental flag. Asked at
        * every `session.open` that declares `instanceNames: true` of a space
@@ -3987,6 +3997,7 @@ export class Server {
       spaceInvites: this.options.inviteHost !== undefined,
       routedAuthV1: false,
       routedCompressionV1: false,
+      syncCidReferencesV1: this.options.syncCidReferences !== false,
     };
   }
 

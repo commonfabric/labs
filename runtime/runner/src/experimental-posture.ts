@@ -78,6 +78,9 @@ export const EXPERIMENTAL_ENV_VARS = {
   // than the rest of its space does, so no environment may turn it on before
   // a runtime of the other naming mode is kept away from a space.
   instanceNames: null,
+  // Taking schema documents by reference is default-off; env-reachable so a
+  // process can opt in with an explicit "true".
+  syncCidReferences: "EXPERIMENTAL_SYNC_CID_REFERENCES",
 } as const satisfies Record<keyof ExperimentalOptions, string | null>;
 
 /**
@@ -135,13 +138,14 @@ export type ExperimentalFlagAuthority = "server" | "client";
  * on this?" is a decision on record rather than whatever the default happened
  * to be.
  *
- * Every flag is server-authoritative today. That is the safe direction rather
- * than a coincidence — each one is visible in what gets written (the link and
- * entity-id encodings, receipt contents, schema references), in what the
- * server admits (commit preconditions, per-class admission), in which side
- * runs the compute at all, or in which documents a subscription ships.
- * `"client"` is here for the flag that gates a purely local experiment;
- * nothing qualifies yet.
+ * Server-authoritative is the safe direction rather than a coincidence —
+ * almost every flag is visible in what gets written (the link and entity-id
+ * encodings, receipt contents, schema references), in what the server admits
+ * (commit preconditions, per-class admission), in which side runs the compute
+ * at all, or in which documents a subscription ships. `"client"` is for a
+ * flag that gates a purely local choice: `syncCidReferences`, a client's
+ * opt-in to a delivery form its server offers on its own, which changes no
+ * stored data.
  */
 export const EXPERIMENTAL_FLAG_AUTHORITY = {
   // Link serialization: the two encodings are a hard mismatch, which the
@@ -195,6 +199,11 @@ export const EXPERIMENTAL_FLAG_AUTHORITY = {
   // two runtimes on different values bind one parent's children to
   // different documents.
   instanceNames: "server",
+  // The one client-side choice: a client opts in to taking schema documents
+  // by reference, and the server's own offer (`ServerOptions` of the memory
+  // server) is the deployment's half. Neither changes what is stored, and a
+  // client that does not opt in is delivered every body as before.
+  syncCidReferences: "client",
 } as const satisfies Record<
   keyof ExperimentalOptions,
   ExperimentalFlagAuthority

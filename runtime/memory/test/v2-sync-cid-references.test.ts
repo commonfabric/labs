@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { JSONSchema } from "@commonfabric/api";
 import { internSchema } from "@commonfabric/data-model-schema";
@@ -23,12 +23,10 @@ import {
   getMemoryProtocolFlags,
   type HelloOkMessage,
   MEMORY_PROTOCOL,
-  resetSyncCidReferencesConfig,
   type ResponseMessage,
   type ServerMessage,
   type SessionOpenAuthMetadata,
   type SessionSync,
-  setSyncCidReferencesConfig,
   type WatchSetResult,
 } from "../v2.ts";
 import {
@@ -240,6 +238,60 @@ const watchRaw = async (
   }
 };
 
+/**
+ * Installs the closure and a carrier of it in a space of `server`, watches
+ * the carrier from a client that opts in to references when `optedIn`, and
+ * returns how many references and `graph.query` requests crossed, and how
+ * many schema documents the client's view holds with their bodies.
+ */
+const watchThrough = async (
+  name: string,
+  server: Server,
+  optedIn: boolean,
+): Promise<{ references: number; queries: number; bodies: number }> => {
+  const { counts, transport } = countingTransport(server);
+  const writerClient = await connect({ transport: loopback(server) });
+  const watcherClient = await connect({
+    transport,
+    syncCidReferences: optedIn,
+  });
+  const space = `did:key:z6Mk-sync-cid-references-${name}`;
+  const carrier = `of:sync-cid-references-${name}`;
+  try {
+    const writer = await writerClient.mount(
+      space,
+      {},
+      testSessionOpenAuthFactory,
+    );
+    await writer.transact({
+      localSeq: 1,
+      reads: { confirmed: [], pending: [] },
+      operations: closureOperations(carrier),
+    });
+    const watcher = await watcherClient.mount(
+      space,
+      {},
+      testSessionOpenAuthFactory,
+    );
+    const view = await watcher.watchSet([{
+      id: "carrier",
+      kind: "graph",
+      query: {
+        roots: [{ id: carrier, selector: { path: [], schema: false } }],
+      },
+    }]);
+    const bodies = [
+      documentIn(view, `cid:${outerHash}`),
+      documentIn(view, `cid:${leafHash}`),
+    ].filter((document) => document !== undefined && document !== null);
+    return { ...counts, bodies: bodies.length };
+  } finally {
+    await writerClient.close();
+    await watcherClient.close();
+    await server.close();
+  }
+};
+
 describe("sync-cid-references", () => {
   describe("referenceServerMessageSchemaDocuments()", () => {
     it("names a schema document the lookup holds by id and seq alone", () => {
@@ -358,10 +410,7 @@ describe("sync-cid-references", () => {
     });
   });
 
-  describe("over a connection with the option on", () => {
-    beforeEach(() => setSyncCidReferencesConfig(true));
-    afterEach(() => resetSyncCidReferencesConfig());
-
+  describe("over a connection with both sides on", () => {
     it("names a schema document by reference and the client applies its body", async () => {
       const server = new Server({
         ...testSessionOpenServerOptions,
@@ -370,7 +419,10 @@ describe("sync-cid-references", () => {
       });
       const { counts, transport } = countingTransport(server);
       const writerClient = await connect({ transport: loopback(server) });
-      const watcherClient = await connect({ transport });
+      const watcherClient = await connect({
+        transport,
+        syncCidReferences: true,
+      });
       const space = "did:key:z6Mk-sync-cid-references-hit";
       const carrier = "of:sync-cid-references-hit";
       try {
@@ -432,7 +484,10 @@ describe("sync-cid-references", () => {
         bothFramesArrived.promise,
       );
       const writerClient = await connect({ transport: loopback(server) });
-      const watcherClient = await connect({ transport });
+      const watcherClient = await connect({
+        transport,
+        syncCidReferences: true,
+      });
       const spaces = [
         "did:key:z6Mk-sync-cid-references-fetch-a",
         "did:key:z6Mk-sync-cid-references-fetch-b",
@@ -501,7 +556,10 @@ describe("sync-cid-references", () => {
         answers.promise,
       );
       const writerClient = await connect({ transport: loopback(server) });
-      const watcherClient = await connect({ transport });
+      const watcherClient = await connect({
+        transport,
+        syncCidReferences: true,
+      });
       const space = "did:key:z6Mk-sync-cid-references-delivered";
       const carrier = "of:sync-cid-references-delivered";
       try {
@@ -598,7 +656,10 @@ describe("sync-cid-references", () => {
       const space = "did:key:z6Mk-sync-cid-references-outage";
       const carrier = "of:sync-cid-references-outage";
       const writerClient = await connect({ transport: loopback(server) });
-      const watcherClient = await connect({ transport });
+      const watcherClient = await connect({
+        transport,
+        syncCidReferences: true,
+      });
       try {
         const writer = await writerClient.mount(
           space,
@@ -639,69 +700,40 @@ describe("sync-cid-references", () => {
         await server.close();
       }
     });
+  });
+
+  describe("over a connection with one side off", () => {
+    it("sends every body and no reference to a client that has not opted in", async () => {
+      const upserts = await watchThrough(
+        "client-off",
+        new Server({
+          ...testSessionOpenServerOptions,
+          store: new URL("memory://sync-cid-references-client-off"),
+          subscriptionRefreshDelayMs: 0,
+        }),
+        false,
+      );
+      expect(upserts).toStrictEqual({ references: 0, queries: 0, bodies: 2 });
+    });
+
+    it("sends every body to a client that opted in when its server's option is off", async () => {
+      const upserts = await watchThrough(
+        "server-off",
+        new Server({
+          ...testSessionOpenServerOptions,
+          store: new URL("memory://sync-cid-references-server-off"),
+          subscriptionRefreshDelayMs: 0,
+          syncCidReferences: false,
+        }),
+        true,
+      );
+      expect(upserts).toStrictEqual({ references: 0, queries: 0, bodies: 2 });
+    });
 
     it("sends every body to a client that does not advertise the flag", async () => {
       const { syncCidReferencesV1: _omitted, ...flags } =
         getMemoryProtocolFlags();
       const upserts = await watchRaw("older", flags);
-      expect(upserts.filter((upsert) => upsert.id.startsWith("cid:")))
-        .toStrictEqual(bodiesOf(upserts));
-      expect(bodiesOf(upserts).length).toBe(2);
-    });
-  });
-
-  describe("over a connection with the option off", () => {
-    it("sends every body and no reference, as by default", async () => {
-      const server = new Server({
-        ...testSessionOpenServerOptions,
-        store: new URL("memory://sync-cid-references-off"),
-        subscriptionRefreshDelayMs: 0,
-      });
-      const { counts, transport } = countingTransport(server);
-      const writerClient = await connect({ transport: loopback(server) });
-      const watcherClient = await connect({ transport });
-      const space = "did:key:z6Mk-sync-cid-references-off";
-      const carrier = "of:sync-cid-references-off";
-      try {
-        const writer = await writerClient.mount(
-          space,
-          {},
-          testSessionOpenAuthFactory,
-        );
-        await writer.transact({
-          localSeq: 1,
-          reads: { confirmed: [], pending: [] },
-          operations: closureOperations(carrier),
-        });
-        const watcher = await watcherClient.mount(
-          space,
-          {},
-          testSessionOpenAuthFactory,
-        );
-        const view = await watcher.watchSet([{
-          id: "carrier",
-          kind: "graph",
-          query: {
-            roots: [{ id: carrier, selector: { path: [], schema: false } }],
-          },
-        }]);
-        expect(counts.references).toBe(0);
-        expect(counts.queries).toBe(0);
-        expect(documentIn(view, `cid:${outerHash}`)).toEqual({
-          value: outerSchema,
-        });
-      } finally {
-        await writerClient.close();
-        await watcherClient.close();
-        await server.close();
-      }
-    });
-
-    it("sends every body to a client that advertises the flag when its server has it off", async () => {
-      const upserts = await watchRaw("off-server", {
-        ...getMemoryProtocolFlags(),
-        syncCidReferencesV1: true,
-      });
       expect(upserts.filter((upsert) => upsert.id.startsWith("cid:")))
         .toStrictEqual(bodiesOf(upserts));
       expect(bodiesOf(upserts).length).toBe(2);

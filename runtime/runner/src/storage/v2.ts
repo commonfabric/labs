@@ -2461,6 +2461,11 @@ export class StorageManager implements IStorageManager {
     this.#sessionFactory.setInstanceNames?.(enabled);
   }
 
+  /** See `IStorageManager.setSyncCidReferences`. */
+  setSyncCidReferences(enabled: boolean): void {
+    this.#sessionFactory.setSyncCidReferences?.(enabled);
+  }
+
   /** See `IStorageManager.setSessionReadCeiling`. */
   setSessionReadCeiling(ceiling: SessionReadCeiling): void {
     if (this.#providers.size > 0) {

@@ -22,12 +22,10 @@ import {
   resetCommitPreconditionsConfig,
   resetMessageCompressionConfig,
   resetServerExecutionConfig,
-  resetSyncCidReferencesConfig,
   resetSyncSchemaTableConfig,
   setCommitPreconditionsConfig,
   setMessageCompressionConfig,
   setServerExecutionConfig,
-  setSyncCidReferencesConfig,
   setSyncSchemaTableConfig,
   toDocumentPath,
   toDocumentSelector,
@@ -605,7 +603,7 @@ describe("parseMemoryProtocolFlags", () => {
     });
   }
 
-  it("advertises syncCidReferencesV1 only while it is set on", () => {
+  it("accepts the syncCidReferencesV1 capability key, which neither peer advertises by build", () => {
     expect(parseMemoryProtocolFlags({})?.syncCidReferencesV1).toBe(false);
     expect(
       parseMemoryProtocolFlags({ syncCidReferencesV1: true })
@@ -618,14 +616,6 @@ describe("parseMemoryProtocolFlags", () => {
       wireMemoryProtocolFlags(getMemoryProtocolFlags()).syncCidReferencesV1,
     )
       .toBe(false);
-    setSyncCidReferencesConfig(true);
-    try {
-      expect(
-        wireMemoryProtocolFlags(getMemoryProtocolFlags()).syncCidReferencesV1,
-      ).toBe(true);
-    } finally {
-      resetSyncCidReferencesConfig();
-    }
   });
 
   it("accepts the syncCrossingsV1 capability key", () => {

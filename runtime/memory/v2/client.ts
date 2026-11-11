@@ -343,6 +343,17 @@ export type ConnectOptions = {
   instanceNames?: boolean;
 
   /**
+   * Whether this client takes `cid:` schema documents by reference
+   * (`syncCidReferencesV1`; `docs/specs/content-addressed-schemas.md`,
+   * "Delivery by reference"). When `true`, its `hello` advertises the
+   * capability, and a server that advertises it too names the schema
+   * documents its registry holds by id, leaving this client to resolve or
+   * fetch their bodies. Absent or `false`, the client advertises nothing and
+   * receives every body.
+   */
+  syncCidReferences?: boolean;
+
+  /**
    * How many handshakes the connect may make, one when absent. Each after the
    * first follows a failed one after the reconnect backoff. A permanent
    * failure fails the connect at once, and so does any failure on a transport
@@ -804,6 +815,9 @@ export class Client {
   /** Whether every open declares `instanceNames: true` (`ConnectOptions`). */
   readonly #instanceNames: boolean;
 
+  /** Whether this client's `hello` offers `syncCidReferencesV1` (`ConnectOptions`). */
+  readonly #offersCidReferences: boolean;
+
   #syncLabelTable = false;
   #commitLabelTable = false;
   /** Whether both peers advertised `syncPartsV1`. */
@@ -941,9 +955,11 @@ export class Client {
     transport: Transport,
     clientInfo: Readonly<ClientInfo>,
     instanceNames: boolean,
+    offersCidReferences: boolean,
   ) {
     this.#clientInfo = clientInfo;
     this.#instanceNames = instanceNames;
+    this.#offersCidReferences = offersCidReferences;
     this.#transport = transport;
     this.#transport.setReceiver((payload) => this.#onMessage(payload));
     this.#transport.setCloseReceiver?.((error) => this.#onClose(error));
@@ -964,6 +980,7 @@ export class Client {
       options.transport,
       Object.freeze(info),
       options.instanceNames === true,
+      options.syncCidReferences === true,
     );
     const abortError = (): Error =>
       options.signal?.reason instanceof Error
@@ -2324,6 +2341,7 @@ export class Client {
             this.#transport.supportsMessageCompression === true,
           // End-to-end compression of streamed bodies through a router.
           routedCompressionV1: offerRoutedCompression,
+          syncCidReferencesV1: this.#offersCidReferences,
         },
       };
       const encoded = encodeMemoryBoundary(hello);
@@ -2531,7 +2549,7 @@ export class Client {
           helloOk.flags.commitLabelTableV1;
         this.#syncParts = expectedFlags.syncPartsV1 &&
           helloOk.flags.syncPartsV1;
-        this.#syncCidReferences = expectedFlags.syncCidReferencesV1 &&
+        this.#syncCidReferences = this.#offersCidReferences &&
           helloOk.flags.syncCidReferencesV1;
         this.#requestLimits = routed
           ? {

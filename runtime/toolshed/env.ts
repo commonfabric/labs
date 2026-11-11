@@ -339,12 +339,12 @@ export const EnvSchema = z.object({
   // `sessionOpenProofs`.
   MEMORY_ACL_DELEGATIONS: z.enum(["true", "1", "false", "0"]).default("true")
     .transform((v) => v === "true" || v === "1"),
-  // Whether this deployment's memory server delivers `cid:` schema
-  // documents by reference to clients that take them (`syncCidReferencesV1`);
-  // off unless set to "true" or "1", and any other spelling refuses startup.
-  // See docs/development/EXPERIMENTAL_OPTIONS.md, `syncCidReferencesV1`.
+  // Whether this deployment's memory server offers `cid:` schema documents
+  // by reference to clients that opt in (`syncCidReferencesV1`); on unless
+  // set to "false" or "0", and any other spelling refuses startup. See
+  // docs/development/EXPERIMENTAL_OPTIONS.md, `syncCidReferencesV1`.
   MEMORY_SYNC_CID_REFERENCES: z.enum(["true", "1", "false", "0"]).default(
-    "false",
+    "true",
   ).transform((v) => v === "true" || v === "1"),
   // Client retirement is disabled; reject settings that would enable it.
   MEMORY_MINIMUM_CLIENT_GENERATION: z.literal("0", {

@@ -2,7 +2,6 @@ import { setModernCellRepConfig } from "@commonfabric/data-model/cell-rep";
 import * as FS from "@std/fs";
 
 import { normalizeInviteHost } from "@commonfabric/memory/space-invites";
-import { setSyncCidReferencesConfig } from "@commonfabric/memory/v2";
 import { verifyConnectionAuthorization } from "@commonfabric/memory/v2/connection-auth";
 import * as MemoryServer from "@commonfabric/memory/v2/server";
 import { verifySessionOpenAuthorization } from "@commonfabric/memory/v2/session-open-auth";
@@ -20,10 +19,6 @@ import {
 } from "@/lib/server-execution-flag.ts";
 
 const memoryAudience = identity.did();
-
-// Delivery by reference is per deployment: this process's memory server, and
-// its own runtimes, advertise it only when the deployment turns it on.
-setSyncCidReferencesConfig(env.MEMORY_SYNC_CID_REFERENCES);
 const routerPolicy = env.MEMORY_ROUTER_CONFIG_FILE === ""
   ? undefined
   : new MemoryRouterPolicy(env.MEMORY_ROUTER_CONFIG_FILE);
@@ -120,6 +115,9 @@ export const memoryServer = new MemoryServer.Server({
   // Invitations issued here name this deployment's public origin, so the
   // HTTP routes and `space.invite` requests check codes against the same host.
   inviteHost: normalizeInviteHost(env.API_URL),
+  // Offered unless the deployment turns it off; a client takes it only when
+  // it opts in.
+  syncCidReferences: env.MEMORY_SYNC_CID_REFERENCES,
   // The posture this process publishes on `/api/meta`, read when an open asks
   // rather than now: it is published once the Runtime exists, after this
   // server is constructed, and until then it names no instances.

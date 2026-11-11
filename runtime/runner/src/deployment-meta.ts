@@ -91,6 +91,9 @@ export const SHELL_FLAG_SOURCES = {
   // a parent binds it to, so the shell has to run the naming mode of the
   // deployment whose spaces it opens.
   instanceNames: "deployment",
+  // A client's own opt-in: the deployment's half is its server's offer, so
+  // the shell takes it from its build.
+  syncCidReferences: "build",
 } as const satisfies Record<keyof ExperimentalOptions, ShellFlagSource>;
 
 /** The flags {@link SHELL_FLAG_SOURCES} gives the deployment. */
