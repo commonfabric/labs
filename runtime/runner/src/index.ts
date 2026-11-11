@@ -276,6 +276,7 @@ export {
   keepLaterConfirmation,
   knownPieceReleasedAt,
   mergeSchemaDefaults,
+  normalizePieceSourceOrigin,
   patternIdentityKey,
   type PatternSetupCommitReceipt,
   PatternSetupPostCommitError,

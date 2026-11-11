@@ -15,6 +15,7 @@ import {
   getMemoryProtocolFlags,
   type HelloOkMessage,
   MEMORY_PROTOCOL,
+  parseMemoryProtocolFlags,
   PATTERN_LIFECYCLE_MAX_BYTES,
   type ResponseMessage,
   type ServerMessage,
@@ -224,6 +225,18 @@ describe("pattern.lifecycle", () => {
 
       server.setPatternLifecycleHandler(undefined);
       expect((await greet(server)).hello.flags.patternLifecycle).toBe(false);
+    });
+
+    it("advertises that its lifecycle verbs take an origin, and parses an older server's silence as `false`", async () => {
+      const server = serverWith();
+      server.setPatternLifecycleHandler(recording().handler);
+      expect((await greet(server)).hello.flags.patternLifecycleOrigins).toBe(
+        true,
+      );
+      expect(
+        parseMemoryProtocolFlags({ patternLifecycle: true })
+          ?.patternLifecycleOrigins,
+      ).toBe(false);
     });
   });
 

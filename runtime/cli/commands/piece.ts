@@ -2685,9 +2685,12 @@ the children of system pieces, say:
 
   cf piece follow --cell <profile> system:system/profile-home/profile-home.tsx
 
-Unlike 'setsrc', which detaches, the origin is recorded with the revision.
-Against a deployment that serves piece lifecycle verbs, its serving runtime
-resolves the origin, reviews what it serves, and commits the follow.
+The origin is recorded with the revision, and the source adopted is what it
+serves now. A plain 'setsrc' detaches instead; 'setsrc --origin' records an
+origin over source you supply. Against a deployment that serves piece
+lifecycle verbs, its serving runtime resolves the origin, reviews what it
+serves, and commits the follow; there, a piece addressed at a scope
+(<id>@user, <id>@session) is refused.
 
 --expect and --expect-revision make the follow conditional on the source state
 a caller inspected ('cf piece inspect --pattern-identity --json' reports both):

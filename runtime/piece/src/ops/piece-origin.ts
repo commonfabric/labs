@@ -148,9 +148,13 @@ export function reconcilePieceSource(
   return runtime.sourceReconciler.reconcile(piece);
 }
 
+/**
+ * An origin no follow can take, or one whose source could not be read or
+ * compiled; `cause` is the failure underneath, when there is one.
+ */
 export class PieceOriginError extends Error {
-  constructor(message: string) {
-    super(message);
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
     this.name = "PieceOriginError";
   }
 }

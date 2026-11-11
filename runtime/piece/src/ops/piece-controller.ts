@@ -46,6 +46,7 @@ import {
   mergeSchemaDefaults,
   NAME,
   type NormalizedLink,
+  normalizePieceSourceOrigin,
   overlayUnreadableLinkPlaceholders,
   parseFabricRef,
   parseLinkOrThrow,
@@ -4652,11 +4653,18 @@ export class PieceController<T = unknown> {
             detail: describeFailure(error),
           });
         }
-        throw error;
+        throw originFailure(error);
       }
     }
 
-    const candidate = await compileProgram(this.#pieces, program);
+    let candidate: Pattern;
+    try {
+      candidate = await compileProgram(this.#pieces, program);
+    } catch (error) {
+      // Source the origin offers failing to compile is the origin's failure;
+      // retained source failing to is not.
+      throw origin === null ? error : originFailure(error);
+    }
     const candidateRef = this.#pieces.runtime.patternManager
       .getArtifactEntryRef(candidate);
     if (candidateRef === undefined) {
@@ -5320,6 +5328,11 @@ export class PieceController<T = unknown> {
       options.origin,
       { self: { space: this.#pieces.getSpace(), pieceId: this.id } },
     );
+    // What the piece will store, which a rooted path is normalized into.
+    const recordedOrigin = origin === null
+      ? null
+      : normalizePieceSourceOrigin(this.#pieces.runtime, this.#cell, origin)
+        .origin;
     const mutationVersion = ++this.#mutationVersion;
     let transition: PieceSourceTransition | undefined;
     let commit: PatternSetupCommitReceipt | undefined;
@@ -5481,7 +5494,7 @@ export class PieceController<T = unknown> {
           space: commit.space,
           seq: commit.seq,
           revisionId: transition.revisionId,
-          ...originFields(transition),
+          ...originFields(transition, recordedOrigin),
           refresh: { status: "failed", warning },
         };
       }
@@ -5498,7 +5511,7 @@ export class PieceController<T = unknown> {
       space: commit!.space,
       seq: commit!.seq,
       revisionId: transition!.revisionId,
-      ...originFields(transition!),
+      ...originFields(transition!, recordedOrigin),
       refresh: {
         status: options?.served === undefined ? "completed" : "deferred",
       },
@@ -6130,17 +6143,30 @@ async function preparePinnedBaseline(
 
 /**
  * Helper for `#updatePattern()`, which says what a direct edit's transition
- * did to the piece's origin: the origin it detached, which is none when the
- * piece keeps following the one it followed, and the origin it records.
+ * did to the piece's origin, given `recorded`, the origin as the piece stores
+ * it once the transition lands: the origin it detached, which is none when
+ * the piece keeps following the one it followed, and the origin it records.
  */
 function originFields(
   transition: PieceSourceTransition,
+  recorded: string | null,
 ): Pick<PatternUpdateReceipt, "detachedOrigin" | "origin"> {
   const before = transition.expected.origin;
   return {
-    detachedOrigin: before === transition.origin ? null : before,
-    ...(transition.origin === null ? {} : { origin: transition.origin }),
+    detachedOrigin: before === recorded ? null : before,
+    ...(recorded === null ? {} : { origin: recorded }),
   };
+}
+
+/**
+ * Helper for `#prepareChange()`, which reports a failure to read or compile
+ * what an origin offers as the origin's failure, in its own words.
+ */
+function originFailure(error: unknown): PieceOriginError {
+  return error instanceof PieceOriginError ? error : new PieceOriginError(
+    error instanceof Error ? error.message : String(error),
+    { cause: error },
+  );
 }
 
 /**

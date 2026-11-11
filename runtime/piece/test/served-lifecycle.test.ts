@@ -1283,6 +1283,7 @@ export default pattern(() => {
     const routes: Record<string, string> = {
       "/api/patterns/followed.tsx": RELEASED_SOURCE,
       "/api/patterns/numeric.tsx": NUMERIC_SEED_PROGRAM.files[0].contents,
+      "/api/patterns/broken.tsx": BROKEN_PROGRAM.files[0].contents,
     };
     let restoreFetch: () => void;
 
@@ -1472,7 +1473,7 @@ export default pattern(() => {
       });
     });
 
-    it("refuses an origin no piece can follow, and one whose route serves nothing", async () => {
+    it("refuses an origin no piece can follow, one whose route serves nothing, and one whose source does not compile", async () => {
       const created = await instantiate({ program: BASE_PROGRAM });
       const unusable = await refusalOf(
         prepare(created.pieceId, "https://source.test/pattern.tsx"),
@@ -1483,6 +1484,11 @@ export default pattern(() => {
       );
       expect(absent.code).toBe("origin-unreachable");
       expect(absent.message).toContain("404");
+      const broken = await refusalOf(
+        prepare(created.pieceId, "system:broken.tsx"),
+      );
+      expect(broken.code).toBe("origin-unreachable");
+      expect(broken.message).toContain("undefinedName");
       expect(await stored(created.pieceId)).toMatchObject({
         pattern: created.pattern,
         origin: undefined,

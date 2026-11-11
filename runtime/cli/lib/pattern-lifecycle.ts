@@ -25,6 +25,14 @@ export interface LifecycleClientConfig {
     verb: PatternLifecycleVerb,
     body: FabricPlainObject,
   ) => Promise<FabricPlainObject>;
+
+  /**
+   * Whether the lifecycle verbs of the deployment serving `space` take an
+   * origin, as its memory server advertises (`patternLifecycleOrigins`);
+   * `undefined` where the connection cannot ask, and a verb that carries an
+   * origin is then sent regardless.
+   */
+  takesOrigins?: (space: MemorySpace) => Promise<boolean | undefined>;
 }
 
 /** A content-addressed pattern pointer. */
@@ -56,6 +64,7 @@ const REFUSED_CODES: ReadonlySet<string> = new Set([
   "invalid-source",
   "lifecycle-unsupported",
   "origin-unreachable",
+  "origin-unsupported",
   "payload-too-large",
   "pattern-not-found",
   "piece-not-found",
@@ -153,6 +162,22 @@ async function call<T>(
 }
 
 /**
+ * Refuses, as `origin-unsupported` and before anything is sent, a verb that
+ * carries an origin to a deployment whose lifecycle verbs take none: such a
+ * server refuses `follow` unread and drops a `setsrc` origin, detaching the
+ * piece.
+ */
+async function refuseUntakenOrigin(
+  config: LifecycleClientConfig,
+  space: MemorySpace,
+  refusal: string,
+): Promise<void> {
+  if (await config.takesOrigins?.(space) === false) {
+    throw new ServedLifecycleError("origin-unsupported", refusal);
+  }
+}
+
+/**
  * Create a piece in `space` from `program`, set up and not started here,
  * with its name in the setup transaction and registration through the
  * default pattern action after setup commits. Missing roots or handlers retain
@@ -233,6 +258,14 @@ export async function setPieceSourceOnServer(
   detachedOrigin: string | null;
   origin?: string;
 }> {
+  if (input.origin !== undefined) {
+    await refuseUntakenOrigin(
+      config,
+      input.space,
+      "This deployment does not record an origin with `setsrc` yet, so the " +
+        "update was not sent.",
+    );
+  }
   return await call(config, "setsrc", {
     space: input.space,
     piece: input.piece,
@@ -278,6 +311,12 @@ export async function followPieceOnServer(
   /** The incompatibility the override accepted, when the review found one. */
   acceptedIncompatibility?: string;
 }> {
+  await refuseUntakenOrigin(
+    config,
+    input.space,
+    "This deployment serves piece lifecycle verbs, and `follow` is not " +
+      "served yet: its memory server does not advertise origins.",
+  );
   return await call(config, "follow", {
     space: input.space,
     piece: input.piece,

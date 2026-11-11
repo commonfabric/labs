@@ -198,6 +198,29 @@ describe("cf piece follow", () => {
         });
       });
 
+      it("asks the memory server whether it takes origins, and sends nothing to one that does not", async () => {
+        const sent: unknown[] = [];
+        const older = {
+          ...served,
+          runtime: {
+            ...served.runtime,
+            storageManager: {
+              serverFlags: () => Promise.resolve({ patternLifecycle: true }),
+              runPatternLifecycle: (...args: unknown[]) => {
+                sent.push(args);
+                return Promise.resolve({});
+              },
+            },
+          },
+        };
+        await expect(followPieceSource(config, "system:system/x.tsx", {}, {
+          // deno-lint-ignore no-explicit-any
+          loadPieces: () => Promise.resolve(older as any),
+          resolvePieceAddress: () => Promise.resolve("of:profile"),
+        })).rejects.toThrow("`follow` is not served yet");
+        expect(sent).toEqual([]);
+      });
+
       it("refuses a piece addressed at a scope, sending nothing", async () => {
         let sent = false;
         await expect(followServed(

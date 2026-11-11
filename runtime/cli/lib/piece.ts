@@ -1795,6 +1795,12 @@ function lifecycleClient(pieces: PiecesController): LifecycleClientConfig {
       }
       return storageManager.runPatternLifecycle(space, verb, body);
     },
+    takesOrigins: async (space) => {
+      const flags = await storageManager?.serverFlags?.(space);
+      return flags === undefined
+        ? undefined
+        : flags?.patternLifecycleOrigins === true;
+    },
   };
 }
 
@@ -2307,9 +2313,11 @@ const FOLLOW_NOT_SERVED =
  *
  * This is how a piece created detached — a profile made before the runtime
  * claimed origins for children of system pieces, say — is put on the
- * lifecycle a release reaches. Unlike `setsrc`, which detaches, the origin
- * is recorded with the revision. The transition carries the same writer
- * delegation a `setsrc` does, since it is the owner's explicit act.
+ * lifecycle a release reaches. The origin is recorded with the revision, and
+ * the source adopted is what the origin serves now; a `setsrc` that names an
+ * origin records it over source the caller supplies instead, and one that
+ * names none detaches. The transition carries the same writer delegation a
+ * `setsrc` does, since it is the owner's explicit act.
  *
  * Against a deployment that serves piece lifecycle verbs, the serving runtime
  * resolves the origin, reviews the candidate and commits the transition
@@ -2461,9 +2469,10 @@ async function followOnServer(
 
 /**
  * Replaces the piece's source and returns its setup transaction receipt.
- * Against a serving deployment the update is the serving runtime's to
- * commit; a piece addressed at a scope keeps the client-side path, since
- * the served verb takes the piece's id alone.
+ * The update detaches the piece unless `options.origin` names the origin it
+ * follows from then on. Against a serving deployment the update is the
+ * serving runtime's to commit; a piece addressed at a scope keeps the
+ * client-side path, since the served verb takes the piece's id alone.
  */
 export async function setPiecePattern(
   config: PieceConfig,

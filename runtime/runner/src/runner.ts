@@ -17689,7 +17689,13 @@ export function samePieceSourceSnapshot(
     left.revisionId === right.revisionId;
 }
 
-function normalizePieceSourceOrigin(
+/**
+ * The origin as a piece stores it, which a source transition writes: a rooted
+ * path becomes the absolute URL it names on the host serving the piece's
+ * space, keeping the string as entered as `recordedOrigin`; anything else is
+ * stored as it is.
+ */
+export function normalizePieceSourceOrigin(
   runtime: Runtime,
   resultCell: Cell<unknown>,
   origin: string | null,

@@ -1,6 +1,7 @@
 // The pattern-lifecycle verbs as the serving side runs them
 // (docs/features/server-pattern-lifecycle.md): compile a program into a
-// space, create a piece from a pattern, and replace a piece's source. Each
+// space, create a piece from a pattern, replace a piece's source, and point a
+// piece at an origin and adopt what it serves. Each
 // runs on a space's serving runtime inside a wave cycle. A write the first
 // two make seals into that cycle's wave and reaches the store as one of the
 // serving loop's own commits, which rules out the client-side shape of the
@@ -13,7 +14,10 @@
 // wave has committed. A source update carries module-update authority the
 // runner publishes only from a transaction that commits to storage itself,
 // so its setup transaction commits directly, outside the wave, and its
-// receipt is the store's verdict.
+// receipt is the store's verdict. A follow is such an update over two
+// cycles: the first resolves and compiles the origin's candidate, whose
+// closure seals into that cycle's wave, and reviews it; the second, once the
+// closure is durable, makes the reviewed change as a direct commit.
 
 import type { JSONSchema } from "@commonfabric/api";
 import {
@@ -90,8 +94,9 @@ export type ServedLifecycleRefusalCode =
   /** The piece is not on the pattern the update was proved against. */
   | "source-moved"
   /**
-   * The origin a follow names is not one a piece can follow, or the source
-   * it names could not be read or compiled.
+   * The origin a follow or a source update names is not one a piece can
+   * follow, or, for a follow, the source it names could not be read or
+   * compiled.
    */
   | "origin-unreachable";
 
@@ -1144,22 +1149,38 @@ function followPins(request: ServedFollowRequest): {
 
 /**
  * Helper for `servedPrepareFollow()`, which names the refusal a failed
- * preparation is: the piece moved off a pin, the candidate cannot run over
- * the piece's state, the piece's stored argument does not satisfy the
- * candidate, or — anything else — the origin offered nothing to adopt.
+ * preparation is — the origin cannot be followed or its source could not be
+ * read or compiled, the piece moved off a pin, the candidate cannot run over
+ * the piece's state, or the piece's stored argument does not satisfy the
+ * candidate — and hands back any other failure as it is, a failure of the
+ * serving side.
  */
-function prepareFollowRefusal(error: unknown): ServedLifecycleRefusal {
-  if (isStoredArgumentSchemaRefusal(error)) {
-    return new ServedLifecycleRefusal("setup-failed", describeFailure(error), {
+function prepareFollowRefusal(error: unknown): unknown {
+  const message = describeFailure(error);
+  if (error instanceof PieceOriginError) {
+    return new ServedLifecycleRefusal("origin-unreachable", message, {
       cause: error,
     });
   }
-  const refusal = setSourceRefusal(error);
-  return refusal.code === "setup-failed"
-    ? new ServedLifecycleRefusal("origin-unreachable", refusal.message, {
+  if (isStoredArgumentSchemaRefusal(error)) {
+    return new ServedLifecycleRefusal("setup-failed", message, {
       cause: error,
-    })
-    : refusal;
+    });
+  }
+  if (
+    error instanceof PieceSourceChangedError ||
+    message.includes(PIECE_SOURCE_MOVED)
+  ) {
+    return new ServedLifecycleRefusal("source-moved", message, {
+      cause: error,
+    });
+  }
+  if (isPieceSourceCompatibilityRefusal(error)) {
+    return new ServedLifecycleRefusal("incompatible", message, {
+      cause: error,
+    });
+  }
+  return error;
 }
 
 /**

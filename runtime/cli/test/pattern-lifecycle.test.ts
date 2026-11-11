@@ -200,6 +200,55 @@ describe("pattern-lifecycle client", () => {
       }]);
     });
 
+    it("refuses before sending to a deployment whose verbs take no origin, and sends where they do or it cannot tell", async () => {
+      const { cfg, sent } = sessionConfig(() =>
+        Promise.resolve({
+          pieceId: "p1",
+          pattern: { identity: "i", symbol: "s" },
+          origin: "system:x.tsx",
+          revisionId: "r2",
+          seq: 3,
+          detachedOrigin: null,
+        })
+      );
+      let takes: boolean | undefined = false;
+      const config = { ...cfg, takesOrigins: () => Promise.resolve(takes) };
+      const follow = () =>
+        followPieceOnServer(config, {
+          space: SPACE_DID,
+          piece: "p1",
+          origin: "system:x.tsx",
+        });
+      const setsrc = (origin?: string) =>
+        setPieceSourceOnServer(config, {
+          space: SPACE_DID,
+          piece: "p1",
+          program: PROGRAM,
+          ...(origin === undefined ? {} : { origin }),
+        });
+
+      for (const refused of [follow(), setsrc("system:x.tsx")]) {
+        const failure = await refused.then(() => undefined, (error) => error);
+        expect(failure).toBeInstanceOf(ServedLifecycleError);
+        expect(failure.code).toBe("origin-unsupported");
+        expect(failure.refused).toBe(true);
+      }
+      expect(sent).toEqual([]);
+      // An update naming no origin does not depend on the capability.
+      await setsrc();
+      expect(sent.map(({ verb }) => verb)).toEqual(["setsrc"]);
+
+      takes = true;
+      await follow();
+      takes = undefined;
+      await setsrc("system:x.tsx");
+      expect(sent.map(({ verb }) => verb)).toEqual([
+        "setsrc",
+        "follow",
+        "setsrc",
+      ]);
+    });
+
     it("raises the server's refusal with its code, which settles the verb", async () => {
       const { cfg } = sessionConfig(() =>
         Promise.reject(refusal("origin-unreachable", "Failed to fetch: 404"))

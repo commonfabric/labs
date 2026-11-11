@@ -565,6 +565,18 @@ describe("piece source lifecycle", () => {
     expect(detached.detachedOrigin).toBe("system:other.tsx");
     expect(detached.origin).toBeUndefined();
     expect(getPatternSource(piece.getCell())).toBeUndefined();
+
+    // A rooted path is stored as the URL it names, and the receipt says so:
+    // naming it again keeps the origin rather than detaching it.
+    const rooted = await piece.setPattern(versionProgram("v6"), {
+      origin: "/api/patterns/entered.tsx",
+    });
+    expect(rooted.origin).toBe("http://toolshed.test/api/patterns/entered.tsx");
+    expect(getPatternSource(piece.getCell())).toBe(rooted.origin);
+    const rootedAgain = await piece.setPattern(versionProgram("v7"), {
+      origin: "/api/patterns/entered.tsx",
+    });
+    expect(rootedAgain.detachedOrigin).toBeNull();
   });
 
   it("refuses a direct edit naming an origin no follow can take, writing nothing", async () => {

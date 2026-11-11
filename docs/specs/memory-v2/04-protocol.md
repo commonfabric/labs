@@ -116,6 +116,7 @@ If the server accepts the protocol, it returns:
     "admissionNotice": true,
     "sessionReportV1": true,
     "patternLifecycle": true,
+    "patternLifecycleOrigins": true,
     "servedRequests": true,
     "spaceInvites": true,
     "syncCrossingsV1": true,
@@ -400,6 +401,13 @@ while it runs the serving loop. It defaults to `false` when absent: a client
 then sends no `pattern.lifecycle` request, and sends the verb some other way
 or not at all. Only the server advertises it, and a client's `hello` leaves it
 out.
+
+`patternLifecycleOrigins` advertises that the lifecycle verbs take an origin:
+the `follow` verb, and `origin` on `setsrc` (section 4.3.10). It is
+build-inherent. It defaults to `false` when absent, from an older server that
+refuses `follow` unread and drops a `setsrc` origin, detaching the piece; a
+client then sends neither. Only the server advertises it, and a client's
+`hello` leaves it out.
 
 `servedRequests` advertises that the server takes `served` requests (section
 4.3.12), the crossings another process of its deployment sends it as the owner
@@ -791,6 +799,7 @@ interface HelloMessage {
     elidedVerdicts?: boolean;
     sessionReportV1?: boolean;
     patternLifecycle?: boolean;
+    patternLifecycleOrigins?: boolean;
     servedRequests?: boolean;
     spaceInvites?: boolean;
     spaceKind?: boolean;
