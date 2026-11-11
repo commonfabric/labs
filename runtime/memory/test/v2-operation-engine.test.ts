@@ -3010,7 +3010,7 @@ describe("v2-operation-engine", () => {
         }
       });
 
-      it("merges the label of a moved anchor's writer into one entry, keeping its confidentiality and dropping its integrity", async () => {
+      it("joins the move's label into one entry with the writer's, its confidentiality the union and its integrity the meet", async () => {
         const { engine, path } = await openTestEngine();
         try {
           seed(

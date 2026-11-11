@@ -236,14 +236,16 @@ in the field's scope instance and in each broader instance of the same
 document. The label-metadata templates are left out: they are keyed against
 the stored document rather than its value, so none labels the field, not
 even a field that is the whole value, whose path is a prefix of every path,
-or one named `cfc`. Memory joins the confidentiality of the entries it read
-into the label of the moved anchor's offset, the one derived entry of the
-value class at the anchor's path, and adds that entry where there is none.
-The label keeps the clauses it held, since the new offset is computed from
-the old one, and loses its integrity, since Memory rather than the anchor's
-writer produced the offset. A derived entry of no class at the path, which a
-read of the offset also consumes, loses its integrity too and keeps its
-clauses, and every other label at the path stays as it was. A later reader
+or one named `cfc`. The move's own label is the confidentiality of the
+entries it read, with no integrity, since Memory rather than the anchor's
+writer produced the offset. Memory joins it into the label of the moved
+anchor's offset, the one derived entry of the value class at the anchor's
+path, or makes it that entry where there is none. The join keeps every
+clause either label held, since the new offset is computed from the old one,
+and meets their integrity, which with the move's empty integrity leaves none.
+A derived entry of no class at the path is consumed by a read of the offset
+too, so its integrity meets the move's as well, and its clauses stay. Every
+other label at the path stays as it was. A later reader
 of that offset is tainted as a reader of the field was, whoever wrote the
 anchor. An anchor the edit left where it was gets no label from it, and an
 anchor neither written nor moved keeps the labels it had.

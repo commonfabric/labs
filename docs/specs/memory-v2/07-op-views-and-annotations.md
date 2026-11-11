@@ -410,14 +410,17 @@ Within the apply steps of §7.7.1:
    these: not for a field that is the whole value, whose path is a prefix of
    every path, and not for a field named `cfc`. A label an entry names by
    document is read from that document. Integrity is not taken. Where that
-   confidentiality is not empty, the engine joins it, for each moved anchor,
-   into the entry at the anchor's path of origin `derived` and class
-   `value`, and adds that entry where the envelope holds none, so that the
-   path holds one such entry. The entry keeps the confidentiality it held,
-   since the moved offset is computed from the old one, and holds no
-   integrity, since the engine rather than the entry's writer produced the
-   offset. A `derived` entry of no class at that path, which a read of the
-   offset also consumes, loses its integrity and keeps its confidentiality.
+   confidentiality is not empty, the move's label is that confidentiality
+   with no integrity, since the engine rather than the anchor's writer
+   produced the offset. For each moved anchor, the engine joins it into the
+   entry at the anchor's path of origin `derived` and class `value`, or makes
+   it that entry where the envelope holds none, so that the path holds one
+   such entry. The join is the union of the two labels' confidentiality,
+   since the moved offset is computed from the old one, and the meet of
+   their integrity, which with the move's empty integrity is empty. A
+   `derived` entry of no class at that path is consumed by a read of the
+   offset too, so its integrity meets the move's as well, and its
+   confidentiality stays.
    A label one of these entries names by document is read from that
    document. Where the envelope already holds every label this would write, it
    is not written. An anchors document with no envelope gets one, naming the

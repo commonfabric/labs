@@ -230,8 +230,8 @@ const resolvedLabel = (
 
 // SPEC-PENDING https://github.com/commonfabric/specs/pull/93 The label of a
 // moved anchor is a store-performed derivation, which the pull request adds
-// a section to rule on: the field's confidentiality joined into the anchor's
-// derived value entry, which keeps its clauses and holds no integrity. It
+// a section to rule on: the move's label, the field's confidentiality with no
+// integrity, joined into the anchor's derived value entry. It
 // changes what is stored without a dial, an exception to the pending-marker
 // procedure that Robin McCollum accepted in the review of labs#9667: anchors
 // are already persisted, and the label narrows what a reader of them learns.
@@ -245,15 +245,16 @@ const resolvedLabel = (
  *
  * Each moved anchor's offset is labeled by one derived entry of the value
  * class at the anchor's own path, which is what ties the label to the offset
- * the engine computed. Where the envelope holds such an entry, the engine
- * joins `confidentiality` into it: the new offset is computed from the old
- * one, so it keeps the clauses the old one carried. The entry loses its
- * integrity, since the engine, not the entry's writer, produced the offset it
- * now labels; a derived entry of no class at the path, which a read of the
- * offset also consumes, loses its integrity too and keeps its
- * confidentiality. Where the envelope holds none, the engine adds one. Every
- * other entry, a declared one at the anchor's path among them, stays as its
- * writer left it.
+ * the engine computed. The move's own label is `confidentiality` with no
+ * integrity, since no principal produced the offset, and the engine joins it
+ * into that entry: the confidentiality is the union of the two clause lists,
+ * as the new offset is computed from the old one, and the integrity is their
+ * meet, which with the move's empty integrity is empty. Where the envelope
+ * holds no such entry, the move's label is the entry. A derived entry of no
+ * class at the path is consumed by a read of the offset as well, so its
+ * integrity meets the move's too; its confidentiality, which reads of the
+ * other classes consume, stays. Every other entry, a declared one at the
+ * anchor's path among them, stays as its writer left it.
  *
  * A writer's envelope pass drops a derived value-class entry at a path the
  * writer replaces, and a writer of the document writes the anchors that
