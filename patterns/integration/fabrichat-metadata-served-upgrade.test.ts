@@ -12,8 +12,9 @@ import { describe, it } from "@std/testing/bdd";
 import type { FabricValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import { isPlainObject } from "@commonfabric/js-values/types";
-import type { MemorySpace } from "@commonfabric/memory/interface";
-import { read } from "@commonfabric/memory/v2/engine";
+import { aclDocId } from "@commonfabric/memory/acl";
+import type { MemorySpace, URI } from "@commonfabric/memory/interface";
+import { read, readState } from "@commonfabric/memory/v2/engine";
 import {
   adoptProcessInstanceId,
   processInstanceId,
@@ -23,6 +24,7 @@ import { idStringForEntityAddress, parseLink } from "@commonfabric/runner";
 import { ExecutorHost } from "@commonfabric/runner/executor/host";
 import { servingRuntimeFactory } from "@commonfabric/runner/executor/serving-runtime";
 import { PatternsRoute } from "@commonfabric/runner/patterns-route.deno";
+import { StorageManager } from "@commonfabric/runner/storage/cache";
 import { namesInstancesByDefault } from "@commonfabric/runner/storage/cache.deno";
 import {
   claimPatternEnvironment,
@@ -136,7 +138,7 @@ describe("FabriChat metadata served upgrade", () => {
         const ownerIdentity = await Identity.fromPassphrase(
           `served metadata owner ${update}`,
         );
-        const startServer = () => {
+        const startServer = async (seedOwner?: Identity) => {
           // The predecessor is fully closed before simulating a new process.
           adoptProcessInstanceId(crypto.randomUUID());
           const server = StandaloneMemoryServer.start({
@@ -145,6 +147,35 @@ describe("FabriChat metadata served upgrade", () => {
             namesInstances: namesInstancesByDefault,
             serve: (request) => route.serve(request),
           });
+          if (seedOwner !== undefined) {
+            // Finish Home genesis before serving sessions bind to its owner.
+            try {
+              const bootstrap = StorageManager.open({
+                as: seedOwner,
+                memoryHost: server.url,
+              });
+              try {
+                const { error } = await bootstrap.open(seedOwner.did()).sync(
+                  aclDocId(seedOwner.did()) as URI,
+                );
+                if (error) throw error;
+              } finally {
+                await bootstrap.close();
+              }
+              const engine = await server.server.engineForSpace(
+                seedOwner.did(),
+              );
+              expect(
+                readState(engine, { id: aclDocId(seedOwner.did()) })?.document
+                  ?.value,
+              ).toEqual({ [seedOwner.did()]: "OWNER" });
+              expect(server.server.resolveSpaceOwner(engine, seedOwner.did()))
+                .toBe(seedOwner.did());
+            } catch (error) {
+              await server.close();
+              throw error;
+            }
+          }
           const release = claimPatternEnvironment(server.url);
           const host = new ExecutorHost({
             server: server.server,
@@ -169,7 +200,7 @@ describe("FabriChat metadata served upgrade", () => {
             },
           };
         };
-        let served = startServer();
+        let served = await startServer(ownerIdentity);
         cleanup.defer(() => served.close());
         const programPath = join(
           patterns,
@@ -253,7 +284,7 @@ describe("FabriChat metadata served upgrade", () => {
         await harness.dispose();
         await served.close();
         if (update) route = new PatternsRoute(patterns);
-        served = startServer();
+        served = await startServer();
         harness = await MultiRuntimeHarness.create({
           apiUrl: served.server.url,
           programPath,

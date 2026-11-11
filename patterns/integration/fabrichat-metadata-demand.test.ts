@@ -9,6 +9,8 @@ import { getLogger, getLoggerCountsBreakdown } from "@commonfabric/logger";
 import { type FabricValue } from "@commonfabric/data-model";
 import { jsonFromFabricValue } from "@commonfabric/data-model/codecs";
 import { Identity } from "@commonfabric/identity";
+import { aclDocId } from "@commonfabric/memory/acl";
+import type { URI } from "@commonfabric/memory/interface";
 import { isPlainObject } from "@commonfabric/js-values/types";
 import {
   adoptProcessInstanceId,
@@ -25,6 +27,7 @@ import { ExecutorHost } from "@commonfabric/runner/executor/host";
 import { servingRuntimeFactory } from "@commonfabric/runner/executor/serving-runtime";
 import { PatternsRoute } from "@commonfabric/runner/patterns-route.deno";
 import { namesInstancesByDefault } from "@commonfabric/runner/storage/cache.deno";
+import { StorageManager } from "@commonfabric/runner/storage/cache";
 import {
   claimPatternEnvironment,
   MultiRuntimeHarness,
@@ -182,7 +185,12 @@ async function sourceTree(
   return vintage;
 }
 
-function startServing(store: string, route: PatternsRoute, service: Identity) {
+async function startServing(
+  store: string,
+  route: PatternsRoute,
+  service: Identity,
+  owner?: Identity,
+) {
   // All predecessor hosts are closed before simulating the next process.
   adoptProcessInstanceId(crypto.randomUUID());
   const server = StandaloneMemoryServer.start({
@@ -191,6 +199,33 @@ function startServing(store: string, route: PatternsRoute, service: Identity) {
     namesInstances: namesInstancesByDefault,
     serve: (request) => route.serve(request),
   });
+  if (owner !== undefined) {
+    // Home genesis replaces fresh-space READ with the owner's private ACL.
+    // Finish it before the host can mount a temporary, unbound serving session.
+    try {
+      const bootstrap = StorageManager.open({
+        as: owner,
+        memoryHost: server.url,
+      });
+      try {
+        const { error } = await bootstrap.open(owner.did()).sync(
+          aclDocId(owner.did()) as URI,
+        );
+        if (error) throw error;
+      } finally {
+        await bootstrap.close();
+      }
+      const engine = await server.server.engineForSpace(owner.did());
+      expect(readState(engine, { id: aclDocId(owner.did()) })?.document?.value)
+        .toEqual({ [owner.did()]: "OWNER" });
+      expect(server.server.resolveSpaceOwner(engine, owner.did())).toBe(
+        owner.did(),
+      );
+    } catch (error) {
+      await server.close();
+      throw error;
+    }
+  }
   const release = claimPatternEnvironment(server.url);
   const loaded = new Map<string, Set<string>>();
   const runtimes = new Map<string, Runtime>();
@@ -275,7 +310,7 @@ async function compare(
   const service = await Identity.fromPassphrase("chat demand service");
   const identity = await Identity.fromPassphrase("chat demand owner");
   const seedStore = join(temporary, "seed");
-  let serving = startServing(seedStore, baselineRoute, service);
+  let serving = await startServing(seedStore, baselineRoute, service, identity);
   cleanup.defer(() => serving.close());
   let harness = await MultiRuntimeHarness.create({
     apiUrl: serving.server.url,
@@ -378,7 +413,7 @@ async function compare(
     // precisely the same SQLite files, identities, records and request history.
     await copy(seedStore, store);
     const route = candidate ? candidateRoute : baselineRoute;
-    serving = startServing(store, route, service);
+    serving = await startServing(store, route, service);
     harness = await MultiRuntimeHarness.create({
       apiUrl: serving.server.url,
       programPath: fixture,
@@ -709,7 +744,7 @@ async function compare(
       );
       await harness.dispose();
       await serving.close();
-      serving = startServing(store, route, service);
+      serving = await startServing(store, route, service);
       harness = await MultiRuntimeHarness.create({
         apiUrl: serving.server.url,
         programPath: fixture,
