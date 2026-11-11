@@ -2,6 +2,7 @@ import {
   type Cell,
   Cfc,
   computed,
+  type Default,
   equals,
   type FabricBytes,
   handler,
@@ -99,7 +100,7 @@ export type PictureChoice = { picture?: FabricBytes };
 /** The picture the profile takes: the user's choice, else the suggestion's. */
 function pictureToApply(
   choice: PictureChoice | undefined,
-  suggestion: ProfileSuggestion | undefined,
+  suggestion: ProfileSuggestion | null | undefined,
 ): FabricBytes | undefined {
   const picture = choice === undefined ? suggestion?.picture : choice.picture;
   // An empty picture is none: the seed step and `setPicture` take only bytes.
@@ -140,7 +141,7 @@ export const seedProfileName = handler<
   SeedProfileNameEvent,
   {
     privateInbox?: ProfileInbox;
-    profileSuggestion?: Writable<ProfileSuggestion | undefined>;
+    profileSuggestion?: Writable<ProfileSuggestion | null | undefined>;
     pictureChoice?: Writable<PictureChoice | undefined>;
   }
 >((event, { privateInbox, profileSuggestion, pictureChoice }) => {
@@ -714,7 +715,11 @@ export type ProfileCreateInput = {
    * to replace, and the wish shows this surface only while the user has no
    * profile.
    */
-  profileSuggestion?: Writable<ProfileSuggestion | undefined>;
+  // Defaults to null: for a user no host made a suggestion for, the link the
+  // wish passes reaches a document nobody wrote, and a server-side read of
+  // that would wait for it forever (speculation.md), stalling every computed
+  // here that reads the suggestion.
+  profileSuggestion?: Writable<ProfileSuggestion | null | Default<null>>;
 };
 
 export type ProfileCreateOutput = {
@@ -737,8 +742,11 @@ export type ProfileCreateOutput = {
 
 export default pattern<ProfileCreateInput, ProfileCreateOutput>(
   ({ profiles, inputId, defaultName, privateInbox, profileSuggestion }) => {
-    const pictureChoice = new Writable<PictureChoice | undefined>(undefined).for(
-      "pictureChoice",
+    // The picture decision in progress. Per session: it belongs to the view
+    // making it, as the profile picker's pending Remove does, so it neither
+    // reaches another device nor waits for the next create.
+    const pictureChoice = Writable.perSession.of<PictureChoice | undefined>(
+      undefined,
     );
     const seedName = seedProfileName({
       privateInbox,
