@@ -1,6 +1,7 @@
 import {
-  getLoggerCountsBreakdown,
+  getLoggerCountsByKey,
   getTimingStatsBreakdown,
+  loggerCountsBreakdownOf,
 } from "@commonfabric/logger";
 
 import type { ModuleCompileWorker } from "../harness/module-compile-worker.ts";
@@ -8,20 +9,21 @@ import type { ServingLoopDiagnostics } from "./serving-port-protocol.ts";
 
 /**
  * The serving loop's diagnostics, as the realm that runs the loop reports
- * them: this realm's logger counts and timing statistics, and the timing
- * statistics of `moduleCompiler`, the compile worker its serving runtimes
- * compile in, which hold the compiler's own phase timings under the worker's
- * prefixed logger names. The compile worker's logger counts are not included.
- *
- * @throws Error, as a rejection, when `moduleCompiler` is closed or its worker
- * dies before it answers.
+ * them: this realm's logger counts and timing statistics, and those of
+ * `moduleCompiler`, the compile worker its serving runtimes compile in, as of
+ * that worker's latest compile and under its prefixed logger names. The
+ * worker's timing statistics hold the compiler's own phase timings. Reading
+ * them never waits on the worker.
  */
-export async function servingLoopDiagnostics(
+export function servingLoopDiagnostics(
   moduleCompiler?: ModuleCompileWorker,
-): Promise<ServingLoopDiagnostics> {
-  const compileTimings = await moduleCompiler?.timingStats();
+): ServingLoopDiagnostics {
+  const worker = moduleCompiler?.diagnostics();
   return {
-    loggerCounts: getLoggerCountsBreakdown(),
-    timingStats: { ...getTimingStatsBreakdown(), ...compileTimings },
+    loggerCounts: loggerCountsBreakdownOf({
+      ...getLoggerCountsByKey(),
+      ...worker?.loggerCounts,
+    }),
+    timingStats: { ...getTimingStatsBreakdown(), ...worker?.timingStats },
   };
 }

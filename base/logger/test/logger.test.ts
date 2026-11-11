@@ -7,12 +7,14 @@ import {
   getGlobalLogFloor,
   getLogger,
   getLoggerCountsBreakdown,
+  getLoggerCountsByKey,
   getLoggerErrorMessagesBreakdown,
   getTimingMeasuresState,
   getTimingStatsBreakdown,
   getTotalLoggerCounts,
   log,
   LOG_COLORS,
+  loggerCountsBreakdownOf,
   parseTimingMeasureCap,
   resetAllLoggerCounts,
   resetAllTimingStats,
@@ -1250,6 +1252,47 @@ describe("logger", () => {
 
       resetAllLoggerCounts();
       expect(getTotalLoggerCounts()).toBe(0);
+    });
+  });
+
+  describe("loggerCountsBreakdownOf()", () => {
+    const counts = (debug: number, info: number) => ({
+      debug,
+      info,
+      warn: 0,
+      error: 0,
+      total: debug + info,
+    });
+
+    it("returns each logger's counts with its total, and the total across them", () => {
+      const breakdown = loggerCountsBreakdownOf({
+        a: { one: counts(1, 2), two: counts(0, 4) },
+        b: { one: counts(5, 0) },
+      });
+
+      expect(breakdown.a!.one).toEqual(counts(1, 2));
+      expect(breakdown.a!.total).toBe(7);
+      expect(breakdown.b!.total).toBe(5);
+      expect(breakdown.total).toBe(12);
+    });
+
+    it("skips a message key named `total`, which would overwrite the logger's", () => {
+      const breakdown = loggerCountsBreakdownOf({
+        a: { total: counts(9, 9), one: counts(1, 0) },
+      });
+
+      expect(breakdown.a!.total).toBe(1);
+      expect(breakdown.total).toBe(1);
+    });
+
+    it("returns what `getLoggerCountsBreakdown()` returns, given `getLoggerCountsByKey()`", () => {
+      captureConsole("log", () => {
+        getLogger("counts-by-key-test").info("test-key", "test");
+      });
+
+      expect(loggerCountsBreakdownOf(getLoggerCountsByKey())).toEqual(
+        getLoggerCountsBreakdown(),
+      );
     });
   });
 

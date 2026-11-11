@@ -80,7 +80,7 @@ export const servingPlaneEndpoint = (port: PortLike): ServingPlaneEndpoint =>
 export type ServingPlaneHost = {
   stats: () => ServingLoopStats;
   eventStats: () => ServingLoopStats["events"];
-  diagnostics: () => Promise<ServingLoopDiagnostics>;
+  diagnostics: () => ServingLoopDiagnostics;
   collectedMemory: () => CollectedMemory;
   runLifecycleVerb: (
     space: MemorySpace,

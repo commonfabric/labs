@@ -1,13 +1,18 @@
 /**
  * The realm side of a compile worker: `ModuleCompileWorker`, which runs a
  * runtime's compiles in a Worker of this process (`compile-worker.ts`), and
- * the prefix it puts on the worker realm's logger names when it reports their
- * timing statistics.
+ * the prefix it puts on the worker realm's logger names when it reports
+ * them.
  */
 
 import { debugStr } from "@commonfabric/data-model";
 import type { CompiledTypeScriptModule } from "@commonfabric/js-compiler";
-import type { TimingStatsBreakdown } from "@commonfabric/logger";
+import type {
+  LogCounts,
+  SlowTiming,
+  TimingStats,
+  TimingStatsBreakdown,
+} from "@commonfabric/logger";
 
 import { markPlaceCompileFailure } from "./compile-failure.ts";
 import {
@@ -16,6 +21,7 @@ import {
   decodeCompileFailure,
   decodeCompileWorkerAnswer,
   decodeModules,
+  type WorkerDiagnostics,
 } from "./compile-worker-protocol.ts";
 import type { ModuleCompiler, ModuleCompileRequest } from "./module-compile.ts";
 
@@ -31,15 +37,20 @@ import type { ModuleCompiler, ModuleCompileRequest } from "./module-compile.ts";
  * fresh one. {@link ModuleCompileWorker.close} ends the worker and fails what
  * it held the same way.
  *
- * The compiler's own phase timings accumulate in the worker's realm, so
- * {@link ModuleCompileWorker.timingStats} reads them from there for the
- * realm that reports on its loggers.
+ * The compiler's own phase timings accumulate in the worker's realm. Each
+ * answer carries a snapshot of that realm's loggers, and
+ * {@link ModuleCompileWorker.diagnostics} returns the latest one, so a realm
+ * reporting on its loggers can include them without waiting on the worker.
  */
 export class ModuleCompileWorker implements ModuleCompiler {
   readonly #workerModule: URL;
   #generation: WorkerGeneration | undefined;
   #nextId = 0;
   #closed = false;
+  #diagnostics: CompileWorkerDiagnostics = {
+    timingStats: {},
+    loggerCounts: {},
+  };
 
   /**
    * Constructs an instance whose worker runs `workerModule`, by default this
@@ -78,38 +89,27 @@ export class ModuleCompileWorker implements ModuleCompiler {
     const { promise, resolve, reject } = Promise.withResolvers<
       Map<string, CompiledTypeScriptModule>
     >();
-    generation.pending.set(id, { kind: "compile", request, resolve, reject });
-    this.#send(generation, { kind: "compile", id, request });
+    generation.pending.set(id, { request, resolve, reject });
+    const message: CompileWorkerRequest = { id, request };
+    if (generation.ready) {
+      this.#post(generation, message);
+    } else {
+      generation.queued.push(message);
+    }
     return promise;
   }
 
   /**
-   * The worker realm's timing statistics, each logger's name prefixed with
+   * The worker realm's loggers as they stood after its latest answered
+   * compile, each logger's name prefixed with
    * {@link COMPILE_WORKER_LOGGER_PREFIX} so they can sit beside this realm's
-   * own. Before the first compile no worker runs, and there are none.
-   *
-   * @throws Error, as a rejection, when this instance is closed or the worker
-   * dies before it answers.
+   * own, and each timestamp moved onto this realm's `performance.now()`
+   * clock. Before the first answer there are none; after a worker dies they
+   * stay as they were until a fresh worker answers, whose counts start again
+   * from zero.
    */
-  timingStats(): Promise<TimingStatsBreakdown> {
-    if (this.#closed) {
-      return Promise.reject(new Error("The compile worker is closed"));
-    }
-    const generation = this.#generation;
-    if (generation === undefined) return Promise.resolve({});
-    const id = this.#nextId++;
-    const { promise, resolve, reject } = Promise.withResolvers<
-      TimingStatsBreakdown
-    >();
-    generation.pending.set(id, { kind: "diagnostics", resolve, reject });
-    this.#send(generation, { kind: "diagnostics", id });
-    return promise.then((stats) =>
-      Object.fromEntries(
-        Object.entries(stats).map((
-          [name, byKey],
-        ) => [`${COMPILE_WORKER_LOGGER_PREFIX}${name}`, byKey]),
-      )
-    );
+  diagnostics(): CompileWorkerDiagnostics {
+    return this.#diagnostics;
   }
 
   /** Ends the worker, failing every compile it still held. */
@@ -184,21 +184,7 @@ export class ModuleCompileWorker implements ModuleCompiler {
     }
     // Decoded before the request leaves `pending`, so a decode failure still
     // reaches it through `#end()`.
-    if (answer.kind === "diagnostics") {
-      if (waiting.kind !== "diagnostics") {
-        throw new Error(
-          `The compile worker answered compile ${answer.id} with diagnostics`,
-        );
-      }
-      generation.pending.delete(answer.id);
-      waiting.resolve(answer.timingStats);
-      return;
-    }
-    if (waiting.kind !== "compile") {
-      throw new Error(
-        `The compile worker answered request ${answer.id} for diagnostics with a compile`,
-      );
-    }
+    this.#diagnostics = fromWorkerRealm(answer.diagnostics);
     if (answer.kind === "compiled") {
       const modules = decodeModules(answer.modules);
       generation.pending.delete(answer.id);
@@ -211,19 +197,7 @@ export class ModuleCompileWorker implements ModuleCompiler {
   }
 
   /**
-   * Helper for `compile()` and `timingStats()`, which sends `message` now or,
-   * before the worker is ready, once it is.
-   */
-  #send(generation: WorkerGeneration, message: CompileWorkerRequest): void {
-    if (generation.ready) {
-      this.#post(generation, message);
-    } else {
-      generation.queued.push(message);
-    }
-  }
-
-  /**
-   * Helper for `#send()` and `#settle()`, which sends `message` to the
+   * Helper for `compile()` and `#settle()`, which sends `message` to the
    * worker. A request that cannot be cloned fails alone, as a failure of the
    * place it was to run, since no compile of its bytes was attempted.
    */
@@ -266,25 +240,61 @@ type WorkerGeneration = {
   readonly queued: CompileWorkerRequest[];
 
   /** Requests the worker has not answered, by id. */
-  readonly pending: Map<number, PendingRequest>;
-};
-
-/** A request a worker has not answered, and how to settle it. */
-type PendingRequest =
-  | {
-    readonly kind: "compile";
+  readonly pending: Map<number, {
     readonly request: ModuleCompileRequest;
     resolve(modules: Map<string, CompiledTypeScriptModule>): void;
     reject(error: Error): void;
-  }
-  | {
-    readonly kind: "diagnostics";
-    resolve(stats: TimingStatsBreakdown): void;
-    reject(error: Error): void;
-  };
+  }>;
+};
 
 /**
- * What {@link ModuleCompileWorker.timingStats} puts ahead of each of the
+ * What {@link ModuleCompileWorker.diagnostics} puts ahead of each of the
  * worker realm's logger names.
  */
 export const COMPILE_WORKER_LOGGER_PREFIX = "compile-worker:";
+
+/** The worker realm's loggers, as {@link ModuleCompileWorker.diagnostics} returns them. */
+export interface CompileWorkerDiagnostics {
+  /** Timing statistics by prefixed logger name and key. */
+  readonly timingStats: TimingStatsBreakdown;
+
+  /** Log counts by prefixed logger name and message key. */
+  readonly loggerCounts: Record<string, Record<string, LogCounts>>;
+}
+
+/**
+ * Helper for `ModuleCompileWorker.#settle()`, which prefixes `diagnostics`'s
+ * logger names and moves its timestamps from the worker's clock onto this
+ * realm's.
+ */
+function fromWorkerRealm(
+  diagnostics: WorkerDiagnostics,
+): CompileWorkerDiagnostics {
+  const shift = diagnostics.timeOrigin - performance.timeOrigin;
+  const prefixed = <T, U>(byLogger: Record<string, T>, map: (value: T) => U) =>
+    Object.fromEntries(
+      Object.entries(byLogger).map((
+        [name, value],
+      ) => [`${COMPILE_WORKER_LOGGER_PREFIX}${name}`, map(value)]),
+    );
+  const shiftedStats = (stats: TimingStats): TimingStats => ({
+    ...stats,
+    lastTimestamp: stats.lastTimestamp + shift,
+    slowest: stats.slowest.map((slow): SlowTiming => ({
+      ...slow,
+      at: slow.at + shift,
+    })),
+  });
+  return {
+    timingStats: prefixed(
+      diagnostics.timingStats,
+      (byKey) =>
+        Object.fromEntries(
+          Object.entries(byKey).map((
+            [key, stats],
+          ) => [key, shiftedStats(stats)]),
+        ),
+    ),
+    loggerCounts: prefixed(diagnostics.loggerCounts, (byKey) => byKey),
+  };
+}

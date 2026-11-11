@@ -505,7 +505,8 @@ export function startServerExecutionHost(options: {
       stats: () => host.stats(),
       // This thread's loggers, and the compile worker's timings, which hold
       // the compiler's phases.
-      diagnostics: () => servingLoopDiagnostics(moduleCompiler),
+      diagnostics: () =>
+        Promise.resolve(servingLoopDiagnostics(moduleCompiler)),
       collectedWorkerMemory: () => Promise.resolve(undefined),
       host,
       // The compile worker closes first, so a compile an activation still

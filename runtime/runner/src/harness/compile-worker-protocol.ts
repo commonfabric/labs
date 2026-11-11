@@ -9,8 +9,9 @@
  * The worker posts `ready` once its listener is installed, and the realm
  * sends nothing before that, since a message posted to a worker that has no
  * listener yet is dropped. Every request carries an id its answer repeats.
- * Besides compiles, the realm can ask for the worker realm's timing
- * statistics, which hold the compiler's own phase timings.
+ * Each compile's answer carries a snapshot of the worker realm's loggers,
+ * which hold the compiler's own phase timings; that realm does nothing but
+ * compile, so the snapshot after its latest compile is current.
  */
 
 import type {
@@ -30,6 +31,7 @@ import {
 } from "@commonfabric/js-values/types";
 import type {
   CDFPoint,
+  LogCounts,
   SlowTiming,
   TimingStats,
   TimingStatsBreakdown,
@@ -42,18 +44,29 @@ import {
   type ModuleCompileRequest,
 } from "./module-compile.ts";
 
-/**
- * What the realm asks its worker for: a compile, or the worker realm's timing
- * statistics. `id` is the number the answer repeats, unique within one
- * realm's worker.
- */
-export type CompileWorkerRequest =
-  | {
-    readonly kind: "compile";
-    readonly id: number;
-    readonly request: ModuleCompileRequest;
-  }
-  | { readonly kind: "diagnostics"; readonly id: number };
+/** A compile the realm asks its worker for. */
+export interface CompileWorkerRequest {
+  /** The number the answer repeats, unique within one realm's worker. */
+  readonly id: number;
+
+  /** The compile to run. */
+  readonly request: ModuleCompileRequest;
+}
+
+/** The worker realm's loggers, as they stood when it answered a compile. */
+export interface WorkerDiagnostics {
+  /**
+   * The worker's `performance.timeOrigin`, which the timestamps in
+   * `timingStats` count from.
+   */
+  readonly timeOrigin: number;
+
+  /** The worker realm's timing statistics. */
+  readonly timingStats: TimingStatsBreakdown;
+
+  /** The worker realm's log counts, by logger name and message key. */
+  readonly loggerCounts: Record<string, Record<string, LogCounts>>;
+}
 
 /** What a compile worker posts to its realm. */
 export type CompileWorkerAnswer =
@@ -62,16 +75,13 @@ export type CompileWorkerAnswer =
     readonly kind: "compiled";
     readonly id: number;
     readonly modules: readonly (readonly [string, EncodedModule])[];
+    readonly diagnostics: WorkerDiagnostics;
   }
   | {
     readonly kind: "failed";
     readonly id: number;
     readonly failure: EncodedCompileFailure;
-  }
-  | {
-    readonly kind: "diagnostics";
-    readonly id: number;
-    readonly timingStats: TimingStatsBreakdown;
+    readonly diagnostics: WorkerDiagnostics;
   };
 
 /** A compiled module as it crosses, its source map as JSON text. */
@@ -218,11 +228,7 @@ export function decodeCompileWorkerRequest(
   if (!isPlainObject(data) || typeof data.id !== "number") {
     throw new Error("A compile worker received a message with no request id");
   }
-  if (data.kind === "diagnostics") return { kind: "diagnostics", id: data.id };
-  if (data.kind !== "compile") {
-    throw protocolError("a request of no known kind");
-  }
-  return { kind: "compile", id: data.id, request: decodeRequest(data.request) };
+  return { id: data.id, request: decodeRequest(data.request) };
 }
 
 /**
@@ -243,6 +249,7 @@ export function decodeCompileWorkerAnswer(data: unknown): CompileWorkerAnswer {
       kind: "compiled",
       id: data.id,
       modules: arrayOf(data.modules, "modules", decodeModuleEntry),
+      diagnostics: decodeWorkerDiagnostics(data.diagnostics),
     };
   }
   if (data.kind === "failed") {
@@ -250,16 +257,50 @@ export function decodeCompileWorkerAnswer(data: unknown): CompileWorkerAnswer {
       kind: "failed",
       id: data.id,
       failure: decodeFailure(data.failure),
-    };
-  }
-  if (data.kind === "diagnostics") {
-    return {
-      kind: "diagnostics",
-      id: data.id,
-      timingStats: decodeTimingStatsBreakdown(data.timingStats),
+      diagnostics: decodeWorkerDiagnostics(data.diagnostics),
     };
   }
   throw protocolError("an answer of no known kind");
+}
+
+function decodeWorkerDiagnostics(value: unknown): WorkerDiagnostics {
+  if (!isPlainObject(value)) {
+    throw protocolError("worker diagnostics that are not a record");
+  }
+  return {
+    timeOrigin: numberField(value, "timeOrigin"),
+    timingStats: decodeTimingStatsBreakdown(value.timingStats),
+    loggerCounts: decodeLoggerCounts(value.loggerCounts),
+  };
+}
+
+function decodeLoggerCounts(
+  value: unknown,
+): Record<string, Record<string, LogCounts>> {
+  if (!isPlainObject(value)) {
+    throw protocolError("log counts that are not a record");
+  }
+  const byLogger: Record<string, Record<string, LogCounts>> = {};
+  for (const [loggerName, byKey] of Object.entries(value)) {
+    if (!isPlainObject(byKey)) {
+      throw protocolError("a logger's log counts that are not a record");
+    }
+    const counts: Record<string, LogCounts> = {};
+    for (const [key, entry] of Object.entries(byKey)) {
+      if (!isPlainObject(entry)) {
+        throw protocolError("log counts for a key that are not a record");
+      }
+      counts[key] = {
+        debug: numberField(entry, "debug"),
+        info: numberField(entry, "info"),
+        warn: numberField(entry, "warn"),
+        error: numberField(entry, "error"),
+        total: numberField(entry, "total"),
+      };
+    }
+    byLogger[loggerName] = counts;
+  }
+  return byLogger;
 }
 
 function decodeTimingStatsBreakdown(value: unknown): TimingStatsBreakdown {

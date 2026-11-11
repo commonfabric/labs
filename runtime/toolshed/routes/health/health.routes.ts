@@ -154,8 +154,8 @@ export const stats = createRoute({
 
 /**
  * The serving loop's realm's own logger counts and timing statistics, with
- * the timing statistics of the compile worker its serving runtimes compile
- * in under `compile-worker:` logger names. With the loop in a worker,
+ * those of the compile worker its serving runtimes compile in under
+ * `compile-worker:` logger names. With the loop in a worker,
  * `/api/health/stats` reads this thread's loggers, which hold none of the
  * loop's; this route asks the worker, so an answer waits for the worker's
  * turn, which is why it is not part of `stats`.

@@ -53,21 +53,21 @@ describe("servingLoopDiagnostics()", () => {
     await storageManager.close();
   });
 
-  it("returns this realm's timing statistics and no compile worker's without one", async () => {
-    const { timingStats } = await servingLoopDiagnostics();
+  it("returns this realm's timing statistics and no compile worker's without one", () => {
+    const { timingStats, loggerCounts } = servingLoopDiagnostics();
 
     expect(timingStats[REALM_LOGGER]?.probe?.count).toBeGreaterThan(0);
     expect(
-      Object.keys(timingStats).some((name) =>
-        name.startsWith(COMPILE_WORKER_LOGGER_PREFIX)
-      ),
+      [...Object.keys(timingStats), ...Object.keys(loggerCounts)].some((
+        name,
+      ) => name.startsWith(COMPILE_WORKER_LOGGER_PREFIX)),
     ).toBe(false);
   });
 
-  it("returns the compile worker's phase timings beside this realm's", async () => {
+  it("returns the compile worker's phase timings and log counts beside this realm's", async () => {
     await runtime.harness.compileToRecordGraph(PROGRAM);
 
-    const { timingStats } = await servingLoopDiagnostics(worker);
+    const { timingStats, loggerCounts } = servingLoopDiagnostics(worker);
 
     expect(timingStats[REALM_LOGGER]?.probe?.count).toBeGreaterThan(0);
     expect(
@@ -75,5 +75,12 @@ describe("servingLoopDiagnostics()", () => {
         "phase/emitFile"
       ]?.count,
     ).toBeGreaterThan(0);
+    const workerCounts = Object.entries(worker.diagnostics().loggerCounts);
+    expect(workerCounts.length).toBeGreaterThan(0);
+    for (const [name, byKey] of workerCounts) {
+      for (const [key, counts] of Object.entries(byKey)) {
+        expect(loggerCounts[name]?.[key]).toEqual(counts);
+      }
+    }
   });
 });
