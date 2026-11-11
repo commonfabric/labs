@@ -723,12 +723,6 @@ const demanderPairKey = (identity: ScopeKeyIdentity): string =>
     identity.sessionId === undefined ? "" : String(identity.sessionId)
   }`;
 
-/** Coalesces demand notifications into one pending wake callback. Input
- * cycles can reconcile demand before it fires, and notifications racing a
- * pass can require another pass. The grace is separate from the active
- * wave's consequence-flush deadline. */
-const DEMAND_WAKE_GRACE_MS = 300;
-
 const neverAPieceRootId = (id: string): boolean =>
   id === SERVER_EXECUTION_WATERMARK_DOC_ID ||
   // Phase 4: the effects doc is a session-scoped VALUE doc every
@@ -1124,8 +1118,7 @@ export class SpaceServer implements TransactionSealDestination {
   #pendingStructureRetryWake = false;
 
   /** Level-converted demand wake (stage B): a session's watch set
-   * changed (or a session opened) and the grace elapsed; consumed by the
-   * next #waitForInput. */
+   * changed (or a session opened); consumed by the next #waitForInput. */
   #pendingDemandWake = false;
 
   /**
@@ -1147,9 +1140,6 @@ export class SpaceServer implements TransactionSealDestination {
 
   /** Whether the last publish left a `read` view without its answer. */
   #readViewUnanswered = false;
-
-  /** The demand wake's grace timer (see noteDemandChanged). */
-  #demandWakeTimer: ReturnType<typeof setTimeout> | undefined;
 
   /** WARM DEMAND (the explicit warm request's demand half —
    * serving-loop.md §1's third activation trigger, RULED 2026-08-21):
@@ -2302,13 +2292,11 @@ export class SpaceServer implements TransactionSealDestination {
     }
   }
 
-  /** Reconsiders demanded roots after a session's demand changes.
-   * Notifications share one pending grace callback, which latches a cycle.
-   * Each notification also advances the demand generation, so a pass that
-   * already captured its rows re-arms on completion. One callback can
-   * therefore lead to multiple passes. Input-driven cycles reconcile demand
-   * independently of the timer; the grace is a coalescing interval, not a
-   * minimum wait for every new demand. */
+  /** Reconsiders demanded roots after a session's demand changes. Each
+   * notification latches a cycle and wakes a loop waiting on input; the
+   * notifications that arrive before that cycle's demand pass share it. Each
+   * also advances the demand generation, so a pass that already captured its
+   * rows re-arms on completion. */
   noteDemandChanged(
     reason: "watch" | "push-growth" | "warm" | "read-view" = "watch",
   ): void {
@@ -2330,12 +2318,8 @@ export class SpaceServer implements TransactionSealDestination {
     } else if (reason === "watch") {
       this.#options.stats.demand.watchWakes += 1;
     }
-    if (this.#demandWakeTimer !== undefined) return;
-    this.#demandWakeTimer = setTimeout(() => {
-      this.#demandWakeTimer = undefined;
-      this.#pendingDemandWake = true;
-      this.#feedArrived?.resolve();
-    }, DEMAND_WAKE_GRACE_MS);
+    this.#pendingDemandWake = true;
+    this.#feedArrived?.resolve();
   }
 
   /**
@@ -2671,8 +2655,7 @@ export class SpaceServer implements TransactionSealDestination {
   #atRest(): boolean {
     return this.suspendedOnInput && this.#feed.length === 0 &&
       this.#nothingOwed() && !this.#pendingShadowFlipWake &&
-      !this.#outboxDrainOwed && this.#demandWakeTimer === undefined &&
-      this.#deferredRescanTimer === undefined &&
+      !this.#outboxDrainOwed && this.#deferredRescanTimer === undefined &&
       this.#originFollowsInFlight.size === 0;
   }
 
@@ -8509,10 +8492,6 @@ export class SpaceServer implements TransactionSealDestination {
     // every key it reads.
     this.#demandMirror.clear();
     this.#demandFullReconcile = true;
-    if (this.#demandWakeTimer !== undefined) {
-      clearTimeout(this.#demandWakeTimer);
-      this.#demandWakeTimer = undefined;
-    }
     this.#pendingDemandWake = false;
     // MINOR-2: fold any demand-root delta since the last pass BEFORE the
     // runtime (and its counters) are disposed below, so a transition after
