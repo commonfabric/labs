@@ -1,4 +1,4 @@
-import { describe, it } from "@std/testing/bdd";
+import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { JSONSchema } from "@commonfabric/api";
 import { internSchema } from "@commonfabric/data-model-schema";
@@ -23,10 +23,12 @@ import {
   getMemoryProtocolFlags,
   type HelloOkMessage,
   MEMORY_PROTOCOL,
+  resetSyncCidReferencesConfig,
   type ResponseMessage,
   type ServerMessage,
   type SessionOpenAuthMetadata,
   type SessionSync,
+  setSyncCidReferencesConfig,
   type WatchSetResult,
 } from "../v2.ts";
 import {
@@ -155,6 +157,89 @@ const countingTransport = (
 const documentIn = (view: { entities: EntitySnapshot[] }, id: string) =>
   view.entities.find((entity) => entity.id === id)?.document;
 
+/** The `cid:` upserts in `upserts` that carry their bodies. */
+const bodiesOf = (upserts: SessionSync["upserts"]) =>
+  upserts.filter((upsert) =>
+    upsert.id.startsWith("cid:") && upsert.doc !== undefined &&
+    upsert.byReference === undefined
+  );
+
+/**
+ * Opens a session on a fresh server through a raw connection whose hello
+ * carries `flags`, installs the closure and a carrier of it, and returns the
+ * upserts of the watch set over the carrier.
+ */
+const watchRaw = async (
+  name: string,
+  flags: Record<string, unknown>,
+): Promise<SessionSync["upserts"]> => {
+  const server = new Server({
+    ...testSessionOpenServerOptions,
+    store: new URL(`memory://sync-cid-references-${name}`),
+    subscriptionRefreshDelayMs: 0,
+  });
+  const space = `did:key:z6Mk-sync-cid-references-${name}`;
+  const carrier = `of:sync-cid-references-${name}`;
+  const messages: ServerMessage[] = [];
+  const connection = server.connect((message) => messages.push(message));
+  const send = async (request: Record<string, unknown>) => {
+    messages.length = 0;
+    await connection.receive(encodeMemoryBoundary(request as never));
+    return messages.find((message) =>
+      message.type === "response" &&
+      (message as ResponseMessage<unknown>).requestId === request.requestId
+    ) as ResponseMessage<Record<string, unknown>>;
+  };
+  try {
+    await connection.receive(encodeMemoryBoundary({
+      type: "hello",
+      protocol: MEMORY_PROTOCOL,
+      flags,
+    } as never));
+    const sessionOpen = (messages.shift() as HelloOkMessage)
+      .sessionOpen as SessionOpenAuthMetadata;
+    const opened = await send({
+      type: "session.open",
+      requestId: "open",
+      space,
+      session: {},
+      invocation: {
+        aud: sessionOpen.audience,
+        challenge: sessionOpen.challenge.value,
+      },
+    });
+    const sessionId = opened.ok!.sessionId;
+    await send({
+      type: "transact",
+      requestId: "write",
+      space,
+      sessionId,
+      commit: {
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: closureOperations(carrier),
+      },
+    });
+    const watched = await send({
+      type: "session.watch.set",
+      requestId: "watch",
+      space,
+      sessionId,
+      watches: [{
+        id: "carrier",
+        kind: "graph",
+        query: {
+          roots: [{ id: carrier, selector: { path: [], schema: false } }],
+        },
+      }],
+    });
+    return (watched.ok as unknown as WatchSetResult).sync.upserts;
+  } finally {
+    connection.close();
+    await server.close();
+  }
+};
+
 describe("sync-cid-references", () => {
   describe("referenceServerMessageSchemaDocuments()", () => {
     it("names a schema document the lookup holds by id and seq alone", () => {
@@ -273,7 +358,10 @@ describe("sync-cid-references", () => {
     });
   });
 
-  describe("over a connection", () => {
+  describe("over a connection with the option on", () => {
+    beforeEach(() => setSyncCidReferencesConfig(true));
+    afterEach(() => resetSyncCidReferencesConfig());
+
     it("names a schema document by reference and the client applies its body", async () => {
       const server = new Server({
         ...testSessionOpenServerOptions,
@@ -553,81 +641,70 @@ describe("sync-cid-references", () => {
     });
 
     it("sends every body to a client that does not advertise the flag", async () => {
+      const { syncCidReferencesV1: _omitted, ...flags } =
+        getMemoryProtocolFlags();
+      const upserts = await watchRaw("older", flags);
+      expect(upserts.filter((upsert) => upsert.id.startsWith("cid:")))
+        .toStrictEqual(bodiesOf(upserts));
+      expect(bodiesOf(upserts).length).toBe(2);
+    });
+  });
+
+  describe("over a connection with the option off", () => {
+    it("sends every body and no reference, as by default", async () => {
       const server = new Server({
         ...testSessionOpenServerOptions,
-        store: new URL("memory://sync-cid-references-older"),
+        store: new URL("memory://sync-cid-references-off"),
         subscriptionRefreshDelayMs: 0,
       });
-      const space = "did:key:z6Mk-sync-cid-references-older";
-      const carrier = "of:sync-cid-references-older";
-      const messages: ServerMessage[] = [];
-      const connection = server.connect((message) => messages.push(message));
-      const send = async (request: Record<string, unknown>) => {
-        messages.length = 0;
-        await connection.receive(encodeMemoryBoundary(request as never));
-        return messages.find((message) =>
-          message.type === "response" &&
-          (message as ResponseMessage<unknown>).requestId === request.requestId
-        ) as ResponseMessage<Record<string, unknown>>;
-      };
+      const { counts, transport } = countingTransport(server);
+      const writerClient = await connect({ transport: loopback(server) });
+      const watcherClient = await connect({ transport });
+      const space = "did:key:z6Mk-sync-cid-references-off";
+      const carrier = "of:sync-cid-references-off";
       try {
-        const { syncCidReferencesV1: _omitted, ...flags } =
-          getMemoryProtocolFlags();
-        await connection.receive(encodeMemoryBoundary({
-          type: "hello",
-          protocol: MEMORY_PROTOCOL,
-          flags,
-        }));
-        const sessionOpen = (messages.shift() as HelloOkMessage)
-          .sessionOpen as SessionOpenAuthMetadata;
-        const opened = await send({
-          type: "session.open",
-          requestId: "open",
+        const writer = await writerClient.mount(
           space,
-          session: {},
-          invocation: {
-            aud: sessionOpen.audience,
-            challenge: sessionOpen.challenge.value,
-          },
-        });
-        const sessionId = opened.ok!.sessionId;
-        await send({
-          type: "transact",
-          requestId: "write",
-          space,
-          sessionId,
-          commit: {
-            localSeq: 1,
-            reads: { confirmed: [], pending: [] },
-            operations: closureOperations(carrier),
-          },
-        });
-        const watched = await send({
-          type: "session.watch.set",
-          requestId: "watch",
-          space,
-          sessionId,
-          watches: [{
-            id: "carrier",
-            kind: "graph",
-            query: {
-              roots: [{ id: carrier, selector: { path: [], schema: false } }],
-            },
-          }],
-        });
-        const upserts = (watched.ok as unknown as WatchSetResult).sync.upserts;
-        const schemaUpserts = upserts.filter((upsert) =>
-          upsert.id.startsWith("cid:")
+          {},
+          testSessionOpenAuthFactory,
         );
-        expect(schemaUpserts.length).toBe(2);
-        for (const upsert of schemaUpserts) {
-          expect(upsert.byReference).toBeUndefined();
-          expect(upsert.doc).toBeDefined();
-        }
+        await writer.transact({
+          localSeq: 1,
+          reads: { confirmed: [], pending: [] },
+          operations: closureOperations(carrier),
+        });
+        const watcher = await watcherClient.mount(
+          space,
+          {},
+          testSessionOpenAuthFactory,
+        );
+        const view = await watcher.watchSet([{
+          id: "carrier",
+          kind: "graph",
+          query: {
+            roots: [{ id: carrier, selector: { path: [], schema: false } }],
+          },
+        }]);
+        expect(counts.references).toBe(0);
+        expect(counts.queries).toBe(0);
+        expect(documentIn(view, `cid:${outerHash}`)).toEqual({
+          value: outerSchema,
+        });
       } finally {
-        connection.close();
+        await writerClient.close();
+        await watcherClient.close();
         await server.close();
       }
+    });
+
+    it("sends every body to a client that advertises the flag when its server has it off", async () => {
+      const upserts = await watchRaw("off-server", {
+        ...getMemoryProtocolFlags(),
+        syncCidReferencesV1: true,
+      });
+      expect(upserts.filter((upsert) => upsert.id.startsWith("cid:")))
+        .toStrictEqual(bodiesOf(upserts));
+      expect(bodiesOf(upserts).length).toBe(2);
     });
   });
 });

@@ -2,6 +2,7 @@ import { setModernCellRepConfig } from "@commonfabric/data-model/cell-rep";
 import * as FS from "@std/fs";
 
 import { normalizeInviteHost } from "@commonfabric/memory/space-invites";
+import { setSyncCidReferencesConfig } from "@commonfabric/memory/v2";
 import { verifyConnectionAuthorization } from "@commonfabric/memory/v2/connection-auth";
 import * as MemoryServer from "@commonfabric/memory/v2/server";
 import { verifySessionOpenAuthorization } from "@commonfabric/memory/v2/session-open-auth";
@@ -19,6 +20,10 @@ import {
 } from "@/lib/server-execution-flag.ts";
 
 const memoryAudience = identity.did();
+
+// Delivery by reference is per deployment: this process's memory server, and
+// its own runtimes, advertise it only when the deployment turns it on.
+setSyncCidReferencesConfig(env.MEMORY_SYNC_CID_REFERENCES);
 const routerPolicy = env.MEMORY_ROUTER_CONFIG_FILE === ""
   ? undefined
   : new MemoryRouterPolicy(env.MEMORY_ROUTER_CONFIG_FILE);

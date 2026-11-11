@@ -22,10 +22,12 @@ import {
   resetCommitPreconditionsConfig,
   resetMessageCompressionConfig,
   resetServerExecutionConfig,
+  resetSyncCidReferencesConfig,
   resetSyncSchemaTableConfig,
   setCommitPreconditionsConfig,
   setMessageCompressionConfig,
   setServerExecutionConfig,
+  setSyncCidReferencesConfig,
   setSyncSchemaTableConfig,
   toDocumentPath,
   toDocumentSelector,
@@ -178,7 +180,7 @@ describe("memory v2 flags", () => {
       syncCrossingsV1: true,
       watchRemoveV1: true,
       syncPartsV1: true,
-      syncCidReferencesV1: true,
+      syncCidReferencesV1: false,
       watchSetPartsV1: true,
       syncSchemaTableV2: false,
       syncLabelTableV1: true,
@@ -225,7 +227,7 @@ describe("memory v2 flags", () => {
       syncCrossingsV1: true,
       watchRemoveV1: true,
       syncPartsV1: true,
-      syncCidReferencesV1: true,
+      syncCidReferencesV1: false,
       watchSetPartsV1: true,
       syncSchemaTableV2: true,
       syncLabelTableV1: true,
@@ -591,13 +593,7 @@ describe("parseMemoryProtocolFlags", () => {
     );
   });
 
-  for (
-    const flag of [
-      "syncPartsV1",
-      "syncCidReferencesV1",
-      "watchSetPartsV1",
-    ] as const
-  ) {
+  for (const flag of ["syncPartsV1", "watchSetPartsV1"] as const) {
     it(`accepts the ${flag} capability key`, () => {
       assertEquals(parseMemoryProtocolFlags({})?.[flag], false);
       assertEquals(parseMemoryProtocolFlags({ [flag]: true })?.[flag], true);
@@ -608,6 +604,29 @@ describe("parseMemoryProtocolFlags", () => {
       );
     });
   }
+
+  it("advertises syncCidReferencesV1 only while it is set on", () => {
+    expect(parseMemoryProtocolFlags({})?.syncCidReferencesV1).toBe(false);
+    expect(
+      parseMemoryProtocolFlags({ syncCidReferencesV1: true })
+        ?.syncCidReferencesV1,
+    ).toBe(true);
+    expect(parseMemoryProtocolFlags({ syncCidReferencesV1: "true" })).toBe(
+      null,
+    );
+    expect(
+      wireMemoryProtocolFlags(getMemoryProtocolFlags()).syncCidReferencesV1,
+    )
+      .toBe(false);
+    setSyncCidReferencesConfig(true);
+    try {
+      expect(
+        wireMemoryProtocolFlags(getMemoryProtocolFlags()).syncCidReferencesV1,
+      ).toBe(true);
+    } finally {
+      resetSyncCidReferencesConfig();
+    }
+  });
 
   it("accepts the syncCrossingsV1 capability key", () => {
     assertEquals(parseMemoryProtocolFlags({})?.syncCrossingsV1, false);

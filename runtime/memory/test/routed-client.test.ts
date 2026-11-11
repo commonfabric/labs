@@ -5,7 +5,12 @@ import { FakeTime } from "@std/testing/time";
 import { Identity } from "@commonfabric/identity";
 import { setModernCellRepConfig } from "@commonfabric/data-model/cell-rep";
 import { internSchema } from "@commonfabric/data-model-schema";
-import { getMemoryProtocolFlags, type SessionSync } from "../v2.ts";
+import {
+  getMemoryProtocolFlags,
+  resetSyncCidReferencesConfig,
+  type SessionSync,
+  setSyncCidReferencesConfig,
+} from "../v2.ts";
 import {
   connect,
   type SessionPrincipal,
@@ -2665,6 +2670,7 @@ Deno.test("handshake refusals retain the server error and signature custody prop
 
 Deno.test("on a routed connection a space's unanswered body fetch holds back no other space's frames", async () => {
   setModernCellRepConfig(true);
+  setSyncCidReferencesConfig(true);
   // Two spaces behind one routed connection name the same schema document
   // by reference. Space A's host never answers its body fetch until space B
   // has asked its own; B asking first is what keeps A's host from holding
@@ -2761,5 +2767,6 @@ Deno.test("on a routed connection a space's unanswered body fetch holds back no 
     ).toEqual({ value: schema });
   } finally {
     await client.close();
+    resetSyncCidReferencesConfig();
   }
 });
