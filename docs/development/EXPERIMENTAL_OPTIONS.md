@@ -1769,11 +1769,16 @@ the per-epic implementation notes).
     `0`; any other spelling refuses startup). A server advertises the
     capability unless it is turned off.
   - **Client:** the runtime's `syncCidReferences` experimental option, from
-    `RuntimeOptions.experimental` (how a host embedding a runtime sets it) or
-    `EXPERIMENTAL_SYNC_CID_REFERENCES`. The runtime hands it to its memory
-    connections (`ConnectOptions.syncCidReferences`), whose `hello` then
-    advertises the capability. It is client-authoritative, so a client never
-    adopts it from a deployment.
+    `RuntimeOptions.experimental` (how a host that constructs a runtime sets
+    it), `EXPERIMENTAL_SYNC_CID_REFERENCES` (a process that reads env), or, in
+    the labs shell, the per-profile `localStorage` key `syncCidReferences`
+    set to `"true"` (how a host loading the shell in a WebView sets it, or
+    `commonfabric.syncCidReferences(true)` from the console; next runtime).
+    The runtime hands it to its memory connections
+    (`ConnectOptions.syncCidReferences`), whose `hello` then advertises the
+    capability. It is client-authoritative, so a client never adopts it from
+    a deployment
+    ([host embedding](../features/host-embedding.md), seam 13).
 - **Purpose.** A schema document's bytes are the same in every space that
   stores it, so a client reading many spaces built from one pattern receives
   the same closure from each. On a connection where both sides are on, a server
