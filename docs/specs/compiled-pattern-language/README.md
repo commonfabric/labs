@@ -577,6 +577,9 @@ disagree, the detailed document governs and this one is corrected.
 - [Built-in inventory](builtin-inventory.md): each built-in's group, label
   rule, and durable state
 
+The work that remains on these documents, and the rulings that are fixed, are
+in the [continuation plan](../../plans/compiled-pattern-language.md).
+
 ## Open questions
 
 - **Gates under speculation.** Which of the server's gates a client can

@@ -330,6 +330,10 @@ a record: archive it to `docs/history/plans/` following the procedure in
   factory's request. It carries the shape of program that has no home without
   one, the two routes a design could take and what each gives up, and the
   provider-side stack left standing in the meantime.
+- [Compiled pattern language: continuing the specification](compiled-pattern-language.md)
+  carries the design of the compiled pattern language on from its four
+  specification documents: where the work is, the rulings that are fixed, the
+  questions still open, and the three documents to write next.
 
 ## Concepts not planned for deployment
 
