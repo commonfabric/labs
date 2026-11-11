@@ -98,9 +98,12 @@ relitigated.
   with one exception: a client enacts `navigateTo` from its speculative run,
   reconciled with the server's result as it is today. *(The exception is
   pending.)*
-- One transaction per cause. A failed constraint rejects the cause's whole
-  transaction. A failed cone takes a labeled error state and the rest
-  commits.
+- One transaction per cause. A failed cone takes a labeled error state and
+  the rest commits.
+- A failed constraint on what a handler itself writes rejects the event's
+  whole transaction. A failed constraint on a derived output drops that
+  output's write alone: the output keeps what is stored, and the rest of
+  the transaction commits. *(The second sentence is pending.)*
 - Several events are handled in one batch. Before a handler body runs, the
   stale cones it reads are evaluated, the ones an earlier event of the batch
   made stale included. Every other derivation the batch made stale settles
@@ -181,21 +184,6 @@ documents make until it is answered. "ES", "SS", and "FA" are
 `footprint-analysis.md`; a question number is an entry of that document's
 open-questions section, and the other numbers are findings of the cross-read
 record.
-
-**A finding that argues against a ruling.**
-
-1. **How far a rejection reaches** (SS question 1, SS §5.6). With
-   derivations settling once behind a batch, an event's transaction holds
-   the handler's reads, its body, and its writes. A constraint on one of
-   those writes rejects the event, as ruled. What is open is the
-   transaction behind the batch, which derives the stale outputs of every
-   demanded instance of the space for every demanding principal. If one
-   kept output there fails a constraint, the ruling as written rejects all
-   of that transaction, so no instance's outputs are derived while one
-   instance's constraint fails, and which instances are in the transaction
-   depends on which sessions have them open. The alternative is that the
-   failing output alone is not written, as a failed cone's is not, and the
-   rest commits. Today a failing node's write is dropped alone.
 
 **Label rules.** Each changes what Contextual Flow Control decides, so the
 answer goes to the specification with the document.
