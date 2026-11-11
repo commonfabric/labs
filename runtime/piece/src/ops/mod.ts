@@ -155,6 +155,7 @@ export {
   type ServedFollowPreparation,
   type ServedFollowReceipt,
   type ServedFollowRequest,
+  type ServedInstance,
   servedInstantiatePiece,
   type ServedInstantiateReceipt,
   type ServedInstantiateRequest,

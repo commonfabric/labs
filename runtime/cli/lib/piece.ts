@@ -173,6 +173,7 @@ import {
   instantiatePieceOnServer,
   type LifecycleClientConfig,
   ServedLifecycleError,
+  type ServedPieceScope,
   setPieceSourceOnServer,
 } from "./pattern-lifecycle.ts";
 import { claimProcessDeployment } from "./process-deployment.ts";
@@ -1801,7 +1802,19 @@ function lifecycleClient(pieces: PiecesController): LifecycleClientConfig {
         ? undefined
         : flags?.patternLifecycleOrigins === true;
     },
+    takesScopes: async (space) =>
+      (await storageManager?.serverFlags?.(space))?.patternLifecycleScopes,
   };
+}
+
+/**
+ * The scope a served verb names `scope`'s requester instance at: none for a
+ * piece's space instance, which the verb addresses by its id alone.
+ */
+function servedScope(
+  scope: PieceConfig["pieceScope"],
+): ServedPieceScope | undefined {
+  return scope === undefined || scope === "space" ? undefined : scope;
 }
 
 /**
@@ -2224,15 +2237,18 @@ async function updateOnServer(
   config: PieceConfig,
   pieces: PiecesController,
   pieceId: string,
+  scope: PieceConfig["pieceScope"],
   program: RuntimeProgram,
   entry: EntryConfig,
   options: SetPiecePatternOptions,
   deps: PieceOperationDependencies,
 ): Promise<PatternUpdateReceipt> {
+  const served = servedScope(scope);
   const receipt = await (deps.setPieceSourceOnServer ??
     setPieceSourceOnServer)(lifecycleClient(pieces), {
       space: pieces.getSpace(),
       piece: pieceId,
+      ...(served === undefined ? {} : { scope: served }),
       program,
       ...(entry.repository === undefined
         ? {}
@@ -2254,7 +2270,12 @@ async function updateOnServer(
   }
   let refresh: PatternUpdateReceipt["refresh"];
   try {
-    const cell = await pieces.getPieceCell(receipt.pieceId, false);
+    const cell = await pieces.getPieceCell(
+      receipt.pieceId,
+      false,
+      undefined,
+      scope,
+    );
     await (deps.pullServed ?? pullServed)(pieces, pieces.getResult(cell));
     refresh = { status: "completed" };
   } catch (error) {
@@ -2321,14 +2342,16 @@ const FOLLOW_NOT_SERVED =
  *
  * Against a deployment that serves piece lifecycle verbs, the serving runtime
  * resolves the origin, reviews the candidate and commits the transition
- * (docs/features/server-pattern-lifecycle.md), and this connection then asks
- * the server for the piece's result, reporting a failure of that as
- * `executionWarning`.
+ * (docs/features/server-pattern-lifecycle.md), on this identity's instance
+ * of a piece addressed at a scope, and this connection then asks the server
+ * for the piece's result, reporting a failure of that as `executionWarning`.
+ * Nothing changes the source in this process there.
  *
  * @throws Error when the piece cannot be resolved, or when the origin cannot
- * be read or does not compile; against a serving deployment, also for a
- * piece addressed at a scope, since the served verb takes the piece's id
- * alone, and when its memory server cannot read a `follow` request;
+ * be read or does not compile; against a serving deployment, also when its
+ * memory server cannot read a `follow` request;
+ * `ServedLifecycleError` (`scope-unsupported`) for a piece addressed at a
+ * scope on a deployment whose verbs do not take one;
  * `PieceSourceChangedError` when the piece is off a pin `options` names.
  */
 export async function followPieceSource(
@@ -2347,16 +2370,11 @@ export async function followPieceSource(
   // runtime's to commit; a client-side repoint there would commit outside
   // the served lifecycle.
   if (servesLifecycleVerbs(pieces)) {
-    if (resolvedConfig.pieceScope !== undefined) {
-      throw new Error(
-        "This deployment serves `follow` for a piece named by its id, and " +
-          "this piece is addressed at a scope.",
-      );
-    }
     return await followOnServer(
       config,
       pieces,
       resolvedConfig.piece,
+      resolvedConfig.pieceScope,
       origin,
       options,
       deps,
@@ -2417,10 +2435,12 @@ async function followOnServer(
   config: PieceConfig,
   pieces: PiecesController,
   pieceId: string,
+  scope: PieceConfig["pieceScope"],
   origin: string,
   options: FollowPieceSourceOptions,
   deps: PieceOperationDependencies,
 ): Promise<FollowPieceSourceResult> {
+  const served = servedScope(scope);
   let receipt: Awaited<ReturnType<typeof followPieceOnServer>>;
   try {
     receipt = await (deps.followPieceOnServer ?? followPieceOnServer)(
@@ -2428,6 +2448,7 @@ async function followOnServer(
       {
         space: pieces.getSpace(),
         piece: pieceId,
+        ...(served === undefined ? {} : { scope: served }),
         origin,
         ...followPins(options),
         ...(options.dangerouslyAllowIncompatibleSchema
@@ -2453,7 +2474,12 @@ async function followOnServer(
   noteWroteTo(config.space);
   let executionWarning: string | undefined;
   try {
-    const cell = await pieces.getPieceCell(receipt.pieceId, false);
+    const cell = await pieces.getPieceCell(
+      receipt.pieceId,
+      false,
+      undefined,
+      scope,
+    );
     await (deps.pullServed ?? pullServed)(pieces, pieces.getResult(cell));
   } catch (error) {
     executionWarning = describeFailure(error);
@@ -2471,8 +2497,11 @@ async function followOnServer(
  * Replaces the piece's source and returns its setup transaction receipt.
  * The update detaches the piece unless `options.origin` names the origin it
  * follows from then on. Against a serving deployment the update is the
- * serving runtime's to commit; a piece addressed at a scope keeps the
- * client-side path, since the served verb takes the piece's id alone.
+ * serving runtime's to commit, on this identity's instance of a piece
+ * addressed at a scope, and nothing changes the source in this process.
+ *
+ * @throws ServedLifecycleError (`scope-unsupported`) for a piece addressed
+ * at a scope on a serving deployment whose verbs do not take one.
  */
 export async function setPiecePattern(
   config: PieceConfig,
@@ -2488,13 +2517,12 @@ export async function setPiecePattern(
   );
   const program = await (deps.getPinnedProgramFromFile ??
     getPinnedProgramFromFile)(pieces, entry);
-  if (
-    servesLifecycleVerbs(pieces) && resolvedConfig.pieceScope === undefined
-  ) {
+  if (servesLifecycleVerbs(pieces)) {
     return await updateOnServer(
       config,
       pieces,
       resolvedConfig.piece,
+      resolvedConfig.pieceScope,
       program,
       entry,
       options,

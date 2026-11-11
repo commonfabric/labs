@@ -77,12 +77,21 @@ holds. A body naming both or neither fails validation. `follow` takes neither:
 it takes an `origin`, a `system:` ref or a fabric URL, which the serving runtime
 resolves ([Following an origin](#following-an-origin) below).
 
-| verb          | arguments                                                                                                                                         | receipt                                                                                                                                                                                                    |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `upload`      | `program`                                                                                                                                         | `{ pattern }` — the pointer the space now holds the program under                                                                                                                                          |
-| `instantiate` | `program` or `pattern`; optional `argument`, `repository`, `slug`, `force`, `register`, `start`, `requestKey`                                     | `{ pieceId, pattern, slug?, requestKey, registration: { status, error?, attempt?, terminal? }, timings? }`                                                                                                 |
-| `setsrc` | `piece`; `program` or `pattern`; optional `repository`, `dangerouslyAllowIncompatibleSchema`, `expectedPattern`, `origin`, `start` | `{ pieceId, pattern, revisionId, seq, detachedOrigin, origin? }` — the accepted setup transaction's receipt, `seq` its position in the space's commit log, `origin` the origin it records when the request named one |
-| `follow`      | `piece`, `origin`; optional `expectedPattern`, `expectedRevision` (`null` for an empty source log), `dangerouslyAllowIncompatibleSchema`, `start` | `{ pieceId, pattern, origin, revisionId, acceptedIncompatibility? }` — the pointer and the origin the piece now holds, the revision the transition appended, and the incompatibility the override accepted |
+| verb          | arguments                                                                                                                                                  | receipt                                                                                                                                                                                                                                                                                              |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `upload`      | `program`                                                                                                                                                  | `{ pattern }` — the pointer the space now holds the program under                                                                                                                                                                                                                                    |
+| `instantiate` | `program` or `pattern`; optional `argument`, `repository`, `slug`, `force`, `register`, `start`, `requestKey`                                              | `{ pieceId, pattern, slug?, requestKey, registration: { status, error?, attempt?, terminal? }, timings? }`                                                                                                                                                                                           |
+| `setsrc`      | `piece`; `program` or `pattern`; optional `scope`, `repository`, `dangerouslyAllowIncompatibleSchema`, `expectedPattern`, `origin`, `start`                | `{ pieceId, pattern, revisionId, seq, detachedOrigin, origin?, scope? }` — the accepted setup transaction's receipt, `seq` its position in the space's commit log, `origin` the origin it records when the request named one, `scope` the scope of the instance it changed when that was not `space` |
+| `follow`      | `piece`, `origin`; optional `scope`, `expectedPattern`, `expectedRevision` (`null` for an empty source log), `dangerouslyAllowIncompatibleSchema`, `start` | `{ pieceId, pattern, origin, revisionId, acceptedIncompatibility?, scope? }` — the pointer and the origin the piece now holds, the revision the transition appended, the incompatibility the override accepted, and `scope` as for `setsrc`                                                          |
+
+`scope` is the scope the client addresses the piece at: `space`, the default,
+`user`, or `session`. For `user` and `session` the verb reads and writes the
+requester's instance of the piece rather than its space instance: the
+principal's, and for `session` the one keyed by the memory session the request
+came on, which is the session the client's own scoped reads and writes resolve
+against. A requester who holds no such instance is refused `piece-not-found`. A
+memory server takes `scope` while it advertises `patternLifecycleScopes`; an
+older one reads past it and changes the space instance.
 
 Once creation commits, a preparation or completion refusal returns the created
 receipt with failed registration and its retained request key. It makes no new
@@ -114,6 +123,7 @@ stable and is what a client branches on; its `message` is prose for a person.
 | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `lifecycle-unsupported`                          | raised by the client before sending: the memory server does not advertise `patternLifecycle`                                                                                                                           |
 | `origin-unsupported`                             | raised by the client before sending: the memory server does not advertise `patternLifecycleOrigins`, so a `follow`, or a `setsrc` carrying an origin, is not sent                                                      |
+| `scope-unsupported`                              | raised by the client before sending: the memory server does not advertise `patternLifecycleScopes`, so a `setsrc` or `follow` for a piece addressed at a user or session scope is not sent                             |
 | `payload-too-large`                              | the message takes more than 8 MiB in UTF-8; the client refuses before sending past that, or past 4 MiB on a routed connection                                                                                          |
 | `invalid-request`                                | `body` does not match the verb's schema, including a body naming both `program` and `pattern`, or neither                                                                                                              |
 | `forbidden`                                      | the caller is not a writer of the space, or there is no such space                                                                                                                                                     |
@@ -293,10 +303,13 @@ when it has read dependencies, submits a zero-operation store commit to validate
 them before reporting success. Effect-completion writebacks retain their
 authoritative whole-document writes.
 
-The serving runtime's scope identity resolves a direct commit's scoped read
-dependencies and entity preconditions, as it resolves the commit's write
-annotations. This is an addressing context for the store's strict validators;
-it adds no acting principal or user attribution to the bookkeeping operation.
+A direct commit's scoped read dependencies, entity preconditions and write
+annotations resolve against the scope identity its transaction names, when it
+names one: a served source change to the requester's instance of a scoped piece
+names the requester, and for session scope the requester's session. Otherwise
+they resolve against the serving runtime's own scope identity. This is an
+addressing context for the store's strict validators; it adds no acting
+principal or user attribution to the bookkeeping operation.
 
 A wave open when the direct commit lands learns of it once the replica has
 applied it. Its commit step treats a document the direct commit wrote, sitting
@@ -322,8 +335,9 @@ retained-argument validators, the source revision, and the delegation the
 successor inherits — carrying the requester's trust snapshot as a creation's
 does, committed directly, with the piece not started here. A piece the loop runs
 is swapped by its pointer watcher; a piece nothing runs waits for demand, and
-unless `start` is `false` the verb names the piece's root as its demand so the
-cycle after derives it.
+unless `start` is `false` the verb names the root of a piece's space instance
+as its demand so the cycle after derives it. The requester's instance of a
+scoped piece derives when the requester demands it.
 
 ### Following an origin
 
@@ -349,7 +363,8 @@ transition commits directly, with the requester's trust snapshot and the writer
 delegation a `setsrc` carries, and the piece is not started there. What
 following the origin concluded is then recorded on the piece as the serving
 loop's bookkeeping, as the source reconciler records its own. Unless `start` is
-`false`, the verb names the piece's root as its demand.
+`false`, the verb names the root of a piece's space instance as its demand, as
+`setsrc` does.
 
 A served `setsrc` that names an `origin` records it with the update's revision
 instead of detaching the piece. The source it writes is the request's program
@@ -393,8 +408,12 @@ while the serving loop serves the derived values, and reports that refresh's
 outcome beside the receipt — a failed refresh is a non-zero exit over a durable
 commit. The start waits for the commit of the started graph's setup writes,
 since a refused one retires the graph in the command's process, whatever the
-serving loop goes on serving; that refusal is a failed refresh too. A piece addressed at a scope keeps the
-client-side path, since the verb takes the piece's id alone.
+serving loop goes on serving; that refusal is a failed refresh too. A piece
+addressed at a user or session scope is sent with its `scope` to a memory server
+that advertises `patternLifecycleScopes`. Against one that does not, the
+command refuses as `scope-unsupported` before sending, since such a server would
+change the piece's space instance. Neither `setsrc` nor `follow` changes a
+piece's source in the command's process under the flag.
 `cf piece setsrc --origin <origin>` sends the origin with the program to a
 memory server that advertises `patternLifecycleOrigins`. Against one that does
 not, it refuses as `origin-unsupported` before sending, since such a server
@@ -407,12 +426,12 @@ piece's id, the origin, and the pins and override it was given, and answers as a
 client-side follow does: an `incompatible` refusal is the incompatible result it
 reports, and `source-moved` the refusal of a piece off its pin. What stays in
 its process is the refresh: it asks the server for the piece's result, and
-reports a failure of that over the durable follow. A piece addressed at a scope
-is refused there, since the verb takes the piece's id alone. Against a memory
-server that does not advertise `patternLifecycleOrigins` the command says,
-before sending, that the deployment does not serve `follow` yet; one that cannot
-report the flag and does not know the verb answers the request as unreadable,
-with the same result.
+reports a failure of that over the durable follow. A piece addressed at a user
+or session scope is sent with its `scope`, as `setsrc` sends it. Against a
+memory server that does not advertise `patternLifecycleOrigins` the command
+says, before sending, that the deployment does not serve `follow` yet; one that
+cannot report the flag and does not know the verb answers the request as
+unreadable, with the same result.
 
 Another client of the piece controller, the browser shell, keeps the client-side
 shape. Moving it is its own change; the served operations and the
@@ -435,7 +454,9 @@ shape. Moving it is its own change; the served operations and the
   predecessor registered on the serving runtime and stored in the closure a
   later runtime reads; for `follow`, the origin, revision and reconciliation a
   later client reads, each refusal, and the second cycle held to the source
-  state the first reviewed.
+  state the first reviewed; for both, a user- or session-scoped piece changed
+  on the requester's instance with its space instance left alone, and an
+  instance the requester does not hold refused.
 - `runtime/piece/test/ops/pieces-controller.test.ts` — `startPiece()` given
   `awaitSetupCommit` rejects when storage refuses the start's setup commit,
   and a plain `startPiece()` resolves over the same refusal;
@@ -445,14 +466,16 @@ shape. Moving it is its own change; the served operations and the
   `pattern.lifecycle` request: the `patternLifecycle` flag, the session and
   WRITE checks, each refusal code, the size bound on both sides, and a frame
   handled while the verb still runs.
-- `runtime/toolshed/lib/pattern-lifecycle.test.ts` — the writer check against
-  a real ACL document, the code each refusal carries, and a session request's
-  validation and outcome; `runtime/toolshed/lib/pattern-lifecycle-handler.test.ts`
-  — the handler reading a hosted space's ACL through the memory server.
+- `runtime/toolshed/lib/pattern-lifecycle.test.ts` — the writer check against a
+  real ACL document, the code each refusal carries, and a session request's
+  validation and outcome, including the requester's instance a scoped `setsrc`
+  or `follow` names; `runtime/toolshed/lib/pattern-lifecycle-handler.test.ts` —
+  the handler reading a hosted space's ACL through the memory server.
 - `runtime/cli/test/pattern-lifecycle.test.ts` — the client's arguments on the
-  session and its refusal handling against a stubbed session;
+  session and its refusal handling against a stubbed session, including a
+  scope sent only where the server takes one;
   `runtime/cli/test/piece-follow.test.ts` — `cf piece follow`'s served path, its
-  refusals, and the deployment that does not know the verb;
+  refusals, a scoped piece, and the deployment that does not know the verb;
   `runtime/cli/test/piece-integration.test.ts` and
   `runtime/cli/integration/integration.sh` drive the real verbs against a
   toolshed in both CI arms.

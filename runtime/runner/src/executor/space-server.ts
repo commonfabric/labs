@@ -3379,14 +3379,20 @@ export class SpaceServer implements TransactionSealDestination {
       );
     }
     this.#recordLifecycleVerbWrites(tx);
-    const identity = runtime.scopeKeyIdentity;
+    // A transaction that names a principal's instance — a served source
+    // change to a requester's piece held at a user or session scope —
+    // addresses its scoped documents as that instance; any other addresses
+    // them as the serving runtime's own.
+    const instance = inner.scopeKeyIdentity;
+    const identity = instance ?? runtime.scopeKeyIdentity;
     // Ordinary patches and elisions are sound only over a committed base.
     // Guard every commit dependency or attempted document, including a net-zero
     // write and untouched siblings carried by a whole-document replacement.
     // These verifier reads consume no flow labels. They remain in the
     // scheduling log so an empty seal validates the original snapshot too.
     const emptyNative: NativeStorageCommit = { operations: [] };
-    const initialReads = replica.storeCommitOf(emptyNative, inner).reads;
+    const initialReads =
+      replica.storeCommitOf(emptyNative, inner, instance).reads;
     const dependencies = new Set(
       [...initialReads.confirmed, ...initialReads.pending].map((read) =>
         toDirtyKey(read.id, resolveScopeKey(read.scope, identity))
@@ -3420,13 +3426,11 @@ export class SpaceServer implements TransactionSealDestination {
     }
     // An empty seal clears its activity without calling the collector.
     // Preserve its read set so even that verdict is checked by the store.
-    const emptyStore = replica.storeCommitOf(emptyNative, inner);
+    const emptyStore = replica.storeCommitOf(emptyNative, inner, instance);
     // Every space the transaction wrote is collected before anything
     // commits, so a refusal leaves nothing behind. The store's shape of the
     // serving space's commit is taken during the handoff, while the
-    // transaction's read log is still the transaction's to give, under the
-    // replica's own identity: a direct commit is a bookkeeping run's, which
-    // carries no other.
+    // transaction's read log is still the transaction's to give.
     const handed: Array<{
       space: MemorySpace;
       native: NativeStorageCommit;
@@ -3446,7 +3450,7 @@ export class SpaceServer implements TransactionSealDestination {
           native,
           source,
           store: space === this.#options.space
-            ? replica.storeCommitOf!(native, source)
+            ? replica.storeCommitOf!(native, source, instance)
             : undefined,
         });
         return Promise.resolve({ ok: {} });
@@ -3531,7 +3535,7 @@ export class SpaceServer implements TransactionSealDestination {
       native,
       source,
       Promise.resolve({ committed: { seq: committedSeq } }),
-      { reads },
+      { reads, ...(instance === undefined ? {} : { identity: instance }) },
     );
     const settled = await sealed.settled;
     if (settled.error !== undefined) {

@@ -117,6 +117,7 @@ If the server accepts the protocol, it returns:
     "sessionReportV1": true,
     "patternLifecycle": true,
     "patternLifecycleOrigins": true,
+    "patternLifecycleScopes": true,
     "servedRequests": true,
     "spaceInvites": true,
     "syncCrossingsV1": true,
@@ -408,6 +409,13 @@ build-inherent. It defaults to `false` when absent, from an older server that
 refuses `follow` unread and drops a `setsrc` origin, detaching the piece; a
 client then sends neither. Only the server advertises it, and a client's
 `hello` leaves it out.
+
+`patternLifecycleScopes` advertises that `setsrc` and `follow` take `scope`, the
+scope a piece is addressed at, and change the requester's instance of a piece
+held at a user or session scope (section 4.3.10). It is build-inherent. It
+defaults to `false` when absent, from an older server that ignores `scope` and
+changes the piece's space instance; a client then sends no scoped request. Only
+the server advertises it, and a client's `hello` leaves it out.
 
 `servedRequests` advertises that the server takes `served` requests (section
 4.3.12), the crossings another process of its deployment sends it as the owner
@@ -800,6 +808,7 @@ interface HelloMessage {
     sessionReportV1?: boolean;
     patternLifecycle?: boolean;
     patternLifecycleOrigins?: boolean;
+    patternLifecycleScopes?: boolean;
     servedRequests?: boolean;
     spaceInvites?: boolean;
     spaceKind?: boolean;
@@ -1844,8 +1853,8 @@ Semantics:
   grant reached only through a proof chain's root issuer (section 4.5.1) does
   not count, since the verb commits with the requester's own trust. An
   anonymous session, or a principal without WRITE, is refused with `forbidden`
-- the server hands the verb, its `body` unread, and the principal to the
-  handler its host installed; a server with no handler refuses with
+- the server hands the verb, its `body` unread, the principal and the session to
+  the handler its host installed; a server with no handler refuses with
   `server-execution-off`, and a handler that throws is refused with `internal`.
   The handler validates `body` and refuses one that does not match the verb's
   schema with `invalid-request`

@@ -249,6 +249,73 @@ describe("pattern-lifecycle client", () => {
       ]);
     });
 
+    it("sends the scope of a piece addressed at one only to a deployment whose verbs say they take it", async () => {
+      const { cfg, sent } = sessionConfig(() =>
+        Promise.resolve({
+          pieceId: "p1",
+          pattern: { identity: "i", symbol: "s" },
+          origin: "system:x.tsx",
+          revisionId: "r2",
+          seq: 3,
+          detachedOrigin: null,
+          scope: "session",
+        })
+      );
+      let takes: boolean | undefined = false;
+      const config = {
+        ...cfg,
+        takesOrigins: () => Promise.resolve(true),
+        takesScopes: () => Promise.resolve(takes),
+      };
+      const follow = () =>
+        followPieceOnServer(config, {
+          space: SPACE_DID,
+          piece: "p1",
+          scope: "session",
+          origin: "system:x.tsx",
+        });
+      const setsrc = (scope?: "user") =>
+        setPieceSourceOnServer(config, {
+          space: SPACE_DID,
+          piece: "p1",
+          ...(scope === undefined ? {} : { scope }),
+          program: PROGRAM,
+        });
+
+      // An older server reads past the scope and changes the space
+      // instance, and one that cannot be asked might: neither is sent to.
+      for (const answer of [false, undefined]) {
+        takes = answer;
+        for (const refused of [follow(), setsrc("user")]) {
+          const failure = await refused.then(() => undefined, (e) => e);
+          expect(failure).toBeInstanceOf(ServedLifecycleError);
+          expect(failure.code).toBe("scope-unsupported");
+          expect(failure.refused).toBe(true);
+        }
+      }
+      expect(sent).toEqual([]);
+      // A space piece does not depend on the capability.
+      await setsrc();
+      expect(sent).toEqual([{
+        space: SPACE_DID,
+        verb: "setsrc",
+        body: { piece: "p1", program: PROGRAM },
+      }]);
+
+      takes = true;
+      expect((await follow()).scope).toBe("session");
+      await setsrc("user");
+      expect(sent.slice(1)).toEqual([{
+        space: SPACE_DID,
+        verb: "follow",
+        body: { piece: "p1", scope: "session", origin: "system:x.tsx" },
+      }, {
+        space: SPACE_DID,
+        verb: "setsrc",
+        body: { piece: "p1", scope: "user", program: PROGRAM },
+      }]);
+    });
+
     it("raises the server's refusal with its code, which settles the verb", async () => {
       const { cfg } = sessionConfig(() =>
         Promise.reject(refusal("origin-unreachable", "Failed to fetch: 404"))

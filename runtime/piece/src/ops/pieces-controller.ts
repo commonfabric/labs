@@ -20,6 +20,7 @@ import { isDID } from "@commonfabric/identity/did";
 import { HttpProgramResolver } from "@commonfabric/js-compiler/program";
 import { setLLMUrl } from "@commonfabric/llm";
 import type { ClientBuild } from "@commonfabric/memory/v2/client-info";
+import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
 import type { CfcPosture } from "@commonfabric/runner";
 import {
   applyPieceSourceTransition,
@@ -139,7 +140,7 @@ import {
 import { ensurePrivateInboxOf } from "./private-inbox.ts";
 import { repairProfileRootsOf } from "./profile-space-root.ts";
 import { type ShareIntake, startShareIntakeOf } from "./share-intake.ts";
-import { compileProgram } from "./utils.ts";
+import { compileProgram, instanceTx } from "./utils.ts";
 export {
   DEFAULT_APP_PATTERN_SOURCE,
   deriveSystemPatternSource,
@@ -1541,7 +1542,13 @@ export class PiecesController<T = unknown> {
     if (argumentLink === undefined) {
       throw new Error("piece missing argument cell");
     }
-    return this.runtime.getCellFromLink(argumentLink);
+    // A piece read as one principal's instance has its argument read as
+    // that principal's too.
+    return this.runtime.getCellFromLink(
+      argumentLink,
+      undefined,
+      instanceTx(piece),
+    );
   }
 
   getResult<T = unknown>(
@@ -1821,6 +1828,13 @@ export class PiecesController<T = unknown> {
 
       /** The scope the piece is addressed at; absent, its space instance. */
       scope?: CellScope;
+
+      /**
+       * The principal, and for session scope the session, whose instance of
+       * a piece addressed at a user or session scope the update reads and
+       * writes (`RunSyncedOptions.scopeKeyIdentity`).
+       */
+      scopeKeyIdentity?: ScopeKeyIdentity;
     },
   ): Promise<{
     /** Cell view reconciled to the pattern current after post-commit work. */
@@ -1853,6 +1867,9 @@ export class PiecesController<T = unknown> {
             options.served.actingUser,
           ),
         }),
+        ...(options.scopeKeyIdentity === undefined
+          ? {}
+          : { scopeKeyIdentity: options.scopeKeyIdentity }),
       },
     );
     if (options.served !== undefined) return result;

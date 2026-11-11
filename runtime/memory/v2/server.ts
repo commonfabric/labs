@@ -3265,6 +3265,13 @@ export type PatternLifecycleCall = {
   /** The DID the request's session was opened as, which holds WRITE on `space`. */
   principal: string;
 
+  /**
+   * The memory session the request came on, which a session-scoped address
+   * names the instance of, as it does for the session's own reads and
+   * commits.
+   */
+  sessionId: string;
+
   verb: PatternLifecycleVerb;
 
   /** The verb's arguments, as the client sent them and not yet validated. */
@@ -7102,6 +7109,7 @@ export class Server {
       const outcome = await handler({
         space,
         principal: writer.principal,
+        sessionId,
         verb: message.verb,
         body: message.body,
       });

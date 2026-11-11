@@ -33,7 +33,18 @@ export interface LifecycleClientConfig {
    * origin is then sent regardless.
    */
   takesOrigins?: (space: MemorySpace) => Promise<boolean | undefined>;
+
+  /**
+   * Whether the `setsrc` and `follow` verbs of the deployment serving `space`
+   * take a scope, as its memory server advertises (`patternLifecycleScopes`).
+   * A verb addressed at a scope is sent only when this answers `true`: a
+   * server that takes none changes the piece's space instance instead.
+   */
+  takesScopes?: (space: MemorySpace) => Promise<boolean | undefined>;
 }
+
+/** The scope a served verb names a piece's requester instance at. */
+export type ServedPieceScope = "user" | "session";
 
 /** A content-addressed pattern pointer. */
 export interface PatternRef {
@@ -68,6 +79,7 @@ const REFUSED_CODES: ReadonlySet<string> = new Set([
   "payload-too-large",
   "pattern-not-found",
   "piece-not-found",
+  "scope-unsupported",
   "server-execution-off",
   "setup-failed",
   "slug-taken",
@@ -178,6 +190,26 @@ async function refuseUntakenOrigin(
 }
 
 /**
+ * Refuses, as `scope-unsupported` and before anything is sent, a verb
+ * addressed at a scope to a deployment that does not say its verbs take one:
+ * such a server reads past `scope` and changes the piece's space instance.
+ */
+async function refuseUntakenScope(
+  config: LifecycleClientConfig,
+  space: MemorySpace,
+  verb: "setsrc" | "follow",
+): Promise<void> {
+  if (await config.takesScopes?.(space) !== true) {
+    throw new ServedLifecycleError(
+      "scope-unsupported",
+      `This deployment serves \`${verb}\` for a piece's space instance ` +
+        "only, and this piece is addressed at a scope, so the change was " +
+        "not sent.",
+    );
+  }
+}
+
+/**
  * Create a piece in `space` from `program`, set up and not started here,
  * with its name in the setup transaction and registration through the
  * default pattern action after setup commits. Missing roots or handlers retain
@@ -233,17 +265,21 @@ export async function instantiatePieceOnServer(
  * Replace `piece`'s source in `space` with `program`, through the same
  * compatibility checks a client-side update runs, in a setup transaction
  * the serving runtime commits to the store on its own. With `origin`, the
- * piece follows that origin from then on rather than being detached. The
- * receipt is that transaction's: the pointer the piece now holds, the
- * revision it appended, the origin it detached, and the origin it records,
- * which a server that does not take one leaves out. Unless `start` is
- * `false`, the serving loop derives the updated piece in the cycle after.
+ * piece follows that origin from then on rather than being detached. With
+ * `scope`, the change is to the session principal's instance of a piece
+ * addressed at that scope. The receipt is that transaction's: the pointer
+ * the piece now holds, the revision it appended, the origin it detached, the
+ * origin it records, which a server that does not take one leaves out, and
+ * the scope it changed. Unless `start` is `false`, the serving loop derives
+ * an updated space piece in the cycle after; a scoped one derives when this
+ * connection asks for it.
  */
 export async function setPieceSourceOnServer(
   config: LifecycleClientConfig,
   input: {
     space: MemorySpace;
     piece: string;
+    scope?: ServedPieceScope;
     program: RuntimeProgram;
     repository?: string;
     dangerouslyAllowIncompatibleSchema?: boolean;
@@ -257,7 +293,11 @@ export async function setPieceSourceOnServer(
   seq: number;
   detachedOrigin: string | null;
   origin?: string;
+  scope?: ServedPieceScope;
 }> {
+  if (input.scope !== undefined) {
+    await refuseUntakenScope(config, input.space, "setsrc");
+  }
   if (input.origin !== undefined) {
     await refuseUntakenOrigin(
       config,
@@ -269,6 +309,7 @@ export async function setPieceSourceOnServer(
   return await call(config, "setsrc", {
     space: input.space,
     piece: input.piece,
+    ...(input.scope === undefined ? {} : { scope: input.scope }),
     program: wireProgram(input.program),
     ...(input.repository === undefined ? {} : { repository: input.repository }),
     ...(input.origin === undefined ? {} : { origin: input.origin }),
@@ -287,15 +328,19 @@ export async function setPieceSourceOnServer(
  * pins refuse a piece that moved off the pattern or the source-log head they
  * name (`source-moved`), and a candidate that cannot run over the piece's
  * retained state is refused (`incompatible`) unless the override is sent.
- * The receipt names the pointer the piece now holds, the origin as it
- * records it, and the revision the transition appended. Unless `start` is
- * `false`, the serving loop derives the piece in the cycle after.
+ * With `scope`, the follow is of the session principal's instance of a
+ * piece addressed at that scope. The receipt names the pointer the piece now
+ * holds, the origin as it records it, the revision the transition appended,
+ * and the scope it changed. Unless `start` is `false`, the serving loop
+ * derives a space piece in the cycle after; a scoped one derives when this
+ * connection asks for it.
  */
 export async function followPieceOnServer(
   config: LifecycleClientConfig,
   input: {
     space: MemorySpace;
     piece: string;
+    scope?: ServedPieceScope;
     origin: string;
     expectedPattern?: PatternRef;
     expectedRevision?: string | null;
@@ -310,6 +355,8 @@ export async function followPieceOnServer(
 
   /** The incompatibility the override accepted, when the review found one. */
   acceptedIncompatibility?: string;
+
+  scope?: ServedPieceScope;
 }> {
   await refuseUntakenOrigin(
     config,
@@ -317,9 +364,13 @@ export async function followPieceOnServer(
     "This deployment serves piece lifecycle verbs, and `follow` is not " +
       "served yet: its memory server does not advertise origins.",
   );
+  if (input.scope !== undefined) {
+    await refuseUntakenScope(config, input.space, "follow");
+  }
   return await call(config, "follow", {
     space: input.space,
     piece: input.piece,
+    ...(input.scope === undefined ? {} : { scope: input.scope }),
     origin: input.origin,
     ...(input.expectedPattern === undefined
       ? {}

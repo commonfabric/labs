@@ -53,13 +53,14 @@ import { PieceOriginError } from "./piece-origin.ts";
 import {
   isPieceSourceCompatibilityRefusal,
   type PatternUpdateReceipt,
-  type PieceController,
+  PieceController,
   type PieceSourceActionResult,
   PieceSourceChangedError,
   type PieceSourcePreparation,
   type PreparedPieceSourceChange,
 } from "./piece-controller.ts";
 import type { PiecesController } from "./pieces-controller.ts";
+import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
 import { setCfcTrustSnapshot } from "@commonfabric/runner/cfc/trust-authority";
 
 /** A content-addressed pattern pointer: the closure and the export run. */
@@ -171,10 +172,26 @@ export type ServedInstantiateReceipt = {
   slug?: string;
 };
 
+/**
+ * The requester's instance of a piece held at a scope narrower than its
+ * space, which a served source change reads and writes: `identity` names the
+ * requester, and for session scope the memory session the request came on.
+ */
+export type ServedInstance = {
+  scope: "user" | "session";
+  identity: ScopeKeyIdentity;
+};
+
 /** What `setsrc` asks for. */
 export interface ServedSetSourceRequest {
   /** The piece whose source is replaced. */
   pieceId: string;
+
+  /**
+   * The requester's instance of the piece, for one addressed at a user or
+   * session scope; absent, the piece's space instance.
+   */
+  instance?: ServedInstance;
 
   /**
    * The pattern the piece moves to: a closure the space already holds. A
@@ -234,6 +251,9 @@ export type ServedSetSourceReceipt = {
 
   /** The origin the revision records, when the request named one. */
   origin?: string;
+
+  /** The scope of the instance the update changed, when it was not space. */
+  scope?: ServedInstance["scope"];
 };
 
 /**
@@ -243,6 +263,9 @@ export type ServedSetSourceReceipt = {
 export interface ServedFollowRequest {
   /** The piece pointed at the origin. */
   pieceId: string;
+
+  /** As {@link ServedSetSourceRequest.instance} is. */
+  instance?: ServedInstance;
 
   /** What the piece follows from then on: a `system:` ref or a fabric URL. */
   origin: string;
@@ -291,6 +314,9 @@ export type ServedFollowReceipt = {
 
   /** The incompatibility the request accepted, when the review found one. */
   acceptedIncompatibility?: string;
+
+  /** The scope of the instance the follow changed, when it was not space. */
+  scope?: ServedInstance["scope"];
 };
 
 /**
@@ -919,7 +945,7 @@ export async function servedSetPieceSource(
     { pattern: request.pattern },
     { repairCache: false },
   );
-  const piece = await servedPiece(pieces, request.pieceId);
+  const piece = await servedPiece(pieces, request.pieceId, request.instance);
   let receipt: PatternUpdateReceipt;
   try {
     receipt = await piece.setCompiledPattern(pattern, {
@@ -949,12 +975,16 @@ export async function servedSetPieceSource(
     seq: receipt.seq,
     detachedOrigin: receipt.detachedOrigin,
     ...(receipt.origin === undefined ? {} : { origin: receipt.origin }),
+    ...(request.instance === undefined
+      ? {}
+      : { scope: request.instance.scope }),
   };
 }
 
 /**
  * The piece `pieceId` names, opened on the serving runtime without being
- * started, for a verb that changes its source.
+ * started, for a verb that changes its source: the requester's `instance` of
+ * it when one is named, read and written as that instance by the controller.
  *
  * @throws ServedLifecycleRefusal `piece-not-found` when the address names no
  * piece the space holds.
@@ -962,10 +992,24 @@ export async function servedSetPieceSource(
 async function servedPiece(
   pieces: PiecesController,
   pieceId: string,
+  instance?: ServedInstance,
 ): Promise<PieceController> {
   let piece: PieceController;
   try {
-    piece = await pieces.get(pieceId, false);
+    if (instance === undefined) {
+      piece = await pieces.get(pieceId, false);
+    } else {
+      const cell = pieceAt(
+        pieces.runtime,
+        pieces.getSpace(),
+        pieceId,
+        instance,
+      );
+      await cell.sync();
+      piece = new PieceController(pieces, cell, {
+        scopeKeyIdentity: instance.identity,
+      });
+    }
   } catch (error) {
     throw new ServedLifecycleRefusal(
       "piece-not-found",
@@ -982,6 +1026,30 @@ async function servedPiece(
     );
   }
   return piece;
+}
+
+/**
+ * The cell of the piece `pieceId` names in `space`: its space instance, or
+ * the requester's `instance`, read through a transaction that names it.
+ */
+function pieceAt(
+  runtime: Runtime,
+  space: MemorySpace,
+  pieceId: string,
+  instance: ServedInstance | undefined,
+): Cell<unknown> {
+  const cell = runtime.getCellFromEntityId(
+    space,
+    entityIdFrom(pieceId),
+    [],
+    undefined,
+    undefined,
+    instance?.scope,
+  );
+  if (instance === undefined) return cell;
+  const tx = runtime.readTx();
+  tx.tx.scopeKeyIdentity = instance.identity;
+  return cell.withTx(tx);
 }
 
 /**
@@ -1010,18 +1078,17 @@ function setSourceRefusal(error: unknown): ServedLifecycleRefusal {
 
 /**
  * The durability read behind {@link servedSetPieceSource}: the piece
- * document holds the pattern pointer the transaction wrote and the
- * revision it appended, with the origin it records when it named one.
+ * document, at the requester's `instance` when the update named one, holds
+ * the pattern pointer the transaction wrote and the revision it appended,
+ * with the origin it records when it named one.
  */
 export async function confirmServedSetSource(
   runtime: Runtime,
   space: MemorySpace,
   receipt: ServedSetSourceReceipt,
+  instance?: ServedInstance,
 ): Promise<void> {
-  const piece = runtime.getCellFromEntityId(
-    space,
-    entityIdFrom(receipt.pieceId),
-  );
+  const piece = pieceAt(runtime, space, receipt.pieceId, instance);
   await piece.sync();
   const stored = getPatternIdentityRef(piece);
   if (
@@ -1054,7 +1121,7 @@ export async function servedPrepareFollow(
   pieces: PiecesController,
   request: ServedFollowRequest,
 ): Promise<ServedFollowPreparation> {
-  const piece = await servedPiece(pieces, request.pieceId);
+  const piece = await servedPiece(pieces, request.pieceId, request.instance);
   let preparation: PieceSourcePreparation;
   try {
     preparation = await piece.prepareSourceChange(
@@ -1097,7 +1164,7 @@ export async function servedFollowPieceSource(
   actingUser: string,
 ): Promise<ServedFollowReceipt> {
   const { request, prepared } = preparation;
-  const piece = await servedPiece(pieces, request.pieceId);
+  const piece = await servedPiece(pieces, request.pieceId, request.instance);
   let result: PieceSourceActionResult;
   try {
     result = await piece.changeSource(prepared.action, {
@@ -1129,6 +1196,9 @@ export async function servedFollowPieceSource(
     ...(preparation.acceptedIncompatibility === undefined
       ? {}
       : { acceptedIncompatibility: preparation.acceptedIncompatibility }),
+    ...(request.instance === undefined
+      ? {}
+      : { scope: request.instance.scope }),
   };
 }
 
@@ -1185,18 +1255,17 @@ function prepareFollowRefusal(error: unknown): unknown {
 
 /**
  * The durability read behind {@link servedFollowPieceSource}: the piece
- * document holds the pattern pointer and the origin the transition wrote,
- * and the revision it appended.
+ * document, at the requester's `instance` when the follow named one, holds
+ * the pattern pointer and the origin the transition wrote, and the revision
+ * it appended.
  */
 export async function confirmServedFollow(
   runtime: Runtime,
   space: MemorySpace,
   receipt: ServedFollowReceipt,
+  instance?: ServedInstance,
 ): Promise<void> {
-  const piece = runtime.getCellFromEntityId(
-    space,
-    entityIdFrom(receipt.pieceId),
-  );
+  const piece = pieceAt(runtime, space, receipt.pieceId, instance);
   await piece.sync();
   const stored = getPieceSourceSnapshot(piece);
   if (

@@ -157,6 +157,7 @@ export {
   sendEvent,
   setCell,
   sinkProjected,
+  syncCellForIdentity,
 } from "./cell.ts";
 export {
   getCellOrThrow,

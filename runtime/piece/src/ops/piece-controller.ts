@@ -4,6 +4,7 @@ import type {
   FabricValue,
   LinkScope,
 } from "@commonfabric/api";
+import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
 import {
   debugStr,
   fabricAwareEqual,
@@ -114,7 +115,7 @@ import {
   resolvePieceOriginSource,
 } from "./piece-origin.ts";
 import type { PiecesController } from "./pieces-controller.ts";
-import { commitFailure, compileProgram } from "./utils.ts";
+import { commitFailure, compileProgram, instanceTx } from "./utils.ts";
 
 const pieceUpdateLogger = getLogger("piece.update", {
   enabled: true,
@@ -4019,6 +4020,7 @@ export async function loadPiecePattern(
 export class PieceController<T = unknown> {
   #cell: Cell<T>;
   #pieces: PiecesController;
+  #scopeKeyIdentity: ScopeKeyIdentity | undefined;
   #mutationVersion = 0;
   #latestSuccessfulMutationVersion = 0;
   readonly id: string;
@@ -4026,14 +4028,27 @@ export class PieceController<T = unknown> {
   input: PieceCellIo;
   result: PieceCellIo;
 
-  constructor(pieces: PiecesController, cell: Cell<T>) {
+  /**
+   * Constructs a controller for the piece `cell` addresses. For a piece held
+   * at a user or session scope, `options.scopeKeyIdentity` names the
+   * principal, and for session scope the session, whose instance the
+   * controller reads and writes, as a serving runtime acting on a requester's
+   * piece does; absent, the instance the cell's transaction or the runtime's
+   * own identity names.
+   */
+  constructor(
+    pieces: PiecesController,
+    cell: Cell<T>,
+    options: { scopeKeyIdentity?: ScopeKeyIdentity } = {},
+  ) {
     const id = pieceId(cell);
     if (!id) {
       throw new Error("Could not get an ID from a Cell<Piece>");
     }
     this.id = id;
     this.#pieces = pieces;
-    this.#cell = cell;
+    this.#scopeKeyIdentity = options.scopeKeyIdentity;
+    this.#cell = this.#atInstance(cell);
     this.input = new PiecePropIo(this, "input");
     this.result = new PiecePropIo(this, "result");
   }
@@ -4392,6 +4407,7 @@ export class PieceController<T = unknown> {
     // read at the top of the change that led here, so there is nothing left
     // to throw either.
     await this.#pieces.runtime.editWithRetry((tx) => {
+      this.#nameInstance(tx);
       // An outcome describes the piece the attempt reasoned about. A
       // concurrent detach, edit, or repoint has moved it somewhere this
       // conclusion does not describe, so the write is dropped rather than
@@ -4415,6 +4431,9 @@ export class PieceController<T = unknown> {
         this.#pieces.runtime.stampServerRun(tx, {
           actionId: `source-change/${this.#cell.sourceURI}`,
           kind: "bookkeeping",
+          ...(this.#scopeKeyIdentity === undefined
+            ? {}
+            : { scopeKeyIdentity: this.#scopeKeyIdentity }),
         });
       }
       // A release time confirmed for the source the piece runs stays: an
@@ -4866,6 +4885,7 @@ export class PieceController<T = unknown> {
       try {
         await this.#runMutation(mutationVersion, async () => {
           const result = await this.#pieces.runtime.editWithRetry((tx) => {
+            this.#nameInstance(tx);
             applyPieceSourceTransition(
               this.#pieces.runtime,
               this.#cell,
@@ -5023,6 +5043,9 @@ export class PieceController<T = unknown> {
             undefined,
             {
               scope: this.#cell.getAsNormalizedFullLink().scope,
+              ...(this.#scopeKeyIdentity === undefined
+                ? {}
+                : { scopeKeyIdentity: this.#scopeKeyIdentity }),
               expectedPatternIdentity: previousRef,
               validateCurrentArgument: acceptedReview === undefined
                 ? undefined
@@ -5435,6 +5458,9 @@ export class PieceController<T = unknown> {
             undefined,
             {
               scope: this.#cell.getAsNormalizedFullLink().scope,
+              ...(this.#scopeKeyIdentity === undefined
+                ? {}
+                : { scopeKeyIdentity: this.#scopeKeyIdentity }),
               expectedPatternIdentity: previousRef,
               validateArgumentLinks: options?.dangerouslyAllowIncompatibleSchema
                 ? undefined
@@ -5529,7 +5555,7 @@ export class PieceController<T = unknown> {
         mutationVersion,
       );
       if (mutationVersion === this.#mutationVersion) {
-        this.#cell = cell;
+        this.#cell = this.#atInstance(cell);
       } else if (
         this.#latestSuccessfulMutationVersion === mutationVersion
       ) {
@@ -5550,7 +5576,7 @@ export class PieceController<T = unknown> {
   }
 
   async #refreshCellSchema(refreshVersion: number): Promise<void> {
-    const cell = this.#cell;
+    const cell = this.#atInstance(this.#cell);
     while (
       refreshVersion === this.#mutationVersion && cell === this.#cell
     ) {
@@ -5579,6 +5605,25 @@ export class PieceController<T = unknown> {
         this.#cell = cell.asSchema(pattern.resultSchema);
       }
       return;
+    }
+  }
+
+  /**
+   * `cell` read through a fresh transaction that names this controller's
+   * instance, when it addresses one, so a read sees the store as it stands
+   * now; `cell` itself otherwise.
+   */
+  #atInstance(cell: Cell<T>): Cell<T> {
+    if (this.#scopeKeyIdentity === undefined) return cell;
+    const tx = this.#pieces.runtime.readTx();
+    tx.tx.scopeKeyIdentity = this.#scopeKeyIdentity;
+    return cell.withTx(tx);
+  }
+
+  /** Has `tx` read and write this controller's instance, when it has one. */
+  #nameInstance(tx: IExtendedStorageTransaction): void {
+    if (this.#scopeKeyIdentity !== undefined) {
+      tx.tx.scopeKeyIdentity = this.#scopeKeyIdentity;
     }
   }
 
@@ -5905,7 +5950,7 @@ async function pieceSourceCompatibilityReview(
   await argumentCell.asSchema(candidate.argumentSchema).sync();
   try {
     pieces.runtime.runner.validateStoredArgument(
-      pieces.runtime.readTx(),
+      pieces.runtime.readTx(instanceTx(piece)),
       piece,
       candidate,
     );
@@ -5983,8 +6028,10 @@ function pieceSourceCfcEnvelopeIssue(
   candidate: Pattern,
   pieces: PiecesController,
 ): string | undefined {
-  // `readTx()` cannot write, so the two dry runs stay dry runs.
-  const tx = pieces.runtime.readTx();
+  // `readTx()` cannot write, so the two dry runs stay dry runs; a piece read
+  // as one principal's instance is reviewed through the transaction that
+  // names it.
+  const tx = pieces.runtime.readTx(instanceTx(piece));
   // The modules the release would install, as setup names them.
   const patternManager = pieces.runtime.patternManager;
   const entry = patternManager.getArtifactEntryRef(candidate);
@@ -6248,6 +6295,7 @@ async function executePatternUpdate(
     sourceTransition: PieceSourceTransition;
     served?: { actingUser: string };
     scope?: CellScope;
+    scopeKeyIdentity?: ScopeKeyIdentity;
   },
 ): Promise<{
   cell: Cell<unknown>;

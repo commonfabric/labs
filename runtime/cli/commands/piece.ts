@@ -2690,7 +2690,7 @@ serves now. A plain 'setsrc' detaches instead; 'setsrc --origin' records an
 origin over source you supply. Against a deployment that serves piece
 lifecycle verbs, its serving runtime resolves the origin, reviews what it
 serves, and commits the follow; there, a piece addressed at a scope
-(<id>@user, <id>@session) is refused.
+(<id>@user, <id>@session) is followed on your instance of it.
 
 --expect and --expect-revision make the follow conditional on the source state
 a caller inspected ('cf piece inspect --pattern-identity --json' reports both):

@@ -61,8 +61,15 @@ describe("cf piece follow", () => {
       const served = {
         runtime: { experimental: { serverExecution: true } },
         getSpace: () => BASE_OPTIONS.space,
-        getPieceCell: (id: string) => Promise.resolve({ id }),
-        getResult: (cell: { id: string }) => ({ resultOf: cell.id }),
+        getPieceCell: (
+          id: string,
+          _open: unknown,
+          _schema: unknown,
+          scope?: string,
+        ) => Promise.resolve({ id, ...(scope === undefined ? {} : { scope }) }),
+        getResult: (cell: { id: string; scope?: string }) => ({
+          resultOf: cell,
+        }),
         get: () => {
           throw new Error("must not reach the client-side repoint");
         },
@@ -119,7 +126,7 @@ describe("cf piece follow", () => {
           expectedPattern: { identity: "abc", symbol: "default" },
           expectedRevision: null,
         }]);
-        expect(pulled).toEqual([{ resultOf: "of:profile" }]);
+        expect(pulled).toEqual([{ resultOf: { id: "of:profile" } }]);
       });
 
       it("sends the override, and reports the incompatibility it accepted", async () => {
@@ -221,19 +228,72 @@ describe("cf piece follow", () => {
         expect(sent).toEqual([]);
       });
 
-      it("refuses a piece addressed at a scope, sending nothing", async () => {
-        let sent = false;
-        await expect(followServed(
-          {
-            followPieceOnServer: () => {
-              sent = true;
-              return Promise.resolve(receipt);
+      it("sends a piece addressed at a user or session scope with its scope, and refreshes that instance", async () => {
+        const sent: unknown[] = [];
+        const pulled: unknown[] = [];
+        for (const pieceScope of ["user", "session", "space"] as const) {
+          const result = await followServed(
+            {
+              followPieceOnServer: (_client, input) => {
+                sent.push(input);
+                return Promise.resolve(receipt);
+              },
+              pullServed: (_pieces, cell) => {
+                pulled.push(cell);
+                return Promise.resolve();
+              },
+            },
+            {},
+            { ...config, pieceScope },
+          );
+          expect(result).toEqual({ status: "applied" });
+        }
+        const piece = { space: BASE_OPTIONS.space, piece: "of:profile" };
+        const origin = "system:system/x.tsx";
+        expect(sent).toEqual([
+          { ...piece, scope: "user", origin },
+          { ...piece, scope: "session", origin },
+          { ...piece, origin },
+        ]);
+        expect(pulled).toEqual([
+          { resultOf: { id: "of:profile", scope: "user" } },
+          { resultOf: { id: "of:profile", scope: "session" } },
+          { resultOf: { id: "of:profile", scope: "space" } },
+        ]);
+      });
+
+      it("asks the memory server whether it takes scopes, and sends a scoped piece to none that does not", async () => {
+        const sent: unknown[] = [];
+        const older = {
+          ...served,
+          runtime: {
+            ...served.runtime,
+            storageManager: {
+              serverFlags: () =>
+                Promise.resolve({
+                  patternLifecycle: true,
+                  patternLifecycleOrigins: true,
+                }),
+              runPatternLifecycle: (...args: unknown[]) => {
+                sent.push(args);
+                return Promise.resolve({});
+              },
             },
           },
+        };
+        const failure = await followPieceSource(
+          { ...config, pieceScope: "user" },
+          "system:system/x.tsx",
           {},
-          { ...config, pieceScope: "session" },
-        )).rejects.toThrow("addressed at a scope");
-        expect(sent).toBe(false);
+          {
+            // deno-lint-ignore no-explicit-any
+            loadPieces: () => Promise.resolve(older as any),
+            resolvePieceAddress: () => Promise.resolve("of:profile"),
+          },
+        ).then(() => undefined, (error) => error);
+        expect(failure).toBeInstanceOf(ServedLifecycleError);
+        expect(failure.code).toBe("scope-unsupported");
+        expect(sent).toEqual([]);
       });
     });
 

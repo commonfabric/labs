@@ -9,6 +9,7 @@ import { entityIdFrom, isStream, Runtime } from "@commonfabric/runner";
 import {
   PiecesController,
   servedLifecycleRunner,
+  type ServedLifecycleVerbDescriptor,
   type ServedLifecycleVerbRunner,
 } from "@commonfabric/piece/ops";
 import { ExecutorHost } from "@commonfabric/runner/executor/host";
@@ -957,10 +958,14 @@ export default pattern(() => {
     }
   });
   describe("processLifecycleCall()", () => {
+    /** The memory session the handed-over calls came on. */
+    const SESSION = "session-of-the-call";
+
     it("returns an `upload` receipt as the outcome's `ok`", async () => {
       const outcome = await processLifecycleCall(deps, {
         space,
         principal: alice.did(),
+        sessionId: SESSION,
         verb: "upload",
         body: { program: PROGRAM },
       });
@@ -974,6 +979,7 @@ export default pattern(() => {
       const outcome = await processLifecycleCall(deps, {
         space,
         principal: bob.did(),
+        sessionId: SESSION,
         verb: "instantiate",
         body: { program: PROGRAM, register: false },
       });
@@ -986,18 +992,32 @@ export default pattern(() => {
       const noPiece = await processLifecycleCall(deps, {
         space,
         principal: alice.did(),
+        sessionId: SESSION,
         verb: "setsrc",
         body: { program: PROGRAM },
       });
       const noOrigin = await processLifecycleCall(deps, {
         space,
         principal: alice.did(),
+        sessionId: SESSION,
         verb: "follow",
         body: { piece: "of:piece" },
+      });
+      const unknownScope = await processLifecycleCall(deps, {
+        space,
+        principal: alice.did(),
+        sessionId: SESSION,
+        verb: "setsrc",
+        body: {
+          piece: "of:piece",
+          pattern: { identity: "x", symbol: "default" },
+          scope: "galaxy",
+        },
       });
       const bothSources = await processLifecycleCall(deps, {
         space,
         principal: alice.did(),
+        sessionId: SESSION,
         verb: "instantiate",
         body: {
           program: PROGRAM,
@@ -1011,16 +1031,76 @@ export default pattern(() => {
       expect(noOrigin).toEqual({
         refusal: { code: "invalid-request", message: expect.any(String) },
       });
+      expect(unknownScope).toEqual({
+        refusal: { code: "invalid-request", message: expect.any(String) },
+      });
       expect(bothSources).toEqual({
         refusal: { code: "invalid-request", message: expect.any(String) },
       });
       expect(host!.stats().lifecycleVerbs.runs).toBe(0);
     });
 
+    it("names the requester's instance of a user- or session-scoped piece in the verbs `setsrc` and `follow` run, and none for a space piece", async () => {
+      const sent: ServedLifecycleVerbDescriptor[] = [];
+      const recording: ServedLifecycleVerbRunner = {
+        runLifecycleVerb: (_space, verb) => {
+          sent.push(verb);
+          return Promise.resolve({ receipt: {}, timings: [] });
+        },
+      };
+      const recorded = { ...deps, host: () => recording };
+      const pattern = { identity: "p", symbol: "default" };
+      for (const scope of [undefined, "space", "user", "session"] as const) {
+        const scoped = scope === undefined ? {} : { scope };
+        for (
+          const [verb, body] of [
+            ["setsrc", { piece: "of:piece", pattern, ...scoped }],
+            ["follow", {
+              piece: "of:piece",
+              origin: "system:a.tsx",
+              ...scoped,
+            }],
+          ] as const
+        ) {
+          const outcome = await processLifecycleCall(recorded, {
+            space,
+            principal: alice.did(),
+            sessionId: SESSION,
+            verb,
+            body,
+          });
+          assert("ok" in outcome, JSON.stringify(outcome));
+        }
+      }
+
+      const user = { scope: "user", identity: { principal: alice.did() } };
+      const session = {
+        scope: "session",
+        identity: { principal: alice.did(), sessionId: SESSION },
+      };
+      expect(
+        sent.flatMap((verb) =>
+          verb.name === "setsrc" || verb.name === "follow-prepare"
+            ? [[verb.name, verb.request.instance]]
+            : []
+        ),
+      ).toEqual([
+        ["setsrc", undefined],
+        ["follow-prepare", undefined],
+        ["setsrc", undefined],
+        ["follow-prepare", undefined],
+        ["setsrc", user],
+        ["follow-prepare", user],
+        ["setsrc", session],
+        ["follow-prepare", session],
+      ]);
+    });
+
     it("returns a verb's refusal under its own code", async () => {
       const outcome = await processLifecycleCall(deps, {
         space,
         principal: mallory.did(),
+        sessionId: SESSION,
         verb: "instantiate",
         body: { program: PROGRAM },
       });

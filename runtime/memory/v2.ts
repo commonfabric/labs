@@ -1541,6 +1541,16 @@ export type MemoryProtocolFlags = {
   patternLifecycleOrigins?: boolean;
 
   /**
+   * Server capability: the `setsrc` and `follow` verbs this server runs take
+   * `scope`, the scope a piece is addressed at, and change the requester's
+   * instance of a piece held at a user or session scope (04-protocol.md
+   * §4.3.10). Build-inherent. Absent (an older server) parses to false: such
+   * a server ignores `scope` and changes the piece's space instance, so a
+   * client sends no scoped request.
+   */
+  patternLifecycleScopes?: boolean;
+
+  /**
    * Server capability: the server runs `served` requests (04-protocol.md
    * §4.3.12), the crossings one serving process sends the process that owns
    * the target space. Advertised exactly while the deployment has a served
@@ -1629,6 +1639,7 @@ export type WireMemoryProtocolFlags = {
   sessionReportV1?: boolean;
   patternLifecycle?: boolean;
   patternLifecycleOrigins?: boolean;
+  patternLifecycleScopes?: boolean;
   servedRequests?: boolean;
   spaceInvites?: boolean;
   instanceNameMark?: boolean;
@@ -3092,6 +3103,8 @@ export const getMemoryProtocolFlags = (): MemoryProtocolFlags => ({
   instanceNameMark: true,
   // Build-inherent: this build's lifecycle verbs take an origin.
   patternLifecycleOrigins: true,
+  // Build-inherent: this build's `setsrc` and `follow` take a scope.
+  patternLifecycleScopes: true,
   // Configuration rather than build-inherent: a `Server` advertises each
   // from what it was given (`Server.memoryProtocolFlags()`).
   patternLifecycle: false,
@@ -3357,6 +3370,14 @@ export const parseMemoryProtocolFlags = (
     return null;
   }
 
+  const patternLifecycleScopes = value.patternLifecycleScopes;
+  if (
+    patternLifecycleScopes !== undefined &&
+    typeof patternLifecycleScopes !== "boolean"
+  ) {
+    return null;
+  }
+
   const servedRequests = value.servedRequests;
   if (servedRequests !== undefined && typeof servedRequests !== "boolean") {
     return null;
@@ -3464,6 +3485,9 @@ export const parseMemoryProtocolFlags = (
     // Absent (an older server) parses to false: a client then sends neither
     // `follow` nor a `setsrc` origin.
     patternLifecycleOrigins: patternLifecycleOrigins === true,
+    // Absent (an older server) parses to false: a client then sends no
+    // scoped `setsrc` or `follow`.
+    patternLifecycleScopes: patternLifecycleScopes === true,
     // Absent (an older server) parses to false: a client then finds the
     // links out of a space by reading what it synced.
     syncCrossingsV1: syncCrossingsV1 === true,
@@ -3522,6 +3546,7 @@ export const wireMemoryProtocolFlags = (
   sessionReportV1: flags.sessionReportV1,
   patternLifecycle: flags.patternLifecycle,
   patternLifecycleOrigins: flags.patternLifecycleOrigins,
+  patternLifecycleScopes: flags.patternLifecycleScopes,
   servedRequests: flags.servedRequests,
   spaceInvites: flags.spaceInvites,
   instanceNameMark: flags.instanceNameMark,

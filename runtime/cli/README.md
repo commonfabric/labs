@@ -1616,18 +1616,22 @@ store, since a source update publishes module update authority that requires a
 transaction committing to storage itself. What stays in this process is the
 refresh a client-side update runs after its commit: the command starts the piece
 it holds and reports that outcome beside the receipt, exiting non-zero when the
-refresh fails over a durable commit. A piece addressed at a scope keeps the
-client-side path. `cf piece setsrc --check` performs every step in this process
-on every deployment. `cf piece follow` sends the piece's id and the origin, with
+refresh fails over a durable commit. A piece addressed at a scope (`<id>@user`,
+`<id>@session`) is sent with its scope, and the serving runtime changes your
+instance of it. `cf piece setsrc --check` performs every step in this process on
+every deployment. `cf piece follow` sends the piece's id and the origin, with
 its pins and override, as the `follow` verb; the serving runtime resolves the
 origin, reviews what it serves, and commits the transition that records it. The
 command then asks the server for the piece's result, and reports a failure of
-that over the durable follow, as `setsrc` does. A piece addressed at a scope is
-refused there. A deployment whose memory server does not advertise that its
-lifecycle verbs take an origin (`patternLifecycleOrigins`) is told, before
-anything is sent, that it does not serve `follow` yet, and `setsrc --origin` is
-refused there the same way, as `origin-unsupported`. The contract, including the
-refusals and their codes, is
+that over the durable follow and sends a scoped piece's scope, as `setsrc` does.
+A deployment whose memory server does not advertise that its lifecycle verbs
+take an origin (`patternLifecycleOrigins`) is told, before anything is sent,
+that it does not serve `follow` yet, and `setsrc --origin` is refused there the
+same way, as `origin-unsupported`; one that does not advertise that they take a
+scope (`patternLifecycleScopes`) is sent no scoped `setsrc` or `follow`, which
+is refused as `scope-unsupported`. Under server execution neither command
+changes a piece's source in this process. The contract, including the refusals
+and their codes, is
 [`server-pattern-lifecycle.md`](../../docs/features/server-pattern-lifecycle.md).
 
 ## Piece discovery

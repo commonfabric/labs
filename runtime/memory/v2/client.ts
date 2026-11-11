@@ -2241,9 +2241,10 @@ export class Client {
       .withResolvers<void>();
     this.#helloPending = ack;
     // `sessionReportV1`, `watchRemoveV1`, `watchSetPartsV1`,
-    // `patternLifecycle`, `patternLifecycleOrigins`, `servedRequests`,
-    // `spaceInvites` and `instanceNameMark` are the server's capabilities
-    // alone: the client reads them from `hello.ok` and
+    // `patternLifecycle`, `patternLifecycleOrigins`,
+    // `patternLifecycleScopes`, `servedRequests`, `spaceInvites` and
+    // `instanceNameMark` are the server's capabilities alone: the client
+    // reads them from `hello.ok` and
     // never offers them. Other flags an endpoint does not know are ignored
     // there, since the routed flag allowlists were removed (infra DEVIATIONS
     // row 41).
@@ -2253,6 +2254,7 @@ export class Client {
       watchSetPartsV1: _stagedSetsServerOnly,
       patternLifecycle: _lifecycleServerOnly,
       patternLifecycleOrigins: _lifecycleOriginsServerOnly,
+      patternLifecycleScopes: _lifecycleScopesServerOnly,
       servedRequests: _servedServerOnly,
       spaceInvites: _invitesServerOnly,
       instanceNameMark: _instanceNameMarkServerOnly,
