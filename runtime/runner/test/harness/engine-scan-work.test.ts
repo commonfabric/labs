@@ -18,23 +18,15 @@ import { StorageManager } from "../../src/storage/cache.deno.ts";
 // This file's isolated runtime installs the counting loader; the engine's
 // identity tests use the real compiler stack in their own files. All three
 // scans the stack offers are counted, so a step that parses a module through
-// any of them shows up here. So is each resolution of a program, which parses
-// every module it reaches on its own, and every parse the runner makes through
-// the stack's `typescript`, which is how record assembly reads a compiled body.
+// any of them shows up here. So is each resolution of a program through the
+// stack's `resolveProgram`, which parses every module it reaches on its own,
+// and every parse the runner makes through the stack's `typescript`, which is
+// how record assembly reads a compiled body.
 const scans = spy(compiler.scanModuleDeclarations);
 const importScans = spy(compiler.collectImportSpecifiers);
 const dataFileScans = spy(compiler.collectDataFileNames);
-const resolves = spy(compiler.TypeScriptCompiler.prototype.resolveProgram);
+const resolves = spy(compiler.resolveProgram);
 const parses = spy(compiler.ts.createSourceFile);
-
-/** The stack's compiler, with each program resolution recorded in `resolves`. */
-class CountingCompiler extends compiler.TypeScriptCompiler {
-  override resolveProgram(
-    ...args: Parameters<compiler.TypeScriptCompiler["resolveProgram"]>
-  ): ReturnType<compiler.TypeScriptCompiler["resolveProgram"]> {
-    return resolves.call(this, ...args);
-  }
-}
 
 await ensureCompilerStack(() =>
   Promise.resolve({
@@ -48,7 +40,7 @@ await ensureCompilerStack(() =>
     scanModuleDeclarations: scans,
     collectImportSpecifiers: importScans,
     collectDataFileNames: dataFileScans,
-    TypeScriptCompiler: CountingCompiler,
+    resolveProgram: resolves,
   })
 );
 

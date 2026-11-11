@@ -142,9 +142,12 @@ that has seen a wave's commit reads event counters that include what that
 wave's drain counted, and a later full post, never older than an events post
 before it, replaces the merged block with everything else. The loop's own
 logger counts and timing statistics are the worker realm's, so they cross on
-request (`ServingLoopHandle.diagnostics()`), and a request waits for the
-worker's turn: `/api/health/serving-loop-realm` is the route that asks, kept
-apart from `stats` so that a worker in a long settle, or one that is hung,
+request (`ServingLoopHandle.diagnostics()`), with those of the compile worker
+the serving worker starts under `compile-worker:` logger names
+(`servingLoopDiagnostics()`, a snapshot read without waiting on the compile
+worker), and a request waits for the serving worker's turn:
+`/api/health/serving-loop-realm` is the route that asks, kept apart from
+`stats` so that a worker in a long settle, or one that is hung,
 delays only the caller who asked for its loggers. A test that reads a refusal
 the loop's own CFC gate logged asks the handle rather than its own process's
 loggers.
@@ -171,8 +174,13 @@ the engine's replay keying, which keys on the holder and the counter.
 **The runtime's other needs are already remote.** Pattern sources come from
 `/api/patterns` over HTTP, which the main thread answers; the compiled-module
 byte cache is per worker, and that worker's runtimes take turns at a cold compile
-so that a program compiles once; external effects (`fetch`, LLM calls, the
-outbox) run where the runtime runs. A Worker started without a permission
+so that a program compiles once; the type-check, transform and emit step of
+a serving runtime's compiles runs in a compile worker the serving worker
+starts (`ModuleCompileWorker`), so its CPU and its heap are off the thread
+every space's loop shares, except for a compile instrumented for pattern
+coverage or one that asks for its transformed program, which runs on that
+thread; external effects (`fetch`, LLM calls, the outbox) run
+where the runtime runs. A Worker started without a permission
 descriptor inherits the process's permissions, FFI for SQLite included.
 
 ## Ordering and failure

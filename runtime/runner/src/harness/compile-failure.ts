@@ -23,6 +23,10 @@ import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 const deterministicCompileFailures = new WeakSet<object>();
 
+// Failures of the place a compile ran rather than of its inputs, such as a
+// compile worker that died. They stay retryable whichever call site sees them.
+const placeCompileFailures = new WeakSet<object>();
+
 // An allocation failure is a function of heap pressure, not of the verified
 // source bytes, so it must never be classified as deterministic. The messages
 // are the stable V8 / JavaScriptCore / SpiderMonkey spellings for catchable
@@ -46,10 +50,21 @@ function isAllocationFailure(error: object): boolean {
 /** Mark and return a failure that will recur for the same verified bytes. */
 export function markDeterministicCompileFailure<T>(error: T): T {
   if (
-    isObjectOrArray(error) && !isAllocationFailure(error)
+    isObjectOrArray(error) && !isAllocationFailure(error) &&
+    !placeCompileFailures.has(error)
   ) {
     deterministicCompileFailures.add(error);
   }
+  return error;
+}
+
+/**
+ * Mark and return a failure of the place a compile ran, such as a compile
+ * worker that died, which {@link markDeterministicCompileFailure} then never
+ * marks: the same bytes may compile in a fresh one.
+ */
+export function markPlaceCompileFailure<T extends object>(error: T): T {
+  placeCompileFailures.add(error);
   return error;
 }
 

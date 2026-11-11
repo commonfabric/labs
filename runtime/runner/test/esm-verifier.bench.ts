@@ -13,9 +13,12 @@
  *     --no-check runtime/runner/test/esm-verifier.bench.ts
  */
 
+import { fromFileUrl } from "@std/path";
+
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { Engine } from "../src/harness/engine.ts";
+import { resolveLocalProgram } from "../src/harness/local-program.deno.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
 import { Runtime } from "../src/runtime.ts";
 import {
@@ -148,32 +151,21 @@ const smallProgram: RuntimeProgram = {
   ],
 };
 
+/** Resolves the parking program and its imports under the patterns root. */
 async function loadParkingCoordinatorProgram(): Promise<RuntimeProgram> {
-  const [contents, adminContents, vehiclesContents] = await Promise.all([
-    Deno.readTextFile(
-      new URL(
-        "../../../patterns/dev/factory-outputs/parking-coordinator/main.tsx",
-        import.meta.url,
+  const { engine, runtime, storageManager } = createBenchEngine();
+  const root = new URL("../../../patterns/", import.meta.url);
+  try {
+    return await resolveLocalProgram((resolver) => engine.resolve(resolver), {
+      main: fromFileUrl(
+        new URL("dev/factory-outputs/parking-coordinator/main.tsx", root),
       ),
-    ),
-    Deno.readTextFile(
-      new URL("../../../patterns/system/cfc/admin/mod.ts", import.meta.url),
-    ),
-    Deno.readTextFile(
-      new URL(
-        "../../../patterns/dev/factory-outputs/vehicles.ts",
-        import.meta.url,
-      ),
-    ),
-  ]);
-  return {
-    main: "/factory-outputs/parking-coordinator/main.tsx",
-    files: [
-      { name: "/factory-outputs/parking-coordinator/main.tsx", contents },
-      { name: "/cfc/admin/mod.ts", contents: adminContents },
-      { name: "/vehicles.ts", contents: vehiclesContents },
-    ],
-  };
+      root: fromFileUrl(root),
+    });
+  } finally {
+    await runtime.dispose();
+    await storageManager.close();
+  }
 }
 
 //

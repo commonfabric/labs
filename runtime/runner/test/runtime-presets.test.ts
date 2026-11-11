@@ -159,6 +159,7 @@ const MINIMAL_TREATMENT: Record<RuntimeOptionKey, MinimalTreatment> = {
   servingPosture: { treat: "absent" },
   // The same factory shares these among the serving runtimes it builds.
   compileTurns: { treat: "absent" },
+  moduleCompiler: { treat: "absent" },
 };
 
 describe("runtimePresets conformance", () => {

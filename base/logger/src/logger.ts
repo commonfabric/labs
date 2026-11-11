@@ -1791,32 +1791,50 @@ export function getTotalLoggerCounts(): number {
 export function getLoggerCountsBreakdown(): Record<string, LoggerBreakdown> & {
   total: number;
 } {
+  return loggerCountsBreakdownOf(getLoggerCountsByKey());
+}
+
+/**
+ * Returns each logger's counts by message key, by logger name: the counts
+ * {@link getLoggerCountsBreakdown} totals, in a shape that holds nothing but
+ * counts, so it can cross a realm boundary and be totalled on the far side.
+ */
+export function getLoggerCountsByKey(): Record<
+  string,
+  Record<string, LogCounts>
+> {
   const global = globalThis as unknown as {
     commonfabric?: { logger?: Record<string, Logger> };
   };
+  const byLogger: Record<string, Record<string, LogCounts>> = {};
+  for (
+    const [name, logger] of Object.entries(global.commonfabric?.logger ?? {})
+  ) {
+    byLogger[name] = logger.countsByKey;
+  }
+  return byLogger;
+}
 
+/**
+ * Returns `byLogger` totalled as {@link getLoggerCountsBreakdown} reports it:
+ * a `total` for each logger and one across them all. A message key named
+ * `total` is skipped, so that the reserved property is not overwritten.
+ */
+export function loggerCountsBreakdownOf(
+  byLogger: Record<string, Record<string, LogCounts>>,
+): Record<string, LoggerBreakdown> & { total: number } {
   const breakdown: Record<string, LoggerBreakdown> = {};
   let total = 0;
-
-  if (global.commonfabric?.logger) {
-    for (const [name, logger] of Object.entries(global.commonfabric.logger)) {
-      const loggerBreakdown = { total: 0 } as LoggerBreakdown;
-
-      // Add counts by key, skipping `total` so that the reserved property is
-      // not overwritten.
-      for (const [key, counts] of Object.entries(logger.countsByKey)) {
-        if (key === "total") {
-          continue; // Skip reserved property name
-        }
-        loggerBreakdown[key] = counts;
-        loggerBreakdown.total += counts.total;
-      }
-
-      breakdown[name] = loggerBreakdown;
-      total += loggerBreakdown.total;
+  for (const [name, byKey] of Object.entries(byLogger)) {
+    const loggerBreakdown = { total: 0 } as LoggerBreakdown;
+    for (const [key, counts] of Object.entries(byKey)) {
+      if (key === "total") continue;
+      loggerBreakdown[key] = counts;
+      loggerBreakdown.total += counts.total;
     }
+    breakdown[name] = loggerBreakdown;
+    total += loggerBreakdown.total;
   }
-
   return { ...breakdown, total } as Record<string, LoggerBreakdown> & {
     total: number;
   };

@@ -10273,6 +10273,17 @@ export class Runner {
     const candidateRef = this.#runtime.patternManager.getArtifactEntryRef(
       pattern,
     );
+    if (transition !== undefined) {
+      // Applying the transition verifies the current and the candidate source
+      // closures synchronously, inside the setup transaction.
+      await this.#runtime.patternManager.prepareSourceClosureVerification(
+        resultCell.space,
+        [
+          transition.expected.pattern.identity,
+          ...(candidateRef === undefined ? [] : [candidateRef.identity]),
+        ],
+      );
+    }
     const sourceUpdate = transition?.baseline.kind === "retain" && candidateRef
       ? await this.#runtime.patternManager.prepareSourceUpdate(
         resultCell.space,
@@ -13958,19 +13969,31 @@ export class Runner {
       resultSchema,
     );
     this.#handlerResultPatterns.add(resultPattern);
-    if (
-      subPatternNodes(resultPattern).some(({ module }) =>
-        isPattern(module.implementation) &&
-        this.#childSystemOrigin(
-            tx,
-            patternResultCell,
-            module.implementation,
-          ) !== undefined
-      )
-    ) {
-      // A tracked child retains a verified source revision during its setup.
-      // Its compiled module can be loaded without the parser that verifies it.
-      await prepareSourceClosureVerification();
+    // A tracked child retains a verified source revision during its setup,
+    // which verifies the child's source closure synchronously, in the space
+    // the child is placed in.
+    const trackedChildIdentities = new Map<MemorySpace, string[]>();
+    for (const { module } of subPatternNodes(resultPattern)) {
+      const child = module.implementation;
+      if (
+        !isPattern(child) ||
+        this.#childSystemOrigin(tx, patternResultCell, child) === undefined
+      ) {
+        continue;
+      }
+      const ref = this.#runtime.patternManager.getArtifactEntryRef(child);
+      if (ref === undefined) continue;
+      const space = module.targetSpace ?? patternResultCell.space;
+      trackedChildIdentities.set(space, [
+        ...(trackedChildIdentities.get(space) ?? []),
+        ref.identity,
+      ]);
+    }
+    for (const [space, identities] of trackedChildIdentities) {
+      await this.#runtime.patternManager.prepareSourceClosureVerification(
+        space,
+        identities,
+      );
     }
     // navigateTo result patterns must start after the handler's transaction
     // commits so the navigation target is durable. Every other handler result
@@ -17758,14 +17781,27 @@ function keylessTransitionSessionPattern(
  * Verify that a source transition can restore the current source. Recovery
  * paths may omit an unavailable legacy baseline and retain the displaced
  * executable identity outside the restorable history instead.
+ *
+ * This also prepares the synchronous verification
+ * {@link applyPieceSourceTransition} makes of the current source closure and
+ * of the candidate's. `candidateIdentity` names the candidate when the caller
+ * knows it; without it the candidate is unknown here, so the parser that
+ * verification may need is loaded.
  */
 export async function preparePieceSourceTransitionBaseline(
   runtime: Runtime,
   resultCell: Cell<unknown>,
   expected: PieceSourceSnapshot,
-  options: { allowUnavailable?: boolean } = {},
+  options: { allowUnavailable?: boolean; candidateIdentity?: string } = {},
 ): Promise<PieceSourceTransitionBaseline> {
-  await prepareSourceClosureVerification();
+  if (options.candidateIdentity === undefined) {
+    await prepareSourceClosureVerification();
+  } else {
+    await runtime.patternManager.prepareSourceClosureVerification(
+      resultCell.space,
+      [expected.pattern.identity, options.candidateIdentity],
+    );
+  }
   const current = getPieceSourceSnapshot(
     resultCell,
     keylessTransitionSessionPattern(runtime, resultCell, expected.pattern),
@@ -17782,7 +17818,7 @@ export async function preparePieceSourceTransitionBaseline(
   };
   // Load and verify the current closure before opening the write transaction.
   // The write transaction verifies it again and keeps those reads in its OCC
-  // set. This first pass synchronizes the recursive closure and compiler stack.
+  // set; the preparation above covers that second verification.
   const program = await runtime.patternManager
     .getPatternSourceProgramByIdentity(
       expected.pattern.identity,

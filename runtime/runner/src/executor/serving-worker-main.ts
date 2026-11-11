@@ -12,16 +12,14 @@ import { Identity, keyPairFromRealmValue } from "@commonfabric/identity";
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import type { ClientBuild } from "@commonfabric/memory/v2/client-info";
 import { adoptProcessInstanceId } from "@commonfabric/memory/v2/execution-lease";
-import {
-  getLoggerCountsBreakdown,
-  getTimingStatsBreakdown,
-} from "@commonfabric/logger";
 import { holdWorkerLifetimeLock } from "@commonfabric/platform/worker-lifetime";
 import { setPatternEnvironment } from "../builder/env.ts";
 import { collectedMemory } from "../collected-memory.ts";
+import type { ModuleCompileWorker } from "../harness/module-compile-worker.ts";
 import type { ModuleByteCache, RuntimeFetch } from "../runtime.ts";
 import { ExecutorHost } from "./host.ts";
 import { webSocketRoute } from "./routed-plane.ts";
+import { servingLoopDiagnostics } from "./serving-loop-diagnostics.ts";
 import { ServingPlane, servingPlaneEndpoint } from "./serving-port-plane.ts";
 import type {
   LifecycleVerbDescriptor,
@@ -52,6 +50,13 @@ export type ServingWorkerMainOptions = {
 
   /** A compiled-module cache every serving runtime of this worker shares. */
   moduleByteCache?: ModuleByteCache;
+
+  /**
+   * The compile worker every serving runtime of this worker compiles in. It
+   * closes just before the host does, so a compile an activation still awaits
+   * fails at once.
+   */
+  moduleCompiler?: ModuleCompileWorker;
 };
 
 /**
@@ -95,6 +100,9 @@ export function serveFromPort(
         ...(options.moduleByteCache === undefined
           ? {}
           : { moduleByteCache: options.moduleByteCache }),
+        ...(options.moduleCompiler === undefined
+          ? {}
+          : { moduleCompiler: options.moduleCompiler }),
       }),
       ...(init.policy === undefined ? {} : { policy: init.policy }),
       ...(init.ensureSpaceRoots === undefined
@@ -125,11 +133,9 @@ export function serveFromPort(
     plane.serve({
       stats: () => host.stats(),
       eventStats: () => host.eventStats(),
-      // This realm's loggers: the serving loop's own counts and timings.
-      diagnostics: () => ({
-        loggerCounts: getLoggerCountsBreakdown(),
-        timingStats: getTimingStatsBreakdown(),
-      }),
+      // This realm's loggers, the serving loop's own counts and timings, and
+      // the compile worker's timings, which hold the compiler's phases.
+      diagnostics: () => servingLoopDiagnostics(options.moduleCompiler),
       collectedMemory,
       runLifecycleVerb: (space, verb) => {
         if (options.runLifecycleVerb === undefined) {
@@ -143,6 +149,9 @@ export function serveFromPort(
         return options.runLifecycleVerb(host, space, verb, identity);
       },
       close: async () => {
+        // The compile worker closes first, so a compile an activation still
+        // awaits fails at once rather than holding the host's close.
+        options.moduleCompiler?.close();
         try {
           await host.close();
         } finally {
