@@ -73,6 +73,7 @@
     "./storage/v2-remote-session": "./src/storage/v2-remote-session.ts",
     "./storage/cache.deno": "./src/storage/cache.deno.ts",
     "./local-program.deno": "./src/harness/local-program.deno.ts",
+    "./program-resolution": "./src/harness/program-resolution.ts",
     "./module-compile-worker": "./src/harness/module-compile-worker.ts",
     "./patterns-route.deno": "./src/harness/patterns-route.deno.ts",
     "./toolshed-http-auth": "./src/toolshed-http-auth.ts",
