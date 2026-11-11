@@ -14,6 +14,8 @@ import {
   type Cell,
   entityIdFrom,
   getPatternIdentityRef,
+  getPatternSource,
+  getPieceReconciliation,
   getPieceSourceRevisions,
   type NormalizedFullLink,
   Runtime,
@@ -36,15 +38,21 @@ import { pieceId } from "../src/piece-id.ts";
 import { resolveSlugTargetCell } from "../src/slugs.ts";
 import {
   completeServedRegistration,
+  confirmServedFollow,
   confirmServedInstantiate,
   confirmServedRegistration,
   confirmServedSetSource,
   finishServedRegistration,
   prepareServedRegistration,
+  servedFollowPieceSource,
+  type ServedFollowPreparation,
+  type ServedFollowReceipt,
+  type ServedFollowRequest,
   servedInstantiatePiece,
   type ServedInstantiateReceipt,
   ServedLifecycleRefusal,
   type ServedPatternSource,
+  servedPrepareFollow,
   type ServedRegistrationPreparation,
   servedSetPieceSource,
   type ServedSetSourceRequest,
@@ -77,6 +85,18 @@ const BASE_PROGRAM = programOf([
 const BROKEN_PROGRAM = programOf(
   "import { pattern } from 'commonfabric';\nexport default pattern<{}, {}>(() => ({ label: undefinedName }));\n",
 );
+
+/** A release of `BASE_PROGRAM`'s contract, as a patterns route serves it. */
+const RELEASED_SOURCE = [
+  "import { NAME, pattern } from 'commonfabric';",
+  "export default pattern<{ seed?: string }, { label: string }>(",
+  "  ({ seed }) => ({",
+  "    [NAME]: 'Served lifecycle',",
+  "    label: seed ?? 'released',",
+  "  }),",
+  ");",
+  "",
+].join("\n");
 
 /** `BASE_PROGRAM` with its `seed` argument narrowed to a number. */
 const NUMERIC_SEED_PROGRAM = programOf([
@@ -1149,6 +1169,265 @@ export default pattern(() => {
       expect(receipt.status).toBe("committed");
       expect(receipt.refresh).toEqual({ status: "deferred" });
       expect(getPatternIdentityRef(piece.getCell())).toEqual(receipt.ref);
+    });
+  });
+
+  describe("follow", () => {
+    // A follow resolves its origin on the serving runtime, so the origin's
+    // patterns route is what this stubs: `followed.tsx` serves a release
+    // `BASE_PROGRAM` can take, `numeric.tsx` one it cannot, and the route
+    // answers every other path, and every identity request, with a 404.
+    const routes: Record<string, string> = {
+      "/api/patterns/followed.tsx": RELEASED_SOURCE,
+      "/api/patterns/numeric.tsx": NUMERIC_SEED_PROGRAM.files[0].contents,
+    };
+    let restoreFetch: () => void;
+
+    beforeEach(() => {
+      const original = globalThis.fetch;
+      globalThis.fetch =
+        ((input: string | URL | Request, init?: RequestInit) => {
+          const url = new URL(
+            typeof input === "string"
+              ? input
+              : input instanceof URL
+              ? input.href
+              : input.url,
+          );
+          if (!url.pathname.startsWith("/api/patterns/")) {
+            return original(input, init);
+          }
+          const contents = url.searchParams.has("identity")
+            ? undefined
+            : routes[url.pathname];
+          return Promise.resolve(
+            contents === undefined
+              ? new Response("not found", { status: 404 })
+              : new Response(contents, {
+                status: 200,
+                headers: { "content-type": "text/typescript-jsx" },
+              }),
+          );
+        }) as typeof globalThis.fetch;
+      restoreFetch = () => {
+        globalThis.fetch = original;
+      };
+    });
+
+    afterEach(() => {
+      restoreFetch();
+    });
+
+    const prepare = (
+      pieceId: string,
+      origin: string,
+      options: Omit<ServedFollowRequest, "pieceId" | "origin"> = {},
+    ): Promise<ServedFollowPreparation> =>
+      served(
+        "follow-prepare",
+        (pieces) =>
+          servedPrepareFollow(pieces, { pieceId, origin, ...options }),
+      );
+
+    const apply = (
+      preparation: ServedFollowPreparation,
+    ): Promise<ServedFollowReceipt> =>
+      served(
+        "follow",
+        (pieces) =>
+          servedFollowPieceSource(pieces, preparation, aliceSigner.did()),
+        (runtime, receipt) => confirmServedFollow(runtime, space, receipt),
+      );
+
+    // The two halves in consecutive cycles, the way the route runs them.
+    const follow = async (
+      pieceId: string,
+      origin: string,
+      options: Omit<ServedFollowRequest, "pieceId" | "origin"> = {},
+    ): Promise<ServedFollowReceipt> =>
+      await apply(await prepare(pieceId, origin, options));
+
+    /** The piece as a client opened afterwards reads it. */
+    const stored = async (pieceId: string) => {
+      const pieces = await clientPieces();
+      const cell = (await pieces.get(pieceId)).getCell();
+      return {
+        pattern: getPatternIdentityRef(cell),
+        origin: getPatternSource(cell),
+        revisions: getPieceSourceRevisions(cell),
+        reconciliation: getPieceReconciliation(cell),
+      };
+    };
+
+    it("points a detached piece at the origin and adopts what it serves, as a later client reads it", async () => {
+      const created = await instantiate({ program: BASE_PROGRAM });
+      const before = await stored(created.pieceId);
+      expect(before.origin).toBeUndefined();
+      const receipt = await follow(created.pieceId, "system:followed.tsx", {
+        expectedPattern: created.pattern,
+        expectedRevision: before.revisions.at(-1)!.revisionId,
+      });
+      expect(receipt.pieceId).toBe(created.pieceId);
+      expect(receipt.origin).toBe("system:followed.tsx");
+      expect(receipt.pattern.identity).not.toBe(created.pattern.identity);
+      expect(receipt.acceptedIncompatibility).toBeUndefined();
+
+      const after = await stored(created.pieceId);
+      expect(after.pattern).toEqual(receipt.pattern);
+      expect(after.origin).toBe("system:followed.tsx");
+      expect(after.revisions.at(-1)).toMatchObject({
+        revisionId: receipt.revisionId,
+        operation: "repoint",
+        origin: "system:followed.tsx",
+        pattern: receipt.pattern,
+      });
+      // What following the origin last did, written as the serving loop's
+      // own bookkeeping beside the direct commit.
+      expect(after.reconciliation).toMatchObject({
+        outcome: "followed",
+        origin: "system:followed.tsx",
+        offered: receipt.pattern,
+      });
+      expect(host.stats().lifecycleVerbs).toEqual({ runs: 3, failures: 0 });
+    });
+
+    it("refuses a candidate the piece cannot take, and follows under the dangerous override", async () => {
+      // Created without a seed, so the stored argument satisfies either
+      // schema and only the declared contract stands between the two.
+      const created = await instantiate({ program: BASE_PROGRAM });
+      const refusal = await refusalOf(
+        prepare(created.pieceId, "system:numeric.tsx"),
+      );
+      expect(refusal.code).toBe("incompatible");
+      expect(refusal.message).toContain("not backward compatible");
+      expect(await stored(created.pieceId)).toMatchObject({
+        pattern: created.pattern,
+        origin: undefined,
+      });
+
+      const receipt = await follow(created.pieceId, "system:numeric.tsx", {
+        dangerouslyAllowIncompatibleSchema: true,
+      });
+      expect(receipt.acceptedIncompatibility).toContain(
+        "not backward compatible",
+      );
+      expect(await stored(created.pieceId)).toMatchObject({
+        pattern: receipt.pattern,
+        origin: "system:numeric.tsx",
+      });
+    });
+
+    it("refuses a follow pinned to a pattern or a revision the piece is off", async () => {
+      const created = await instantiate({ program: BASE_PROGRAM });
+      const offPattern = await refusalOf(
+        prepare(created.pieceId, "system:followed.tsx", {
+          expectedPattern: { identity: "elsewhere", symbol: "default" },
+        }),
+      );
+      expect(offPattern.code).toBe("source-moved");
+      // The creation appended a revision, so a pin to an empty log is off.
+      const offRevision = await refusalOf(
+        prepare(created.pieceId, "system:followed.tsx", {
+          expectedRevision: null,
+        }),
+      );
+      expect(offRevision.code).toBe("source-moved");
+      expect(await stored(created.pieceId)).toMatchObject({
+        pattern: created.pattern,
+        origin: undefined,
+      });
+    });
+
+    it("refuses to make a prepared follow once the piece's source has moved, though the request named no pin", async () => {
+      const created = await instantiate({ program: BASE_PROGRAM });
+      // Unpinned: the change is held to the source state its review read.
+      const preparation = await prepare(created.pieceId, "system:followed.tsx");
+      const moved = (await served(
+        "upload",
+        (pieces) =>
+          servedUploadPattern(
+            pieces,
+            programOf(RELEASED_SOURCE.replace("'released'", "'moved'")),
+          ),
+      )).ref;
+      await served(
+        "setsrc",
+        (pieces) =>
+          servedSetPieceSource(pieces, {
+            pieceId: created.pieceId,
+            pattern: moved,
+            actingUser: aliceSigner.did(),
+          }),
+        (runtime, receipt) => confirmServedSetSource(runtime, space, receipt),
+      );
+
+      const refusal = await refusalOf(apply(preparation));
+      expect(refusal.code).toBe("source-moved");
+      expect(await stored(created.pieceId)).toMatchObject({
+        pattern: moved,
+        origin: undefined,
+      });
+    });
+
+    it("refuses an origin no piece can follow, and one whose route serves nothing", async () => {
+      const created = await instantiate({ program: BASE_PROGRAM });
+      const unusable = await refusalOf(
+        prepare(created.pieceId, "https://source.test/pattern.tsx"),
+      );
+      expect(unusable.code).toBe("origin-unreachable");
+      const absent = await refusalOf(
+        prepare(created.pieceId, "system:absent.tsx"),
+      );
+      expect(absent.code).toBe("origin-unreachable");
+      expect(absent.message).toContain("404");
+      expect(await stored(created.pieceId)).toMatchObject({
+        pattern: created.pattern,
+        origin: undefined,
+      });
+    });
+
+    it("refuses a piece the space does not hold", async () => {
+      const refusal = await refusalOf(
+        prepare("no-such-piece", "system:followed.tsx"),
+      );
+      expect(refusal.code).toBe("piece-not-found");
+    });
+
+    it("runs both halves from descriptors, and demands the piece's root when asked", async () => {
+      const runner = servedLifecycleRunner(host, serviceSigner);
+      const created = await instantiate({ program: BASE_PROGRAM });
+      const preparing = await runner.runLifecycleVerb(space, {
+        name: "follow-prepare",
+        request: { pieceId: created.pieceId, origin: "system:followed.tsx" },
+      });
+      expect(preparing.timings.map((timing) => timing.phase)).toEqual([
+        "follow-prepare.session",
+        "follow-prepare.queue",
+        "follow-prepare.run",
+        "follow-prepare.commit",
+      ]);
+      const following = await runner.runLifecycleVerb(space, {
+        name: "follow",
+        request: {
+          preparation: preparing.receipt as ServedFollowPreparation,
+          actingUser: aliceSigner.did(),
+          start: true,
+        },
+      });
+      const receipt = following.receipt as ServedFollowReceipt;
+      expect(following.timings.map((timing) => timing.phase)).toEqual([
+        "follow.session",
+        "follow.queue",
+        "follow.run",
+        "follow.commit",
+        "follow.confirm",
+      ]);
+      const root = `of:${created.pieceId.replace(/^of:/, "")}`;
+      expect(host.spaceServer(space)?.warmDemandIds.has(root)).toBe(true);
+      expect(await stored(created.pieceId)).toMatchObject({
+        pattern: receipt.pattern,
+        origin: "system:followed.tsx",
+      });
     });
   });
 });

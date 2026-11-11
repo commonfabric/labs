@@ -17,6 +17,10 @@ import {
   parseRevisionPin,
 } from "../commands/piece.ts";
 import { followPieceSource, type PieceConfig } from "../lib/piece.ts";
+import {
+  type followPieceOnServer,
+  ServedLifecycleError,
+} from "../lib/pattern-lifecycle.ts";
 import { argv, cf, stripAnsi } from "./utils.ts";
 
 const BASE_OPTIONS = {
@@ -43,23 +47,171 @@ describe("cf piece follow", () => {
   });
 
   describe("followPieceSource()", () => {
-    it("refuses a deployment that serves piece lifecycle verbs", async () => {
+    describe("on a deployment that serves piece lifecycle verbs", () => {
       const config: PieceConfig = {
         apiUrl: BASE_OPTIONS.apiUrl,
         identity: BASE_OPTIONS.identity,
         space: BASE_OPTIONS.space,
         piece: "of:profile",
       };
+
+      // A connection to a serving deployment, which the served path asks
+      // for the piece's cell and result after the verb; the client-side
+      // repoint must not be reached.
       const served = {
         runtime: { experimental: { serverExecution: true } },
+        getSpace: () => BASE_OPTIONS.space,
+        getPieceCell: (id: string) => Promise.resolve({ id }),
+        getResult: (cell: { id: string }) => ({ resultOf: cell.id }),
         get: () => {
           throw new Error("must not reach the client-side repoint");
         },
       };
-      await expect(followPieceSource(config, "system:system/x.tsx", {}, {
-        // deno-lint-ignore no-explicit-any
-        loadPieces: () => Promise.resolve(served as any),
-      })).rejects.toThrow(/not served yet/);
+
+      /** Runs a follow over `served` with the given stubs. */
+      const followServed = (
+        stubs: {
+          followPieceOnServer: typeof followPieceOnServer;
+          pullServed?: (pieces: unknown, cell: unknown) => Promise<void>;
+        },
+        options: Parameters<typeof followPieceSource>[2] = {},
+        target: PieceConfig = config,
+      ) =>
+        followPieceSource(target, "system:system/x.tsx", options, {
+          // deno-lint-ignore no-explicit-any
+          loadPieces: () => Promise.resolve(served as any),
+          resolvePieceAddress: () => Promise.resolve("of:profile"),
+          followPieceOnServer: stubs.followPieceOnServer,
+          pullServed: stubs.pullServed ?? (() => Promise.resolve()),
+        });
+
+      const receipt = {
+        pieceId: "of:profile",
+        pattern: { identity: "released", symbol: "default" },
+        origin: "system:system/x.tsx",
+        revisionId: "r2",
+      };
+
+      it("sends the follow with its pins, and refreshes the piece it followed", async () => {
+        const sent: unknown[] = [];
+        const pulled: unknown[] = [];
+        const result = await followServed(
+          {
+            followPieceOnServer: (_client, input) => {
+              sent.push(input);
+              return Promise.resolve(receipt);
+            },
+            pullServed: (_pieces, cell) => {
+              pulled.push(cell);
+              return Promise.resolve();
+            },
+          },
+          {
+            expectedPattern: { identity: "abc", symbol: "default" },
+            expectedRevision: null,
+          },
+        );
+        expect(result).toEqual({ status: "applied" });
+        expect(sent).toEqual([{
+          space: BASE_OPTIONS.space,
+          piece: "of:profile",
+          origin: "system:system/x.tsx",
+          expectedPattern: { identity: "abc", symbol: "default" },
+          expectedRevision: null,
+        }]);
+        expect(pulled).toEqual([{ resultOf: "of:profile" }]);
+      });
+
+      it("sends the override, and reports the incompatibility it accepted", async () => {
+        const sent: unknown[] = [];
+        const result = await followServed(
+          {
+            followPieceOnServer: (_client, input) => {
+              sent.push(input);
+              return Promise.resolve({
+                ...receipt,
+                acceptedIncompatibility: "result.x: field removed",
+              });
+            },
+          },
+          { dangerouslyAllowIncompatibleSchema: true },
+        );
+        expect(sent).toEqual([
+          expect.objectContaining({ dangerouslyAllowIncompatibleSchema: true }),
+        ]);
+        expect(result).toEqual({
+          status: "applied",
+          acceptedIncompatibility: "result.x: field removed",
+        });
+      });
+
+      it("returns an incompatible candidate as the result, and throws `PieceSourceChangedError` for a piece off its pin", async () => {
+        const incompatible = await followServed({
+          followPieceOnServer: () =>
+            Promise.reject(
+              new ServedLifecycleError(
+                "incompatible",
+                "result.x: field removed",
+              ),
+            ),
+        });
+        expect(incompatible).toEqual({
+          status: "incompatible",
+          message: "result.x: field removed",
+        });
+        await expect(followServed({
+          followPieceOnServer: () =>
+            Promise.reject(
+              new ServedLifecycleError("source-moved", "moved elsewhere"),
+            ),
+        })).rejects.toThrow(PieceSourceChangedError);
+      });
+
+      it("rethrows every other refusal as the server worded it", async () => {
+        await expect(followServed({
+          followPieceOnServer: () =>
+            Promise.reject(
+              new ServedLifecycleError(
+                "origin-unreachable",
+                "Failed to fetch: 404",
+              ),
+            ),
+        })).rejects.toThrow("Failed to fetch: 404");
+      });
+
+      it("says `follow` is not served yet where the memory server cannot read the request", async () => {
+        const unreadable = new Error("Unable to parse memory message");
+        unreadable.name = "InvalidMessageError";
+        await expect(followServed({
+          followPieceOnServer: () => Promise.reject(unreadable),
+        })).rejects.toThrow("`follow` is not served yet");
+      });
+
+      it("reports a refresh that failed after the follow committed as `executionWarning`", async () => {
+        const result = await followServed({
+          followPieceOnServer: () => Promise.resolve(receipt),
+          pullServed: () => Promise.reject(new Error("pull refused")),
+        });
+        expect(result).toEqual({
+          status: "applied",
+          executionWarning: "pull refused",
+        });
+      });
+
+      it("refuses a piece addressed at a scope, sending nothing", async () => {
+        let sent = false;
+        await expect(followServed(
+          {
+            followPieceOnServer: () => {
+              sent = true;
+              return Promise.resolve(receipt);
+            },
+          },
+          {},
+          { ...config, pieceScope: "session" },
+        )).rejects.toThrow("addressed at a scope");
+        expect(sent).toBe(false);
+      });
     });
 
     it("repoints the resolved piece at the origin and reports the transition", async () => {

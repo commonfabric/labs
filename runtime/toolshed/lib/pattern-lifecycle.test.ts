@@ -23,6 +23,7 @@ import {
 import {
   type LifecycleDeps,
   type LifecycleResult,
+  processFollow,
   processInstantiate,
   processLifecycleCall,
   processSetSource,
@@ -58,6 +59,41 @@ const NUMERIC_SEED_PROGRAM = {
     ].join("\n"),
   }],
 };
+
+/**
+ * Answers `fetch` for the deployment's patterns route with `routes`, by
+ * path, and a 404 for every other path and every identity request, passing
+ * any other URL through. Returns what puts the original back.
+ */
+function servePatternsRoute(routes: Record<string, string>): () => void {
+  const original = globalThis.fetch;
+  globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+        ? input.href
+        : input.url,
+    );
+    if (!url.pathname.startsWith("/api/patterns/")) {
+      return original(input, init);
+    }
+    const contents = url.searchParams.has("identity")
+      ? undefined
+      : routes[url.pathname];
+    return Promise.resolve(
+      contents === undefined
+        ? new Response("not found", { status: 404 })
+        : new Response(contents, {
+          status: 200,
+          headers: { "content-type": "text/typescript-jsx" },
+        }),
+    );
+  }) as typeof globalThis.fetch;
+  return () => {
+    globalThis.fetch = original;
+  };
+}
 
 /** Narrow a result to its receipt, failing loudly otherwise. */
 const ok = <T>(result: LifecycleResult<T>): T => {
@@ -762,6 +798,88 @@ export default pattern(() => {
     expect(sourceless.code).toBe("invalid-source");
   });
 
+  it("follows an origin for a writer over two verbs, and refuses each other request with its code", async () => {
+    const restoreFetch = servePatternsRoute({
+      "/api/patterns/released.tsx": PROGRAM.files[0].contents.replace(
+        "'unset'",
+        "'released'",
+      ),
+      "/api/patterns/numeric.tsx": NUMERIC_SEED_PROGRAM.files[0].contents,
+    });
+    try {
+      const created = ok(
+        await processInstantiate(deps, alice.did(), {
+          space,
+          program: PROGRAM,
+          start: false,
+        }),
+      );
+      const runsBefore = host!.stats().lifecycleVerbs.runs;
+
+      const reader = refused(
+        await processFollow(deps, mallory.did(), {
+          space,
+          piece: created.pieceId,
+          origin: "system:released.tsx",
+        }),
+      );
+      expect(reader.code).toBe("forbidden");
+
+      // Refused in the first verb, which counts as a failed run: the second
+      // never runs.
+      const incompatible = refused(
+        await processFollow(deps, alice.did(), {
+          space,
+          piece: created.pieceId,
+          origin: "system:numeric.tsx",
+        }),
+      );
+      expect(incompatible.code).toBe("incompatible");
+      expect(host!.stats().lifecycleVerbs).toEqual({
+        runs: runsBefore + 1,
+        failures: 1,
+      });
+
+      const unreachable = refused(
+        await processFollow(deps, alice.did(), {
+          space,
+          piece: created.pieceId,
+          origin: "system:absent.tsx",
+        }),
+      );
+      expect(unreachable.code).toBe("origin-unreachable");
+
+      const moved = refused(
+        await processFollow(deps, alice.did(), {
+          space,
+          piece: created.pieceId,
+          origin: "system:released.tsx",
+          expectedPattern: { identity: "elsewhere", symbol: "default" },
+        }),
+      );
+      expect(moved.code).toBe("source-moved");
+
+      const runsBeforeFollow = host!.stats().lifecycleVerbs.runs;
+      const followed = ok(
+        await processFollow(deps, bob.did(), {
+          space,
+          piece: created.pieceId,
+          origin: "system:released.tsx",
+          expectedPattern: created.pattern,
+          start: false,
+        }),
+      );
+      expect(followed.pieceId).toBe(created.pieceId);
+      expect(followed.origin).toBe("system:released.tsx");
+      expect(followed.pattern.identity).not.toBe(created.pattern.identity);
+      expect(followed.revisionId).toMatch(/\S/);
+      expect(followed.acceptedIncompatibility).toBeUndefined();
+      expect(host!.stats().lifecycleVerbs.runs).toBe(runsBeforeFollow + 2);
+    } finally {
+      restoreFetch();
+    }
+  });
+
   it("refuses a program that does not compile with `compile-failed`", async () => {
     const attributes = new Map<string, unknown>();
     const requestSpan: NonNullable<LifecycleDeps["requestSpan"]> = {
@@ -858,6 +976,12 @@ export default pattern(() => {
         verb: "setsrc",
         body: { program: PROGRAM },
       });
+      const noOrigin = await processLifecycleCall(deps, {
+        space,
+        principal: alice.did(),
+        verb: "follow",
+        body: { piece: "of:piece" },
+      });
       const bothSources = await processLifecycleCall(deps, {
         space,
         principal: alice.did(),
@@ -869,6 +993,9 @@ export default pattern(() => {
       });
 
       expect(noPiece).toEqual({
+        refusal: { code: "invalid-request", message: expect.any(String) },
+      });
+      expect(noOrigin).toEqual({
         refusal: { code: "invalid-request", message: expect.any(String) },
       });
       expect(bothSources).toEqual({

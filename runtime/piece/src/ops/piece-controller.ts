@@ -642,6 +642,43 @@ export type PieceSourceActionResult =
     prepared: PreparedPieceSourceChange;
   };
 
+/**
+ * What {@link PieceController.prepareSourceChange} found: a change whose
+ * candidate can run over the piece's retained state (`prepared`), one whose
+ * candidate cannot (`incompatible`, as {@link PieceSourceActionResult} says
+ * it), or an `adopt` whose active origin offers what the piece runs, which
+ * makes no change (`current`). Either preparation carries its review, and is
+ * what {@link PieceController.changeSource} makes the change from when it is
+ * handed back as `confirmedChange`.
+ */
+export type PieceSourcePreparation =
+  | { status: "prepared"; prepared: PreparedPieceSourceChange }
+  | {
+    status: "incompatible";
+    message: string;
+    prepared: PreparedPieceSourceChange;
+  }
+  | { status: "current" };
+
+/**
+ * The piece's current pattern where it loads, and its stored pattern pointer
+ * alone where it does not, with what the load threw as `failure`.
+ */
+type CurrentPatternOrPointer =
+  & { ref: { identity: string; symbol: string } }
+  & ({ pattern: Pattern } | { pattern: undefined; failure: unknown });
+
+/**
+ * What a source change runs over: the current pattern or its pointer, the
+ * source snapshot the change is conditional on, and `proved`, the pattern a
+ * pinned caller proved the piece runs.
+ */
+type SourceChangeBasis = {
+  previous: CurrentPatternOrPointer;
+  expected: PieceSourceSnapshot;
+  proved: { identity: string; symbol: string } | undefined;
+};
+
 function storedCellTopology(
   value: unknown,
   cell: Cell<unknown>,
@@ -4268,10 +4305,7 @@ export class PieceController<T = unknown> {
    */
   async #loadCurrentPatternOrPointer(
     options: { projectResult?: boolean; repairCache?: boolean } = {},
-  ): Promise<
-    & { ref: { identity: string; symbol: string } }
-    & ({ pattern: Pattern } | { pattern: undefined; failure: unknown })
-  > {
+  ): Promise<CurrentPatternOrPointer> {
     try {
       return await this.#loadCurrentPattern(options);
     } catch (failure) {
@@ -4321,11 +4355,14 @@ export class PieceController<T = unknown> {
    *
    * A failure to record is dropped. The outcome describes the attempt; it is
    * not the attempt's result, and losing it changes nothing the piece runs.
+   * For a `served` change the record is the serving loop's bookkeeping, as
+   * the reconciler's own record is there.
    */
   async #recordReconciliation(
     expected: PieceSourceSnapshot,
     origin: string,
     reconciliation: Omit<PieceReconciliation, "at" | "origin">,
+    served?: { actingUser: string },
   ): Promise<void> {
     // The result is not read. A commit that does not land leaves the piece
     // with whatever it recorded before, which is a worse answer than this one
@@ -4354,6 +4391,12 @@ export class PieceController<T = unknown> {
         current.origin !== expected.origin ||
         current.revisionId !== expected.revisionId
       ) return false;
+      if (served !== undefined) {
+        this.#pieces.runtime.stampServerRun(tx, {
+          actionId: `source-change/${this.#cell.sourceURI}`,
+          kind: "bookkeeping",
+        });
+      }
       // A release time confirmed for the source the piece runs stays: an
       // attempt that failed or found nothing to adopt has learned nothing
       // that moves it back.
@@ -4378,7 +4421,7 @@ export class PieceController<T = unknown> {
    * able to run the source, so there is no warning to accept. Recording it is
    * what separates it, on the source panel, from the refusal that can — and
    * from a piece nothing has looked at, which is how it read while this was
-   * only ever thrown.
+   * only ever thrown. `served` is as {@link changeSource} takes it.
    */
   async #refuseUnusableArgument(
     review: NonNullable<PreparedPieceSourceChange["review"]>,
@@ -4386,6 +4429,7 @@ export class PieceController<T = unknown> {
     origin: string | null,
     candidate: { identity: string; symbol: string },
     active: boolean,
+    served?: { actingUser: string },
   ): Promise<void> {
     const issue = review.issues.argument;
     if (issue === undefined) return;
@@ -4399,9 +4443,288 @@ export class PieceController<T = unknown> {
         reason: "argument-mismatch",
         offered: candidate,
         detail: storedArgumentRefusalDetail(issue),
-      });
+      }, served);
     }
     throw new Error(issue);
+  }
+
+  /**
+   * Helper for `changeSource()` and `prepareSourceChange()`, which reads what
+   * a source change runs over and refuses a piece off either pin with
+   * {@link PieceSourceChangedError}. A reviewing call logs why the current
+   * pattern failed to load; a confirming call repeats a load that was
+   * already reported. Without `repairCache` the load persists nothing.
+   */
+  async #sourceChangeBasis(
+    pins: {
+      expectedPattern?: { identity: string; symbol: string };
+      expectedRevision?: string | null;
+    },
+    options: { reviewing: boolean; repairCache: boolean },
+  ): Promise<SourceChangeBasis> {
+    // A piece whose current pattern does not load is the piece a change of
+    // source rescues: a stored identity only a retired bundle could resolve
+    // strands it otherwise. The pointer still names the predecessor, which is
+    // all a transition records of it, and all a detach needs. What an action
+    // that adopts a candidate loses is the comparison of that candidate with
+    // what the piece ran. The review reports the loss as an incompatibility,
+    // so such a change applies only once confirmed.
+    const previous = await this.#loadCurrentPatternOrPointer({
+      repairCache: options.repairCache,
+    });
+    const previousRef = previous.ref;
+    // Why the load failed is in no review, since a review has to read the
+    // same on the call that confirms it.
+    if (previous.pattern === undefined && options.reviewing) {
+      pieceUpdateLogger.warn("change-source-current-unloadable", () => [
+        "the current pattern failed to load; reviewing the source change",
+        `against the stored identity ref ${previousRef.identity}#` +
+        `${previousRef.symbol} alone (${this.#cell.space})`,
+        previous.failure,
+      ]);
+    }
+    const expected = getPieceSourceSnapshot(
+      this.#cell,
+      this.#pieces.runtime.runner.sessionPatternPointerFor(this.#cell),
+    );
+    if (expected === undefined) {
+      throw new Error("piece missing source state");
+    }
+    const pinned = pins.expectedPattern;
+    if (
+      pinned !== undefined &&
+      (expected.pattern.identity !== pinned.identity ||
+        expected.pattern.symbol !== pinned.symbol)
+    ) {
+      throw new PieceSourceChangedError(
+        `The piece is on ${expected.pattern.identity}#` +
+          `${expected.pattern.symbol}, not the ${pinned.identity}#` +
+          `${pinned.symbol} this change was proved against.`,
+      );
+    }
+    const pinnedRevision = pins.expectedRevision;
+    if (
+      pinnedRevision !== undefined && expected.revisionId !== pinnedRevision
+    ) {
+      throw new PieceSourceChangedError(
+        `The piece's source log ${sourceLogState(expected.revisionId)}, but ` +
+          `this change was proved against one that ` +
+          `${sourceLogState(pinnedRevision)}.`,
+      );
+    }
+    // What a pinned caller proved the piece runs: past the checks above it is
+    // the snapshot's pattern, which a move inside the write is refused off.
+    const proved = pinned === undefined && pinnedRevision === undefined
+      ? undefined
+      : expected.pattern;
+    return { previous, expected, proved };
+  }
+
+  /**
+   * Helper for `changeSource()` and `prepareSourceChange()`, which resolves
+   * and compiles the candidate a change other than a detach adopts, persisting
+   * the candidate's closure in the space, and reviews it against the piece.
+   * The preparation carries its review whether or not it found an issue.
+   * Answers `current` for an `adopt` whose active origin offers what the piece
+   * runs, having recorded that finding.
+   */
+  async #prepareChange(
+    action: Exclude<PieceSourceAction, { kind: "detach" }>,
+    { previous, expected, proved }: SourceChangeBasis,
+  ): Promise<
+    | (Exclude<PieceSourcePreparation, { status: "current" }> & {
+      candidate: Pattern;
+
+      /**
+       * Whether the candidate is a later release of the `system:` pattern
+       * the piece runs, which leaves the contract comparison to the release
+       * gate (`isGatedReleaseStep`).
+       */
+      gatedRelease: boolean;
+    })
+    | { status: "current" }
+  > {
+    const previousRef = previous.ref;
+    const revisions = getPieceSourceRevisions(this.#cell);
+    // A piece with no source history and no origin predates both, and its
+    // space may hold no source for what it runs. It takes the transition's
+    // displaced-identity arm, as it does under `setPattern`. A piece that
+    // recorded how it got its pattern keeps its claim to a restorable
+    // current source, so the baseline still refuses one that has none.
+    const baseline = await preparePinnedBaseline(
+      this.#pieces.runtime,
+      this.#cell,
+      expected,
+      proved,
+      expected.revisionId === null && expected.origin === null
+        ? { allowUnavailable: true }
+        : {},
+    );
+    let program: RuntimeProgram;
+    let origin: string | null;
+    let operation: PieceSourceTransition["operation"];
+    let selectedRevisionId: string | undefined;
+    if (action.kind === "restore") {
+      const selected = sourceRevision(revisions, action.revisionId);
+      const retained = await this.#pieces.runtime.patternManager
+        .getPatternSourceProgramByIdentity(
+          selected.pattern.identity,
+          this.#pieces.getSpace(),
+        );
+      if (retained === undefined) {
+        throw new Error(
+          `source revision ${selected.revisionId} is not available`,
+        );
+      }
+      program = { ...retained, mainExport: selected.pattern.symbol };
+      origin = null;
+      operation = "revert";
+      selectedRevisionId = selected.revisionId;
+    } else {
+      // Every remaining action resolves an origin and adopts what it offers
+      // now. They differ in which origin that is, which export it selects,
+      // and what the revision calls the transition: following an origin the
+      // piece used before, adopting what the active origin offers today, or
+      // moving to one a person supplied.
+      let symbol: string;
+      if (action.kind === "follow") {
+        const selected = sourceRevision(revisions, action.revisionId);
+        if (selected.origin === undefined) {
+          throw new Error(
+            `source revision ${selected.revisionId} has no origin to follow`,
+          );
+        }
+        origin = selected.origin;
+        symbol = selected.pattern.symbol;
+        operation = "repoint";
+        selectedRevisionId = selected.revisionId;
+      } else if (action.kind === "adopt") {
+        if (expected.origin === null) {
+          throw new Error("piece is not following a source");
+        }
+        origin = expected.origin;
+        symbol = previousRef.symbol;
+        operation = "origin-update";
+      } else {
+        origin = acceptEnteredOrigin(
+          this.#pieces.runtime,
+          this.#pieces.getSpace(),
+          action.url,
+        );
+        symbol = previousRef.symbol;
+        operation = "repoint";
+      }
+      try {
+        const resolved = await resolvePieceOriginSource(
+          this.#pieces.runtime,
+          this.#pieces.getSpace(),
+          origin,
+          symbol,
+          { self: { space: this.#pieces.getSpace(), pieceId: this.id } },
+        );
+        program = resolved.program;
+      } catch (error) {
+        // Only for `adopt`: the other two are being pointed at an origin the
+        // piece does not follow yet, and an outcome recorded against one
+        // would describe a relationship it does not have.
+        if (action.kind === "adopt") {
+          await this.#recordReconciliation(expected, origin, {
+            outcome: "unreachable",
+            detail: describeFailure(error),
+          });
+        }
+        throw error;
+      }
+    }
+
+    const candidate = await compileProgram(this.#pieces, program);
+    const candidateRef = this.#pieces.runtime.patternManager
+      .getArtifactEntryRef(candidate);
+    if (candidateRef === undefined) {
+      throw new Error("the candidate source has no pattern identity");
+    }
+    // Only an origin says when what it serves was released; a restore
+    // adopts retained source, which no deployment is serving.
+    const releasedAt = origin === null
+      ? undefined
+      : await advertisedSystemRelease(
+        this.#pieces.runtime,
+        this.#pieces.getSpace(),
+        origin,
+        candidateRef.identity,
+      );
+    if (
+      action.kind === "adopt" &&
+      candidateRef.identity === previousRef.identity &&
+      candidateRef.symbol === previousRef.symbol
+    ) {
+      // The origin offers exactly what the piece runs, so there is no
+      // source transition to make. Recording the outcome is the whole
+      // result: it is what turns an unexamined origin into a current one.
+      // `origin` is the active one, which the adopt branch above refused to
+      // proceed without.
+      // A release time stated for the source the piece already runs is a
+      // later confirmation of it, as the reconciler records one.
+      await this.#recordReconciliation(expected, origin!, {
+        outcome: "followed",
+        offered: candidateRef,
+        ...(releasedAt === undefined
+          ? {}
+          : { confirmed: { identity: candidateRef.identity, releasedAt } }),
+      });
+      return { status: "current" };
+    }
+    const prepared: PreparedPieceSourceChange = {
+      action,
+      expected,
+      candidate: candidateRef,
+      origin,
+      operation,
+      baseline,
+      ...(selectedRevisionId === undefined ? {} : { selectedRevisionId }),
+      ...(releasedAt === undefined ? {} : { releasedAt }),
+    };
+    const gatedRelease = await isGatedReleaseStep(
+      this.#pieces,
+      expected.pattern,
+      this.#cell,
+      prepared,
+    );
+    const review = await pieceSourceCompatibilityReview(
+      previous,
+      candidate,
+      this.#cell,
+      this.#pieces,
+      { gatedRelease },
+    );
+    await this.#refuseUnusableArgument(
+      review,
+      expected,
+      origin,
+      candidateRef,
+      action.kind === "adopt",
+    );
+    prepared.review = review;
+    if (hasPieceSourceCompatibilityIssues(review.issues)) {
+      const message = pieceSourceCompatibilityMessage(review.issues);
+      if (action.kind === "adopt") {
+        // Again the active origin, non-null since the adopt branch above.
+        await this.#recordReconciliation(expected, origin!, {
+          outcome: "refused",
+          reason: "incompatible-schema",
+          offered: candidateRef,
+          detail: message,
+        });
+      }
+      return {
+        status: "incompatible",
+        message,
+        prepared,
+        candidate,
+        gatedRelease,
+      };
+    }
+    return { status: "prepared", prepared, candidate, gatedRelease };
   }
 
   /**
@@ -4440,6 +4763,14 @@ export class PieceController<T = unknown> {
    * pattern pin is for. Either pin refuses with
    * {@link PieceSourceChangedError}, before the change is prepared and again
    * when the piece's source moves while it is prepared or written.
+   *
+   * `served` makes the change as a serving runtime makes it on `actingUser`'s
+   * behalf, as {@link PatternUpdateOptions.served} describes for a direct
+   * edit: the transition commits directly to the store with that principal's
+   * trust snapshot, and the piece is not started here. A served change is
+   * made from a `confirmedChange` that {@link prepareSourceChange} prepared in
+   * an earlier cycle, since the closure the candidate compiled into has to be
+   * durable before the direct commit reads it.
    */
   async changeSource(
     action: PieceSourceAction,
@@ -4447,67 +4778,25 @@ export class PieceController<T = unknown> {
       confirmedChange?: PreparedPieceSourceChange;
       expectedPattern?: { identity: string; symbol: string };
       expectedRevision?: string | null;
+      served?: { actingUser: string };
     } = {},
   ): Promise<PieceSourceActionResult> {
     if (!isPieceSourceAction(action)) {
       throw new Error("unsupported piece source action");
     }
-    // A piece whose current pattern does not load is the piece a change of
-    // source rescues: a stored identity only a retired bundle could resolve
-    // strands it otherwise. The pointer still names the predecessor, which is
-    // all a transition records of it, and all a detach needs. What an action
-    // that adopts a candidate loses is the comparison of that candidate with
-    // what the piece ran. The review below reports the loss as an
-    // incompatibility, so such a change applies only once confirmed.
-    const previous = await this.#loadCurrentPatternOrPointer();
+    const served = options.served;
+    // A served transition commits directly, and a direct commit may not read
+    // what the open wave holds: the candidate's closure has to be durable
+    // already, which a preparation in an earlier cycle makes it.
+    if (served !== undefined && options.confirmedChange === undefined) {
+      throw new Error("a served source change applies a prepared change");
+    }
+    const basis = await this.#sourceChangeBasis(options, {
+      reviewing: options.confirmedChange === undefined,
+      repairCache: served === undefined,
+    });
+    const { previous, expected, proved } = basis;
     const previousRef = previous.ref;
-    // Why the load failed is in no review, since a review has to read the
-    // same on the call that confirms it. A confirmation repeats a load that
-    // was already reported, so only the reviewing call logs it.
-    if (
-      previous.pattern === undefined && options.confirmedChange === undefined
-    ) {
-      pieceUpdateLogger.warn("change-source-current-unloadable", () => [
-        "the current pattern failed to load; reviewing the source change",
-        `against the stored identity ref ${previousRef.identity}#` +
-        `${previousRef.symbol} alone (${this.#cell.space})`,
-        previous.failure,
-      ]);
-    }
-    const expected = getPieceSourceSnapshot(
-      this.#cell,
-      this.#pieces.runtime.runner.sessionPatternPointerFor(this.#cell),
-    );
-    if (expected === undefined) {
-      throw new Error("piece missing source state");
-    }
-    const pinned = options.expectedPattern;
-    if (
-      pinned !== undefined &&
-      (expected.pattern.identity !== pinned.identity ||
-        expected.pattern.symbol !== pinned.symbol)
-    ) {
-      throw new PieceSourceChangedError(
-        `The piece is on ${expected.pattern.identity}#` +
-          `${expected.pattern.symbol}, not the ${pinned.identity}#` +
-          `${pinned.symbol} this change was proved against.`,
-      );
-    }
-    const pinnedRevision = options.expectedRevision;
-    if (
-      pinnedRevision !== undefined && expected.revisionId !== pinnedRevision
-    ) {
-      throw new PieceSourceChangedError(
-        `The piece's source log ${sourceLogState(expected.revisionId)}, but ` +
-          `this change was proved against one that ` +
-          `${sourceLogState(pinnedRevision)}.`,
-      );
-    }
-    // What a pinned caller proved the piece runs: past the checks above it is
-    // the snapshot's pattern, which a move inside the write is refused off.
-    const proved = pinned === undefined && pinnedRevision === undefined
-      ? undefined
-      : expected.pattern;
 
     const confirmed = options.confirmedChange;
     if (
@@ -4519,8 +4808,6 @@ export class PieceController<T = unknown> {
         "the piece source changed after compatibility was checked",
       );
     }
-
-    const revisions = getPieceSourceRevisions(this.#cell);
 
     if (action.kind === "detach") {
       if (confirmed !== undefined) {
@@ -4597,12 +4884,14 @@ export class PieceController<T = unknown> {
         confirmed.origin,
         confirmed.candidate,
         action.kind === "adopt",
+        served,
       );
       const loaded = await this.#pieces.runtime.patternManager
         .loadPatternByIdentity(
           confirmed.candidate.identity,
           confirmed.candidate.symbol,
           this.#pieces.getSpace(),
+          served === undefined ? undefined : { repairCache: false },
         );
       if (loaded === undefined) {
         throw new Error("the confirmed source version is not available");
@@ -4629,6 +4918,7 @@ export class PieceController<T = unknown> {
         confirmed.origin,
         confirmed.candidate,
         action.kind === "adopt",
+        served,
       );
       // The confirmation answers the issues the step raises now. A step that
       // is a gated release now waives its schema issue, which a confirmation
@@ -4662,182 +4952,17 @@ export class PieceController<T = unknown> {
         acceptedReview = confirmed.review;
       }
     } else {
-      // A piece with no source history and no origin predates both, and its
-      // space may hold no source for what it runs. It takes the transition's
-      // displaced-identity arm, as it does under `setPattern`. A piece that
-      // recorded how it got its pattern keeps its claim to a restorable
-      // current source, so the baseline still refuses one that has none.
-      const baseline = await preparePinnedBaseline(
-        this.#pieces.runtime,
-        this.#cell,
-        expected,
-        proved,
-        expected.revisionId === null && expected.origin === null
-          ? { allowUnavailable: true }
-          : {},
-      );
-      let program: RuntimeProgram;
-      let origin: string | null;
-      let operation: PieceSourceTransition["operation"];
-      let selectedRevisionId: string | undefined;
-      if (action.kind === "restore") {
-        const selected = sourceRevision(revisions, action.revisionId);
-        const retained = await this.#pieces.runtime.patternManager
-          .getPatternSourceProgramByIdentity(
-            selected.pattern.identity,
-            this.#pieces.getSpace(),
-          );
-        if (retained === undefined) {
-          throw new Error(
-            `source revision ${selected.revisionId} is not available`,
-          );
-        }
-        program = { ...retained, mainExport: selected.pattern.symbol };
-        origin = null;
-        operation = "revert";
-        selectedRevisionId = selected.revisionId;
-      } else {
-        // Every remaining action resolves an origin and adopts what it offers
-        // now. They differ in which origin that is, which export it selects,
-        // and what the revision calls the transition: following an origin the
-        // piece used before, adopting what the active origin offers today, or
-        // moving to one a person supplied.
-        let symbol: string;
-        if (action.kind === "follow") {
-          const selected = sourceRevision(revisions, action.revisionId);
-          if (selected.origin === undefined) {
-            throw new Error(
-              `source revision ${selected.revisionId} has no origin to follow`,
-            );
-          }
-          origin = selected.origin;
-          symbol = selected.pattern.symbol;
-          operation = "repoint";
-          selectedRevisionId = selected.revisionId;
-        } else if (action.kind === "adopt") {
-          if (expected.origin === null) {
-            throw new Error("piece is not following a source");
-          }
-          origin = expected.origin;
-          symbol = previousRef.symbol;
-          operation = "origin-update";
-        } else {
-          origin = acceptEnteredOrigin(
-            this.#pieces.runtime,
-            this.#pieces.getSpace(),
-            action.url,
-          );
-          symbol = previousRef.symbol;
-          operation = "repoint";
-        }
-        try {
-          const resolved = await resolvePieceOriginSource(
-            this.#pieces.runtime,
-            this.#pieces.getSpace(),
-            origin,
-            symbol,
-            { self: { space: this.#pieces.getSpace(), pieceId: this.id } },
-          );
-          program = resolved.program;
-        } catch (error) {
-          // Only for `adopt`: the other two are being pointed at an origin the
-          // piece does not follow yet, and an outcome recorded against one
-          // would describe a relationship it does not have.
-          if (action.kind === "adopt") {
-            await this.#recordReconciliation(expected, origin, {
-              outcome: "unreachable",
-              detail: describeFailure(error),
-            });
-          }
-          throw error;
-        }
-      }
-
-      candidate = await compileProgram(this.#pieces, program);
-      const candidateRef = this.#pieces.runtime.patternManager
-        .getArtifactEntryRef(candidate);
-      if (candidateRef === undefined) {
-        throw new Error("the candidate source has no pattern identity");
-      }
-      // Only an origin says when what it serves was released; a restore
-      // adopts retained source, which no deployment is serving.
-      const releasedAt = origin === null
-        ? undefined
-        : await advertisedSystemRelease(
-          this.#pieces.runtime,
-          this.#pieces.getSpace(),
-          origin,
-          candidateRef.identity,
-        );
-      if (
-        action.kind === "adopt" &&
-        candidateRef.identity === previousRef.identity &&
-        candidateRef.symbol === previousRef.symbol
-      ) {
-        // The origin offers exactly what the piece runs, so there is no
-        // source transition to make. Recording the outcome is the whole
-        // result: it is what turns an unexamined origin into a current one.
-        // `origin` is the active one, which the adopt branch above refused to
-        // proceed without.
-        // A release time stated for the source the piece already runs is a
-        // later confirmation of it, as the reconciler records one.
-        await this.#recordReconciliation(expected, origin!, {
-          outcome: "followed",
-          offered: candidateRef,
-          ...(releasedAt === undefined
-            ? {}
-            : { confirmed: { identity: candidateRef.identity, releasedAt } }),
-        });
-        return { status: "applied" };
-      }
-      prepared = {
-        action,
-        expected,
-        candidate: candidateRef,
-        origin,
-        operation,
-        baseline,
-        ...(selectedRevisionId === undefined ? {} : { selectedRevisionId }),
-        ...(releasedAt === undefined ? {} : { releasedAt }),
-      };
-      gatedRelease = await isGatedReleaseStep(
-        this.#pieces,
-        expected.pattern,
-        this.#cell,
-        prepared,
-      );
-      const review = await pieceSourceCompatibilityReview(
-        previous,
-        candidate,
-        this.#cell,
-        this.#pieces,
-        { gatedRelease },
-      );
-      reviewed = review;
-      await this.#refuseUnusableArgument(
-        review,
-        expected,
-        origin,
-        candidateRef,
-        action.kind === "adopt",
-      );
-      if (hasPieceSourceCompatibilityIssues(review.issues)) {
-        prepared.review = review;
-        if (action.kind === "adopt") {
-          // Again the active origin, non-null since the adopt branch above.
-          await this.#recordReconciliation(expected, origin!, {
-            outcome: "refused",
-            reason: "incompatible-schema",
-            offered: candidateRef,
-            detail: pieceSourceCompatibilityMessage(review.issues),
-          });
-        }
+      const preparation = await this.#prepareChange(action, basis);
+      if (preparation.status === "current") return { status: "applied" };
+      if (preparation.status === "incompatible") {
         return {
           status: "incompatible",
-          message: pieceSourceCompatibilityMessage(review.issues),
-          prepared,
+          message: preparation.message,
+          prepared: preparation.prepared,
         };
       }
+      ({ candidate, prepared, gatedRelease } = preparation);
+      reviewed = prepared.review;
     }
 
     const transition = pieceSourceTransition(
@@ -4897,6 +5022,7 @@ export class PieceController<T = unknown> {
                 }
               },
               sourceTransition: transition,
+              ...(served === undefined ? {} : { served }),
             },
           );
           commit = result.commit;
@@ -4928,7 +5054,7 @@ export class PieceController<T = unknown> {
         await this.#recordReconciliation(settled, settled.origin, {
           outcome: "followed",
           offered: prepared.candidate,
-        });
+        }, served);
       }
       return { status: "applied" };
     } catch (error) {
@@ -4966,7 +5092,7 @@ export class PieceController<T = unknown> {
             reason: "incompatible-schema",
             offered: prepared.candidate,
             detail: pieceSourceCompatibilityMessage(review.issues),
-          });
+          }, served);
         }
         return {
           status: "incompatible",
@@ -4988,6 +5114,7 @@ export class PieceController<T = unknown> {
           prepared.origin,
           prepared.candidate,
           action.kind === "adopt",
+          served,
         );
         if (hasPieceSourceCompatibilityIssues(review.issues)) {
           prepared.review = review;
@@ -4999,6 +5126,51 @@ export class PieceController<T = unknown> {
         }
       }
       throw pinnedSourceMoved(error, proved);
+    }
+  }
+
+  /**
+   * Prepare the change `action` names without making it: resolve and compile
+   * the candidate it adopts, which persists the candidate's closure in the
+   * space, and review the candidate against the piece as
+   * {@link changeSource} does, pinned the same way. What comes back is
+   * described by {@link PieceSourcePreparation}. A candidate the piece's
+   * stored data does not satisfy is refused by throwing, there as here,
+   * since no confirmation can make the piece run it.
+   *
+   * @throws Error for a `detach`, which adopts no candidate.
+   */
+  async prepareSourceChange(
+    action: PieceSourceAction,
+    pins: {
+      expectedPattern?: { identity: string; symbol: string };
+      expectedRevision?: string | null;
+    } = {},
+  ): Promise<PieceSourcePreparation> {
+    if (!isPieceSourceAction(action)) {
+      throw new Error("unsupported piece source action");
+    }
+    if (action.kind === "detach") {
+      throw new Error("a detach adopts no candidate to prepare");
+    }
+    const preparation = await this.#prepareChange(
+      action,
+      await this.#sourceChangeBasis(pins, {
+        reviewing: true,
+        repairCache: true,
+      }),
+    );
+    switch (preparation.status) {
+      case "current":
+        return preparation;
+      case "incompatible":
+        return {
+          status: "incompatible",
+          message: preparation.message,
+          prepared: preparation.prepared,
+        };
+      case "prepared":
+        return { status: "prepared", prepared: preparation.prepared };
     }
   }
 

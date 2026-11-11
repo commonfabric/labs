@@ -248,6 +248,29 @@ describe("pattern.lifecycle", () => {
       }]);
     });
 
+    it("hands each verb to the handler, `follow` among them", async () => {
+      const server = serverWith();
+      const { calls, handler } = recording();
+      server.setPatternLifecycleHandler(handler);
+      const { wire, sessionId } = await openSession(server, ALICE);
+      const verbs = ["upload", "instantiate", "setsrc", "follow"];
+
+      for (const verb of verbs) {
+        const requestId = crypto.randomUUID();
+        await wire.receive({
+          type: "pattern.lifecycle",
+          requestId,
+          space: SPACE,
+          sessionId,
+          verb,
+          body: { piece: "of:piece" },
+        });
+        expect((await wire.response(requestId)).error).toBeUndefined();
+      }
+
+      expect(calls.map((call) => call.verb)).toEqual(verbs);
+    });
+
     it("refuses with `server-execution-off` when no handler is installed", async () => {
       const server = serverWith();
       const { wire, sessionId } = await openSession(server, ALICE);

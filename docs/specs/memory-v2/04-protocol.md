@@ -1794,7 +1794,8 @@ Semantics:
 ### 4.3.10 `pattern.lifecycle` — Run a Pattern-Lifecycle Verb
 
 `pattern.lifecycle` runs one of the pattern-lifecycle verbs — `upload`,
-`instantiate`, `setsrc` — in the session's space, as the session's principal.
+`instantiate`, `setsrc`, `follow` — in the session's space, as the session's
+principal.
 A server advertises it with the `patternLifecycle` capability flag. The verbs,
 their arguments, and their receipts are defined in
 [`server-pattern-lifecycle.md`](../../features/server-pattern-lifecycle.md).
@@ -1811,7 +1812,7 @@ interface PatternLifecycleRequest {
   requestId: string;
   space: SpaceId;
   sessionId: SessionId;
-  verb: "upload" | "instantiate" | "setsrc";
+  verb: "upload" | "instantiate" | "setsrc" | "follow";
   /** The verb's arguments; the session supplies the space. */
   body: Record<string, unknown>;
 }

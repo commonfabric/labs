@@ -370,9 +370,12 @@ For a detached profile with the legacy inbox descriptor, the manual migration is
 `cf piece follow --cell <profile> system:system/profile-home/profile-home.tsx
 --dangerously-allow-incompatible-schema`
 with the profile owner’s identity and API URL. Inspect the incompatibility
-before accepting it; the new inbox contract uses a piece link. The command
-refuses deployments that serve piece lifecycle verbs, where `follow` is not yet
-served.
+before accepting it; the new inbox contract uses a piece link.
+
+Against a deployment that serves piece lifecycle verbs, the serving runtime
+resolves the origin, reviews the candidate and commits the follow, and the
+command reports the same outcomes, pins included
+([Where a piece is created](#where-a-piece-is-created)).
 
 ## Pattern test read costs
 
@@ -1608,7 +1611,14 @@ refresh a client-side update runs after its commit: the command starts the piece
 it holds and reports that outcome beside the receipt, exiting non-zero when the
 refresh fails over a durable commit. A piece addressed at a scope keeps the
 client-side path. `cf piece setsrc --check` performs every step in this process
-on every deployment. The contract, including the refusals and their codes, is
+on every deployment. `cf piece follow` sends the piece's id and the origin, with
+its pins and override, as the `follow` verb; the serving runtime resolves the
+origin, reviews what it serves, and commits the transition that records it. The
+command then asks the server for the piece's result, and reports a failure of
+that over the durable follow, as `setsrc` does. A piece addressed at a scope is
+refused there, and a deployment whose memory server does not know the verb is
+reported as one that does not serve `follow` yet. The contract, including the
+refusals and their codes, is
 [`server-pattern-lifecycle.md`](../../docs/features/server-pattern-lifecycle.md).
 
 ## Piece discovery

@@ -13243,7 +13243,7 @@ const parseDecodedClientMessage = (
     typeof parsed.space === "string" &&
     typeof parsed.sessionId === "string" &&
     (parsed.verb === "upload" || parsed.verb === "instantiate" ||
-      parsed.verb === "setsrc") &&
+      parsed.verb === "setsrc" || parsed.verb === "follow") &&
     isFabricPlainObject(parsed.body)
   ) {
     return {

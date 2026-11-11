@@ -2680,8 +2680,8 @@ the children of system pieces, say:
   cf piece follow --cell <profile> system:system/profile-home/profile-home.tsx
 
 Unlike 'setsrc', which detaches, the origin is recorded with the revision.
-Not served yet: against a deployment that serves piece lifecycle verbs the
-command refuses, since the served update takes no origin.
+Against a deployment that serves piece lifecycle verbs, its serving runtime
+resolves the origin, reviews what it serves, and commits the follow.
 
 --expect and --expect-revision make the follow conditional on the source state
 a caller inspected ('cf piece inspect --pattern-identity --json' reports both):

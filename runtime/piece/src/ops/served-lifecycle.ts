@@ -26,6 +26,7 @@ import {
   entityIdFrom,
   getPatternIdentityRef,
   getPieceSourceRevisions,
+  getPieceSourceSnapshot,
   isLink,
   isStream,
   type MemorySpace,
@@ -39,6 +40,7 @@ import {
   sendEvent,
 } from "@commonfabric/runner";
 import { pieceListSchema } from "@commonfabric/runner/schemas";
+import { isStoredArgumentSchemaRefusal } from "@commonfabric/runner/shared";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 
 import { pieceId as pieceIdOf } from "../piece-id.ts";
@@ -48,7 +50,10 @@ import {
   isPieceSourceCompatibilityRefusal,
   type PatternUpdateReceipt,
   type PieceController,
+  type PieceSourceActionResult,
   PieceSourceChangedError,
+  type PieceSourcePreparation,
+  type PreparedPieceSourceChange,
 } from "./piece-controller.ts";
 import type { PiecesController } from "./pieces-controller.ts";
 import { setCfcTrustSnapshot } from "@commonfabric/runner/cfc/trust-authority";
@@ -83,7 +88,12 @@ export type ServedLifecycleRefusalCode =
   /** The candidate source cannot run over the piece's retained state. */
   | "incompatible"
   /** The piece is not on the pattern the update was proved against. */
-  | "source-moved";
+  | "source-moved"
+  /**
+   * The origin a follow names is not one a piece can follow, or the source
+   * it names could not be read or compiled.
+   */
+  | "origin-unreachable";
 
 /** A served verb's refusal, carrying the code the wire reports. */
 export class ServedLifecycleRefusal extends Error {
@@ -207,6 +217,63 @@ export type ServedSetSourceReceipt = {
 
   /** The origin the update detached, `null` when the piece had none. */
   detachedOrigin: string | null;
+};
+
+/**
+ * What `follow-prepare` asks for: point a piece at an origin and adopt what
+ * the origin serves now, the `repoint` a client's follow makes.
+ */
+export interface ServedFollowRequest {
+  /** The piece pointed at the origin. */
+  pieceId: string;
+
+  /** What the piece follows from then on: a `system:` ref or a fabric URL. */
+  origin: string;
+
+  /** The pattern the piece must still run; a piece on another refuses. */
+  expectedPattern?: ServedPatternRef;
+
+  /**
+   * The revision the piece's source log must still end at, `null` for a log
+   * that must still be empty; a piece whose log ends elsewhere refuses.
+   */
+  expectedRevision?: string | null;
+
+  /**
+   * Make the change even when its candidate cannot run over the piece's
+   * retained state, or when the current pattern cannot be loaded at all.
+   */
+  dangerouslyAllowIncompatibleSchema?: boolean;
+}
+
+/**
+ * What `follow-prepare` hands to `follow`, which makes the change in the
+ * cycle after: the request, and the change reviewed against the piece, whose
+ * candidate's closure is durable once the preparation's wave has committed.
+ */
+export type ServedFollowPreparation = {
+  request: ServedFollowRequest;
+  prepared: PreparedPieceSourceChange;
+
+  /** The incompatibility the review found, which the request accepted. */
+  acceptedIncompatibility?: string;
+};
+
+/** What `follow` hands back: the transition its direct commit made. */
+export type ServedFollowReceipt = {
+  pieceId: string;
+
+  /** The pointer the piece now holds. */
+  pattern: ServedPatternRef;
+
+  /** The origin the piece now follows, as it records it. */
+  origin: string;
+
+  /** The source revision the transition appended. */
+  revisionId: string;
+
+  /** The incompatibility the request accepted, when the review found one. */
+  acceptedIncompatibility?: string;
 };
 
 /**
@@ -833,24 +900,7 @@ export async function servedSetPieceSource(
     { pattern: request.pattern },
     { repairCache: false },
   );
-  let piece: PieceController;
-  try {
-    piece = await pieces.get(request.pieceId, false);
-  } catch (error) {
-    throw new ServedLifecycleRefusal(
-      "piece-not-found",
-      describeFailure(error),
-      {
-        cause: error,
-      },
-    );
-  }
-  if (getPatternIdentityRef(piece.getCell()) === undefined) {
-    throw new ServedLifecycleRefusal(
-      "piece-not-found",
-      `piece ${request.pieceId} is not held by the space`,
-    );
-  }
+  const piece = await servedPiece(pieces, request.pieceId);
   await prepareSourceClosureVerification();
   let receipt: PatternUpdateReceipt;
   try {
@@ -879,10 +929,42 @@ export async function servedSetPieceSource(
 }
 
 /**
- * Helper for `servedSetPieceSource()`, which names the refusal a failed
- * update is: the piece moved off the pattern it was proved against, the
- * candidate cannot run over the piece's state, or setup refused for a
- * reason of its own.
+ * The piece `pieceId` names, opened on the serving runtime without being
+ * started, for a verb that changes its source.
+ *
+ * @throws ServedLifecycleRefusal `piece-not-found` when the address names no
+ * piece the space holds.
+ */
+async function servedPiece(
+  pieces: PiecesController,
+  pieceId: string,
+): Promise<PieceController> {
+  let piece: PieceController;
+  try {
+    piece = await pieces.get(pieceId, false);
+  } catch (error) {
+    throw new ServedLifecycleRefusal(
+      "piece-not-found",
+      describeFailure(error),
+      {
+        cause: error,
+      },
+    );
+  }
+  if (getPatternIdentityRef(piece.getCell()) === undefined) {
+    throw new ServedLifecycleRefusal(
+      "piece-not-found",
+      `piece ${pieceId} is not held by the space`,
+    );
+  }
+  return piece;
+}
+
+/**
+ * Helper for `servedSetPieceSource()` and `servedFollowPieceSource()`, which
+ * names the refusal a failed update is: the piece moved off the pattern it
+ * was proved against, the candidate cannot run over the piece's state, or
+ * setup refused for a reason of its own.
  */
 function setSourceRefusal(error: unknown): ServedLifecycleRefusal {
   const message = describeFailure(error);
@@ -930,6 +1012,166 @@ export async function confirmServedSetSource(
       `piece ${receipt.pieceId} does not hold pattern ` +
         `${receipt.pattern.identity}#${receipt.pattern.symbol} at revision ` +
         `${receipt.revisionId}: the source update did not commit`,
+    );
+  }
+}
+
+/**
+ * The first half of a served follow: prepare the `repoint` that points a
+ * piece at `request.origin` and adopts what the origin serves now, through
+ * the review a client's follow runs, without making it. Resolving and
+ * compiling the candidate persists its closure into this cycle's wave, so
+ * the cycle after, in which {@link servedFollowPieceSource} makes the change,
+ * finds it durable. A candidate that cannot run over the piece's retained
+ * state is refused `incompatible` unless the request accepts that.
+ */
+export async function servedPrepareFollow(
+  pieces: PiecesController,
+  request: ServedFollowRequest,
+): Promise<ServedFollowPreparation> {
+  const piece = await servedPiece(pieces, request.pieceId);
+  let preparation: PieceSourcePreparation;
+  try {
+    preparation = await piece.prepareSourceChange(
+      { kind: "repoint", url: request.origin },
+      followPins(request),
+    );
+  } catch (error) {
+    throw prepareFollowRefusal(error);
+  }
+  switch (preparation.status) {
+    case "prepared":
+      return { request, prepared: preparation.prepared };
+    case "incompatible":
+      if (request.dangerouslyAllowIncompatibleSchema !== true) {
+        throw new ServedLifecycleRefusal("incompatible", preparation.message);
+      }
+      return {
+        request,
+        prepared: preparation.prepared,
+        acceptedIncompatibility: preparation.message,
+      };
+    case "current":
+      throw new Error("a repoint offered no change to prepare");
+  }
+}
+
+/**
+ * The second half of a served follow: make the change `preparation` reviewed,
+ * checked again against the piece as it stands — pinned to the pattern and
+ * source-log head the review read, so a piece whose source moved since is
+ * refused `source-moved`, and to the review itself — in one transition that
+ * records the origin and commits directly to the store with `actingUser`'s
+ * trust snapshot. The piece is not started here; a piece the loop runs is
+ * swapped by its pointer watcher, and the caller names the piece's root as
+ * the verb's demand for one it does not run.
+ */
+export async function servedFollowPieceSource(
+  pieces: PiecesController,
+  preparation: ServedFollowPreparation,
+  actingUser: string,
+): Promise<ServedFollowReceipt> {
+  const { request, prepared } = preparation;
+  const piece = await servedPiece(pieces, request.pieceId);
+  await prepareSourceClosureVerification();
+  let result: PieceSourceActionResult;
+  try {
+    result = await piece.changeSource(prepared.action, {
+      expectedPattern: prepared.expected.pattern,
+      expectedRevision: prepared.expected.revisionId,
+      confirmedChange: prepared,
+      served: { actingUser },
+    });
+  } catch (error) {
+    throw setSourceRefusal(error);
+  }
+  if (result.status === "incompatible") {
+    throw new ServedLifecycleRefusal("incompatible", result.message);
+  }
+  const settled = getPieceSourceSnapshot(piece.getCell());
+  if (
+    settled === undefined || settled.origin === null ||
+    settled.revisionId === null
+  ) {
+    throw new Error(
+      `piece ${request.pieceId} records no origin after the follow committed`,
+    );
+  }
+  return {
+    pieceId: request.pieceId,
+    pattern: settled.pattern,
+    origin: settled.origin,
+    revisionId: settled.revisionId,
+    ...(preparation.acceptedIncompatibility === undefined
+      ? {}
+      : { acceptedIncompatibility: preparation.acceptedIncompatibility }),
+  };
+}
+
+/** The pins a follow's request names, as the piece controller takes them. */
+function followPins(request: ServedFollowRequest): {
+  expectedPattern?: ServedPatternRef;
+  expectedRevision?: string | null;
+} {
+  return {
+    ...(request.expectedPattern === undefined
+      ? {}
+      : { expectedPattern: request.expectedPattern }),
+    ...(request.expectedRevision === undefined
+      ? {}
+      : { expectedRevision: request.expectedRevision }),
+  };
+}
+
+/**
+ * Helper for `servedPrepareFollow()`, which names the refusal a failed
+ * preparation is: the piece moved off a pin, the candidate cannot run over
+ * the piece's state, the piece's stored argument does not satisfy the
+ * candidate, or — anything else — the origin offered nothing to adopt.
+ */
+function prepareFollowRefusal(error: unknown): ServedLifecycleRefusal {
+  if (isStoredArgumentSchemaRefusal(error)) {
+    return new ServedLifecycleRefusal("setup-failed", describeFailure(error), {
+      cause: error,
+    });
+  }
+  const refusal = setSourceRefusal(error);
+  return refusal.code === "setup-failed"
+    ? new ServedLifecycleRefusal("origin-unreachable", refusal.message, {
+      cause: error,
+    })
+    : refusal;
+}
+
+/**
+ * The durability read behind {@link servedFollowPieceSource}: the piece
+ * document holds the pattern pointer and the origin the transition wrote,
+ * and the revision it appended.
+ */
+export async function confirmServedFollow(
+  runtime: Runtime,
+  space: MemorySpace,
+  receipt: ServedFollowReceipt,
+): Promise<void> {
+  const piece = runtime.getCellFromEntityId(
+    space,
+    entityIdFrom(receipt.pieceId),
+  );
+  await piece.sync();
+  const stored = getPieceSourceSnapshot(piece);
+  if (
+    stored === undefined ||
+    stored.pattern.identity !== receipt.pattern.identity ||
+    stored.pattern.symbol !== receipt.pattern.symbol ||
+    stored.origin !== receipt.origin ||
+    !getPieceSourceRevisions(piece).some((revision) =>
+      revision.revisionId === receipt.revisionId
+    )
+  ) {
+    throw new Error(
+      `piece ${receipt.pieceId} does not follow ${receipt.origin} on ` +
+        `${receipt.pattern.identity}#${receipt.pattern.symbol} at revision ` +
+        `${receipt.revisionId}: the follow did not commit`,
     );
   }
 }

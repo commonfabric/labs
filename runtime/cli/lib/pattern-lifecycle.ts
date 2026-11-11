@@ -55,6 +55,7 @@ const REFUSED_CODES: ReadonlySet<string> = new Set([
   "invalid-request",
   "invalid-source",
   "lifecycle-unsupported",
+  "origin-unreachable",
   "payload-too-large",
   "pattern-not-found",
   "piece-not-found",
@@ -233,6 +234,55 @@ export async function setPieceSourceOnServer(
     piece: input.piece,
     program: wireProgram(input.program),
     ...(input.repository === undefined ? {} : { repository: input.repository }),
+    ...(input.dangerouslyAllowIncompatibleSchema === undefined ? {} : {
+      dangerouslyAllowIncompatibleSchema:
+        input.dangerouslyAllowIncompatibleSchema,
+    }),
+    ...(input.start === undefined ? {} : { start: input.start }),
+  });
+}
+
+/**
+ * Point `piece` in `space` at `origin` and adopt what the origin serves now,
+ * through the review a client's follow runs, in a transition the serving
+ * runtime commits to the store on its own and that records the origin. The
+ * pins refuse a piece that moved off the pattern or the source-log head they
+ * name (`source-moved`), and a candidate that cannot run over the piece's
+ * retained state is refused (`incompatible`) unless the override is sent.
+ * The receipt names the pointer the piece now holds, the origin as it
+ * records it, and the revision the transition appended. Unless `start` is
+ * `false`, the serving loop derives the piece in the cycle after.
+ */
+export async function followPieceOnServer(
+  config: LifecycleClientConfig,
+  input: {
+    space: MemorySpace;
+    piece: string;
+    origin: string;
+    expectedPattern?: PatternRef;
+    expectedRevision?: string | null;
+    dangerouslyAllowIncompatibleSchema?: boolean;
+    start?: boolean;
+  },
+): Promise<{
+  pieceId: string;
+  pattern: PatternRef;
+  origin: string;
+  revisionId: string;
+
+  /** The incompatibility the override accepted, when the review found one. */
+  acceptedIncompatibility?: string;
+}> {
+  return await call(config, "follow", {
+    space: input.space,
+    piece: input.piece,
+    origin: input.origin,
+    ...(input.expectedPattern === undefined
+      ? {}
+      : { expectedPattern: input.expectedPattern }),
+    ...(input.expectedRevision === undefined
+      ? {}
+      : { expectedRevision: input.expectedRevision }),
     ...(input.dangerouslyAllowIncompatibleSchema === undefined ? {} : {
       dangerouslyAllowIncompatibleSchema:
         input.dangerouslyAllowIncompatibleSchema,

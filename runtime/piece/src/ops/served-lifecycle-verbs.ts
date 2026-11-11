@@ -23,15 +23,21 @@ import {
 import type { LifecycleVerb } from "@commonfabric/runner/executor/host";
 import { PiecesController } from "./pieces-controller.ts";
 import {
+  confirmServedFollow,
   confirmServedInstantiate,
   confirmServedRegistration,
   confirmServedSetSource,
   finishServedRegistration,
   prepareServedRegistration,
+  servedFollowPieceSource,
+  type ServedFollowPreparation,
+  type ServedFollowReceipt,
+  type ServedFollowRequest,
   servedInstantiatePiece,
   type ServedInstantiateReceipt,
   type ServedInstantiateRequest,
   type ServedPatternRef,
+  servedPrepareFollow,
   type ServedRegistrationOutcome,
   type ServedRegistrationPreparation,
   servedSetPieceSource,
@@ -64,6 +70,16 @@ export type ServedLifecycleVerbDescriptor =
     readonly name: "setsrc";
     /** `start` names the piece's root as the loop's demand. */
     readonly request: ServedSetSourceRequest & { start: boolean };
+  }
+  | { readonly name: "follow-prepare"; readonly request: ServedFollowRequest }
+  | {
+    readonly name: "follow";
+    /** `start` names the piece's root as the loop's demand. */
+    readonly request: {
+      preparation: ServedFollowPreparation;
+      actingUser: string;
+      start: boolean;
+    };
   };
 
 /** The receipt each verb returns, by the verb's name. */
@@ -73,6 +89,8 @@ export type ServedLifecycleReceipts = {
   "registration-prepare": ServedRegistrationPreparation;
   "registration-finish": ServedInstantiateReceipt;
   setsrc: ServedSetSourceReceipt;
+  "follow-prepare": ServedFollowPreparation;
+  follow: ServedFollowReceipt;
 };
 
 /**
@@ -200,6 +218,26 @@ export function buildServedLifecycleVerb(
         run: (runtime) => servedSetPieceSource(pieces(runtime), request),
         confirm: (runtime, receipt) =>
           confirmServedSetSource(runtime, space, receipt),
+        ...demandRoots(start),
+      };
+      return withReceiptForgotten(verb);
+    }
+    case "follow-prepare": {
+      const request = descriptor.request;
+      const verb: LifecycleVerb<ServedFollowPreparation> = {
+        name: descriptor.name,
+        run: (runtime) => servedPrepareFollow(pieces(runtime), request),
+      };
+      return withReceiptForgotten(verb);
+    }
+    case "follow": {
+      const { preparation, actingUser, start } = descriptor.request;
+      const verb: LifecycleVerb<ServedFollowReceipt> = {
+        name: descriptor.name,
+        run: (runtime) =>
+          servedFollowPieceSource(pieces(runtime), preparation, actingUser),
+        confirm: (runtime, receipt) =>
+          confirmServedFollow(runtime, space, receipt),
         ...demandRoots(start),
       };
       return withReceiptForgotten(verb);

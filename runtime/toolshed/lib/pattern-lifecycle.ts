@@ -23,6 +23,7 @@ import type {
   Server,
 } from "@commonfabric/memory/v2/server";
 import type {
+  ServedFollowReceipt,
   ServedInstantiateReceipt,
   ServedLifecycleReceipts,
   ServedLifecycleRefusalCode,
@@ -95,6 +96,14 @@ const lifecycleBodies = {
     expectedPattern: patternRefSchema.optional(),
     start: z.boolean().optional(),
   }).refine(oneSource, oneSourceMessage),
+  follow: z.object({
+    piece: z.string(),
+    origin: z.string().min(1),
+    expectedPattern: patternRefSchema.optional(),
+    expectedRevision: z.string().nullable().optional(),
+    dangerouslyAllowIncompatibleSchema: z.boolean().optional(),
+    start: z.boolean().optional(),
+  }),
 };
 
 /**
@@ -191,6 +200,7 @@ const SERVED_REFUSAL_CODES: Record<ServedLifecycleRefusalCode, true> = {
   "piece-not-found": true,
   "incompatible": true,
   "source-moved": true,
+  "origin-unreachable": true,
 };
 
 function wireSource(source: WireSource): ServedPatternSource | undefined {
@@ -657,6 +667,61 @@ export async function processSetSource(
 }
 
 /**
+ * The `follow` verb: point `piece` at `origin` and adopt what the origin
+ * serves now, recording the origin with the revision, as a client's follow
+ * does. It runs over two cycles of the serving loop. The first resolves the
+ * origin on the serving runtime, compiles the candidate into the space, and
+ * reviews it against the piece, refusing one that cannot run over the
+ * piece's retained state unless the request accepts that; its wave commit
+ * makes the candidate's closure durable. The second makes the reviewed
+ * change, checked again against the piece as it then stands, in a
+ * transition that commits directly to the store. Unless `start` is `false`,
+ * the piece's root is named as the loop's demand, so a piece nothing runs
+ * derives under its new source in the cycle after; a piece the loop runs is
+ * swapped by its pointer watcher either way.
+ */
+export async function processFollow(
+  deps: LifecycleDeps,
+  callerDid: string,
+  input: {
+    space: string;
+    piece: string;
+    origin: string;
+    expectedPattern?: ServedPatternRef;
+    expectedRevision?: string | null;
+    dangerouslyAllowIncompatibleSchema?: boolean;
+    start?: boolean;
+  },
+): Promise<LifecycleResult<ServedFollowReceipt>> {
+  const prepared = await runServedVerb(deps, callerDid, input.space, {
+    name: "follow-prepare",
+    request: {
+      pieceId: input.piece,
+      origin: input.origin,
+      ...(input.expectedPattern === undefined
+        ? {}
+        : { expectedPattern: input.expectedPattern }),
+      ...(input.expectedRevision === undefined
+        ? {}
+        : { expectedRevision: input.expectedRevision }),
+      ...(input.dangerouslyAllowIncompatibleSchema === undefined ? {} : {
+        dangerouslyAllowIncompatibleSchema:
+          input.dangerouslyAllowIncompatibleSchema,
+      }),
+    },
+  });
+  if (!("ok" in prepared)) return prepared;
+  return await runServedVerb(deps, callerDid, input.space, {
+    name: "follow",
+    request: {
+      preparation: prepared.ok,
+      actingUser: callerDid,
+      start: input.start !== false,
+    },
+  });
+}
+
+/**
  * Runs one `pattern.lifecycle` request the memory server handed over: the
  * verb's arguments are validated against the verb's schema, the verb runs as
  * `call.principal`, and its result is the outcome the memory server answers
@@ -686,6 +751,7 @@ async function lifecycleResult(
     | { pattern: ServedPatternRef }
     | InstantiateReceipt
     | ServedSetSourceReceipt
+    | ServedFollowReceipt
   >
   | undefined
 > {
@@ -706,6 +772,12 @@ async function lifecycleResult(
       const parsed = lifecycleBodies.setsrc.safeParse(body);
       return parsed.success
         ? await processSetSource(deps, principal, { space, ...parsed.data })
+        : undefined;
+    }
+    case "follow": {
+      const parsed = lifecycleBodies.follow.safeParse(body);
+      return parsed.success
+        ? await processFollow(deps, principal, { space, ...parsed.data })
         : undefined;
     }
   }

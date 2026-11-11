@@ -2477,7 +2477,11 @@ export type EventAttentionResolveResult = {
 export const PATTERN_LIFECYCLE_MAX_BYTES = 8 * 1024 * 1024;
 
 /** A pattern-lifecycle verb that a serving deployment runs on request. */
-export type PatternLifecycleVerb = "upload" | "instantiate" | "setsrc";
+export type PatternLifecycleVerb =
+  | "upload"
+  | "instantiate"
+  | "setsrc"
+  | "follow";
 
 /**
  * A request to run a pattern-lifecycle verb in the session's space, as the
