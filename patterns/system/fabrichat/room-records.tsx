@@ -1636,7 +1636,10 @@ export const prepareAttach = handler<unknown, PrepareAttachState>(
  * entry it added, or why it refused, and the composer's send reads that. Each
  * request is named by the event's key and the file's place in it, so every
  * run of one event names the same requests, and the store adds each file once:
- * a file attached again is a new request, whatever became of the last. Moves
+ * a file attached again is a new request, whatever became of the last. A run
+ * of an event the composer has handled already adds none of its requests to
+ * the attachments again: not one they hold, nor one taken out, nor one the
+ * store has answered, whose file was sent, taken out or refused since. Moves
  * the composer's files taken out on, as `settleTakenOut()` does.
  *
  * @throws If the space has no store, or the files would make more
@@ -1657,8 +1660,16 @@ export const commitAttach = handler<UploadEvent, AttachState>(
       throw new Error(`A message can have at most ${max} attachments.`);
     }
     const key = eventKey();
-    const added = files.map((file, index) => {
+    const takenOut = composer.get()?.takenOut ?? [];
+    const requests = target.key("requests");
+    const held = new Set(
+      [...attaching, ...takenOut].map((file) => file.requestId),
+    );
+    const added = files.flatMap((file, index) => {
       const requestId = `attach-${key}-${index}`;
+      if (held.has(requestId) || requests.key(requestId).get() !== undefined) {
+        return [];
+      }
       target.key("add").send({
         requestId,
         name: file.name,
@@ -1667,9 +1678,8 @@ export const commitAttach = handler<UploadEvent, AttachState>(
         size: file.size,
         onConflict: "rename",
       });
-      return { requestId, name: file.name };
+      return [{ requestId, name: file.name }];
     });
-    const takenOut = composer.get()?.takenOut ?? [];
     composer.key("attaching").set([...attaching, ...added]);
     if (takenOut.length > 0) settleTakenOut(composer, store, takenOut);
   },
