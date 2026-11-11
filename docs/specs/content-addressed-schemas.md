@@ -767,13 +767,18 @@ schema it already knows it has.
   lacks, the client sends one one-shot `graph.query` to the space whose
   frame named them, with each `cid:` document as a root
   (memory-v2/04-protocol.md §4.3.3). The fetch adds nothing to the
-  session's watch set. A hash already being fetched on the same connection,
-  for any space, is not asked for again: the frame waits for that fetch
-  instead. Only a body that verified ends such a wait; on any other outcome
-  the waiting frame's own space is asked. A fetched body is verified and
-  registered like any arriving schema document. Fetches coalesce per
-  connection rather than across the realm, so every wait is bounded by the
-  connection the frame arrived on.
+  session's watch set. A hash already being fetched from the same host is
+  not asked for again: the frame waits for that fetch instead. On a direct
+  connection one host serves every space, so a fetch for any space is
+  shared. On a routed connection (`routedAuthV1`) the router reaches a host
+  per space, so a fetch is shared only within its space. A frame then waits
+  only on the host it came from: a network fault on that host would have
+  held back the frame's own delivery anyway, and a host that misbehaves,
+  leaving a fetch unanswered, holds back only what came from it. Only a body
+  that verified ends such a wait; on any other outcome the waiting frame's
+  own space is asked. A fetched body is verified and registered like any
+  arriving schema document. Every wait is bounded by the connection the
+  frame arrived on.
 - **How a fetch ends.** A fetch is answered, or lost with its connection;
   nothing times it out. An answer that returns a verified body resolves the
   hash. An answer that returns none, returns content that does not verify,
