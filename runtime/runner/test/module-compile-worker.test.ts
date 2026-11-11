@@ -11,7 +11,10 @@ import {
   markDeterministicCompileFailure,
 } from "../src/harness/compile-failure.ts";
 import type { ModuleCompileRequest } from "../src/harness/module-compile.ts";
-import { ModuleCompileWorker } from "../src/harness/module-compile-worker.ts";
+import {
+  COMPILE_WORKER_LOGGER_PREFIX,
+  ModuleCompileWorker,
+} from "../src/harness/module-compile-worker.ts";
 import type { CacheableModule } from "../src/harness/types.ts";
 import {
   Runtime,
@@ -287,6 +290,32 @@ describe("ModuleCompileWorker", () => {
 
         expect(failure).toBeInstanceOf(CompilerError);
         expect(isDeterministicCompileFailure(failure)).toBe(true);
+      });
+    });
+
+    describe("timingStats()", () => {
+      it("returns no timings before the first compile", async () => {
+        expect(await worker.timingStats()).toEqual({});
+      });
+
+      it("returns the compiler's phase timings from the worker's realm, under prefixed logger names", async () => {
+        await runtime(worker).harness.compileToRecordGraph(PROGRAM);
+
+        const stats = await worker.timingStats();
+        const phases = stats[`${COMPILE_WORKER_LOGGER_PREFIX}js-compiler`];
+        expect(phases?.["phase/emitFile"]?.count).toBeGreaterThan(0);
+        expect(phases?.["phase/createProgram"]?.count).toBeGreaterThan(0);
+        for (const name of Object.keys(stats)) {
+          expect(name.startsWith(COMPILE_WORKER_LOGGER_PREFIX)).toBe(true);
+        }
+      });
+
+      it("rejects once the instance is closed", async () => {
+        await runtime(worker).harness.compileToRecordGraph(PROGRAM);
+        worker.close();
+
+        const failure = await rejectionOf(() => worker.timingStats());
+        expect(failure).toBeInstanceOf(Error);
       });
     });
 

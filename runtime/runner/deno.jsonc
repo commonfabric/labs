@@ -103,6 +103,7 @@
     "./executor/routed-plane": "./src/executor/routed-plane.ts",
     "./executor/served-requests": "./src/executor/served-requests.ts",
     "./executor/serving-memory-server.deno": "./src/executor/serving-memory-server.deno.ts",
+    "./executor/serving-loop-diagnostics": "./src/executor/serving-loop-diagnostics.ts",
     "./executor/serving-runtime": "./src/executor/serving-runtime.ts",
     "./executor/space-server": "./src/executor/space-server.ts",
     "./executor/serving-worker-host": "./src/executor/serving-worker-host.ts",

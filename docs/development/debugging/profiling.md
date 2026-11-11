@@ -297,10 +297,13 @@ the memory server's thread, and its `servingLoop` block holds executor counters
 rather than worker logger rows. The realm route asks the worker and waits for
 its turn, which is why it is not part of `stats`; with the loop on this thread
 it answers with the process's own loggers, and with the loop off it answers
-404. Collect both routes to account for the serving loop's work. Neither
-holds the compiler's own phase timings (`js-compiler`'s `phase/*`): a serving
+404. Collect both routes to account for the serving loop's work. A serving
 runtime's type-check, transform and emit run in a compile worker
-(`ModuleCompileWorker`), whose loggers no route reads.
+(`ModuleCompileWorker`), and the realm route's `timingStats` carries that
+worker's timing statistics beside the realm's own, under logger names
+prefixed `compile-worker:`: `compile-worker:js-compiler`'s `phase/*` keys are
+the compiler's phase timings. The compile worker's logger counts are not
+reported.
 
 The memory server emits `memory/refresh/batch` for each space processed by a
 flush, with its dirty instance keys, derived-key count, and connection count.

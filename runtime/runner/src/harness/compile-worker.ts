@@ -3,10 +3,13 @@
  * type-check, transform and emit step of each compile its realm sends
  * (`ModuleCompileWorker`), one at a time, on the synchronous driver, since
  * nothing else shares this thread. It reads the TypeScript environment types
- * from this process's static assets. The protocol is
- * `compile-worker-protocol.ts`; nothing outside a worker imports this module.
+ * from this process's static assets, and answers a request for its timing
+ * statistics with this realm's, which hold the compiler's phase timings. The
+ * protocol is `compile-worker-protocol.ts`; nothing outside a worker imports
+ * this module.
  */
 
+import { getTimingStatsBreakdown } from "@commonfabric/logger";
 import { StaticCache } from "@commonfabric/static";
 
 import {
@@ -33,7 +36,16 @@ const compiler = (async () => {
 // rejects outside it: the rejection is unhandled and ends the worker, which
 // is a failure of this worker and not of the compile it was sent.
 self.addEventListener("message", async (event: MessageEvent) => {
-  const { id, request } = decodeCompileWorkerRequest(event.data);
+  const message = decodeCompileWorkerRequest(event.data);
+  if (message.kind === "diagnostics") {
+    post({
+      kind: "diagnostics",
+      id: message.id,
+      timingStats: getTimingStatsBreakdown(),
+    });
+    return;
+  }
+  const { id, request } = message;
   const ready = await compiler;
   let answer: CompileWorkerAnswer;
   try {

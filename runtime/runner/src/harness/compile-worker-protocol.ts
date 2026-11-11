@@ -9,6 +9,8 @@
  * The worker posts `ready` once its listener is installed, and the realm
  * sends nothing before that, since a message posted to a worker that has no
  * listener yet is dropped. Every request carries an id its answer repeats.
+ * Besides compiles, the realm can ask for the worker realm's timing
+ * statistics, which hold the compiler's own phase timings.
  */
 
 import type {
@@ -26,6 +28,12 @@ import {
   isPlainObject,
   type ReadonlyRecord,
 } from "@commonfabric/js-values/types";
+import type {
+  CDFPoint,
+  SlowTiming,
+  TimingStats,
+  TimingStatsBreakdown,
+} from "@commonfabric/logger";
 import { isBuilderSourceSitesV1 } from "@commonfabric/ts-transformers/runtime-contract";
 
 import type { FabricMount } from "../sandbox/module-record-compiler.ts";
@@ -34,14 +42,18 @@ import {
   type ModuleCompileRequest,
 } from "./module-compile.ts";
 
-/** A compile the realm asks its worker for. */
-export interface CompileWorkerRequest {
-  /** The number the answer repeats, unique within one realm's worker. */
-  readonly id: number;
-
-  /** The compile to run. */
-  readonly request: ModuleCompileRequest;
-}
+/**
+ * What the realm asks its worker for: a compile, or the worker realm's timing
+ * statistics. `id` is the number the answer repeats, unique within one
+ * realm's worker.
+ */
+export type CompileWorkerRequest =
+  | {
+    readonly kind: "compile";
+    readonly id: number;
+    readonly request: ModuleCompileRequest;
+  }
+  | { readonly kind: "diagnostics"; readonly id: number };
 
 /** What a compile worker posts to its realm. */
 export type CompileWorkerAnswer =
@@ -55,6 +67,11 @@ export type CompileWorkerAnswer =
     readonly kind: "failed";
     readonly id: number;
     readonly failure: EncodedCompileFailure;
+  }
+  | {
+    readonly kind: "diagnostics";
+    readonly id: number;
+    readonly timingStats: TimingStatsBreakdown;
   };
 
 /** A compiled module as it crosses, its source map as JSON text. */
@@ -201,7 +218,11 @@ export function decodeCompileWorkerRequest(
   if (!isPlainObject(data) || typeof data.id !== "number") {
     throw new Error("A compile worker received a message with no request id");
   }
-  return { id: data.id, request: decodeRequest(data.request) };
+  if (data.kind === "diagnostics") return { kind: "diagnostics", id: data.id };
+  if (data.kind !== "compile") {
+    throw protocolError("a request of no known kind");
+  }
+  return { kind: "compile", id: data.id, request: decodeRequest(data.request) };
 }
 
 /**
@@ -231,7 +252,79 @@ export function decodeCompileWorkerAnswer(data: unknown): CompileWorkerAnswer {
       failure: decodeFailure(data.failure),
     };
   }
+  if (data.kind === "diagnostics") {
+    return {
+      kind: "diagnostics",
+      id: data.id,
+      timingStats: decodeTimingStatsBreakdown(data.timingStats),
+    };
+  }
   throw protocolError("an answer of no known kind");
+}
+
+function decodeTimingStatsBreakdown(value: unknown): TimingStatsBreakdown {
+  if (!isPlainObject(value)) {
+    throw protocolError("timing statistics that are not a record");
+  }
+  const breakdown: TimingStatsBreakdown = {};
+  for (const [loggerName, byKey] of Object.entries(value)) {
+    if (!isPlainObject(byKey)) {
+      throw protocolError("a logger's timing statistics that are not a record");
+    }
+    const stats: Record<string, TimingStats> = {};
+    for (const [key, entry] of Object.entries(byKey)) {
+      stats[key] = decodeTimingStats(entry);
+    }
+    breakdown[loggerName] = stats;
+  }
+  return breakdown;
+}
+
+function decodeTimingStats(value: unknown): TimingStats {
+  if (!isPlainObject(value)) {
+    throw protocolError("timing statistics for a key that are not a record");
+  }
+  const cdfSinceBaseline = value.cdfSinceBaseline;
+  return {
+    count: numberField(value, "count"),
+    min: numberField(value, "min"),
+    max: numberField(value, "max"),
+    totalTime: numberField(value, "totalTime"),
+    average: numberField(value, "average"),
+    countSinceBaseline: numberField(value, "countSinceBaseline"),
+    totalTimeSinceBaseline: numberField(value, "totalTimeSinceBaseline"),
+    averageSinceBaseline: numberField(value, "averageSinceBaseline"),
+    p50: numberField(value, "p50"),
+    p95: numberField(value, "p95"),
+    lastTime: numberField(value, "lastTime"),
+    lastTimestamp: numberField(value, "lastTimestamp"),
+    slowest: arrayOf(value.slowest, "slowest timings", decodeSlowTiming),
+    cdf: arrayOf(value.cdf, "CDF points", decodeCDFPoint),
+    cdfSinceBaseline: cdfSinceBaseline === null
+      ? null
+      : arrayOf(cdfSinceBaseline, "CDF points", decodeCDFPoint),
+  };
+}
+
+function decodeSlowTiming(value: unknown): SlowTiming {
+  if (!isPlainObject(value)) {
+    throw protocolError("a slow timing that is not a record");
+  }
+  return {
+    elapsed: numberField(value, "elapsed"),
+    at: numberField(value, "at"),
+    epochMs: numberField(value, "epochMs"),
+    ...(value.detail === undefined
+      ? {}
+      : { detail: stringField(value, "detail") }),
+  };
+}
+
+function decodeCDFPoint(value: unknown): CDFPoint {
+  if (!isPlainObject(value)) {
+    throw protocolError("a CDF point that is not a record");
+  }
+  return { x: numberField(value, "x"), y: numberField(value, "y") };
 }
 
 function decodeRequest(value: unknown): ModuleCompileRequest {
