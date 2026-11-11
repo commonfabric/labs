@@ -2534,8 +2534,9 @@ export type ServedRequest = {
 
 /**
  * A request to administer the session space's invitations, as the session's
- * principal (04-protocol.md §4.3.11). Redemption is not among them: the one
- * redeeming holds no grant on the space yet, so it has no session to send on.
+ * principal (04-protocol.md §4.3.11). Redemption and preview are not among
+ * them: the one redeeming or previewing holds no grant on the space yet, so it
+ * has no session to send on.
  */
 export type SpaceInviteRequest = {
   type: "space.invite";
@@ -2544,7 +2545,7 @@ export type SpaceInviteRequest = {
   sessionId: SessionId;
 
   /** The operation and its arguments. */
-  invite: Exclude<InviteOperation, { operation: "redeem" }>;
+  invite: Exclude<InviteOperation, { operation: "redeem" | "preview" }>;
 };
 
 /**

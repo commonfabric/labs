@@ -32,6 +32,13 @@ export const INVITE_ACCESS = ["READ", "WRITE", "OWNER"] as const;
  * field refuses a create carrying a suggestion with `invalid-request`, since
  * both transports refuse unknown fields, so a client reads the field before it
  * offers a suggestion.
+ *
+ * `preview` bounds the names an issuer may give an invitation for the person
+ * opening it to read before they redeem it (see {@link InvitePreview}). It was
+ * added after version one shipped, as `suggestedProfile` was: a service whose
+ * response lacks the field refuses a create carrying `spaceName` or
+ * `issuerName` with `invalid-request`, and has no `preview` operation, so a
+ * client reads the field before it sends either.
  */
 export const SPACE_INVITE_CAPABILITY = {
   version: 1,
@@ -39,6 +46,7 @@ export const SPACE_INVITE_CAPABILITY = {
   maxTtlSeconds: 30 * 24 * 60 * 60,
   access: INVITE_ACCESS,
   suggestedProfile: { maxNameLength: 128, maxPictureBytes: 64 * 1024 },
+  preview: { maxNameLength: 128 },
 } as const;
 
 /**
@@ -84,11 +92,7 @@ export function isInviteProfileSuggestion(
     SPACE_INVITE_CAPABILITY.suggestedProfile;
   const { name, picture, ...rest } = value as Record<string, unknown>;
   if (Object.keys(rest).length !== 0) return false;
-  if (
-    typeof name !== "string" || name.length === 0 ||
-    name.length > maxNameLength || !name.isWellFormed() ||
-    name.trim() !== name || /\p{Cc}/u.test(name)
-  ) return false;
+  if (!isInviteName(name, maxNameLength)) return false;
   if (picture === undefined) return true;
   if (typeof picture !== "string" || !/^[A-Za-z0-9_-]+$/.test(picture)) {
     return false;
@@ -104,9 +108,34 @@ export function isInviteProfileSuggestion(
 }
 
 /**
+ * Whether `value` is a name the service stores exactly as it was given: a
+ * well-formed string of between 1 and `maxLength` UTF-16 code units, with no
+ * leading or trailing whitespace and no control character.
+ */
+export function isInviteName(
+  value: unknown,
+  maxLength: number,
+): value is string {
+  return typeof value === "string" && value.length > 0 &&
+    value.length <= maxLength && value.isWellFormed() &&
+    value.trim() === value && !/\p{Cc}/u.test(value);
+}
+
+/**
+ * Whether `value` is a well-formed `spaceName` or `issuerName`: a name of at
+ * most `SPACE_INVITE_CAPABILITY.preview.maxNameLength` UTF-16 code units, as
+ * {@link isInviteName} judges it.
+ */
+export function isInvitePreviewName(value: unknown): value is string {
+  return isInviteName(value, SPACE_INVITE_CAPABILITY.preview.maxNameLength);
+}
+
+/**
  * Issuance parameters, signed by a current explicit space owner. An
  * invitation that carries a `suggestedProfile` is for one person, so its
- * `maxUses` is 1.
+ * `maxUses` is 1. `spaceName` and `issuerName` are the names the issuer gives
+ * the space and themself for the person opening the invitation to read before
+ * they redeem it (see {@link InvitePreview}); any invitation may carry them.
  */
 export type CreateInvite = {
   inviteId: string;
@@ -114,6 +143,22 @@ export type CreateInvite = {
   ttlSeconds: number;
   access: InviteAccess;
   maxUses?: number;
+  suggestedProfile?: InviteProfileSuggestion;
+  spaceName?: string;
+  issuerName?: string;
+};
+
+/**
+ * What the person holding an invitation's code may read before redeeming it:
+ * the access it grants, the names its issuer gave the space and themself, and
+ * the profile its issuer suggests for them, each while the service holds it.
+ * The names are the issuer's claims, as the suggestion is; the service checks
+ * only their form. A preview consumes no use and grants nothing.
+ */
+export type InvitePreview = {
+  access: InviteAccess;
+  spaceName?: string;
+  issuerName?: string;
   suggestedProfile?: InviteProfileSuggestion;
 };
 
