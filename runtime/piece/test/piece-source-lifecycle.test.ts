@@ -567,7 +567,7 @@ describe("piece source lifecycle", () => {
     expect(getPatternSource(piece.getCell())).toBeUndefined();
   });
 
-  it("refuses a direct edit naming an origin the source URL policy does not allow, writing nothing", async () => {
+  it("refuses a direct edit naming an origin no follow can take, writing nothing", async () => {
     const piece = await pieces.create(versionProgram("v1"), { input: {} });
     const before = getPatternIdentityRef(piece.getCell());
 
@@ -576,6 +576,22 @@ describe("piece source lifecycle", () => {
         origin: "https://source.test/pattern.tsx",
       }),
     ).rejects.toThrow("not a source origin");
+    // A fabric origin of a shape no follow takes is refused without being
+    // read, rather than recorded as one the piece could never adopt from.
+    const hash = "A".repeat(43);
+    const space = pieces.getSpace();
+    for (
+      const [origin, refusal] of [
+        [`cf:/${space}/friendly-name`, "stable fabric entity or pattern"],
+        [`cf:pattern:${hash}/schemas`, "subpaths are not supported"],
+        [`cf:/friendly-space/of:fid1:${hash}`, "explicit space DID"],
+        [`cf:/${space}/${piece.id}`, "a piece cannot follow itself"],
+      ]
+    ) {
+      await expect(
+        piece.setPattern(versionProgram("v2"), { origin }),
+      ).rejects.toThrow(refusal);
+    }
 
     expect(getPatternIdentityRef(piece.getCell())).toEqual(before);
     expect(getPatternSource(piece.getCell())).toBeUndefined();

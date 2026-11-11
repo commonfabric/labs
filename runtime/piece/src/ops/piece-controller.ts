@@ -5318,6 +5318,7 @@ export class PieceController<T = unknown> {
       this.#pieces.runtime,
       this.#pieces.getSpace(),
       options.origin,
+      { self: { space: this.#pieces.getSpace(), pieceId: this.id } },
     );
     const mutationVersion = ++this.#mutationVersion;
     let transition: PieceSourceTransition | undefined;
