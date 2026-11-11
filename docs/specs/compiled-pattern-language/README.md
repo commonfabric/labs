@@ -53,8 +53,9 @@ boundaries. For each output path the compiler emits a **label template**: the
 set of inputs whose labels join to form that output's label. The runtime runs
 one transaction per cause (an event, or an external change), evaluates only
 the outputs something demands, stores only the outputs something outside the
-pattern instance can reach, and instantiates label templates for those stored
-outputs alone.
+pattern instance can reach, and instantiates label templates only for what it
+stores: those outputs, the targets of side-writes, the arguments of child
+instances, and effect requests.
 
 ## The language
 
@@ -65,10 +66,14 @@ the subset. It has three tiers.
 ### Reactive expressions
 
 The pattern body. It is first-order and has no loops, no reassignment, and no
-function creation other than the callbacks of the constructs below. Conditional
-expressions (`?:`, `&&`, `||`), property access, object and array construction,
-and the array methods `map`, `filter`, and `flatMap` are reactive constructs
-here, and the compiler lowers each to an operation with a known label rule.
+function creation other than the callbacks of the collection constructs below,
+the functions given to `computed`, `action`, and `assert`, inline event
+handlers, and inline patterns. Conditional expressions (`?:`, `&&`, `||`),
+property access, object and array construction, the array methods `map`,
+`filter`, `flatMap`, `reduce`, `findIndex`, `some`, `every`, and `find`, the
+aggregates, and the collection indexes are reactive constructs here, and the
+compiler lowers each to an operation with a known label rule
+([language subset](language-subset.md), §4.4).
 
 A `computed` whose body is a pure expression over its captures is promoted to
 this tier. It then costs no sandboxed call, and its result gets a label per
@@ -76,13 +81,15 @@ output path instead of one label for the whole result.
 
 ### Function bodies
 
-The bodies of `lift`, `handler`, `computed`, and `action` are full JavaScript
-and run in the sandbox. The compiler parses them and type-checks them in the
+The bodies of `lift`, `handler`, `computed`, `action`, and `assert`, inline
+event handlers, and functions declared at module scope are JavaScript with a
+stated set of restrictions ([language subset](language-subset.md), §5.1) and
+run in the sandbox. The compiler parses them and type-checks them in the
 subset, and performs **footprint analysis** on them: for each input path,
-whether the body reads the value, the shape, the enumeration, or only the
-identity, and which paths it writes. The footprint narrows the schema each
-body is invoked with, which is what keeps a body from being tainted by, or
-gaining access to, data it never touches.
+whether the body reads the value, the shape, the enumeration, only the
+identity, or the label stored for the path, and which paths it writes. The
+footprint narrows the schema each body is invoked with, which is what keeps a
+body from being tainted by, or gaining access to, data it never touches.
 
 Footprint analysis is allowed to give up. When it loses track of a value it
 widens the footprint to the whole subtree that value came from, and no
@@ -96,9 +103,10 @@ Inside a function body the reactive constructs do not exist. `?:` and
 ### Imported TypeScript
 
 A module outside the subset can be imported for functions whose types the
-subset cannot express. The compiler reads only the annotated signature of each
-imported function, does not analyze the body, and treats every argument as
-read in full.
+subset cannot express. A module is imported TypeScript when it begins with the
+directive `"use typescript";` ([language subset](language-subset.md), §5.5).
+The compiler reads only the annotated signature of each imported function,
+does not analyze the body, and treats every argument as read in full.
 
 ### Statelessness
 
@@ -203,7 +211,7 @@ Confidentiality combines by join and integrity by meet, so the label of an
 output path is determined by which inputs flow into it. A label template is
 that set in symbolic form: a set of **slots**, plus constants from declared
 schemas. A slot stands for the label of one input at one path and one
-observation class (value, shape, enumeration, or identity).
+observation class (value, shape, enumeration, identity, or label metadata).
 
 - **Objects:** slots follow the paths the footprint analysis found. A subtree
   the analysis could not resolve is one slot, standing for the join over the
@@ -212,15 +220,24 @@ observation class (value, shape, enumeration, or identity).
   so there is one template per body, not per element. Membership of the
   collection is its own slot.
 - **Conditionals:** the template of a conditional is the condition's slots
-  plus the slots of the branch that was selected. This is the one place a
-  template depends on a value.
+  plus the slots of the branch that was selected. A template depends on a
+  value in three places: the branch a conditional selected, the prefix at
+  which a `findIndex`, `some`, `every`, or `find` stopped, and the child that
+  a dynamic key, a `minBy`, a `maxBy`, or a keyed lookup chose
+  ([plan format and label templates](plan-and-label-templates.md), §3.13 and
+  §3.18).
 - **Sandboxed calls:** the output's template is the union of the slots in the
-  body's footprint.
+  body's footprint and of what the body read dynamically through the cell
+  handles it was given. A reference the body passes on unchanged keeps its
+  own label ([plan format and label templates](plan-and-label-templates.md),
+  §3.9).
 
 Instantiating a template means substituting actual labels for slots and
-combining them. The runtime does this only for outputs it stores, and only
-when a slot's label or a selected branch changed. A change of value alone does
-no label work. With labels held by content address
+combining them. The runtime does this only for what it stores: kept outputs,
+the targets of side-writes, the arguments of child instances, and effect
+requests. It does so only when a slot's label changed, or one of the three
+choices above did. A change of value alone does no label work. With labels
+held by content address
 ([content-addressed CFC labels](../content-addressed-cfc-labels.md)), an
 instantiation is a union of identifiers and can be memoized by template and
 input label identifiers.
@@ -228,7 +245,11 @@ input label identifiers.
 Constraints such as required integrity and maximum confidentiality become
 constraints on slots. Where the labels of the slots are declared in schemas the
 compiler checks the constraint and reports a violation as a compile error.
-Otherwise the check runs when the template is instantiated.
+The check also runs when the template is instantiated, because a declared
+label is a lower bound on what a slot carries. Two results are settled at
+compile time: a writer policy on a static write edge, and an integrity
+requirement that a declared atom satisfies
+([plan format and label templates](plan-and-label-templates.md), §4.4).
 
 ## Execution
 
@@ -239,19 +260,26 @@ the completion of an effect. The runtime opens one transaction per cause,
 evaluates what the cause invalidated and something demands, and commits the
 state the handler wrote and the kept outputs that changed, with their labels.
 A label constraint that fails rejects the cause's whole transaction. A cone
-that fails, for example because a function body throws, does not: its outputs
-take an error state with a label, and the rest of the transaction commits
+that fails, for example because the body of a `lift` or a `computed` throws,
+does not: its outputs take an error state with a label, and the rest of the
+transaction commits. A handler body that throws aborts its event's
+transaction, as it does today
 ([plan format and label templates](plan-and-label-templates.md), §5).
 
 ### Pull and dependency cones
 
-Evaluation is demand-driven. Each output path has a **dependency cone**: the
-part of the pattern that path's value depends on. A pull of an output
-evaluates its cone and nothing else, for the value and for the label.
+Evaluation is demand-driven. The compiler partitions the pattern body into
+**dependency cones**. Every value the instance computes is computed by exactly
+one cone, a cone can compute several outputs, and a cone that uses a value
+another cone computes has an edge from that cone
+([execution and storage](execution-and-storage.md), §2.1). A pull of an output
+evaluates the cone that computes it, with the cones that cone depends on
+where they are not current, and nothing else, for the value and for the
+label.
 
 - An output passed to another pattern is a link. When the consumer is pulled,
-  the pull extends through the link into the producing instance's cone for
-  that path.
+  the pull extends through the link into the cone of the producing instance
+  that computes that path.
 - A `map` element is a cone with a key. The key is the element's value when
   the element is a plain value, and the identity of the element's cell when
   it is not. Elements that move keep their cones, so reordering a list does
@@ -268,9 +296,12 @@ evaluates its cone and nothing else, for the value and for the label.
 Within an instance the order of evaluation is static, so the runtime does not
 discover read sets or sort nodes for it at run time. Dynamic read tracking
 remains for link hops through data, whose targets are not known statically,
-and for reads a function body makes through a cell handle it was given. Where
-footprint analysis gives up it widens a static slot, and no dynamic tracking
-is involved.
+and for some of the reads a function body makes through a cell handle it was
+given: such a read is static when it goes through one handle whose position
+in the body's inputs is known, at a static path, and unconditionally, and it
+is dynamic otherwise ([footprint analysis](footprint-analysis.md), §7.2).
+Where footprint analysis gives up it widens a static slot, and no dynamic
+tracking is involved.
 
 ### Computations that write
 
@@ -317,25 +348,33 @@ has no stored state at all.
 
 State that handlers write is stored in documents whose identifiers derive from
 the cause of their creation, not from their content: the parent instance, the
-element key where there is one, and the cell's name. Two independent
-executions arrive at the same identifier even when they start from slightly
-different data. Such a document is written when it is first assigned, and it
-carries no pattern metadata.
+compiled-in calls and element bodies that enclose the declaration, and the
+cell's name. Two independent executions arrive at the same identifier even
+when they start from slightly different data. Such a document is written when
+it is first assigned. It carries no pattern reference and no manifest, and it
+keeps the back-link to its result, which `resultOwnerOf` reads
+([plan format and label templates](plan-and-label-templates.md), §3.16).
 
-The compiler derives these identifiers exactly as the transformer does, which
-names a state cell after the variable it is assigned to (the `.for(...)` cause
-it emits). Existing stored state of an instance then keeps its identifiers,
-and migrating an instance consists of no longer writing its per-node
-documents. State declared inside a `map` body is the exception: its
-identifier includes the element key, which this design redefines, so such
-state does not carry over.
+The compiler derives the name as the transformer does, from the variable the
+cell is assigned to (the `.for(...)` cause it emits). A state cell declared
+directly in the pattern body keeps the identifier it has today. One declared
+inside a sub-pattern that is compiled into the surrounding instance has a new
+identifier, and its stored value is found through a carry-over record. One
+declared inside a `map` body is not carried over: its identifier includes the
+element key, which this design redefines
+([execution and storage](execution-and-storage.md), §5.7 and §9). Migrating an
+instance is a procedure that document proposes: one setup transaction that
+replaces the stored layout with the compiled one.
 
 ### Provenance
 
-A kept output carries a full provenance chain: its label template, the
-identities of the inputs bound to the template's slots, and the identity of
-the compiled pattern. Interim values that are not kept have no stored
-provenance of their own.
+A kept output has a full provenance chain: its label template, the identities
+of the inputs bound to the template's slots, and the identity of the compiled
+pattern. The stored record names the template and holds the selections and
+the addresses read dynamically. The identities bound to slots are not copied
+into the record where the plan and the document determine them
+([execution and storage](execution-and-storage.md), §7.2). Interim values that
+are not kept have no stored provenance of their own.
 
 ### Caching for incremental computation
 
@@ -351,34 +390,40 @@ cache one is a runtime decision and not a language feature.
 
 ## Built-ins and factories
 
-Built-ins divide into two groups. The
-[built-in inventory](builtin-inventory.md) places each one and states its
-label rule.
+The [built-in inventory](builtin-inventory.md) places each built-in and
+factory in one of four classes, A to D, and states its label rule. Two of the
+classes hold what remains an operation at run time.
 
-- **Structural operations** become compiler operations with label rules:
-  `ifElse`, `when`, `unless`, `map`, `filter`, `flatMap`, the aggregates, the
-  collection-index family, `str`, `anchorsOf`, `inspectConfLabel`, and
-  `wish`. Authors write the reactive constructs of the language, and
-  `mapWithPattern`, which the transformer generates today, has no
-  counterpart. The callable forms `ifElse`, `when`, `unless`, and the `str`
-  tag are removed, so that no new pattern is written in the old way. The
-  compiler accepts them for an interim period, with a warning that names the
-  replacement, only as long as doing so costs it nothing beyond mapping each
-  to the same operation as `?:`, `&&`, `||`, and a template literal. `reduce`
-  and `findIndex` are reactive constructs too, and the callback of `reduce`
-  is restricted to an expression. `some`, `every`, and `find` are reactive
-  constructs as well. The label of `findIndex` joins the elements up to and
-  including the first match, and not the ones after it. `wish` is structural
-  because what it creates, it creates idempotently: its result reads as if
-  the data had already existed.
-- **Effectful operations** stay durable boundaries with declared label rules
-  and their own transactions: the fetch family, `generateText`,
-  `generateObject`, `llmDialog`, `agent`, `sqliteQuery`, `navigateTo`,
-  `compileAndRun`, and the staged changes to a space's access list.
-  `cellFromUrl` splits: parsing an address is structural, and resolving a
-  space name or host is effectful.
+- **Structural operations** (class A) become compiler operations with label
+  rules: `ifElse`, `when`, `unless`, `map`, `filter`, `flatMap`, the
+  aggregates, the collection-index family, `str`, `anchorsOf`,
+  `inspectConfLabel`, and `wish`. Authors write the reactive constructs of
+  the language, and `mapWithPattern`, which the transformer generates today,
+  has no counterpart. The callable forms `ifElse`, `when`, `unless`, and the
+  `str` tag are removed, so that no new pattern is written in the old way.
+  The compiler accepts them for an interim period, with a warning that names
+  the replacement, only as long as doing so costs it nothing beyond mapping
+  each to the same operation as `?:`, `&&`, `||`, and a template literal.
+  `reduce`, `findIndex`, `some`, `every`, and `find` are reactive constructs
+  too. The callback of `reduce` is restricted to an expression, and its
+  accumulator is a data type. The labels of `findIndex`, `some`, and `every`,
+  and of the choice `find` makes, join the elements up to and including the
+  deciding one, and not the ones after it
+  ([plan format and label templates](plan-and-label-templates.md), §3.13).
+  `wish` is structural because what it creates, it creates idempotently: its
+  result reads as if the data had already existed.
+- **Effectful operations** (class B) stay durable boundaries with declared
+  label rules and their own transactions: the fetch family and
+  `fetchProgram`, `generateText`, `generateObject`, `llmDialog`, `agent`,
+  `sqliteQuery`, `navigateTo`, `compileAndRun`, and the staged changes
+  (`grantSpaceAccess`, `revokeSpaceAccess`, and `nameBlob`). `cellFromUrl`
+  splits: parsing an address is structural, and resolving a space name or
+  host is effectful.
 
-`streamData` and `llm` are removed.
+The other two classes are the authoring markers (class C), such as `pattern`,
+`handler`, and `computed`, which stay in the language as syntax the compiler
+recognizes, and the removed forms (class D), which have no counterpart, among
+them `streamData`, `llm`, and every form the transformer emits.
 
 Inside a function body, five kinds of runtime call remain:
 
@@ -400,8 +445,11 @@ wants a reactive mapped list, for example, wraps the list in a pattern.
 
 Each handler invocation is a new frame, so the cells and instances it creates
 are new on every call and are identified by the event and their order within
-the invocation. Pattern bodies and lifts are re-evaluated, so their cells
-need identifiers that are the same on every evaluation.
+the invocation. A handler binding is the exception: it is identified by the
+enclosing instance, the handler, and what it captures
+([plan format and label templates](plan-and-label-templates.md), §1.3).
+Pattern bodies and lifts are re-evaluated, so their cells need identifiers
+that are the same on every evaluation.
 
 ### Instantiating a pattern from a function body
 
@@ -460,7 +508,10 @@ outputs. It keeps five responsibilities:
 
 - turning the storage change channel, including remote writes, into dirty
   slots;
-- tracking which instances are demanded, so that unobserved ones do not run;
+- tracking demand, which is held on kept outputs per path, so that an output
+  nothing observes is not evaluated
+  ([scheduler and serving loop](scheduler-and-serving-loop.md), §4.1 and
+  §4.2);
 - serializing the event queue;
 - running effects, with their time gates and retries;
 - following links across spaces.
@@ -486,13 +537,17 @@ Speculative values that reach the render boundary need labels. A client
 reuses the last committed label of an output while the slots of its template
 are unchanged, and instantiates the template locally otherwise.
 
-A client also evaluates the gates the server will evaluate, so that it does
-not show a result the server is going to refuse. FabriChat is the reference
-case: the pattern declares that a message is added only when the send event
-comes from a trusted UI element. A send from an element without that
-integrity is refused by the server, so the client's speculative run of the
-handler refuses it too, from the same plan. The client's verdict is advisory
-and the server's is authoritative.
+A client also evaluates the gates it can from the plan and the data it holds,
+so that it does not show a result it can tell the server is going to refuse.
+It cannot evaluate every gate: the egress ceiling of an effect a handler
+requests, for example, depends on sink ceilings that are server
+configuration. The table of which gates a client can evaluate is in
+[scheduler and serving loop](scheduler-and-serving-loop.md), §11.3. FabriChat
+is the reference case: the pattern declares that a message is added only when
+the send event comes from a trusted UI element. A send from an element
+without that integrity is refused by the server, so the client's speculative
+run of the handler refuses it too, from the same plan. The client's verdict
+is advisory and the server's is authoritative.
 
 ## Correspondence with the CFC specification
 
@@ -559,11 +614,14 @@ Each stage can be checked before the next begins.
    much of the pattern corpus they accept and how often the analysis gives up.
 3. Emit the plan alongside the transformer's existing output, and compare
    template labels with the labels the runtime computes for the whole corpus.
-   Template labels must be equal or tighter, and never looser.
+   Template labels must be equal or tighter, with one deliberate exception:
+   the membership label of a collection index bucket is wider, because it
+   includes the keys of absent elements
+   ([plan format and label templates](plan-and-label-templates.md), §3.17).
 4. Run one pattern with one transaction per cause and with only its keep set
    stored. Then do the same for `map`. FabriChat is the reference pattern for
-   this stage and the previous one, because it exercises confidentiality,
-   event integrity, and per-row instances together.
+   this stage and the previous one, because it exercises event integrity,
+   write policy, and per-row instances together.
 5. Move the remaining scheduler into the serving loop.
 6. Retire the builder form the transformer emits.
 
@@ -576,7 +634,7 @@ disagree, the detailed document governs and this one is corrected.
 - [Language subset](language-subset.md): grammar, type rules, and diagnostics
 - [Plan format and label templates](plan-and-label-templates.md): slots,
   observation classes, and the label rule of each operation
-- [Built-in inventory](builtin-inventory.md): each built-in's group, label
+- [Built-in inventory](builtin-inventory.md): each built-in's class, label
   rule, and durable state
 - [Footprint analysis](footprint-analysis.md): the abstract domain over a
   function body, where the analysis widens, the write side, and reads through
@@ -594,20 +652,39 @@ in the [continuation plan](../../plans/compiled-pattern-language.md).
 ## Open questions
 
 - **Gates under speculation.** Which of the server's gates a client can
-  evaluate from the plan alone, and how a client presents a refusal it
-  predicts ([render-boundary composition](../cfc-render-boundary-composition.md)).
+  evaluate from the plan and the data it holds, and how a client presents a
+  refusal it predicts
+  ([render-boundary composition](../cfc-render-boundary-composition.md)). A
+  table of the gates and a presentation are proposed
+  ([scheduler and serving loop](scheduler-and-serving-loop.md), §11.3 and
+  §11.5). The presentation, and whether a client still sends an event it
+  predicts the server will refuse, are not ruled on.
 - **Residual termination channels.** Error states are specified
   ([plan format and label templates](plan-and-label-templates.md), §5). What
   stays termination-insensitive is listed there: divergence inside a body's
   budget, demand, and the rejection of a cause's transaction.
 - **Commits that span spaces.** A transaction covers one space. A staged
-  access change and an `inSpace` instantiation both reach another space, and
-  a two-step commit across spaces could serve both
-  ([built-in inventory](builtin-inventory.md), open question 3).
+  access change and an `inSpace` instantiation both reach another space
+  ([built-in inventory](builtin-inventory.md), open question 3). The proposal
+  is one ordered sequence that serves both: access changes first, then the
+  writes to other spaces, then the writes to the home space, without
+  atomicity ([scheduler and serving loop](scheduler-and-serving-loop.md),
+  §9.4). Whether that sequence is accepted, or an atomic commit across spaces
+  is required, is not ruled on.
 - **Cycles through side-writes.** How much the compiler can reject statically,
-  and what the iteration bound inside a cause's transaction is.
+  and what the iteration bound inside a cause's transaction is. The proposed
+  bound is ten evaluations of a cone per transaction, after which the cone
+  fails ([execution and storage](execution-and-storage.md), §2.7;
+  [scheduler and serving loop](scheduler-and-serving-loop.md), §8.1). The
+  number is not ruled on and needs measurement on the corpus.
 - **Cache promotion.** The cost model for promoting a cone to a durable cache,
-  and where that cache lives.
+  and where that cache lives. A model and a cache document per instance and
+  scope key are proposed ([execution and storage](execution-and-storage.md),
+  §8). The model's constants are placeholders until stage 4 measures them.
 - **Migration.** Whether anything besides state cells in existing stored
   instances has to keep its identifier, and when per-node documents already
-  stored can be deleted.
+  stored can be deleted. A procedure is proposed
+  ([execution and storage](execution-and-storage.md), §9). Open with it are
+  what happens to settled effect results, how long retired documents are
+  kept, and what becomes of an instance whose stored source the compiler
+  refuses.
