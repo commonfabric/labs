@@ -839,10 +839,11 @@ describe("sync-cid-references", () => {
           bDelivered = true;
         });
         await b.queryGraph({ roots: [] });
-        expect(bDelivered).toBe(true);
+        const deliveredWhileAWaited = bDelivered;
         release.resolve();
         await deliveredB;
         await watchingA;
+        expect(deliveredWhileAWaited).toBe(true);
       } finally {
         await writerClient.close();
         await watcherClient.close();
