@@ -55,8 +55,9 @@ export type ServingWorkerMainOptions = {
   moduleByteCache?: ModuleByteCache;
 
   /**
-   * The compile worker every serving runtime of this worker compiles in,
-   * which closes when the host does.
+   * The compile worker every serving runtime of this worker compiles in. It
+   * closes just before the host does, so a compile an activation still awaits
+   * fails at once.
    */
   moduleCompiler?: ModuleCompileWorker;
 };
