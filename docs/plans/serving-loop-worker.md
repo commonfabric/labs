@@ -172,9 +172,11 @@ the engine's replay keying, which keys on the holder and the counter.
 `/api/patterns` over HTTP, which the main thread answers; the compiled-module
 byte cache is per worker, and that worker's runtimes take turns at a cold compile
 so that a program compiles once; the type-check, transform and emit step of
-each compile runs in a compile worker the serving worker starts
-(`ModuleCompileWorker`), so its CPU and its heap are off the thread every
-space's loop shares; external effects (`fetch`, LLM calls, the outbox) run
+a serving runtime's compiles runs in a compile worker the serving worker
+starts (`ModuleCompileWorker`), so its CPU and its heap are off the thread
+every space's loop shares, except for a compile instrumented for pattern
+coverage or one that asks for its transformed program, which runs on that
+thread; external effects (`fetch`, LLM calls, the outbox) run
 where the runtime runs. A Worker started without a permission
 descriptor inherits the process's permissions, FFI for SQLite included.
 

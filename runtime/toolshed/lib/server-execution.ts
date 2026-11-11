@@ -513,12 +513,11 @@ export function startServerExecutionHost(options: {
         }),
       collectedWorkerMemory: () => Promise.resolve(undefined),
       host,
-      close: async () => {
-        try {
-          await host.close();
-        } finally {
-          moduleCompiler.close();
-        }
+      // The compile worker closes first, so a compile an activation still
+      // awaits fails at once rather than holding the host's close.
+      close: () => {
+        moduleCompiler.close();
+        return host.close();
       },
     };
   }

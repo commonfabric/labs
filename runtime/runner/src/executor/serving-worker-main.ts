@@ -153,10 +153,12 @@ export function serveFromPort(
         return options.runLifecycleVerb(host, space, verb, identity);
       },
       close: async () => {
+        // The compile worker closes first, so a compile an activation still
+        // awaits fails at once rather than holding the host's close.
+        options.moduleCompiler?.close();
         try {
           await host.close();
         } finally {
-          options.moduleCompiler?.close();
           clearInterval(heartbeat);
           await plane.close();
         }

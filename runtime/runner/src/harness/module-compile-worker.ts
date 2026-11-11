@@ -42,7 +42,8 @@ export class ModuleCompileWorker implements ModuleCompiler {
   /**
    * Compiles `request` in the worker.
    *
-   * @throws Error when this instance is closed.
+   * @throws Error when this instance is closed, or its worker cannot be
+   * started; both are failures of the place the compile was to run.
    */
   compile(
     request: ModuleCompileRequest,
@@ -52,7 +53,16 @@ export class ModuleCompileWorker implements ModuleCompiler {
         markPlaceCompileFailure(new Error("The compile worker is closed")),
       );
     }
-    const generation = this.#generation ??= this.#start();
+    let generation: WorkerGeneration;
+    try {
+      generation = this.#generation ??= this.#start();
+    } catch (error) {
+      return Promise.reject(
+        markPlaceCompileFailure(
+          error instanceof Error ? error : new Error(String(error)),
+        ),
+      );
+    }
     const id = this.#nextId++;
     const { promise, resolve, reject } = Promise.withResolvers<
       Map<string, CompiledTypeScriptModule>

@@ -264,7 +264,29 @@ describe("ModuleCompileWorker", () => {
         );
 
         expect(failure).toBeInstanceOf(Error);
+        if (!(failure instanceof Error)) return;
+        expect(failure.message).toMatch(/compile worker failed/);
         expect(isDeterministicCompileFailure(failure)).toBe(false);
+      });
+
+      it("classifies a compile error in a recompile from stored source as deterministic", async () => {
+        // Stored source is the authored bytes, so the type error below is
+        // stored as written.
+
+        const stored: Source[] = TYPE_ERROR_PROGRAM.files.map((file) => ({
+          name: file.name,
+          contents: file.contents,
+        }));
+
+        const failure = await rejectionOf(() =>
+          runtime(worker).harness.compileResolvedToRecordGraph(
+            stored,
+            TYPE_ERROR_PROGRAM.main,
+          )
+        );
+
+        expect(failure).toBeInstanceOf(CompilerError);
+        expect(isDeterministicCompileFailure(failure)).toBe(true);
       });
     });
 
