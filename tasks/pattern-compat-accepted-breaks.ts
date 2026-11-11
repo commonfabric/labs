@@ -1007,29 +1007,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     record: "docs/history/cfc-chat-demo-submit-input-break.md",
   },
   {
-    // Each `Panel` kind gains an optional `addedBy` DID. The proof does not
-    // apply the open-object evolution allowance inside a union branch, so a
-    // stored panel whose `addedBy` held a non-string reads as a refused
-    // alternative.
-    pattern: "system/loom/main.tsx",
-    baselines: [
-      "20260920T232507Z-_ewvPy8qDJYL47km",
-      "20260922T052256Z--2Q9ESzxSenSTer9",
-    ],
-    paths: [
-      "argument.panels[]",
-      // The paths from here on are recorded in
-      // `docs/history/pattern-compat-every-issue-paths.md`, which names the
-      // recorded change each one comes from.
-      "argument.presentation.focusedPanel",
-      "argument.presentation.stagedPanels[]",
-    ],
-    reason:
-      "a Loom panel's new optional addedBy reads as a narrowed union branch under baselines that never had the property" +
-      "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md",
-    record: "docs/history/loom-panel-added-by-break.md",
-  },
-  {
     // Each `Panel` kind's `addedBy` gains the `admitPanel` write contract and
     // the runtime's `authored-by` label as its type, which the proof reads as
     // a narrowed union branch, and the narrowed `Panel` reaches the `before`
@@ -2731,18 +2708,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     reason:
       "the module defining the policy moved, and a module's identity includes its path, so the reference names the same policy by a different identity",
     record: "docs/history/package-layout-module-identity-break.md",
-  },
-  {
-    // The collection view's ready branch gains the `deleted` lists, optional
-    // since a Home older than them produces none. The proof does not apply
-    // the open-object evolution allowance inside a union branch, so the
-    // branch reads as narrowed, as the Loom root's optional `addedBy` did.
-    pattern: "system/shared-space/shared-space-collection.tsx",
-    baselines: ["20261013T060316Z-c-EAbZTKJzYV9I3w"],
-    paths: ["argument.view"],
-    reason:
-      "the collection view's ready branch gains optional `deleted` lists, which the proof reads as a narrowed union branch under a baseline that never had the property",
-    record: "docs/history/shared-space-collection-deleted-lists-break.md",
   },
   {
     // A placement's `state` gains `"deleted"`, which the specification adds
