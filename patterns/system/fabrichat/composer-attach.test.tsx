@@ -105,10 +105,11 @@ const addEntry = (
 /**
  * Answers an `add` by the file's name: adds it, refuses a name starting
  * `bad`, leaves a name starting `slow` with no outcome, and holds a name
- * starting `late` until `land`.
+ * starting `late` until `land`. Like a store, it acts on a request id once.
  */
 const standInAdd = handler<AddFileEvent, StandInAddState>((event, state) => {
   const name = event?.name ?? "";
+  if (state.requests.key(event?.requestId ?? "").get() !== undefined) return;
   if (name.startsWith("slow")) return;
   if (name.startsWith("late")) {
     state.held.push(event);
@@ -142,7 +143,8 @@ interface StandInRemoveState {
 /**
  * Answers a `remove` by the entry's name, after logging it: refuses a name
  * starting `kept` as not permitted, and one starting `gone` as not found, and
- * otherwise marks the entry removed.
+ * otherwise marks the entry removed. Like a store, it acts on a request id
+ * once, though it logs every `remove` it is sent.
  */
 const standInRemove = handler<RemoveFileEvent, StandInRemoveState>(
   (event, { requests, removals }) => {
@@ -150,6 +152,7 @@ const standInRemove = handler<RemoveFileEvent, StandInRemoveState>(
     const name = entry?.get()?.name ?? "";
     const outcome = requests.key(event?.requestId ?? "");
     removals.push(name);
+    if (outcome.get() !== undefined) return;
     if (entry === undefined || name.startsWith("gone")) {
       outcome.set({
         status: "refused",
