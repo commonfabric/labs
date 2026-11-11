@@ -268,8 +268,17 @@ export const anchorsEnvelopeWith = (
       labelMap: { version: 1, entries: added },
     };
   }
+  // A spread copies own enumerable members only, and the check that found
+  // `stored` readable also reads members a class defines, so the members it
+  // requires are copied by name.
   return {
     ...stored,
-    labelMap: { ...stored.labelMap, entries: [...held, ...added] },
+    version: stored.version,
+    schemaHash: stored.schemaHash,
+    labelMap: {
+      ...stored.labelMap,
+      version: stored.labelMap.version,
+      entries: [...held, ...added],
+    },
   };
 };
