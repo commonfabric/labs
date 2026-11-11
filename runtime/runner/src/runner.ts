@@ -8568,19 +8568,21 @@ export class Runner {
    * A piece whose only absences are defaults its instances are owed
    * (`ownedCellOwesSeed`), each one the store read-through reported holding
    * nothing for, needs no name-sync, which could deliver none of them. Its
-   * run is held for the seeds alone, which `seeds` names, and not at all in
-   * a caller-owned setup, which seeds them in the caller's transaction. A
+   * run is held for the seeds alone, which `seeds` names. A caller-owned
+   * setup seeds them in its transaction unless `prepareScopedDefaults` asks
+   * for the recorded defaults' preparation before the run resumes. A
    * piece of a family no pre-sync named, whose other absences are user- or
    * session-scoped cells the store reported holding nothing at, is held the
-   * same way, and so not in a caller-owned setup either: their instances
-   * join `seeds`, so that outside such a setup its start runs apart from the
-   * caller's transaction (`#familyAbsent` says why).
+   * same way: their instances join `seeds`, so that outside a caller-owned
+   * setup its start runs apart from the caller's transaction
+   * (`#familyAbsent` says why).
    */
   #patternToNameBeforeRun(
     patternOrModule: Pattern | Module | undefined,
     argument: unknown,
     tx: IExtendedStorageTransaction,
     resultCell: Cell<any>,
+    prepareScopedDefaults = false,
   ): {
     pattern: Pattern;
     entryKey: string;
@@ -8640,7 +8642,8 @@ export class Runner {
         seeds,
       )
     ) return { pattern: resolved.pattern, entryKey, identity };
-    return seeds.length === 0 || this.#callerOwnedSetupTransactions.has(tx)
+    return seeds.length === 0 ||
+        (!prepareScopedDefaults && this.#callerOwnedSetupTransactions.has(tx))
       ? undefined
       : { pattern: resolved.pattern, entryKey, identity, seeds };
   }
@@ -9884,28 +9887,44 @@ export class Runner {
    * stored dependencies need loading, resolves that load and throws
    * `RetryImmediately` so the scheduler retries with a fresh transaction.
    * No deferred setup transaction can outlive the caller's resolution writes.
+   * A list can request preparation of recorded scoped defaults during that
+   * load; `#seedOwedDefaults()` verifies their durable owner and manifest,
+   * and the caller's transaction must still be active for a seed to run.
    */
   runInTransaction<T, R>(
     tx: IExtendedStorageTransaction,
     pattern: Pattern,
     argument: T,
     resultCell: Cell<R>,
-    options: RunnerRunOptions = {},
+    options: RunnerRunOptions & {
+      /**
+       * Prepare recorded scoped defaults during non-speculative dependency
+       * loading. List reconciles use the ordinary named-family preparation;
+       * speculative runs keep every seed in their caller's transaction.
+       */
+      prepareScopedDefaults?: boolean;
+    } = {},
   ): Cell<R> | Promise<never> {
     this.#callerOwnedSetupTransactions.add(tx);
+    const context = speculationRunContextOf(tx);
+    const speculative = context?.kind === "derivation" ||
+      context?.kind === "event-handler";
+    const prepareScopedDefaults = options.prepareScopedDefaults === true &&
+      !speculative;
     const toName = this.#patternToNameBeforeRun(
       pattern,
       argument,
       tx,
       resultCell,
+      prepareScopedDefaults,
     );
     if (toName !== undefined) {
       return this.#nameFamilyBeforeRun(
         resultCell,
         toName,
         argument,
-        () => true,
-        false,
+        () => !prepareScopedDefaults || tx.status().status === "ready",
+        prepareScopedDefaults,
       ).then(
         () => {
           throw new RetryImmediately(
