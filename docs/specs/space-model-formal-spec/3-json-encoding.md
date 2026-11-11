@@ -751,7 +751,7 @@ Each measure has a floor, the smallest guarantee an implementation may state:
 | Length of a string | 2^24 (16,777,216) code points |
 | Length of a byte sequence | 2^24 (16,777,216) bytes |
 | Length of a registered symbol's key | 2^10 (1,024) code points |
-| Depth | 2^10 (1,024) containers |
+| Depth | 2^9 (512) containers |
 | Size of a bigint, in bytes of its two's-complement representation | 2^21 (2,097,152) bytes (2^24 bits) |
 
 A guarantee covers one measure taken alone. The format sets no floor on a
