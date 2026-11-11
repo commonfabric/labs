@@ -28,6 +28,43 @@ const CID_PREFIX = "cid:";
 /** The registry lookup each half consults: a verified schema, or nothing. */
 export type SchemaDocumentLookup = (hash: string) => JSONSchema | undefined;
 
+/** {@link namesPrincipal}'s answers, by the schema object it was asked of. */
+const principalNamingSchemas = new WeakMap<object, boolean>();
+
+/**
+ * Whether `value` holds a DID anywhere: in a string at any depth, or in a key.
+ * Helper for {@link namesPrincipal}, which memoizes it per schema.
+ */
+const holdsDid = (value: unknown): boolean => {
+  if (typeof value === "string") return value.includes("did:");
+  if (Array.isArray(value)) return value.some(holdsDid);
+  if (!isObjectNotArray(value)) return false;
+  return Object.entries(value).some(([key, entry]) =>
+    key.includes("did:") || holdsDid(entry)
+  );
+};
+
+/**
+ * Whether `schema` names a principal: holds a DID anywhere, as a
+ * confidentiality or integrity clause bound to its principal does, or a DID
+ * among its values. Such a schema's hash identifies whom it was bound to, so
+ * it never travels by reference and never resolves from the registry
+ * (`docs/specs/content-addressed-schemas.md`, "Delivery by reference"). A
+ * `CurrentPrincipal` placeholder not yet bound holds no DID, and does not
+ * count. Memoized on the schema object, which a registry holds interned and
+ * frozen, so a schema is walked once. Errs toward `true`: a string that
+ * merely mentions `did:` keeps a body that could have been referenced.
+ */
+export const namesPrincipal = (schema: JSONSchema): boolean => {
+  if (!isObjectNotArray(schema)) return false;
+  let answer = principalNamingSchemas.get(schema);
+  if (answer === undefined) {
+    answer = holdsDid(schema);
+    principalNamingSchemas.set(schema, answer);
+  }
+  return answer;
+};
+
 /** What resolving a message's references found. */
 export interface CidReferenceResolution {
   /**
@@ -44,8 +81,8 @@ export interface CidReferenceResolution {
 /**
  * The hash a `cid:` upsert may travel as a reference under, or `undefined`
  * when it must keep its body: when it is not a `cid:` document, is deleted,
- * holds anything beside `value`, or holds a value `lookup` does not return
- * as the schema document its id names.
+ * holds anything beside `value`, holds a value `lookup` does not return as
+ * the schema document its id names, or holds one that names a principal.
  */
 const referenceableHash = (
   upsert: SessionSyncUpsert,
@@ -60,7 +97,8 @@ const referenceableHash = (
   if (keys.length !== 1 || keys[0] !== "value") return undefined;
   const hash = upsert.id.slice(CID_PREFIX.length);
   if (lookup(hash) === undefined) return undefined;
-  return verifySchemaDocument(hash, doc.value) === undefined ? undefined : hash;
+  const schema = verifySchemaDocument(hash, doc.value);
+  return schema === undefined || namesPrincipal(schema) ? undefined : hash;
 };
 
 /**
@@ -116,8 +154,11 @@ export const hasServerMessageCidReferences = (message: unknown): boolean =>
  * Resolves the references in `message`'s sync through `lookup`. A hash in
  * `unresolvable` is one the client could not fetch: its reference is dropped,
  * which leaves arrival validation to quarantine every document whose refs
- * reach it. When any other hash misses, nothing is rewritten and `missing`
- * names them, so the caller fetches them and resolves again.
+ * reach it. A schema that names a principal resolves only once its hash is in
+ * `fetched`, the hashes whose bodies this frame's own space returned, so a
+ * client fetches such a body even when `lookup` holds it. When any other hash
+ * misses, nothing is rewritten and `missing` names them, so the caller fetches
+ * them and resolves again.
  *
  * @throws TypeError when a reference is not a live `cid:` upsert, which is
  *   a form no server sends.
@@ -126,6 +167,7 @@ export const resolveServerMessageCidReferences = (
   message: unknown,
   lookup: SchemaDocumentLookup,
   unresolvable: ReadonlySet<string> = new Set(),
+  fetched: ReadonlySet<string> = new Set(),
 ): CidReferenceResolution => {
   const missing: string[] = [];
   const resolved = withRewrittenUpserts(message, (upserts) => {
@@ -149,7 +191,9 @@ export const resolveServerMessageCidReferences = (
       const hash = upsert.id.slice(CID_PREFIX.length);
       if (unresolvable.has(hash)) continue;
       const schema = lookup(hash);
-      if (schema === undefined) {
+      if (
+        schema === undefined || (namesPrincipal(schema) && !fetched.has(hash))
+      ) {
         missing.push(hash);
         continue;
       }

@@ -5,6 +5,7 @@ import { FakeTime } from "@std/testing/time";
 import { Identity } from "@commonfabric/identity";
 import { setModernCellRepConfig } from "@commonfabric/data-model/cell-rep";
 import { internSchema } from "@commonfabric/data-model-schema";
+import { registerSchemaDocument } from "../../runner/src/schema-registry.ts";
 import { getMemoryProtocolFlags, type SessionSync } from "../v2.ts";
 import {
   connect,
@@ -2762,6 +2763,101 @@ Deno.test("on a routed connection a space's unanswered body fetch holds back no 
     expect(askedBeforeMarker).toStrictEqual([spaceA, spaceB]);
     expect(
       viewB.entities.find((entity) => entity.id === `cid:${hash}`)?.document,
+    ).toEqual({ value: schema });
+  } finally {
+    await client.close();
+  }
+});
+
+Deno.test("a client fetches a schema that names a principal from the space that named it, though it holds the body", async () => {
+  setModernCellRepConfig(true);
+  // A server that names such a schema by reference is one probing for it: an
+  // honest one sends the body. The client holds the body already, and asks
+  // the naming space for it anyway, so the fetch says nothing about whether
+  // it holds it.
+  const schema = {
+    type: "string",
+    title: "routed-cid-reference-bound",
+    ifc: {
+      confidentiality: [{
+        type: "User",
+        subject: "did:key:z6MkhRoutedCidReferenceBoundPrincipal",
+      }],
+    },
+  } as const;
+  const hash = internSchema(schema, true).taggedHashString;
+  registerSchemaDocument(hash, schema as never);
+  const space = "did:key:z6Mk-routed-cid-reference-bound";
+  const asked: string[] = [];
+  const offering = { ...flags(), syncCidReferencesV1: true };
+  const p = peer(frame(hello(metadata(), offering)), (body, push) => {
+    const respond = (rest: Record<string, unknown>) =>
+      push({ type: "response", requestId: body.requestId, ...rest });
+    if (body.type === "connection.auth") {
+      respond({
+        ok: {
+          principal: String(body.statement).split("|")[0],
+          expiresAt: Math.floor(Date.now() / 1000) + 600,
+        },
+      });
+    } else if (body.type === "session.open") {
+      respond({
+        ok: { sessionId: "session-bound", sessionToken: "t", serverSeq: 0 },
+      });
+    } else if (body.type === "session.watch.set") {
+      respond({
+        ok: {
+          serverSeq: 1,
+          sync: {
+            type: "sync",
+            fromSeq: 0,
+            toSeq: 1,
+            upserts: [{
+              branch: "",
+              id: `cid:${hash}`,
+              seq: 1,
+              byReference: true,
+            }],
+            removes: [],
+          },
+        },
+      });
+    } else if (body.type === "graph.query") {
+      const roots = (body.query as { roots: { id: string }[] }).roots;
+      for (const root of roots) asked.push(root.id);
+      respond({
+        ok: {
+          serverSeq: 1,
+          entities: [{
+            branch: "",
+            id: `cid:${hash}`,
+            seq: 1,
+            document: { value: schema },
+          }],
+        },
+      });
+    } else respond({ ok: {} });
+  });
+  const client = await connect({
+    transport: p.transport,
+    syncCidReferences: true,
+  });
+  try {
+    const session = await client.mount(
+      space,
+      {},
+      namedSigner(identity.did()),
+    );
+    const view = await session.watchSet([{
+      id: "schema",
+      kind: "graph" as const,
+      query: {
+        roots: [{ id: `cid:${hash}`, selector: { path: [], schema: false } }],
+      },
+    }]);
+    expect(asked).toStrictEqual([`cid:${hash}`]);
+    expect(
+      view.entities.find((entity) => entity.id === `cid:${hash}`)?.document,
     ).toEqual({ value: schema });
   } finally {
     await client.close();

@@ -110,6 +110,7 @@ import {
 import {
   fetchedSchemaDocument,
   hasServerMessageCidReferences,
+  namesPrincipal,
   resolveServerMessageCidReferences,
 } from "./sync-cid-references.ts";
 import { containsReservedSchemaRefSubstring } from "./sync-schema-ref.ts";
@@ -209,6 +210,12 @@ const cidReferenceHoldKey = (
 type CidReferenceHold = {
   readonly queue: unknown[];
   readonly unresolvable: Set<string>;
+
+  /**
+   * The hashes whose bodies this hold's own space returned verified, which a
+   * schema that names a principal needs before it resolves.
+   */
+  readonly fetched: Set<string>;
   readonly epoch: number;
 
   /** Resolved once the hold ends, its syncs handed on or discarded. */
@@ -2758,6 +2765,7 @@ export class Client {
     const hold: CidReferenceHold = {
       queue: [message],
       unresolvable: new Set(),
+      fetched: new Set(),
       epoch: this.#connectionEpoch,
       ended: Promise.withResolvers(),
     };
@@ -2786,9 +2794,14 @@ export class Client {
   ): void {
     const session = this.#messageSession(hold.queue[0]);
     const fetched = session === undefined
-      ? Promise.resolve({ unresolved: new Set(hashes), lost: false })
+      ? Promise.resolve({
+        unresolved: new Set(hashes),
+        fetched: new Set<string>(),
+        lost: false,
+      })
       : this.#fetchCidBodies(session, hashes);
-    void fetched.then(({ unresolved, lost }) => {
+    void fetched.then(({ unresolved, fetched, lost }) => {
+      for (const hash of fetched) hold.fetched.add(hash);
       if (lost) {
         this.#dropCidReferenceHold(key, hold);
         return;
@@ -2847,6 +2860,7 @@ export class Client {
           hold.queue[0],
           lookupSchemaDocument,
           hold.unresolvable,
+          hold.fetched,
         );
       } catch (cause) {
         this.#cidReferenceHolds.delete(key);
@@ -2894,29 +2908,39 @@ export class Client {
    * with one query, and registers each that verifies. A hash another fetch
    * from the same host is already fetching is waited for instead, and only a
    * body that verified ends that wait: on any other outcome the hash is
-   * fetched again from this space. Returns the hashes still unregistered
-   * afterward, each logged, and whether a fetch went unanswered because the
-   * connection was lost. Never rejects.
+   * fetched again from this space. A schema that names a principal is always
+   * fetched from this space, never waited for and never taken from the
+   * registry, so whether it is fetched says nothing about what this client
+   * holds. Returns the hashes still unresolved afterward, each logged, the
+   * hashes this space returned verified, and whether a fetch went unanswered
+   * because the connection was lost. Never rejects.
    */
   async #fetchCidBodies(
     session: SyncPartSession,
     hashes: readonly string[],
-  ): Promise<{ unresolved: Set<string>; lost: boolean }> {
+  ): Promise<
+    { unresolved: Set<string>; fetched: Set<string>; lost: boolean }
+  > {
+    const namesPrincipalHere = (hash: string): boolean => {
+      const schema = lookupSchemaDocument(hash);
+      return schema !== undefined && namesPrincipal(schema);
+    };
     const own: string[] = [];
     const shared: [string, Promise<boolean>][] = [];
     for (const hash of hashes) {
-      const inFlight = this.#cidBodyFetches.get(
-        this.#cidBodyFetchKey(session, hash),
-      );
+      const inFlight = namesPrincipalHere(hash)
+        ? undefined
+        : this.#cidBodyFetches.get(this.#cidBodyFetchKey(session, hash));
       if (inFlight === undefined) own.push(hash);
       else shared.push([hash, inFlight]);
     }
+    const fetched = new Set<string>();
     let answered = true;
     if (own.length > 0) {
       const request = this.#requestCidBodies(session, own);
       for (const hash of own) {
         const done = request.then((reply) =>
-          reply && lookupSchemaDocument(hash) !== undefined
+          reply.answered && reply.verified.has(hash)
         );
         const key = this.#cidBodyFetchKey(session, hash);
         this.#cidBodyFetches.set(key, done);
@@ -2926,20 +2950,32 @@ export class Client {
           }
         });
       }
-      answered = await request;
+      const reply = await request;
+      answered = reply.answered;
+      for (const hash of reply.verified) fetched.add(hash);
     }
     const retry: string[] = [];
     for (const [hash, done] of shared) {
-      if (!await done && lookupSchemaDocument(hash) === undefined) {
+      // A shared body that names a principal is fetched again from this
+      // space too, so that this space sees the same fetch either way.
+      if (
+        (!await done && lookupSchemaDocument(hash) === undefined) ||
+        namesPrincipalHere(hash)
+      ) {
         retry.push(hash);
       }
     }
     if (answered && retry.length > 0) {
-      answered = await this.#requestCidBodies(session, retry);
+      const reply = await this.#requestCidBodies(session, retry);
+      answered = reply.answered;
+      for (const hash of reply.verified) fetched.add(hash);
     }
-    if (!answered) return { unresolved: new Set(), lost: true };
+    if (!answered) return { unresolved: new Set(), fetched, lost: true };
     const unresolved = new Set(
-      hashes.filter((hash) => lookupSchemaDocument(hash) === undefined),
+      hashes.filter((hash) =>
+        lookupSchemaDocument(hash) === undefined ||
+        (namesPrincipalHere(hash) && !fetched.has(hash))
+      ),
     );
     if (unresolved.size > 0) {
       logger.error("schema-doc-reference-unresolved", () => [
@@ -2949,7 +2985,7 @@ export class Client {
         [...unresolved].map((hash) => `cid:${hash}`).join(", "),
       ]);
     }
-    return { unresolved, lost: false };
+    return { unresolved, fetched, lost: false };
   }
 
   /**
@@ -2971,14 +3007,15 @@ export class Client {
    * Helper for `#fetchCidBodies()`, which asks `session`'s space for the
    * `cid:` documents `hashes` name with a one-shot query, and registers
    * each returned body that verifies as the schema document its id names.
-   * Returns `false` when the query went unanswered because the connection
-   * was lost, and `true` otherwise. Never rejects: a refused query is logged
-   * and registers nothing.
+   * Returns whether the query was answered, `false` when the connection was
+   * lost, and the hashes whose bodies it returned verified. Never rejects: a
+   * refused query is logged and registers nothing.
    */
   async #requestCidBodies(
     session: SyncPartSession,
     hashes: readonly string[],
-  ): Promise<boolean> {
+  ): Promise<{ answered: boolean; verified: Set<string> }> {
+    const verified = new Set<string>();
     try {
       const result = await this.request<GraphQueryResult>({
         type: "graph.query",
@@ -2996,17 +3033,21 @@ export class Client {
         if (!entity.id.startsWith("cid:")) continue;
         const hash = entity.id.slice("cid:".length);
         const schema = fetchedSchemaDocument(hash, entity.document);
-        if (schema !== undefined) registerSchemaDocument(hash, schema);
+        if (schema === undefined) continue;
+        registerSchemaDocument(hash, schema);
+        verified.add(hash);
       }
-      return true;
+      return { answered: true, verified };
     } catch (error) {
-      if (this.#closed || isConnectionError(error)) return false;
+      if (this.#closed || isConnectionError(error)) {
+        return { answered: false, verified };
+      }
       logger.warn("schema-doc-fetch-failed", () => [
         `Fetching ${hashes.length} schema document bodies from ${
           backtickQuote(session.space)
         } failed: ${describeError(error)}`,
       ]);
-      return true;
+      return { answered: true, verified };
     }
   }
 

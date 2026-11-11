@@ -45,12 +45,43 @@ const outerSchema = {
 } as const;
 const outerHash = internSchema(outerSchema, true).taggedHashString;
 
-/** A lookup holding exactly the two schemas above. */
+/** A schema bound to its principal, as a creator binding writes one. */
+const boundSchema = {
+  type: "string",
+  title: "sync-cid-references-bound",
+  ifc: {
+    confidentiality: [{
+      type: "User",
+      subject: "did:key:z6MkhSyncCidReferencesBoundPrincipal",
+    }],
+  },
+} as const;
+const boundHash = internSchema(boundSchema, true).taggedHashString;
+
+/** A schema whose principal placeholder is not yet bound. */
+const placeholderSchema = {
+  type: "string",
+  title: "sync-cid-references-placeholder",
+  ifc: {
+    confidentiality: [{
+      type: "User",
+      subject: { __ctCurrentPrincipal: true },
+    }],
+  },
+} as const;
+const placeholderHash = internSchema(placeholderSchema, true)
+  .taggedHashString;
+
+/** A lookup holding exactly the schemas above. */
 const lookup: SchemaDocumentLookup = (hash) =>
   hash === leafHash
     ? leafSchema as JSONSchema
     : hash === outerHash
     ? outerSchema as JSONSchema
+    : hash === boundHash
+    ? boundSchema as unknown as JSONSchema
+    : hash === placeholderHash
+    ? placeholderSchema as unknown as JSONSchema
     : undefined;
 
 /** A response carrying a sync of `upserts`. */
@@ -346,6 +377,36 @@ describe("sync-cid-references", () => {
       );
     });
 
+    it("keeps the body of a schema that names a principal", () => {
+      const message = responseWith([{
+        branch: "",
+        id: `cid:${boundHash}`,
+        seq: 6,
+        doc: { value: boundSchema },
+      }]);
+      expect(referenceServerMessageSchemaDocuments(message, lookup)).toBe(
+        message,
+      );
+    });
+
+    it("names a schema whose principal placeholder is unbound by reference", () => {
+      const message = referenceServerMessageSchemaDocuments(
+        responseWith([{
+          branch: "",
+          id: `cid:${placeholderHash}`,
+          seq: 7,
+          doc: { value: placeholderSchema },
+        }]),
+        lookup,
+      );
+      expect(upsertsOf(message)).toStrictEqual([{
+        branch: "",
+        id: `cid:${placeholderHash}`,
+        seq: 7,
+        byReference: true,
+      }]);
+    });
+
     it("keeps deleted and non-`cid:` upserts as they are", () => {
       const message = responseWith([
         { branch: "", id: `cid:${leafHash}`, seq: 5, deleted: true },
@@ -398,6 +459,30 @@ describe("sync-cid-references", () => {
       );
       expect(resolved.missing).toStrictEqual([]);
       expect(upsertsOf(resolved.message)).toStrictEqual([carrierUpsert]);
+    });
+
+    it("returns a held schema that names a principal as missing until its own space returned it", () => {
+      const message = responseWith([{
+        branch: "",
+        id: `cid:${boundHash}`,
+        seq: 6,
+        byReference: true,
+      }]);
+      expect(resolveServerMessageCidReferences(message, lookup).missing)
+        .toStrictEqual([boundHash]);
+      const resolved = resolveServerMessageCidReferences(
+        message,
+        lookup,
+        new Set(),
+        new Set([boundHash]),
+      );
+      expect(resolved.missing).toStrictEqual([]);
+      expect(upsertsOf(resolved.message)).toStrictEqual([{
+        branch: "",
+        id: `cid:${boundHash}`,
+        seq: 6,
+        doc: { value: boundSchema },
+      }]);
     });
 
     it("throws on a reference that carries a body", () => {
@@ -598,6 +683,65 @@ describe("sync-cid-references", () => {
         await delivered;
         await watching;
         expect(pendingAtDelivered).toBe(0);
+      } finally {
+        await writerClient.close();
+        await watcherClient.close();
+        await server.close();
+      }
+    });
+
+    it("sends a schema that names a principal with its body", async () => {
+      const server = new Server({
+        ...testSessionOpenServerOptions,
+        store: new URL("memory://sync-cid-references-bound"),
+        subscriptionRefreshDelayMs: 0,
+      });
+      const { counts, transport } = countingTransport(server);
+      const writerClient = await connect({ transport: loopback(server) });
+      const watcherClient = await connect({
+        transport,
+        syncCidReferences: true,
+      });
+      const space = "did:key:z6Mk-sync-cid-references-bound";
+      const carrier = "of:sync-cid-references-bound";
+      try {
+        const writer = await writerClient.mount(
+          space,
+          {},
+          testSessionOpenAuthFactory,
+        );
+        await writer.transact({
+          localSeq: 1,
+          reads: { confirmed: [], pending: [] },
+          operations: [
+            {
+              op: "set",
+              id: `cid:${boundHash}`,
+              value: { value: boundSchema },
+            },
+            {
+              op: "set",
+              id: carrier,
+              value: { value: { x: linkWithSchemaRef(boundHash) } },
+            },
+          ],
+        });
+        const watcher = await watcherClient.mount(
+          space,
+          {},
+          testSessionOpenAuthFactory,
+        );
+        const view = await watcher.watchSet([{
+          id: "carrier",
+          kind: "graph",
+          query: {
+            roots: [{ id: carrier, selector: { path: [], schema: false } }],
+          },
+        }]);
+        expect(counts.references).toBe(0);
+        expect(documentIn(view, `cid:${boundHash}`)).toEqual({
+          value: boundSchema,
+        });
       } finally {
         await writerClient.close();
         await watcherClient.close();
