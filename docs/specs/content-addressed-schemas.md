@@ -738,13 +738,16 @@ schema it already knows it has.
   ([memory-v2/04-protocol.md](memory-v2/04-protocol.md) §4.1.1). A
   connection where either peer does not delivers every schema document with
   its body, as the rest of this document describes.
-- **What travels by reference.** A schema document that result assembly
-  joins to a session's frame, and that has verified against the delivering
-  space's own store as the document its id names, may travel as a
-  reference: its id and the seq the space holds it at, without its body
-  (memory-v2/04-protocol.md §4.2.3). A document a watch or query names as a
-  root, a label document, a code document, and every other `cid:` document
-  that is not a schema document travel with their bodies.
+- **What travels by reference.** A `cid:` document in a session frame may
+  travel as a reference — its id and the seq the space holds it at, without
+  its body (memory-v2/04-protocol.md §4.2.3) — when the copy the delivering
+  space's store holds is exactly `{ "value": <schema> }`, that schema
+  verifies as the document its id names, and the server's realm registry
+  holds it: a schema the server has resolved as one. A label document is
+  resolved through its envelope rather than as a schema, so it keeps its
+  body unless the same value also serves as a schema, and so do code
+  documents and every other `cid:` document. A one-shot `graph.query`
+  returns every entity with its body.
 - **What the server still enforces, per space.** Nothing above moves: the
   commit boundary validates every closure a commit references against that
   space's commit and store, result assembly verifies every closure a frame
@@ -787,10 +790,10 @@ schema it already knows it has.
   client lacks, and so, by their absence, which it already holds from the
   other spaces it reads. A schema document is derived from pattern code —
   the schema generator's output and the defaults a pattern's author writes
-  — and not from user data. That is why label documents, whose labels can
-  name principals, keep their bodies. Whether this disclosure is acceptable
-  between hosts that serve different spaces behind a memory router is open
-  for a ruling (§ Open questions).
+  — and not from user data. Label documents, whose labels can name
+  principals, are not resolved as schemas and keep their bodies. Whether
+  this disclosure is acceptable between hosts that serve different spaces
+  behind a memory router is open for a ruling (§ Open questions).
 
 ### Traversal and sync
 
@@ -994,6 +997,5 @@ playbook:
    a client fetches from a space tell that space which schema hashes the
    client lacks, and so which it already holds from other spaces. Schema
    documents derive from pattern code, not user data, and label documents
-   stay outside delivery by reference for that reason. Whether the
-   disclosure is acceptable where different hosts serve different spaces
-   behind a memory router is open for a ruling.
+   keep their bodies. Whether the disclosure is acceptable where different
+   hosts serve different spaces behind a memory router is open for a ruling.

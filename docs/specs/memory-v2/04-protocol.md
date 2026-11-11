@@ -1116,9 +1116,9 @@ Semantics:
   its `doc`: its space's store holds the document at `seq`, verified as the
   schema document its id names, and the client takes the content from its own
   verified store, fetching with `graph.query` (section 4.3.3) any body it
-  lacks. Only a schema document that result assembly joins to the frame
-  travels this way, never one a watch names as a root, and never with
-  `deleted`. The frame applies once every body it lacks has arrived
+  lacks. Only a schema document the server's realm registry holds travels
+  this way, never with `deleted`. The frame applies once every body it lacks
+  has arrived
   ([content-addressed-schemas.md](../content-addressed-schemas.md#delivery-by-reference)
   states the client's rules)
 - `removes` are not deletions in storage; they mean the entity is no longer in
