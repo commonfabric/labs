@@ -405,7 +405,9 @@ Within the apply steps of §7.7.1:
    stored CFC envelope of the field's document, in the field's scope instance
    and in each broader instance, and takes the confidentiality of every label
    entry whose path is the field's path, a prefix of it, or beneath it, a `*`
-   segment standing for any key. A label an entry names by document is read
+   segment standing for any key. A label-metadata template entry is keyed
+   against the stored document rather than the value, so it is never one of
+   these, even for a field named `cfc`. A label an entry names by document is read
    from that document. Integrity is not taken. Where that confidentiality is
    not empty, the engine adds to the anchors document's envelope, for each
    moved anchor, an entry at the anchor's path, of origin `derived` and class

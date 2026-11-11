@@ -233,8 +233,11 @@ labels that anchor with the confidentiality the field's document holds over
 the field at that edit, in the same transaction. It reads the label entries
 of the field's stored envelope that lie at, above or inside the field's path,
 in the field's scope instance and in each broader instance of the same
-document, and writes their confidentiality as a derived label of the moved
-anchor's offset, beside whatever label the anchor already carried. A later
+document. The label-metadata templates are left out: they are keyed against
+the stored document rather than its value, so none labels the field, even
+one named `cfc`. Memory writes the confidentiality of the entries it read as
+a derived label of the moved anchor's offset, beside whatever label the
+anchor already carried. A later
 reader of that offset is tainted as a reader of the field was, whoever wrote
 the anchor. An anchor the edit left where it was gets no label from it, and
 an anchor neither written nor moved keeps the labels it had.

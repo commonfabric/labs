@@ -21,6 +21,7 @@ import { taggedHashStringOf, valueEqual } from "@commonfabric/data-model";
 import {
   isCfcLabelDocumentContent,
   isCfcLabelReference,
+  isLabelMetadataTemplateEntry,
   parseCfcLabelReference,
   type StoredCfcEnvelope,
   type StoredCfcEnvelopeDefect,
@@ -157,8 +158,9 @@ const bearsOn = (
 
 /**
  * The confidentiality the stored envelopes `envelopes` hold over the value
- * at `path`: every clause of every entry that bears on the path, each once,
- * in the order found. `envelopes` are those of the document the value is in,
+ * at `path`: every clause of every payload entry that bears on the path,
+ * each once, in the order found. A label-metadata template entry is not a
+ * payload entry and bears on no path here. `envelopes` are those of the document the value is in,
  * one per scope instance a reader of the value answers to. Integrity is left
  * out: it speaks for whoever wrote a value, and nobody wrote an offset the
  * engine computed.
@@ -182,6 +184,10 @@ export const confidentialityOver = (
     const entries: readonly ReadEntry[] =
       readableEnvelopeOf(envelope, holder)?.labelMap.entries ?? [];
     for (const entry of entries) {
+      // A label-metadata template is keyed against the stored document, not
+      // the value, so its `["cfc", "labels", ...]` path is never a payload
+      // field's, a field named `cfc` included.
+      if (isLabelMetadataTemplateEntry(entry)) continue;
       if (!bearsOn(entry.path, path)) continue;
       const label = resolvedLabel(entry.label, holder, labelDocument);
       for (const clause of label.confidentiality ?? []) {

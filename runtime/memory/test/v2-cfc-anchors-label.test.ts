@@ -1,7 +1,10 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { FabricValue } from "@commonfabric/api";
-import { anchorsEnvelopeWith } from "../v2/cfc-anchors-label.ts";
+import {
+  anchorsEnvelopeWith,
+  confidentialityOver,
+} from "../v2/cfc-anchors-label.ts";
 import { storedCfcEnvelopeDefect } from "../v2/cfc-stored-envelope.ts";
 
 const entry = {
@@ -48,6 +51,35 @@ const withAnchor = (envelope: unknown): unknown =>
   );
 
 describe("cfc-anchors-label", () => {
+  describe("confidentialityOver()", () => {
+    it("returns no clause of a label-metadata template, for a field named `cfc`", () => {
+      // A template's path is keyed against the stored document, so it shares
+      // its first segment with a payload field named `cfc` without labeling
+      // that field.
+
+      const stored = {
+        version: 1,
+        schemaHash: "hash",
+        labelMap: {
+          version: 1,
+          entries: [
+            { path: ["cfc"], label: { confidentiality: ["field"] } },
+            {
+              path: ["cfc", "labels", "value", "cfc", "confidentiality"],
+              origin: "label-metadata",
+              observes: "labelMetadata",
+              label: { confidentiality: ["template"] },
+            },
+          ],
+        },
+      };
+
+      expect(
+        confidentialityOver([stored], ["cfc"], "of:field", () => undefined),
+      ).toEqual(["field"]);
+    });
+  });
+
   describe("anchorsEnvelopeWith()", () => {
     it("returns a readable envelope for one whose required members are class getters", () => {
       const stored = new GetterEnvelope();
