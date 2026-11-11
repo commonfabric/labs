@@ -47,8 +47,10 @@ checks of
 Memory, the one definition of a readable envelope. The store's labeling of
 the anchors an edit moves
 ([cfc-anchors-label.ts](../../runtime/memory/v2/cfc-anchors-label.ts)) reads
-a field's envelope through the same checks, so it reads the envelopes the
-runner reads and refuses the edit for every other one.
+a field's envelope through the same checks, and refuses the edit for every
+envelope that fails them. Resolving the labels an envelope names stays with
+each reader; §7.7.4 of the Memory v2 operations spec says which ones the
+store resolves.
 
 - **Nothing stored.** The position holds `null`, a scalar, or nothing at
   all. The reader returns `undefined` and the document carries no labels.

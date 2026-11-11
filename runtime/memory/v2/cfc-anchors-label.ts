@@ -10,9 +10,10 @@
  * The functions here read and build envelopes as plain stored values. Which
  * stored envelopes they read is decided by the checks of
  * `cfc-stored-envelope.ts`, which the runner's reader holds to as well, so
- * the engine reads the envelopes the runner reads and no others, and
- * refuses whatever it cannot read, since a label it misread would leave the
- * anchors less confidential than the field.
+ * an envelope that fails them is refused here too, since a label misread
+ * would leave the anchors less confidential than the field. Resolving
+ * labels is the engine's own: it resolves those that bear on the field
+ * ({@link confidentialityOver}) and no others.
  */
 
 import type { FabricValue } from "@commonfabric/api";
@@ -122,8 +123,8 @@ function assertReadable(
  * a document that stores no envelope: `undefined`, `null` and the scalars,
  * which are what a reader of the reserved member takes as nothing stored.
  *
- * @throws AnchorsLabelError for an envelope the runner would not read,
- *   naming the rule of `cfc-stored-envelope.ts` it breaks.
+ * @throws AnchorsLabelError for an envelope that fails the checks of
+ *   `cfc-stored-envelope.ts`, naming the rule it breaks.
  */
 const readableEnvelopeOf = (
   envelope: Stored,
@@ -196,7 +197,9 @@ export const confidentialityOver = (
 /**
  * Helper for {@link confidentialityOver}, which returns the label an entry
  * holds: `label` itself, or, for a `{ $ref: "cid:<hash>" }` reference, the
- * value of the label document it names.
+ * value of the label document it names. The document is not compared with
+ * its hash: the store installs a `cid:` document only when its content
+ * hashes to its id.
  *
  * @throws AnchorsLabelError for a reference nothing stored backs, and for a
  *   document that does not hold a label.

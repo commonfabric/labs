@@ -5914,9 +5914,10 @@ const upsertOperationFieldHead = (
  * (§7.7.4): a moved offset was computed from the field, whoever wrote the
  * anchor. Whatever else the envelope holds stays as its writer left it.
  *
- * Returns the revisions written: the document's, and ahead of it, where the
- * envelope is the document's first and the store does not hold the schema
- * document it names, that schema document's.
+ * Returns the revisions written: the document's, and ahead of it, where a
+ * label is added and the store does not hold the schema document
+ * {@link anchorsSchemaHash} names, that schema document's. It is written
+ * whether or not the document's envelope names it.
  *
  * @throws ProtocolError where the confidentiality cannot be read off the
  *   field's envelope or joined onto the document's, so that no offset is

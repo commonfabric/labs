@@ -251,14 +251,19 @@ does:
   transaction that read nothing confidential is unlabeled again.
 - Releasing the field leaves the labels in place, with the anchors.
 
-Where Memory cannot read the field's envelope, or the anchors document's, it
-refuses the edit and moves nothing, so that no offset is stored that is less
-confidential than the field it came from. Memory reads an envelope by the
-same rules as the runner, so every envelope the runner refuses to read, it
-refuses too: one of a version it does not know, one that names no schema, a
-label of a shape it does not know, a label held by reference in an envelope
-of a version that does not define that spelling, and a label reference no
-stored label document backs are each such a case.
+Where an edit moves an anchor and Memory cannot read the field's envelope,
+it refuses the edit and moves nothing, so that no offset is stored that is
+less confidential than the field it came from. It checks the envelope with
+the checks the runner uses, so it refuses one of a version it does not know,
+one that names no schema, a label of a shape it does not know, and a label
+held by reference in an envelope of a version that does not define that
+spelling. Of the labels, it resolves only those that bear on the field: it
+refuses the edit for a reference among them that no stored label document
+backs, and leaves a reference elsewhere in the envelope unresolved. It does
+not compare a label document with its hash, since the store installs a
+`cid:` document only when its content hashes to its id. It reads the anchors
+document's envelope only when it has a label to add to it, and refuses the
+edit when that envelope cannot be read.
 
 The anchors take none of the field's integrity, from either source, and the
 field's write policy does not govern them: a pattern that wants only certain
