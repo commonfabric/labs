@@ -104,6 +104,9 @@ make that safe without renaming: a name is one path segment, and never `.`,
 
 - **An entry no message links.** A client removes what it added for a message
   it did not send, but a client that quits or crashes with a draft open leaves
-  that draft's entries in the store, listed like any other. Whether a store
-  does anything about an entry no message links, and how it would know, is not
-  decided.
+  that draft's entries in the store, listed like any other. Such an entry is
+  acceptable: a store is meant to be reachable and managed directly, through
+  its view ([`FileStoreView`](FileStoreView.md)) or a client's own rendering
+  of it, where a person can remove it like any other entry. Whether a store
+  does anything more about an entry no message links, and how it would know,
+  is not decided.

@@ -120,7 +120,11 @@ entry stays. Attaching the same file again is a new `add`. The composer
 removes nothing when its room leaves the client, as when the person forgets
 it, since nothing it can observe marks that: a file in a draft left that way,
 and one taken out while being added with no later run of the composer's
-handlers in its session, keeps its entry.
+handlers in its session, keeps its entry. That is acceptable, because the
+store is meant to be reachable and managed directly, through its own view
+([`FileStoreView`](../fabrifile/FileStoreView.md)), where such an entry can be
+removed like any other; the composer's removal keeps the common case tidy, and
+an entry it leaves is not lost.
 
 ## Writers
 
