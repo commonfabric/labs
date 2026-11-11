@@ -2938,7 +2938,8 @@ for (
             serverSeq: 1,
             entities: [{
               branch: "",
-              id: `of:${hash}`,
+              // As long as `cid:`, so the hash is all that follows it.
+              id: `rid:${hash}`,
               seq: 1,
               document: {
                 value: {
