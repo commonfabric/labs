@@ -2227,14 +2227,16 @@ the per-epic implementation notes).
 - **Current default and planned end state.** On by default in the toolshed
   over a file store, off in the test harness's serving memory server. The end
   state is the in-process arm gone, with the knob.
-- **Status on 2026-10-31.** Implemented, on by default in the toolshed over a
-  file store. The worker entry builds its process's compiled-module byte cache,
-  as the main-thread loop does. Run with the variable `true`, the pattern
-  integration suites the `MultiRuntimeHarness` drives pass under the worker;
+- **Status on 2026-11-11.** Implemented, on by default in the toolshed over a
+  file store, with a worker per served space. Each worker's entry builds a
+  compiled-module byte cache for the spaces that worker serves, as the
+  main-thread loop builds one for its process. Run with the variable `true`,
+  the pattern integration suites the `MultiRuntimeHarness` drives pass with a
+  worker per space;
   the private-inbox and FabriChat suites need a serving runtime to run no child
   placed in a space other than the one it serves (#9418). No CI lane runs them
-  that way yet: in CI the worker runs in the toolshed-backed lanes and the
-  worker's own unit tests.
+  that way yet: in CI the workers run in the toolshed-backed lanes and the
+  workers' own unit tests.
 - **Path to removal.** Soak with the default on, then delete the knob and the
   in-process arm.
 
