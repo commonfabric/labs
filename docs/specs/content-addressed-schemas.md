@@ -816,9 +816,12 @@ schema it already knows it has.
   from what it reads can hold that data, in a `default`, `const` or `enum`
   among others, and its hash then says what the client holds of it. Label
   documents, whose labels can name principals, are not resolved as schemas
-  and keep their bodies. Whether this disclosure is acceptable between hosts
-  that serve different spaces behind a memory router is open for a ruling
-  (§ Open questions).
+  and keep their bodies. The disclosure can also be probed for: a server can
+  name any hashes by reference and watch which bodies the client fetches,
+  since the client cannot check a server's claim that its store holds a
+  document. Sharing fetches per host bounds who can stall a frame, but not
+  what resolves: a reference resolves from the realm registry whichever host
+  its body came from. Closing that is open (§ Open questions).
 
 ### Traversal and sync
 
@@ -1018,13 +1021,24 @@ playbook:
    different member names are different documents. Acceptable (names are
    stable per shared TypeScript type); canonical renaming inside groups
    would buy marginal dedup at real debuggability cost.
-6. **What a body fetch discloses.** Under delivery by reference, the bodies
-   a client fetches from a space tell that space which schema hashes the
-   client lacks, and so which it already holds from other spaces. A schema
-   generated from pattern code holds no user data; one a pattern builds at
-   run time from what it reads can. Label documents keep their bodies.
-   Whether the disclosure is acceptable where different hosts serve
-   different spaces behind a memory router is open for a ruling.
+6. **A body fetch is a probing oracle.** Under delivery by reference, a
+   server can name arbitrary hashes by reference and watch which bodies the
+   client fetches: a hash it does not fetch is one it already holds from
+   somewhere else. A server could so learn whether the client runs a given
+   pattern anywhere, or has read a space that hands out a known document.
+   This is the attack browsers met in their HTTP caches, and the delivery
+   that existed before references had no such oracle, since the client never
+   asked for a body. A schema generated from pattern code holds no user
+   data; one a pattern builds at run time from what it reads can, and its
+   hash then says what the client holds of it. Label documents keep their
+   bodies. Browsers closed the attack by partitioning their caches by
+   top-level site, and the same key fits here: a reference from a space on
+   site B would resolve through the registry only if the hash arrived from
+   a space on site B, and would be fetched from B otherwise, while the
+   verified objects stay shared in memory. Partitioning needs the client to
+   know which site serves a space, which it does not yet (question 10).
+   Fetches are already shared only per host, but resolution is not
+   partitioned at all.
 7. **Delivering only the selected paths' closures.** Delivery by reference
    removes the repeated bodies, but each space still delivers and holds the
    closure of every link in every document a read touches, though a narrow
@@ -1055,3 +1069,12 @@ playbook:
    knows no client can hold yet, because it was just created, would then
    want a send-it-now path that skips the reference, and whether schema
    documents want one too is part of the question.
+10. **Knowing which site serves a space.** A client shares a body fetch
+    across spaces only where one host serves them: every space on a direct
+    connection, one space at a time on a routed connection, since the client
+    cannot tell which host or site a routed space reaches. Sharing per site
+    (scheme and registrable domain) would keep the savings among spaces one
+    site serves behind a router, and question 6's partitioning needs the
+    same knowledge. The router knows which host owns each space; an opaque
+    owner tag with each routed `session.open` would let a client key both by
+    it.
