@@ -1623,8 +1623,10 @@ its pins and override, as the `follow` verb; the serving runtime resolves the
 origin, reviews what it serves, and commits the transition that records it. The
 command then asks the server for the piece's result, and reports a failure of
 that over the durable follow, as `setsrc` does. A piece addressed at a scope is
-refused there, and a deployment whose memory server does not know the verb is
-reported as one that does not serve `follow` yet. The contract, including the
+refused there. A deployment whose memory server does not advertise that its
+lifecycle verbs take an origin (`patternLifecycleOrigins`) is told, before
+anything is sent, that it does not serve `follow` yet, and `setsrc --origin` is
+refused there the same way, as `origin-unsupported`. The contract, including the
 refusals and their codes, is
 [`server-pattern-lifecycle.md`](../../docs/features/server-pattern-lifecycle.md).
 

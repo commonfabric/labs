@@ -113,12 +113,13 @@ stable and is what a client branches on; its `message` is prose for a person.
 | code                                             | meaning                                                                                                                                                                                                                |
 | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `lifecycle-unsupported`                          | raised by the client before sending: the memory server does not advertise `patternLifecycle`                                                                                                                           |
+| `origin-unsupported`                             | raised by the client before sending: the memory server does not advertise `patternLifecycleOrigins`, so a `follow`, or a `setsrc` carrying an origin, is not sent                                                      |
 | `payload-too-large`                              | the message takes more than 8 MiB in UTF-8; the client refuses before sending past that, or past 4 MiB on a routed connection                                                                                          |
 | `invalid-request`                                | `body` does not match the verb's schema, including a body naming both `program` and `pattern`, or neither                                                                                                              |
 | `forbidden`                                      | the caller is not a writer of the space, or there is no such space                                                                                                                                                     |
 | `pattern-not-found`, `piece-not-found`           | the named pattern, or the named piece, is not in the space                                                                                                                                                             |
 | `slug-taken`, `source-moved`                     | the slug names something and `force` was not set; the piece is not on the pattern the update was proved against, or for `follow` not at the source-log head it was pinned to, or moved between the follow's two cycles |
-| `origin-unreachable` | the origin a `follow` or a `setsrc` names is not one a piece can follow; for `follow`, also when the source it names could not be read or compiled |
+| `origin-unreachable`                             | the origin a `follow` or a `setsrc` names is not one a piece can follow; for `follow`, also when the source it names could not be read or compiled                                                                     |
 | `compile-failed`, `setup-failed`, `incompatible` | the program did not compile; setup refused the pattern or the argument; the candidate cannot run over the piece's retained state and the override was not set                                                          |
 | `server-execution-off`                           | the memory server has no handler installed: no serving loop runs on this deployment                                                                                                                                    |
 | `space-not-served`                               | the serving loop on this process cannot serve the space                                                                                                                                                                |
@@ -394,9 +395,11 @@ commit. The start waits for the commit of the started graph's setup writes,
 since a refused one retires the graph in the command's process, whatever the
 serving loop goes on serving; that refusal is a failed refresh too. A piece addressed at a scope keeps the
 client-side path, since the verb takes the piece's id alone.
-`cf piece setsrc --origin <origin>` sends the origin with the program. A server
-from before `setsrc` took an origin drops the field and detaches the piece; its
-receipt then names no origin, and the command fails, saying the source update
+`cf piece setsrc --origin <origin>` sends the origin with the program to a
+memory server that advertises `patternLifecycleOrigins`. Against one that does
+not, it refuses as `origin-unsupported` before sending, since such a server
+drops the field and detaches the piece. Where the connection cannot report the
+flag, a receipt naming no origin fails the command, saying the source update
 committed but the piece follows nothing.
 
 `cf piece follow` sends the `follow` verb against a serving deployment, with the
@@ -405,9 +408,11 @@ client-side follow does: an `incompatible` refusal is the incompatible result it
 reports, and `source-moved` the refusal of a piece off its pin. What stays in
 its process is the refresh: it asks the server for the piece's result, and
 reports a failure of that over the durable follow. A piece addressed at a scope
-is refused there, since the verb takes the piece's id alone. A memory server
-that does not know the verb answers the request as unreadable, and the command
-then says that the deployment does not serve `follow` yet.
+is refused there, since the verb takes the piece's id alone. Against a memory
+server that does not advertise `patternLifecycleOrigins` the command says,
+before sending, that the deployment does not serve `follow` yet; one that cannot
+report the flag and does not know the verb answers the request as unreadable,
+with the same result.
 
 Another client of the piece controller, the browser shell, keeps the client-side
 shape. Moving it is its own change; the served operations and the
