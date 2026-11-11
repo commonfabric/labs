@@ -292,6 +292,59 @@ export class XBodyView extends BaseView {
     `;
   }
 
+  #retryUnreachable = new Task(this, {
+    autoRun: false,
+    task: async () => {
+      await this.rt?.runtime().retryUnreachableSpaces();
+    },
+  });
+
+  /**
+   * What stands where a space or piece would be when its space could not be
+   * reached: a statement saying so, and a control that asks the runtime to
+   * dial every space it could not reach once more. The runtime does not dial
+   * such a space again by itself, and asks again when the person comes back
+   * to the page or the browser regains a network, but a person who just fixed
+   * the network has no reason to wait for either. A retry that reaches the
+   * space runs the failed load again, which replaces this; one that does not
+   * leaves it as it was.
+   */
+  #renderSpaceUnreachable(loadError: LoadError) {
+    const retrying = this.#retryUnreachable.status === TaskStatus.PENDING;
+    return html`
+      <div
+        slot="main"
+        class="load-error"
+        @contextmenu="${this.#onLoadErrorContextMenu}"
+      >
+        <cf-alert status="error" aria-busy="${retrying ? "true" : "false"}">
+          <span slot="icon" class="load-error-icon" aria-hidden="true">!</span>
+          <h2 slot="title">We could not reach this ${loadError.kind}</h2>
+          <span slot="description">
+            The server that holds it did not answer. Check your network
+            connection, then try again.
+          </span>
+          <cf-button
+            ?disabled="${retrying}"
+            @click="${() => this.#retryUnreachable.run()}"
+          >
+            Try again
+          </cf-button>
+          ${retrying ? html`<span>Trying…</span>` : null}
+          ${this.#retryUnreachable.status === TaskStatus.ERROR
+            ? html`
+              <code>${loadErrorMessage(this.#retryUnreachable.error)}</code>
+            `
+            : null}
+          <div class="load-error-details">
+            <span>Error details</span>
+            <code>${loadErrorMessage(loadError.error)}</code>
+          </div>
+        </cf-alert>
+      </div>
+    `;
+  }
+
   /**
    * What stands where a space would be when the space is deleted: a statement
    * saying so, with nothing to try, since no retry admits anyone to it.
@@ -320,6 +373,9 @@ export class XBodyView extends BaseView {
       : this.loadError?.kind === "space" &&
           isSpaceNotFound(this.loadError.error)
       ? this.#renderSpaceNotFound()
+      : this.loadError !== undefined &&
+          isSpaceUnreachable(this.loadError.error)
+      ? this.#renderSpaceUnreachable(this.loadError)
       : this.loadError
       ? html`
         <div
@@ -399,6 +455,12 @@ export class XBodyView extends BaseView {
 function isSpaceNotFound(error: unknown): boolean {
   return isObjectOrArray(error) && "code" in error &&
     error.code === RuntimeErrorCode.SpaceNotFound;
+}
+
+/** Whether a load failed because its space's memory host was never reached. */
+function isSpaceUnreachable(error: unknown): boolean {
+  return isObjectOrArray(error) && "code" in error &&
+    error.code === RuntimeErrorCode.SpaceUnreachable;
 }
 
 /** Whether a load failed because the space it addresses is deleted. */
