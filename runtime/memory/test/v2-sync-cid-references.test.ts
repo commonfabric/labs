@@ -4,7 +4,12 @@ import type { JSONSchema } from "@commonfabric/api";
 import { internSchema } from "@commonfabric/data-model-schema";
 
 import { acquireSchemaRegistryLease } from "../../runner/src/schema-registry.ts";
-import { connect, loopback, type Transport } from "../v2/client.ts";
+import {
+  connect,
+  connectionError,
+  loopback,
+  type Transport,
+} from "../v2/client.ts";
 import { Server } from "../v2/server.ts";
 import {
   hasServerMessageCidReferences,
@@ -384,6 +389,99 @@ describe("sync-cid-references", () => {
             value: leafSchema,
           });
         }
+      } finally {
+        await writerClient.close();
+        await watcherClient.close();
+        await server.close();
+      }
+    });
+
+    it("delivers again the syncs held when the connection fetching their bodies closes", async () => {
+      const server = new Server({
+        ...testSessionOpenServerOptions,
+        store: new URL("memory://sync-cid-references-outage"),
+        subscriptionRefreshDelayMs: 0,
+      });
+      // The client's first body fetch is lost with its connection, and the
+      // client reconnects to the same server. Each reference empties the
+      // shared registry first, as in the test above.
+      let receiver = (_payload: string) => {};
+      let disconnected = (_error?: Error) => {};
+      const reach = (): Transport => {
+        const connection = loopback(server);
+        connection.setReceiver((payload) => {
+          if (payload.includes('"byReference":true')) {
+            acquireSchemaRegistryLease()();
+          }
+          receiver(payload);
+        });
+        return connection;
+      };
+      let active: Transport | null = reach();
+      let queries = 0;
+      const outage = Promise.withResolvers<void>();
+      const transport: Transport = {
+        async send(payload) {
+          if (active === null) throw connectionError("connection refused");
+          if (payload.includes('"graph.query"') && queries++ === 0) {
+            const down = active;
+            active = null;
+            await down.close();
+            disconnected(new Error("synthetic outage"));
+            outage.resolve();
+            return;
+          }
+          await active.send(payload);
+        },
+        close: () => active?.close() ?? Promise.resolve(),
+        reset() {
+          if (active === null) active = reach();
+        },
+        setReceiver(next) {
+          receiver = next;
+        },
+        setCloseReceiver(next) {
+          disconnected = next;
+        },
+      };
+      const space = "did:key:z6Mk-sync-cid-references-outage";
+      const carrier = "of:sync-cid-references-outage";
+      const writerClient = await connect({ transport: loopback(server) });
+      const watcherClient = await connect({ transport });
+      try {
+        const writer = await writerClient.mount(
+          space,
+          {},
+          testSessionOpenAuthFactory,
+        );
+        await writer.transact({
+          localSeq: 1,
+          reads: { confirmed: [], pending: [] },
+          operations: closureOperations(carrier),
+        });
+        const watcher = await watcherClient.mount(
+          space,
+          {},
+          testSessionOpenAuthFactory,
+        );
+        const watching = watcher.watchSet([{
+          id: "carrier",
+          kind: "graph",
+          query: {
+            roots: [{ id: carrier, selector: { path: [], schema: false } }],
+          },
+        }]).catch(() => undefined);
+        await outage.promise;
+        await watcherClient.restoreConnection();
+        await watching;
+        const view = (await watcher.watchAddSync([])).view;
+        expect(queries).toBeGreaterThan(0);
+        expect(documentIn(view, `cid:${outerHash}`)).toEqual({
+          value: outerSchema,
+        });
+        expect(documentIn(view, `cid:${leafHash}`)).toEqual({
+          value: leafSchema,
+        });
       } finally {
         await writerClient.close();
         await watcherClient.close();
