@@ -1284,14 +1284,22 @@ describe("logger", () => {
       expect(breakdown.a!.total).toBe(1);
       expect(breakdown.total).toBe(1);
     });
+  });
 
-    it("returns what `getLoggerCountsBreakdown()` returns, given `getLoggerCountsByKey()`", () => {
+  describe("getLoggerCountsByKey()", () => {
+    it("returns each registered logger's counts by message key", () => {
       captureConsole("log", () => {
-        getLogger("counts-by-key-test").info("test-key", "test");
+        const logger = getLogger("counts-by-key-test");
+        logger.info("one", "test");
+        logger.info("one", "test");
+        logger.warn("two", "test");
       });
 
-      expect(loggerCountsBreakdownOf(getLoggerCountsByKey())).toEqual(
-        getLoggerCountsBreakdown(),
+      const byKey = getLoggerCountsByKey()["counts-by-key-test"];
+      expect(byKey?.one).toMatchObject({ info: 2, warn: 0, total: 2 });
+      expect(byKey?.two).toMatchObject({ info: 0, warn: 1, total: 1 });
+      expect(Object.keys(getLoggerCountsByKey())).toContain(
+        "counts-by-key-test",
       );
     });
   });

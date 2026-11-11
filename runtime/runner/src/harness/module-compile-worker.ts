@@ -253,7 +253,10 @@ type WorkerGeneration = {
  */
 export const COMPILE_WORKER_LOGGER_PREFIX = "compile-worker:";
 
-/** The worker realm's loggers, as {@link ModuleCompileWorker.diagnostics} returns them. */
+/**
+ * The worker realm's loggers, as {@link ModuleCompileWorker.diagnostics}
+ * returns them.
+ */
 export interface CompileWorkerDiagnostics {
   /** Timing statistics by prefixed logger name and key. */
   readonly timingStats: TimingStatsBreakdown;

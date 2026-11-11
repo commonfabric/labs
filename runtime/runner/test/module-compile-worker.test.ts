@@ -342,6 +342,36 @@ describe("ModuleCompileWorker", () => {
         }
       });
 
+      it("takes a snapshot from a compile that failed as well", async () => {
+        await rejectionOf(() =>
+          runtime(worker).harness.compileToRecordGraph(TYPE_ERROR_PROGRAM)
+        );
+
+        expect(
+          worker.diagnostics().timingStats[
+            `${COMPILE_WORKER_LOGGER_PREFIX}js-compiler`
+          ]?.["phase/createProgram"]?.count,
+        ).toBeGreaterThan(0);
+      });
+
+      it("keeps the latest diagnostics after its worker dies", async () => {
+        worker = new ModuleCompileWorker(DYING_WORKER);
+        await runtime(worker).harness.compileToRecordGraph(PROGRAM);
+        const latest = worker.diagnostics();
+        const dies: RuntimeProgram = {
+          main: "/dies.tsx",
+          files: [
+            { name: "/dies.tsx", contents: PROGRAM.files[0]!.contents },
+            PROGRAM.files[1]!,
+          ],
+        };
+
+        await rejectionOf(() =>
+          runtime(worker).harness.compileToRecordGraph(dies)
+        );
+        expect(worker.diagnostics()).toBe(latest);
+      });
+
       it("keeps the latest diagnostics once the instance is closed", async () => {
         await runtime(worker).harness.compileToRecordGraph(PROGRAM);
         const latest = worker.diagnostics();

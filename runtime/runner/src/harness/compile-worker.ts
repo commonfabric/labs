@@ -28,6 +28,7 @@ import { compileModulesHere } from "./module-compile.ts";
 
 const post = (answer: CompileWorkerAnswer) => self.postMessage(answer);
 
+/** The modules of a compile, as an answer carries them. */
 type EncodedModules = ReturnType<typeof encodeModules>;
 
 const compiler = (async () => {

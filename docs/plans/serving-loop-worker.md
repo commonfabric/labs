@@ -144,7 +144,8 @@ before it, replaces the merged block with everything else. The loop's own
 logger counts and timing statistics are the worker realm's, so they cross on
 request (`ServingLoopHandle.diagnostics()`), with those of the compile worker
 the serving worker starts under `compile-worker:` logger names
-(`servingLoopDiagnostics()`), and a request waits for the worker's turn:
+(`servingLoopDiagnostics()`, a snapshot read without waiting on the compile
+worker), and a request waits for the serving worker's turn:
 `/api/health/serving-loop-realm` is the route that asks, kept apart from
 `stats` so that a worker in a long settle, or one that is hung,
 delays only the caller who asked for its loggers. A test that reads a refusal
