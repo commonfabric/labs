@@ -1,6 +1,10 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
-import type { TimingStats } from "@commonfabric/logger";
+import type {
+  LogCounts,
+  LoggerBreakdown,
+  TimingStats,
+} from "@commonfabric/logger";
 import {
   mergeServingLoopDiagnostics,
   mergeTimingStats,
@@ -38,16 +42,24 @@ const timingOf = (samples: readonly number[]): TimingStats => {
 const diagnosticsOf = (
   counts: number,
   timing?: TimingStats,
-): ServingLoopDiagnostics => ({
-  loggerCounts: {
-    total: counts,
-    executor: {
+): ServingLoopDiagnostics => {
+  // A breakdown's `total` sits beside its entries under one index signature,
+  // so no literal has its type; each level is spread together, as the logger
+  // builds its own.
+  const byKey: Record<string, LogCounts> = {
+    wave: { debug: 0, info: counts, warn: 0, error: 0, total: counts },
+  };
+  const byLogger: Record<string, LoggerBreakdown> = {
+    executor: { ...byKey, total: counts } as LoggerBreakdown,
+  };
+  return {
+    loggerCounts: {
+      ...byLogger,
       total: counts,
-      wave: { debug: 0, info: counts, warn: 0, error: 0, total: counts },
-    },
-  } as ServingLoopDiagnostics["loggerCounts"],
-  timingStats: timing === undefined ? {} : { executor: { settle: timing } },
-});
+    } as ServingLoopDiagnostics["loggerCounts"],
+    timingStats: timing === undefined ? {} : { executor: { settle: timing } },
+  };
+};
 
 describe("diagnostics-merge", () => {
   describe("mergeTimingStats()", () => {
