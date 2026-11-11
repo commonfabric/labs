@@ -132,7 +132,10 @@ export type Template =
     /** What computed it: a sandboxed body, or emitted expression code. */
     readonly by: { readonly body: Index } | { readonly expression: true };
   }
-  /** Conditional selection. The one node that depends on a value. */
+  /**
+   * Conditional selection. One of three nodes whose label depends on a
+   * value, with a `fold` that has `through` and a `pick`.
+   */
   | {
     readonly op: "select";
     readonly selector: Index;
@@ -185,12 +188,12 @@ export interface Collection {
   /** The label of which elements are present and in what order. */
   readonly membership: Template;
   /**
-   * Whether a body applied to this collection uses the element's index, or
-   * the whole array. Either makes the position part of an element's key
-   * (section 1.3). The element part of the key is not recorded: it follows
-   * from each element at run time.
+   * Whether a body applied to this collection uses the element's index,
+   * which makes the position part of an element's key (section 1.3). The
+   * element part of the key is not recorded: it follows from each element
+   * at run time.
    */
-  readonly bodyUses: { readonly index: boolean; readonly array: boolean };
+  readonly bodyUses: { readonly index: boolean };
 }
 
 /** One sandboxed function body and the result of footprint analysis. */
@@ -415,9 +418,33 @@ export interface Child {
   readonly perElementOf?: Index;
   /** `asScope`: the scope of the state the instance declares. */
   readonly scope?: "space" | "user" | "session";
-  /** `inSpace`: the slot that names the target space. */
-  readonly space?: Index;
+  /** `inSpace`: the target space and the options of the request. */
+  readonly space?: SpaceRequest;
 }
+
+/** What an `inSpace` request records (section 3.14). */
+export interface SpaceRequest {
+  /** Which space the instance is created in. */
+  readonly target:
+    /** A space identifier. */
+    | { readonly kind: "identifier"; readonly space: RequestValue }
+    /** The space the cell at an `identity` slot lives in. */
+    | { readonly kind: "spaceOf"; readonly cell: Index }
+    /** A name the calling space resolves. */
+    | { readonly kind: "name"; readonly name: RequestValue }
+    /** A space of the site's own, which has no name. */
+    | { readonly kind: "anonymous" };
+  /** The options written at the site. An absent member was not written. */
+  readonly grants?: RequestValue;
+  readonly root?: RequestValue;
+  readonly spaceKind?: RequestValue;
+  readonly selfOwned?: RequestValue;
+}
+
+/** A value of an `inSpace` request: a constant of the site, or a slot. */
+export type RequestValue =
+  | { readonly constant: unknown }
+  | { readonly slot: Index };
 
 /**
  * A pattern closure used as a value: an inline pattern bound to what it
@@ -565,10 +592,9 @@ enters a document identifier, as the row identifiers of `sqliteQuery` are
 (`builtin-inventory.md`, "Element keys"). Without the salt an identifier
 would reveal a low-entropy value to anyone who can see a link.
 
-The position is part of the key only when the body uses it:
-`Collection.bodyUses.index`, or `bodyUses.array`, since a body that reads the
-whole array depends on where it stands in it. A key then is the pair of the
-element part and the index.
+The position is part of the key only when the body uses the index
+(`Collection.bodyUses.index`). A key then is the pair of the element part and
+the index.
 
 The purpose of the rule is that an element that moves keeps its cone, so
 reordering a collection recomputes nothing. Keeping the identifiers of
@@ -877,9 +903,8 @@ branches. `a && b` is `select(a, [b, a])`: when `a` is falsy the result is
 
 The condition's slots have the class the test needs: `value` at the root for
 a scalar condition, `shape` at the root for a record or array, whose
-truthiness is its existence. Nothing below the root is observed. This settles
-the first case of `builtin-inventory.md`'s open question 1, more narrowly
-than the value observation it assumed; section 2.4 covers the other two.
+truthiness is its existence. Nothing below the root is observed (section
+2.4).
 
 When the selected arm of `&&` or `||` *is* the condition, the result carries
 that operand's full template, not only its truthiness.
@@ -917,10 +942,12 @@ the link consumes the selected branch's label at its own document. **Equal.**
 - **Membership template.** For a `map` over an input collection, the
   `enumeration` slot of that collection. `map` preserves the domain, so the
   result's membership is its source's.
-- **Index and array.** A body that uses the index adds the collection's
-  `enumeration` to its element template, because an element's index depends
-  on the order of the others. A body that uses the array argument adds a
-  `value` or narrower slot over the whole collection, as its footprint says.
+- **Index.** A body that uses the index adds the collection's `enumeration`
+  to its element template, because an element's index depends on the order
+  of the others. A callback has no parameter for the whole array
+  (`language-subset.md` §4.4.1). A body that needs the collection captures
+  it by name, and the capture is an ordinary slot, like any other captured
+  outer value.
 - **Nothing else.** The label of element `i` does not include any slot of
   element `j`.
 
@@ -1000,18 +1027,21 @@ positions depend on lengths alone.
 
 ### 3.8 Aggregates
 
-The aggregates are `count`, `countTruthy`, `sum`, `min`, `max`, `minBy` and
-`maxBy`, as `builtin-inventory.md` lists them. `some`, `every` and `find` are
-reactive constructs too; they depend on order and are in section 3.13.
+The aggregates are `count`, `sum`, `min`, `max`, `minBy` and `maxBy`, as
+`builtin-inventory.md` lists them. `some`, `every` and `find` are reactive
+constructs too; they depend on order and are in section 3.13.
 
 | Aggregate | Template |
 | --- | --- |
 | `count()`, `.length` | The collection's membership |
-| `count(predicate)`, `countTruthy` | `fold` of the predicate's template, joined with membership |
+| `count(predicate)` | `fold` of the predicate's template, joined with membership |
 | `sum()`, `min()`, `max()` | `fold` of the element's `value`, joined with membership |
-| `minBy(selector)`, `maxBy(selector)` | `pick` (section 3.18): the winning element, with the choice labeled by a `fold` of the selector's template |
+| `minBy(keyFunction)`, `maxBy(keyFunction)` | `pick` (section 3.18): the winning element, with the choice labeled by a `fold` of the key function's template |
 
-A predicate is observed for truthiness, with the classes of section 3.5.
+A predicate is observed for truthiness, with the classes of section 3.5. The
+callback of `minBy` and `maxBy` is called the **key function**: it returns
+the key the elements are compared by. The callback of a collection index
+(section 3.17) is a key function too.
 
 **Semantics the plan fixes.** Value code on a client and on the server has
 to agree, so the result of an aggregate is defined independently of how it is
@@ -1021,8 +1051,8 @@ computed.
   whatever their order (`AggregateSum` in
   `runtime/runner/src/builtins/aggregate-sum.ts` is the current
   implementation of that).
-- The empty results are `0` for `sum` and `countTruthy`, `Infinity` for
-  `min`, `-Infinity` for `max`, and `undefined` for `minBy` and `maxBy`.
+- The empty results are `0` for `sum` and `count`, `Infinity` for `min`,
+  `-Infinity` for `max`, and `undefined` for `minBy` and `maxBy`.
 - A tie in `minBy` or `maxBy` goes to the element with the smallest key in
   the canonical order of keys, so the result does not depend on the order of
   the collection.
@@ -1044,8 +1074,9 @@ alone. **Equal or tighter**, to be confirmed by the stage 3 comparison,
 because what a raw list read consumes at its slots depends on the list's
 stored entries. `minBy` and `maxBy` publish a link to the winning element
 today. The link passes up the tree through node outputs, each labeled by a
-transaction that read its members' selector values, so the choice carries
-the join over all of them, as the `pick` template's choice does. **Equal.**
+transaction that read its members' key function results, so the choice
+carries the join over all of them, as the `pick` template's choice does.
+**Equal.**
 
 ### 3.9 Opaque sandboxed calls
 
@@ -1114,7 +1145,8 @@ argument schema. **Equal or tighter**: equal when the body reads everything
 its schema materializes today, tighter when footprint analysis narrows the
 schema further than the transformer does. The narrowing does not rest on the
 compiler's analysis being right (section 7): a footprint that is too small
-starves the body instead of leaking to it.
+starves the body instead of leaking to it. One argument is not narrowed
+today, a handler's event of an authored type; section 3.12 compares it.
 
 ### 3.10 Link following
 
@@ -1172,7 +1204,20 @@ integrity for the written path, such as an authorship atom for the acting
 principal, is a declared entry and is added as it is today.
 
 **Today.** The handler's transaction join over the event payload and the
-state it read lands on every written path. **Equal.**
+state it read lands on every written path. The state's schema is narrowed to
+what the body uses, as a `lift`'s argument is. The event's schema is not,
+where the author wrote the event's type: the transformer generates the
+schema of the authored type whole and narrows only the capability of each
+cell in it (the `contract` mode of `CapabilitySummaryApplicationMode` in
+`base/ts-transformers/src/transformers/type-shrinking.ts`, applied by
+`applyCapabilitySummaryToArgument` and `applyCapabilitySummaryToParameter`
+in `schema-injection.ts` beside it). The handler's transaction then reads
+the event through the whole declared type. An event whose type is inferred,
+an inline event handler's among them, is narrowed like the state. The
+template joins the event slots of the footprint. **Equal or tighter**: equal
+for an inferred event type, and for a body that reads every field the
+authored type declares; tighter when the authored type declares a field the
+body does not read.
 
 ### 3.13 `findIndex`, `some`, `every`, `find`, and `reduce`
 
@@ -1234,9 +1279,9 @@ expression.
   nearest checkpoint before `k`. The *label* is cheaper than the value: it
   is a join over the steps, so the multiset of step label identifiers is
   maintained as for an aggregate, and only the steps whose instantiation
-  key changed are re-instantiated. The
-  accumulator has to be a data type for that state to be storable, which is
-  a rule for `language-subset.md`.
+  key changed are re-instantiated. The accumulator is a data type, so that
+  this state can be stored (`language-subset.md` §4.4.1,
+  `collection:reduce-accumulator`).
 
 **Today.** `reduce` and `findIndex` on a cell mint a `lift` inline
 (`reduce` and `findIndex` in `runtime/runner/src/cell.ts`), which reads the
@@ -1267,7 +1312,7 @@ the child instance (section 3.15) when the transaction commits.
 | A link to an instance requested earlier in the same invocation, passed as an argument | A reference like any other: it carries its own identity label, `T_b`. It is legal before either instance exists, because both are created by the same commit |
 | `.for(tag)` | The tag's value is part of the footprint. The instance's existence label is frozen when it is first created (§8.12.8, `08-12-store-label-monotonicity.md`); a later event that names the same instance creates nothing |
 | `asScope(scope)` | A constant of the site. It sets the scope of the state the child declares |
-| `inSpace(space, options)` | The target is a slot or a constant of the site: a space identifier, the space of a given cell, a name, or anonymous. The argument is written into another space, so the write-side checks of that space apply to the argument's templates joined with `T_b`. The new instance's and space's identifiers derive from the request and are known before the commit, which spans both spaces |
+| `inSpace(space, options)` | The target is a slot or a constant of the site: a space identifier, the space of a given cell, a name, or anonymous. `Child.space` records which of the four it is, and the options `grants`, `root`, `spaceKind` and `selfOwned` where the site writes them. The argument is written into another space, so the write-side checks of that space apply to the argument's templates joined with `T_b`. The new instance's and space's identifiers derive from the request and are known before the commit, which spans both spaces |
 
 The instance becomes an instantiated pattern, with a result cell, when its
 link is written into state or passed to `navigateTo`. A link the body drops
@@ -1475,27 +1520,27 @@ bodies") lists what each of these reads and where its label comes from, from
 `lookup(k)`, `keys()` and `keyEntries()` read it.
 
 The index is an `Operation` of kind `index`. Its state holds, per element
-key, the index key the selector produced and the number of positions, and
-per index key the bucket. The per-element selector cones write a statically
-known target, so no materializer is involved.
+key, the index key the key function produced and the number of positions,
+and per index key the bucket. The per-element key function cones write a
+statically known target, so no materializer is involved.
 
 | Part | Template |
 | --- | --- |
-| Membership of bucket `k` | The source's membership, order included, joined with a `fold` of the selector's template over every element: `value` for a primitive key, `identity` for a cell key. A `group` bucket lists its elements in source order |
+| Membership of bucket `k` | The source's membership, order included, joined with a `fold` of the key function's template over every element: `value` for a primitive key, `identity` for a cell key. A `group` bucket lists its elements in source order |
 | The elements of a bucket | The source elements, passed through (`slot` templates), with their root `shape` replaced by the bucket's membership |
 | `lookup(k)` in `group` mode | A collection whose membership is the bucket's membership joined with the template of `k` |
 | `lookup(k)` in `key` mode | `pick` (section 3.18): the winning element, with the choice labeled by the bucket's membership and the template of `k` |
 | A lookup that misses | The same choice label, with no element |
-| `keys()`, `keyEntries()` | A collection whose membership is the source's membership joined with the `fold` of the selector's template |
+| `keys()`, `keyEntries()` | A collection whose membership is the source's membership joined with the `fold` of the key function's template |
 
 The winner among elements with equal index keys in `key` mode is the element
 with the smallest element key in the canonical order, so no element value
 beyond the index key enters the choice. A nullish index key omits the
 element, which is part of what the fold observes.
 
-Every element's selector result is in a bucket's membership, not only those
-of the elements in the bucket: that an element is absent from bucket `k`
-says its key is not `k`.
+Every element's key function result is in a bucket's membership, not only
+those of the elements in the bucket: that an element is absent from bucket
+`k` says its key is not `k`.
 
 **This is the one rule that is looser than today.** Each
 `collectionIndexMember` run reads its own key and writes one bucket, and its
@@ -1530,7 +1575,7 @@ untouched, and `choice` labels which one it is.
 
 | Construct | `from` | `choice` |
 | --- | --- | --- |
-| `minBy`, `maxBy` | The collection | Membership joined with a `fold` of the selector's template |
+| `minBy`, `maxBy` | The collection | Membership joined with a `fold` of the key function's template |
 | `lookup(k)`, `key` mode | The bucket | The bucket's membership joined with the template of `k` |
 | `a[k]` | The container slot of `a` | The template of `k` joined with the `shape` of the chosen child |
 
@@ -1539,9 +1584,8 @@ whether the child exists, and whatever the surrounding expression reads of
 it. It does not observe the container's other children or its enumeration,
 by the rule that child access is navigation (§4.6.3). The value code
 reports the key, the runtime binds the body's child slots to that path, and
-the label follows. `language-subset.md` (open question 3) assumed the
-container's enumeration as well; it is not needed, so the rule here is
-narrower and a dynamic key in the reactive tier needs no refusal.
+the label follows. The container's enumeration is not needed, so a dynamic
+key in the reactive tier needs no refusal.
 
 For a collection the runtime does the choosing from per-element results, as
 it does the filtering in section 3.7, so the chosen element is known to it.
@@ -1629,7 +1673,7 @@ and the captures.
 | The writer policy of a written path names this handler | Compile time, for a static write edge (section 4.4) | When the handler writes: the resolved `Body.code` against the policy of the cell it was bound to |
 | The handler's schemas fit the binding | Compile time | When the binding is made: the resolved record's event and state schemas against the declared ones. A misfit fails the binding's cone, or the binding handler |
 | Input requirements and ceilings on the handler's state | Compile time where the bound slots are declared | At instantiation, from the resolved record's constraints over the `binding` slots |
-| Some element of the pattern binds the handler under the surface its UI contract names | Compile time (section 4.4) | Not checkable; per event only |
+| Some element of the pattern binds the handler under the surface its UI contract names | Compile time, reported as a warning (section 4.4) | Not checkable; per event only |
 | A write the handler's record does not list | Compile time | Refused by the runtime when attempted (section 7.4) |
 
 **What is hard.**
@@ -1667,18 +1711,18 @@ nothing to compare.
 | `map` | Element template; membership slot | Equal; tighter within an element as above |
 | `filter` | Pass-through elements; membership `fold` of predicates | Equal |
 | `flatMap` | Element template; membership `fold` of segment lengths | Tighter (content of other segments excluded) |
-| `count`, `countTruthy`, `sum`, `min`, `max` | `fold` | Equal; `count` equal or tighter |
-| `minBy`, `maxBy` | `pick`, choice a `fold` of selectors | Equal |
+| `count`, `sum`, `min`, `max` | `fold` | Equal; `count` equal or tighter |
+| `minBy`, `maxBy` | `pick`, choice a `fold` of the key function | Equal |
 | `findIndex`, `some`, `every` | `fold` through the deciding element | Tighter (later elements excluded) |
 | `find` | `pick`, choice a prefix `fold` | Tighter (later elements excluded) |
 | `reduce` | `fold` of the step expression, plus the initial value | Equal; tighter when the expression selects |
-| `groupBy`, `keyBy`, `lookup`, `keys`, `keyEntries` | Bucket membership a `fold` of selectors; `pick` for `key` mode | **Looser**, the one exception: absent elements' keys are included |
+| `groupBy`, `keyBy`, `lookup`, `keys`, `keyEntries` | Bucket membership a `fold` of the key function; `pick` for `key` mode | **Looser**, the one exception: absent elements' keys are included |
 | Dynamic key `a[k]` | `pick` over a container | Equal |
 | Template literal | `derive` over substitutions | Equal; tighter inside a constructed object |
 | Sandboxed call | `derive` over footprint and handles; references passed through | Equal or tighter |
 | Link following | `identity` slot plus `dynamic` | Equal |
 | Static side-write | Template of the written expression | Equal or tighter |
-| Handler | `derive` over event and state footprint | Equal |
+| Handler | `derive` over event and state footprint | Equal or tighter (an authored event type is read whole today) |
 | Calls in a body | The body's template on what it creates | Equal; tighter for passed references |
 | Child instance | Argument templates in; `child` slots out | Equal |
 | Pattern closure | Join of the capture templates on the factory value; `params` slots inside | Equal |
@@ -1699,13 +1743,26 @@ schema materializes today as well.
 ### 4.1 When it runs
 
 Instantiation runs in the transaction of a cause, after the value code, and
-only for kept outputs and write edges. For each one:
+only for the templates of what the transaction stores or checks:
 
-1. If the output's cone was not evaluated in this transaction, do nothing.
+- a kept output (`Output.template`);
+- a write edge (`WriteEdge.template`): a side-write, a path of a child's
+  argument, the initial value of a created cell;
+- the `input` of an effect operation, on which the egress ceiling is checked
+  (sections 3.14 and 4.4);
+- a state path of a binding that is copied (`Binding.state`), which is
+  stored in the binding's state document (section 3.14);
+- a parameter of a pattern closure that is copied (`Closure.params`), which
+  is stored with the factory value (section 3.15).
+
+For each one:
+
+1. If the cone or body that computes it was not evaluated in this
+   transaction, do nothing.
 2. Collect the label identifier of each slot the template reaches under the
    reported selections, and the selections themselves. This is the
    **instantiation key**.
-3. If the key equals the key stored with the output's current label, reuse
+3. If the key equals the key the stored label was instantiated from, reuse
    that label. A change of value alone ends here.
 4. Otherwise instantiate (section 4.2), look the result up in the memo
    (section 4.3), check the constraints (section 4.4), and stage the label
@@ -1871,13 +1928,30 @@ constraint on slots or on a write edge.
 | Write floor on a target | `verifyWriteFloor` on the written value's integrity | `I(template)` of the write edge satisfies the patterns |
 | Writer-fit | Persist region of `prepareBoundaryCommitSteps`: the join fits the target's declared confidentiality | `C(template)` of the write edge fits it |
 | `writeAuthorizedBy`, `writePolicyAnyOf` | `writeAuthorizedByReason`, `writePolicyAnyOfReason` at prepare | `Body.code` of the writing body is one the policy names |
-| UI event integrity contract | `verifyTrustedEventRequirements`, with provenance recorded by `recordTrustedEventPolicyInputs` (`runtime/runner/src/cfc/ui-contract.ts`) | The event bound to the handler's `event` root satisfies the alternative's `uiContract` |
+| UI event integrity contract | `verifyTrustedEventRequirements` (`runtime/runner/src/cfc/prepare.ts`), with provenance recorded by `recordTrustedEventPolicyInputs` (`runtime/runner/src/cfc/ui-contract.ts`) | The event bound to the handler's `event` root satisfies the alternative's `uiContract` |
 | Egress ceiling of an effect | `verifySinkRequestCeilings` over the whole transaction's consumed label | `C` of the effect operation's `input` template fits the ceiling |
 
 The slots a `requiredIntegrity` or `maxConfidentiality` constraint lists are
 the slots of the body's footprint whose path overlaps the annotated path, in
 either prefix direction, which is the overlap the runtime uses today
 (`buildWritePrefixBounds`).
+
+**Where a constraint comes from.** `language-subset.md` §8.1 lists the keys
+a label annotation adds to a type. The plan holds each as follows.
+
+| Annotation key | In the plan |
+| --- | --- |
+| `confidentiality` | `Slot.declared.confidentiality` of a slot the annotation covers (`language-subset.md` §8.3), and a declared entry of the stored label (section 2.3). On a path a write edge targets, it is the declared confidentiality a `writerFit` constraint tests the edge's template against |
+| `integrity` | `Slot.declared.integrity` of a slot the annotation covers, and a declared entry of the stored label |
+| `requiredIntegrity` | A `requiredIntegrity` constraint with the annotation's patterns, over the slots that overlap the annotated path |
+| `maxConfidentiality` | A `maxConfidentiality` constraint with the annotation's ceiling, over the slots that overlap the annotated path |
+| `writeAuthorizedBy` | A `writer` constraint on each write edge to the annotated path, with one `WriterPolicy` whose `body` is the body the binding names |
+| `writePolicyAnyOf` | A `writer` constraint on each write edge to the annotated path, with one `WriterPolicy` per policy of the list |
+| `uiContract` | `WriterPolicy.uiContract` of the alternative it is declared with |
+| `addIntegrity`, `exactCopyOf`, `projection` | No record and no rule (section 8, question 14) |
+
+No key in this table yields a `writeFloor` constraint. Which one does is
+question 15 of section 8.
 
 **When a constraint is checked.**
 
@@ -1892,10 +1966,13 @@ either prefix direction, which is the overlap the runtime uses today
   check rejects a transaction today (section 5.5 says what that reveals).
 - **Per event** for a UI contract. Whether an event came from the named
   surface is a fact about that event (`trustedEventProvenanceMatchesUiContract`
-  in `runtime/runner/src/cfc/ui-contract.ts`). The compiler can still report
-  the case where no element of the compiled pattern that binds the handler
-  sits under a surface carrying the required pattern and integrity names,
-  since then no event from this pattern's UI can satisfy the policy.
+  in `runtime/runner/src/cfc/ui-contract.ts`). The compiler reports, as a
+  warning (`cfc-flow:ui-contract`, `language-subset.md` §10.5), the case
+  where no element of the compiled pattern that binds the handler sits under
+  a surface carrying the required pattern and integrity names, since then no
+  event from this pattern's UI can satisfy the policy. It is not an error,
+  because a handler bound to an exported stream also receives events from
+  other patterns (section 6.3 has one).
 
 A compile-time check does not replace the run-time one. Declared labels are a
 lower bound on what a slot carries: a derived component can add
@@ -1959,10 +2036,10 @@ normally.
   against the declared type, and handing it a value outside that type would
   void what the compiler checked. So a path projection in the reactive tier
   on mismatched data yields `undefined` exactly when the type allows
-  `undefined` there, and an error state otherwise, which settles
-  `language-subset.md`'s open question 2. Either outcome was decided by
-  observing the stored value at that path, and its label is the label of
-  that slot, which the output's template already contains.
+  `undefined` there, and an error state otherwise. `language-subset.md`
+  (§13) relies on this for its strict `null` checks. Either outcome was
+  decided by observing the stored value at that path, and its label is the
+  label of that slot, which the output's template already contains.
 - **The label of an error state** is the label the output would have had: the
   output's template, instantiated with the selections taken up to the failure.
   A failed body contributes its whole footprint, the `reads` slots and
@@ -2070,9 +2147,12 @@ The handler `commitSend` calls `sendInto`, which in outline:
 1. resolves the sender's profile from `myProfile` and throws when there is
    none;
 2. takes the text from `event.body`, or else `event.target.value`;
-3. resolves `event.attachments` and throws when there are too many;
+3. resolves `event.attachments`, reads the file entry behind each, and
+   throws when there are too many or one cannot be attached;
 4. throws when there is neither text nor an attachment;
-5. checks `event.replyTo` against `messages` when it is set;
+5. checks `event.replyTo` when it is set: it reads the messages the reply's
+   `thread` and `quotes` links name, and compares their space with the space
+   of `messages`;
 6. creates a reactions list, and pushes
    `{ authorProfile, body, attachments?, sentAt, replyTo?, reactions }` onto
    `messages`;
@@ -2090,7 +2170,8 @@ Each row, in `message-row.tsx`, derives among others:
 - `text = computed(() => bodyText(message.get()))`, where `bodyText` returns
   the body when it is a string and otherwise one of two fixed sentences,
   chosen by whether `authorProfile` is present;
-- `isEdited`, true when `editedAt` is present and the body is a string;
+- `isEdited = computed(() => …)`, whose body reads `message.get()` and
+  returns `record?.editedAt !== undefined && typeof record.body === "string"`;
 - `replies`, read from `places.key(key).get()?.replies` with `key` computed
   from the message's identity, and `threadLabel`, which is
   `replies === 1 ? "1 reply" : …`.
@@ -2104,12 +2185,16 @@ s0  argument  messages                 : enumeration
 s1  argument  messages/*               : identity
 s2  argument  myProfile                : identity
 s3  argument  threadInfo               : identity
+s4  argument  messages                 : identity
 e0  event     body                     : value
 e1  event     target/value             : value
 e2  event     attachments              : enumeration
 e3  event     attachments/*            : identity
-e4  event     replyTo                  : value
-e5  event     threadTitle              : value
+e4  event     replyTo                  : shape
+e5  event     replyTo/thread           : identity
+e6  event     replyTo/quotes           : identity
+e7  event     replyTo/shownIn          : value
+e8  event     threadTitle              : value
 m0  element   (root)                   : shape      of collection c1
 m1  element   (root)                   : identity
 m2  element   body                     : value
@@ -2123,30 +2208,50 @@ Bodies:
 
 ```text
 B0  handler  commitSend
-      reads    e0 e1 e2 e3 e4 e5 s2
-      handles  myProfile, messages, threadInfo
+      reads    e0 e1 e2 e3 e4 e5 e6 e7 e8 s2 s4
+      handles  myProfile, threadInfo, attachments/*,
+               replyTo/thread, replyTo/quotes
       writes   state messages/*      template T_send   constraints [k0, k1]
                state reactions       template T_send
 B1  computed messageFacts
       reads    s0 s1 s3
       handles  messages, threadInfo
-B2  computed bodyText      reads m0 m1 m2 m4
-B3  computed isEdited      reads m0 m1 m3 m5
-B4  computed replies       reads m1          handles places
+B2  function bodyText      reads m0 m1 m2 m4
+B3  computed replies       reads m1          handles places
 ```
 
-`messages` is a handle of `B0` and `B1` because both read through it at
-addresses they compute: `B0` checks a reply against the list, and `B1` walks
-each message cell. `myProfile` is a handle of `B0` because the handler
-resolves the link and reads the profile behind it.
+`messages` is a handle of `B1`, which walks each message cell through it.
+`B0` does not read through `messages`. `sendInto` pushes onto it and passes
+it to `spaceOf`, by way of `isInRoomOf`, which observes its identity (`s4`).
+`B0` reads through five handles:
+
+- `myProfile`: `resolvedProfile` resolves the link and tests whether the
+  profile behind it holds a value;
+- each element of `event.attachments`: `attachmentsIn` reads the file entry
+  behind it;
+- `event.replyTo/thread` and `event.replyTo/quotes`: `checkedReply` reads
+  the messages behind them when the event names a reply;
+- `threadInfo`: `threadTitleRecord` reads it under a key computed from the
+  thread's root, when the event carries a `threadTitle`.
+
+Of `event.replyTo` itself the body observes whether it is set (`e4`), the two
+references (`e5`, `e6`), and `shownIn` (`e7`).
+
+`text` and `isEdited` meet the promotion criterion of `language-subset.md`
+§6.1, so neither `computed` is a body. `text` is a call of the authored
+function `bodyText`, which is `B2`, a body of kind `function`. `isEdited`
+calls nothing but `message.get()`, so it is expression code with a `select`
+for its `&&`.
 
 Templates:
 
 ```text
-T_send   = derive(by B0)  [ e0 e1 e2 e3 e4 e5 s2
+T_send   = derive(by B0)  [ e0 e1 e2 e3 e4 e5 e6 e7 e8 s2 s4
                             dynamic(handle B0.myProfile)
-                            dynamic(handle B0.messages)
-                            dynamic(handle B0.threadInfo) ]
+                            dynamic(handle B0.threadInfo)
+                            dynamic(handle B0.attachments/*)
+                            dynamic(handle B0.replyTo/thread)
+                            dynamic(handle B0.replyTo/quotes) ]
 
 T_facts  = derive(by B1)  [ s0 s1 s3
                             dynamic(handle B1.messages)
@@ -2155,11 +2260,14 @@ T_facts  = derive(by B1)  [ s0 s1 s3
 T_empty  = derive(expression) [ T_facts, const ]
 
 c1       = collection  source: facts.main   membership: T_facts
-                       bodyUses: { index: false, array: false }
+                       bodyUses: { index: false }
 
 T_text   = derive(by B2)  [ m0 m1 m2 m4 ]
-T_edited = derive(by B3)  [ m0 m1 m3 m5 ]
-T_repl   = derive(by B4)  [ m1  dynamic(handle B4.places) ]
+T_isSet  = derive(expression) [ m0 m1 m5 ]
+T_edited = select( condition: T_isSet,
+                   branches:  [ derive(expression) [ m3 ],
+                                T_isSet ] )
+T_repl   = derive(by B3)  [ m1  dynamic(handle B3.places) ]
 T_label  = select( condition: derive(expression) [ T_repl, const ],
                    branches:  [ const,
                                 derive(expression) [ const, T_repl ] ] )
@@ -2199,7 +2307,7 @@ schema, so their existence is constant.
 Kept outputs in the slice: the room's `messages` output (from `facts.list`),
 and the rendered tree under `[UI]`, which holds the empty-state branch and
 each row's text, edited mark and thread label. `facts.entries`, `replies` and
-the condition of `T_label` are interim.
+the conditions of `T_edited` and `T_label` are interim.
 
 ### 6.3 The gate on the send handler
 
@@ -2220,9 +2328,10 @@ the condition of `T_label` are interim.
 In the room's rendered tree the composer is a submit input inside an element
 that carries the surface's pattern and integrity names, and it binds
 `commitComposerSend`, which the policy also names. The compiler can verify
-that such an element exists for each handler the pattern binds to a control.
-`commitSend` itself is bound to the exported `sendMessage` stream, whose
-events come from other patterns, so for it the check is per event only.
+that such an element exists for each handler the pattern binds to a control,
+and it warns where none does (section 4.4). `commitSend` itself is bound to
+the exported `sendMessage` stream, whose events come from other patterns, so
+for it the check is per event only.
 
 `sendInto` creates the reactions list with a cell constructor. That is a
 `createCell` call of `B0`, identified by the event and its ordinal (section
@@ -2242,11 +2351,11 @@ journaled reads through handle `h` consumed.
 
 | Output | Instantiated confidentiality | Instantiated integrity |
 | --- | --- | --- |
-| New message (computed fields) | `C(e0..e5) ⊔ C(s2) ⊔ C(D(myProfile)) ⊔ C(D(messages)) ⊔ C(D(threadInfo))` | Declared authorship atom; `⊓` over the same inputs; `TransformedBy(commitSend)` when the join is not empty |
+| New message (computed fields) | `C(e0..e8) ⊔ C(s2) ⊔ C(s4) ⊔ C(D(myProfile)) ⊔ C(D(threadInfo)) ⊔ C(D(attachments/*)) ⊔ C(D(replyTo/thread)) ⊔ C(D(replyTo/quotes))` | Declared authorship atom; `⊓` over the same inputs; `TransformedBy(commitSend)` when the join is not empty |
 | `facts`, every path | `C(s0) ⊔ C(s1) ⊔ C(s3) ⊔ C(D(messages)) ⊔ C(D(threadInfo))` | `⊓` over the same; `TransformedBy(messageFacts)` |
 | `isEmpty` | Same as `facts` | `⊓` over the same; `TransformedBy(pattern)` |
 | Row `text` | `C(facts) ⊔ C(m1) ⊔ C(m2) ⊔ C(m4)` | `⊓` over the same; `TransformedBy(bodyText)` |
-| Row `isEdited` | `C(facts) ⊔ C(m1) ⊔ C(m3) ⊔ C(m5)` | likewise |
+| Row `isEdited` | `C(facts) ⊔ C(m1) ⊔ C(m5)`, and `C(m3)` as well when `editedAt` is present | from the selected branch: `⊓` over its inputs; `TransformedBy(pattern)` |
 | Row `threadLabel` | `C(m1) ⊔ C(D(places))` | from the selected branch |
 
 **In the deployed configuration** every one of these confidentialities is
@@ -2266,19 +2375,21 @@ a pass-through and keeps the atom under both.
 
 | Output | Today | Template |
 | --- | --- | --- |
-| New message | Handler transaction's join over the event and state reads, plus the declared atom | Same set |
+| New message | Handler transaction's join over the whole declared event, the state reads and the reads through handles, plus the declared atom. `RoomStreamEvent` is an authored type, so its schema is not narrowed (section 3.12) | The same set, with the event slots `e0` to `e8` in place of the whole event: a field the handler does not use, such as `emoji` or `target/dataset`, is not read |
 | `facts` | `computed` node's join | Same set |
 | `isEmpty` | Its own node and document; the join of reading `facts.main`'s length | Same label; no node or document |
 | Row `text` | The row node reads `message.get()`, the whole record as its schema materializes it: `body`, `sentAt`, `editedAt`, `replyTo`, and the slots of `authorProfile`, `attachments` and `reactions` | `body` and the presence of `authorProfile` |
-| Row `isEdited` | The whole record, as above | The presence of `editedAt` and the kind of `body` |
+| Row `isEdited` | The whole record, as above | The presence of `editedAt`, and the kind of `body` when `editedAt` is present |
 | Row `threadLabel` | Its own node; reads `replies`, another node's document | The label of the `places` entry read, through the `select` |
 
 For `text` and `isEdited` the template is tighter whenever a field the value
 does not depend on carries a label the others do not. In FabriChat that
 happens after an edit or a reaction: `commitEdit` rewrites `body` and
 `editedAt` in a later transaction with its own join, and the reactions list is
-a document of its own. With FabriChat's actual labels the instantiated labels
-are equal, because all of them are empty.
+a document of its own. For the new message the template is tighter whenever
+an event field `commitSend` does not use carries a label. With FabriChat's
+actual labels the instantiated labels are equal, because all of them are
+empty.
 
 What differs in the deployed configuration is the amount of work and storage.
 The measured second load of a thirty-message room made 615 CFC preparations
@@ -2375,7 +2486,8 @@ bracketed dereferences, fail-closed on unresolved references".
   element body once per key with that element's slots, and performs the
   filtering, concatenation, folding and choosing itself (sections 3.6 to
   3.8, 3.17, 3.18). No emitted code sees two elements of a mapped collection
-  at once, unless the body asks for the array.
+  at once, unless the body captures the collection by name, and then the
+  collection is a slot of its own in the body's template (section 3.6).
 - **References a body passes on.** That a returned reference is one the body
   was given is checked by identity (section 3.9).
 - **Dynamic reads.** Reads through handles and links, and of access lists,
@@ -2413,8 +2525,7 @@ These the runtime cannot check. They hold only if the compiler is correct.
   the result, and that the reported selection is the one taken. The same
   holds for the key a `pick` over a container reports.
 - **Element locality where the body asks for more.** A body that uses the
-  index or the array is given them, and what it does with them is the
-  compiler's claim.
+  index is given it, and what it does with it is the compiler's claim.
 - **Wiring.** That the result of body `B` is what flows to the outputs whose
   templates name `B`.
 - **Gating sets.** That a guarded write depends only on the slots its
@@ -2456,23 +2567,26 @@ as operations (3.13); the wider collection-index label (3.17); rejection of
 a cause's whole transaction (4.4); a child replaced under the same name
 (3.15); identifiers of a cross-space request known before its commit (3.14);
 salted value-derived identifiers (1.3); no effect request from a `lift` or
-`computed` (3.14); handler factories bindable as values (3.21).
+`computed` (3.14); handler factories bindable as values (3.21); the
+accumulator of `reduce` is a data type, which `language-subset.md` §4.4.1
+requires (3.13).
 
 What remains is for the sibling documents, the specification change, or the
 prototype. Each entry states the assumption this document made.
 
-1. **How fine footprint analysis should be for computed values.** Section 3.9
+1. **How fine footprint analysis is for computed values.** Section 3.9
    gives a body's computed result paths one template and refines only
-   references and required paths. *Assumed:* one template for computed values,
-   which equals today's label. A template per computed path would be a further
-   claim under section 7.4, and unlike the reference rules the runtime could
-   not verify it. `footprint-analysis.md` decides.
+   references and required paths. `footprint-analysis.md` §4.1 settles it
+   that way: one template per body, which equals today's label. A template
+   per computed path would be a further claim under section 7.4, and unlike
+   the reference rules the runtime could not verify it.
 2. **References reached through data.** Section 3.9 covers a reference at a
    result path that equals an input reference. A reference the body found by
    reading through a handle is not an input slot. *Assumed:* it gets the
    `derive` template.
-3. **The accumulator of `reduce` is a data type.** Section 3.13 needs this for
-   the durable state. It is a rule for `language-subset.md`.
+3. **The accumulator of `reduce`.** Not open: it is listed with the settled
+   outcomes above. The entry keeps its number because other documents cite
+   the entries after it by number.
 4. **Demand as a channel.** Section 5.5 lists it as accepted. Whether a kept
    output that nothing demands should be marked stale, so that a later reader
    can tell, is undecided.
@@ -2493,8 +2607,10 @@ prototype. Each entry states the assumption this document made.
 9. **Where provenance and origins are stored.** A kept output carries its
    template, the identities bound to its slots, and the compiled pattern's
    identity; a kept derived collection carries the origin of each position
-   (section 3.7). *Assumed:* beside the envelope's label map, keyed by output
-   path. The stored format is a host arrangement.
+   (section 3.7). `execution-and-storage.md` specifies both: §7.2 has the
+   provenance record of a kept output, held in the result envelope beside
+   the label map, and §7.3 has the origins of a kept derived collection,
+   held with its `enumerate` entry. The stored format is a host arrangement.
 10. **A record in a template literal.** Section 3.19 gives a record
     substitution a `value` slot over its subtree. If the language renders a
     record as JavaScript does, only its `shape` is observed, and the slot can
@@ -2503,8 +2619,42 @@ prototype. Each entry states the assumption this document made.
     compile error to declare state or bind a handler over plain values without
     the index, and assumes that where the compiler cannot tell (a record-typed
     input) an inline element fails its cone at run time. `language-subset.md`
-    owns the diagnostic and may prefer a type-level way to say "elements are
-    cells".
+    §4.4.1 has the static rule and its diagnostic
+    (`collection:shared-element-state`): it decides "plain value" from the
+    element type and from where the collection comes from, and treats an
+    object-typed element of a list read from an input or a cell as identified
+    by its cell. The run-time failure covers the inline record that rule
+    cannot see.
 12. **The cost of handler factory values.** Section 3.21 lists what moves to
     run time. Whether cycle detection and write classification stay useful when
     any cell handed to a handler value counts as written is for the prototype.
+13. **The severity of the report for a surface no element carries.** Section
+    4.4 has the compiler report a handler whose UI contract names a surface
+    that no element binding the handler sits under. *Assumed:* a warning. The
+    report shows that no event from this pattern's UI can satisfy the policy,
+    and an event can still reach the handler from another pattern, through an
+    exported stream. `language-subset.md` §10.5 has the catalog entry,
+    `cfc-flow:ui-contract`.
+14. **Label annotations with no rule here.** `language-subset.md` §8.1 lists
+    the keys `addIntegrity`, `exactCopyOf` and `projection` (the aliases
+    `AddIntegrity`, `RepresentsCurrentUser`, `AuthoredByCurrentUser`,
+    `ExactCopy`, `ProjectionPath`, `ProjectionOf` and `Projection`) beside
+    the keys section 4.4 places. The plan has no record for them and section
+    3 has no template rule. *Assumed:* the annotation stays in the schema of
+    the written path and the runtime applies it at the write as it does
+    today. It adds the `addIntegrity` atoms as a declared entry, which is
+    what section 3.12 relies on for an authorship atom. It verifies a copy or
+    projection claim and carries the source's label
+    (`verifyExactCopyRequirements` and `verifyProjectionRequirements` in
+    `runtime/runner/src/cfc/prepare.ts`). How each combines with the
+    template of a write edge is for the specification change.
+15. **Which annotation yields a write floor.** `Constraint` has a
+    `writeFloor` kind, and section 4.4 checks it on `I(template)` of a write
+    edge. No annotation key of `language-subset.md` §8.1 is named for it.
+    *Assumed:* `requiredIntegrity` on a path a body writes. That is the
+    specification's rule (§8.12.4.1, `08-12-store-label-monotonicity.md`:
+    "on a write target this declaration is a **floor**") and the key
+    `verifyWriteFloor` (`runtime/runner/src/cfc/prepare.ts`) reads today.
+    One annotation then yields a `requiredIntegrity` constraint over the
+    slots that read the path and a `writeFloor` constraint on the edges that
+    write it.
