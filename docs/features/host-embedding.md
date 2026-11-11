@@ -774,10 +774,14 @@ deployment's, so a runtime never adopts them from the server it talks to:
 `syncCidReferences` is one, taking `cid:` schema documents by reference from a
 server that offers them
 ([`EXPERIMENTAL_OPTIONS.md`](../development/EXPERIMENTAL_OPTIONS.md#synccidreferencesv1)).
-A host opts in one of two ways, by how it gets its runtime:
+A host opts in by how it gets its runtime:
 
 - A host that constructs the runtime passes the option in
   `RuntimeOptions.experimental`, as `experimental: { syncCidReferences: true }`.
+- A process whose runtime reads its experimental options from the environment
+  (`experimentalOptionsFromEnv`), as `cf` and other Deno hosts do, sets
+  `EXPERIMENTAL_SYNC_CID_REFERENCES=true`. The same variable is the labs
+  shell's build define, which bakes the opt-in into a shell built with it.
 - A host that runs the labs shell, as a WebView loading it from a deployment
   does, sets the shell's per-profile toggle before the shell loads:
   `localStorage` key `syncCidReferences` to `"true"`, which a user script can
@@ -787,8 +791,8 @@ A host opts in one of two ways, by how it gets its runtime:
   `commonfabric.syncCidReferences(true)` sets the same key. Either takes effect
   on the next runtime, so a host that sets it late reloads.
 
-No server setting reaches either: an environment variable does not reach a
-page, and a deployment's posture does not carry a client-side option.
+No server setting reaches any of these: a toolshed's environment does not reach
+a page, and a deployment's posture does not carry a client-side option.
 
 ---
 

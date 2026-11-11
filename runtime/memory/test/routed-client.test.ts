@@ -2931,6 +2931,27 @@ for (
         }),
     ],
     [
+      "a body answered under an id that is not `cid:`",
+      (hash: string) => (respond: (rest: Record<string, unknown>) => void) =>
+        respond({
+          ok: {
+            serverSeq: 1,
+            entities: [{
+              branch: "",
+              id: `of:${hash}`,
+              seq: 1,
+              document: {
+                value: {
+                  type: "string",
+                  title:
+                    "routed-cid-reference-unresolved-a body answered under an id that is not `cid:`",
+                },
+              },
+            }],
+          },
+        }),
+    ],
+    [
       "a fetched body that does not verify",
       (hash: string) => (respond: (rest: Record<string, unknown>) => void) =>
         respond({
@@ -3025,6 +3046,56 @@ Deno.test("a client that did not negotiate references refuses a sync carrying on
     });
     expect((refusal as Error | undefined)?.name).toBe("InvalidMessageError");
     expect(asked).toStrictEqual([]);
+  } finally {
+    await client.close();
+  }
+});
+
+Deno.test("a client hands on a sync no session claims without fetching for it", async () => {
+  setModernCellRepConfig(true);
+  // A response to no request this client made names a body by reference.
+  // No session takes it, so nothing is fetched, and the session the client
+  // does hold goes on as before.
+  const schema = { type: "string", title: "routed-cid-unclaimed" } as const;
+  const hash = internSchema(schema, true).taggedHashString;
+  const { p, asked } = referencingPeer(
+    hash,
+    { ...flags(), syncCidReferencesV1: true },
+    (respond) => respond({ ok: { serverSeq: 1, entities: [] } }),
+  );
+  const client = await connect({
+    transport: p.transport,
+    syncCidReferences: true,
+  });
+  try {
+    const session = await client.mount(
+      "did:key:z6Mk-routed-cid-unclaimed",
+      {},
+      namedSigner(identity.did()),
+    );
+    p.push({
+      type: "response",
+      requestId: "unclaimed",
+      ok: {
+        serverSeq: 1,
+        sync: {
+          type: "sync",
+          fromSeq: 0,
+          toSeq: 1,
+          upserts: [{
+            branch: "",
+            id: `cid:${hash}`,
+            seq: 1,
+            byReference: true,
+          }],
+          removes: [],
+        },
+      },
+    });
+    await client.delivered();
+    expect(asked).toStrictEqual([]);
+    expect(client.isConnected()).toBe(true);
+    expect(session.sessionId).toBe("session-ref");
   } finally {
     await client.close();
   }

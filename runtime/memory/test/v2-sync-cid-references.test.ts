@@ -837,25 +837,43 @@ describe("sync-cid-references", () => {
           },
         }]);
         await referenced.promise;
+        // The write names a schema of its own, so its effect needs a body
+        // too, which the hold fetches when it reaches it.
         await writer.transact({
           localSeq: 2,
           reads: { confirmed: [], pending: [] },
-          operations: [{
-            op: "set",
-            id: carrier,
-            value: { value: { x: linkWithSchemaRef(outerHash), second: true } },
-          }],
+          operations: [
+            {
+              op: "set",
+              id: `cid:${placeholderHash}`,
+              value: { value: placeholderSchema },
+            },
+            {
+              op: "set",
+              id: carrier,
+              value: {
+                value: {
+                  x: linkWithSchemaRef(outerHash),
+                  y: linkWithSchemaRef(placeholderHash),
+                },
+              },
+            },
+          ],
         });
         await effected.promise;
         release.resolve();
         await watching;
+        await watcherClient.delivered(watcher);
         const view = (await watcher.watchAddSync([])).view;
         expect(documentIn(view, carrier)?.value).toEqual({
           x: linkWithSchemaRef(outerHash),
-          second: true,
+          y: linkWithSchemaRef(placeholderHash),
         });
         expect(documentIn(view, `cid:${outerHash}`)).toEqual({
           value: outerSchema,
+        });
+        expect(documentIn(view, `cid:${placeholderHash}`)).toEqual({
+          value: placeholderSchema,
         });
       } finally {
         await writerClient.close();
@@ -1153,12 +1171,13 @@ describe("sync-cid-references", () => {
         async send(payload) {
           if (active === null) throw connectionError("connection refused");
           if (payload.includes('"graph.query"') && queries++ === 0) {
+            // The fetch's own send fails as its connection goes.
             const down = active;
             active = null;
             await down.close();
             disconnected(new Error("synthetic outage"));
             outage.resolve();
-            return;
+            throw connectionError("connection lost");
           }
           await active.send(payload);
         },

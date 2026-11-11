@@ -209,6 +209,8 @@ const cidReferenceHoldKey = (
  * lacks have arrived, in arrival order, with the hashes whose fetch failed.
  */
 type CidReferenceHold = {
+  /** The session the held syncs are for. */
+  readonly session: SyncPartSession;
   readonly queue: unknown[];
   readonly unresolvable: Set<string>;
 
@@ -835,9 +837,9 @@ export class Client {
   /** Whether both peers advertised `syncCidReferencesV1`. */
   #syncCidReferences = false;
   /**
-   * The syncs held for schema document bodies, by session (`#holdKey()`).
-   * A session with an entry has every later sync appended to it, so its
-   * frames still reach it in the order they arrived.
+   * The syncs held for schema document bodies, by session
+   * (`cidReferenceHoldKey()`). A session with an entry has every later sync
+   * appended to it, so its frames still reach it in the order they arrived.
    */
   #cidReferenceHolds = new Map<string, CidReferenceHold>();
   /**
@@ -2767,7 +2769,11 @@ export class Client {
    */
   #admitCidReferences(message: unknown): unknown {
     if (serverMessageSync(message) === undefined) return message;
-    const key = this.#holdKey(message);
+    const session = this.#messageSession(message);
+    // A sync no session claims answers no request this client holds, and is
+    // dropped as it is handed on, so nothing is fetched for it.
+    if (session === undefined) return message;
+    const key = cidReferenceHoldKey(session);
     const held = this.#cidReferenceHolds.get(key);
     if (held !== undefined) {
       // Checked now, so that a malformed sync fails as it arrives, as any
@@ -2782,6 +2788,7 @@ export class Client {
     );
     if (resolved.missing.length === 0) return resolved.message;
     const hold: CidReferenceHold = {
+      session,
       queue: [message],
       unresolvable: new Set(),
       fetched: new Set(),
@@ -2793,15 +2800,6 @@ export class Client {
   }
 
   /**
-   * Helper for the reference hold, which names the session `message` is for
-   * as a map key, or the empty string for a message no session claims.
-   */
-  #holdKey(message: unknown): string {
-    const session = this.#messageSession(message);
-    return session === undefined ? "" : cidReferenceHoldKey(session);
-  }
-
-  /**
    * Helper for the reference hold, which fetches the bodies `hashes` name
    * for the first held sync, then hands on what the hold can now resolve.
    */
@@ -2810,36 +2808,30 @@ export class Client {
     hold: CidReferenceHold,
     hashes: readonly string[],
   ): void {
-    const session = this.#messageSession(hold.queue[0]);
-    const fetched = session === undefined
-      ? Promise.resolve({
-        unresolved: new Set(hashes),
-        fetched: new Set<string>(),
-        lost: false,
-      })
-      : this.#fetchCidBodies(session, hashes);
-    void fetched.then(({ unresolved, fetched, lost }) => {
-      for (const hash of fetched) hold.fetched.add(hash);
-      if (lost) {
-        this.#dropCidReferenceHold(key, hold);
-        return;
-      }
-      if (unresolved.size > 0) {
-        // The server recorded these documents as delivered, and a dropped
-        // reference leaves them unheld, so the next restore declares what the
-        // session actually holds rather than leaving them elided.
-        const error = new Error(
-          "Schema documents named by reference could not be fetched",
-        );
-        for (const session of this.#spaces) {
-          if (cidReferenceHoldKey(session) === key) {
-            session.invalidateDelivery(error);
+    void this.#fetchCidBodies(hold.session, hashes).then(
+      ({ unresolved, fetched, lost }) => {
+        for (const hash of fetched) hold.fetched.add(hash);
+        if (lost) {
+          this.#dropCidReferenceHold(key, hold);
+          return;
+        }
+        if (unresolved.size > 0) {
+          // The server recorded these documents as delivered, and a dropped
+          // reference leaves them unheld, so the next restore declares what the
+          // session actually holds rather than leaving them elided.
+          const error = new Error(
+            "Schema documents named by reference could not be fetched",
+          );
+          for (const session of this.#spaces) {
+            if (cidReferenceHoldKey(session) === key) {
+              session.invalidateDelivery(error);
+            }
           }
         }
-      }
-      for (const hash of unresolved) hold.unresolvable.add(hash);
-      this.#drainCidReferenceHold(key, hold);
-    });
+        for (const hash of unresolved) hold.unresolvable.add(hash);
+        this.#drainCidReferenceHold(key, hold);
+      },
+    );
   }
 
   /**
@@ -3049,8 +3041,9 @@ export class Client {
         },
       });
       for (const entity of result.entities) {
-        // An entity that is not the `cid:` document it is read as fails the
-        // identity check below.
+        // Only a `cid:` document is a body: an entity under any other id is
+        // not one, whatever its content hashes to.
+        if (!entity.id.startsWith("cid:")) continue;
         const hash = entity.id.slice("cid:".length);
         const schema = fetchedSchemaDocument(hash, entity.document);
         if (schema === undefined) continue;
