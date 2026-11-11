@@ -235,6 +235,14 @@ type PoolWorker = {
    */
   sentWhileRetiring: AdmittedCommitNotice[];
 
+  /**
+   * The warm-marked commits the worker's host has been sent for which no
+   * wave has committed in their space since. A warm request is a one-shot
+   * signal nothing sends again, so a worker that fails owes these to its
+   * spaces' next placement.
+   */
+  warmOutstanding: AdmittedCommitNotice[];
+
   /** The spaces a client session opened on while `retiring`. */
   openedWhileRetiring: Set<string>;
 
@@ -500,17 +508,27 @@ export class ServingWorkerPool {
   /**
    * Collects the whole heap of each worker, once those that are starting
    * serve, and returns the memory each isolate still holds with the spaces
-   * placed on it. Rejects once the pool is closed, and unless
+   * placed on it, leaving out a worker that left the pool before it
+   * answered. Rejects once the pool is closed, and unless
    * `exposeGarbageCollector()` has run in this process.
    */
   async collectedMemory(): Promise<CollectedWorkerMemory[]> {
     const workers = await this.#startedWorkers();
-    return await Promise.all(
-      workers.map(async (worker) => ({
-        ...await worker.bridge.requestCollectedMemory(),
-        spaces: [...worker.spaces],
-      })),
+    const answers = await Promise.allSettled(
+      workers.map((worker) => worker.bridge.requestCollectedMemory()),
     );
+    const collected: CollectedWorkerMemory[] = [];
+    for (const [index, answer] of answers.entries()) {
+      const worker = workers[index];
+      if (answer.status === "fulfilled") {
+        collected.push({ ...answer.value, spaces: [...worker.spaces] });
+      } else if (!worker.gone) {
+        // A worker that left the pool meanwhile has no memory to report;
+        // any other refusal is the caller's to hear of.
+        throw answer.reason;
+      }
+    }
+    return collected;
   }
 
   /**
@@ -644,6 +662,25 @@ export class ServingWorkerPool {
     return this.#options.server.executionLeases.holderOf(space) !== undefined;
   }
 
+  /**
+   * Whether `space`'s store holds events no serving loop has delivered.
+   * A store that cannot be read counts as holding some, as it does for a
+   * host deciding whether to serve a space again after a park: the
+   * activation opens the store itself, and backs off if that fails too.
+   */
+  async #hasUndeliveredEvents(space: string): Promise<boolean> {
+    try {
+      return await this.#options.server.hasUndeliveredEvents(space);
+    } catch (error) {
+      logger.warn("undelivered-events-check-failed", () => [
+        `space ${space}: undelivered-events check failed after its worker ` +
+        "failed; placing it to check again",
+        error,
+      ]);
+      return true;
+    }
+  }
+
   /** Whether a session other than the serving loop's own is live on `space`. */
   #hasClientSessions(space: string): boolean {
     return this.#options.server.hasLiveSessionsForSpace(space, {
@@ -678,7 +715,7 @@ export class ServingWorkerPool {
       if (worker.retiring !== undefined && activates()) {
         worker.sentWhileRetiring.push(notice);
       }
-      worker.bridge.observer.commitAdmitted(notice);
+      this.#send(worker, notice);
       return;
     }
     if (!activates()) return;
@@ -784,10 +821,19 @@ export class ServingWorkerPool {
         observer.sessionChanged(event);
       }
     }
-    for (const notice of notices) observer.commitAdmitted(notice);
+    for (const notice of notices) this.#send(worker, notice);
     for (const space of spaces) {
       if (this.#hasClientSessions(space)) observer.sessionOpened(space);
     }
+  }
+
+  /**
+   * Sends `notice` to a serving worker's host, keeping a warm-marked one as
+   * outstanding until a wave commits in its space.
+   */
+  #send(worker: PoolWorker, notice: AdmittedCommitNotice): void {
+    if (notice.warm === true) worker.warmOutstanding.push(notice);
+    worker.bridge.observer.commitAdmitted(notice);
   }
 
   /** Starts a worker, which serves once its host answers `worker.init`. */
@@ -816,6 +862,9 @@ export class ServingWorkerPool {
         // fail at its first wave.
         onWaveCommitted: (space) => {
           this.#failures.delete(space);
+          started.warmOutstanding = started.warmOutstanding.filter((notice) =>
+            notice.space !== space
+          );
         },
         onOccupancy: (occupancy) => this.#onOccupancy(started, occupancy),
         onHeartbeat: (heapUsed) => this.#onHeartbeat(started, heapUsed),
@@ -839,6 +888,7 @@ export class ServingWorkerPool {
       heapUsed: 0,
       retiring: undefined,
       sentWhileRetiring: [],
+      warmOutstanding: [],
       openedWhileRetiring: new Set(),
       reportedWhileRetiring: false,
     };
@@ -995,9 +1045,13 @@ export class ServingWorkerPool {
       let diagnostics: ServingLoopDiagnostics | undefined;
       try {
         diagnostics = await worker.bridge.retireHost({ evenIfParked });
-      } catch {
-        // The worker failed with the request in flight, which the failure
-        // path has taken up.
+      } catch (error) {
+        // A worker that failed with the request in flight is the failure
+        // path's already. Otherwise the host's close threw part way, which
+        // leaves a host that may hold a lease and serves nothing, so the
+        // worker goes the way a failed one does.
+        worker.retiring = undefined;
+        this.#onWorkerFailed(worker, `closing its host failed: ${error}`);
         return false;
       }
       worker.retiring = undefined;
@@ -1077,8 +1131,9 @@ export class ServingWorkerPool {
    * Leaves the spaces placed on `worker`, which is gone, waiting until
    * `teardown` has settled, and then places each one that still has
    * something to serve: a commit among `owed` or admitted meanwhile that
-   * would start a tenure, or a client session that counts toward a
-   * placement (`WaitingSpace.sessionsPlace`).
+   * would start a tenure, a client session that counts toward a placement
+   * (`WaitingSpace.sessionsPlace`), or, where the worker failed, events its
+   * store still holds undelivered.
    */
   #resumeAfter(
     worker: PoolWorker,
@@ -1092,7 +1147,16 @@ export class ServingWorkerPool {
         "tearing down a serving worker failed",
         error,
       ]);
-    }).then(() => {
+    }).then(async () => {
+      // A failed worker may have taken events it never served, which the
+      // store still holds undelivered and nothing announces again.
+      const undelivered = failed && !this.#closed
+        ? new Set(
+          (await Promise.all(spaces.map(async (space) =>
+            await this.#hasUndeliveredEvents(space) ? [space] : []
+          ))).flat(),
+        )
+        : new Set<string>();
       this.#teardowns.delete(resumed);
       for (const space of spaces) {
         const waiting = this.#waiting.get(space);
@@ -1103,7 +1167,7 @@ export class ServingWorkerPool {
           continue;
         }
         if (
-          waiting.notices.length > 0 ||
+          waiting.notices.length > 0 || undelivered.has(space) ||
           (waiting.sessionsPlace && this.#hasClientSessions(space))
         ) {
           this.#place(space, waiting.notices);
@@ -1144,10 +1208,16 @@ export class ServingWorkerPool {
     if (worker.gone) return;
     if (killed) worker.lifetimeLock = undefined;
     // A commit the worker never took, since its host never served, is owed
-    // to the space's next placement like one sent to a host that closed.
-    const owed = [...worker.backlog, ...worker.sentWhileRetiring].filter(
-      (notice) =>
-        admissionActivates(notice, () => this.#hasClientSessions(notice.space)),
+    // to the space's next placement like one sent to a host that closed,
+    // and so is a warm request the worker took and committed no wave for.
+    const owed = [
+      ...new Set([
+        ...worker.warmOutstanding,
+        ...worker.backlog,
+        ...worker.sentWhileRetiring,
+      ]),
+    ].filter((notice) =>
+      admissionActivates(notice, () => this.#hasClientSessions(notice.space))
     );
     this.#forget(worker);
     this.#counts.failed += 1;

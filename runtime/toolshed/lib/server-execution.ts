@@ -329,7 +329,12 @@ export function servingWorkerPoolFromEnv(
     const raw = envGet(name);
     if (raw === undefined || raw === "") return undefined;
     const value = /^\d+$/.test(raw) ? Number.parseInt(raw, 10) : undefined;
-    if (value !== undefined && value >= least) return value;
+    // A run of digits long enough parses to `Infinity`, which is no count.
+    if (
+      value !== undefined && Number.isSafeInteger(value) && value >= least
+    ) {
+      return value;
+    }
     warn(
       `Server-execution v2: ignoring ${name}=${JSON.stringify(raw)} ` +
         `(expected an integer of ${least} or more); using the default`,

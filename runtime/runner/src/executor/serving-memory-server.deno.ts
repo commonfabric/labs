@@ -422,9 +422,14 @@ async function attachServingLoop(params: {
     const environmentMaxWorkers =
       Deno.env.get("SERVER_EXECUTION_MAX_WORKERS") ??
         "";
+    // A positive decimal integer, as the toolshed bootstrap reads it; a run
+    // of digits long enough parses to `Infinity`, which is no count.
+    const environmentCount = /^\d+$/.test(environmentMaxWorkers)
+      ? Number.parseInt(environmentMaxWorkers, 10)
+      : 0;
     const maxWorkers = requestedMaxWorkers ??
-      (/^[1-9]\d*$/.test(environmentMaxWorkers)
-        ? Number.parseInt(environmentMaxWorkers, 10)
+      (Number.isSafeInteger(environmentCount) && environmentCount > 0
+        ? environmentCount
         : undefined);
     let worker: ServingWorkerPool | undefined;
     try {

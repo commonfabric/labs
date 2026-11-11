@@ -7,7 +7,8 @@
  * internal origin is set, and one compiled-module cache and one compile
  * worker serve every space the worker serves. Loading this
  * module anywhere but in a Worker serves nothing; `lib/server-execution.ts`
- * starts one per served space.
+ * starts a `ServingWorkerPool` that runs it in Workers and places each
+ * served space on one.
  */
 
 import {

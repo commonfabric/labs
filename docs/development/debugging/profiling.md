@@ -292,8 +292,10 @@ deno run --allow-read skills/perf-investigation/scripts/attribute-measures.ts \
 ### Attribute refresh frequency to its inputs
 
 When serving runs in workers, `/api/health/serving-loop-realm` answers with
-the workers' `loggerCounts` and `timingStats` added up, with those of each
-worker that has closed; `/api/health/stats` reads only
+the running workers' `loggerCounts` added up and their `timingStats` mixed,
+each key's distribution weighted by its measurements, together with those of
+each worker closed in order; what a failed worker's realm logged is lost.
+`/api/health/stats` reads only
 the memory server's thread, and its `servingLoop` block holds executor counters
 rather than worker logger rows. The realm route asks each worker and waits for
 its turn, which is why it is not part of `stats`; with the loop on this thread

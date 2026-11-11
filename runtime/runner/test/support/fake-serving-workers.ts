@@ -320,6 +320,7 @@ type FakeSession = { sessionId: string; principal: string };
 export class FakeMemoryServer {
   readonly #executionLeases = new ExecutionLeases();
   readonly #sessions = new Map<string, FakeSession[]>();
+  readonly #undelivered = new Set<string>();
   #observer: ServerExecutionObserver | undefined;
   #openEngine: ((space: string) => Promise<Engine>) | undefined;
 
@@ -390,6 +391,16 @@ export class FakeMemoryServer {
 
   /** As `Server.noteExecutorCommit()`; a stand-in fans nothing out. */
   noteExecutorCommit(): void {}
+
+  /** As `Server.hasUndeliveredEvents()`, by what `holdEvents()` has said. */
+  hasUndeliveredEvents(space: string): Promise<boolean> {
+    return Promise.resolve(this.#undelivered.has(space));
+  }
+
+  /** Has `space`'s store hold events no serving loop has delivered. */
+  holdEvents(space: string): void {
+    this.#undelivered.add(space);
+  }
 
   /** Opens a session on `space`, as a client's `session.open` does. */
   openSession(space: string, sessionId: string, principal = "did:key:client") {

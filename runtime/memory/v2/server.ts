@@ -12484,6 +12484,16 @@ export class Server {
   }
 
   /**
+   * Whether `space`'s store holds stream events no serving loop has
+   * delivered, read from the store as it stands (serving-loop.md §1's second
+   * ACTIVE criterion). Rejects when the store cannot be opened or read.
+   */
+  async hasUndeliveredEvents(space: string): Promise<boolean> {
+    const engine = await this.#openEngine(space);
+    return Engine.selectPendingStreamEventDocs(engine).length > 0;
+  }
+
+  /**
    * The map from space to execution lease holder (serving-loop.md §2), which
    * this server's serving loop acquires and releases through. Server-internal
    * machinery and tests only, like `engineForSpace()`.

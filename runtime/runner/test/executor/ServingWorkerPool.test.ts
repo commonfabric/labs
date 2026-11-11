@@ -685,6 +685,59 @@ describe("ServingWorkerPool", () => {
       });
     });
 
+    describe("collectedMemory()", () => {
+      /** Has `worker`'s host report `heapUsed` as its collected memory. */
+      const collect = (worker: FakeServingWorker, heapUsed: number): void =>
+        worker.host.onRequest(
+          "host.collectedMemory",
+          () => ({ heapUsed, external: 0 }),
+        );
+
+      it("returns each worker's collected memory with the spaces placed on it", async () => {
+        const started = start({ spareWorkers: 1 });
+        await started.ready;
+        server.openSession(alpha, "session-a");
+        await clock.settle();
+        collect(workers()[0], 10);
+        collect(workers()[1], 20);
+        expect(await started.collectedMemory()).toEqual([
+          { heapUsed: 10, external: 0, spaces: [alpha] },
+          { heapUsed: 20, external: 0, spaces: [] },
+        ]);
+      });
+
+      it("leaves out a worker that left the pool before it answered", async () => {
+        const started = start();
+        server.openSession(alpha, "session-a");
+        server.openSession(beta, "session-b");
+        await clock.settle();
+        const [leaving, staying] = workers();
+        leaving.host.onRequest(
+          "host.collectedMemory",
+          () => new Promise<never>(() => {}),
+        );
+        collect(staying, 20);
+        const asked = started.collectedMemory();
+        await clock.settle();
+        leaving.fail();
+        expect(await asked).toEqual([
+          { heapUsed: 20, external: 0, spaces: [beta] },
+        ]);
+      });
+
+      it("rejects with a refusal from a worker that is still in the pool", async () => {
+        const started = start();
+        server.openSession(alpha, "session-a");
+        await clock.settle();
+        workers()[0].host.onRequest("host.collectedMemory", () => {
+          throw new Error("no collector exposed");
+        });
+        await expect(started.collectedMemory()).rejects.toThrow(
+          "no collector exposed",
+        );
+      });
+    });
+
     describe("close()", () => {
       it("closes each serving worker's host, terminates every worker, and removes the server's observer", async () => {
         const started = start({ spareWorkers: 1 });

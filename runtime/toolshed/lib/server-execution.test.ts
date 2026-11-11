@@ -271,6 +271,8 @@ describe("servingWorkerPoolFromEnv()", () => {
         ["SERVER_EXECUTION_SPARE_WORKERS", "1.5"],
         ["SERVER_EXECUTION_WORKER_HEAP_BUDGET_MB", "0"],
         ["SERVER_EXECUTION_WORKER_HEAP_BUDGET_MB", "2e3"],
+        // Long enough a run of digits to parse to `Infinity`.
+        ["SERVER_EXECUTION_MAX_WORKERS", "9".repeat(400)],
       ]
     ) {
       const warnings: string[] = [];

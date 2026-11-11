@@ -134,9 +134,11 @@ export const StatsResponseSchema = z.object({
   }).optional(),
   // The serving loop's counters (server-execution v2,
   // serving-loop.md §7) — present only in a process that runs the
-  // loop (the ON arm), on this thread or in its worker. Between a
-  // worker that failed and its replacement they are the failed
-  // worker's last counters, and no worker is serving.
+  // loop (the ON arm), on this thread or in its workers. In workers
+  // they are the counters each worker last posted, taken together
+  // with the last of each worker that has closed or failed. A worker
+  // that fails leaves the others serving; its own spaces are served
+  // again once they are placed on another.
   servingLoop: z.any().optional(),
 });
 

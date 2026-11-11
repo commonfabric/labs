@@ -118,9 +118,12 @@ execution observer and decides which worker serves which space:
   worker's tenure may hold a session on that space as a cross-space replica
   ("A deleted space" below).
 - A worker that reports an error, cannot start, or is killed by the watchdog
-  (§2) is taken out of the pool alone. Its leases are released once it is
+  (§2) is taken out of the pool alone, as is one whose host's close throws
+  part way. Its leases are released once it is
   gone, and each of its spaces is placed again, if it still has a client
-  session or a commit that would start a tenure arrived meanwhile, after the
+  session, its store holds undelivered events, the worker had taken a warm
+  request for it and committed no wave in it since, or a commit that would
+  start a tenure arrived meanwhile, after the
   failure-park backoff below counted per space across its workers'
   consecutive failures; a wave committed for the space clears the count, as
   does a worker of its own closing with nothing left to serve. A

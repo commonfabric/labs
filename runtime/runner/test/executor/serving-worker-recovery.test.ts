@@ -135,9 +135,13 @@ describe("serving-worker-recovery", () => {
       ]);
     });
 
-    it("has a commit that would start a tenure, admitted during the backoff, handed to the space's next worker", async () => {
+    it("has the warm commit it had taken, and one admitted during the backoff, handed to the space's next worker", async () => {
+      // A warm request is a one-shot signal, so the commit the failed worker
+      // took and committed no wave for is owed again.
+
       start();
-      server.admit(admittedNotice(space, { warm: true, seq: 1 }));
+      const taken = admittedNotice(space, { warm: true, seq: 1 });
+      server.admit(taken);
       await clock.settle();
       workers()[0].fail();
       await clock.settle();
@@ -147,7 +151,70 @@ describe("serving-worker-recovery", () => {
       await clock.settle();
       expect(workers()).toHaveLength(2);
       expect(workers()[1].receivedOf("observer.commitAdmitted")).toEqual([
+        { notice: taken },
         { notice: during },
+      ]);
+    });
+
+    it("leaves its space unplaced when a wave committed in the space after the warm commit it took", async () => {
+      using _commit = stub(
+        EngineWaveCommitSink.prototype,
+        "commitWave",
+        () => Promise.resolve({ ok: { seq: 2 } }),
+      );
+      server.openEngine = () => Promise.resolve({} as Engine.Engine);
+      start();
+      server.admit(admittedNotice(space, { warm: true, seq: 1 }));
+      await clock.settle();
+      const [worker] = workers();
+      await worker.host.request("sink.commitWave", {
+        sessionId: holderOf(worker),
+        localSeq: 1,
+        batch: encodeMemoryBoundary({ space } as unknown as FabricValue),
+      });
+      worker.fail();
+      await clock.tick(10);
+      await clock.settle();
+      expect(workers()).toHaveLength(1);
+    });
+
+    it("has its space placed again when the space's store holds undelivered events, with no session and no commit owed", async () => {
+      start();
+      server.openSession(space, "session-1");
+      await clock.settle();
+      server.closeSession(space, "session-1");
+      server.holdEvents(space);
+      workers()[0].fail();
+      await clock.tick(10);
+      await clock.settle();
+      expect(workers()).toHaveLength(2);
+    });
+
+    it("is what a worker counts as when its host's close throws, and its space is placed again at the next trigger", async () => {
+      fakes[Symbol.dispose]();
+      fakes = fakeServingWorkers((worker) => {
+        worker.host.onRequest("host.retire", () => {
+          throw new Error("a park failed while the host closed");
+        });
+        worker.serve();
+      });
+      const started = start();
+      server.openSession(space, "session-1");
+      await clock.settle();
+      server.closeSession(space, "session-1");
+      const [closing] = workers();
+      closing.report("vacant");
+      await clock.settle();
+      expect(closing.terminated).toBe(true);
+      expect(started.stats().workers).toMatchObject({ failed: 1, retired: 0 });
+
+      await clock.tick(10);
+      await clock.settle();
+      server.openSession(space, "session-2");
+      await clock.settle();
+      expect(workers()).toHaveLength(2);
+      expect(workers()[1].receivedOf("observer.sessionOpened")).toEqual([
+        { space },
       ]);
     });
 
