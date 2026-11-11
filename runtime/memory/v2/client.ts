@@ -210,6 +210,9 @@ type CidReferenceHold = {
   readonly queue: unknown[];
   readonly unresolvable: Set<string>;
   readonly epoch: number;
+
+  /** Resolved once the hold ends, its syncs handed on or discarded. */
+  readonly ended: PromiseWithResolvers<void>;
 };
 
 /**
@@ -1024,11 +1027,15 @@ export class Client {
 
   /**
    * Resolves once every server frame the transport held at the call has
-   * reached this client. What a frame goes on to do from there — a response resolving, a
-   * sync frame handed to its session — is microtask work after that.
+   * reached this client, and every sync then held for the schema documents
+   * it names has been handed on or discarded. What a frame goes on
+   * to do from there — a response resolving, a sync frame handed to its
+   * session — is microtask work after that.
    */
-  delivered(): Promise<void> {
-    return this.#transport.delivered?.() ?? Promise.resolve();
+  async delivered(): Promise<void> {
+    await this.#transport.delivered?.();
+    const holds = [...this.#cidReferenceHolds.values()];
+    await Promise.all(holds.map((hold) => hold.ended.promise));
   }
 
   /**
@@ -2733,6 +2740,7 @@ export class Client {
       queue: [message],
       unresolvable: new Set(),
       epoch: this.#connectionEpoch,
+      ended: Promise.withResolvers(),
     };
     this.#cidReferenceHolds.set(key, hold);
     this.#fetchHeldCidBodies(key, hold, resolved.missing);
@@ -2793,6 +2801,7 @@ export class Client {
   #dropCidReferenceHold(key: string, hold: CidReferenceHold): void {
     if (this.#cidReferenceHolds.get(key) !== hold) return;
     this.#cidReferenceHolds.delete(key);
+    hold.ended.resolve();
     const error = connectionError(
       "Memory connection closed while syncs waited for schema documents",
     );
@@ -2822,6 +2831,7 @@ export class Client {
         );
       } catch (cause) {
         this.#cidReferenceHolds.delete(key);
+        hold.ended.resolve();
         const error = new Error("Unable to parse memory server message", {
           cause,
         });
@@ -2838,6 +2848,7 @@ export class Client {
       this.#dispatchMessage(resolved.message);
     }
     this.#cidReferenceHolds.delete(key);
+    hold.ended.resolve();
   }
 
   /**
@@ -2855,6 +2866,7 @@ export class Client {
         session.invalidateDelivery(error);
       }
     }
+    for (const hold of this.#cidReferenceHolds.values()) hold.ended.resolve();
     this.#cidReferenceHolds.clear();
   }
 

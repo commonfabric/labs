@@ -396,6 +396,67 @@ describe("sync-cid-references", () => {
       }
     });
 
+    it("resolves `delivered()` only once a sync held for a body is handed on", async () => {
+      const server = new Server({
+        ...testSessionOpenServerOptions,
+        store: new URL("memory://sync-cid-references-delivered"),
+        subscriptionRefreshDelayMs: 0,
+      });
+      const referenced = Promise.withResolvers<void>();
+      const answers = Promise.withResolvers<void>();
+      const { transport } = countingTransport(
+        server,
+        () => {
+          acquireSchemaRegistryLease()();
+          referenced.resolve();
+        },
+        answers.promise,
+      );
+      const writerClient = await connect({ transport: loopback(server) });
+      const watcherClient = await connect({ transport });
+      const space = "did:key:z6Mk-sync-cid-references-delivered";
+      const carrier = "of:sync-cid-references-delivered";
+      try {
+        const writer = await writerClient.mount(
+          space,
+          {},
+          testSessionOpenAuthFactory,
+        );
+        await writer.transact({
+          localSeq: 1,
+          reads: { confirmed: [], pending: [] },
+          operations: closureOperations(carrier),
+        });
+        const watcher = await watcherClient.mount(
+          space,
+          {},
+          testSessionOpenAuthFactory,
+        );
+        const watching = watcher.watchSet([{
+          id: "carrier",
+          kind: "graph",
+          query: {
+            roots: [{ id: carrier, selector: { path: [], schema: false } }],
+          },
+        }]);
+        await referenced.promise;
+        const order: string[] = [];
+        const delivered = watcherClient.delivered().then(() => {
+          order.push("delivered");
+        });
+        await transport.delivered!();
+        order.push("answered");
+        answers.resolve();
+        await delivered;
+        await watching;
+        expect(order).toStrictEqual(["answered", "delivered"]);
+      } finally {
+        await writerClient.close();
+        await watcherClient.close();
+        await server.close();
+      }
+    });
+
     it("delivers again the syncs held when the connection fetching their bodies closes", async () => {
       const server = new Server({
         ...testSessionOpenServerOptions,
