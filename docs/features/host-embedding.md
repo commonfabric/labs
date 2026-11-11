@@ -615,7 +615,10 @@ deciding nothing, the same payload refused through `sendStrict()`, a refused
 handling resolving `sendStrict()` without `awaitHandling`, a reviewed grant
 changing a space's access list for an `OWNER` and refused for a member without
 one, the same grant changing nothing through `sendStrict()`, the event the
-worker delivers, and the requests it refuses.
+worker delivers, and the requests it refuses. It also sends from a worker that
+has loaded nothing of the pattern, to a stream nested two patterns deep, and
+covers what a failed load, a disposal, a second send, and an idle wait do to
+such a send.
 `runtime/runner/test/builder/space-access-change.test.ts` and
 `runtime/runner/test/executor-space-access-change.test.ts` cover a native
 control's grant and revoke on a client and on a serving runtime.

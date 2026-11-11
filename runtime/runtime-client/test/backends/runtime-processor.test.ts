@@ -6804,6 +6804,10 @@ describe("runtime-processor", () => {
       };
       const resolvedCell = {
         marker: "resolved-cell",
+        // A send resolves its target before its transaction, and finds the
+        // replica holds the document it reaches, so it loads nothing.
+        resolveAsCell: () => resolvedCell,
+        getAsNormalizedFullLink: () => ref,
         withTx: (candidateTx: unknown) => {
           expect(candidateTx).toBe(tx);
           return cellWithTx;
@@ -6814,6 +6818,11 @@ describe("runtime-processor", () => {
         resolvedCell,
         processor: buildProcessor({
           runtime: {
+            storageManager: {
+              open: () => ({
+                replica: { hasLocalDocumentCoverage: () => true },
+              }),
+            },
             edit: () => tx,
             prepareTxForCommit: (candidate: unknown) => {
               expect(candidate).toBe(tx);
