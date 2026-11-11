@@ -6173,12 +6173,22 @@ export class SchemaObjectTraverser<V extends FabricValue>
     // Opaque handles preserve their link directly. An unknown-valued
     // handle also preserves an ordinary link: transferring its address needs
     // no target read authority. Write redirects still resolve the local slot.
+    // A link into another space found at a position typed `unknown` without
+    // `asCell` is kept as well, by a read and by a query-shaped walk alike:
+    // it is the form an unknown-valued handle takes once a link's schema is
+    // stripped of its `asCell` (`sanitizeSchemaForLinks()`), and the position
+    // declares nothing of the target to read or select. A read there returns
+    // the reference without loading the target, and a reader that wants the
+    // target reads it under a schema of its own.
     const asCellValues = ContextualFlowControl.getAsCellValues(schema);
     const pointerLink = parseLink(doc.value, doc.address);
     if (
       ContextualFlowControl.getAsCellKind(asCellValues.at(0)) === "opaque" ||
       (isUnknownCellSchema(schema) && !isWriteRedirectLink(doc.value) &&
-        pointerLink !== undefined)
+        pointerLink !== undefined) ||
+      (pointerLink !== undefined &&
+        pointerLink.space !== doc.address.space &&
+        !isWriteRedirectLink(doc.value) && isUnknownValueSchema(schema))
     ) {
       const cellLink = getNextCellLink(this.tx, this.context, doc, schema);
       return { ok: this.objectCreator.createObject(cellLink, undefined) };
@@ -6577,14 +6587,22 @@ export function getJsonType(value: unknown): JSONSchemaTypes | null {
     : getPlainJsonType(value);
 }
 
-/** Returns whether a schema requests a cell handle with no declared value shape. */
-export function isUnknownCellSchema(schema: JSONSchema | undefined): boolean {
+/**
+ * Whether `schema`, its references resolved, types its position `unknown`,
+ * alone or among other types, whether or not it marks the position a cell.
+ */
+function isUnknownValueSchema(schema: JSONSchema | undefined): boolean {
   if (!isObjectOrArray(schema)) return false;
   const resolved = resolveSchemaRefsCanonical(schema);
   return isObjectOrArray(resolved) &&
     (resolved.type === "unknown" ||
-      (Array.isArray(resolved.type) && resolved.type.includes("unknown"))) &&
-    SchemaObjectTraverser.hasAsCell(resolved);
+      (Array.isArray(resolved.type) && resolved.type.includes("unknown")));
+}
+
+/** Returns whether a schema requests a cell handle with no declared value shape. */
+export function isUnknownCellSchema(schema: JSONSchema | undefined): boolean {
+  return isUnknownValueSchema(schema) && isObjectOrArray(schema) &&
+    SchemaObjectTraverser.hasAsCell(resolveSchemaRefsCanonical(schema));
 }
 
 /**
