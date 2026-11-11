@@ -2334,8 +2334,9 @@ export class PatternManager {
    * evaluates only compiled patterns therefore verifies the closures of the
    * pieces it creates without loading the compiler.
    *
-   * A read that fails loads the parser instead, so the verification it
-   * prepares runs as it would have, and reports the failure itself.
+   * Every closure is synchronized, whichever of them needs the parser. A read
+   * that fails loads the parser, so the verification it prepares runs as it
+   * would have, and reports the failure itself.
    */
   async prepareSourceClosureVerification(
     space: MemorySpace,
@@ -2343,19 +2344,14 @@ export class PatternManager {
   ): Promise<void> {
     const tx = this.#runtime.edit();
     try {
+      let parserNeeded = false;
       for (const identity of new Set(identities)) {
         if (PatternManager.isKeylessPatternIdentity(identity)) continue;
         if (!await this.#closureVerifiesWithoutParser(space, identity, tx)) {
-          await ensureCompilerStack();
-          return;
+          parserNeeded = true;
         }
       }
-    } catch (error) {
-      logger.warn("source-closure-preparation-read-failed", () => [
-        `space=${space}`,
-        error,
-      ]);
-      await ensureCompilerStack();
+      if (parserNeeded) await ensureCompilerStack();
     } finally {
       tx.abort("source closure verification prepared");
     }
@@ -2373,21 +2369,35 @@ export class PatternManager {
     identity: string,
     tx: IExtendedStorageTransaction,
   ): Promise<boolean> {
-    const closure = await loadSourceClosure(this.#runtime, space, identity, tx);
-    if (closure === undefined) return true;
-    if (!sourceClosureNeedsParser(this.#runtime, space, closure)) return true;
-    const runtimeVersion = await this.compileCacheRuntimeVersion({
-      patternCoverage: this.#patternCoverageFor() !== undefined,
-    });
-    if (runtimeVersion === undefined) return false;
-    await loadCompiledClosure(
-      this.#runtime,
-      space,
-      identity,
-      { runtimeVersion },
-      tx,
-    );
-    return !sourceClosureNeedsParser(this.#runtime, space, closure);
+    try {
+      const closure = await loadSourceClosure(
+        this.#runtime,
+        space,
+        identity,
+        tx,
+      );
+      if (closure === undefined) return true;
+      if (!sourceClosureNeedsParser(this.#runtime, space, closure)) return true;
+      const runtimeVersion = await this.compileCacheRuntimeVersion({
+        patternCoverage: this.#patternCoverageFor() !== undefined,
+      });
+      if (runtimeVersion === undefined) return false;
+      await loadCompiledClosure(
+        this.#runtime,
+        space,
+        identity,
+        { runtimeVersion },
+        tx,
+      );
+      return !sourceClosureNeedsParser(this.#runtime, space, closure);
+    } catch (error) {
+      logger.warn("source-closure-preparation-read-failed", () => [
+        `entry=${identity}`,
+        `space=${space}`,
+        error,
+      ]);
+      return false;
+    }
   }
 
   /**
@@ -2459,20 +2469,9 @@ export class PatternManager {
   ): Promise<void> {
     const tx = this.#runtime.edit();
     try {
-      const runtimeVersion = await this.compileCacheRuntimeVersion({
-        patternCoverage: this.#patternCoverageFor() !== undefined,
-      });
-      if (runtimeVersion !== undefined) {
-        await loadCompiledClosure(
-          this.#runtime,
-          space,
-          identity,
-          { runtimeVersion },
-          tx,
-        );
-        if (!this.#owesInheritedAuthority(space, identity, predecessors)) {
-          return;
-        }
+      await this.#readCompiledDelegations(space, identity, tx);
+      if (!this.#owesInheritedAuthority(space, identity, predecessors)) {
+        return;
       }
       await loadVerifiedSourceClosure(this.#runtime, space, identity, tx);
     } catch (error) {
@@ -2482,6 +2481,37 @@ export class PatternManager {
       ]);
     } finally {
       tx.abort("inherited authority read complete");
+    }
+  }
+
+  /**
+   * Helper for `#readStoredDelegations()`, which reads `identity`'s compiled
+   * closure for this runtime version in `tx`, registering the delegations it
+   * carries. A failed read is logged and registers nothing: the source closure
+   * is read on its own after it, and can still supply every grant.
+   */
+  async #readCompiledDelegations(
+    space: MemorySpace,
+    identity: string,
+    tx: IExtendedStorageTransaction,
+  ): Promise<void> {
+    try {
+      const runtimeVersion = await this.compileCacheRuntimeVersion({
+        patternCoverage: this.#patternCoverageFor() !== undefined,
+      });
+      if (runtimeVersion === undefined) return;
+      await loadCompiledClosure(
+        this.#runtime,
+        space,
+        identity,
+        { runtimeVersion },
+        tx,
+      );
+    } catch (error) {
+      logger.warn("inherited-authority-compiled-read-failed", () => [
+        `reading the compiled closure of ${identity} in ${space} failed`,
+        error,
+      ]);
     }
   }
 

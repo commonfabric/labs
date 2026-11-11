@@ -1444,6 +1444,27 @@ describe("module identity delegation", () => {
       expect(demands).toBe(0);
     });
 
+    it("registers the delegation the successor's source closure carries when reading its compiled closure fails", async () => {
+      await storeSuccessorSource();
+
+      {
+        using _failingCompiledRead = stub(
+          runtime.patternManager,
+          "compileCacheRuntimeVersion",
+          () => Promise.reject(new Error("injected compiled read failure")),
+        );
+        await runtime.patternManager.readInheritedAuthority(
+          space,
+          successor.identity,
+          [oldIdentity],
+        );
+      }
+
+      expect(
+        runtime.grantsModuleDelegation(space, successor.identity, oldIdentity),
+      ).toBe(true);
+    });
+
     it("asks for the compiler to read the source closure when the space holds no compiled closure for the successor", async () => {
       await storeSuccessorSource();
 

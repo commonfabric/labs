@@ -13970,24 +13970,29 @@ export class Runner {
     );
     this.#handlerResultPatterns.add(resultPattern);
     // A tracked child retains a verified source revision during its setup,
-    // which verifies the child's source closure synchronously.
-    const trackedChildIdentities = subPatternNodes(resultPattern).flatMap((
-      { module },
-    ) => {
+    // which verifies the child's source closure synchronously, in the space
+    // the child is placed in.
+    const trackedChildIdentities = new Map<MemorySpace, string[]>();
+    for (const { module } of subPatternNodes(resultPattern)) {
       const child = module.implementation;
       if (
         !isPattern(child) ||
         this.#childSystemOrigin(tx, patternResultCell, child) === undefined
       ) {
-        return [];
+        continue;
       }
       const ref = this.#runtime.patternManager.getArtifactEntryRef(child);
-      return ref === undefined ? [] : [ref.identity];
-    });
-    if (trackedChildIdentities.length > 0) {
+      if (ref === undefined) continue;
+      const space = module.targetSpace ?? patternResultCell.space;
+      trackedChildIdentities.set(space, [
+        ...(trackedChildIdentities.get(space) ?? []),
+        ref.identity,
+      ]);
+    }
+    for (const [space, identities] of trackedChildIdentities) {
       await this.#runtime.patternManager.prepareSourceClosureVerification(
-        patternResultCell.space,
-        trackedChildIdentities,
+        space,
+        identities,
       );
     }
     // navigateTo result patterns must start after the handler's transaction

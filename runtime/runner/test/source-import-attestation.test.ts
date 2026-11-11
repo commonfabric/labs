@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "../src/storage/cache.deno.ts";
+import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { Runtime, type RuntimeFetch } from "../src/runtime.ts";
 import type { Cell } from "../src/cell.ts";
 import type { CacheableModule, RuntimeProgram } from "../src/harness/types.ts";
@@ -27,6 +28,7 @@ import {
   resolveSpaceRootPattern,
 } from "../src/ensure-space-root.ts";
 import { getPieceSourceRevisions } from "../src/index.ts";
+import { newSharedServer } from "./memory-v2-test-utils.ts";
 
 await ensureCompilerStack();
 
@@ -333,8 +335,9 @@ describe("source import attestation", () => {
       }
     });
 
-    it("asks for the compiler when a module's compiled document carries no attested list", async () => {
-      const runtime = newRuntime();
+    /** Writes a module whose compiled document carries no attested list,
+     * as one written before the field existed, and returns its identity. */
+    const writeUnattestedModule = async (runtime: Runtime): Promise<string> => {
       const source = "export const revision = 'legacy';\n";
       const module: CacheableModule = {
         identity: computeModuleHashes({
@@ -355,15 +358,68 @@ describe("source import attestation", () => {
           }, tx);
         })).error,
       ).toBeUndefined();
+      return module.identity;
+    };
+
+    it("asks for the compiler when a module's compiled document carries no attested list", async () => {
+      const legacy = await writeUnattestedModule(newRuntime());
       const fresh = newRuntime();
 
       const demands = await compilerDemandsOf(() =>
-        fresh.patternManager.prepareSourceClosureVerification(space, [
-          module.identity,
-        ])
+        fresh.patternManager.prepareSourceClosureVerification(space, [legacy])
       );
 
       expect(demands).toBeGreaterThan(0);
+    });
+
+    it("synchronizes every closure it is given, also those after one that needs the parser", async () => {
+      // A runtime of its own session, so that only what the preparation
+      // synchronizes reaches its replica.
+      const server = newSharedServer();
+      const writerStorage = EmulatedStorageManager.connectTo(server, {
+        as: signer,
+      });
+      const freshStorage = EmulatedStorageManager.connectTo(server, {
+        as: signer,
+      });
+      const writer = new Runtime({
+        apiUrl: new URL("http://toolshed.test"),
+        storageManager: writerStorage,
+      });
+      const fresh = new Runtime({
+        apiUrl: new URL("http://toolshed.test"),
+        storageManager: freshStorage,
+      });
+      try {
+        const legacy = await writeUnattestedModule(writer);
+        const pattern = await writer.patternManager.compilePattern(program, {
+          space,
+        });
+        await writer.patternManager.flushCompileCacheWrites();
+        await writer.idle();
+        const entry = writer.patternManager.getArtifactEntryRef(pattern)!
+          .identity;
+
+        await fresh.patternManager.prepareSourceClosureVerification(space, [
+          legacy,
+          entry,
+        ]);
+
+        const tx = fresh.edit();
+        try {
+          expect(
+            readVerifiedSourceClosure(fresh, space, entry, tx)?.has(entry),
+          ).toBe(true);
+        } finally {
+          tx.abort();
+        }
+      } finally {
+        await fresh.dispose();
+        await writer.dispose();
+        await freshStorage.close();
+        await writerStorage.close();
+        await server.close();
+      }
     });
   });
 

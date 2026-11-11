@@ -135,9 +135,11 @@ export interface CacheableModule extends CompiledModuleArtifact {
   sourceImports?: readonly string[];
 
   /**
-   * The record surface of `js` (`deriveModuleRecordFields()`), when the module
-   * was read from a compiled document that already carries it. Given, a write
-   * stores it rather than parsing `js` again; `importSpecs` is the third field.
+   * The record surface of `js` (`deriveModuleRecordFields()`), together with
+   * `importSpecs`, when the module was read from a compiled document that
+   * already carries it. A write stores the surface rather than parsing `js`
+   * again only when all three of `exportNames`, `starTargetSpecs` and
+   * `importSpecs` are given.
    */
   exportNames?: readonly string[];
 
