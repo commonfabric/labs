@@ -19,6 +19,7 @@ import {
   topicTitle,
 } from "./topic-board-fixture.ts";
 import { BoardSession } from "./topic-board-session.ts";
+import { WORKER_RUN_TIMING_KEY } from "./topics-browser-measurement-core.ts";
 import {
   formatTopicsSample,
   measureTopicsReads,
@@ -643,16 +644,48 @@ describe("topics-browser-measurement", () => {
     });
 
     it("throws for an operation that runs nothing in the worker", async () => {
-      await session.page.evaluate(async () => {
+      // The counts are held still, so the operation reads as running nothing.
+      // A worker whose views the server serves may have timed no run yet in
+      // this session, which would leave its timing without the key the
+      // helper counts by and fail the helper for that reason instead. The
+      // held counts carry the key, as a worker's do once it has run once.
+      // The counts the client returns are frozen, so the held ones are a copy.
+      const separator = WORKER_RUN_TIMING_KEY.indexOf("/");
+      const runLogger = WORKER_RUN_TIMING_KEY.slice(0, separator);
+      const runKey = WORKER_RUN_TIMING_KEY.slice(separator + 1);
+      await session.page.evaluate(async (logger: string, key: string) => {
         const scope: ReplacementGlobal = globalThis;
         const rt = scope.commonfabric!.rt!;
         const counts = await rt.getLoggerCounts();
+        const held = {
+          ...counts,
+          timing: {
+            ...counts.timing,
+            [logger]: {
+              [key]: {
+                count: 1,
+                min: 0,
+                max: 0,
+                totalTime: 0,
+                average: 0,
+                p50: 0,
+                p95: 0,
+                lastTime: 0,
+                lastTimestamp: 0,
+                slowest: [],
+                cdf: [],
+                cdfSinceBaseline: null,
+              },
+              ...counts.timing[logger],
+            },
+          },
+        };
         const readCounts = rt.getLoggerCounts;
         scope.__cfRestoreLoggerCounts = () => {
           rt.getLoggerCounts = readCounts;
         };
-        rt.getLoggerCounts = () => Promise.resolve(counts);
-      });
+        rt.getLoggerCounts = () => Promise.resolve(held);
+      }, { args: [runLogger, runKey] });
       try {
         await expect(
           timeTopicsOperation(session.page, {

@@ -1989,6 +1989,18 @@ export interface RunSyncedOptions {
    */
   cfcTrustSnapshot?: TrustSnapshot;
 
+  /**
+   * The principal, and for a session-scoped piece the session, whose
+   * instance of a scoped piece the run addresses: the result cell's own
+   * document and every document its pattern reads are loaded, read and
+   * written as that principal's instances, and the owned setup transaction
+   * and its run stamp carry the identity. A serving runtime acting on a
+   * requester's piece held at a user or session scope supplies the
+   * requester's. Absent, the run addresses what the result cell's
+   * transaction or the runtime's own identity names.
+   */
+  scopeKeyIdentity?: ScopeKeyIdentity;
+
   /** See `RunnerRunOptions.attributeInitialization`. */
   attributeInitialization?: boolean;
 }
@@ -10300,12 +10312,14 @@ export class Runner {
     // pre-sync names what that node reads: `inputs` under the module's
     // argument schema.
     const presyncPattern = this.#resolveToPattern(pattern);
-    await resultCell.sync();
+    const identity = options?.scopeKeyIdentity;
+    await syncCellForIdentity(resultCell, identity);
 
     const synced = await this.#syncCellsForRunningPattern(
       resultCell,
       presyncPattern,
       inputs,
+      identity ?? cellTx(resultCell)?.tx.scopeKeyIdentity,
     );
 
     const transition = options?.pieceSourceTransition;
@@ -10419,10 +10433,12 @@ export class Runner {
           // that a later withdrawal can undo; bookkeeping commits to storage.
           // A receipt minted from an overlay seal would claim durability it
           // does not have, so re-stamping this one is not a naming change.
+          if (identity !== undefined) tx.tx.scopeKeyIdentity = identity;
           this.#runtime.stampServerRun(tx, {
             actionId: `piece-run-synced/${resultCell.sourceURI}`,
             kind: "bookkeeping",
             ...(options?.directCommit === true ? { directCommit: true } : {}),
+            ...(identity === undefined ? {} : { scopeKeyIdentity: identity }),
           });
           if (options?.cfcTrustSnapshot !== undefined) {
             setCfcTrustSnapshot(tx, options.cfcTrustSnapshot);
@@ -10514,7 +10530,12 @@ export class Runner {
         if (givenTx) {
           await this.#syncCellsForRunningPattern(resultCell, presyncPattern);
         } else {
-          await this.#prepareCellsForRunningPattern(resultCell, presyncPattern);
+          await this.#prepareCellsForRunningPattern(
+            resultCell,
+            presyncPattern,
+            undefined,
+            identity === undefined ? {} : { identity },
+          );
         }
       }
 
@@ -17731,7 +17752,13 @@ export function samePieceSourceSnapshot(
     left.revisionId === right.revisionId;
 }
 
-function normalizePieceSourceOrigin(
+/**
+ * The origin as a piece stores it, which a source transition writes: a rooted
+ * path becomes the absolute URL it names on the host serving the piece's
+ * space, keeping the string as entered as `recordedOrigin`; anything else is
+ * stored as it is.
+ */
+export function normalizePieceSourceOrigin(
   runtime: Runtime,
   resultCell: Cell<unknown>,
   origin: string | null,
