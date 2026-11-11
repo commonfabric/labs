@@ -157,9 +157,12 @@ describe("fabrichat-room-list", () => {
    * Starts a fresh client of the person's Home, recording every document a
    * space delivers to it and every space it is refused, from before Home is
    * brought up, and brings Home up, with the housekeeping that adopts the
-   * catalog's rooms unless `adopt` is false.
+   * catalog's rooms unless `adopt` is false. With `early`, the client
+   * subscribes to the chats view before Home is brought up, and holds it.
    */
-  async function bootClient({ adopt = true } = {}): Promise<Client> {
+  async function bootClient(
+    { adopt = true, early = false } = {},
+  ): Promise<Client> {
     const controller = await initializePiecesController({
       space: owner.did(),
       apiUrl: server.url,
@@ -186,6 +189,12 @@ describe("fabrichat-room-list", () => {
       (space, error) => refused.set(space, error),
     );
     const waits = new MemberWaits(controller.runtime.scheduler);
+    if (early) {
+      const root = await controller.getDefaultPattern(false);
+      if (root === undefined) throw new Error("The person has no Home");
+      root.key("chatManager").key("$VIEWS").key("chats").asSchema<Chats>(CHATS)
+        .sink(() => {});
+    }
     const home = (await controller.ensureDefaultPattern()).getCell();
     if (adopt) await controller.adoptCatalogRooms();
     await controller.runtime.idle();
@@ -370,6 +379,29 @@ describe("fabrichat-room-list", () => {
     it("receives no document from any room's space either", () => {
       const spaces = [...kept, deleted, revoked];
       expect(arrivedIn(client, spaces)).toEqual(spaces.map(() => 0));
+    });
+  });
+
+  //
+  // A client that subscribes before Home is brought up
+  //
+
+  describe("a fresh client subscribing to the list before Home is brought up", () => {
+    let client: Client;
+
+    beforeAll(async () => {
+      client = await bootClient({ early: true });
+      await listRooms(client, ROOMS + 2);
+    });
+
+    afterAll(async () => {
+      await client?.controller.dispose();
+    });
+
+    it("receives no document from any room's space, from bring-up on", () => {
+      const spaces = [...kept, deleted, revoked];
+      expect(arrivedIn(client, spaces)).toEqual(spaces.map(() => 0));
+      expect(heldIn(client, spaces)).toEqual(spaces.map(() => 0));
     });
   });
 
