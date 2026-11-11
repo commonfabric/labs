@@ -300,6 +300,11 @@ topic, and following a crossref to a sibling. Its `topic board` group charts
 each of those as its own series plus a `journey` series for the whole sequence,
 so a regression lands on the segment that caused it.
 
+The opened card is selected by the newest seeded topic's title. The board sorts
+cards by last activity, and topics with equal timestamps can put a topic without
+citations first. Only the newest seeded topics carry the citations navigation
+follows.
+
 Two further series in that group measure the Topics derivations rather than the
 navigation over them, for the browser tier of [the Topics computation
 plan](../plans/topics-computation-cost.md). Each charts a timed interval and
@@ -310,17 +315,16 @@ measurement.
 
 - `comment` is a warm update: sending a comment on an open topic, which moves
   that topic's comment count and its last activity. It runs against a board of
-  its own, in its own space, because sending a comment is a durable write that
-  makes the commented topic the board's first card, which would leave `crossref`
-  and `journey` opening a card with no citation to follow. Each iteration
+  its own, in its own space, so its durable writes leave the navigation
+  fixture's counts, activity, and card order unchanged. Each iteration
   comments on a topic that has none, so every iteration measures the same
   thing.
 - `backlink` opens the topic the most siblings cite and waits for every row the
   topic's backlink derivation produces. `crossref` cannot measure that: it
-  follows a citation outward from the board's first card, which is the newest
-  topic, and nothing cites the newest topic. The segment reaches its topic
-  through the shell's own navigation rather than by clicking, because a topic in
-  the middle of the board is on no card or link the page is showing.
+  follows a citation outward from the newest seeded topic, which nothing cites.
+  The segment reaches its topic through the shell's own navigation rather than
+  by clicking, because a topic in the middle of the board is on no card or link
+  the page is showing.
 
 Under server execution the serving runtime computes those derivations, and with
 web view-scoped replication on the page shows what it delivers without running
