@@ -2863,3 +2863,169 @@ Deno.test("a client fetches a schema that names a principal from the space that 
     await client.close();
   }
 });
+
+/**
+ * A scripted router for one space whose watch answers name the schema
+ * document `hash` by reference, with `offering` greeting each hello and
+ * `answer` answering each body fetch. Returns the peer and the ids each
+ * fetch asked for.
+ */
+function referencingPeer(
+  hash: string,
+  offering: ReturnType<typeof flags>,
+  answer: (respond: (rest: Record<string, unknown>) => void) => void,
+) {
+  const asked: string[] = [];
+  const p = peer(frame(hello(metadata(), offering)), (body, push) => {
+    const respond = (rest: Record<string, unknown>) =>
+      push({ type: "response", requestId: body.requestId, ...rest });
+    if (body.type === "connection.auth") {
+      respond({
+        ok: {
+          principal: String(body.statement).split("|")[0],
+          expiresAt: Math.floor(Date.now() / 1000) + 600,
+        },
+      });
+    } else if (body.type === "session.open") {
+      respond({
+        ok: { sessionId: "session-ref", sessionToken: "t", serverSeq: 0 },
+      });
+    } else if (body.type === "session.watch.set") {
+      respond({
+        ok: {
+          serverSeq: 1,
+          sync: {
+            type: "sync",
+            fromSeq: 0,
+            toSeq: 1,
+            upserts: [
+              { branch: "", id: `cid:${hash}`, seq: 1, byReference: true },
+              {
+                branch: "",
+                id: "of:routed-cid-reference-carrier",
+                seq: 1,
+                doc: { value: { carried: true } },
+              },
+            ],
+            removes: [],
+          },
+        },
+      });
+    } else if (body.type === "graph.query") {
+      for (const root of (body.query as { roots: { id: string }[] }).roots) {
+        asked.push(root.id);
+      }
+      answer(respond);
+    } else respond({ ok: {} });
+  });
+  return { p, asked };
+}
+
+for (
+  const [outcome, answerFor] of [
+    [
+      "a refused body fetch",
+      () => (respond: (rest: Record<string, unknown>) => void) =>
+        respond({
+          error: { name: "AuthorizationError", message: "refused" },
+        }),
+    ],
+    [
+      "a fetched body that does not verify",
+      (hash: string) => (respond: (rest: Record<string, unknown>) => void) =>
+        respond({
+          ok: {
+            serverSeq: 1,
+            entities: [{
+              branch: "",
+              id: `cid:${hash}`,
+              seq: 1,
+              document: { value: { type: "number", title: "forged" } },
+            }],
+          },
+        }),
+    ],
+  ] as const
+) {
+  Deno.test(`after ${outcome}, a client applies the frame without the reference`, async () => {
+    setModernCellRepConfig(true);
+    // The reference resolves to nothing, so the frame applies without it:
+    // the client's view holds the frame's other documents and not the schema
+    // document, which arrival validation then treats as any missing ref.
+    const schema = {
+      type: "string",
+      title: `routed-cid-reference-unresolved-${outcome}`,
+    } as const;
+    const hash = internSchema(schema, true).taggedHashString;
+    const { p, asked } = referencingPeer(
+      hash,
+      { ...flags(), syncCidReferencesV1: true },
+      answerFor(hash),
+    );
+    const client = await connect({
+      transport: p.transport,
+      syncCidReferences: true,
+    });
+    try {
+      const session = await client.mount(
+        "did:key:z6Mk-routed-cid-reference-unresolved",
+        {},
+        namedSigner(identity.did()),
+      );
+      const view = await session.watchSet([{
+        id: "schema",
+        kind: "graph" as const,
+        query: {
+          roots: [{
+            id: "of:routed-cid-reference-carrier",
+            selector: { path: [], schema: false },
+          }],
+        },
+      }]);
+      expect(asked).toStrictEqual([`cid:${hash}`]);
+      expect(view.entities.map((entity) => entity.id)).toStrictEqual([
+        "of:routed-cid-reference-carrier",
+      ]);
+    } finally {
+      await client.close();
+    }
+  });
+}
+
+Deno.test("a client that did not negotiate references refuses a sync carrying one", async () => {
+  setModernCellRepConfig(true);
+  const schema = { type: "string", title: "routed-cid-unnegotiated" } as const;
+  const hash = internSchema(schema, true).taggedHashString;
+  // The server offers nothing, and sends a reference anyway: the frame is
+  // refused as one the client cannot parse, and nothing of it is applied.
+  const { p, asked } = referencingPeer(
+    hash,
+    flags(),
+    (respond) => respond({ ok: { serverSeq: 1, entities: [] } }),
+  );
+  const client = await connect({ transport: p.transport });
+  try {
+    const session = await client.mount(
+      "did:key:z6Mk-routed-cid-unnegotiated",
+      {},
+      namedSigner(identity.did()),
+    );
+    let refusal: unknown;
+    await session.watchSet([{
+      id: "schema",
+      kind: "graph" as const,
+      query: {
+        roots: [{
+          id: "of:routed-cid-reference-carrier",
+          selector: { path: [], schema: false },
+        }],
+      },
+    }]).catch((error) => {
+      refusal = error;
+    });
+    expect((refusal as Error | undefined)?.name).toBe("InvalidMessageError");
+    expect(asked).toStrictEqual([]);
+  } finally {
+    await client.close();
+  }
+});

@@ -948,6 +948,114 @@ describe("sync-cid-references", () => {
     });
   });
 
+  describe("across a reconnect", () => {
+    it("renegotiates when a session reconnects from a server with its option off to one with it on", async () => {
+      // The same space's documents on two servers: the session first opens on
+      // one that offers no references, then reconnects to one that does, and
+      // takes references there.
+      const offServer = new Server({
+        ...testSessionOpenServerOptions,
+        store: new URL("memory://sync-cid-references-renegotiate-off"),
+        subscriptionRefreshDelayMs: 0,
+        syncCidReferences: false,
+      });
+      const onServer = new Server({
+        ...testSessionOpenServerOptions,
+        store: new URL("memory://sync-cid-references-renegotiate-on"),
+        subscriptionRefreshDelayMs: 0,
+      });
+      const space = "did:key:z6Mk-sync-cid-references-renegotiate";
+      const carrier = "of:sync-cid-references-renegotiate";
+      let references = 0;
+      let receiver = (_payload: string) => {};
+      let disconnected = (_error?: Error) => {};
+      let host = offServer;
+      const reach = (next: Server): Transport => {
+        const connection = loopback(next);
+        connection.setReceiver((payload) => {
+          if (payload.includes('"byReference":true')) references++;
+          receiver(payload);
+        });
+        return connection;
+      };
+      let active: Transport | null = reach(offServer);
+      const transport: Transport = {
+        async send(payload) {
+          if (active === null) throw connectionError("connection refused");
+          await active.send(payload);
+        },
+        close: () => active?.close() ?? Promise.resolve(),
+        reset() {
+          if (active === null) active = reach(host);
+        },
+        setReceiver(next) {
+          receiver = next;
+        },
+        setCloseReceiver(next) {
+          disconnected = next;
+        },
+      };
+      const writers = await Promise.all(
+        [offServer, onServer].map((server) =>
+          connect({ transport: loopback(server) })
+        ),
+      );
+      const watcherClient = await connect({
+        transport,
+        syncCidReferences: true,
+      });
+      try {
+        for (const writerClient of writers) {
+          const writer = await writerClient.mount(
+            space,
+            {},
+            testSessionOpenAuthFactory,
+          );
+          await writer.transact({
+            localSeq: 1,
+            reads: { confirmed: [], pending: [] },
+            operations: closureOperations(carrier),
+          });
+        }
+        const watcher = await watcherClient.mount(
+          space,
+          {},
+          testSessionOpenAuthFactory,
+        );
+        const before = await watcher.watchSet([{
+          id: "carrier",
+          kind: "graph",
+          query: {
+            roots: [{ id: carrier, selector: { path: [], schema: false } }],
+          },
+        }]);
+        const referencesBefore = references;
+        expect(documentIn(before, `cid:${outerHash}`)).toEqual({
+          value: outerSchema,
+        });
+
+        const down = active;
+        active = null;
+        await down.close();
+        disconnected(new Error("synthetic outage"));
+        host = onServer;
+        await watcherClient.restoreConnection();
+        const after = (await watcher.watchAddSync([])).view;
+
+        expect(referencesBefore).toBe(0);
+        expect(references).toBeGreaterThan(0);
+        expect(documentIn(after, `cid:${outerHash}`)).toEqual({
+          value: outerSchema,
+        });
+      } finally {
+        for (const writerClient of writers) await writerClient.close();
+        await watcherClient.close();
+        await offServer.close();
+        await onServer.close();
+      }
+    });
+  });
+
   describe("over a connection with one side off", () => {
     it("sends every body and no reference to a client that has not opted in", async () => {
       const upserts = await watchThrough(
