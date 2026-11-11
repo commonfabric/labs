@@ -12,6 +12,7 @@ import { isObjectNotArray } from "@commonfabric/js-values/types";
 import {
   isCfcLabelDocumentContent as isStoredLabelDocumentContent,
   isCfcLabelReference,
+  parseCfcLabelReference,
 } from "@commonfabric/memory/v2/cfc-stored-envelope";
 import { canonicalizeCfcLabel } from "./canonical.ts";
 import type { IFCLabel } from "./label-view-core.ts";
@@ -34,27 +35,13 @@ export const CFC_LABEL_INLINE_LIMIT = 128;
 
 const utf8 = new TextEncoder();
 
-const CID_PREFIX = "cid:";
-
 /**
- * Whether a stored entry's label is a reference rather than an inline label.
- * The check is the one every reader of a stored envelope holds to, so it
- * lives with the others in Memory's `v2/cfc-stored-envelope`.
+ * Whether a stored entry's label is a reference rather than an inline label,
+ * and the document hash a reference names. Every reader of a stored envelope
+ * holds to these, so they live with the other envelope checks in Memory's
+ * `v2/cfc-stored-envelope`.
  */
-export { isCfcLabelReference };
-
-/**
- * The document hash a label reference names, or `undefined` for a reference
- * outside the `cid:` namespace. The hash is the part after the prefix, the
- * form `schemaHash` carries and `cid:<hash>` documents are addressed by.
- */
-export const parseCfcLabelReference = (
-  reference: CfcLabelReference,
-): string | undefined =>
-  reference.$ref.startsWith(CID_PREFIX) &&
-    reference.$ref.length > CID_PREFIX.length
-    ? reference.$ref.slice(CID_PREFIX.length)
-    : undefined;
+export { isCfcLabelReference, parseCfcLabelReference };
 
 /**
  * Whether `value` has the shape of a label document's content: a plain

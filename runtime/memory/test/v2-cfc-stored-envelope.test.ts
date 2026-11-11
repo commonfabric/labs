@@ -10,6 +10,7 @@ import {
   isReadableStoredCfcEnvelope,
   isWellFormedLabelMetadataTemplateEntry,
   LABEL_METADATA_TEMPLATE_ORIGIN,
+  parseCfcLabelReference,
   storedCfcEnvelopeDefect,
 } from "@commonfabric/memory/v2/cfc-stored-envelope";
 
@@ -52,6 +53,17 @@ describe("cfc-stored-envelope", () => {
       expect(isCfcLabelReference({ $ref: 1 })).toBe(false);
       expect(isCfcLabelReference([{ $ref: "cid:abc" }])).toBe(false);
       expect(isCfcLabelReference(secret)).toBe(false);
+    });
+  });
+
+  describe("parseCfcLabelReference()", () => {
+    it("returns the hash after the `cid:` prefix", () => {
+      expect(parseCfcLabelReference({ $ref: "cid:abc" })).toBe("abc");
+    });
+
+    it("returns `undefined` for a reference outside the `cid:` namespace, or naming no hash", () => {
+      expect(parseCfcLabelReference({ $ref: "of:abc" })).toBeUndefined();
+      expect(parseCfcLabelReference({ $ref: "cid:" })).toBeUndefined();
     });
   });
 

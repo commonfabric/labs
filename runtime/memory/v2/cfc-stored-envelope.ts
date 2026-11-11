@@ -55,6 +55,21 @@ export const isCfcLabelReference = (
   isObjectNotArray(value) && typeof value.$ref === "string" &&
   Object.keys(value).length === 1;
 
+const CID_PREFIX = "cid:";
+
+/**
+ * The document hash a label reference names, or `undefined` for a reference
+ * outside the `cid:` namespace. The hash is the part after the prefix, the
+ * form `schemaHash` carries and `cid:<hash>` documents are addressed by.
+ */
+export const parseCfcLabelReference = (
+  reference: StoredCfcLabelReference,
+): string | undefined =>
+  reference.$ref.startsWith(CID_PREFIX) &&
+    reference.$ref.length > CID_PREFIX.length
+    ? reference.$ref.slice(CID_PREFIX.length)
+    : undefined;
+
 /**
  * A label as an envelope holds it inline, with clauses and atoms of type
  * `Leaf`. A type rather than an interface, so that a label of stored values
@@ -66,6 +81,20 @@ export type StoredInlineCfcLabel<Leaf = unknown> = {
 };
 
 const LABEL_MEMBERS: readonly string[] = ["confidentiality", "integrity"];
+
+/**
+ * Helper for {@link isInlineCfcLabelShape} and
+ * {@link isCfcLabelDocumentContent}, which returns whether `value` is a plain
+ * object whose every member is `confidentiality` or `integrity` holding an
+ * array, or `undefined` where `admitsUndefined` is `true`.
+ */
+const isLabelRecord = (value: unknown, admitsUndefined: boolean): boolean =>
+  isPlainObject(value) &&
+  Object.keys(value).every((key) =>
+    LABEL_MEMBERS.includes(key) &&
+    (Array.isArray(value[key]) ||
+      (admitsUndefined && value[key] === undefined))
+  );
 
 /**
  * Whether `value` has the shape of an inline label: a plain object whose
@@ -85,12 +114,7 @@ const LABEL_MEMBERS: readonly string[] = ["confidentiality", "integrity"];
  */
 export const isInlineCfcLabelShape = (
   value: unknown,
-): value is StoredInlineCfcLabel =>
-  isPlainObject(value) &&
-  Object.keys(value).every((key) =>
-    LABEL_MEMBERS.includes(key) &&
-    (value[key] === undefined || Array.isArray(value[key]))
-  );
+): value is StoredInlineCfcLabel => isLabelRecord(value, true);
 
 /**
  * Whether `value` has the shape of a label document's content, the value of
@@ -105,11 +129,7 @@ export const isInlineCfcLabelShape = (
  */
 export const isCfcLabelDocumentContent = (
   value: unknown,
-): value is StoredInlineCfcLabel =>
-  isPlainObject(value) &&
-  Object.keys(value).every((key) =>
-    LABEL_MEMBERS.includes(key) && Array.isArray(value[key])
-  );
+): value is StoredInlineCfcLabel => isLabelRecord(value, false);
 
 /**
  * The origin of a label-metadata population template entry, which the

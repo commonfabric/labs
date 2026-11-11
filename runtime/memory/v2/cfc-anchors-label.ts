@@ -20,6 +20,7 @@ import { taggedHashStringOf, valueEqual } from "@commonfabric/data-model";
 import {
   isCfcLabelDocumentContent,
   isCfcLabelReference,
+  parseCfcLabelReference,
   type StoredCfcEnvelope,
   type StoredCfcEnvelopeDefect,
   storedCfcEnvelopeDefect,
@@ -52,8 +53,6 @@ export const anchorsSchemaHash = (): string =>
 export const anchorsSchemaDocument = (): { value: FabricValue } => ({
   value: ANCHORS_SCHEMA,
 });
-
-const CID_PREFIX = "cid:";
 
 /** A stored document member, or `undefined` where the document has none. */
 type Stored = FabricValue | undefined;
@@ -208,10 +207,8 @@ const resolvedLabel = (
   labelDocument: (hash: string) => Stored,
 ): InlineLabel => {
   if (!isCfcLabelReference(label)) return label;
-  const resolved = label.$ref.length > CID_PREFIX.length &&
-      label.$ref.startsWith(CID_PREFIX)
-    ? labelDocument(label.$ref.slice(CID_PREFIX.length))
-    : undefined;
+  const hash = parseCfcLabelReference(label);
+  const resolved = hash === undefined ? undefined : labelDocument(hash);
   if (resolved === undefined) {
     throw new AnchorsLabelError(
       `the CFC envelope of ${holder} names a label document \`${label.$ref}\` the store does not hold`,
