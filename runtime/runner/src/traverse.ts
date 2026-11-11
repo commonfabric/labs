@@ -6173,25 +6173,33 @@ export class SchemaObjectTraverser<V extends FabricValue>
     // Opaque handles preserve their link directly. An unknown-valued
     // handle also preserves an ordinary link: transferring its address needs
     // no target read authority. Write redirects still resolve the local slot.
-    // A link into another space found at a position typed `unknown` without
-    // `asCell` is kept as well, by a read and by a query-shaped walk alike:
-    // it is the form an unknown-valued handle takes once a link's schema is
-    // stripped of its `asCell` (`sanitizeSchemaForLinks()`), and the position
-    // declares nothing of the target to read or select. A read there returns
-    // the reference without loading the target, and a reader that wants the
-    // target reads it under a schema of its own.
     const asCellValues = ContextualFlowControl.getAsCellValues(schema);
     const pointerLink = parseLink(doc.value, doc.address);
     if (
       ContextualFlowControl.getAsCellKind(asCellValues.at(0)) === "opaque" ||
       (isUnknownCellSchema(schema) && !isWriteRedirectLink(doc.value) &&
-        pointerLink !== undefined) ||
-      (pointerLink !== undefined &&
-        pointerLink.space !== doc.address.space &&
-        !isWriteRedirectLink(doc.value) && isUnknownValueSchema(schema))
+        pointerLink !== undefined)
     ) {
       const cellLink = getNextCellLink(this.tx, this.context, doc, schema);
       return { ok: this.objectCreator.createObject(cellLink, undefined) };
+    }
+    // A link into another space found at a position typed `unknown` without
+    // `asCell` is not followed, by a read or by a query-shaped walk: it is
+    // the form an unknown-valued handle takes once a link's schema is
+    // stripped of its `asCell` (`sanitizeSchemaForLinks()`), and the position
+    // declares nothing of the target to read or select. A read there answers
+    // the opaque presence an `unknown` position answers for whatever is
+    // there, naming the target as the link does, without loading it; a
+    // reader that reads through it loads the target then.
+    if (
+      pointerLink !== undefined && pointerLink.space !== doc.address.space &&
+      !isWriteRedirectLink(doc.value) && isUnknownValueSchema(schema)
+    ) {
+      const targetLink = getNextCellLink(this.tx, this.context, doc, schema);
+      return {
+        ok: this.objectCreator.createOpaquePresence?.(targetLink) ??
+          this.objectCreator.createObject(targetLink, undefined),
+      };
     }
 
     if (
