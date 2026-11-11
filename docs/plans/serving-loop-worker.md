@@ -149,14 +149,17 @@ that has seen a wave's commit reads event counters that include what that
 wave's drain counted, and a later full post, never older than an events post
 before it, replaces the merged block with everything else. The loop's own
 logger counts and timing statistics are each worker realm's own, so they
-cross on request (`ServingLoopHandle.diagnostics()`), added up across the
-workers (`diagnostics-merge.ts`: counts add, and a timing key's distribution
-is the mixture of the workers' distributions), and a request waits for each
-worker's turn: `/api/health/serving-loop-realm` is the route that asks, kept
-apart from `stats` so that a worker in a long settle, or one that is hung,
-delays only the caller who asked for the loggers. A worker that closes hands
-back what its realm logged, which stays in the sum; one that fails takes it
-along. A test that reads a refusal
+cross on request (`ServingLoopHandle.diagnostics()`), each serving worker's
+with those of the compile worker it starts under `compile-worker:` logger
+names (`servingLoopDiagnostics()`, a snapshot read without waiting on the
+compile worker), added up across the serving workers (`diagnostics-merge.ts`:
+counts add, and a timing key's distribution is the mixture of the workers'
+distributions), and a request waits for each serving worker's turn:
+`/api/health/serving-loop-realm` is the route that asks, kept apart from
+`stats` so that a worker in a long settle, or one that is hung, delays only
+the caller who asked for the loggers. A worker that closes hands back what
+its realm logged, which stays in the sum; one that fails takes it along. A
+test that reads a refusal
 the loop's own CFC gate logged asks the handle rather than its own process's
 loggers.
 

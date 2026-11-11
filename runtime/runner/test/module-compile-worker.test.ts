@@ -11,7 +11,10 @@ import {
   markDeterministicCompileFailure,
 } from "../src/harness/compile-failure.ts";
 import type { ModuleCompileRequest } from "../src/harness/module-compile.ts";
-import { ModuleCompileWorker } from "../src/harness/module-compile-worker.ts";
+import {
+  COMPILE_WORKER_LOGGER_PREFIX,
+  ModuleCompileWorker,
+} from "../src/harness/module-compile-worker.ts";
 import type { CacheableModule } from "../src/harness/types.ts";
 import {
   Runtime,
@@ -287,6 +290,94 @@ describe("ModuleCompileWorker", () => {
 
         expect(failure).toBeInstanceOf(CompilerError);
         expect(isDeterministicCompileFailure(failure)).toBe(true);
+      });
+    });
+
+    describe("diagnostics()", () => {
+      it("returns none before the first compile", () => {
+        expect(worker.diagnostics()).toEqual({
+          timingStats: {},
+          loggerCounts: {},
+        });
+      });
+
+      it("returns the worker realm's phase timings and log counts after a compile, under prefixed logger names", async () => {
+        await runtime(worker).harness.compileToRecordGraph(PROGRAM);
+
+        const { timingStats, loggerCounts } = worker.diagnostics();
+        const phases =
+          timingStats[`${COMPILE_WORKER_LOGGER_PREFIX}js-compiler`];
+        expect(phases?.["phase/emitFile"]?.count).toBeGreaterThan(0);
+        expect(phases?.["phase/createProgram"]?.count).toBeGreaterThan(0);
+        expect(
+          Object.values(loggerCounts).some((byKey) =>
+            Object.values(byKey).some((counts) => counts.total > 0)
+          ),
+        ).toBe(true);
+        for (
+          const name of [
+            ...Object.keys(timingStats),
+            ...Object.keys(loggerCounts),
+          ]
+        ) {
+          expect(name.startsWith(COMPILE_WORKER_LOGGER_PREFIX)).toBe(true);
+        }
+      });
+
+      it("puts the worker's timestamps on this realm's clock", async () => {
+        // A slow timing records when it ended on both clocks; moved onto
+        // this realm's, its `at` counts from this realm's time origin to the
+        // same instant its `epochMs` names.
+
+        await runtime(worker).harness.compileToRecordGraph(PROGRAM);
+
+        const slowest = worker.diagnostics().timingStats[
+          `${COMPILE_WORKER_LOGGER_PREFIX}js-compiler`
+        ]?.["phase/emitFile"]?.slowest ?? [];
+        expect(slowest.length).toBeGreaterThan(0);
+        for (const slow of slowest) {
+          expect(
+            Math.abs(performance.timeOrigin + slow.at - slow.epochMs),
+          ).toBeLessThan(50);
+        }
+      });
+
+      it("takes a snapshot from a compile that failed as well", async () => {
+        await rejectionOf(() =>
+          runtime(worker).harness.compileToRecordGraph(TYPE_ERROR_PROGRAM)
+        );
+
+        expect(
+          worker.diagnostics().timingStats[
+            `${COMPILE_WORKER_LOGGER_PREFIX}js-compiler`
+          ]?.["phase/createProgram"]?.count,
+        ).toBeGreaterThan(0);
+      });
+
+      it("keeps the latest diagnostics after its worker dies", async () => {
+        worker = new ModuleCompileWorker(DYING_WORKER);
+        await runtime(worker).harness.compileToRecordGraph(PROGRAM);
+        const latest = worker.diagnostics();
+        const dies: RuntimeProgram = {
+          main: "/dies.tsx",
+          files: [
+            { name: "/dies.tsx", contents: PROGRAM.files[0]!.contents },
+            PROGRAM.files[1]!,
+          ],
+        };
+
+        await rejectionOf(() =>
+          runtime(worker).harness.compileToRecordGraph(dies)
+        );
+        expect(worker.diagnostics()).toBe(latest);
+      });
+
+      it("keeps the latest diagnostics once the instance is closed", async () => {
+        await runtime(worker).harness.compileToRecordGraph(PROGRAM);
+        const latest = worker.diagnostics();
+        worker.close();
+
+        expect(worker.diagnostics()).toBe(latest);
       });
     });
 

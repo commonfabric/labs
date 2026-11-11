@@ -155,11 +155,13 @@ export const stats = createRoute({
 });
 
 /**
- * The serving loop's realm's own logger counts and timing statistics. With
- * the loop in workers, `/api/health/stats` reads this thread's loggers,
- * which hold none of the loop's; this route asks each worker and adds up
- * what they logged, so an answer waits for each worker's turn, which is why
- * it is not part of `stats`.
+ * The serving loop's realm's own logger counts and timing statistics, with
+ * those of the compile worker its serving runtimes compile in under
+ * `compile-worker:` logger names. With the loop in workers,
+ * `/api/health/stats` reads this thread's loggers, which hold none of the
+ * loop's; this route asks each worker and adds up what they logged, each
+ * with its own compile worker's, so an answer waits for each worker's turn,
+ * which is why it is not part of `stats`.
  */
 export const servingLoopRealm = createRoute({
   path: "/api/health/serving-loop-realm",
