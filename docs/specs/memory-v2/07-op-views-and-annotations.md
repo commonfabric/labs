@@ -407,7 +407,8 @@ Within the apply steps of §7.7.1:
    entry whose path is the field's path, a prefix of it, or beneath it, a `*`
    segment standing for any key. A label-metadata template entry is keyed
    against the stored document rather than the value, so it is never one of
-   these, even for a field named `cfc`. A label an entry names by document is read
+   these: not for a field that is the whole value, whose path is a prefix of
+   every path, and not for a field named `cfc`. A label an entry names by document is read
    from that document. Integrity is not taken. Where that confidentiality is
    not empty, the engine adds to the anchors document's envelope, for each
    moved anchor, an entry at the anchor's path, of origin `derived` and class

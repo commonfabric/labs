@@ -78,6 +78,32 @@ describe("cfc-anchors-label", () => {
         confidentialityOver([stored], ["cfc"], "of:field", () => undefined),
       ).toEqual(["field"]);
     });
+
+    it("returns no clause of a label-metadata template, for a field that is the whole value", () => {
+      // The root field's path is a prefix of every path, so every entry
+      // bears on it, and a template has to be left out by its origin.
+
+      const stored = {
+        version: 1,
+        schemaHash: "hash",
+        labelMap: {
+          version: 1,
+          entries: [
+            { path: ["body"], label: { confidentiality: ["field"] } },
+            {
+              path: ["cfc", "labels", "value", "confidentiality"],
+              origin: "label-metadata",
+              observes: "labelMetadata",
+              label: { confidentiality: ["template"] },
+            },
+          ],
+        },
+      };
+
+      expect(
+        confidentialityOver([stored], [], "of:field", () => undefined),
+      ).toEqual(["field"]);
+    });
   });
 
   describe("anchorsEnvelopeWith()", () => {

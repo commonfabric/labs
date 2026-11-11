@@ -185,8 +185,9 @@ export const confidentialityOver = (
       readableEnvelopeOf(envelope, holder)?.labelMap.entries ?? [];
     for (const entry of entries) {
       // A label-metadata template is keyed against the stored document, not
-      // the value, so its `["cfc", "labels", ...]` path is never a payload
-      // field's, a field named `cfc` included.
+      // the value, so it labels no field. Compared as a payload path,
+      // `["cfc", "labels", ...]` would bear on a field that is the whole
+      // value, whose path is a prefix of every path, and on one named `cfc`.
       if (isLabelMetadataTemplateEntry(entry)) continue;
       if (!bearsOn(entry.path, path)) continue;
       const label = resolvedLabel(entry.label, holder, labelDocument);
