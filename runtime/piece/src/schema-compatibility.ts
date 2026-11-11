@@ -2524,11 +2524,11 @@ function sourceAlternativeAcceptedBy(
  * update rather than risk accepting an incompatible one.
  *
  * A conjunct carrying only inert annotations ({@link isInertAnnotationKey})
- * constrains nothing, so a conjunction whose other conjuncts are all of that
- * kind accepts exactly what its one remaining conjunct accepts. When both
- * sides reduce that way, typically a union branch beside a base holding
- * nothing but the union's description, the two remaining conjuncts are
- * compared as whole contracts, under the evolution policy the caller allows.
+ * or definitions constrains no value. A conjunction with one remaining
+ * conjunct accepts exactly what that conjunct accepts. When both sides reduce
+ * that way, typically a union branch beside its description and definitions,
+ * the two remaining conjuncts are compared as whole contracts, under the
+ * evolution policy the caller allows.
  * Any other conjunction is proved conjunct by conjunct without that policy:
  * a field one conjunct leaves unnamed may be contracted by another.
  */
@@ -2566,7 +2566,8 @@ function schemaConjunctionSubsetIssue(
 /**
  * The one conjunct of `conjunction` that constrains values, or its only
  * conjunct, or `undefined` when neither exists. A conjunct constrains nothing
- * when it is `true` or every key it carries is an inert annotation.
+ * when it is `true` or every key it carries is an inert annotation or a
+ * definitions key. Definitions resolve through the context's owning roots.
  */
 function soleConstrainingConjunct(
   conjunction: readonly JSONSchema[],
@@ -2575,7 +2576,10 @@ function soleConstrainingConjunct(
   const constraining = conjunction.filter((conjunct) =>
     conjunct !== true &&
     (conjunct === false ||
-      !Object.keys(conjunct).every(isInertAnnotationKey))
+      !Object.keys(conjunct).every((key) =>
+        isInertAnnotationKey(key) ||
+        DEFS_KEYS.some((defsKey) => defsKey === key)
+      ))
   );
   return constraining.length === 1 ? constraining[0] : undefined;
 }
