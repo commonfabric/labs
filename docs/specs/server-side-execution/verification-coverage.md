@@ -4136,7 +4136,9 @@ Delta 2026-11-01 — stage L (the lease in memory,
   admission-side criteria and by nothing less, its events routed to that
   worker alone, an access-list commit announced to the others, a vacant host
   closed unless it holds something again by the time it is asked, a commit
-  sent meanwhile handed to the space's next worker, spares, the cap on
+  sent meanwhile handed to the space's next worker, a session live at the
+  close placing nothing where one opened meanwhile does, a space leased to
+  another holder left unplaced, spares, the cap on
   workers and on parked workers, the heap budget, and the counters of
   several workers taken together. `executor/serving-worker-recovery.test.ts`
   holds a failed worker's spaces alone to the per-space backoff.

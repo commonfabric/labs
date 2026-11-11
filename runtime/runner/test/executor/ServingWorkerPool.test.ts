@@ -168,6 +168,25 @@ describe("ServingWorkerPool", () => {
       expect(workers()).toHaveLength(0);
     });
 
+    it("starts no worker for a space whose lease another holder has", async () => {
+      const started = start();
+      expect(server.executionLeases.acquire(alpha, "did:key:rival#elsewhere"))
+        .toBe(true);
+      server.openSession(alpha, "session-1");
+      server.admit(admittedNotice(alpha, { warm: true }));
+      await clock.settle();
+      expect(workers()).toHaveLength(0);
+      await expect(
+        started.runLifecycleVerb(alpha, { name: "upload", request: {} }),
+      ).rejects.toThrow(SpaceNotServedError);
+      expect(workers()).toHaveLength(0);
+
+      server.executionLeases.release(alpha, "did:key:rival#elsewhere");
+      server.openSession(alpha, "session-2");
+      await clock.settle();
+      expect(workers()).toHaveLength(1);
+    });
+
     it("gives each space a worker of its own", async () => {
       const started = start();
       server.openSession(alpha, "session-a");
@@ -347,11 +366,35 @@ describe("ServingWorkerPool", () => {
       expect(started.stats().workers.retired).toBe(1);
     });
 
-    it("places a space again once its worker has closed while a client session is live on it", async () => {
+    it("leaves a space unplaced whose host closed with a client session live, until another session opens", async () => {
+      // A host that holds nothing while a session is live has turned the
+      // session's tenure down, so the session starts no worker after it.
+
       start();
       server.openSession(alpha, "session-1");
       await clock.settle();
       workers()[0].report("vacant");
+      await clock.settle();
+      expect(workers()[0].terminated).toBe(true);
+      expect(workers()).toHaveLength(1);
+
+      server.openSession(alpha, "session-2");
+      await clock.settle();
+      expect(workers()).toHaveLength(2);
+      expect(workers()[1].receivedOf("observer.sessionOpened")).toEqual([
+        { space: alpha },
+      ]);
+    });
+
+    it("places a space again for a client session that opened while its worker was closing", async () => {
+      start();
+      server.admit(admittedNotice(alpha, { warm: true }));
+      await clock.settle();
+      workers()[0].report("vacant");
+      // The report crosses, and the request to close is on its way, when the
+      // session opens.
+      await Promise.resolve();
+      server.openSession(alpha, "session-1");
       await clock.settle();
       expect(workers()[0].terminated).toBe(true);
       expect(workers()).toHaveLength(2);
@@ -613,6 +656,32 @@ describe("ServingWorkerPool", () => {
           total: 4,
           executor: { total: 4 },
         });
+      });
+
+      it("counts a worker once that closed while another's answer was awaited", async () => {
+        const started = start();
+        server.admit(admittedNotice(alpha, { warm: true }));
+        server.admit(admittedNotice(beta, { warm: true }));
+        await clock.settle();
+        const [closing, slow] = workers();
+        const logged = (total: number) => ({
+          loggerCounts: { total } as never,
+          timingStats: {},
+        });
+        closing.diagnostics = logged(2);
+        const slowAnswer = Promise.withResolvers<
+          ReturnType<typeof logged>
+        >();
+        slow.host.onRequest("host.diagnostics", () => slowAnswer.promise);
+
+        const asked = started.diagnostics();
+        await clock.settle();
+        closing.report("vacant");
+        await clock.settle();
+        expect(closing.terminated).toBe(true);
+        slowAnswer.resolve(logged(3));
+
+        expect((await asked).loggerCounts).toEqual({ total: 5 });
       });
     });
 

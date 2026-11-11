@@ -97,8 +97,16 @@ execution observer and decides which worker serves which space:
   as it handles the request, after every message sent ahead of it, so a
   trigger already on its way keeps the worker; a commit that would start a
   tenure, sent while the request is in flight, is kept for the space's next
-  placement. Once the host has closed, the worker is terminated, the space is
-  placed nowhere, and its next trigger places it on a fresh worker.
+  placement, and so is a client session that opened then. Once the host has
+  closed, the worker is terminated, the space is placed nowhere, and its
+  next trigger places it on a fresh worker. A client session that was live
+  when its space's host closed holding nothing places nothing by itself: the
+  host turned that session's tenure down, as it does for a deleted space.
+- A space whose lease another holder on the memory server has is placed on
+  no worker and its lifecycle verbs are refused as not served, since that
+  holder serves it (§2) and a worker's acquire would be refused. The pool
+  finds a lease only on a space it has placed nowhere, where its own
+  workers' leases are released, so any holder there is a rival.
 - The pool keeps at most `maxParkedRuntimes` workers whose hosts report
   `parked`, closing the longest-parked beyond that, and with a heap budget
   (`heapBudgetBytes`; `SERVER_EXECUTION_WORKER_HEAP_BUDGET_MB`, default none)

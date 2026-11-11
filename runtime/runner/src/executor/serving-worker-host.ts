@@ -235,6 +235,9 @@ type PoolWorker = {
    */
   sentWhileRetiring: AdmittedCommitNotice[];
 
+  /** The spaces a client session opened on while `retiring`. */
+  openedWhileRetiring: Set<string>;
+
   /** Whether the host said what it holds while `retiring`. */
   reportedWhileRetiring: boolean;
 };
@@ -246,6 +249,16 @@ type WaitingSpace = {
 
   /** Whether the space's last worker failed. */
   failed: boolean;
+
+  /**
+   * Whether a client session on the space places it again once the wait
+   * ends: one opened since the worker's host was asked to close, or any
+   * live one where the worker failed. A session that was live when a host
+   * closed holding nothing is one whose tenure that host turned down, as it
+   * does while another holder has the space's lease, and it does not place
+   * the space on worker after worker.
+   */
+  sessionsPlace: boolean;
 
   /** Settles once the space has been placed again or left unplaced. */
   resumed: Promise<void>;
@@ -470,12 +483,16 @@ export class ServingWorkerPool {
     const answers = await Promise.allSettled(
       workers.map((worker) => worker.bridge.requestDiagnostics()),
     );
+    // A worker that left the pool while another's answer was awaited is in
+    // the closed hosts' sum already, with what its realm logged last.
     return mergeServingLoopDiagnostics([
       ...(this.#closedDiagnostics === undefined
         ? []
         : [this.#closedDiagnostics]),
-      ...answers.flatMap((answer) =>
-        answer.status === "fulfilled" ? [answer.value] : []
+      ...answers.flatMap((answer, index) =>
+        answer.status === "fulfilled" && !workers[index].gone
+          ? [answer.value]
+          : []
       ),
     ]);
   }
@@ -501,7 +518,8 @@ export class ServingWorkerPool {
    * placing the space first if it is on none: a verb is an activation
    * trigger of its own. Throws {@link SpaceNotServedError} once the pool is
    * closed, while the space waits for a successor to a worker that failed,
-   * and when the worker it is placed on cannot start.
+   * when another holder on this memory server has the space's lease, and
+   * when the worker it is placed on cannot start.
    */
   async runLifecycleVerb(
     space: MemorySpace,
@@ -515,7 +533,11 @@ export class ServingWorkerPool {
         await waiting.resumed;
         continue;
       }
-      const worker = this.#placements.get(space) ?? this.#place(space, []);
+      const placed = this.#placements.get(space);
+      if (placed === undefined && this.#leasedElsewhere(space)) {
+        throw new SpaceNotServedError(space);
+      }
+      const worker = placed ?? this.#place(space, []);
       if (worker.retiring !== undefined) {
         await worker.retiring;
         continue;
@@ -610,6 +632,18 @@ export class ServingWorkerPool {
     return worker?.serving === true ? worker : undefined;
   }
 
+  /**
+   * Whether another holder has `space`'s lease. A space is placed nowhere
+   * only once the leases of the worker it was on are released, so a holder
+   * found then is a rival on this memory server, which serves the space
+   * (serving-loop.md §2). The pool leaves it the space, as a host leaves a
+   * space parked on a rival's lease, and starts no worker a rival's lease
+   * would refuse.
+   */
+  #leasedElsewhere(space: string): boolean {
+    return this.#options.server.executionLeases.holderOf(space) !== undefined;
+  }
+
   /** Whether a session other than the serving loop's own is live on `space`. */
   #hasClientSessions(space: string): boolean {
     return this.#options.server.hasLiveSessionsForSpace(space, {
@@ -650,7 +684,9 @@ export class ServingWorkerPool {
     if (!activates()) return;
     const waiting = this.#waiting.get(notice.space);
     if (waiting !== undefined) waiting.notices.push(notice);
-    else this.#place(notice.space, [notice]);
+    else if (!this.#leasedElsewhere(notice.space)) {
+      this.#place(notice.space, [notice]);
+    }
   }
 
   /**
@@ -664,12 +700,16 @@ export class ServingWorkerPool {
     if (worker !== undefined) {
       // A worker not yet serving is told of its spaces' sessions as it
       // starts to (`#introduce()`).
-      if (worker.serving) worker.bridge.observer.sessionOpened(space);
+      if (!worker.serving) return;
+      if (worker.retiring !== undefined) worker.openedWhileRetiring.add(space);
+      worker.bridge.observer.sessionOpened(space);
       return;
     }
+    if (!this.#hasClientSessions(space)) return;
     // A space between workers is weighed again once its wait ends.
-    if (this.#waiting.has(space) || !this.#hasClientSessions(space)) return;
-    this.#place(space, []);
+    const waiting = this.#waiting.get(space);
+    if (waiting !== undefined) waiting.sessionsPlace = true;
+    else if (!this.#leasedElsewhere(space)) this.#place(space, []);
   }
 
   /**
@@ -799,6 +839,7 @@ export class ServingWorkerPool {
       heapUsed: 0,
       retiring: undefined,
       sentWhileRetiring: [],
+      openedWhileRetiring: new Set(),
       reportedWhileRetiring: false,
     };
     started.watchdog = this.#watch(started, intervalMs);
@@ -949,6 +990,7 @@ export class ServingWorkerPool {
       return;
     }
     worker.reportedWhileRetiring = false;
+    worker.openedWhileRetiring.clear();
     worker.retiring = (async () => {
       let diagnostics: ServingLoopDiagnostics | undefined;
       try {
@@ -1035,7 +1077,8 @@ export class ServingWorkerPool {
    * Leaves the spaces placed on `worker`, which is gone, waiting until
    * `teardown` has settled, and then places each one that still has
    * something to serve: a commit among `owed` or admitted meanwhile that
-   * would start a tenure, or a live client session.
+   * would start a tenure, or a client session that counts toward a
+   * placement (`WaitingSpace.sessionsPlace`).
    */
   #resumeAfter(
     worker: PoolWorker,
@@ -1054,8 +1097,15 @@ export class ServingWorkerPool {
       for (const space of spaces) {
         const waiting = this.#waiting.get(space);
         this.#waiting.delete(space);
-        if (this.#closed || waiting === undefined) continue;
-        if (waiting.notices.length > 0 || this.#hasClientSessions(space)) {
+        if (
+          this.#closed || waiting === undefined || this.#leasedElsewhere(space)
+        ) {
+          continue;
+        }
+        if (
+          waiting.notices.length > 0 ||
+          (waiting.sessionsPlace && this.#hasClientSessions(space))
+        ) {
           this.#place(space, waiting.notices);
         }
       }
@@ -1067,6 +1117,7 @@ export class ServingWorkerPool {
       this.#waiting.set(space, {
         notices: owed.filter((notice) => notice.space === space),
         failed,
+        sessionsPlace: failed || worker.openedWhileRetiring.has(space),
         resumed,
       });
     }

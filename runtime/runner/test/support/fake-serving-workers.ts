@@ -77,6 +77,7 @@ export class FakeServingWorker implements PortLike {
   #terminated = false;
   #occupancy: HostOccupancy = "vacant";
   #finalStats: ServingLoopStats = emptyServingLoopStats();
+  #diagnostics: ServingLoopDiagnostics = NO_DIAGNOSTICS;
   #hostCloses = 0;
 
   /** Constructs an instance whose host answers nothing until told to. */
@@ -97,7 +98,7 @@ export class FakeServingWorker implements PortLike {
       this.#hostCloses += 1;
     });
     this.#host.onRequest("host.stats", () => this.#finalStats);
-    this.#host.onRequest("host.diagnostics", () => NO_DIAGNOSTICS);
+    this.#host.onRequest("host.diagnostics", () => this.#diagnostics);
     this.#host.onRequest("host.retire", ({ evenIfParked }) => {
       if (
         this.#occupancy === "busy" ||
@@ -105,7 +106,7 @@ export class FakeServingWorker implements PortLike {
       ) {
         return null;
       }
-      return { stats: this.#finalStats, diagnostics: NO_DIAGNOSTICS };
+      return { stats: this.#finalStats, diagnostics: this.#diagnostics };
     });
   }
 
@@ -157,6 +158,18 @@ export class FakeServingWorker implements PortLike {
 
   set finalStats(stats: ServingLoopStats) {
     this.#finalStats = stats;
+  }
+
+  /**
+   * What the host's realm logged, which it reports on request and hands
+   * back as its last on retiring.
+   */
+  get diagnostics(): ServingLoopDiagnostics {
+    return this.#diagnostics;
+  }
+
+  set diagnostics(diagnostics: ServingLoopDiagnostics) {
+    this.#diagnostics = diagnostics;
   }
 
   /** How many times the pool asked the host to close outright. */
