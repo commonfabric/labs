@@ -491,8 +491,11 @@ export class ServingWorkerPool {
     const answers = await Promise.allSettled(
       workers.map((worker) => worker.bridge.requestDiagnostics()),
     );
-    // A worker that left the pool while another's answer was awaited is in
-    // the closed hosts' sum already, with what its realm logged last.
+    // A worker that left the pool while another's answer was awaited is left
+    // out, so the result is of the pool as it is now. One whose host closed
+    // in order is in the closed hosts' sum already, with what its realm
+    // logged last, and one that failed took what its realm logged with it,
+    // as it would have had it failed before it was asked.
     return mergeServingLoopDiagnostics([
       ...(this.#closedDiagnostics === undefined
         ? []
@@ -691,7 +694,9 @@ export class ServingWorkerPool {
   /**
    * The server's `commitAdmitted`: the commit goes to the worker its space
    * is placed on, and a commit that would start a tenure in a space placed
-   * nowhere places it (serving-loop.md §1's admission-side hook).
+   * nowhere places it (serving-loop.md §1's admission-side hook), unless
+   * another holder has the space's lease (`#leasedElsewhere()`). A commit
+   * for a space between workers is kept for its next placement.
    */
   #onCommitAdmitted(notice: AdmittedCommitNotice): void {
     if (this.#closed) return;
@@ -728,7 +733,8 @@ export class ServingWorkerPool {
 
   /**
    * The server's `sessionOpened`: a first client session on a space placed
-   * nowhere places it; one on a placed space is the worker's host's to
+   * nowhere places it, unless another holder has the space's lease
+   * (`#leasedElsewhere()`); one on a placed space is the worker's host's to
    * weigh.
    */
   #onSessionOpened(space: string): void {
