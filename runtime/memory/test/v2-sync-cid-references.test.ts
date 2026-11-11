@@ -240,7 +240,8 @@ const watchRaw = async (
 
 /**
  * Installs the closure and a carrier of it in a space of `server`, watches
- * the carrier from a client that opts in to references when `optedIn`, and
+ * the carrier from a client that opts in to references when `optedIn` and
+ * leaves the option unset otherwise, and
  * returns how many references and `graph.query` requests crossed, and how
  * many schema documents the client's view holds with their bodies.
  */
@@ -251,10 +252,9 @@ const watchThrough = async (
 ): Promise<{ references: number; queries: number; bodies: number }> => {
   const { counts, transport } = countingTransport(server);
   const writerClient = await connect({ transport: loopback(server) });
-  const watcherClient = await connect({
-    transport,
-    syncCidReferences: optedIn,
-  });
+  const watcherClient = await connect(
+    optedIn ? { transport, syncCidReferences: true } : { transport },
+  );
   const space = `did:key:z6Mk-sync-cid-references-${name}`;
   const carrier = `of:sync-cid-references-${name}`;
   try {
