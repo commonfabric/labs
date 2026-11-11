@@ -165,6 +165,27 @@ states, which hosts apply through `profileOwnership()`. It can be called where
 `principalOf()` can; in a handler, a profile or name document still loading
 withdraws the handler, which runs again once it arrives.
 
+## Whom a value's own cell represents
+
+`writtenPrincipalOf(target)` returns the principal `target`'s value's own cell
+represents: the one principal that the label of the cell a write to `target`
+lands in names at its root as the one the value represents, read in the form
+the runtime writes, and only when no claim anywhere in that label names anyone
+else. The value must be the whole of that cell, and the cell must not hold a
+link to a value elsewhere: a value at a path within a document reads with that
+document's label, which says whom the document represents, and a link stored
+in the cell leads to a value it does not hold. Otherwise, and for a `target`
+of `undefined`, it returns `undefined`. The label says nothing of who pointed
+`target` at that cell, since the links on the way, write redirects among them,
+are followed; a profile's owner-protected fields keep theirs from being
+repointed. A write declared
+`RepresentsCurrentUser`, as a profile's `setPicture` is, labels the value with
+the principal it acts for, so `profileFace()` in
+`patterns/system/profile-face/profile-face.ts` compares it with
+`profileOwnerOf()` to decide a profile's face. It is the rule
+`writtenPrincipalAt()` in `runtime/runner/src/written-principal.ts` applies for
+a host, and it can be called where `principalOf()` can.
+
 `resultOwnerOf(target, field)` reads no label: it names, as `space/id`, the
 pattern whose result the document `target` is in back-links, when that
 result's own `field` is that document, or returns `undefined` otherwise, for

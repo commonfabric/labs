@@ -1531,6 +1531,26 @@ export type MemoryProtocolFlags = {
   patternLifecycle?: boolean;
 
   /**
+   * Server capability: the `pattern.lifecycle` verbs this server runs, while
+   * it advertises `patternLifecycle`, take an origin — the `follow` verb, and
+   * `origin` on `setsrc` (04-protocol.md §4.3.10). Build-inherent, so a
+   * server of this version always advertises it. Absent (an older server)
+   * parses to false: such a server refuses `follow` unread and drops a
+   * `setsrc` origin, detaching the piece, so a client sends neither.
+   */
+  patternLifecycleOrigins?: boolean;
+
+  /**
+   * Server capability: the `setsrc` and `follow` verbs this server runs take
+   * `scope`, the scope a piece is addressed at, and change the requester's
+   * instance of a piece held at a user or session scope (04-protocol.md
+   * §4.3.10). Build-inherent. Absent (an older server) parses to false: such
+   * a server ignores `scope` and changes the piece's space instance, so a
+   * client sends no scoped request.
+   */
+  patternLifecycleScopes?: boolean;
+
+  /**
    * Server capability: the server runs `served` requests (04-protocol.md
    * §4.3.12), the crossings one serving process sends the process that owns
    * the target space. Advertised exactly while the deployment has a served
@@ -1618,6 +1638,8 @@ export type WireMemoryProtocolFlags = {
   elidedVerdicts?: boolean;
   sessionReportV1?: boolean;
   patternLifecycle?: boolean;
+  patternLifecycleOrigins?: boolean;
+  patternLifecycleScopes?: boolean;
   servedRequests?: boolean;
   spaceInvites?: boolean;
   instanceNameMark?: boolean;
@@ -2477,7 +2499,11 @@ export type EventAttentionResolveResult = {
 export const PATTERN_LIFECYCLE_MAX_BYTES = 8 * 1024 * 1024;
 
 /** A pattern-lifecycle verb that a serving deployment runs on request. */
-export type PatternLifecycleVerb = "upload" | "instantiate" | "setsrc";
+export type PatternLifecycleVerb =
+  | "upload"
+  | "instantiate"
+  | "setsrc"
+  | "follow";
 
 /**
  * A request to run a pattern-lifecycle verb in the session's space, as the
@@ -3075,6 +3101,10 @@ export const getMemoryProtocolFlags = (): MemoryProtocolFlags => ({
   // Build-inherent: this build's server records a space's instance-naming
   // mark and admits sessions and commits by it (INV-16).
   instanceNameMark: true,
+  // Build-inherent: this build's lifecycle verbs take an origin.
+  patternLifecycleOrigins: true,
+  // Build-inherent: this build's `setsrc` and `follow` take a scope.
+  patternLifecycleScopes: true,
   // Configuration rather than build-inherent: a `Server` advertises each
   // from what it was given (`Server.memoryProtocolFlags()`).
   patternLifecycle: false,
@@ -3332,6 +3362,22 @@ export const parseMemoryProtocolFlags = (
     return null;
   }
 
+  const patternLifecycleOrigins = value.patternLifecycleOrigins;
+  if (
+    patternLifecycleOrigins !== undefined &&
+    typeof patternLifecycleOrigins !== "boolean"
+  ) {
+    return null;
+  }
+
+  const patternLifecycleScopes = value.patternLifecycleScopes;
+  if (
+    patternLifecycleScopes !== undefined &&
+    typeof patternLifecycleScopes !== "boolean"
+  ) {
+    return null;
+  }
+
   const servedRequests = value.servedRequests;
   if (servedRequests !== undefined && typeof servedRequests !== "boolean") {
     return null;
@@ -3436,6 +3482,12 @@ export const parseMemoryProtocolFlags = (
     // Absent (an older server) parses to false: the server records no mark
     // and admits a declaring session's commits without one.
     instanceNameMark: instanceNameMark === true,
+    // Absent (an older server) parses to false: a client then sends neither
+    // `follow` nor a `setsrc` origin.
+    patternLifecycleOrigins: patternLifecycleOrigins === true,
+    // Absent (an older server) parses to false: a client then sends no
+    // scoped `setsrc` or `follow`.
+    patternLifecycleScopes: patternLifecycleScopes === true,
     // Absent (an older server) parses to false: a client then finds the
     // links out of a space by reading what it synced.
     syncCrossingsV1: syncCrossingsV1 === true,
@@ -3493,6 +3545,8 @@ export const wireMemoryProtocolFlags = (
   elidedVerdicts: flags.elidedVerdicts,
   sessionReportV1: flags.sessionReportV1,
   patternLifecycle: flags.patternLifecycle,
+  patternLifecycleOrigins: flags.patternLifecycleOrigins,
+  patternLifecycleScopes: flags.patternLifecycleScopes,
   servedRequests: flags.servedRequests,
   spaceInvites: flags.spaceInvites,
   instanceNameMark: flags.instanceNameMark,

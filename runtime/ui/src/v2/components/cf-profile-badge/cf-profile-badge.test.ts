@@ -86,6 +86,7 @@ function resolvedInSpace(
       },
     }),
     asSchema: () => ({
+      key: () => faceField(undefined),
       subscribe: (cb: (val: unknown, label?: unknown) => void) => {
         cb({ name: "Ada" }, representsPrincipalLabel(OWNER_DID));
         delivered.resolve();
@@ -195,12 +196,54 @@ function navResolvedCell(
     id: () => opts.id ?? "fid1:piece",
     runtime: runtimeWithOtherRoot,
     asSchema: () => ({
+      key: () => faceField(undefined),
       subscribe: (cb: (val: unknown) => void) => {
         cb({ name: "Ada" });
         return () => {};
       },
     }),
     getCfcLabel: () => Promise.resolve(undefined),
+  };
+}
+
+/**
+ * A handle on the cell holding one field of a profile's face: it resolves to
+ * itself, and its subscription delivers `value` with `label`. `id` tells two
+ * fields apart, and `delivered` resolves once the subscription has delivered.
+ */
+function faceField(value: unknown, label?: unknown, id = "of:face") {
+  const delivered = deferred<void>();
+  const cell = {
+    ref: () => ({ space: "did:key:zSpace", id, path: [] }),
+    space: () => "did:key:zSpace",
+    id: () => id,
+    runtime: runtimeWithOtherRoot,
+    resolveAsCellWithWriteTarget: () =>
+      Promise.resolve({ cell, writeTarget: cell }),
+    subscribe: (
+      cb: (
+        val: unknown,
+        label?: unknown,
+        delivery?: { cfcLabelCurrent: boolean },
+      ) => void,
+    ) => {
+      cb(value, label, { cfcLabelCurrent: true });
+      delivered.resolve();
+      return () => {};
+    },
+    delivered: delivered.promise,
+  };
+  return cell;
+}
+
+/** The label a write of a face field by `subject` stores on its cell. */
+function writtenBy(subject: string) {
+  return {
+    version: 1,
+    entries: [{
+      path: [],
+      label: { integrity: [{ kind: "represents-principal", subject }] },
+    }],
   };
 }
 
@@ -416,6 +459,7 @@ describe("CFProfileBadge", () => {
       const resolvedCell = {
         ref: () => ({ path: [] }),
         asSchema: () => ({
+          key: () => faceField(undefined),
           subscribe: () => {
             subscribeCount++;
             return () => {};
@@ -456,6 +500,7 @@ describe("CFProfileBadge", () => {
         id: () => "fid1:piece",
         runtime: runtimeWithOtherRoot,
         asSchema: () => ({
+          key: () => faceField(undefined),
           subscribe: (cb: (val: unknown) => void) => {
             subscribeCount++;
             cb({ name: "Ada", avatar: undefined });
@@ -578,6 +623,7 @@ describe("CFProfileBadge", () => {
         id: () => "fid1:piece",
         runtime: runtimeWithOtherRoot,
         asSchema: () => ({
+          key: () => faceField(undefined),
           subscribe: (cb: (val: unknown, label?: unknown) => void) => {
             deliver = cb;
             return () => {};
@@ -628,6 +674,7 @@ describe("CFProfileBadge", () => {
         id: () => "fid1:piece",
         runtime: runtimeWithOtherRoot,
         asSchema: () => ({
+          key: () => faceField(undefined),
           subscribe: (cb: (val: unknown, label?: unknown) => void) => {
             deliver = cb;
             return () => {};
@@ -1214,9 +1261,104 @@ describe("CFProfileBadge", () => {
     });
   });
 
-  describe("profileDisplayFromValue", () => {
+  describe("face", () => {
+    const VISITOR_DID =
+      "did:key:z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH";
     const picture = new FabricBytes(new Uint8Array([0x89, 0x50, 0x4e, 0x47]));
 
+    /**
+     * The face a badge draws for a profile whose label names `owner`, and
+     * whose picture and avatar cells hold what `fields` says, each as its
+     * value and the label of its cell. The profile's label is the one the
+     * worker read with its value only when `current`.
+     */
+    async function faceOf(
+      owner: string | undefined,
+      fields: Record<"picture" | "avatar", [unknown, unknown]>,
+      current = true,
+    ) {
+      const cells = {
+        picture: faceField(...fields.picture, "of:picture"),
+        avatar: faceField(...fields.avatar, "of:avatar"),
+      };
+      const badge = badgeOver({
+        ref: () => ({ path: [] }),
+        space: () => "did:key:zSpace",
+        id: () => "fid1:piece",
+        runtime: runtimeWithOtherRoot,
+        asSchema: () => ({
+          key: (field: "picture" | "avatar") => cells[field],
+          subscribe: (
+            cb: (
+              val: unknown,
+              label?: unknown,
+              delivery?: { cfcLabelCurrent: boolean },
+            ) => void,
+          ) => {
+            cb(
+              { name: "Ada" },
+              owner === undefined ? undefined : representsPrincipalLabel(owner),
+              { cfcLabelCurrent: current },
+            );
+            return () => {};
+          },
+        }),
+      });
+      await badge.accessForTestingOnly.resolve();
+      await Promise.all([cells.picture.delivered, cells.avatar.delivered]);
+      // The fakes answer through settled promises, so one zero-delay turn
+      // finishes every resolve the face observation started.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      return badge.accessForTestingOnly.face;
+    }
+
+    it("draws the picture its owner set", async () => {
+      expect(
+        await faceOf(OWNER_DID, {
+          picture: [picture, writtenBy(OWNER_DID)],
+          avatar: ["🦊", writtenBy(OWNER_DID)],
+        }),
+      ).toEqual({ picture, avatar: undefined });
+    });
+
+    it("draws the owner's avatar in place of a picture someone else set", async () => {
+      expect(
+        await faceOf(OWNER_DID, {
+          picture: [picture, writtenBy(VISITOR_DID)],
+          avatar: [" 🦊 ", writtenBy(OWNER_DID)],
+        }),
+      ).toEqual({ picture: undefined, avatar: "🦊" });
+    });
+
+    it("draws neither a picture stored without a label nor an avatar someone else set", async () => {
+      expect(
+        await faceOf(OWNER_DID, {
+          picture: [picture, undefined],
+          avatar: ["🦊", writtenBy(VISITOR_DID)],
+        }),
+      ).toEqual({ picture: undefined, avatar: undefined });
+    });
+
+    it("draws no face while the profile's label is not the one the worker read with its value", async () => {
+      expect(
+        await faceOf(OWNER_DID, {
+          picture: [picture, writtenBy(OWNER_DID)],
+          avatar: ["🦊", writtenBy(OWNER_DID)],
+        }, false),
+      ).toEqual({ picture: undefined, avatar: undefined });
+    });
+
+    it("draws no face for a profile whose label names no one", async () => {
+      expect(
+        await faceOf(undefined, {
+          picture: [picture, writtenBy(OWNER_DID)],
+          avatar: ["🦊", writtenBy(OWNER_DID)],
+        }),
+      ).toEqual({ picture: undefined, avatar: undefined });
+    });
+  });
+
+  describe("profileDisplayFromValue", () => {
     it("prefers the profile's name field over the cell [NAME]", () => {
       // On main, profile-home's [NAME] is the static placeholder "Profile"
       // (profile-home.tsx:303); the editable `name` field is the real name.
@@ -1225,47 +1367,16 @@ describe("CFProfileBadge", () => {
         name: "Ben",
         avatar: "https://example.com/ben.png",
       };
-      expect(profileDisplayFromValue(val)).toEqual({
-        name: "Ben",
-        picture: undefined,
-        avatar: "https://example.com/ben.png",
-      });
+      expect(profileDisplayFromValue(val)).toEqual({ name: "Ben" });
     });
 
     it("falls back to the cell [NAME] when the name field is blank", () => {
       const val = { [NAME]: "Ada Lovelace", name: "  ", avatar: "🦊" };
-      expect(profileDisplayFromValue(val)).toEqual({
-        name: "Ada Lovelace",
-        picture: undefined,
-        avatar: "🦊",
-      });
-    });
-
-    it("returns the picture's bytes beside the avatar text", () => {
-      const val = { name: "Ada", picture, avatar: "🦊" };
-      expect(profileDisplayFromValue(val)).toEqual({
-        name: "Ada",
-        picture,
-        avatar: "🦊",
-      });
-    });
-
-    it("returns no picture for empty bytes or a value that is not bytes", () => {
-      for (
-        const notAPicture of [
-          new FabricBytes(new Uint8Array()),
-          "data:image/png;base64,iVBORw0KGgo=",
-          { length: 4 },
-        ]
-      ) {
-        expect(
-          profileDisplayFromValue({ name: "Ada", picture: notAPicture }),
-        ).toEqual({ name: "Ada", picture: undefined, avatar: undefined });
-      }
+      expect(profileDisplayFromValue(val)).toEqual({ name: "Ada Lovelace" });
     });
 
     it("returns undefined fields for empty / non-object input", () => {
-      const none = { name: undefined, picture: undefined, avatar: undefined };
+      const none = { name: undefined };
       expect(profileDisplayFromValue(undefined)).toEqual(none);
       expect(profileDisplayFromValue("nope")).toEqual(none);
       expect(profileDisplayFromValue({})).toEqual(none);

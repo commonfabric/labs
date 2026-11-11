@@ -31,10 +31,13 @@ import {
 } from "commonfabric";
 import { normalizePresenceParticipantName } from "./participant-name.ts";
 
-/** What a viewer's Fabric profile shows: a name and an avatar, where set. */
+/**
+ * The part of a viewer's Fabric profile the note reads: their name, where
+ * set. A comment's author is drawn from the profile itself, whose face
+ * `cf-profile-badge` shows only when its owner set it.
+ */
 export interface NoteProfile {
   name?: string;
-  avatar?: string;
 }
 
 /** A live link to a person's profile. */

@@ -67,6 +67,7 @@ import {
   probesOf,
   requirementsOf,
   SIZE_FLOORS,
+  SIZE_GUARANTEES,
   type SizeMeasure,
   type TextWithMods,
   textWithModsOf,
@@ -311,6 +312,14 @@ export type {
 export const SIZE_FLOORS_FOR_TESTING_ONLY: {
   readonly [Measure in SizeMeasure]: number;
 } = SIZE_FLOORS;
+
+/**
+ * This package's guarantee by each measure of a value's size, as its README
+ * states it, no figure being written `Infinity`.
+ */
+export const SIZE_GUARANTEES_FOR_TESTING_ONLY: {
+  readonly [Measure in SizeMeasure]: number;
+} = SIZE_GUARANTEES;
 
 /**
  * `requirementsOf()` from `conformance-fixtures.ts`, which returns what a

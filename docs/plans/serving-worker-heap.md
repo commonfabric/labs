@@ -41,7 +41,7 @@ is unchanged: 0.24-0.43 s before and 0.25-0.37 s after, two alternating rounds o
 three, 100 creates each, at load 77-269.
 
 A worker rig (`heap-worker-probe.ts`, under "The process") serves a fresh board
-from a `ServingWorker` the way the toolshed does and has the worker write its own
+from a `ServingWorkerPool` the way the toolshed does and has the worker write its own
 snapshots, so each holder is measured in the process that holds it. On that rig
 a create left 862 KB on the worker before the changes under "Landed" that
 followed, 522 KB after the closure change among them, and 610 KB on the run
@@ -196,7 +196,9 @@ A create here is an `addTopic` event, and any verb that starts a piece will do.
 
 1. **Measure the heap after a collection, between steps.** A local server answers
    `/api/health/collected-memory` with `servingLoopWorker.heapUsed` after a full
-   collection. RSS moves by hundreds of megabytes on its own, and a process's heap
+   collection, the serving workers' heaps added up, and with each worker's own
+   under `servingLoopWorkers` beside the spaces placed on it, so a board's
+   worker is the one whose `spaces` names the board's space. RSS moves by hundreds of megabytes on its own, and a process's heap
    numbers leave a worker out. Vary one thing at a time: a round of creates, then a
    round of reads, then more creates. This says what the growth follows before
    anyone reads code.
@@ -206,7 +208,7 @@ A create here is an `addTopic` event, and any verb that starts a piece will do.
    that it does not need.
 
 3. **Take two snapshots of the worker's growing heap.** `heap-worker-probe.ts`
-   serves a fresh board from a `ServingWorker` with `heap-worker-module.ts` as
+   serves a fresh board from a `ServingWorkerPool` with `heap-worker-module.ts` as
    the worker's entry, creates Topics through the board's `addTopic` verb, and
    has the worker write its own snapshot after the first N creates and after M
    more. `--v8-flags=--expose-gc` reaches the worker, and a snapshot the worker

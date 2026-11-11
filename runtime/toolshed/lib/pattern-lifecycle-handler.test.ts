@@ -64,6 +64,7 @@ describe("pattern-lifecycle-handler", () => {
         const outcome = await lifecycleRequestHandler({
           space,
           principal: reader.did(),
+          sessionId: "session-of-the-call",
           verb: "upload",
           body: { program: { main: "/main.tsx", files: [] } },
         });

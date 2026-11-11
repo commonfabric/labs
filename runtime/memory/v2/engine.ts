@@ -122,6 +122,7 @@ import {
   resolvePrincipalSessionKey,
   resolveScopeKey,
   type ScopeKey,
+  type ScopeKeyIdentity,
   scopeOfScopeKey,
   SERVER_EXECUTION_ATTENTION_DOC_ID,
   SERVER_EXECUTION_EFFECTS_DOC_ID,
@@ -4792,6 +4793,13 @@ export type WaveBasisInstance = {
 export const applyWaveCommit = (
   engine: Engine,
   options: ApplyCommitOptions & {
+    /**
+     * The fixed transaction identity whose instances a direct derived commit
+     * read or guarded. Addressing only: admission and acting annotations keep
+     * the serving envelope. Scoped writes must address these same instances.
+     * Retries of one commit retain this identity, as they retain annotations.
+     */
+    dependencyScopeIdentity?: ScopeKeyIdentity;
     waveBasis: {
       /** The wave's input snapshot seq (per-doc CAS basis). */
       basisSeq: number;
@@ -4822,8 +4830,25 @@ export const applyWaveCommit = (
 ): AppliedCommit => {
   const applyUnderTransaction = engine.database.transaction(
     (txEngine: Engine, txOptions: typeof options) => {
-      const { waveBasis, basisInstances, outboxAppends, ...restOptions } =
-        txOptions;
+      const {
+        waveBasis,
+        basisInstances,
+        outboxAppends,
+        dependencyScopeIdentity,
+        ...restOptions
+      } = txOptions;
+      if (dependencyScopeIdentity !== undefined) {
+        if (restOptions.commitClass !== "derived") {
+          throw new ProtocolError(
+            "dependency scope identity requires a derived commit",
+          );
+        }
+        if (restOptions.commit.reads.pending.length > 0) {
+          throw new ProtocolError(
+            "dependency scope identity cannot resolve pending reads",
+          );
+        }
+      }
       // Basis rows are ADDRESSING (recovery's re-mark scan matches
       // storage rows against these instance values), so their keys meet
       // the same admission bar as annotated scope keys: a non-canonical
@@ -4879,6 +4904,16 @@ export const applyWaveCommit = (
         const annotated = normalizeScope(operation.scope) === "space"
           ? undefined
           : scopeKeyByOp.get(opIndex);
+        if (
+          dependencyScopeIdentity !== undefined &&
+          normalizeScope(operation.scope) !== "space" &&
+          annotated !==
+            resolveScopeKey(operation.scope, dependencyScopeIdentity)
+        ) {
+          throw new ProtocolError(
+            "scoped write annotation does not match dependency scope identity",
+          );
+        }
         const scopeKey = annotated ??
           resolveScopeKey(operation.scope, {
             principal: applyOptions.principal,
@@ -4947,13 +4982,19 @@ export const applyWaveCommit = (
         ).entries()
       ) {
         try {
-          validateCommitPreconditions(txEngine, sessionKey, branch, {
-            ...applyOptions.commit,
-            preconditions: [precondition],
-          }, {
-            principal: applyOptions.principal,
-            sessionId: applyOptions.sessionId,
-          });
+          validateCommitPreconditions(
+            txEngine,
+            sessionKey,
+            branch,
+            {
+              ...applyOptions.commit,
+              preconditions: [precondition],
+            },
+            dependencyScopeIdentity ?? {
+              principal: applyOptions.principal,
+              sessionId: applyOptions.sessionId,
+            },
+          );
         } catch (error) {
           if (
             error instanceof PreconditionFailedError ||
@@ -4973,7 +5014,11 @@ export const applyWaveCommit = (
       }
       let applied: AppliedCommit;
       try {
-        applied = applyCommitTransaction(txEngine, applyOptions);
+        applied = applyCommitTransaction(
+          txEngine,
+          applyOptions,
+          dependencyScopeIdentity,
+        );
       } catch (error) {
         // A stale edit is a conflict on its document, so that the wave
         // requeues the contributions writing it rather than all of them.
@@ -6294,6 +6339,7 @@ const applyCommitTransaction = (
     allowEmptyOperations,
     elidedVerdicts = false,
   }: ApplyCommitOptions,
+  dependencyScopeIdentity?: ScopeKeyIdentity,
 ): AppliedCommit => {
   // The derived-class posture gate (protocol.md §1): off the flag NOTHING
   // may claim the class — retries included — because `derived` names the
@@ -6691,10 +6737,16 @@ const applyCommitTransaction = (
     }
   }
 
-  validateCommitPreconditions(engine, sessionKey, branch, commit, {
-    principal,
-    sessionId,
-  });
+  validateCommitPreconditions(
+    engine,
+    sessionKey,
+    branch,
+    commit,
+    dependencyScopeIdentity ?? {
+      principal,
+      sessionId,
+    },
+  );
 
   // Content-addressed documents are immutable: the content under a `cid:`
   // id can never change, so `set` is the only operation admitted against
@@ -7454,10 +7506,16 @@ const applyCommitTransaction = (
   let resolvedPendingReads: Array<{ localSeq: number; seq: number }>;
   const conflictScans: ConflictScans = new Map();
   try {
-    validateConfirmedReads(engine, conflictScans, branch, commit, {
-      principal,
-      sessionId,
-    });
+    validateConfirmedReads(
+      engine,
+      conflictScans,
+      branch,
+      commit,
+      dependencyScopeIdentity ?? {
+        principal,
+        sessionId,
+      },
+    );
     resolvedPendingReads = resolvePendingReads(
       engine,
       conflictScans,
@@ -8116,7 +8174,7 @@ const validateCommitPreconditions = (
   sessionKey: string,
   branch: BranchName,
   commit: ClientCommit,
-  scopeContext: { principal?: string; sessionId: SessionId },
+  scopeContext: ScopeKeyIdentity,
 ): void => {
   for (const precondition of commit.preconditions ?? []) {
     // Wire input: validate the shape deterministically so malformed entries
@@ -8203,12 +8261,12 @@ const validateConfirmedReads = (
   scans: ConflictScans,
   branch: BranchName,
   commit: ClientCommit,
-  scopeContext: { principal?: string; sessionId: SessionId },
+  scopeContext: ScopeKeyIdentity,
 ): void => {
-  // A commit is evaluated under one connection principal/session context.
-  // Every confirmed read in the commit resolves declared user/session scope
-  // against that writer identity, even when the read points at another branch.
-  // Cross-branch reads inherit this same principal context.
+  // A client commit resolves reads against its connection identity. A direct
+  // derived commit supplies the transaction's fixed addressing identity,
+  // independently of its actorless serving envelope. Cross-branch reads use
+  // that same identity.
   const conflicts: ConfirmedReadConflict[] = [];
   const staleInstances = new Map<BranchName, Map<ScopeKey, Set<EntityId>>>();
   for (const read of commit.reads.confirmed) {

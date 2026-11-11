@@ -703,9 +703,11 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
 
   /**
    * Observes authoritative denial and recovery after an authorized reopen,
-   * and a refusal of a space already refused that turns out to be its
-   * deletion. Read `spaceAccessError()` for the current verdict. Initial
-   * successful opens and transient connection failures do not emit.
+   * a refusal of a space already refused that turns out to be its deletion,
+   * and a space whose first connection never completed a handshake that a
+   * `retrySpaceAccess()` reached. Read `spaceAccessError()` for the current
+   * verdict. Initial successful opens and transient connection failures do
+   * not emit.
    */
   subscribeSpaceAccessChange?(observer: (space: MemorySpace) => void): Cancel;
 
@@ -1783,7 +1785,9 @@ export interface IStorageTransaction {
   /**
    * Check scheduling dependencies before accepting an empty commit or seal.
    * Set by reactive computations, whose subscriptions must cover changes since
-   * their reads. Event handlers retain ordinary empty-commit behavior.
+   * their reads, and direct bookkeeping commits, whose verdict validates the
+   * guarded snapshot even when every write is elided. Event handlers retain
+   * ordinary empty-commit behavior.
    */
   validateReactiveReads?: boolean;
 

@@ -8,11 +8,13 @@ import { Server as MemoryServer } from "@commonfabric/memory/v2/server";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
 import {
   DEFAULT_MAX_OUTSTANDING_EFFECTS,
+  DEFAULT_SPARE_SERVING_WORKERS,
   ensureSpaceRootsFromEnv,
   ownerRoutingFromEnv,
   serverExecutionPolicyFromEnv,
   serverExecutionRoute,
   serverExecutionWorkerFromEnv,
+  servingWorkerPoolFromEnv,
   startServerExecutionHost,
   stopServerExecutionHost,
 } from "@/lib/server-execution.ts";
@@ -221,6 +223,67 @@ describe("serverExecutionPolicyFromEnv", () => {
       expect(warning).toContain(
         "SERVER_EXECUTION_PARKED_RUNTIME_RETENTION_MS",
       );
+    }
+  });
+});
+
+describe("servingWorkerPoolFromEnv()", () => {
+  it("returns the toolshed's spare count alone when no knob is set", () => {
+    const warnings: string[] = [];
+    for (
+      const env of [{}, {
+        SERVER_EXECUTION_MAX_WORKERS: "",
+        SERVER_EXECUTION_SPARE_WORKERS: "",
+        SERVER_EXECUTION_WORKER_HEAP_BUDGET_MB: "",
+      }]
+    ) {
+      expect(servingWorkerPoolFromEnv(envOf(env), (m) => warnings.push(m)))
+        .toEqual({ spareWorkers: DEFAULT_SPARE_SERVING_WORKERS });
+    }
+    expect(warnings).toEqual([]);
+  });
+
+  it("returns each knob's value, the heap budget in bytes, and no spares for the literal 0", () => {
+    const warnings: string[] = [];
+    expect(
+      servingWorkerPoolFromEnv(
+        envOf({
+          SERVER_EXECUTION_MAX_WORKERS: "1",
+          SERVER_EXECUTION_SPARE_WORKERS: "0",
+          SERVER_EXECUTION_WORKER_HEAP_BUDGET_MB: "2048",
+        }),
+        (m) => warnings.push(m),
+      ),
+    ).toEqual({
+      maxWorkers: 1,
+      spareWorkers: 0,
+      heapBudgetBytes: 2048 * 1024 * 1024,
+    });
+    expect(warnings).toEqual([]);
+  });
+
+  it("returns the default for a value that is not a whole number in range, with a warning naming the knob", () => {
+    for (
+      const [name, raw] of [
+        ["SERVER_EXECUTION_MAX_WORKERS", "0"],
+        ["SERVER_EXECUTION_MAX_WORKERS", "many"],
+        ["SERVER_EXECUTION_SPARE_WORKERS", "-1"],
+        ["SERVER_EXECUTION_SPARE_WORKERS", "1.5"],
+        ["SERVER_EXECUTION_WORKER_HEAP_BUDGET_MB", "0"],
+        ["SERVER_EXECUTION_WORKER_HEAP_BUDGET_MB", "2e3"],
+        // Long enough a run of digits to parse to `Infinity`.
+        ["SERVER_EXECUTION_MAX_WORKERS", "9".repeat(400)],
+      ]
+    ) {
+      const warnings: string[] = [];
+      expect(
+        servingWorkerPoolFromEnv(
+          envOf({ [name]: raw }),
+          (m) => warnings.push(m),
+        ),
+      ).toEqual({ spareWorkers: DEFAULT_SPARE_SERVING_WORKERS });
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain(`${name}=${JSON.stringify(raw)}`);
     }
   });
 });

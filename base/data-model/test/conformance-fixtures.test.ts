@@ -1,6 +1,8 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
+import { bigintToUnpaddedBase64url } from "@commonfabric/bytes/bigint";
+
 import type { FabricInstance, FabricValue } from "@";
 import { ProblematicStateError, UnknownValue } from "@/codec-common";
 import { jsonFromFabricValue } from "@/codecs.ts";
@@ -686,6 +688,15 @@ describe("conformance-fixtures", () => {
       });
     }
 
+    /**
+     * Returns the greatest and the least bigint whose minimal two's-complement
+     * representation is `count` bytes.
+     */
+    function bigintsOfBytes(count: number): readonly [bigint, bigint] {
+      const bound = 1n << BigInt(count * 8 - 1);
+      return [bound - 1n, -bound];
+    }
+
     /** Returns `inner` written inside `count` nested arrays. */
     function nestedIn(count: number, inner: string): string {
       return "[".repeat(count) + inner + "]".repeat(count);
@@ -699,6 +710,9 @@ describe("conformance-fixtures", () => {
         `fvj1:{"/Bytes@1":"${"A".repeat(base64LengthOf(floors.bytesLength))}"}`,
         `fvj1:{"/Symbol@1":"${"x".repeat(floors.symbolKeyLength)}"}`,
         `fvj1:${nestedIn(floors.depth, "1")}`,
+        ...bigintsOfBytes(floors.bigintBytes).map((value) =>
+          `fvj1:{"/BigInt@1":"${bigintToUnpaddedBase64url(value)}"}`
+        ),
       ];
       for (const text of texts) {
         expect(requirementsOfText(text)).toBeUndefined();
@@ -776,6 +790,37 @@ describe("conformance-fixtures", () => {
       expect(requirementsOfText(`fvj1:{"/Symbol@1":"${key}"}`)).toEqual({
         symbolKeyLength: floors.symbolKeyLength + 1,
       });
+    });
+
+    it("returns the size of the largest bigint past the floor, in bytes of its minimal two's complement", () => {
+      // Each of the two is one byte past the floor, and the greatest and least
+      // bigints at the floor are not past it.
+      const [greatest, least] = bigintsOfBytes(floors.bigintBytes);
+      for (const value of [greatest + 1n, least - 1n]) {
+        const text = `fvj1:[{"/BigInt@1":"AQ"},` +
+          `{"/BigInt@1":"${bigintToUnpaddedBase64url(value)}"}]`;
+
+        expect(requirementsOfText(text)).toEqual({
+          bigintBytes: floors.bigintBytes + 1,
+        });
+      }
+    });
+
+    it("returns the size of a temporal quantity's bigint as a bigint's", () => {
+      const state = bigintToUnpaddedBase64url(
+        1n << BigInt(floors.bigintBytes * 8),
+      );
+      const tags = [
+        "EpochNsec@1",
+        "EpochDay@1",
+        "DurationNsec@1",
+        "DurationDay@1",
+      ];
+      for (const tag of tags) {
+        expect(requirementsOfText(`fvj1:{"/${tag}":"${state}"}`)).toEqual({
+          bigintBytes: floors.bigintBytes + 1,
+        });
+      }
     });
 
     it("returns the depth past the floor, an instance and its state counting as two", () => {
@@ -865,7 +910,8 @@ describe("conformance-fixtures", () => {
           stringLength: 2 ** 26,
           bytesLength: 2 ** 27,
           symbolKeyLength: 2 ** 26,
-          depth: 2 ** 11,
+          depth: 2 ** 9,
+          bigintBytes: 2 ** 26,
         }),
       ).toBe(true);
     });
@@ -881,7 +927,8 @@ describe("conformance-fixtures", () => {
         { stringLength: 2 ** 26 + 1 },
         { bytesLength: 2 ** 27 + 1 },
         { symbolKeyLength: 2 ** 26 + 1 },
-        { depth: 2 ** 11 + 1 },
+        { depth: 2 ** 9 + 1 },
+        { bigintBytes: 2 ** 26 + 1 },
       ];
       for (const requires of pastEach) {
         expect({ requires, met: meetsRequirementsForTestingOnly(requires) })

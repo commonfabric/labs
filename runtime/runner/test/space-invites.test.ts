@@ -71,6 +71,38 @@ describe("space-invites", () => {
     expect(result.code).toBe(retry.code);
     expect(result.inviteId).toBe(retry.inviteId);
   });
+  it("sends a suggested profile in the signed create body and keeps it for an exact retry", async () => {
+    const signer = await Identity.generate();
+    const suggestedProfile = { name: "Sam Lee", picture: "iVBORw" };
+    const requests: Record<string, unknown>[] = [];
+    const client = new SpaceInviteClient({
+      host: "https://example.com",
+      space: signer.did(),
+      signer,
+      fetch: async (input, init) => {
+        const body = await new Request(input, init).json();
+        requests.push(body);
+        if (requests.length === 1) throw new TypeError("connection closed");
+        return Response.json({ inviteId: body.inviteId, remainingUses: 1 });
+      },
+    });
+    let failure: unknown;
+    try {
+      await client.create({
+        access: "WRITE",
+        ttlSeconds: 60,
+        suggestedProfile,
+      });
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(SpaceInviteCreateError);
+    if (!(failure instanceof SpaceInviteCreateError)) throw failure;
+    expect(requests[0]).toMatchObject({ suggestedProfile });
+    expect(failure.retry).toMatchObject({ suggestedProfile });
+    await client.create(failure.retry);
+    expect(requests[1]).toEqual(requests[0]);
+  });
   it("retains supplied credentials and refusal codes without enumerating secrets", async () => {
     const signer = await Identity.generate();
     const credentials = createInviteCredentials();

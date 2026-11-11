@@ -2772,17 +2772,25 @@ with nothing before or after:
 (<prefix>.)*<name>(@<version>)?
 ```
 
-- A **prefix** and a **name** are each an ASCII letter followed by any number
-  of ASCII letters and digits, in any case.
+- A **prefix** and a **name** are each an ASCII letter followed by ASCII
+  letters and digits, in any case, **at most 100 characters** in all.
+- A tag has **at most ten components**, its prefixes and its name counted
+  together, so at most nine prefixes.
 - A **version** is a decimal integer with no leading zero, so the lowest
-  version is 1.
+  version is 1, of **at most ten digits**, so the highest is 9999999999.
 - The version is **optional on a tag with no prefix** and **required on a tag
   with at least one prefix**.
 
-As a regular expression:
+The three limits are syntax, as much as the alphabet is. They are not
+guarantees of the kind `3-json-encoding.md` Section 12 has an implementation
+state, past which the implementation may refuse a value or may handle it: a
+string past any of them is not a tag, for every implementation alike, as a
+string holding a `_` is not.
+
+As a regular expression, which states the limits with bounded repetitions:
 
 ```
-^(?:[A-Za-z][A-Za-z0-9]*(?:@[1-9][0-9]*)?|(?:[A-Za-z][A-Za-z0-9]*\.)+[A-Za-z][A-Za-z0-9]*@[1-9][0-9]*)$
+^(?:[A-Za-z][A-Za-z0-9]{0,99}(?:@[1-9][0-9]{0,9})?|(?:[A-Za-z][A-Za-z0-9]{0,99}\.){1,9}[A-Za-z][A-Za-z0-9]{0,99}@[1-9][0-9]{0,9})$
 ```
 
 A **type tag** is a tag that **always has a version**, whatever its prefixes
@@ -2795,13 +2803,15 @@ and whatever its case:
 As a regular expression:
 
 ```
-^(?:[A-Za-z][A-Za-z0-9]*\.)*[A-Za-z][A-Za-z0-9]*@[1-9][0-9]*$
+^(?:[A-Za-z][A-Za-z0-9]{0,99}\.){0,9}[A-Za-z][A-Za-z0-9]{0,99}@[1-9][0-9]{0,9}$
 ```
 
 `Bytes@1`, `Abc123@1234`, `sys.beep.Boop@1`, `Sys.Boop@1`, `bytes@1` and
-`quote@1` are type tags. `Bytes`, `widget`, `fid1` and `sha256` are tags but
-not type tags, having no version, and are valid only where a format calls for a
-tag in the general syntax, as it does for a hash algorithm tag (Section 1.4.9).
+`quote@1` are type tags. So are `a.b.c.d.e.f.g.h.i.j@1`, with ten components,
+`Abc@1234567890`, whose version has ten digits, and a tag whose prefix or name
+has 100 characters. `Bytes`, `widget`, `fid1` and `sha256` are tags but not
+type tags, having no version, and are valid only where a format calls for a tag
+in the general syntax, as it does for a hash algorithm tag (Section 1.4.9).
 None of these is a tag at all:
 
 - `sys.Boop` and `core.Globals`, which have a prefix and no version.
@@ -2811,6 +2821,9 @@ None of these is a tag at all:
 - `.Boop@1` and `sys..Boop@1`, which hold an empty prefix.
 - `Bytes@0`, `Bytes@01`, `Bytes@1.0` and `Bytes@`, whose versions are not
   decimal integers without a leading zero, starting at 1.
+- `a.b.c.d.e.f.g.h.i.j.k@1`, which has eleven components.
+- A string whose prefix or name has 101 characters, with or without a version.
+- `Abc@12345678901`, whose version has eleven digits.
 - Any tag padded with whitespace or a newline.
 
 A string that is not a type tag is not an unrecognized type; it names no type

@@ -23,6 +23,8 @@ import type {
   Server,
 } from "@commonfabric/memory/v2/server";
 import type {
+  ServedFollowReceipt,
+  ServedInstance,
   ServedInstantiateReceipt,
   ServedLifecycleReceipts,
   ServedLifecycleRefusalCode,
@@ -44,6 +46,8 @@ import {
   authorizeSpaceWriter,
   type SpaceAuthorityDeps,
 } from "@/lib/space-authority.ts";
+
+const scopeSchema = z.enum(["space", "user", "session"]);
 
 const programSchema = z.object({
   main: z.string(),
@@ -93,9 +97,61 @@ const lifecycleBodies = {
     repository: z.string().optional(),
     dangerouslyAllowIncompatibleSchema: z.boolean().optional(),
     expectedPattern: patternRefSchema.optional(),
+    origin: z.string().min(1).optional(),
+    scope: scopeSchema.optional(),
     start: z.boolean().optional(),
   }).refine(oneSource, oneSourceMessage),
+  follow: z.object({
+    piece: z.string(),
+    origin: z.string().min(1),
+    expectedPattern: patternRefSchema.optional(),
+    expectedRevision: z.string().nullable().optional(),
+    dangerouslyAllowIncompatibleSchema: z.boolean().optional(),
+    scope: scopeSchema.optional(),
+    start: z.boolean().optional(),
+  }),
 };
+
+/** The scope a piece is addressed at, as `setsrc` and `follow` take it. */
+type PieceScope = z.infer<typeof scopeSchema>;
+
+/**
+ * What a source-changing verb knows of the request beyond its body: the
+ * memory session it came on, which a session-scoped piece's instance is
+ * keyed by. A request handed over by the memory server always carries it.
+ */
+type RequestSession = { sessionId?: string };
+
+/**
+ * The requester's instance of a piece addressed at `scope`, which the verb
+ * reads and writes: none for the piece's space instance; for a user scope,
+ * `callerDid`'s; for a session scope, `callerDid`'s in the session the
+ * request came on.
+ *
+ * @throws Error for a session scope on a request that names no session,
+ * which only a caller outside the memory protocol can send.
+ */
+function requesterInstance(
+  callerDid: string,
+  scope: PieceScope | undefined,
+  { sessionId }: RequestSession,
+): ServedInstance | undefined {
+  switch (scope) {
+    case undefined:
+    case "space":
+      return undefined;
+    case "user":
+      return { scope, identity: { principal: callerDid } };
+    case "session":
+      if (sessionId === undefined) {
+        throw new Error(
+          "A piece addressed at session scope is named by the memory " +
+            "session the request came on, and this request names none.",
+        );
+      }
+      return { scope, identity: { principal: callerDid, sessionId } };
+  }
+}
 
 /**
  * The part of a routed scope a registration delivery uses: the append into
@@ -191,6 +247,7 @@ const SERVED_REFUSAL_CODES: Record<ServedLifecycleRefusalCode, true> = {
   "piece-not-found": true,
   "incompatible": true,
   "source-moved": true,
+  "origin-unreachable": true,
 };
 
 function wireSource(source: WireSource): ServedPatternSource | undefined {
@@ -600,20 +657,23 @@ async function observeRegistrationDelivery(
  * A program is compiled as a verb of its own first, so its closure is
  * durable at that verb's wave commit before the update's setup transaction
  * reads and extends it; the update then commits directly to the store,
- * outside the wave. Unless `start` is `false`, the piece's root is named as
- * the loop's demand, so a piece nothing runs derives under its new source
- * in the cycle after; a piece the loop runs is swapped by its pointer
- * watcher either way.
+ * outside the wave. A piece addressed at a user or session `scope` is
+ * changed on the requester's instance of it. Unless `start` is `false`, a
+ * space piece's root is named as the loop's demand, so a piece nothing runs
+ * derives under its new source in the cycle after; a piece the loop runs is
+ * swapped by its pointer watcher either way.
  */
 export async function processSetSource(
   deps: LifecycleDeps,
   callerDid: string,
-  input: WireSource & {
+  input: WireSource & RequestSession & {
     space: string;
     piece: string;
     repository?: string;
     dangerouslyAllowIncompatibleSchema?: boolean;
     expectedPattern?: ServedPatternRef;
+    origin?: string;
+    scope?: PieceScope;
     start?: boolean;
   },
 ): Promise<LifecycleResult<ServedSetSourceReceipt>> {
@@ -624,6 +684,7 @@ export async function processSetSource(
       "Supply exactly one of `program` and `pattern`.",
     );
   }
+  const instance = requesterInstance(callerDid, input.scope, input);
   let candidate: ServedPatternRef;
   if (source.program !== undefined) {
     const uploaded = await runServedVerb(deps, callerDid, input.space, {
@@ -639,6 +700,7 @@ export async function processSetSource(
     name: "setsrc",
     request: {
       pieceId: input.piece,
+      ...(instance === undefined ? {} : { instance }),
       pattern: candidate,
       ...(input.repository === undefined
         ? {}
@@ -650,6 +712,66 @@ export async function processSetSource(
       ...(input.expectedPattern === undefined
         ? {}
         : { expectedPattern: input.expectedPattern }),
+      ...(input.origin === undefined ? {} : { origin: input.origin }),
+      actingUser: callerDid,
+      start: input.start !== false,
+    },
+  });
+}
+
+/**
+ * The `follow` verb: point `piece` at `origin` and adopt what the origin
+ * serves now, recording the origin with the revision, as a client's follow
+ * does. It runs over two cycles of the serving loop. The first resolves the
+ * origin on the serving runtime, compiles the candidate into the space, and
+ * reviews it against the piece, refusing one that cannot run over the
+ * piece's retained state unless the request accepts that; its wave commit
+ * makes the candidate's closure durable. The second makes the reviewed
+ * change, checked again against the piece as it then stands, in a
+ * transition that commits directly to the store. A piece addressed at a
+ * user or session `scope` is followed on the requester's instance of it.
+ * Unless `start` is `false`, a space piece's root is named as the loop's
+ * demand, so a piece nothing runs derives under its new source in the cycle
+ * after; a piece the loop runs is swapped by its pointer watcher either way.
+ */
+export async function processFollow(
+  deps: LifecycleDeps,
+  callerDid: string,
+  input: RequestSession & {
+    space: string;
+    piece: string;
+    origin: string;
+    expectedPattern?: ServedPatternRef;
+    expectedRevision?: string | null;
+    dangerouslyAllowIncompatibleSchema?: boolean;
+    scope?: PieceScope;
+    start?: boolean;
+  },
+): Promise<LifecycleResult<ServedFollowReceipt>> {
+  const instance = requesterInstance(callerDid, input.scope, input);
+  const prepared = await runServedVerb(deps, callerDid, input.space, {
+    name: "follow-prepare",
+    request: {
+      pieceId: input.piece,
+      ...(instance === undefined ? {} : { instance }),
+      origin: input.origin,
+      ...(input.expectedPattern === undefined
+        ? {}
+        : { expectedPattern: input.expectedPattern }),
+      ...(input.expectedRevision === undefined
+        ? {}
+        : { expectedRevision: input.expectedRevision }),
+      ...(input.dangerouslyAllowIncompatibleSchema === undefined ? {} : {
+        dangerouslyAllowIncompatibleSchema:
+          input.dangerouslyAllowIncompatibleSchema,
+      }),
+    },
+  });
+  if (!("ok" in prepared)) return prepared;
+  return await runServedVerb(deps, callerDid, input.space, {
+    name: "follow",
+    request: {
+      preparation: prepared.ok,
       actingUser: callerDid,
       start: input.start !== false,
     },
@@ -659,8 +781,8 @@ export async function processSetSource(
 /**
  * Runs one `pattern.lifecycle` request the memory server handed over: the
  * verb's arguments are validated against the verb's schema, the verb runs as
- * `call.principal`, and its result is the outcome the memory server answers
- * with. A body that fails validation is refused as `invalid-request`.
+ * `call.principal` (in `call.sessionId`, for a session-scoped piece), and
+ * its result is the outcome the memory server answers with. A body that fails validation is refused as `invalid-request`.
  */
 export async function processLifecycleCall(
   deps: LifecycleDeps,
@@ -680,12 +802,13 @@ export async function processLifecycleCall(
  */
 async function lifecycleResult(
   deps: LifecycleDeps,
-  { space, principal, verb, body }: PatternLifecycleCall,
+  { space, principal, sessionId, verb, body }: PatternLifecycleCall,
 ): Promise<
   | LifecycleResult<
     | { pattern: ServedPatternRef }
     | InstantiateReceipt
     | ServedSetSourceReceipt
+    | ServedFollowReceipt
   >
   | undefined
 > {
@@ -705,7 +828,21 @@ async function lifecycleResult(
     case "setsrc": {
       const parsed = lifecycleBodies.setsrc.safeParse(body);
       return parsed.success
-        ? await processSetSource(deps, principal, { space, ...parsed.data })
+        ? await processSetSource(deps, principal, {
+          space,
+          sessionId,
+          ...parsed.data,
+        })
+        : undefined;
+    }
+    case "follow": {
+      const parsed = lifecycleBodies.follow.safeParse(body);
+      return parsed.success
+        ? await processFollow(deps, principal, {
+          space,
+          sessionId,
+          ...parsed.data,
+        })
         : undefined;
     }
   }

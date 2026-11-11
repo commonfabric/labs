@@ -184,6 +184,13 @@ export interface MultiRuntimeSessionSpec {
    * the session's `#profile` wish fail rather than answer as another profile.
    */
   preferredProfileSpace?: DID;
+
+  /**
+   * A profile this session's runtime suggests for its user's first profile,
+   * stored once the runtime starts (`offerProfileSuggestion`), as a host does
+   * with the profile an invitation suggests. `picture` is the picture's bytes.
+   */
+  profileSuggestion?: { name: string; picture?: number[] };
 }
 
 export interface MultiRuntimeHarnessOptions {
@@ -636,6 +643,18 @@ export class MultiRuntimeSession {
   }
 
   /**
+   * The profile stored as suggested for this session's user, with its
+   * picture's bytes as numbers, or `undefined` when none is stored.
+   */
+  async profileSuggestion(): Promise<
+    { name?: string; picture?: number[] } | undefined
+  > {
+    return await this.#client.call("profileSuggestion", {}) as
+      | { name?: string; picture?: number[] }
+      | undefined;
+  }
+
+  /**
    * Have this session's runtime reconsider `space` after it was refused, as
    * the shell's Retry does. A permanent refusal is retained until the
    * runtime hears the verdict may have changed: an ACL notice on a session it
@@ -1056,6 +1075,9 @@ export class MultiRuntimeHarness {
           ...(cfcWriteFloor !== undefined ? { cfcWriteFloor } : {}),
           ...(started.preferredProfileSpace !== undefined
             ? { preferredProfileSpace: started.preferredProfileSpace }
+            : {}),
+          ...(started.profileSuggestion !== undefined
+            ? { profileSuggestion: started.profileSuggestion }
             : {}),
         }).catch(async (error) => {
           await client.terminate();

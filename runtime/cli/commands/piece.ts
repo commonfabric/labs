@@ -223,7 +223,9 @@ export function setsrcSuccessLine(
 ): string {
   return `Committed source update for piece ${config.piece} (Pattern Ref: ${
     formatPatternIdentity(update.ref)
-  }, Revision: ${update.revisionId}, Seq: ${update.seq})`;
+  }, Revision: ${update.revisionId}, Seq: ${update.seq})${
+    update.origin === undefined ? "" : `; it follows ${update.origin}`
+  }`;
 }
 
 /** A warning for work which failed after storage accepted the source update. */
@@ -2645,6 +2647,10 @@ export const piece = targetOptions(
     "Replace the source even when pattern or retained-link schema compatibility cannot be proven, or when the current pattern cannot be loaded at all.",
   )
   .option(
+    "--origin <origin:string>",
+    "Record this origin (a system: ref or fabric URL) with the revision, so the piece follows it from then on. Without it, setsrc detaches the piece.",
+  )
+  .option(
     "--check",
     "Report whether the source could replace the piece's current one, without issuing storage writes. Exits non-zero when it could not.",
   )
@@ -2679,9 +2685,12 @@ the children of system pieces, say:
 
   cf piece follow --cell <profile> system:system/profile-home/profile-home.tsx
 
-Unlike 'setsrc', which detaches, the origin is recorded with the revision.
-Not served yet: against a deployment that serves piece lifecycle verbs the
-command refuses, since the served update takes no origin.
+The origin is recorded with the revision, and the source adopted is what it
+serves now. A plain 'setsrc' detaches instead; 'setsrc --origin' records an
+origin over source you supply. Against a deployment that serves piece
+lifecycle verbs, its serving runtime resolves the origin, reviews what it
+serves, and commits the follow; there, a piece addressed at a scope
+(<id>@user, <id>@session) is followed on your instance of it.
 
 --expect and --expect-revision make the follow conditional on the source state
 a caller inspected ('cf piece inspect --pattern-identity --json' reports both):
@@ -3354,6 +3363,9 @@ export interface PieceCLIOptions {
   test?: string[];
   datafile?: string[];
   dangerouslyAllowIncompatibleSchema?: boolean;
+
+  /** `setsrc`: the origin the piece follows from then on. */
+  origin?: string;
   json?: boolean;
 }
 
@@ -5217,6 +5229,7 @@ export async function setPieceSourceFromCommand(
     {
       dangerouslyAllowIncompatibleSchema:
         options.dangerouslyAllowIncompatibleSchema,
+      ...(options.origin === undefined ? {} : { origin: options.origin }),
     },
   );
   return { config, update };
