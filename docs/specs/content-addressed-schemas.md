@@ -26,10 +26,13 @@ this design is the storage-side successor for link positions, and a
 reference at rest never needs transport compression. Code documents
 (§ Code documents) share the namespace and its rules: the compile cache
 stores each module's text as one, and its records link to them.
+Delivery by reference (§ Delivery by reference) is specified and not yet
+implemented: no build advertises its capability, so every schema document
+travels with its body.
 
 ## Last Updated
 
-2026-10-12
+2026-11-11
 
 ## Motivation
 
@@ -604,7 +607,9 @@ documents available alongside their declarations:
   raw commits that never went through it.
 - **The read-side guarantee.** A query result is self-sufficient: every
   schema reference embedded in delivered documents resolves within the
-  delivered set. Enforcement sits at the result-assembly boundary: after
+  delivered set, whose schema documents travel with their bodies or, to a
+  client that takes them, by reference (§ Delivery by reference).
+  Enforcement sits at the result-assembly boundary: after
   traversal establishes the documents being delivered, the server scans
   each complete document — a link schema anywhere in its value, its
   `schema` metadata member, or a delivered schema document's own refs —
@@ -653,11 +658,14 @@ Arrival mirrors the assembly pass rather than trusting it: BEFORE a frame
 applies, every schema ref its documents embed — a registered `cid:`
 schema document's own refs, a link schema anywhere in an ordinary
 document's value, or an ordinary document's `schema` metadata member —
-must reach a document the prospective frame or the
-stored replica holds whose content passes the identity check. Verified
-content, never mere presence: a forged local copy fails even when the
-realm registry holds a valid twin from another space, and content that
-changes under a previously verified `cid:` id fails outright. A broken
+must reach a document the prospective frame or the stored replica holds
+whose content passes the identity check, a document the space delivered by
+reference counting as held there with the realm registry's verified content
+(§ Delivery by reference). Verified content, never mere presence: a forged
+local copy fails even when the realm registry holds a valid twin from
+another space, the registry stands in for a space's own copy only of a
+document that space delivered by reference, and content that changes under
+a previously verified `cid:` id fails outright. A broken
 ref QUARANTINES the offending document (OW61's ACKed containment,
 RULED 2026-08-24): that document is dropped from the frame with a loud
 per-doc diagnostic and the replica keeps whatever it already held under
@@ -709,7 +717,80 @@ read-side guarantee is enforced, and its strictness only ever bites where
 the write-side guarantee was violated, which is exactly where a loud
 signal is wanted. The commit boundary's closure validation makes the
 write-side guarantee server-checked for every commit, up to the one
-patch shape documented under Resolution.
+patch shape documented under Resolution. A document a space delivered by
+reference is not such a reuse: that space's own server verified it in that
+space's store before naming it, so a traversal resolves it through the
+registry as that space's document.
+
+### Delivery by reference
+
+A schema document's bytes are the same in every space that stores it, so a
+client that reads many spaces built from one pattern receives the same
+closure from each. A read of a FabriChat room's root that selects only
+`about.kind` delivers 173 schema documents, about 194 KB, and every room
+space delivers the same 173. Delivery by reference sends a client each
+schema document's body once, from whichever space it reads first, and has
+every other space name it by id. The server states what its space holds,
+and the client decides locally: it is not sent, and does not ask for, a
+schema it already knows it has.
+
+- **Negotiation.** Both peers advertise `syncCidReferencesV1`
+  ([memory-v2/04-protocol.md](memory-v2/04-protocol.md) §4.1.1). A
+  connection where either peer does not delivers every schema document with
+  its body, as the rest of this document describes.
+- **What travels by reference.** A schema document that result assembly
+  joins to a session's frame, and that has verified against the delivering
+  space's own store as the document its id names, may travel as a
+  reference: its id and the seq the space holds it at, without its body
+  (memory-v2/04-protocol.md §4.2.3). A document a watch or query names as a
+  root, a label document, a code document, and every other `cid:` document
+  that is not a schema document travel with their bodies.
+- **What the server still enforces, per space.** Nothing above moves: the
+  commit boundary validates every closure a commit references against that
+  space's commit and store, result assembly verifies every closure a frame
+  reaches against the delivering space's own store before the frame names
+  any of it, and fails the query on a hole, and the traversal keeps its
+  availability gate. A reference is that space's server stating that its
+  own store holds the verified document, and never a statement about
+  another space.
+- **The realm's verified store.** The client resolves a reference through
+  the realm registry (§ Resolution), which holds every schema document a
+  space delivered to it with its body and every body a fetch returned, each
+  verified at registration. A hash the registry holds resolves at once: the
+  space's replica records the document as held at the reference's seq, with
+  the registry's value as its content. The registry retains a document for
+  as long as a replica holds it by reference.
+- **Fetching a body.** For a hash the registry lacks, the client fetches the
+  body from the space whose frame named it, with a one-shot `graph.query`
+  whose root is the `cid:` document (memory-v2/04-protocol.md §4.3.3). The
+  fetch adds nothing to the session's watch set. Fetches coalesce across the
+  realm: one fetch per hash is in flight at a time, and a space whose frame
+  names a hash another space is already fetching waits for that fetch
+  rather than starting one. If that fetch fails, the waiting space fetches
+  from its own space. A fetched body is verified and registered like any
+  arriving schema document.
+- **Waiting for a body.** A frame that names a hash the registry lacks
+  applies once every such body has arrived, and the session's later frames
+  apply after it, in order, so arrival validation always runs over a frame
+  whose references resolve locally. Until then a load of a document the
+  frame carries waits rather than taking it for absent, and `synced()` and
+  `inputSynced()` wait too, as on the quarantine-heal path above. A fetch
+  that returns no document, or content that does not verify, leaves the
+  reference unresolved: the frame applies, and arrival validation
+  quarantines every document whose refs reach the hash, with its loud
+  diagnostic.
+- **Holdings.** A document held by reference is held like any other. A
+  reconnecting client declares it at the seq its reference carried
+  (memory-v2/04-protocol.md §4.1.2), and the server elides it as it elides
+  any held document.
+- **What a fetch discloses.** A body fetch tells a space which hashes the
+  client lacks, and so, by their absence, which it already holds from the
+  other spaces it reads. A schema document is derived from pattern code —
+  the schema generator's output and the defaults a pattern's author writes
+  — and not from user data. That is why label documents, whose labels can
+  name principals, keep their bodies. Whether this disclosure is acceptable
+  between hosts that serve different spaces behind a memory router is open
+  for a ruling (§ Open questions).
 
 ### Traversal and sync
 
@@ -766,9 +847,12 @@ delivery and traversal split the work in two layers:
 
 A client that syncs a document therefore receives the schema documents for
 every link it contains in the same round trip, keeping the "resolved means
-locally available" property. Schema documents are immutable, so their
-presence in watch sets is quiet; whether they deserve a fetch-once path
-instead is an open question shared with all `cid:` documents.
+locally available" property. A client that takes references receives the
+bodies it lacks one fetch later, and the frame waits for them before it
+applies, so the property holds for everything the client exposes. Schema
+documents are immutable, so their presence in watch sets is quiet; the
+body fetch of delivery by reference is a fetch-once path for schema
+documents, and whether other `cid:` documents deserve one is open.
 
 Scan results are cached per document version and engine, so in steady
 state a version is scanned once however many sessions deliver it, and
@@ -779,8 +863,9 @@ bound, can rescan.
 
 On the wire, a reference-bearing link is already small; the sync schema
 table (`schema-ref@2:`) skips reference-only schema positions. Schema
-document bodies travel once, as ordinary document upserts, and benefit from
-any document-level caching.
+document bodies travel once per space as ordinary document upserts, or once
+per client under delivery by reference, and benefit from any document-level
+caching.
 
 ### What this does not change
 
@@ -891,9 +976,10 @@ playbook:
    read-side assembly is what catches it.
 3. **Fetch-once for immutable documents.** Every pull is a watch add, so
    schema documents permanently grow the session watch set even though they
-   can never change. Quiet but not free; a fetch-without-subscribe
-   primitive for `cid:` documents would benefit blobs and module sources
-   equally.
+   can never change. Quiet but not free. Delivery by reference fetches a
+   schema document's body with a one-shot query, which adds no watch; a
+   fetch-without-subscribe primitive for the other `cid:` documents would
+   benefit blobs and module sources equally.
 4. **Garbage collection.** Nothing collects unreferenced documents today;
    schema documents accumulate like `pattern:` and CFC `cid:` documents do.
    Net bytes still fall (each document replaces many inline copies), so
@@ -904,3 +990,10 @@ playbook:
    different member names are different documents. Acceptable (names are
    stable per shared TypeScript type); canonical renaming inside groups
    would buy marginal dedup at real debuggability cost.
+6. **What a body fetch discloses.** Under delivery by reference, the bodies
+   a client fetches from a space tell that space which schema hashes the
+   client lacks, and so which it already holds from other spaces. Schema
+   documents derive from pattern code, not user data, and label documents
+   stay outside delivery by reference for that reason. Whether the
+   disclosure is acceptable where different hosts serve different spaces
+   behind a memory router is open for a ruling.
