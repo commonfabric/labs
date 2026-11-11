@@ -578,6 +578,15 @@ disagree, the detailed document governs and this one is corrected.
   observation classes, and the label rule of each operation
 - [Built-in inventory](builtin-inventory.md): each built-in's group, label
   rule, and durable state
+- [Footprint analysis](footprint-analysis.md): the abstract domain over a
+  function body, where the analysis widens, the write side, and reads through
+  cell handles
+- [Execution and storage](execution-and-storage.md): the transaction of one
+  cause for one instance, the layout of a result document, causal
+  identifiers, cache promotion, and migration
+- [Scheduler and serving loop](scheduler-and-serving-loop.md): what remains
+  of the scheduler across instances, effects, links across spaces, and
+  client speculation
 
 The work that remains on these documents, and the rulings that are fixed, are
 in the [continuation plan](../../plans/compiled-pattern-language.md).
