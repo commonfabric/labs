@@ -30,8 +30,8 @@ interface ChatIndexEntry {
   through it: `about`; `messages.count` and `messages.newestAt`, which say how
   many messages the room holds and when the newest was sent; and `roster`, the
   profiles of those who joined it, from which the manager draws its `people`.
-  Those are what the room's space shares with every member, and cost little to
-  read: the first two are derived from the room's messages alone, and `roster`
+  Those are what the room's space shares with every member. Activity is
+  derived from the room's messages, and `roster`
   holds each profile as a link, which the declaration doesn't follow. The rest
   of the room's output, its `canSend` decided per reader, its
   `messages.latest`, which holds up to `maxWindowCount` messages, and its

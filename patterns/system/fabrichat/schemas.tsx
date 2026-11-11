@@ -476,12 +476,39 @@ export interface ChatRoomLink {
   roster?: ManagerProfileCell[];
 }
 
+/** The room records an index reads, without demanding message activity. */
+export interface ChatRoomIndexLink {
+  /** What the room says about itself, including its creator's record. */
+  about?: ChatRoomAbout;
+
+  /** The profiles of those who joined; the fallback for an older room. */
+  roster?: ManagerProfileCell[];
+
+  /** A separately addressable advisory descriptor, when the room exports it. */
+  metadata?: ChatRoomMetadata;
+}
+
+/** Original room records whose values remain live under older room writers. */
+export interface ChatRoomMetadataSources {
+  /** The room's creator's record, absent for a container's own conversation. */
+  about?: Cell<AboutRecord>;
+
+  /** The singleton keyed title list, empty until the first retitle. */
+  titles?: Cell<TitleRecord[]>;
+
+  /** The stored joined profiles, without deriving message authors. */
+  roster?: Cell<{ items?: ProfileCell[] }>;
+}
+
 /**
  * A room's identifying metadata, materialized in its own document in the room's
  * space. Its navigation address is plain data, so reading it requires no
  * reference to the room result.
  */
 export interface ChatRoomMetadata {
+  /** Original records; consumers prefer these to the copied display values. */
+  sources?: ChatRoomMetadataSources;
+
   /** The kind of conversation the room holds. */
   kind: ChatRoomKind;
 
@@ -518,6 +545,12 @@ export interface ChatContainer {
 
   /** Where the container keeps its space's file store. */
   fileStoreRecord?: FileStoreRecord;
+}
+
+/** A container's explicit chat declaration, as the manager discovers it. */
+export interface ChatIndexContainer {
+  /** The declared conversation, without demanding its message activity. */
+  chatRoom?: Cell<ChatRoomIndexLink>;
 }
 
 /** One room in a user's chat manager. */

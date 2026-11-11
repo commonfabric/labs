@@ -144,6 +144,7 @@ import {
   type ChatRoomKind,
   type ChatRoomLink,
   type ChatRoomMetadata,
+  type ChatRoomMetadataSources,
   type ChatRoomPolicy,
   epochNsec,
   isPrincipalDID,
@@ -1116,6 +1117,9 @@ export interface ChatMessageRights extends MessageRights {
 
 /** The room's shared facts needed to materialize its list metadata. */
 interface RoomMetadataInput {
+  /** Original display records, independent of the conversation's messages. */
+  sources: ChatRoomMetadataSources;
+
   /** The kind of conversation. */
   kind: ChatRoomKind;
 
@@ -1129,9 +1133,10 @@ interface RoomMetadataInput {
   roomAddress: ChatRoomMetadata["room"];
 }
 
-/** Materializes a room's list metadata as one document of plain facts. */
+/** Materializes a room's list metadata with direct display-record references. */
 const roomMetadata = lift<RoomMetadataInput, PerSpace<ChatRoomMetadata>>(
-  ({ kind, title, roster, roomAddress }) => ({
+  ({ sources, kind, title, roster, roomAddress }) => ({
+    sources,
     kind,
     ...(title === undefined ? {} : { title }),
     roster: [...roster],
@@ -1753,6 +1758,11 @@ export const FabriChatRoomCore = pattern<
     record: about,
   };
   const metadataValue = roomMetadata({
+    sources: {
+      about,
+      titles,
+      roster,
+    },
     kind,
     title,
     roster: joined,

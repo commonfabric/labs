@@ -1,7 +1,9 @@
 /**
  * Reopens populated FabriChat rooms from disk before updating their source.
  * The room and schema snapshots are byte-for-byte copies from 4efa1c0882,
- * before room metadata; their production dependencies keep their normal paths.
+ * before room metadata. The producer-only manager snapshot from 27d9003f4a
+ * keeps the seed graph compatible with those schemas; dependencies retain
+ * their production paths.
  * This storage-only server deliberately exercises client execution (OFF).
  */
 
@@ -69,12 +71,14 @@ describe("FabriChat metadata upgrade", () => {
         const entry of Deno.readDir(join(patterns, "system/fabrichat"))
       ) {
         const destination = join(vintageSystem, "fabrichat", entry.name);
-        if (entry.name === "room.tsx" || entry.name === "schemas.tsx") {
+        if (["manager.tsx", "room.tsx", "schemas.tsx"].includes(entry.name)) {
           const contents = await Deno.readTextFile(
             new URL(
-              `./fixtures/fabrichat-metadata-upgrade/${
-                entry.name.replace(".tsx", "-before.tsx.txt")
-              }`,
+              `./fixtures/${
+                entry.name === "manager.tsx"
+                  ? "fabrichat-manager-demand"
+                  : "fabrichat-metadata-upgrade"
+              }/${entry.name.replace(".tsx", "-before.tsx.txt")}`,
               import.meta.url,
             ),
           );

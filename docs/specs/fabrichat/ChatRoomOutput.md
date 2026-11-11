@@ -364,6 +364,17 @@ the room's space. It holds the room's `kind` and optional `title`, and its
 maintaining it requires no message-history traversal. Activity remains on
 `messages`.
 
+Its optional `sources` directory holds direct references to original display
+records: `about`, the creator's record; `titles`, the singleton keyed title list;
+and `roster`, the stored object with optional joined-profile `items`. When the
+directory is present, it includes every original display record supplied to
+the room core. An absent entry means that core record was not supplied. The title is
+the `title` element of `titles`, falling back to `about.title`; the roster is
+`roster.items`, falling back to an empty list. These references require no room
+result or message-history read to observe a change. They remain live when an
+older writer changes the same records without maintaining the projection's
+copied values. Older descriptors may omit the directory entirely.
+
 The metadata is advisory display data. The roster claims who joined; neither
 it nor the metadata's address proves membership, access, or authorship. A
 consumer reads the original records and their labels when it needs those
@@ -391,11 +402,14 @@ with write access initializes its projection from the existing records without a
 backfill or a rewrite of those records. A read-only client can read an existing
 projection but cannot maintain it. A runtime executing an older generation alone
 does not maintain the projection. Consumers that require current facts must use
-the room's existing fields when metadata is unavailable or its producer is not
-known to be current.
+the original source records, or the room's existing fields when the source
+directory is unavailable. The copied display values alone do not establish
+freshness.
 
-The manager's [`ChatIndexEntry`](ChatIndexEntry.md) still locates the room
-through its `room` reference. A retained metadata address does not establish
+The manager's [`ChatIndexEntry`](ChatIndexEntry.md) locates the room through its
+`room` reference. Its compact [`list`](FabriChatManager.md#compact-list) also
+carries an optional direct metadata reference.
+A retained metadata address does not establish
 that a catalog entry still exists, that a container still declares this room,
 or that a replaced root is the same room; discovery must establish those
 facts independently.

@@ -103,7 +103,7 @@ import {
   getLoggerCountsBreakdown,
   TIMING_MEASURE_PREFIX,
 } from "@commonfabric/logger";
-import { isObjectNotArray } from "@commonfabric/js-values/types";
+import { isObjectNotArray, isPlainObject } from "@commonfabric/js-values/types";
 import { holdWorkerLifetimeLock } from "@commonfabric/platform/worker-lifetime";
 import { authenticatedOwnerFromLabel } from "../../runtime/ui/src/v2/components/cf-owner-view/owner-predicate.ts";
 
@@ -113,6 +113,7 @@ let resultSchema: unknown;
 let resultSinkCancel: (() => void) | undefined;
 let addressSinkCancel: (() => void) | undefined;
 let addressCell: Cell<unknown> | undefined;
+let documentObservations: Map<string, Set<string>> | undefined;
 let addressValue: FabricValue;
 let boundedReads = false;
 let watchPaths: readonly (readonly (string | number)[])[] = [[]];
@@ -1579,7 +1580,7 @@ const handlers: Record<
    * Holds one explicitly addressed cell under the schema its link carries,
    * without opening a piece. Replaces this command's preceding subscription.
    */
-  async watchAddress({ link }) {
+  async watchAddress({ link, fields, observedAddresses }) {
     const parsed = parseLink(link);
     if (
       parsed === undefined || parsed.id === undefined ||
@@ -1591,11 +1592,54 @@ const handlers: Record<
     addressSinkCancel?.();
     addressCell = cell;
     addressValue = undefined;
+    if (Array.isArray(fields)) {
+      const values: Record<string, FabricValue> = {};
+      const cancel: (() => void)[] = [];
+      const stages: FabricValue[] = [];
+      addressValue = values;
+      addressSinkCancel = () => cancel.forEach((stop) => stop());
+      for (const field of fields) {
+        if (typeof field !== "string") {
+          throw new TypeError("A subscribed field must be a string.");
+        }
+        const source = cell.key(field);
+        cancel.push(source.sink((value) => {
+          values[field] = hostValueOf(value);
+        }));
+        await source.pull({ awaitDurability: true });
+        if (Array.isArray(observedAddresses)) {
+          stages.push({
+            field,
+            loadedDocuments: [...(documentObservations?.values() ?? [])].reduce(
+              (sum, ids) => sum + ids.size,
+              0,
+            ),
+            addresses: observedAddresses.filter((address) =>
+              isPlainObject(address) && typeof address.space === "string" &&
+              typeof address.id === "string" &&
+              documentObservations?.get(address.space)?.has(address.id)
+            ),
+          });
+        }
+      }
+      await idle();
+      return Array.isArray(observedAddresses)
+        ? { value: addressValue, stages }
+        : addressValue;
+    }
     addressSinkCancel = cell.sink((value) => {
       addressValue = hostValueOf(value);
     });
     await idle();
     return addressValue;
+  },
+
+  /** Resolves an explicit projection's link without opening the containing piece. */
+  async addressLink({ link, path }) {
+    const cell = controller().runtime.getCellFromLink(link as never)
+      .key(...((path ?? []) as string[]));
+    await cell.pull({ awaitDurability: true });
+    return cell.resolveAsCell().getAsNormalizedFullLink();
   },
 
   /** Returns the most recent value delivered to `watchAddress()`. */
@@ -1640,6 +1684,39 @@ const handlers: Record<
   async memorySizes() {
     await idle();
     return controller().runtime.getSizes();
+  },
+
+  /** Records delivered document identities without adding any storage demand. */
+  observeDocuments() {
+    if (documentObservations !== undefined) {
+      throw new Error("Document observation is already active.");
+    }
+    const observed = new Map<string, Set<string>>();
+    controller().runtime.storageManager.subscribe({
+      next(notification) {
+        if (
+          notification.type === "load" || notification.type === "pull" ||
+          notification.type === "integrate"
+        ) {
+          const ids = observed.get(notification.space) ?? new Set<string>();
+          for (const change of notification.changes) ids.add(change.address.id);
+          observed.set(notification.space, ids);
+        }
+        return undefined;
+      },
+    });
+    documentObservations = observed;
+    return Promise.resolve({});
+  },
+
+  /** The document arrivals recorded since `observeDocuments()`. */
+  observedDocuments() {
+    return Promise.resolve(
+      [...(documentObservations ?? [])].map(([space, ids]) => ({
+        space,
+        ids: [...ids],
+      })),
+    );
   },
 
   /**
@@ -1776,6 +1853,7 @@ const handlers: Record<
     addressSinkCancel?.();
     addressSinkCancel = undefined;
     addressCell = undefined;
+    documentObservations = undefined;
     for (const intake of shareIntakes.splice(0)) intake.stop();
     viewMountCancel?.();
     viewMountCancel = undefined;

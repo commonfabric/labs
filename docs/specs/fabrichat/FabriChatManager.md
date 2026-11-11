@@ -83,8 +83,18 @@ unchanged to `forget`; they need supply no container. A direct room's
 room's labeled creator. `people` is drawn from listed rooms' rosters per
 user, keyed by the principal each profile attests.
 
-The manager's rendering labels each listed room with its `about.title`, read
-through the room's link, so a retitle shows there once the room records it. A
+The manager retains a room's direct metadata reference when creation, joining,
+acceptance, or discovery finds one. The rendering reads the original title
+records through its `sources` directory, and `people` reads the original joined
+roster there. An older room writer can change those records without refreshing
+the descriptor's copied facts. A missing directory uses the room's existing
+`about.title` and `roster`. Discovery still reads the authoritative room records
+and observes root and container declarations; a missing or replaced descriptor
+replaces the current list entry's cached route. Discovery and list derivations
+use bounded room handles, while the public room link retains its activity
+contract for consumers that request it.
+
+The manager's rendering labels each listed room with its title. A
 direct room with no title is labeled by its counterpart. A standalone room's
 catalog entry holds its title too, as a display hint for readers of the
 catalog, which neither the rendering nor `rooms` reads. Registration takes the
@@ -151,6 +161,63 @@ before the user's profile resolves is recorded all the same, and the user
 isn't added.
 Offering a new room to a member adds that member's profile the same way (see
 [first contact](#first-contact)).
+
+## Compact list
+
+The optional `list` field, also exposed on the `chats` view, is a separately
+materialized `PerUser` document for native clients. It groups three values in
+one subscription:
+
+- `rooms` has the same order, kind, counterpart, listing time, and revision as
+  the manager's `rooms`. Its optional `title` follows the original title records,
+  with the room's existing title as the fallback for an older descriptor.
+- `requests` preserves each request's status, refusal reason and code, delivery,
+  and optional entry. Its entries use the same compact navigation references.
+- `sharedSpaceCatalog.entries` preserves the catalog keys and their optional
+  kind and title display hints. Offer receipts and other catalog state are
+  excluded.
+
+Each entry stores its `room` reference with an explicit empty-object read
+schema. To keep the list's navigation references bounded, the client's read
+schema must also specify `properties: {}` at every selected `room` and
+`metadata` reference, including those nested under `requests.*.entry`:
+
+```json
+{ "type": "object", "properties": {}, "asCell": ["cell"] }
+```
+
+A bare object reference schema that omits `properties` permits wider reads when
+combined with the stored schema. The stored reference's empty schema alone does
+not constrain such a caller. With the explicit empty projection, the reference
+identifies the conversation without requesting its activity or message fields.
+Clients select a separate schema when they open the conversation or read its
+metadata descriptor.
+
+A current room's identity comes from the manager's authoritative discovery and
+membership checks. A historical request preserves its navigation reference
+without resolving the target; a deleted or unavailable conversation must not
+prevent the rest of the list from rendering.
+
+A client keeps a subscription to the manager's `list` reference so it observes
+replacement or removal. When a reference is available, the client subscribes to
+that scoped document for room rows, request outcomes, and catalog display hints,
+instead of separately subscribing to the three legacy fields or reading each
+room for its title. A changed reference replaces the document subscription; a
+removed reference closes it. Opening a conversation follows the chosen entry's
+`room` reference with the conversation schema.
+
+Clients use the existing `rooms`, `requests`, and `sharedSpaceCatalog` fields
+only after discovery confirms that `list` is absent. A pending read or a failed
+subscription does not establish absence. These legacy fields and the manager's
+streams retain their existing contracts. The compact list initializes from
+existing state when the updated manager runs; it requires no stored-data
+migration.
+
+Authoritative discovery still reads the room and its root or container
+references. The separate list narrows the values a client subscribes to; it
+does not promise that discovery or server execution avoids those documents or
+message-derived computations. Its titles and metadata are display data, not
+proof of room access, container declaration, membership, or authorship.
 
 ## Creating a room
 

@@ -1,6 +1,8 @@
 /**
  * Replays the pre-metadata FabriChat source from 4efa1c0882999a5052b134c91d70c364d7a91468
  * over persisted rooms, with enforced access lists and an actual serving loop.
+ * Its seed uses the producer-only manager snapshot from 27d9003f4a, which
+ * compiles against the pre-metadata schemas.
  * Fresh worker clients and a new serving host reopen the same disk store.
  */
 
@@ -107,12 +109,14 @@ describe("FabriChat metadata served upgrade", () => {
           const entry of Deno.readDir(join(patterns, "system/fabrichat"))
         ) {
           const destination = join(vintage, "system/fabrichat", entry.name);
-          if (entry.name === "room.tsx" || entry.name === "schemas.tsx") {
+          if (["manager.tsx", "room.tsx", "schemas.tsx"].includes(entry.name)) {
             await Deno.copyFile(
               new URL(
-                `./fixtures/fabrichat-metadata-upgrade/${
-                  entry.name.replace(".tsx", "-before.tsx.txt")
-                }`,
+                `./fixtures/${
+                  entry.name === "manager.tsx"
+                    ? "fabrichat-manager-demand"
+                    : "fabrichat-metadata-upgrade"
+                }/${entry.name.replace(".tsx", "-before.tsx.txt")}`,
                 import.meta.url,
               ),
               destination,
@@ -177,11 +181,15 @@ describe("FabriChat metadata served upgrade", () => {
           rootPath: patterns,
           watchPaths: [],
           diagnostics: true,
-          sourceSnapshots: ["room", "schemas"].map((name) => ({
+          sourceSnapshots: ["manager", "room", "schemas"].map((name) => ({
             name: `/system/fabrichat/${name}.tsx`,
             filePath: fromFileUrl(
               new URL(
-                `./fixtures/fabrichat-metadata-upgrade/${name}-before.tsx.txt`,
+                `./fixtures/${
+                  name === "manager"
+                    ? "fabrichat-manager-demand"
+                    : "fabrichat-metadata-upgrade"
+                }/${name}-before.tsx.txt`,
                 import.meta.url,
               ),
             ),
