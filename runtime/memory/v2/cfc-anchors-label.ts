@@ -247,14 +247,14 @@ const resolvedLabel = (
  * class at the anchor's own path, which is what ties the label to the offset
  * the engine computed. The move's own label is `confidentiality` with no
  * integrity, since no principal produced the offset, and the engine joins it
- * into that entry: the confidentiality is the union of the two clause lists,
- * as the new offset is computed from the old one, and the integrity is their
- * meet, which with the move's empty integrity is empty. Where the envelope
- * holds no such entry, the move's label is the entry. A derived entry of no
- * class at the path is consumed by a read of the offset as well, so its
- * integrity meets the move's too; its confidentiality, which reads of the
- * other classes consume, stays. Every other entry, a declared one at the
- * anchor's path among them, stays as its writer left it.
+ * into that entry. The join keeps every clause either label held, as the new
+ * offset is computed from the old one, and meets their integrity, which with
+ * the move's empty integrity leaves none. Where the envelope holds no such
+ * entry, the move's label is the entry. A derived entry of no class at the
+ * path is consumed by a read of the offset as well, so its integrity meets
+ * the move's too; its confidentiality, which reads of the other classes
+ * consume, stays. Every other entry, a declared one at the anchor's path
+ * among them, stays as its writer left it.
  *
  * A writer's envelope pass drops a derived value-class entry at a path the
  * writer replaces, and a writer of the document writes the anchors that

@@ -3010,7 +3010,7 @@ describe("v2-operation-engine", () => {
         }
       });
 
-      it("joins the move's label into one entry with the writer's, its confidentiality the union and its integrity the meet", async () => {
+      it("joins the move's label into one entry with the writer's, joining their confidentiality and meeting their integrity", async () => {
         const { engine, path } = await openTestEngine();
         try {
           seed(

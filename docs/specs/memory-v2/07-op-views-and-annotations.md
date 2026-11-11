@@ -415,13 +415,12 @@ Within the apply steps of §7.7.1:
    produced the offset. For each moved anchor, the engine joins it into the
    entry at the anchor's path of origin `derived` and class `value`, or makes
    it that entry where the envelope holds none, so that the path holds one
-   such entry. The join is the union of the two labels' confidentiality,
-   since the moved offset is computed from the old one, and the meet of
-   their integrity, which with the move's empty integrity is empty. A
-   `derived` entry of no class at that path is consumed by a read of the
-   offset too, so its integrity meets the move's as well, and its
-   confidentiality stays.
-   A label one of these entries names by document is read from that
+   such entry. The join keeps every clause either label held, since the
+   moved offset is computed from the old one, and meets their integrity,
+   which with the move's empty integrity leaves none. A `derived` entry of
+   no class at that path is consumed by a read of the offset too, so its
+   integrity meets the move's as well, and its confidentiality stays. A
+   label one of these entries names by document is read from that
    document. Where the envelope already holds every label this would write, it
    is not written. An anchors document with no envelope gets one, naming the
    schema document of the schema that declares nothing, which the engine stores
