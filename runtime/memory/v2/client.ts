@@ -3167,16 +3167,16 @@ export class SpaceSession {
    * denial, such as the router's while its space's toolshed is down. Its
    * requests wait meanwhile, while the connection's other sessions work.
    */
+  get held(): boolean {
+    return this.#held;
+  }
+
   /**
    * @internal Whether this session has a restore pending: its connection
    * dropped, or a restore has not finished, since it was last restored.
    */
   get restorePending(): boolean {
     return this.#restoreComplete !== undefined;
-  }
-
-  get held(): boolean {
-    return this.#held;
   }
 
   #assertOpen(): void {
