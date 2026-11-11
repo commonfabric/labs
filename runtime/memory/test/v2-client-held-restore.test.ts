@@ -4,6 +4,8 @@
  * the connection's other spaces must keep working meanwhile.
  */
 import { assert, assertEquals, assertRejects } from "@std/assert";
+import { expect } from "@std/expect";
+import { describe, it } from "@std/testing/bdd";
 import { Identity } from "@commonfabric/identity";
 import { setModernCellRepConfig } from "@commonfabric/data-model/cell-rep";
 import { getMemoryProtocolFlags } from "../v2.ts";
@@ -354,6 +356,90 @@ const settled = (promise: Promise<unknown>) => {
   promise.then(() => done = true, () => done = true);
   return () => done;
 };
+
+/** A watch of the whole document `of:<id>`, under `id`. */
+const watch = (id: string) => ({
+  id,
+  kind: "graph" as const,
+  query: { roots: [{ id: `of:${id}`, selector: { path: [], schema: false } }] },
+});
+
+type WatchChange = "session.watch.set" | "session.watch.add";
+
+/**
+ * Has `peer` leave each watch change it is sent from here on unanswered until
+ * the test answers it, and keep the watch set those changes leave on a server:
+ * an addition adds to the set, and a `session.watch.set` that is accepted
+ * replaces it. The changes take effect in the order they were sent, as a
+ * server handles them, whenever each is answered.
+ */
+function holdWatchChanges(peer: RoutedPeer) {
+  type Sent = { type: WatchChange; ids: string[]; refused: boolean };
+  type Held = { answer(reply: "ok" | "retriable"): void };
+  const sent: Sent[] = [];
+  const held: Record<WatchChange, Held[]> = {
+    "session.watch.set": [],
+    "session.watch.add": [],
+  };
+  const awaited: Record<WatchChange, ((change: Held) => void)[]> = {
+    "session.watch.set": [],
+    "session.watch.add": [],
+  };
+  const send = peer.send.bind(peer);
+  peer.send = (payload: string) => {
+    const body = JSON.parse(payload.slice(5));
+    if (
+      body.type !== "session.watch.set" && body.type !== "session.watch.add"
+    ) {
+      return send(payload);
+    }
+    const type: WatchChange = body.type;
+    const change: Sent = {
+      type,
+      ids: body.watches.map((w: { id: string }) => w.id),
+      refused: false,
+    };
+    sent.push(change);
+    const hold: Held = {
+      answer(reply) {
+        change.refused = reply === "retriable";
+        peer.push({
+          type: "response",
+          requestId: body.requestId,
+          ...(reply === "ok" ? { ok: { serverSeq: 0, sync: emptySync() } } : {
+            error: {
+              name: "AuthorizationError",
+              message: "Routed memory request denied",
+              retriable: true,
+            },
+          }),
+        });
+      },
+    };
+    const waiting = awaited[type].shift();
+    if (waiting === undefined) held[type].push(hold);
+    else waiting(hold);
+    return Promise.resolve();
+  };
+  return {
+    /** Resolves with the next change of `type` the peer is sent. */
+    next(type: WatchChange): Promise<Held> {
+      const arrived = held[type].shift();
+      if (arrived !== undefined) return Promise.resolve(arrived);
+      return new Promise((resolve) => awaited[type].push(resolve));
+    },
+    /** The ids of the watches a server sent these changes would hold. */
+    watching(): string[] {
+      const ids = new Set<string>();
+      for (const change of sent) {
+        if (change.refused) continue;
+        if (change.type === "session.watch.set") ids.clear();
+        for (const id of change.ids) ids.add(id);
+      }
+      return [...ids].sort();
+    },
+  };
+}
 
 Deno.test("a retriable reopen denial holds only that session on a shared connection", async () => {
   // After the drop, A's reopens are denied twice, as while its toolshed is
@@ -1481,4 +1567,40 @@ Deno.test("a client a held retry fails does not handshake again", async () => {
   } finally {
     await client.close();
   }
+});
+
+describe("client", () => {
+  describe("held restore", () => {
+    it("leaves the server watching a watch added during a restore that a denial held, once the retry has sent the watch set again", async () => {
+      // The reopen after the drop starts a new server session, so the restore
+      // owes it the watch set. That set is denied for now, which holds the
+      // session, and the retry sends it again as the client held it when the
+      // retry began. A set replaces what the server watches, so an addition
+      // sent ahead of it would be answered as made and then wiped.
+
+      const peer = new RoutedPeer((_space, open) => open === 2 ? "new" : "ok");
+      const client = await connect({ transport: peer });
+      try {
+        const session = await client.mount(SPACE_A, {}, principal());
+        await session.watchAdd([watch("a")]);
+        const changes = holdWatchChanges(peer);
+        peer.drop();
+        const restoring = await changes.next("session.watch.set");
+        const adding = session.watchAdd([watch("b")]);
+        restoring.answer("retriable");
+        await client.restoreConnection();
+        expect(session.held).toBe(true);
+
+        const retry = session.restore();
+        (await changes.next("session.watch.set")).answer("ok");
+        await retry;
+        (await changes.next("session.watch.add")).answer("ok");
+        await adding;
+
+        expect(changes.watching()).toEqual(["a", "b"]);
+      } finally {
+        await client.close();
+      }
+    });
+  });
 });
