@@ -4835,11 +4835,13 @@ export class PieceController<T = unknown> {
       if (expected.origin === null) {
         throw new Error("piece is not following a source");
       }
+      // A detach keeps the pattern the piece runs.
       const baseline = await preparePinnedBaseline(
         this.#pieces.runtime,
         this.#cell,
         expected,
         proved,
+        { candidateIdentity: previousRef.identity },
       );
       const transition = pieceSourceTransition(
         expected,
@@ -5290,7 +5292,12 @@ export class PieceController<T = unknown> {
     pattern: Pattern,
     options?: PatternUpdateOptions,
   ): Promise<PatternUpdateReceipt> {
-    return await this.#updatePattern(() => Promise.resolve(pattern), options);
+    return await this.#updatePattern(
+      () => Promise.resolve(pattern),
+      options,
+      this.#pieces.runtime.patternManager.getArtifactEntryRef(pattern)
+        ?.identity,
+    );
   }
 
   /**
@@ -5298,10 +5305,14 @@ export class PieceController<T = unknown> {
    * update over the candidate `compile` produces at the point in the flow
    * where the candidate is needed: after the current pattern and the
    * transition's baseline are in hand, ahead of the compatibility checks.
+   * `knownCandidateIdentity` is the candidate's identity when it is known
+   * before `compile` runs, which lets the baseline prepare verifying the
+   * candidate's source without loading the compiler.
    */
   async #updatePattern(
     compile: () => Promise<Pattern>,
     options?: PatternUpdateOptions,
+    knownCandidateIdentity?: string,
   ): Promise<PatternUpdateReceipt> {
     const origin = options?.origin === undefined ? null : acceptEnteredOrigin(
       this.#pieces.runtime,
@@ -5373,9 +5384,14 @@ export class PieceController<T = unknown> {
           this.#pieces.runtime,
           this.#cell,
           expected,
-          expected.revisionId === null && expected.origin === null
-            ? { allowUnavailable: true }
-            : {},
+          {
+            ...(expected.revisionId === null && expected.origin === null
+              ? { allowUnavailable: true }
+              : {}),
+            ...(knownCandidateIdentity === undefined
+              ? {}
+              : { candidateIdentity: knownCandidateIdentity }),
+          },
         );
         const pattern = await compile();
         const candidate = this.#pieces.runtime.patternManager
@@ -6097,7 +6113,7 @@ async function preparePinnedBaseline(
   cell: Cell<unknown>,
   expected: PieceSourceSnapshot,
   proved: { identity: string; symbol: string } | undefined,
-  options: { allowUnavailable?: boolean } = {},
+  options: { allowUnavailable?: boolean; candidateIdentity?: string } = {},
 ): Promise<PieceSourceTransitionBaseline> {
   try {
     return await preparePieceSourceTransitionBaseline(

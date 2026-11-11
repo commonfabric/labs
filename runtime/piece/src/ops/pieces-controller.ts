@@ -102,7 +102,6 @@ import { getLogger } from "@commonfabric/logger";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 
-import { prepareSourceClosureVerification } from "../../../runner/src/compilation-cache/cell-cache.ts";
 import { getResultCellWithSourceSchema } from "../../../runner/src/piece-helpers.ts";
 import { pieceId } from "../piece-id.ts";
 // System space-root pattern refs, their derivation, and the source→URL
@@ -1886,15 +1885,19 @@ export class PiecesController<T = unknown> {
       pattern.resultSchema,
     );
     // Setup verifies the source closure of a pattern that carries a
-    // content-addressed entry ref, and verifies it synchronously. Load the
-    // parser it needs first, since setup cannot await one.
+    // content-addressed entry ref, and verifies it synchronously. Prepare
+    // that verification first, since setup cannot await.
     const knownEntryRef = this.runtime.patternManager.getArtifactEntryRef(
       pattern,
     );
     if (knownEntryRef !== undefined) {
       await timePiecePhase(
         "setupPersistent.prepareSourceClosureVerification",
-        () => prepareSourceClosureVerification(),
+        () =>
+          this.runtime.patternManager.prepareSourceClosureVerification(
+            this.#space,
+            [knownEntryRef.identity],
+          ),
       );
     }
     await timePiecePhase(
@@ -3322,7 +3325,7 @@ export class PiecesController<T = unknown> {
       runtime,
       rootToStart,
       sourceSnapshot,
-      { allowUnavailable: true },
+      { allowUnavailable: true, candidateIdentity: officialRef.identity },
     );
     const sourceTransition: PieceSourceTransition = {
       revisionId: crypto.randomUUID(),

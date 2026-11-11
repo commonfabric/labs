@@ -22,6 +22,7 @@ import {
   type RuntimeProgram,
 } from "@commonfabric/runner";
 import type { ExecutorHost } from "@commonfabric/runner/executor/host";
+import { observeCompilerStackDemandsForTestingOnly } from "@commonfabric/runner/for-testing-only";
 import { LifecycleVerbFailure } from "@commonfabric/runner/executor/lifecycle-verb";
 import {
   type ServingMemoryServer,
@@ -1038,6 +1039,38 @@ export default pattern(() => {
         (runtime, receipt) => confirmServedSetSource(runtime, space, receipt),
       );
     };
+
+    it("asks for no compiler to move a piece onto a pattern the space holds compiled", async () => {
+      const created = await instantiate({
+        program: authorizedWriterProgram("v1"),
+      });
+      const candidate = await patternOf({
+        program: authorizedWriterProgram("v2"),
+      });
+      let demands = 0;
+
+      const receipt = await served(
+        "setsrc",
+        async (pieces) => {
+          const stop = observeCompilerStackDemandsForTestingOnly(() =>
+            demands++
+          );
+          try {
+            return await servedSetPieceSource(pieces, {
+              pieceId: created.pieceId,
+              pattern: candidate,
+              actingUser: aliceSigner.did(),
+            });
+          } finally {
+            stop();
+          }
+        },
+        (runtime, receipt) => confirmServedSetSource(runtime, space, receipt),
+      );
+
+      expect(receipt.pattern).toEqual(candidate);
+      expect(demands).toBe(0);
+    });
 
     it("replaces the source a later client reads, with the revision the receipt names, and authorizes the successor over the predecessor", async () => {
       const created = await instantiate({

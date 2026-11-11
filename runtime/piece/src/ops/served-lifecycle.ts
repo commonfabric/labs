@@ -45,7 +45,6 @@ import { describeFailure } from "@commonfabric/js-values/describe-failure";
 
 import { pieceId as pieceIdOf } from "../piece-id.ts";
 import { claimSlugInTx, prepareSlugClaim } from "../slugs.ts";
-import { prepareSourceClosureVerification } from "../../../runner/src/compilation-cache/cell-cache.ts";
 import { PieceOriginError } from "./piece-origin.ts";
 import {
   isPieceSourceCompatibilityRefusal,
@@ -398,8 +397,10 @@ export async function servedInstantiatePiece(
     pattern.resultSchema,
   );
   // Setup verifies the source closure behind a content-addressed entry
-  // ref synchronously, so the parser it needs is loaded ahead of it.
-  await prepareSourceClosureVerification();
+  // ref synchronously, so that verification is prepared ahead of it.
+  await runtime.patternManager.prepareSourceClosureVerification(space, [
+    ref.identity,
+  ]);
   const slugClaim = request.slug === undefined
     ? undefined
     : await prepareSlugClaim(pieces, request.slug, piece, {
@@ -914,7 +915,6 @@ export async function servedSetPieceSource(
     { repairCache: false },
   );
   const piece = await servedPiece(pieces, request.pieceId);
-  await prepareSourceClosureVerification();
   let receipt: PatternUpdateReceipt;
   try {
     receipt = await piece.setCompiledPattern(pattern, {
@@ -1093,7 +1093,6 @@ export async function servedFollowPieceSource(
 ): Promise<ServedFollowReceipt> {
   const { request, prepared } = preparation;
   const piece = await servedPiece(pieces, request.pieceId);
-  await prepareSourceClosureVerification();
   let result: PieceSourceActionResult;
   try {
     result = await piece.changeSource(prepared.action, {

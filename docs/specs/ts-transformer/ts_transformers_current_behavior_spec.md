@@ -4170,7 +4170,7 @@ The option is constructed end-to-end by the runner/CLI chain:
    `registerSpan` forwards to the collector, `fileName`/`mapSpan` implement
    the filename and line remapping of §16.5
    (`patternCoverageOptionsForCompile`,
-   `runtime/runner/src/harness/engine.ts`) — and hands it to the
+   `runtime/runner/src/harness/module-compile.ts`) — and hands it to the
    `CommonFabricTransformerPipeline({ patternCoverage })` it constructs for
    the compile.
 
@@ -4281,7 +4281,8 @@ authored bytes. `injectCfHelpers` (`src/core/cf-helpers.ts`) builds
 `__cfHelpers` import) is prepended, and the trailer (the forwarding `h(...)`
 helper, named `__cfHelpersShim` for modules binding `h` — §2.1) is
 appended after the source. The runner compensates in its `mapSpan`
-(`patternCoverageOptionsForCompile`, `runtime/runner/src/harness/engine.ts`):
+(`patternCoverageOptionsForCompile`,
+`runtime/runner/src/harness/module-compile.ts`):
 
 - every span is shifted by `lineOffset: -1`, the single prepended line — or by
   `0` for the two shapes that reach the compiler unchanged: a stored legacy
@@ -5030,7 +5031,7 @@ re-listing it. The enforced sources of truth:
 | Auto-`.for()` cause triggers, cause-path grammar, and the `__patternResult` root (§13) | `shouldAddReactiveFor` / `createForCall` / `PATTERN_RESULT_CAUSE` (`src/transformers/reactive-variable-for.ts`) | emitted shapes pinned by the stable-cause tests in `test/transform.test.ts` |
 | Shadow-guard binding set + canonical guard text (§14) | `SHADOWED_FACTORY_BINDINGS` / `createFactoryShadowGuardSource()` (`base/pattern-contract/src/sandbox-contract.ts`); insertion point `findFactoryGuardInsertionIndex` (`src/transformers/module-scope-shadowing.ts`) | emission byte-pinned by ~all fixture expected outputs; verifier consumes the same constants via `RESERVED_FACTORY_BINDINGS` (`runtime/runner/src/sandbox/compiled-bundle-verifier.ts`); `cf view`'s `SCAFFOLDING_NAMES` (`runtime/cli/lib/view/languages/typescript/vocab.ts`) is an unimported copy — check for drift |
 | Module-scope `__cf_data` wrap/exclusion name sets + verifier error strings (§15) | `TRUSTED_BUILDERS` / `TRUSTED_DATA_HELPERS` (`base/pattern-contract/src/sandbox-contract.ts`); `CF_DATA_CONSTRUCTOR_NAMES` (`src/transformers/module-scope-cf-data.ts`); `TOP_LEVEL_CALL_RESULT_ERROR` (`runtime/runner/src/sandbox/policy.ts`) | one module feeds both transformer and runner verifier — cross-package contract; runtime freezer semantics live in `runtime/runner/src/sandbox/plain-data.ts` |
-| Coverage instrumentation + span schema (§16) | `PatternCoverageTransformer` (`src/transformers/pattern-coverage.ts`); `PatternCoverageSpan` / `PatternCoverageOptions` / `PATTERN_COVERAGE_GLOBAL` (`src/core/transformers.ts`) | line remapping pins the one-line helper prelude: `HELPERS_STMT` (`src/core/cf-helpers.ts`) ↔ `patternCoverageOptionsForCompile` (`runtime/runner/src/harness/engine.ts`) — change them together |
+| Coverage instrumentation + span schema (§16) | `PatternCoverageTransformer` (`src/transformers/pattern-coverage.ts`); `PatternCoverageSpan` / `PatternCoverageOptions` / `PATTERN_COVERAGE_GLOBAL` (`src/core/transformers.ts`) | line remapping pins the one-line helper prelude: `HELPERS_STMT` (`src/core/cf-helpers.ts`) ↔ `patternCoverageOptionsForCompile` (`runtime/runner/src/harness/module-compile.ts`) — change them together |
 | Hardening/binding helper names, metadata field, canonical helper bodies (§17) | `FUNCTION_HARDENING_HELPER_NAME` / `BINDING_IDENTITY_HELPER_NAME` / `VERIFIED_BINDING_METADATA_FIELD` and `createFunctionHardeningHelperSource` / `createBindingIdentityHelperSource` (`base/pattern-contract/src/sandbox-contract.ts`) | the runner verifier recognizes helper declarations by trivia-stripped byte equality to these sources (`CANONICAL_HARDENING_HELPER` in `runtime/runner/src/sandbox/compiled-bundle-verifier.ts`); the transformer's AST-built twins (`createFunctionHardeningHelper` / `createBindingIdentityHelper` in `src/transformers/module-scope-function-hardening.ts`) must compile to exactly that text — drift fails every module load |
 | Trusted-binding type names + binding positions (§17.3) | seed map `LIBRARY_BINDING_POSITIONS`, extended by `discoverAliasBindingPositions` / `collectAliasBindingPositions` (`src/transformers/module-scope-function-hardening.ts`) | keep in sync with `WriteAuthorizedByValidationTransformer` (§6.8) and the schema generator's `__ctWriterIdentityOf` claim emission; both spell files via the shared `normalizeWriterIdentityFile` (`src/utils/writer-identity-file.ts`) so claim and provenance spellings cannot drift |
 

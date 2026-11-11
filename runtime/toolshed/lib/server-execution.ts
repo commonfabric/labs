@@ -22,6 +22,7 @@ import {
   RoutedPlane,
   webSocketRoute,
 } from "@commonfabric/runner/executor/routed-plane";
+import { servingLoopDiagnostics } from "@commonfabric/runner/executor/serving-loop-diagnostics";
 import { DEFAULT_FLUSH_DEADLINE_MS } from "@commonfabric/runner/executor/space-server";
 import {
   SERVING_RUNTIME_EXPERIMENTAL,
@@ -31,6 +32,7 @@ import {
   type ServingLoopHandle,
   ServingWorker,
 } from "@commonfabric/runner/executor/serving-worker-host";
+import { ModuleCompileWorker } from "@commonfabric/runner/module-compile-worker";
 import type { Server as MemoryServer } from "@commonfabric/memory/v2/server";
 import type { CollectedMemory } from "@commonfabric/runner/collected-memory";
 import type { Identity } from "@commonfabric/identity";
@@ -38,10 +40,6 @@ import {
   servedLifecycleRunner,
   type ServedLifecycleVerbRunner,
 } from "@commonfabric/piece/ops";
-import {
-  getLoggerCountsBreakdown,
-  getTimingStatsBreakdown,
-} from "@commonfabric/logger";
 import { ProcessModuleByteCache } from "@commonfabric/test-support/compile-byte-cache";
 
 /**
@@ -468,6 +466,9 @@ export function startServerExecutionHost(options: {
           ? "by SERVER_EXECUTION_WORKER=false (default is a Worker)"
           : "(the memory store is not a file, which a Worker cannot open)"),
     );
+    // Keeps the type-check, transform and emit step of every compile off the
+    // thread that answers requests.
+    const moduleCompiler = new ModuleCompileWorker();
     const host = new ExecutorHost({
       policy,
       ensureSpaceRoots,
@@ -496,19 +497,24 @@ export function startServerExecutionHost(options: {
         // activation skip the transform-and-emit step for modules this
         // process compiled.
         moduleByteCache: new ProcessModuleByteCache(),
+        moduleCompiler,
       }),
     });
     loop = {
       ...servedLifecycleRunner(host, options.identity),
       stats: () => host.stats(),
+      // This thread's loggers, and the compile worker's timings, which hold
+      // the compiler's phases.
       diagnostics: () =>
-        Promise.resolve({
-          loggerCounts: getLoggerCountsBreakdown(),
-          timingStats: getTimingStatsBreakdown(),
-        }),
+        Promise.resolve(servingLoopDiagnostics(moduleCompiler)),
       collectedWorkerMemory: () => Promise.resolve(undefined),
       host,
-      close: () => host.close(),
+      // The compile worker closes first, so a compile an activation still
+      // awaits fails at once rather than holding the host's close.
+      close: () => {
+        moduleCompiler.close();
+        return host.close();
+      },
     };
   }
   // Only now, with the loop actually up: what `/api/meta` adds to the base

@@ -126,6 +126,7 @@ import { applyLocalExperimentalDefaults } from "./experimental-defaults.ts";
 import type { CompileTurns } from "./harness/compile-interleave.ts";
 import type { ConsoleMethod } from "./harness/console.ts";
 import { Engine } from "./harness/index.ts";
+import type { ModuleCompiler } from "./harness/module-compile.ts";
 import type { CompiledModuleArtifact } from "./harness/types.ts";
 import {
   immutableCellsFor,
@@ -1018,6 +1019,15 @@ export interface RuntimeOptions {
   compileTurns?: CompileTurns;
 
   /**
+   * Where this runtime's compiles run their type-check, transform and emit
+   * step, when not in this realm: a compile worker, which keeps that step and
+   * the heap it takes off this runtime's thread. A compile instrumented for
+   * pattern coverage, or one that asks for its transformed program, runs here
+   * regardless. When unset, every compile runs here.
+   */
+  moduleCompiler?: ModuleCompiler;
+
+  /**
    * Statement-coverage collector for authored patterns. When set, every compile
    * this runtime performs is instrumented — the transformer injects a hit call
    * in front of each authored statement — and the collector receives the hits.
@@ -1470,6 +1480,7 @@ export class Runtime {
   readonly #transactions = new WeakSet<IExtendedStorageTransaction>();
   readonly #derivedInternalCellIds = new DerivedInternalCellIds();
   readonly #compileTurns: CompileTurns | undefined;
+  readonly #moduleCompiler: ModuleCompiler | undefined;
 
   readonly id: string;
   readonly scheduler: Scheduler;
@@ -1679,6 +1690,11 @@ export class Runtime {
     return this.#compileTurns;
   }
 
+  /** See `RuntimeOptions.moduleCompiler`. */
+  get moduleCompiler(): ModuleCompiler | undefined {
+    return this.#moduleCompiler;
+  }
+
   /**
    * Fires once this runtime stops minting write work, at the point in
    * `dispose()` where retries would otherwise re-run against a storage that
@@ -1753,6 +1769,18 @@ export class Runtime {
   readonly #moduleDelegations = new ModuleDelegationRegistry();
 
   /**
+   * The authored import list each module identity's compiled document
+   * attests, by the space whose compiler-stamped document this runtime read
+   * it from. Verifying a source closure in a space takes a module's list from
+   * here in place of parsing its source, and only from that space, since the
+   * stamp is trusted where it was read, as the compiled bodies are.
+   */
+  readonly #sourceImportAttestations = new Map<
+    MemorySpace,
+    Map<string, readonly string[]>
+  >();
+
+  /**
    * Records that, in `space`, each successor identity in `delegations`
    * inherits the writer authority of its predecessors. A registration that
    * adds nothing leaves the published snapshot as it was; one that adds a
@@ -1765,6 +1793,36 @@ export class Runtime {
     delegations: ReadonlyMap<string, ReadonlySet<string>>,
   ): void {
     this.#moduleDelegations.register(space, delegations);
+  }
+
+  /**
+   * Records, for `space`, the authored import list a compiler-stamped compiled
+   * document there attests for each identity in `attestations`.
+   */
+  registerSourceImportAttestations(
+    space: MemorySpace,
+    attestations: ReadonlyMap<string, readonly string[]>,
+  ): void {
+    if (attestations.size === 0) return;
+    let bySpace = this.#sourceImportAttestations.get(space);
+    if (bySpace === undefined) {
+      bySpace = new Map();
+      this.#sourceImportAttestations.set(space, bySpace);
+    }
+    for (const [identity, imports] of attestations) {
+      bySpace.set(identity, imports);
+    }
+  }
+
+  /**
+   * The authored import list a compiled document read in `space` attests for
+   * `identity`, or `undefined` when this runtime has read none.
+   */
+  attestedSourceImports(
+    space: MemorySpace,
+    identity: string,
+  ): readonly string[] | undefined {
+    return this.#sourceImportAttestations.get(space)?.get(identity);
   }
 
   /**
@@ -2195,6 +2253,7 @@ export class Runtime {
       );
       this.moduleByteCache = options.moduleByteCache;
       this.#compileTurns = options.compileTurns;
+      this.#moduleCompiler = options.moduleCompiler;
       this.patternCoverage = options.patternCoverage;
       // Validated + digested + frozen before the trust-snapshot provider
       // default below, whose `revision` covers the config digest (a trust
