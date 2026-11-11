@@ -45,8 +45,9 @@ Checkers referenced below:
   configs) — INV-6 over the decided-but-not-yet-processed window.
 - the **delivery model**: `docs/specs/memory-v2/tla/SessionDelivery.tla`,
   which model-checks INV-14 over one session's watch delivery across lost
-  pushes, a wiped replica, and both reconnect paths (resumed and
-  re-established), for each diff-base design (`SessionDelivery_*.cfg`).
+  pushes, a wiped replica, frames held for schema document bodies, and both
+  reconnect paths (resumed and re-established), for each diff-base design
+  and hold rule (`SessionDelivery_*.cfg`).
 
 ## The invariants
 
@@ -699,11 +700,13 @@ Checked by: the delivery model (`SessionDelivery_Holdings.cfg` certifies it
 with loss, a wipe, union shrink, and the zero-watch reconcile in play;
 `SessionDelivery_Memory.cfg` is the violation witness for the server-memory
 base — the schema-doc quarantine residual; `SessionDelivery_MemoryFull.cfg`
-witnesses the full re-download of a lapsed session under the old base). The
-model certifies the SERVER's diff rule against a truthful declaration —
-`tla/README.md` states the assumption set — and each CLIENT construction
-obligation is pinned by a unit test instead: delivered-not-promoted seqs and
-the end-to-end declaration by
+witnesses the full re-download of a lapsed session under the old base;
+`SessionDelivery_Held.cfg` certifies it with frames held for schema document
+bodies, and `SessionDelivery_HeldBypass.cfg` witnesses a removal applied
+ahead of a held frame). The model certifies the SERVER's diff rule against
+a truthful declaration — `tla/README.md` states the assumption set — and
+each CLIENT construction obligation is pinned by a unit test instead:
+delivered-not-promoted seqs and the end-to-end declaration by
 `runtime/runner/test/memory-v2-reconnect-holdings.test.ts`; branch identity,
 the wire-boundary parse, and the zero-watch retraction by
 `runtime/memory/test/v2-session-holdings.test.ts`; the declaration on both
@@ -1085,8 +1088,10 @@ scanning, cascade scope, or retry behavior:
    `docs/specs/memory-v2/tla/README.md`) — add a mode to the model if the
    change introduces a new recording/basis shape. The same holds on the
    delivery side: a change to the reconnect diff base, the holdings
-   declaration, or removal semantics runs the `SessionDelivery` configs,
-   and a new base or declaration shape becomes a `Mode` variant there.
+   declaration, removal semantics, or the frames a client holds back from
+   its replica runs the `SessionDelivery` configs, and a new base or
+   declaration shape becomes a `Mode` variant there, a new hold rule a
+   `HoldMode` variant.
 4. Run the differential harness; if the change makes the engine accept
    strictly more histories, the naive validator must agree on every newly
    accepted one.

@@ -101,13 +101,19 @@ java -cp tla2tools.jar tlc2.TLC -config SessionDelivery_Memory.cfg \
   -workers auto SessionDelivery.tla
 java -cp tla2tools.jar tlc2.TLC -config SessionDelivery_MemoryFull.cfg \
   -workers auto SessionDelivery.tla
+java -cp tla2tools.jar tlc2.TLC -config SessionDelivery_Held.cfg \
+  -workers auto SessionDelivery.tla
+java -cp tla2tools.jar tlc2.TLC -config SessionDelivery_HeldBypass.cfg \
+  -workers auto SessionDelivery.tla
 ```
 
-Only the Holdings run is expected to pass. The Memory and MemoryFull runs
-are regression witnesses: each MUST report the violation its table row
-describes and exits nonzero doing so — a clean exit from either means the
-old design's defect became unreproducible and the model needs examining,
-exactly as a new violation in Holdings means the shipped design does.
+Only the Holdings and Held runs are expected to pass. The Memory, MemoryFull
+and HeldBypass runs are regression witnesses: each MUST report the violation
+its table row describes and exits nonzero doing so — a clean exit from one
+means the defect it witnesses became unreproducible and the model needs
+examining, exactly as a new violation in Holdings or Held means the shipped
+design does. With more than one worker, TLC may report a longer trace than
+the depth a row gives; `-workers 1` reports the shortest.
 
 A violated invariant prints the full state trace — each `State N` is one
 atomic action (`Build`, `Process`, `Deliver`, `Integrate`); the last state's `log` entry
@@ -242,9 +248,11 @@ or missed contributor directly.
   arrays (so verdict-time and frame-time drop policies are covered alike),
   and a locally cascade-dropped commit models
   as never-decided (pre-send refusal) — the server-decides-first ordering
-  is a separate reachable interleaving. Still outside scope: connection
-  loss and replay (INV-11), which remain covered by reconnect unit tests
-  only.
+  is a separate reachable interleaving. A verdict processed while frames
+  wait for schema document bodies (delivery by reference) is this
+  interleaving too: the hold delays `Integrate` and nothing else. Still
+  outside scope: connection loss and replay (INV-11), which remain covered
+  by reconnect unit tests only.
 - **FIFO per-session admission.** INV-5 holds by construction, matching the
   current implementation (which rejects rather than holds). If admission is
   ever parallelized or holds are introduced, that assumption must become an
@@ -275,18 +283,38 @@ indistinguishable from initial delivery). `Mode` selects the diff base:
 (the design before client-declared holdings); `holdings` is the client's
 declaration on both paths.
 
+`HoldMode` adds the hold that delivery by reference brings
+(`docs/specs/content-addressed-schemas.md`, "Delivery by reference"). A frame
+that names a schema document body the client's registry lacks waits for its
+fetch in a queue in front of the replica, though the server has already
+recorded it as delivered. `Drain` is the fetch's reply: a verified body applies the frame
+at the head, and a body that could not be fetched drops it, which counts as a
+loss. A disconnect discards the queue. `inorder` queues every frame that
+arrives while one is held behind it, as the client does; `bypass` applies a
+frame that names no missing body at once, ahead of the held ones; `none`
+holds nothing. `MaxHeld` bounds the frames held for their own bodies. The
+replica applies a push only when it advances the document's seq, the
+monotonic guard INV-14 states, so a late push cannot move a document
+backwards; a removal is not a seq, and nothing guards it.
+
 Checked with TLC 2.19; every config finishes in seconds:
 
-| Config | Mode | MaxLoss | AllowReset | Result |
-| --- | --- | --- | --- | --- |
-| `SessionDelivery_Memory.cfg` | `memory` | 1 | yes | **ReconnectConverges violated** at depth 4 — a push the server records as delivered and the client loses, a disconnect, a resume: the diff against the server's memory elides the lost document, and the replica stays behind. This is the schema-doc quarantine residual (verification-coverage.md OW61) as a machine-found trace; kept as the regression witness. (The same base fails the removal direction too — a lost removal the memory believes absorbed is never retracted — at greater depth; the reported trace is the shortest.) |
-| `SessionDelivery_MemoryFull.cfg` | `memory` | 0 | no | **NoRedundantDelivery violated** — with a perfect client the old design converges (`ReconnectConverges` holds at 602 distinct states when checked alone), but a re-established session is delivered in full: the whole union again, held or not. |
-| `SessionDelivery_Holdings.cfg` | `holdings` | 1 | yes | **All invariants hold** (2,164 distinct states, exhaustive at `MaxWrites = 3`): every reconnect — resumed or re-established, after any loss, wipe, or union shrink — brings the replica to the union's current state, retracts what the union no longer covers (the zero-watch reconcile included), and re-delivers nothing it holds. Negative control: emptying `Reconnect`'s `removed` set — the zero-watch shortcut — violates `ReconnectConverges` within a second (a lost removal, a disconnect, a resume: the stale document survives as held state), so the retraction clause is load-bearing, not decorative. |
+| Config | Mode | MaxLoss | AllowReset | HoldMode | Result |
+| --- | --- | --- | --- | --- | --- |
+| `SessionDelivery_Memory.cfg` | `memory` | 1 | yes | `none` | **ReconnectConverges violated** at depth 4 — a push the server records as delivered and the client loses, a disconnect, a resume: the diff against the server's memory elides the lost document, and the replica stays behind. This is the schema-doc quarantine residual (verification-coverage.md OW61) as a machine-found trace; kept as the regression witness. (The same base fails the removal direction too — a lost removal the memory believes absorbed is never retracted — at greater depth; the reported trace is the shortest.) |
+| `SessionDelivery_MemoryFull.cfg` | `memory` | 0 | no | `none` | **NoRedundantDelivery violated** — with a perfect client the old design converges (`ReconnectConverges` holds at 602 distinct states when checked alone), but a re-established session is delivered in full: the whole union again, held or not. |
+| `SessionDelivery_Holdings.cfg` | `holdings` | 1 | yes | `none` | **All invariants hold**, `SteadyConverges` included (2,889 distinct states, exhaustive at `MaxWrites = 3`): every reconnect — resumed or re-established, after any loss, wipe, or union shrink — brings the replica to the union's current state, retracts what the union no longer covers (the zero-watch reconcile included), and re-delivers nothing it holds. Negative control: emptying `Reconnect`'s `removed` set — the zero-watch shortcut — violates `ReconnectConverges` within a second (a lost removal, a disconnect, a resume: the stale document survives as held state), so the retraction clause is load-bearing, not decorative. |
+| `SessionDelivery_Held.cfg` | `holdings` | 1 | yes | `inorder`, `MaxHeld = 2` | **All invariants hold**, `SteadyConverges` included (8,295 distinct states, exhaustive at `MaxWrites = 3`): with frames held for their bodies, queued behind one another, dropped when a body cannot be fetched, and discarded by a disconnect, every reconnect still converges and re-delivers nothing the replica holds, and between reconnects a session with nothing held, lost or wiped is current. A discarded queue is recovered like a lost push: the server recorded its frames as delivered, and the reconnect's diff against the declaration delivers them again. |
+| `SessionDelivery_HeldBypass.cfg` | `holdings` | 1 | yes | `bypass`, `MaxHeld = 2` | **SteadyConverges violated** at depth 4 — a push held for its body, the document's removal applied ahead of it, the push drained: the replica holds a document the union no longer covers, with nothing held or lost. `ReconnectConverges` holds when checked alone (7,137 distinct states), since the next reconnect's declaration names the document and the removal comes, which is why the steady-state invariant is stated. Kept as the witness that a held session's later frames queue behind it. |
 
 `ReconnectConverges` is INV-14 of `09-invariants.md`, its uncovered-document
 clause included; `NoRedundantDelivery` is its efficiency companion, stated as
 an invariant so the full re-download the old design performed on a lapsed
-session is a checked witness rather than an anecdote.
+session is a checked witness rather than an anecdote. `SteadyConverges` is
+the same statement as `ReconnectConverges` at every point between reconnects
+where nothing is held and nothing has been lost, dropped or wiped since the
+last one. `ReconnectConverges` alone cannot see a replica that goes wrong
+between reconnects and is put right by the next one.
 
 **Scope of the certification.** What the Holdings result certifies is the
 SERVER's diff rule against a truthful declaration. The CLIENT's construction
@@ -319,6 +347,30 @@ the pre-watch loss they were once subject to is fixed and pinned separately
 the steady-state push and the removal frame. Commit replay (INV-11) remains
 outside both models.
 
+**What the hold leaves out.**
+
+- **Verdicts.** A transact response is not a frame and is never held, so a
+  verdict can be processed while the frames sent before it wait for a body.
+  That is `PendingStacks.tla`'s channel delivery, where `Deliver` runs
+  independently of `Integrate`: the hold delays integration, and never lets
+  a covering frame precede its verdict.
+- **A request's response behind a later one.** A `session.watch.set` or
+  `session.watch.add` response carries a sync and is held like any frame,
+  while the response to a later request, a transact verdict among them, is
+  not. Neither model represents request responses, so a response processed
+  ahead of an earlier request's is outside both.
+- **Recovery after a dropped body.** A frame dropped because its body could
+  not be fetched leaves the session behind until its next reconnect, and
+  nothing forces one. `SteadyConverges` excludes that state, and the model
+  checks only that the reconnect restores it.
+- **A hold that outlives its connection.** The client discards every hold
+  when its connection is replaced. A variant that keeps them, draining their
+  frames before or after the next reconnect's catch-up, also passes the
+  `Held` config, since union growth is not modeled: the queue keeps such
+  frames in order, and the guard makes a late push a no-op. The model
+  therefore does not certify the discard; a removal that outlived its
+  connection into a session whose union had grown again would need it.
+
 ## Changing the models
 
 Per the change discipline in `09-invariants.md`: if a change introduces a new
@@ -327,10 +379,12 @@ what a client shows for a pending layer, add it as a `DepMode` /
 `BasisMode` / `IdentityMode` / `ViewMode` variant plus a config, and record
 the expected/observed result in the table above. The delivery model has the same obligation on its own axes:
 a change to the reconnect diff base, to what a declaration may claim or how
-the server reads one, or to removal semantics (union shrink, the zero-watch
-reconcile, uncovered-document retraction) is a reason to rerun all three
-`SessionDelivery` configs, and a new base or declaration shape is added as a
-`Mode` variant plus a config with its expected/observed row. Keep the
+the server reads one, to removal semantics (union shrink, the zero-watch
+reconcile, uncovered-document retraction), or to which frames the client
+holds back from its replica and in what order it applies them is a reason to
+rerun every `SessionDelivery` config. A new base or declaration shape is
+added as a `Mode` variant, and a new hold rule as a `HoldMode` variant, each
+with a config and its expected/observed row. Keep the
 existing modes in both models — the violated configs are regression witnesses
 (they document *why* the current shape is what it is), not dead code. If TLC
 finds a violation in a mode expected to pass, the trace is the ticket:

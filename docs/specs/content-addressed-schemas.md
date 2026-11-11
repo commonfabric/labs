@@ -820,7 +820,9 @@ schema it already knows it has.
   those frames — the held one or one queued behind it — keeps waiting rather
   than taking its document for absent, and the barriers that wait for every
   frame the client has received (`inputSynced()`, and the frame-applied
-  barrier) wait for the held frames as well.
+  barrier) wait for the held frames as well. The delivery model checks
+  this order against lost, dropped and discarded frames
+  (`memory-v2/tla/SessionDelivery.tla`, `HoldMode`).
 - **An unresolved reference.** The client drops the reference from its
   frame and applies the rest: the document is never recorded as held, so
   it is never declared in holdings, and the client discards its delivery
