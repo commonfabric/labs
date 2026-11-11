@@ -5576,10 +5576,14 @@ export class PieceController<T = unknown> {
   }
 
   async #refreshCellSchema(refreshVersion: number): Promise<void> {
-    const cell = this.#atInstance(this.#cell);
+    // The guard compares the controller's own cell, so a mutation that
+    // replaced it ends the refresh; reads go through a view of it at this
+    // controller's instance, fresh on each pass.
+    const base = this.#cell;
     while (
-      refreshVersion === this.#mutationVersion && cell === this.#cell
+      refreshVersion === this.#mutationVersion && base === this.#cell
     ) {
+      const cell = this.#atInstance(base);
       await cell.sync();
       const refBeforeLoad = getPatternIdentityRef(cell);
       if (!refBeforeLoad) return;
@@ -5600,7 +5604,7 @@ export class PieceController<T = unknown> {
         continue;
       }
       if (
-        refreshVersion === this.#mutationVersion && cell === this.#cell
+        refreshVersion === this.#mutationVersion && base === this.#cell
       ) {
         this.#cell = cell.asSchema(pattern.resultSchema);
       }

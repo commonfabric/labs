@@ -626,6 +626,41 @@ describe("piece source lifecycle", () => {
     expect(getPatternIdentityRef(spaceInstance)).toBeUndefined();
   });
 
+  it("reloads a scoped controller's schema from its instance after a refused update, as for a space piece", async () => {
+    const program = versionProgram("v1");
+    const { id } = await userScopedPiece(program);
+    // As a serving runtime opens a requester's piece: a schemaless cell, and
+    // the identity whose instance the controller reads and writes.
+    const cell = runtime.getCellFromEntityId(
+      pieces.getSpace(),
+      id,
+      [],
+      undefined,
+      undefined,
+      "user",
+    );
+    await cell.sync();
+    const piece = new PieceController(pieces, cell, {
+      scopeKeyIdentity: runtime.scopeKeyIdentity,
+    });
+    expect(piece.getCell().getAsNormalizedFullLink().schema).toBeUndefined();
+
+    // Refused before it writes anything; the controller then reloads the
+    // schema the durable pattern declares.
+    await expect(
+      piece.setPattern(versionProgram("v2"), {
+        expectedPattern: { identity: "elsewhere", symbol: "default" },
+      }),
+    ).rejects.toThrow(PieceSourceChangedError);
+
+    const pattern = await runtime.patternManager.compilePattern(program, {
+      space: pieces.getSpace(),
+    });
+    expect(piece.getCell().getAsNormalizedFullLink().schema).toEqual(
+      pattern.resultSchema,
+    );
+  });
+
   it("points a piece addressed at a scope at an origin on that scope's instance", async () => {
     webSources["/api/patterns/entered.tsx"] = versionProgram("entered-v1");
     const { piece, id } = await userScopedPiece(versionProgram("v1"));

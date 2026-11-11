@@ -364,7 +364,8 @@ delegation a `setsrc` carries, and the piece is not started there. What
 following the origin concluded is then recorded on the piece as the serving
 loop's bookkeeping, as the source reconciler records its own. Unless `start` is
 `false`, the verb names the root of a piece's space instance as its demand, as
-`setsrc` does.
+`setsrc` does; the requester's instance of a scoped piece derives when the
+requester demands it.
 
 A served `setsrc` that names an `origin` records it with the update's revision
 instead of detaching the piece. The source it writes is the request's program
