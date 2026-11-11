@@ -114,6 +114,7 @@ import {
   HOME_PATTERN_SOURCE,
   patternSourceUrl,
 } from "../system-pattern-url.ts";
+import { adoptCatalogRoomsOf } from "./adopt-catalog-rooms.ts";
 import { isCfcMigrationRejection } from "./cfc-migration-rejection.ts";
 import {
   assertSuppliedLinkSchemasCompatible,
@@ -2549,6 +2550,28 @@ export class PiecesController<T = unknown> {
     this.#assertHomeSpace("ensure a private inbox");
     const home = (await this.ensureDefaultPattern()).getCell();
     await ensurePrivateInboxOf(
+      this.runtime,
+      home,
+      this.runtime.userIdentityDID,
+      signal,
+    );
+  }
+
+  /**
+   * Has the identity's chat manager adopt each room Home's catalog lists with
+   * no membership, a few rooms at a time, as `adoptCatalogRoomsOf()` says, so
+   * that the manager, which lists a room by its membership alone, lists it.
+   * This controller must be over the identity's Home space.
+   *
+   * Resolves once no entry is left to adopt, or once `signal` aborts or the
+   * runtime begins disposal, after the batch under way. Rejects when Home
+   * cannot be brought up, when reading its records fails, or when the
+   * manager's handling of an adoption fails.
+   */
+  async adoptCatalogRooms(signal?: AbortSignal): Promise<void> {
+    this.#assertHomeSpace("adopt its catalog's rooms");
+    const home = (await this.ensureDefaultPattern()).getCell();
+    await adoptCatalogRoomsOf(
       this.runtime,
       home,
       this.runtime.userIdentityDID,

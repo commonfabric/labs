@@ -492,19 +492,37 @@ export interface ChatContainer {
   fileStoreRecord?: FileStoreRecord;
 }
 
-/** One room in a user's chat manager. */
+/**
+ * One room in a user's chat manager: a link to the room, and what the
+ * manager's own handlers recorded of it when they read the room, so that a
+ * list of entries reads nothing in any room's space.
+ */
 export interface ChatIndexEntry {
-  /** The room. */
-  room: Cell<ChatRoomLink>;
+  /**
+   * The room, as a handle that declares nothing of the room: a read of an
+   * entry, or of anything holding one, keeps the link without loading the
+   * room. Whoever reads the room reads it through a link that declares what
+   * it reads, as a `ChatRoomLink` does.
+   */
+  // `Cell<…>` is written out rather than reached through an alias: a schema
+  // marks a reference position only where the wrapper is written in the type.
+  room: Cell<unknown>;
 
-  /** The room's kind, as its `about.kind` says. */
+  /** The room's kind, as its `about.kind` said when the entry was recorded. */
   kind: ChatRoomKind;
 
   /** A direct room's other member, by principal. */
   counterpart?: string;
 
-  /** When first listed for this user, using catalog admission for discovery. */
+  /** When first listed for this user. */
   since: FabricEpochNsec;
+
+  /**
+   * The room's title as the manager last read it, when the room has one:
+   * absent for a room with no title, and otherwise exactly the room's own,
+   * empty or not.
+   */
+  title?: string;
 
   /**
    * The opaque revision supplied by `rooms` for its membership or discovery
@@ -688,8 +706,13 @@ export interface ChatManagerNotice {
   /** The notice's id, unique in the manager. */
   id: string;
 
-  /** The room the recipient was admitted to. */
-  room: Cell<ChatRoomLink>;
+  /**
+   * The room the recipient was admitted to, as a handle that declares nothing
+   * of the room, as `ChatIndexEntry.room` is.
+   */
+  // `Cell<…>` is written out rather than reached through an alias: a schema
+  // marks a reference position only where the wrapper is written in the type.
+  room: Cell<unknown>;
 
   /** The DID of the person admitted. */
   recipient: string;
