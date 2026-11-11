@@ -817,12 +817,13 @@ export class Client {
    */
   #cidReferenceHolds = new Map<string, CidReferenceHold>();
   /**
-   * The schema document body fetches in flight on this connection, by hash,
-   * each settling `true` once its body has verified and registered. A frame
-   * of any space naming a hash already being fetched waits for that fetch
-   * rather than starting one. The wait is bounded by this connection: every
-   * request on it is answered, or the connection closes
-   * (`docs/specs/content-addressed-schemas.md`, "Delivery by reference").
+   * The schema document body fetches in flight on this connection, by
+   * `#cidBodyFetchKey()`, each settling `true` once its body has verified and
+   * registered. A frame naming a hash already being fetched from the same
+   * host waits for that fetch rather than starting one. The wait is bounded
+   * by this connection: every request on it is answered, or the connection
+   * closes (`docs/specs/content-addressed-schemas.md`, "Delivery by
+   * reference").
    */
   #cidBodyFetches = new Map<string, Promise<boolean>>();
   /**
@@ -2872,8 +2873,8 @@ export class Client {
 
   /**
    * Fetches the schema document bodies `hashes` name from `session`'s space
-   * with one query, and registers each that verifies. A hash another fetch on
-   * this connection is already fetching is waited for instead, and only a
+   * with one query, and registers each that verifies. A hash another fetch
+   * from the same host is already fetching is waited for instead, and only a
    * body that verified ends that wait: on any other outcome the hash is
    * fetched again from this space. Returns the hashes still unregistered
    * afterward, each logged, and whether a fetch went unanswered because the
@@ -2886,7 +2887,9 @@ export class Client {
     const own: string[] = [];
     const shared: [string, Promise<boolean>][] = [];
     for (const hash of hashes) {
-      const inFlight = this.#cidBodyFetches.get(hash);
+      const inFlight = this.#cidBodyFetches.get(
+        this.#cidBodyFetchKey(session, hash),
+      );
       if (inFlight === undefined) own.push(hash);
       else shared.push([hash, inFlight]);
     }
@@ -2897,10 +2900,11 @@ export class Client {
         const done = request.then((reply) =>
           reply && lookupSchemaDocument(hash) !== undefined
         );
-        this.#cidBodyFetches.set(hash, done);
+        const key = this.#cidBodyFetchKey(session, hash);
+        this.#cidBodyFetches.set(key, done);
         void done.then(() => {
-          if (this.#cidBodyFetches.get(hash) === done) {
-            this.#cidBodyFetches.delete(hash);
+          if (this.#cidBodyFetches.get(key) === done) {
+            this.#cidBodyFetches.delete(key);
           }
         });
       }
@@ -2928,6 +2932,21 @@ export class Client {
       ]);
     }
     return { unresolved, lost: false };
+  }
+
+  /**
+   * Helper for `#fetchCidBodies()`, which names the fetch of `hash` for
+   * `session` in `#cidBodyFetches`, so that frames share a fetch only when
+   * one host answers both. A direct connection reaches one host for every
+   * space, so a hash names one fetch. A routed connection (`routedAuthV1`)
+   * reaches a host per space, so a fetch is shared only within its space: a
+   * host that leaves a fetch unanswered then holds back only frames that
+   * came from it.
+   */
+  #cidBodyFetchKey(session: SyncPartSession, hash: string): string {
+    return this.#serverFlags?.routedAuthV1 === true
+      ? JSON.stringify([session.space, hash])
+      : hash;
   }
 
   /**

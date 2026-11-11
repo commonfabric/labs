@@ -4,6 +4,7 @@ import { expect } from "@std/expect";
 import { FakeTime } from "@std/testing/time";
 import { Identity } from "@commonfabric/identity";
 import { setModernCellRepConfig } from "@commonfabric/data-model/cell-rep";
+import { internSchema } from "@commonfabric/data-model-schema";
 import { getMemoryProtocolFlags, type SessionSync } from "../v2.ts";
 import {
   connect,
@@ -2660,4 +2661,105 @@ Deno.test("handshake refusals retain the server error and signature custody prop
     Error,
     "Key unavailable",
   );
+});
+
+Deno.test("on a routed connection a space's unanswered body fetch holds back no other space's frames", async () => {
+  setModernCellRepConfig(true);
+  // Two spaces behind one routed connection name the same schema document
+  // by reference. Space A's host never answers its body fetch until space B
+  // has asked its own; B asking first is what keeps A's host from holding
+  // B's frames.
+  const schema = { type: "string", title: "routed-cid-reference" } as const;
+  const hash = internSchema(schema, true).taggedHashString;
+  const spaceA = "did:key:z6Mk-routed-cid-reference-a";
+  const spaceB = "did:key:z6Mk-routed-cid-reference-b";
+  const asked: string[] = [];
+  let askedBeforeMarker: string[] | undefined;
+  let answerA: (() => void) | undefined;
+  const aAsked = Promise.withResolvers<void>();
+  const bFramed = Promise.withResolvers<void>();
+  const p = peer(frame(hello()), (body, push) => {
+    const respond = (rest: Record<string, unknown>) =>
+      push({ type: "response", requestId: body.requestId, ...rest });
+    const space = String(body.space);
+    if (body.type === "connection.auth") {
+      respond({
+        ok: {
+          principal: String(body.statement).split("|")[0],
+          expiresAt: Math.floor(Date.now() / 1000) + 600,
+        },
+      });
+    } else if (body.type === "session.open") {
+      respond({
+        ok: { sessionId: `session-${space}`, sessionToken: "t", serverSeq: 0 },
+      });
+    } else if (body.type === "session.watch.set") {
+      respond({
+        ok: {
+          serverSeq: 1,
+          sync: {
+            type: "sync",
+            fromSeq: 0,
+            toSeq: 1,
+            upserts: [{
+              branch: "",
+              id: `cid:${hash}`,
+              seq: 1,
+              byReference: true,
+            }],
+            removes: [],
+          },
+        },
+      });
+      if (space === spaceB) bFramed.resolve();
+    } else if (body.type === "graph.query") {
+      const roots = (body.query as { roots: unknown[] }).roots;
+      const answered = (entities: unknown[]) =>
+        respond({ ok: { serverSeq: 1, entities } });
+      if (roots.length === 0) {
+        // The test's marker: whatever was asked before it was asked when
+        // B's frame was admitted.
+        askedBeforeMarker = [...asked];
+        answered([]);
+        answerA?.();
+      } else if (space === spaceA) {
+        asked.push(space);
+        answerA = () => answered([]);
+        aAsked.resolve();
+      } else {
+        asked.push(space);
+        answered([{
+          branch: "",
+          id: `cid:${hash}`,
+          seq: 1,
+          document: { value: schema },
+        }]);
+      }
+    } else respond({ ok: {} });
+  });
+  const client = await connect({ transport: p.transport });
+  try {
+    const a = await client.mount(spaceA, {}, namedSigner(identity.did()));
+    const b = await client.mount(spaceB, {}, namedSigner(identity.did()));
+    const watch = [{
+      id: "schema",
+      kind: "graph" as const,
+      query: {
+        roots: [{ id: `cid:${hash}`, selector: { path: [], schema: false } }],
+      },
+    }];
+    const watchingA = a.watchSet(watch);
+    await aAsked.promise;
+    const watchingB = b.watchSet(watch);
+    await bFramed.promise;
+    await b.queryGraph({ roots: [] });
+    const viewB = await watchingB;
+    await watchingA;
+    expect(askedBeforeMarker).toStrictEqual([spaceA, spaceB]);
+    expect(
+      viewB.entities.find((entity) => entity.id === `cid:${hash}`)?.document,
+    ).toEqual({ value: schema });
+  } finally {
+    await client.close();
+  }
 });
