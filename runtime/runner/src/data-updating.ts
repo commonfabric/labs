@@ -1,4 +1,5 @@
 import type { JSONSchemaObj } from "@commonfabric/api";
+import { appendCfcDiagnosticLog } from "./cfc/diagnostic-log.ts";
 import {
   getServerExecutionConfig,
   resolveScopeKey,
@@ -1196,6 +1197,11 @@ function anchorValueAsEntity(
         path: [...path],
       }],
     }, runtimeWritePolicyAuthorization);
+    appendCfcDiagnosticLog(
+      `marker(anchored): ${newEntryLink.id} under ${link.id} at /${
+        path.join("/")
+      }`,
+    );
   }
 
   // The same carry for the other class of parent, on the same reasoning. A

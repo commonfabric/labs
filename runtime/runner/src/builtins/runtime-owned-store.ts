@@ -6,6 +6,7 @@
  */
 
 import type { JSONSchema } from "../builder/types.ts";
+import { appendCfcDiagnosticLog } from "../cfc/diagnostic-log.ts";
 import { type Cell, cellRuntime } from "../cell.ts";
 import {
   CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE,
@@ -68,6 +69,9 @@ export function recordRuntimeOwnedStore(
       path: [...ownerLink.path],
     }],
   }, runtimeWritePolicyAuthorization);
+  appendCfcDiagnosticLog(
+    `marker(oneshot): ${storeLink.id} owner ${ownerLink.id}`,
+  );
 }
 
 /**

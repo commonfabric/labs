@@ -1,4 +1,5 @@
 import type { TextChange } from "@commonfabric/api";
+import { appendCfcDiagnosticLog } from "../cfc/diagnostic-log.ts";
 import {
   deepFreeze,
   type FabricPlainObject,
@@ -1081,6 +1082,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    */
   noteCfcDiagnostic(message: string): void {
     this.#cfcState.diagnostics.push(message);
+    appendCfcDiagnosticLog(message);
   }
 
   // A refusal this transaction has already reported. Prepare decides and
