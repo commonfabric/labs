@@ -508,6 +508,42 @@ describe("send-reviewed", () => {
       expect(await relay.stored()).toEqual([]);
     });
 
+    it("logs the load's failure, and sends nothing, for a send it took without waiting", async () => {
+      await using relay = await coldRelay();
+      const processor = buildProcessor({
+        runtime: relay.runtime,
+        identity: signer,
+        space,
+      });
+      const logged: unknown[][] = [];
+      try {
+        using _refused = stub(
+          relay.runtime.storageManager,
+          "syncCell",
+          () => Promise.reject(new Error("The server refused the load.")),
+        );
+        using _log = stub(console, "error", (...args: unknown[]) => {
+          logged.push(args);
+        });
+        processor.handleCellSend({
+          type: RequestType.CellSend,
+          cell: relay.save,
+          event: { body: "refused" },
+        });
+        await processor.handleIdle();
+      } finally {
+        await processor.dispose();
+      }
+      expect(logged.map(([message, error]) => [
+        message,
+        (error as Error).message,
+      ])).toEqual([[
+        "[RuntimeProcessor] Cell send failed:",
+        "Could not load document",
+      ]]);
+      expect(await relay.stored()).toEqual([]);
+    });
+
     it("rejects, and sends nothing, when the processor is disposed while the stream's documents load", async () => {
       await using relay = await coldRelay();
       const processor = buildProcessor({
