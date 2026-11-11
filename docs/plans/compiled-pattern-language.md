@@ -180,10 +180,14 @@ migration.
   that promote (1,351 of 1,466), and the count of per-element callbacks that
   bind a handler without the index (6 certain, 95 undecided), both need the
   type-checker prototype.
-- **Factory values depend on unstarted work.** A factory can be stored but
-  not read back as something callable. Calling one read from a cell needs
-  the first stages of
-  [first-class serializable factories](first-class-serializable-factories.md).
+- **Factory values depend on pending work.** On this branch a factory can be
+  stored but not read back as something callable. Pull request #4687 in this
+  repository implements
+  [first-class serializable factories](first-class-serializable-factories.md)
+  and is not merged. It also removes `patternTool` in favor of an inline
+  pattern that closes over values of the enclosing pattern body, which is
+  the model for the replacement asked about above. The inventory's statement
+  that this work has not started predates that pull request.
 
 ## Next work
 
