@@ -30,6 +30,7 @@ import { type ACL, isACLUser, isCapability } from "@commonfabric/memory/acl";
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import {
   isDeletedSpaceError,
+  isFirstHandshakeFailure,
   type PresenceEvent,
   type PresenceMembership,
 } from "@commonfabric/memory/v2/client";
@@ -89,6 +90,7 @@ import {
   resolveExternalRootRefForStructure,
   resolveSlugReference,
   resolveSlugTargetInPiece,
+  resolveWriteTarget,
   Runtime,
   runtimePresets,
   RuntimeTelemetry,
@@ -130,6 +132,7 @@ import {
 } from "@commonfabric/runner/cfc/custody-seal";
 import { cfcSchemaGivesNoShape } from "@commonfabric/runner/cfc/schema-primitives";
 import { hashStringForEntityAddress } from "@commonfabric/runner/entity-kind";
+import { offerProfileSuggestion } from "@commonfabric/runner/profile-suggestion";
 import { bindNativeUiControl } from "@commonfabric/runner/native-ui";
 import {
   NameSchema,
@@ -189,6 +192,7 @@ import {
   type CellPushRequest,
   type CellRef,
   type CellResolveAsCellRequest,
+  type CellResolveAsCellResponse,
   CellResponse,
   type CellSendRequest,
   type CellSendReviewedRequest,
@@ -241,6 +245,7 @@ import {
   type LoggerMetadata,
   type LogLevel,
   NotificationType,
+  type OfferProfileSuggestionRequest,
   type OperationApplyRequest,
   type OperationApplyResponse,
   type OperationCapabilitiesRequest,
@@ -280,6 +285,7 @@ import {
   RequestType,
   type ResolveEventAttentionRequest,
   type RetrySpaceAccessRequest,
+  type RetryUnreachableSpacesRequest,
   RuntimeErrorCode,
   type RuntimeSecurityContext,
   type SetActionRunTraceEnabledRequest,
@@ -969,16 +975,16 @@ type RuntimeOperationSession = {
 /**
  * The worker side of a runtime client connection. An instance owns the
  * worker's `Runtime`, keeps a `PiecesController` for the home space and for
- * each other space a request has named, and serves every client attached to
- * the worker: `handleRequest()` routes a client's request to the handler for
- * its type, and what the runtime produces on its own (console output, errors,
- * navigation, subscription updates) reaches the client through
- * `postToClient()`. Subscriptions, operation sessions, and VDOM mounts are
- * keyed by the client that opened them, so one client's departure takes down
- * only its own. The security context is fixed at `initialize()` and is the
- * one every attached client is held to. `dispose()` cancels what is
- * outstanding and disposes the runtime, once, however many times it is
- * called.
+ * each other space a request has named while something in that space is open,
+ * and serves every client attached to the worker: `handleRequest()` routes a
+ * client's request to the handler for its type, and what the runtime produces
+ * on its own (console output, errors, navigation, subscription updates)
+ * reaches the client through `postToClient()`. Subscriptions, operation
+ * sessions, and VDOM mounts are keyed by the client that opened them, so one
+ * client's departure takes down only its own. The security context is fixed
+ * at `initialize()` and is the one every attached client is held to.
+ * `dispose()` cancels what is outstanding and disposes the runtime, once,
+ * however many times it is called.
  */
 export class RuntimeProcessor {
   #runtime: Runtime;
@@ -1013,6 +1019,9 @@ export class RuntimeProcessor {
    * unsubscribe stops its own feed and no one else's.
    */
   #subscriptions = new Map<string, Cancel>();
+
+  /** The space of each cell subscription, by the same key. */
+  #subscriptionSpaces = new Map<string, DID>();
 
   #operationSubscriptions = new Map<
     string,
@@ -1054,7 +1063,13 @@ export class RuntimeProcessor {
    */
   #vdomMounts = new Map<
     string,
-    { reconciler: WorkerReconciler; cancel: Cancel; client: WorkerClient }
+    {
+      reconciler: WorkerReconciler;
+      cancel: Cancel;
+      client: WorkerClient;
+      /** The space of the cell the mount renders. */
+      space?: DID;
+    }
   >();
 
   #vdomBatchIdCounter = 0;
@@ -1106,8 +1121,9 @@ export class RuntimeProcessor {
   #cancelClientUpdateRequired?: Cancel;
 
   /**
-   * The retries of refused spaces in flight, which the render boundaries'
-   * retry controls and `handleRetrySpaceAccess()` share.
+   * The retries of refused and unreachable spaces in flight, which the render
+   * boundaries' retry controls, `handleRetrySpaceAccess()` and
+   * `handleRetryUnreachableSpaces()` share.
    */
   readonly #spaceAccessRetries = new SpaceAccessRetries((space) =>
     this.#runtime.retrySpaceAccess(space)
@@ -1486,13 +1502,17 @@ export class RuntimeProcessor {
   }
 
   /**
-   * The PiecesController already serving a space, if any. Used by the
-   * piece-created callback to register a piece in its own space's
-   * list; deliberately does NOT create a context (a piece can only be
-   * created by a pattern some existing context started).
+   * The PiecesController serving a space, if any. Used by the piece-created
+   * callback to register a piece in its own space's list. It makes a context
+   * only for a space where a piece runs: a piece is created by a running
+   * pattern, and a space's context can have been dropped while that pattern's
+   * start was under way, before it ran.
    */
   piecesFor(space: DID): PiecesController | undefined {
-    return this.#spaces.get(space);
+    return this.#spaces.get(space) ??
+      (this.#runtime.runner.runsPieceIn(space)
+        ? this.#getSpaceCtx(space)
+        : undefined);
   }
 
   dispose(): Promise<void> {
@@ -1634,6 +1654,7 @@ export class RuntimeProcessor {
       if (!key.startsWith(prefix)) continue;
       cancel();
       this.#subscriptions.delete(key);
+      this.#subscriptionSpaces.delete(key);
     }
 
     for (
@@ -1665,6 +1686,7 @@ export class RuntimeProcessor {
       void this.#endPresenceMembership(subscriptionId);
     }
 
+    this.#releaseIdleSpaceContexts();
     // What only this client read is now read by nothing.
     void this.#runtime.releaseUnreadDocuments();
   }
@@ -1721,6 +1743,36 @@ export class RuntimeProcessor {
       });
     }
     return ctx;
+  }
+
+  /**
+   * Whether anything in `space` is open here: a piece whose result is in it
+   * running, or a client's cell subscription or view mount of a cell in it.
+   */
+  #spaceIsOpen(space: DID): boolean {
+    if (this.#runtime.runner.runsPieceIn(space)) return true;
+    for (const open of this.#subscriptionSpaces.values()) {
+      if (open === space) return true;
+    }
+    for (const mount of this.#vdomMounts.values()) {
+      if (mount.space === space) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Drops the piece context of each space in which nothing is open, apart
+   * from the home space's and the user's own, so that the space cell it
+   * holds, and what that cell's watch reaches, can be released. The next
+   * request naming the space makes it a context of its own again. A request
+   * already holding the dropped one finishes with it.
+   */
+  #releaseIdleSpaceContexts(): void {
+    for (const [space, ctx] of [...this.#spaces]) {
+      if (ctx === this.#cc || space === this.#identity.did()) continue;
+      if (this.#spaceIsOpen(space)) continue;
+      this.#spaces.delete(space);
+    }
   }
 
   handleCellGet(
@@ -2459,6 +2511,7 @@ export class RuntimeProcessor {
       queueMicrotask(() => client.post(update)));
 
     this.#subscriptions.set(key, cancel);
+    this.#subscriptionSpaces.set(key, request.cell.space);
     return { value: true };
   }
 
@@ -2478,34 +2531,24 @@ export class RuntimeProcessor {
     if (cancel) {
       cancel();
       this.#subscriptions.delete(key);
+      this.#subscriptionSpaces.delete(key);
+      this.#releaseIdleSpaceContexts();
       void this.#runtime.releaseUnreadDocuments();
       return { value: true };
     }
     return { value: false };
   }
 
-  handleCellResolveAsCell(request: CellResolveAsCellRequest): CellResponse {
+  handleCellResolveAsCell(
+    request: CellResolveAsCellRequest,
+  ): CellResolveAsCellResponse {
     const cell = getCell(this.#runtime, request.cell);
-    const resolved = cell.resolveAsCell();
-    const ref = createCellRef(resolved);
-    if (
-      ref.schema && typeof ref.schema === "object" &&
-      !Array.isArray(ref.schema)
-    ) {
-      ref.schema = resolveExternalRootRefForStructure(ref.schema);
-    }
-    const raw = (resolved as Cell<unknown> & {
-      getRaw?: (options: { lastNode: "value" }) => unknown;
-    }).getRaw?.({ lastNode: "value" });
-    if (isSqliteDbRefValue(raw)) {
-      const schema = ref.schema && typeof ref.schema === "object" &&
-          !Array.isArray(ref.schema)
-        ? ref.schema
-        : { type: "object" as const };
-      ref.schema = { ...schema, asCell: ["sqlite"] as const };
-    }
+    // Both are resolved in this one turn, so they describe the same links.
     return {
-      cell: ref,
+      cell: resolvedCellRef(cell.resolveAsCell()),
+      ...(request.withWriteTarget
+        ? { writeTarget: resolvedCellRef(resolveWriteTarget(cell)) }
+        : {}),
     };
   }
 
@@ -2704,13 +2747,15 @@ export class RuntimeProcessor {
    * @throws When the record's space refused the worker access: a load it
    *   refused resolves as one that found nothing, and a record the worker
    *   could not read is not one that holds no record.
+   * @throws The failure to reach the record's space when its first connection
+   *   never completed a handshake, for the same reason.
    */
   async handleCellFields(
     request: CellFieldsRequest,
   ): Promise<CellFieldsResponse> {
     const cell = getCell(this.#runtime, request.cell);
     await cell.sync();
-    this.#throwIfAccessRefused(request.cell.space);
+    this.#throwIfUnreadable(request.cell.space);
     return this.#hostReadGate.fields(cell);
   }
 
@@ -2925,6 +2970,30 @@ export class RuntimeProcessor {
     // controller.
     const homePattern = await this.#ensureHomePattern();
     return { cell: createCellRef(homePattern) };
+  }
+
+  /**
+   * Stores the profile `request` suggests for this runtime's user, as
+   * `offerProfileSuggestion()` in the runner does.
+   *
+   * @throws When the name is not a string, or a picture is given that is not
+   *   bytes.
+   */
+  async handleOfferProfileSuggestion(
+    request: OfferProfileSuggestionRequest,
+  ): Promise<void> {
+    if (typeof request.name !== "string") {
+      throw new Error("offerProfileSuggestion requires a name");
+    }
+    if (
+      request.picture !== undefined && !(request.picture instanceof FabricBytes)
+    ) {
+      throw new Error("offerProfileSuggestion requires a picture as bytes");
+    }
+    await offerProfileSuggestion(this.#runtime, {
+      name: request.name,
+      ...(request.picture === undefined ? {} : { picture: request.picture }),
+    });
   }
 
   /**
@@ -3296,6 +3365,8 @@ export class RuntimeProcessor {
    *   the space, whether or not a root is still held from before.
    * @throws {SpaceNotFoundError} When the request opens a DID that no space
    *   answers to, other than this runtime's identity's own Home.
+   * @throws The failure to reach the space when its first connection never
+   *   completed a handshake, before anything decides the space has no root.
    */
   async handleGetSpaceRootPattern(
     request: PatternGetSpaceRoot,
@@ -3315,11 +3386,11 @@ export class RuntimeProcessor {
       });
       // Checked whatever the lookup found, since a root this runtime read
       // before losing the space is still in its replica.
-      this.#throwIfAccessRefused(request.space);
+      this.#throwIfUnreadable(request.space);
       return stored ? { piece: createPieceRef(stored) } : {};
     }
     const existing = await cc.getDefaultPattern(false);
-    this.#throwIfAccessRefused(request.space);
+    this.#throwIfUnreadable(request.space);
     if (existing === undefined && !(await this.#ownsSpace(request.space))) {
       // No owner means either a space someone else owns, which has nothing in
       // it yet, or no space at all, which opening does not create.
@@ -3358,14 +3429,19 @@ export class RuntimeProcessor {
 
   /**
    * Throws the server's refusal of `space`, or of this runtime's session
-   * there, if it refused either. A refused read finds nothing, so a caller
-   * that would report what it found asks this first.
+   * there, if it refused either, and the failure to reach the space if its
+   * first connection never completed a handshake. A refused read finds
+   * nothing, and so does a read of a space never reached, so a caller that
+   * would report what it found asks this first. A space never reached would
+   * otherwise read as one with no root, which an owner goes on to create.
    */
-  #throwIfAccessRefused(space: MemorySpace): void {
+  #throwIfUnreadable(space: MemorySpace): void {
     const storage = this.#runtime.storageManager;
     const denied = storage.spaceAccessError?.(space) ??
       storage.authorizationError?.(space);
     if (denied !== undefined) throw denied;
+    const sessionError = storage.spaceSessionError?.(space);
+    if (isFirstHandshakeFailure(sessionError)) throw sessionError;
   }
 
   /**
@@ -3608,6 +3684,7 @@ export class RuntimeProcessor {
   ): Promise<BooleanResponse> {
     const cc = this.#getSpaceCtx(request.space);
     await cc.stopPiece(request.pieceId, request.scope);
+    this.#releaseIdleSpaceContexts();
     // A missing piece throws in `stopPiece()`, so `true` here means the
     // piece is stopped, whether or not it was running.
     // TODO(danfuzz): Report whether it was running, once `stopPiece()`
@@ -3853,6 +3930,21 @@ export class RuntimeProcessor {
    */
   handleRetrySpaceAccess(request: RetrySpaceAccessRequest): Promise<void> {
     return this.#spaceAccessRetries.retry(request.space);
+  }
+
+  /**
+   * Retries, as `handleRetrySpaceAccess()` does, every space whose first
+   * connection never completed a handshake, and resolves once each retry has
+   * settled. A space still out of reach is the expected answer to a network
+   * change, not a failure, so this does not reject.
+   */
+  async handleRetryUnreachableSpaces(
+    _request: RetryUnreachableSpacesRequest,
+  ): Promise<void> {
+    const spaces = this.#runtime.storageManager.unreachableSpaces?.() ?? [];
+    await Promise.allSettled(
+      spaces.map((space) => this.#spaceAccessRetries.retry(space)),
+    );
   }
 
   async handleCreateSpace(
@@ -4253,6 +4345,8 @@ export class RuntimeProcessor {
         return await this.handleEnsureHomePatternRunning(request);
       case RequestType.JoinVisitedRoom:
         return await this.handleJoinVisitedRoom(request);
+      case RequestType.OfferProfileSuggestion:
+        return await this.handleOfferProfileSuggestion(request);
       case RequestType.Idle:
         return await this.handleIdle();
       case RequestType.ListEventAttention:
@@ -4309,6 +4403,8 @@ export class RuntimeProcessor {
         return await this.handleRegisterSpaceHostDetailed(request);
       case RequestType.RetrySpaceAccess:
         return await this.handleRetrySpaceAccess(request);
+      case RequestType.RetryUnreachableSpaces:
+        return await this.handleRetryUnreachableSpaces(request);
       case RequestType.GetGraphSnapshot:
         return this.getGraphSnapshot(request);
       case RequestType.GetStorageDiagnostics:
@@ -4440,12 +4536,9 @@ export class RuntimeProcessor {
 
     // Check if already mounted. Scoped to this client, so a second client
     // mounting under the same id mounts rather than displacing the first.
-    if (this.#vdomMounts.has(key)) {
-      this.handleVDomUnmount(
-        { type: RequestType.VDomUnmount, mountId },
-        client,
-      );
-    }
+    // A mount replacing one under the same id keeps its space's context: the
+    // context is not dropped between the two.
+    if (this.#vdomMounts.has(key)) this.#unmountView(key);
 
     // Get the cell from the runtime and apply rendererVDOMSchema
     // The schema has a [UI] property definition that handles VDOM unwrapping
@@ -4485,6 +4578,7 @@ export class RuntimeProcessor {
     const mount = {
       reconciler,
       client,
+      space: cellRef.space,
       cancel: () => {
         active = false;
         cancelRender?.();
@@ -4522,16 +4616,21 @@ export class RuntimeProcessor {
   ): void {
     const { mountId } = request;
 
-    const mount = this.#vdomMounts.get(clientScopedKey(client, mountId));
-    if (!mount) {
+    const key = clientScopedKey(client, mountId);
+    if (!this.#vdomMounts.has(key)) {
       console.warn(`[RuntimeProcessor] Mount ${mountId} not found for unmount`);
       return;
     }
+    this.#unmountView(key);
+    this.#releaseIdleSpaceContexts();
+  }
 
-    // Cancel subscriptions and clean up
+  /** Cancels the view mount at `key` and forgets it. */
+  #unmountView(key: string): void {
+    const mount = this.#vdomMounts.get(key)!;
     mount.cancel();
     mount.reconciler.unmount();
-    this.#vdomMounts.delete(clientScopedKey(client, mountId));
+    this.#vdomMounts.delete(key);
   }
 
   handleVDomBatchApplied(
@@ -4811,4 +4910,29 @@ export class RuntimeProcessor {
     }
     return processor;
   }
+}
+
+/**
+ * The ref a client receives for `resolved`, a cell resolved for it, with the
+ * schema it reads the cell through.
+ */
+function resolvedCellRef(resolved: Cell<unknown>): CellRef {
+  const ref = createCellRef(resolved);
+  if (
+    ref.schema && typeof ref.schema === "object" &&
+    !Array.isArray(ref.schema)
+  ) {
+    ref.schema = resolveExternalRootRefForStructure(ref.schema);
+  }
+  const raw = (resolved as Cell<unknown> & {
+    getRaw?: (options: { lastNode: "value" }) => unknown;
+  }).getRaw?.({ lastNode: "value" });
+  if (isSqliteDbRefValue(raw)) {
+    const schema = ref.schema && typeof ref.schema === "object" &&
+        !Array.isArray(ref.schema)
+      ? ref.schema
+      : { type: "object" as const };
+    ref.schema = { ...schema, asCell: ["sqlite"] as const };
+  }
+  return ref;
 }

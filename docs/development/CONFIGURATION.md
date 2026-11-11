@@ -224,9 +224,9 @@ Used by `/routes/sandbox/exec` to execute untrusted pattern code.
 The executor itself is not in this repo; the toolshed only forwards to
 `SANDBOX_SERVICE_URL`. The service is `commonfabric/common-cluster` (Go): its
 `node-agent` serves `/v1/sandboxes` and runs each sandbox as a gVisor container
-on a per-node ZFS dataset. The `runsc` runtime and `sandboxexec` library come
-from `commonfabric/gvisor` (branch `cfc_v2`), and the cluster is provisioned by
-`commonfabric/infra` (Terraform).
+on a per-node ZFS dataset. Its `runsc` is upstream gVisor's, from a pinned
+`google/gvisor` release in common-cluster's `Dockerfile`, and the cluster is
+provisioned by `commonfabric/infra` (Terraform).
 
 ---
 
@@ -249,7 +249,7 @@ Off by default; flip `OTEL_ENABLED=true` to start exporting.
 | Var | Default | Notes |
 |---|---|---|
 | `TOOLSHED_GIT_SHA` | _(unset)_ | Explicit toolshed commit override, surfaced via `lib/build-info.ts`. Takes priority over the build-baked SHA for `/api/meta`. |
-| `TOOLSHED_RELEASED_AT` | _(unset)_ | When this deployment released what it serves, as an RFC 3339 date-time with an offset, such as `2026-10-16T14:03:00Z`; any other non-empty value refuses startup, and so does a time more than five minutes ahead of the host's clock. Set by each deploy to the time of that deploy, a deploy of a commit already deployed included, and the same on every instance a deploy restarts ([Deploying a commit](deploying.md#a-deploy-states-when-it-happened)). The patterns route sends it beside every identity it advertises, in a `CF-Released-At` header, and `/api/meta` publishes it as `releasedAt`. A piece following a `system:` origin records it with the revision that adopts that source, moves it forward when a later release offers the same source, and is then not moved to an earlier release unless its running pattern cannot load and its history records no move to it from that release. Unset or empty: identities go out alone, and pieces follow them by identity without any order. |
+| `TOOLSHED_RELEASED_AT` | _(unset)_ | When this deployment released what it serves, as an RFC 3339 date-time with an offset, such as `2026-10-16T14:03:00Z`; any other non-empty value refuses startup, and so does a time more than five minutes ahead of the host's clock. Set by each deploy to the time of that deploy, a deploy of a commit already deployed included, and the same on every instance a deploy restarts ([Deploying a commit](deploying.md#a-deploy-states-when-it-happened)). The patterns route sends it beside every identity it advertises, in a `CF-Released-At` header, and `/api/meta` publishes it as `releasedAt`. A piece following a `system:` origin records it with the revision that adopts that source, moves it forward when a later release offers the same source, and is then not moved to an earlier release unless its running pattern cannot load and its history records no move to it from that release. Unset or empty: identities go out alone. A piece whose running source records no release time follows them by identity, and one whose source records a time takes an answer without one as an earlier release, under the same rule. |
 | `COMMIT_SHA` | _(unset)_ | Source-run build metadata fallback. It lets `/api/meta` present the same `gitSha` field that a compiled toolshed obtains from baked metadata. On a compiled toolshed, baked metadata takes priority. The system-pattern updater does not consult this value. |
 
 Set `COMMIT_SHA` to the Labs revision that describes a source checkout when you

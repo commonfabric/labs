@@ -3,6 +3,7 @@ import { expect } from "@std/expect";
 import {
   isInMain,
   isSingleEmoji,
+  sameNameMarks,
   THREAD_EXCERPT_LENGTH,
   threadExcerpt,
   type ViewItem,
@@ -135,6 +136,45 @@ describe("logic", () => {
     it("returns no code point split by the cut", () => {
       const excerpt = threadExcerpt("😺".repeat(60));
       expect(excerpt).toBe(`${"😺".repeat(THREAD_EXCERPT_LENGTH - 1)}…`);
+    });
+  });
+
+  describe("sameNameMarks()", () => {
+    const ada = "did:key:z6MkAdaLovelaceAAAAAA";
+    const otherAda = "did:key:z6MkAdaLovelaceBBBBBB";
+    const grace = "did:key:z6MkGraceHopperCCCCCC";
+
+    it("returns the empty string for each person whose name no one else shows", () => {
+      expect(sameNameMarks([
+        { principal: ada, name: "Ada Lovelace" },
+        { principal: grace, name: "Grace Hopper" },
+      ])).toStrictEqual({ [ada]: "", [grace]: "" });
+    });
+
+    it("returns the end of each principal for people showing the same name", () => {
+      expect(sameNameMarks([
+        { principal: ada, name: "Ada Lovelace" },
+        { principal: otherAda, name: "Ada Lovelace" },
+        { principal: grace, name: "Grace Hopper" },
+      ])).toStrictEqual({
+        [ada]: "…AAAAAA",
+        [otherAda]: "…BBBBBB",
+        [grace]: "",
+      });
+    });
+
+    it("returns marks for names that differ only in case and surrounding space", () => {
+      expect(sameNameMarks([
+        { principal: ada, name: "Ada Lovelace" },
+        { principal: otherAda, name: "  ada lovelace " },
+      ])).toStrictEqual({ [ada]: "…AAAAAA", [otherAda]: "…BBBBBB" });
+    });
+
+    it("returns the empty string for people showing no name", () => {
+      expect(sameNameMarks([
+        { principal: ada, name: undefined },
+        { principal: otherAda, name: "  " },
+      ])).toStrictEqual({ [ada]: "", [otherAda]: "" });
     });
   });
 });

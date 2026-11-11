@@ -64,6 +64,7 @@ import {
 } from "../loom/participants.tsx";
 import { memberSet, type SpaceMember } from "../social-space/member-set.ts";
 import {
+  sameNameMarks,
   type ShownIn,
   threadExcerpt,
   type ViewPlace,
@@ -681,6 +682,18 @@ export interface AddMemberOutput {
   canAdd: PerSession<boolean>;
 }
 
+/** A person the room's picker offers to add. */
+interface AddCandidate {
+  /** The first profile attesting them, which the add names them by. */
+  profile: ProfileCell;
+
+  /**
+   * What tells them apart from another person offered under the same name
+   * (`sameNameMarks()`); empty where no one else shows their name.
+   */
+  mark: string;
+}
+
 /**
  * Offers an OWNER of a group room's space a way to admit someone else to it,
  * by their chat address, or by picking them from the people the viewer's
@@ -742,19 +755,31 @@ export const AddMember = pattern<AddMemberInput, AddMemberOutput>(
       shown === "" ? "none" : "block"
     );
     // Each person the manager lists who isn't a member of the room's space, by
-    // the first profile attesting them, per user, as the manager's people are,
-    // and no one while the space's members aren't known. The binding's name is
-    // the value's cause, the identity of the document that stores it, so
-    // renaming it moves its data.
-    const candidatesForUser = computed((): PerUser<ProfileCell[]> =>
-      members === undefined ? [] : Object.entries(manager?.people ?? {})
-        .flatMap(([principal, profiles]): ProfileCell[] =>
-          members.some((member) => member.principal === principal) ||
-            profiles[0] === undefined
+    // the first profile attesting them, with what tells them apart from
+    // another of them under the same name, per user, as the manager's people
+    // are, and no one while the space's members aren't known. The binding's
+    // name is the value's cause, the identity of the document that stores it,
+    // so renaming it moves its data.
+    const candidatesForUser = computed((): PerUser<AddCandidate[]> => {
+      if (members === undefined) return [];
+      const listed = Object.entries(manager?.people ?? {}).flatMap(
+        ([principal, profiles]) => {
+          const profile = profiles[0];
+          return members.some((member) => member.principal === principal) ||
+              profile === undefined
             ? []
-            : [profiles[0]]
-        )
-    );
+            : [{ principal, profile }];
+        },
+      );
+      const marks = sameNameMarks(listed.map(({ principal, profile }) => ({
+        principal,
+        name: profile.key("name").get(),
+      })));
+      return listed.map(({ principal, profile }) => ({
+        profile,
+        mark: marks[principal] ?? "",
+      }));
+    });
     const candidatesDisplay = computed((): ChatDisplay =>
       candidatesForUser.length === 0 ? "none" : "block"
     );
@@ -788,19 +813,26 @@ export const AddMember = pattern<AddMemberInput, AddMemberOutput>(
               <cf-text variant="caption">
                 Or add people from your chats:
               </cf-text>
-              {candidatesForUser.map((profile) => (
+              {candidatesForUser.map((candidate) => (
                 <cf-hstack
                   gap="2"
                   align="center"
                   data-ui-pattern={CHAT_ADD_MEMBER_SURFACE}
                   data-ui-event-integrity={CHAT_ADD_MEMBER_SURFACE}
                 >
-                  <cf-profile-badge variant="chip" $profile={profile} />
+                  <cf-profile-badge
+                    variant="chip"
+                    $profile={candidate.profile}
+                  />
+                  <cf-text variant="caption">{candidate.mark}</cf-text>
                   <cf-button
                     data-ui-action={CHAT_ADD_MEMBER_ACTION}
                     size="sm"
                     variant="ghost"
-                    onClick={commitAddMember({ ...bindings, picked: profile })}
+                    onClick={commitAddMember({
+                      ...bindings,
+                      picked: candidate.profile,
+                    })}
                   >
                     Add
                   </cf-button>

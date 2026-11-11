@@ -80,6 +80,13 @@ only once its update reaches this handle, so an update can compute from a value
 that write has since replaced. Its write is a blind overwrite, as `set()`'s is,
 not an atomic read-modify-write; `push()` appends as the worker merges.
 
+`resolveAsCell()` and `getCfcLabel()` take their turn in the same queue. A call
+to either, made through an equal ref while an earlier call to it waits for its
+turn and nothing else has been asked of the cell since, shares that call's
+request. The request has yet to go to the worker, so its answer is as current as
+one the later call would have sent. Many elements reading one cell's label at
+once then send a request for each turn of the queue, not one each.
+
 ## Observing authorship
 
 `observeAuthorship(value, author, onState)` watches a value cell and the cell
@@ -108,7 +115,8 @@ Each label is read from the subscription's update when the update says its label
 is the worker's current read (`CellDelivery`), and from the worker otherwise. An
 update holding nothing, which the connection drops, leaves the label a handle
 holds behind the worker's; the handle says so, to its own subscribers and to a
-handle seeded from it, and the observation then asks the worker.
+handle seeded from it, and the observation then asks the worker. A read that a
+later update has taken the place of asks the worker nothing further.
 
 A label counts as loaded once a read of it has finished with nothing left to
 wait for. When the cell a handle resolves to reads as having no label, the
@@ -269,7 +277,15 @@ principal, as `spaceaccesslost` reported, has admitted it again. It carries the
 `space`. It is sent for every admission, whoever asked for the retry that
 decided it: the runtime itself, on the memory server's `session/admissible`; the
 renderer's Retry button on a refused space's placeholder; or a host through
-`retrySpaceAccess()`.
+`retrySpaceAccess()`. It is also sent for a space whose first connection never
+completed a handshake, as when its memory host was down or out of the network's
+reach, once a retry reaches it, even when a load the retry repeats fails again.
+The runtime dials such a space again only when asked: through
+`retrySpaceAccess(space)`, or through `retryUnreachableSpaces()`, which retries
+every such space and is the call for a host that learns the network may have
+changed. A load that failed for want of the connection fails with the code
+`RuntimeErrorCode.SpaceUnreachable`, which is how a host tells it from other
+failures and offers a retry.
 
 `RuntimeInternals` in `@commonfabric/lib-shell` drops the loads it remembers as
 failed, every space's on `connectionrestored` and the one space's on

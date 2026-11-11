@@ -223,7 +223,11 @@ registers its nodes there. Nothing demands those nodes, so once the handler's
 transaction commits the result is released (`#releaseServedHandlerResult` in
 `runner.ts`), and what remains is what the store holds, with the basis rows of
 any of its actions that ran. A demand for one of its values, or an event to one
-of its streams, starts the piece as either starts a piece on a fresh runtime. A
+of its streams, starts the piece as either starts a piece on a fresh runtime.
+A session demands one of its values when it is sent a document the piece's
+setup wrote, other than its argument, which holds inputs current without it. A
+read that stops at a link to the piece is sent only its result document, and
+starts nothing (`carriesPieceMeta` in `runtime/memory/v2/server-sync.ts`). A
 piece whose document a client session tracks at that commit keeps running,
 because that session's demand has already made its attempt to load it. The result
 pattern's index entry goes with the release, and so do the watches of the
@@ -484,15 +488,19 @@ the lease:
 - The count starts at the worker's first message. Until its modules have loaded
   a worker has no timer to post from and no lease to release.
 - A long stretch of work on the worker's thread silences the heartbeat too, since
-  the heartbeat is a timer on that thread. So a serving runtime compiles through
-  the interleaved driver and yields between the modules of a graph it evaluates
-  (`EngineOptions.interleaveCompile`), as its settle loop yields between actions.
-  The longest stretch a pattern load holds the thread is then one module's compile
-  step, one module's evaluation, or one write of the compile cache, and a thread
-  that does that work is not silent for the length of a whole program. The
-  runtimes of one worker take turns at a cold compile (`CompileTurns`), so one
-  program compiles once per worker however many of its spaces load it at the same
-  time.
+  the heartbeat is a timer on that thread. So a serving runtime runs the
+  type-check, transform and emit step of a compile in the compile worker its
+  serving worker starts (`ModuleCompileWorker`), and yields between the steps it
+  keeps: the security check of each emitted module and the evaluation of each
+  module of a graph (`EngineOptions.interleaveCompile`), as its settle loop
+  yields between actions. The longest stretch a pattern load holds the thread is
+  then one module's check, one module's evaluation, or one write of the compile
+  cache, and a thread that does that work is not silent for the length of a
+  whole program. The runtimes of one worker take turns at a cold compile
+  (`CompileTurns`), so one program compiles once per worker however many of its
+  spaces load it at the same time. A compile worker that dies fails the compiles
+  it held as failures of where they ran, never as deterministic compile
+  failures, and the next compile starts a fresh one.
 - Nothing waits for a killed worker's teardown. `terminate()` takes effect when
   its thread next reaches its event loop, which a stalled thread may never do, and
   such a thread keeps whatever core it was spinning on until the process restarts.

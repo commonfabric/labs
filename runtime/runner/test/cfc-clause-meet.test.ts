@@ -1,12 +1,11 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
-
 import {
   type CfcConfClause,
   clauseAlternatives,
-  clausesEqual,
-  normalizeClause,
-} from "../src/cfc/clause.ts";
+} from "@commonfabric/memory/v2/cfc-release-authority";
+
+import { clausesEqual, normalizeClause } from "../src/cfc/clause.ts";
 import {
   CFC_LABEL_READ_FAILED_ATOM,
   cfcObservationFitsCeiling,

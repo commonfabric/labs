@@ -47,7 +47,7 @@ Two things follow for a class written here:
 ## Size guarantees
 
 The format has an implementation state how large a value it guarantees to
-handle, by six measures, each guarantee at least a floor the format sets
+handle, by seven measures, each guarantee at least a floor the format sets
 ([`3-json-encoding.md`](../../docs/specs/space-model-formal-spec/3-json-encoding.md)
 Section 12). This package encodes, decodes, hashes and compares any value within
 the figures below. Past one, it may refuse a value or may handle it. Most of the
@@ -76,6 +76,9 @@ each says where its bound comes from.
 - **Depth:** 2^11 (2,048). The bound is the host's stack, which the codec, the
   hasher and `valueEqual()` each use up recursing through a value. On Deno's
   default stack the first of them to fail does so past about 3,000 levels.
+- **Bigints:** 2^26 (67,108,864) bytes (2^29 bits). The bound is the host's: V8
+  holds no bigint of 2^30 bits. A bigint of 2^26 bytes encodes, decodes, hashes
+  and compares in about a second each.
 
 ## Conformance fixtures
 

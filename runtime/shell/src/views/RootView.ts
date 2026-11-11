@@ -44,7 +44,7 @@ import {
 } from "../lib/env.ts";
 import { runtimeHostFlags } from "../lib/host-toggles.ts";
 import { type BrowserTelemetry, initBrowserOtel } from "../lib/otel.ts";
-import { RefusedSpaceRetry } from "../lib/refused-space-retry.ts";
+import { UnavailableSpaceRetry } from "../lib/unavailable-space-retry.ts";
 import { shouldRecreateRuntime } from "../lib/runtime-lifecycle.ts";
 import {
   getThemePreference,
@@ -171,8 +171,11 @@ export class XRootView extends BaseView implements ShellApp {
   >();
   #eventAttentionRefreshOwners = new Map<DID, symbol>();
 
-  /** The current runtime's refused spaces, retried on returning to them. */
-  #refusedSpaceRetry: RefusedSpaceRetry | undefined;
+  /**
+   * The current runtime's refused and unreachable spaces, retried on
+   * returning to them.
+   */
+  #unavailableSpaceRetry: UnavailableSpaceRetry | undefined;
 
   /**
    * Generation counter which invalidates callbacks from replaced workers. A
@@ -269,8 +272,8 @@ export class XRootView extends BaseView implements ShellApp {
           );
           previous.dispose().catch(console.error);
         }
-        this.#refusedSpaceRetry?.dispose();
-        this.#refusedSpaceRetry = undefined;
+        this.#unavailableSpaceRetry?.dispose();
+        this.#unavailableSpaceRetry = undefined;
         this._eventAttention = [];
         this.#eventAttentionMutationVersions.clear();
         this.#eventAttentionRefreshOwners.clear();
@@ -351,7 +354,7 @@ export class XRootView extends BaseView implements ShellApp {
           "eventneedsattention",
           this._handleEventNeedsAttention,
         );
-        this.#refusedSpaceRetry = new RefusedSpaceRetry(this.runtime);
+        this.#unavailableSpaceRetry = new UnavailableSpaceRetry(this.runtime);
         if (this.space !== undefined) {
           void this.#refreshEventAttention(this.space, generation);
         }
@@ -411,6 +414,7 @@ export class XRootView extends BaseView implements ShellApp {
     globalThis.addEventListener("beforeunload", this.#onBeforeUnload);
     globalThis.addEventListener("focus", this.#onReturn);
     document.addEventListener("visibilitychange", this.#onReturn);
+    globalThis.addEventListener("online", this.#onOnline);
   }
 
   override disconnectedCallback(): void {
@@ -423,6 +427,7 @@ export class XRootView extends BaseView implements ShellApp {
     globalThis.removeEventListener("beforeunload", this.#onBeforeUnload);
     globalThis.removeEventListener("focus", this.#onReturn);
     document.removeEventListener("visibilitychange", this.#onReturn);
+    globalThis.removeEventListener("online", this.#onOnline);
     super.disconnectedCallback();
   }
 
@@ -449,12 +454,25 @@ export class XRootView extends BaseView implements ShellApp {
 
   /**
    * Handler for the page's `focus` and `visibilitychange`, which asks again
-   * for every space the runtime refused once the person is back to see it.
-   * A grant made meanwhile sends nothing to a refused session.
+   * for every space the runtime refused or could not reach once the person
+   * is back to see it. A grant made meanwhile sends nothing to a refused
+   * session, and a host that came back sends nothing to a runtime that gave
+   * up dialing it.
    */
   #onReturn = (): void => {
     if (document.visibilityState === "hidden") return;
-    this.#refusedSpaceRetry?.retryAll();
+    this.#unavailableSpaceRetry?.retryAll();
+  };
+
+  /**
+   * Handler for the window's `online`, which asks again for every space the
+   * runtime could not reach. The browser fires it only when it regains a
+   * network interface, so it misses a change of route such as a VPN joined
+   * on a network already up; returning to the page and the failed load's
+   * "Try again" cover that.
+   */
+  #onOnline = (): void => {
+    this.#unavailableSpaceRetry?.retryUnreachable();
   };
 
   /**
@@ -591,7 +609,7 @@ export class XRootView extends BaseView implements ShellApp {
     if (space !== undefined) {
       void this.#refreshEventAttention(space, this.#runtimeGeneration);
     }
-    this.#refusedSpaceRetry?.retry(space);
+    this.#unavailableSpaceRetry?.retry(space);
   }
 
   readonly _handleEventNeedsAttention = (

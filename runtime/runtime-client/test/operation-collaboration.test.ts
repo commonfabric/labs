@@ -48,7 +48,7 @@ describe("RuntimeClient operation collaboration", () => {
       cursor: null,
       baselineHash: "baseline",
       materialized: "hello",
-      anchors: [],
+      anchors: {},
       operations: [],
     };
     const integrated: OperationFieldSnapshot = {
@@ -57,7 +57,7 @@ describe("RuntimeClient operation collaboration", () => {
       codec: "codemirror-changeset@1",
       cursor: { epoch: 1, version: 1 },
       materialized: "hello!",
-      anchors: [],
+      anchors: {},
       operations: [{
         opId: "op:1",
         cursor: { epoch: 1, version: 1 },
@@ -304,7 +304,7 @@ describe("RuntimeClient operation collaboration", () => {
       cursor: { epoch: 1, version: 1 },
       baselineHash: "baseline",
       materialized: bytes,
-      anchors: [],
+      anchors: {},
       operations: [{
         opId: "op:bytes",
         cursor: { epoch: 1, version: 1 },
@@ -379,7 +379,7 @@ describe("RuntimeClient operation collaboration", () => {
       cursor: null,
       baselineHash: "baseline",
       materialized: "value",
-      anchors: [],
+      anchors: {},
       operations: [],
     };
     const replica = {
@@ -657,7 +657,7 @@ describe("RuntimeClient operation collaboration", () => {
       cursor: { epoch: 1, version: 0 },
       baselineHash: "baseline",
       materialized: "value",
-      anchors: [],
+      anchors: {},
       operations: [],
     };
     const capability = {

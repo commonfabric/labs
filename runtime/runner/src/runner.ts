@@ -120,7 +120,10 @@ import {
   recordReplayedArgumentSlots,
 } from "./cfc/reference-initialization.ts";
 import { legacyPieceCreatorEvidence } from "./cfc/piece-creator-evidence.ts";
-import { servedRunActsForNoOne } from "./cfc/prepare.ts";
+import {
+  flowJoinObservationsOf,
+  servedRunActsForNoOne,
+} from "./cfc/prepare.ts";
 import { cfcSchemaWithInheritedDefs } from "./cfc/schema-refs.ts";
 import { spaceReaderRole } from "./cfc/space-membership.ts";
 import { isTrustedGesture } from "./cfc/ui-contract.ts";
@@ -1463,6 +1466,21 @@ function describeSkippedSubPatternNode(
 }
 
 /**
+ * The journal position the next activity `tx` journals takes: one past every
+ * position its journaled reads hold so far. Reads and write attempts share the
+ * clock, so a read journaled later holds this position or a later one.
+ */
+const nextJournalPosition = (tx: IExtendedStorageTransaction): number => {
+  let next = 0;
+  for (const read of tx.getReadActivities?.() ?? []) {
+    if (read.journalIndex !== undefined && read.journalIndex >= next) {
+      next = read.journalIndex + 1;
+    }
+  }
+  return next;
+};
+
+/**
  * Records what each write redirect `projection` stages into `resultCell`
  * initializes, at the position the redirect takes. A redirect to one of
  * `ownCells`, the documents the setup creates for its piece, is the setup's own
@@ -1748,6 +1766,27 @@ const carryAttributionMarks = (
   for (const piece of state.attributedPieces) {
     to.markCfcAttributedInitialization(runtimeWritePolicyAuthorization, piece);
   }
+};
+
+/**
+ * Takes what `from` has observed so far that its flow join weighs
+ * (`flowJoinObservationsOf()`), and returns the step that hands it to a
+ * transaction a run `from` decided runs in later, as trigger reads and
+ * label-metadata observations of its own. What decided that the run happens
+ * then joins the flow label of everything the run writes (CFC §8.9.2), as it
+ * would had the run been part of `from`. The observations are taken when the
+ * run is deferred, since `from` reads on and commits on its own after that.
+ */
+const carryRunDecision = (
+  from: IExtendedStorageTransaction,
+): (to: IExtendedStorageTransaction) => void => {
+  const { reads, labelMetadata } = flowJoinObservationsOf(from);
+  return (to) => {
+    if (reads.length > 0) to.addCfcTriggerReads(reads);
+    for (const observation of labelMetadata) {
+      to.recordCfcLabelMetadataObservation(observation);
+    }
+  };
 };
 
 /** The document a piece's attribution mark names: its result document. */
@@ -2783,6 +2822,42 @@ export class Runner {
     IExtendedStorageTransaction
   >();
 
+  /**
+   * The transactions a setup runs in that are the ones it was asked in: the
+   * transaction a caller hands `run`, `setup`, `runSynced` or
+   * `runInTransaction`, or one `setup` or `runSynced` makes for that call as
+   * it is made. A `run` given no transaction is not one: that is how a
+   * continuation starts a pattern an earlier transaction chose, such as
+   * wish's suggestion fetch, so the reads that decided it are in that earlier
+   * transaction. Only these are added, at those entry points; a setup nested
+   * in another, such as a pattern node instantiated with its parent, takes
+   * whatever standing the transaction already has. Only a setup in one of
+   * these restates a result wiring it finds unchanged (§8.9.1.3). A
+   * transaction the runner makes later, for a start deferred out of an asking
+   * transaction or a swap, has that standing too when it carries the reads
+   * that decided it from an asking one that is committing or committed
+   * (`#carriedStanding`).
+   * Every other setup transaction, a repair's or a swap's that no setup here
+   * staged, holds none of those reads, so re-minting the stored membership
+   * there would drop a clause they carried.
+   */
+  readonly #askingSetupTransactions = new WeakSet<
+    IExtendedStorageTransaction
+  >();
+
+  /**
+   * For a transaction the runner made to carry a deferred run's decision
+   * (`#runDecisionOf()`), whether it has the asking standing now: whether the
+   * transaction whose reads it carries had that standing and has committed
+   * or is committing. While that transaction is still open, and for good if
+   * it is aborted or refused, the carrying transaction is not an asking one,
+   * so a caller that aborts changes no stored label through it.
+   */
+  readonly #carriedStanding = new WeakMap<
+    IExtendedStorageTransaction,
+    () => boolean
+  >();
+
   #runtime: Runtime;
   readonly #cancels = new Map<
     `${MemorySpace}/${ScopeKey}/${URI}`,
@@ -3005,6 +3080,19 @@ export class Runner {
   #sessionPatternSwaps = new Map<
     `${MemorySpace}/${ScopeKey}/${URI}`,
     (pattern: Pattern, ref: { identity: string; symbol: string }) => void
+  >();
+
+  /**
+   * What decided the latest committed setup of each running piece, for the
+   * swap that setup's pattern reaches it by (`#runDecisionOf()`). A running
+   * piece takes the pattern a setup staged in transactions of its own, the
+   * swap's setup and the instantiation of the new graph, so they carry it
+   * (CFC §8.9.2). An entry names the pattern it was set up with, and only a
+   * swap to that pattern takes it.
+   */
+  readonly #runDecisions = new Map<
+    `${MemorySpace}/${ScopeKey}/${URI}`,
+    { pattern: string; carry: (to: IExtendedStorageTransaction) => void }
   >();
 
   /**
@@ -3690,6 +3778,7 @@ export class Runner {
   ): Promise<Cell<R>> {
     if (providedTx) {
       this.#callerOwnedSetupTransactions.add(providedTx);
+      this.#askingSetupTransactions.add(providedTx);
       this.#setupInternal(
         providedTx,
         patternOrModule,
@@ -3708,6 +3797,7 @@ export class Runner {
       // setup.
       return this.#runtime.editWithRetry((tx) => {
         this.#callerOwnedSetupTransactions.add(tx);
+        this.#askingSetupTransactions.add(tx);
         this.#setupInternal(tx, patternOrModule, argument, resultCell, options);
       }).then(({ error }) => {
         if (error) {
@@ -4137,15 +4227,36 @@ export class Runner {
     tx: IExtendedStorageTransaction,
     pattern: Pattern,
     resultCell: Cell<R>,
-    options: { preserveName: boolean },
+    options: { preserveName: boolean; setupBegan: number },
   ): void {
-    const { result, fabricResult, changed } = this.#nextResultProjection(
-      tx,
-      pattern,
-      resultCell,
-      getMetaLink(resultCell.withTx(tx), "argument")!,
-      options,
-    );
+    const { result, fabricResult, changed, nameCarried } = this
+      .#nextResultProjection(
+        tx,
+        pattern,
+        resultCell,
+        getMetaLink(resultCell.withTx(tx), "argument")!,
+        options,
+      );
+    // Setup restates the result wiring whether or not it writes it, so the
+    // wiring's membership entries are re-minted either way (§8.9.1.3). The
+    // build, chosen by what the transaction had read when the setup began,
+    // and the piece's identity fix every reference the wiring places, save a
+    // name carried over from the stored result, which is a reference the
+    // stored document chose.
+    const resultLink = resultCell.getAsNormalizedFullLink();
+    if (changed || this.#isAsking(tx)) {
+      tx.recordCfcWritePolicyInput({
+        kind: "result-wiring",
+        target: {
+          space: resultLink.space,
+          id: resultLink.id,
+          scope: resultLink.scope,
+          path: [...resultLink.path],
+        },
+        buildDecided: !nameCarried,
+        setupBegan: options.setupBegan,
+      }, runtimeWritePolicyAuthorization);
+    }
     if (changed) {
       // A result field the setup projects to one of the piece's internal
       // cells is the setup's own initialization of that cell. Those cells are
@@ -4176,9 +4287,11 @@ export class Runner {
    * one stored now: `result` is the projection as bound to the document,
    * which the policy-input recorder walks; `fabricResult` is what a write
    * stores; and `changed` is whether that differs from what is stored, which
-   * is the one condition under which setup writes it. `argumentCellLink` is
-   * the argument link the projection binds to, which setup has staged under
-   * `pattern`'s argument schema by the time it writes. Reads only.
+   * is the one condition under which setup writes it. `nameCarried` is
+   * whether the projection's name is the one stored rather than the
+   * pattern's. `argumentCellLink` is the argument link the projection binds
+   * to, which setup has staged under `pattern`'s argument schema by the time
+   * it writes. Reads only.
    */
   #nextResultProjection<R>(
     tx: IExtendedStorageTransaction,
@@ -4186,7 +4299,12 @@ export class Runner {
     resultCell: Cell<R>,
     argumentCellLink: NormalizedFullLink,
     options: { preserveName: boolean },
-  ): { result: R; fabricResult: FabricValue; changed: boolean } {
+  ): {
+    result: R;
+    fabricResult: FabricValue;
+    changed: boolean;
+    nameCarried: boolean;
+  } {
     const writableResultCell = pattern.resultSchema === undefined
       ? resultCell.withTx(tx)
       : resultCell.withTx(tx).asSchema(pattern.resultSchema);
@@ -4202,11 +4320,10 @@ export class Runner {
     const previousResult = writableResultCell.getRaw({
       meta: ignoreReadForScheduling,
     });
-    if (
-      options.preserveName &&
+    const nameCarried = options.preserveName &&
       isObjectOrArray(previousResult) &&
-      previousResult[NAME]
-    ) {
+      Boolean(previousResult[NAME]);
+    if (nameCarried) {
       result = { ...result, [NAME]: previousResult[NAME] };
     }
     // Convert-and-freeze (default): a deep-frozen value lets the storage write
@@ -4231,6 +4348,7 @@ export class Runner {
       result,
       fabricResult,
       changed: !valueEqualByWalk(fabricResult, previousResult),
+      nameCarried,
     };
   }
 
@@ -4514,6 +4632,7 @@ export class Runner {
     setupState: SetupStateReuse,
     argument: T,
     resultCell: Cell<R>,
+    setupBegan: number,
     referencedArgumentFields: readonly string[] = [],
     capturedArgumentFields: readonly string[] = [],
     droppedArgumentFields: readonly string[] = [],
@@ -4819,6 +4938,7 @@ export class Runner {
 
     this.#updateResultProjection(tx, pattern, resultCell.withTx(tx), {
       preserveName: sameStoredSetup,
+      setupBegan,
     });
 
     // This completion marker records the identity whose schema, arguments,
@@ -5036,6 +5156,16 @@ export class Runner {
     validationOptions: SetupValidationOptions = {},
   ): SetupResult<R> {
     const tx = providedTx ?? this.#runtime.edit();
+    // Where in the transaction's journal this setup begins, before it reads
+    // anything of its own: what was read before it chose the pattern and the
+    // argument the setup builds from (§8.9.1.3). A transaction carrying a
+    // deferred run's decision holds that decision as trigger reads
+    // (`#runDecisionOf()`), and its own earlier reads are the runner's work
+    // on the run, such as the instantiation of the nodes beside a nested
+    // pattern, which chose nothing, so its setups begin at its start.
+    const setupBegan = this.#carriedStanding.has(tx)
+      ? 0
+      : nextJournalPosition(tx);
 
     logger.debug("cell-info", () => [
       `resultCell: ${resultCell.getAsNormalizedFullLink().id}`,
@@ -5280,6 +5410,7 @@ export class Runner {
       setupState,
       argument,
       resultCell,
+      setupBegan,
       validationOptions.referencedArgumentFields,
       validationOptions.capturedArgumentFields,
       validationOptions.droppedArgumentFields,
@@ -5292,6 +5423,39 @@ export class Runner {
         this.#runtime.getCellFromLink(argumentLink, undefined, tx),
         pattern.argumentSchema,
       );
+    }
+
+    // A piece running here takes this setup's pattern by swapping, a setup
+    // for resume such as a source update's included, and the swap is decided
+    // by what decided this setup. The decision is there from the setup on,
+    // since the store's notification of the pointer move can reach the
+    // swap before this transaction's commit callbacks run, and goes with a
+    // setup that does not land.
+    const runningKey = this.#getSetupKey(resultCell.withTx(tx));
+    if (this.#sessionPatternSwaps.has(runningKey)) {
+      const decided = {
+        pattern: patternIdentityKey(entryRef),
+        carry: this.#runDecisionOf(tx),
+      };
+      this.#runDecisions.set(runningKey, decided);
+      const undecide = () => {
+        if (this.#runDecisions.get(runningKey) === decided) {
+          this.#runDecisions.delete(runningKey);
+        }
+      };
+      tx.addCommitCallback((settledTx, result) => {
+        if (result.error) {
+          undecide();
+          return;
+        }
+        // A wave that withdraws the setup after accepting it leaves nothing
+        // the decision decided.
+        void (waveSettlementOf(settledTx) ?? waveSettlementOf(tx))?.then(
+          ({ error }) => {
+            if (error) undecide();
+          },
+        );
+      });
     }
 
     if (!validationOptions.prepareForResume) {
@@ -6182,11 +6346,13 @@ export class Runner {
 
     // Helper to instantiate nodes for a pattern. Returns the settlement of the
     // transaction it commits itself, and nothing when it stages into `useTx`
-    // or instantiates nothing.
+    // or instantiates nothing. A transaction it makes itself receives
+    // `carryDecision`, what decided a swap to `pattern`.
     const instantiatePattern = (
       pattern: Pattern,
       useTx?: IExtendedStorageTransaction,
       retry?: InstantiationRetry,
+      carryDecision?: (to: IExtendedStorageTransaction) => void,
     ): PieceInstantiationSettlement | undefined => {
       if (!active || startLifecycleEpoch !== this.#lifecycleEpoch) return;
       const shouldCommit = !useTx;
@@ -6209,6 +6375,9 @@ export class Runner {
 
       // Instantiate nodes
       const actualTx = useTx ?? this.#runtime.edit();
+      if (useTx === undefined && carryDecision !== undefined) {
+        carryDecision(actualTx);
+      }
       enrollPieceOwnedStores(actualTx, resultCell, pattern);
       // A transaction that also carries the cold-start setup repair is named
       // for it, so its seal and any refusal of it are attributed to the repair
@@ -6570,6 +6739,7 @@ export class Runner {
                       PIECE_RUN_START_MAX_RETRIES) - 1,
                     loaded: new Set([...(retry?.loaded ?? []), ...absent]),
                   },
+                carryDecision,
               );
             } catch (retryError) {
               const failure = this.#reportPieceStartCommitFailure(
@@ -6723,6 +6893,7 @@ export class Runner {
         const pattern = this.#resolveToPattern(loaded as Pattern);
         const swap = {};
         latestSwap = swap;
+        const carryDecision = this.#takeRunDecision(pieceKey, newRef);
         // Whoever moved the pointer may have staged the incoming pattern in
         // the same transaction, which is how a transition makes staging and
         // the pointer succeed or fail together. Its completion marker says
@@ -6734,12 +6905,14 @@ export class Runner {
           setupMarker.symbol === newRef.symbol
         ) {
           cancelNodes?.();
-          instantiatePattern(pattern);
+          instantiatePattern(pattern, undefined, undefined, carryDecision);
           runningRef = newRef;
           instantiatedPatternKey = patternIdentityKey(newRef);
           return;
         }
         const setupTx = this.#runtime.edit();
+        // The swap's setup reads nothing before this, so it begins here.
+        const setupBegan = nextJournalPosition(setupTx);
         // Under an installed seal destination (serving-loop.md §3d) every
         // commit path declares its run context; the swap's setup write is
         // runtime-internal bookkeeping. A no-op everywhere else. The action
@@ -6755,9 +6928,14 @@ export class Runner {
           }/${pieceLink.id}`,
           kind: "bookkeeping",
         });
-        const finishSwap = () => {
+        if (carryDecision !== undefined) {
+          carryDecision(setupTx);
+        }
+        const finishSwap = (
+          setupDecision: (to: IExtendedStorageTransaction) => void,
+        ) => {
           cancelNodes?.();
-          instantiatePattern(pattern);
+          instantiatePattern(pattern, undefined, undefined, setupDecision);
           runningRef = newRef;
           runningPattern = pattern;
           instantiatedPatternKey = patternIdentityKey(newRef);
@@ -6774,6 +6952,16 @@ export class Runner {
             currentPatternKey = instantiatedPatternKey;
           }
           this.#evictResultPatternMemos(`${pieceLink.space}/${pieceLink.id}`);
+          // A later swap to the same pattern is decided as this one was.
+          if (
+            carryDecision !== undefined && active &&
+            !this.#runDecisions.has(pieceKey)
+          ) {
+            this.#runDecisions.set(pieceKey, {
+              pattern: patternIdentityKey(newRef),
+              carry: carryDecision,
+            });
+          }
         };
         // The running graph is replaced only once the setup it reads is
         // accepted. A commit can be refused, and a serving wave can still
@@ -6785,6 +6973,7 @@ export class Runner {
         // later pointer write (or reactivation) repairs. Events for the piece
         // wait for the outcome (`pendingPatternChangeFor`).
         const setupWork = (async () => {
+          let setupDecision: (to: IExtendedStorageTransaction) => void;
           try {
             this.#applySetupState(
               setupTx,
@@ -6797,7 +6986,11 @@ export class Runner {
               },
               undefined,
               resultCell,
+              setupBegan,
             );
+            // The new graph is set up from what the setup read, and from what
+            // decided the swap, which the setup carries.
+            setupDecision = this.#runDecisionOf(setupTx);
             this.#runtime.prepareTxForCommit(setupTx);
             const committed = await setupTx.commit().settled;
             if (committed.error !== undefined) {
@@ -6838,7 +7031,7 @@ export class Runner {
           // one while the settlement was pending.
           if (!active || startLifecycleEpoch !== this.#lifecycleEpoch) return;
           if (currentPatternKey !== patternIdentityKey(newRef)) return;
-          finishSwap();
+          finishSwap(setupDecision);
         })().catch((error) => {
           logger.error(
             "pattern-swap-setup-error",
@@ -6878,6 +7071,7 @@ export class Runner {
       addCancel(() => {
         if (this.#sessionPatternSwaps.get(pieceKey) === sessionSwapHandler) {
           this.#sessionPatternSwaps.delete(pieceKey);
+          this.#runDecisions.delete(pieceKey);
         }
       });
       // Follow a pointer the watcher saw move to `newRef`: swap to the
@@ -7337,6 +7531,8 @@ export class Runner {
           pattern,
           ref,
           stage: (repairTx) => {
+            // The repair's setup begins with this stage, before its own reads.
+            const setupBegan = nextJournalPosition(repairTx);
             // A retry re-stages what a refused commit rolled back; once a
             // commit has landed the stored setup agrees with the pattern and
             // there is nothing left to stage.
@@ -7392,6 +7588,7 @@ export class Runner {
               },
               undefined,
               resultCell,
+              setupBegan,
             );
           },
         };
@@ -7703,7 +7900,17 @@ export class Runner {
           "rootCellSync",
         );
         if (rootCell.getRaw() === undefined) {
-          return Promise.reject(new Error("No data at cell"));
+          // A space whose session failed reads as empty too, since a sync
+          // resolves either way; say why, by the rule `Cell.pull()` uses. A
+          // refused space stays an empty read, as its loads are.
+          const sessionError = this.#runtime.storageManager
+            .spaceSessionError?.(rootCell.space);
+          return Promise.reject(
+            sessionError !== undefined &&
+              sessionError.name !== "AuthorizationError"
+              ? sessionError
+              : new Error("No data at cell"),
+          );
         } else {
           return this.#doStart(rootCell, seenCells, attempt);
         }
@@ -8032,6 +8239,62 @@ export class Runner {
       : committer(tx, resultCell, commit);
   }
 
+  /**
+   * Whether `tx` is an asking transaction, one a setup in which restates a
+   * wiring it finds unchanged: one it was asked in
+   * (`#askingSetupTransactions`), or one carrying the reads of such a
+   * transaction that has committed (`#carriedStanding`).
+   */
+  #isAsking(tx: IExtendedStorageTransaction): boolean {
+    return this.#askingSetupTransactions.has(tx) ||
+      this.#carriedStanding.get(tx)?.() === true;
+  }
+
+  /**
+   * Takes what decided a run `from` deferred into a transaction the runner
+   * makes later (`carryRunDecision()`), and returns the step that hands it to
+   * that transaction, along with `from`'s standing once `from` commits: a
+   * transaction carrying the reads of an asking transaction that has
+   * committed, or is committing, is an asking one (`#carriedStanding`), and
+   * restates a wiring it finds unchanged as that transaction would. One
+   * carrying the reads of a transaction that was not asking, that is still
+   * open, or that was aborted or refused by the time the setup consults it,
+   * is not. A commit still in flight counts, since a running piece swaps to
+   * the pattern a setup staged as soon as its writes apply here, before the
+   * commit settles; a transaction that read those writes is refused with
+   * them.
+   */
+  #runDecisionOf(
+    from: IExtendedStorageTransaction,
+  ): (to: IExtendedStorageTransaction) => void {
+    const carry = carryRunDecision(from);
+    const standing = () => {
+      const { status } = from.status();
+      return (status === "pending" || status === "done") &&
+        this.#isAsking(from);
+    };
+    return (to) => {
+      carry(to);
+      this.#carriedStanding.set(to, standing);
+    };
+  }
+
+  /**
+   * Helper for the pattern watcher's swap, which takes what decided the setup
+   * that staged `ref` on the piece `key` names (`#runDecisions`), or nothing
+   * when the latest committed setup there staged another pattern.
+   */
+  #takeRunDecision(
+    key: `${MemorySpace}/${ScopeKey}/${URI}`,
+    ref: { identity: string; symbol: string },
+  ): ((to: IExtendedStorageTransaction) => void) | undefined {
+    const decided = this.#runDecisions.get(key);
+    this.#runDecisions.delete(key);
+    return decided?.pattern === patternIdentityKey(ref)
+      ? decided.carry
+      : undefined;
+  }
+
   #createDeferredStartOwnership<T>(
     resultCell: Cell<T>,
   ): DeferredCancelOwnership {
@@ -8129,6 +8392,7 @@ export class Runner {
     const resultLink = resultCell.getAsNormalizedFullLink();
     const startLifecycleEpoch = this.#lifecycleEpoch;
     const ownership = this.#createDeferredStartOwnership(resultCell);
+    const carryDecision = this.#runDecisionOf(tx);
     tx.addCommitCallback((_committedTx, result) => {
       if (result.error) {
         // The callback that would install this start is the one running now,
@@ -8141,6 +8405,7 @@ export class Runner {
       if (ownership.isCancelled()) return;
 
       const startTx = this.#runtime.edit();
+      carryDecision(startTx);
       // A start deferred from a handler run initializes on that run's behalf.
       carryAttributionMarks(tx, startTx);
       // Minted inside a commit callback — by definition outside any scheduler
@@ -8924,6 +9189,7 @@ export class Runner {
     const navigateContext = navigateEventContextFromRunInfo(
       waveRunContextOf(tx) ?? speculationContext,
     );
+    const carryDecision = this.#runDecisionOf(tx);
     const work = (async () => {
       let toName = named;
       let retriesLeft = PIECE_RUN_START_MAX_RETRIES;
@@ -8947,6 +9213,7 @@ export class Runner {
         }
         if (ownership.isCancelled()) return;
         const startTx = this.#runtime.edit();
+        carryDecision(startTx);
         // Speculative starts keep defaults in their overlay transaction. A
         // bookkeeping seed here would escape the parent's destination, and a
         // later authored start still needs its own durable preparation.
@@ -9467,6 +9734,7 @@ export class Runner {
     // (`#ancestorSystemOrigin`), so the chain is recorded ahead of the start
     // exactly as the immediate path's start records it.
     this.#demandRootChainFor(resultLink.id, parentPieceRootId);
+    const carryDecision = this.#runDecisionOf(tx);
     tx.addCommitCallback((_committedTx, result) => {
       if (result.error) {
         // Settled here for the same reason as the start above: this callback
@@ -9478,6 +9746,7 @@ export class Runner {
       if (ownership.isCancelled()) return;
 
       const startTx = this.#runtime.edit();
+      carryDecision(startTx);
       // A result pattern deferred from a handler run initializes on that
       // run's behalf, as the deferred start above does.
       carryAttributionMarks(tx, startTx);
@@ -9610,12 +9879,17 @@ export class Runner {
     options?: RunnerRunOptions,
   ): Cell<R>;
   run<T, R = any>(
-    providedTx: IExtendedStorageTransaction,
+    providedTx: IExtendedStorageTransaction | undefined,
     patternOrModule: Pattern | Module | undefined,
     argument: T,
     resultCell: Cell<R>,
     options: RunnerRunOptions = {},
   ): Cell<R> {
+    // A run given no transaction starts in one the runner makes, which holds
+    // none of the reads that chose the pattern, so it is not an asking one.
+    if (providedTx !== undefined) {
+      this.#askingSetupTransactions.add(providedTx);
+    }
     return this.#runWithStartOwnership(
       providedTx,
       patternOrModule,
@@ -10061,6 +10335,7 @@ export class Runner {
     };
     if (givenTx) {
       this.#callerOwnedSetupTransactions.add(givenTx);
+      this.#askingSetupTransactions.add(givenTx);
       if (sourceUpdate !== undefined) {
         throw new Error(
           "source update authority requires an owned setup transaction",
@@ -10123,6 +10398,7 @@ export class Runner {
             setCfcTrustSnapshot(tx, options.cfcTrustSnapshot);
           }
           assertExpectedPatternIdentity(resultCell.withTx(tx));
+          this.#askingSetupTransactions.add(tx);
           return this.#setupInternal(
             tx,
             pattern,
@@ -12035,6 +12311,15 @@ export class Runner {
       ? this.#runtime.getCellFromLink({ ...link, path: [] })
       : resultCell;
     return this.#cancels.has(this.#getDocKey(rootCell));
+  }
+
+  /** Whether a piece whose result document is in `space` is running. */
+  runsPieceIn(space: MemorySpace): boolean {
+    const prefix = `${space}/`;
+    for (const key of this.#cancels.keys()) {
+      if (key.startsWith(prefix)) return true;
+    }
+    return false;
   }
 
   /**

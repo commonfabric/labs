@@ -155,7 +155,7 @@ createNewNote.handler  void
 Each `.handler` and `.tool` file embeds the input schema as readable comments:
 
 ```sh
-#!/path/to/cf-exec exec
+#!/bin/sh
 # schema: {"type":"string"}
 # input: string
 exec '/path/to/cf-exec' exec "$0" "$@"

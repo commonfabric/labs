@@ -19,6 +19,7 @@ import {
 import { holdWorkerLifetimeLock } from "@commonfabric/platform/worker-lifetime";
 import { setPatternEnvironment } from "../builder/env.ts";
 import { collectedMemory } from "../collected-memory.ts";
+import type { ModuleCompileWorker } from "../harness/module-compile-worker.ts";
 import type { ModuleByteCache, RuntimeFetch } from "../runtime.ts";
 import { ExecutorHost } from "./host.ts";
 import { webSocketRoute } from "./routed-plane.ts";
@@ -52,6 +53,12 @@ export type ServingWorkerMainOptions = {
 
   /** A compiled-module cache every serving runtime of this worker shares. */
   moduleByteCache?: ModuleByteCache;
+
+  /**
+   * The compile worker every serving runtime of this worker compiles in,
+   * which closes when the host does.
+   */
+  moduleCompiler?: ModuleCompileWorker;
 };
 
 /**
@@ -95,6 +102,9 @@ export function serveFromPort(
         ...(options.moduleByteCache === undefined
           ? {}
           : { moduleByteCache: options.moduleByteCache }),
+        ...(options.moduleCompiler === undefined
+          ? {}
+          : { moduleCompiler: options.moduleCompiler }),
       }),
       ...(init.policy === undefined ? {} : { policy: init.policy }),
       ...(init.ensureSpaceRoots === undefined
@@ -143,6 +153,9 @@ export function serveFromPort(
         return options.runLifecycleVerb(host, space, verb, identity);
       },
       close: async () => {
+        // The compile worker closes first, so a compile an activation still
+        // awaits fails at once rather than holding the host's close.
+        options.moduleCompiler?.close();
         try {
           await host.close();
         } finally {

@@ -270,6 +270,13 @@ workflow. A run's lanes come from two jobs.
   Each runs `deno run -A tasks/ci-lane.ts --lane N --of M` with `plan`'s
   `args`. A lane packs the same plan from the manifest and the tree as every
   other lane of its run, and runs its own share of it.
+- Each job of `tests` mounts its checkout a second time, at
+  `$HOME/checkout 🦆`, and runs the lane from there. A test that turns a file
+  URL into a path without decoding it, which works in the workspace's plain
+  ASCII path, fails in one holding a space and an emoji. The lane's coverage
+  reports name each file of the repository by its path relative to the
+  checkout, so `Status` and the release job, which read them from the
+  workspace, resolve them to the same files.
 - Each job of `tests` plans before it runs. Its `🗺️ Plan the lane` step runs
   the lane with `--dry-run`, which prints the lane's share, what it is
   projected to take, and what was withheld, in a step of their own. The
@@ -1759,7 +1766,16 @@ for a change. Where it may be run without its neighbours, the run on the
 default branch runs it as many times as its share asks for and does not
 fail for it, so it goes on being measured while it is out of changes, and
 a green run of the default branch can carry a failure of one of these
-tests and still deploy. `explain <identity>` says of any test whether the
+tests and still deploy.
+
+That count is the most a lane runs it. A lane stops repeating a unit once
+each test that asked for its repeats has either passed and failed at the
+commit, which is the disagreement the publisher reads a flake from, or
+failed twice running, which is a test failing at that commit, whose further
+runs would each take as long as its failure does. Every run the lane makes
+is recorded and measured as before, and its closing summary says, under
+"Left out, which is not a failure", how many runs of each unit it did not
+need and why. `explain <identity>` says of any test whether the
 manifest this commit resolves withholds it and how many runs it is given.
 The reasoning behind each part is in [the archived
 plan](../history/plans/pull-request-test-selection.md#an-excluded-test-still-runs-on-main).

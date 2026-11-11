@@ -2,8 +2,8 @@ import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
+import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
 
-import type { CfcConfClause } from "../src/cfc/clause.ts";
 import { stampWaveRunContext } from "../src/executor/wave.ts";
 import { toMemorySpaceAddress } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";

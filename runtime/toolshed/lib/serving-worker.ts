@@ -4,8 +4,8 @@
  * its `pattern.lifecycle` handler sends are built here from
  * `@commonfabric/piece`'s served lifecycle, requests the serving runtimes
  * address to the public origin go to this server's own listener when an
- * internal origin is set, and one compiled-module cache serves every space
- * the worker serves. Loading this
+ * internal origin is set, and one compiled-module cache and one compile
+ * worker serve every space the worker serves. Loading this
  * module anywhere but in a Worker serves nothing; `lib/server-execution.ts`
  * starts it.
  */
@@ -15,6 +15,7 @@ import {
   type ServedLifecycleVerbDescriptor,
 } from "@commonfabric/piece/ops";
 import { serveFromPort } from "@commonfabric/runner/executor/serving-worker-main";
+import { ModuleCompileWorker } from "@commonfabric/runner/module-compile-worker";
 import { ProcessModuleByteCache } from "@commonfabric/test-support/compile-byte-cache";
 import env from "@/env.ts";
 import { toolshedClientBuild } from "@/lib/build-info.ts";
@@ -37,4 +38,7 @@ serveFromPort(self as unknown as Parameters<typeof serveFromPort>[0], {
   // never holds; the shared cache is what lets a later space's activation
   // skip the transform-and-emit step for modules this worker compiled.
   moduleByteCache: new ProcessModuleByteCache(),
+  // The type-check, transform and emit step of every compile runs there, off
+  // the thread every space's serving loop shares.
+  moduleCompiler: new ModuleCompileWorker(),
 });

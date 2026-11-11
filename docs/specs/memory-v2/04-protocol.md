@@ -562,6 +562,8 @@ interface SessionOpenInvocation {
 }
 
 interface SessionOpenResult {
+  // Baked commit of the serving Toolshed process; diagnostic only.
+  serverBuild?: string;
   sessionId: SessionId;
   sessionToken: string;
   serverSeq: number;
@@ -580,6 +582,9 @@ interface SessionOpenResult {
     outcome: "redeemed" | "already-redeemed";
     redemption: { inviteId: string; did: string };
     currentAccess: "READ" | "WRITE" | "OWNER" | null;
+    // The profile the issuer suggested for the redeemer, while the
+    // invitation service holds one (runtime/toolshed/README.md).
+    suggestedProfile?: { name: string; picture?: string };
   };
   sessionOpen: {
     challenge: {
@@ -590,6 +595,14 @@ interface SessionOpenResult {
   };
 }
 ```
+
+`serverBuild` optionally identifies the serving Toolshed process by its baked
+40-character lowercase Git commit. It does not identify the router answering
+`hello` or a separately launched execution worker. A client compares it with its
+loaded bundle for diagnostics and refreshes it on every successful session
+reopen; an absent or malformed marker clears previously recorded provenance.
+Missing or different builds do not refuse admission or imply incompatibility;
+protocol capabilities determine which operations the peers support.
 
 `session.client` is optional, bounded, self-reported runtime provenance. The
 application is 1–64 printable ASCII characters; the SHA is a full lowercase

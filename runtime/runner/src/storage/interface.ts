@@ -71,6 +71,8 @@ import type { Cancel } from "../cancel.ts";
 import type { Cell } from "../cell.ts";
 import type {
   CfcConfidentialityRelease,
+  CfcConfidentialityReleaseByIntent,
+  CfcConfidentialityReleaseByIntentInput,
   CfcConfidentialityReleaseInput,
 } from "../cfc/confidentiality-release-plan.ts";
 import type {
@@ -701,9 +703,11 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
 
   /**
    * Observes authoritative denial and recovery after an authorized reopen,
-   * and a refusal of a space already refused that turns out to be its
-   * deletion. Read `spaceAccessError()` for the current verdict. Initial
-   * successful opens and transient connection failures do not emit.
+   * a refusal of a space already refused that turns out to be its deletion,
+   * and a space whose first connection never completed a handshake that a
+   * `retrySpaceAccess()` reached. Read `spaceAccessError()` for the current
+   * verdict. Initial successful opens and transient connection failures do
+   * not emit.
    */
   subscribeSpaceAccessChange?(observer: (space: MemorySpace) => void): Cancel;
 
@@ -722,7 +726,8 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * `spaceSessionError()` reports from then on: for example a takeover, an
    * authorization denial, or a client that gives up reconnecting. The space's
    * documents receive no further updates unless a reopen after an access
-   * change (see `subscribeSpaceAccessChange()`) replaces the session, after
+   * change (see `subscribeSpaceAccessChange()`), or a `retrySpaceAccess()` of
+   * a space that never connected, replaces the session, after
    * which `spaceSessionError()` returns undefined again. An authorization
    * denial also reaches `subscribeSpaceAccessLoss()` observers. Ordinary
    * reconnects, normal closure, and spaces whose reads an authoritative local
@@ -1041,8 +1046,26 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * or of a repeated load, rejects, and a later call repeats the loads that
    * have not yet succeeded. Does nothing for a space this manager has not
    * opened, or one it holds no refusal for.
+   *
+   * A space whose first connection never completed a handshake, such as one
+   * on a host that was down or out of the network's reach, counts as refused
+   * here: its `spaceSessionError()` stays that failure, and its loads fail
+   * with it at once without dialing again, until this call makes one more
+   * round of connection attempts. An ACL notice does not. The loads that
+   * failed in the meantime are made again once it connects.
+   * A host calls it when it has reason to think the host is reachable now,
+   * such as a person asking to try again or a change of network. A dial that
+   * fails again rejects with the new failure and leaves the space as it was.
    */
   retrySpaceAccess?(space: MemorySpace): Promise<void>;
+
+  /**
+   * The spaces this manager has opened whose first connection never
+   * completed a handshake, which `retrySpaceAccess()` would dial again. For a
+   * host that learns the network changed and cannot know which spaces were
+   * out of its reach. Opens nothing.
+   */
+  unreachableSpaces?(): MemorySpace[];
 
   /**
    * Load cell from storage. Will also subscribe to new changes.
@@ -1329,6 +1352,12 @@ export interface IOperationStorageCapability {
     query: Omit<OperationFieldQuery, "principal" | "sessionId">,
   ): Promise<OperationFieldSnapshot>;
 
+  /**
+   * Applies an operation and waits for its covering frame while a subscription
+   * and the server's verdict catch-up markers are available. Without that
+   * channel, or when it closes, returns the accepted result without waiting
+   * for delivery.
+   */
   applyOperation(operation: ApplyOpOperation): Promise<ApplyOpResolution>;
 
   releaseOperationField(operation: ReleaseOpFieldOperation): Promise<void>;
@@ -1756,7 +1785,9 @@ export interface IStorageTransaction {
   /**
    * Check scheduling dependencies before accepting an empty commit or seal.
    * Set by reactive computations, whose subscriptions must cover changes since
-   * their reads. Event handlers retain ordinary empty-commit behavior.
+   * their reads, and direct bookkeeping commits, whose verdict validates the
+   * guarded snapshot even when every write is elided. Event handlers retain
+   * ordinary empty-commit behavior.
    */
   validateReactiveReads?: boolean;
 
@@ -3085,6 +3116,29 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
   releaseCfcConfidentiality(
     input: CfcConfidentialityReleaseInput,
   ): CfcConfidentialityRelease;
+
+  /**
+   * The trusted writer path for an owner's release by intent of the
+   * confidentiality stored at one path of a document (§8.12.7 route 2d,
+   * `cfc/confidentiality-release-plan.ts`). Requires the transaction's
+   * current implementation identity to be the `cfc-owner-release-by-intent`
+   * builtin. Verifies the signed request first: its signature, that its
+   * signer is the space's owner by the access list it reads, which the caller
+   * loads from the store first (`releaseAccessListOf()`),
+   * that the document's stored envelope is the one it names, and that its
+   * record does not exist yet. Then removes the clauses it names from every
+   * component of the label at its path and from the stored schema, re-derives
+   * the envelope's label-metadata templates, and writes the envelope inside
+   * the privileged system-write scope. The record is the caller's to write,
+   * at the returned id, in the same transaction; the store refuses the
+   * release without it.
+   *
+   * @throws On any of the requirements above, on an unreadable envelope, and
+   *   on everything `planConfidentialityReleaseByIntent()` refuses.
+   */
+  releaseCfcConfidentialityByIntent(
+    input: CfcConfidentialityReleaseByIntentInput,
+  ): CfcConfidentialityReleaseByIntent;
 
   /**
    * Surfaces a post-commit sink-request release rejection (the effect is fail-

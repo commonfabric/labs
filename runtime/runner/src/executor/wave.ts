@@ -564,6 +564,11 @@ export interface WaveSpaceCommit {
    * carries its transaction's own reads. */
   confirmedReads?: ConfirmedRead[];
 
+  /** The direct transaction's fixed instance-addressing identity, used only
+   * for its confirmed reads and entity preconditions. It supplies no acting
+   * principal and remains the same on a retry of the commit. */
+  dependencyScopeIdentity?: ScopeKeyIdentity;
+
   /** Owning contribution index per precondition — home batch only; lets a
    * reported precondition failure resolve per write class. */
   preconditionOwners?: number[];

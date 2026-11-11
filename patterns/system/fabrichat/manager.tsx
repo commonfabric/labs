@@ -83,6 +83,7 @@ import {
   type SharedSpaceCatalogStorage,
   type SharedSpaceEntry,
 } from "../shared-space/shared-space-catalog.ts";
+import { sameNameMarks } from "./logic.ts";
 import { entityKeyOf, listsRoomIn } from "./room-records.tsx";
 import FabriChatRoom from "./room.tsx";
 import {
@@ -1923,6 +1924,12 @@ interface ShownPerson {
 
   /** What the control picking them says, which shows whether they are. */
   label: string;
+
+  /**
+   * What tells them apart from another person listed under the same name
+   * (`sameNameMarks()`); empty where no one else shows their name.
+   */
+  mark: string;
 }
 
 /** The opaque revision of a conversation discovered through a catalog entry. */
@@ -2066,13 +2073,23 @@ const liveDirect = (
 ): ChatIndexEntry | undefined =>
   known !== undefined && spaceDeleted(known.room) !== true ? known : undefined;
 
-/** Orders index entries newest first. */
-const newestFirst = (a: ChatIndexEntry, b: ChatIndexEntry): number =>
-  nsecOf(b.since) < nsecOf(a.since)
-    ? -1
-    : nsecOf(b.since) > nsecOf(a.since)
-    ? 1
-    : 0;
+/**
+ * `entries`, newest first. The handler clock counts whole seconds, so two rooms
+ * created in one second share a `since`, and between them the one later in
+ * `entries` comes first. The manager appends a membership when it records one,
+ * so that is the room created later, unless a forget or a rejoin has since
+ * moved the other's membership to the end; a restore leaves a membership where
+ * it is. Rooms only the catalog finds follow the memberships, in the catalog's
+ * order, so the order is total.
+ */
+const newestFirst = <T extends ChatIndexEntry>(entries: readonly T[]): T[] =>
+  entries.map((entry, index) => ({ entry, index })).sort((a, b) =>
+    nsecOf(b.entry.since) < nsecOf(a.entry.since)
+      ? -1
+      : nsecOf(b.entry.since) > nsecOf(a.entry.since)
+      ? 1
+      : b.index - a.index
+  ).map(({ entry }) => entry);
 
 /**
  * The rooms the catalog's saved `entries` led to, each once it resolves and
@@ -2241,14 +2258,16 @@ export const FabriChatManagerCore = pattern<
           !memberships.some((known) => equals(known.room, entry.room))
         ),
       ].filter((entry) => !roomDeleted(catalogEntries, entry.room));
-      return listed.filter((entry, index) =>
-        listed.findIndex((known) => equals(known.room, entry.room)) === index
-      ).map((entry) => {
-        if (entry.kind !== "direct") return entry;
-        const { counterpart: _stale, ...rest } = entry;
-        const counterpart = counterpartOf(stored, entry.room, self);
-        return counterpart === undefined ? rest : { ...rest, counterpart };
-      }).sort(newestFirst);
+      return newestFirst(
+        listed.filter((entry, index) =>
+          listed.findIndex((known) => equals(known.room, entry.room)) === index
+        ).map((entry) => {
+          if (entry.kind !== "direct") return entry;
+          const { counterpart: _stale, ...rest } = entry;
+          const counterpart = counterpartOf(stored, entry.room, self);
+          return counterpart === undefined ? rest : { ...rest, counterpart };
+        }),
+      );
     });
     // The rooms `rooms` leaves out because their space is deleted, newest
     // first, among those this user holds a membership for, saved or archived.
@@ -2269,14 +2288,16 @@ export const FabriChatManagerCore = pattern<
         (entry.state === "saved" || entry.state === "archived") &&
         roomDeleted(catalogEntries, entry.room)
       );
-      return gone.filter((entry, index) =>
-        gone.findIndex((known) => equals(known.room, entry.room)) === index
-      ).map((entry) => {
-        if (entry.kind !== "direct") return entry;
-        const counterpart = entry.counterpart ??
-          counterpartOf(stored, entry.room, self);
-        return counterpart === undefined ? entry : { ...entry, counterpart };
-      }).sort(newestFirst);
+      return newestFirst(
+        gone.filter((entry, index) =>
+          gone.findIndex((known) => equals(known.room, entry.room)) === index
+        ).map((entry) => {
+          if (entry.kind !== "direct") return entry;
+          const counterpart = entry.counterpart ??
+            counterpartOf(stored, entry.room, self);
+          return counterpart === undefined ? entry : { ...entry, counterpart };
+        }),
+      );
     });
     // The people the listed rooms' rosters hold, by the principal each
     // profile's own label attests, read beside the rooms that list them, and
@@ -2343,21 +2364,29 @@ export const FabriChatManagerCore = pattern<
     const refusalDisplay = computed((): ChatDisplay =>
       startRefusal.get() === "" ? "none" : "block"
     );
-    // Each person once, by the first profile attesting them, and whether the
+    // Each person once, by the first profile attesting them, what tells them
+    // apart from another person under the same name, and whether the
     // session's draft has picked them, by any profile of theirs, per session,
     // as the draft is.
     const shownPeople = computed((): PerSession<ShownPerson[]> => {
       const picked = draft.get()?.picked ?? [];
-      return Object.values(peopleForUser).flatMap((profiles): ShownPerson[] => {
-        const profile = profiles[0];
-        if (profile === undefined) return [];
-        return [{
-          profile,
-          label: picked.some((known) => samePerson(known, profile))
-            ? "Added"
-            : "Add",
-        }];
-      });
+      const listed = Object.entries(peopleForUser).flatMap(
+        ([principal, profiles]) => {
+          const profile = profiles[0];
+          return profile === undefined ? [] : [{ principal, profile }];
+        },
+      );
+      const marks = sameNameMarks(listed.map(({ principal, profile }) => ({
+        principal,
+        name: profile.key("name").get(),
+      })));
+      return listed.map(({ principal, profile }): ShownPerson => ({
+        profile,
+        label: picked.some((known) => samePerson(known, profile))
+          ? "Added"
+          : "Add",
+        mark: marks[principal] ?? "",
+      }));
     });
     const peopleDisplay = computed((): ChatDisplay =>
       shownPeople.length === 0 ? "none" : "block"
@@ -2502,6 +2531,7 @@ export const FabriChatManagerCore = pattern<
                         variant="chip"
                         $profile={person.profile}
                       />
+                      <cf-text variant="caption">{person.mark}</cf-text>
                       <cf-button
                         size="sm"
                         variant="ghost"

@@ -126,6 +126,7 @@ import { applyLocalExperimentalDefaults } from "./experimental-defaults.ts";
 import type { CompileTurns } from "./harness/compile-interleave.ts";
 import type { ConsoleMethod } from "./harness/console.ts";
 import { Engine } from "./harness/index.ts";
+import type { ModuleCompiler } from "./harness/module-compile.ts";
 import type { CompiledModuleArtifact } from "./harness/types.ts";
 import {
   immutableCellsFor,
@@ -1018,6 +1019,15 @@ export interface RuntimeOptions {
   compileTurns?: CompileTurns;
 
   /**
+   * Where this runtime's compiles run their type-check, transform and emit
+   * step, when not in this realm: a compile worker, which keeps that step and
+   * the heap it takes off this runtime's thread. A compile instrumented for
+   * pattern coverage, or one that asks for its transformed program, runs here
+   * regardless. When unset, every compile runs here.
+   */
+  moduleCompiler?: ModuleCompiler;
+
+  /**
    * Statement-coverage collector for authored patterns. When set, every compile
    * this runtime performs is instrumented — the transformer injects a hit call
    * in front of each authored statement — and the collector receives the hits.
@@ -1470,6 +1480,7 @@ export class Runtime {
   readonly #transactions = new WeakSet<IExtendedStorageTransaction>();
   readonly #derivedInternalCellIds = new DerivedInternalCellIds();
   readonly #compileTurns: CompileTurns | undefined;
+  readonly #moduleCompiler: ModuleCompiler | undefined;
 
   readonly id: string;
   readonly scheduler: Scheduler;
@@ -1677,6 +1688,11 @@ export class Runtime {
   /** See `RuntimeOptions.compileTurns`. */
   get compileTurns(): CompileTurns | undefined {
     return this.#compileTurns;
+  }
+
+  /** See `RuntimeOptions.moduleCompiler`. */
+  get moduleCompiler(): ModuleCompiler | undefined {
+    return this.#moduleCompiler;
   }
 
   /**
@@ -2195,6 +2211,7 @@ export class Runtime {
       );
       this.moduleByteCache = options.moduleByteCache;
       this.#compileTurns = options.compileTurns;
+      this.#moduleCompiler = options.moduleCompiler;
       this.patternCoverage = options.patternCoverage;
       // Validated + digested + frozen before the trust-snapshot provider
       // default below, whose `revision` covers the config digest (a trust
@@ -5213,6 +5230,24 @@ export class Runtime {
     } finally {
       this.#inSpaceResolutions.delete(creationKey);
     }
+  }
+
+  /**
+   * Returns the space that `space`'s allocation record names for the
+   * `PatternFactory.inSpace(name)` target `name`, once the record has loaded,
+   * or `undefined` when `space` records none, as before any run asked for
+   * that name. Reads only: unlike {@link resolveInSpaceName}, it creates no
+   * space and writes no record, so a caller can ask which space a name
+   * stands for without bringing it into being.
+   */
+  async recordedInSpaceName(
+    space: MemorySpace,
+    name: string,
+  ): Promise<MemorySpace | undefined> {
+    const record = this.#inSpaceAllocationCell(space, name);
+    await record.sync();
+    const recorded = record.get()?.did;
+    return isDID(recorded) ? recorded : undefined;
   }
 
   #inSpaceAllocationCell(

@@ -2,7 +2,7 @@
 
 The Contextual Flow Control specification in `commonfabric/specs` under `cfc/`
 says, in §18.6.4 of `18-runtime-implementation-profiles.md`, that a deployment
-claiming the reactive-runtime profile MUST document eight things. This document
+claiming the reactive-runtime profile MUST document nine things. This document
 is this runtime's answer, one section per item. Each section names the adapter
 code under `runtime/runner/src/` that implements the item, by file and
 symbol, and states every known non-conformance with its direction: an
@@ -13,7 +13,10 @@ answer, the section says "not established" and what would establish it.
 
 The statement is written against the specification at the commit the spec
 snapshot at `runtime/runner/src/cfc/kernel/spec-snapshot.json` records,
-`0c12ccf3`. It describes the runtime's shipped defaults: the dial values
+`239fc839`. That commit is the head of
+[specs#88](https://github.com/commonfabric/specs/pull/88), which adds §8.9.1.3
+and has not merged; the rest of the specification there is `9c9e96d0` on specs
+`main`. It describes the runtime's shipped defaults: the dial values
 `RUNTIME_CFC_DIAL_DEFAULTS` in `cfc/posture-report.ts` applies to every
 `Runtime`, and `presetCfcOptions` in `runtime-presets.ts` pins for every host
 preset. A host that sets a dial lower is described by
@@ -454,8 +457,46 @@ to the egress and sink consumed set and to the `requiredIntegrity` input gate
 as well. `cfc-enforcement-matrix.md` §2, item 4, records that multi-hop closure
 is complete at `persist`, the shipped default.
 
+**A run deferred into a transaction of its own carries what decided it.** The
+runner sets up or starts some runs in a fresh transaction rather than the one
+that asked for them: a piece whose execution family has to be named first
+(`#runAfterNamedFamilyLands` in `runner.ts`), a start held until the asking
+transaction commits (`#startAfterSuccessfulCommit`), and a handler's
+navigate-bearing result pattern (`#runPatternAfterSuccessfulCommit`). When the
+run is deferred, `flowJoinObservationsOf` in `cfc/prepare.ts` takes the
+addresses of what the asking transaction has observed so far that its flow
+join weighs, its own trigger reads among them, and the fresh transaction
+receives them as trigger reads, with the asking transaction's label-metadata
+observations. So what decided that the run happens joins the PC of everything
+the run writes, at its labels when the run commits, and under
+`cfcTriggerReadGating` it enters the run's consumed sets and input gate too.
+A piece already running here takes the pattern a setup staged by swapping to
+it, in transactions of the pattern watcher's own (`swapToPattern`): a setup
+transaction, unless the setup that moved the pointer staged the pattern
+already, and an instantiation transaction. Those carry the same observations
+of the transaction that ran the setup, a source update's setup for resume
+included (`#runDecisions`, recorded when the setup stages), and the
+instantiation carries the swap setup's own along with them. This is how the
+pattern a lift returns reaches a result that is running already, and how a
+source update reaches the patterns the updated piece nests.
+`runInTransaction` defers by throwing `RetryImmediately`, and the scheduler
+then reruns the asking action, which reads again.
+
 **Residuals.**
 
+- A read the asking transaction took shallowly is carried as a recursive
+  trigger read of its address: an over-taint. So is a read it declared
+  onward, whose membership the asking transaction's own join leaves to the
+  declared target.
+- External content the asking transaction observed is not carried, since its
+  receipt binds it to that transaction. An action that both records external
+  content and defers a run leaves that content off the run, an under-taint;
+  whether any action does both is not established.
+- A swap to a pattern that no setup in this runtime staged, such as one whose
+  pointer another runtime moved, receives no carried observations: its
+  transactions weigh only what they read themselves. The pointer is one of
+  the document's own members, which carries no payload label (§4.6.5), so a
+  trigger read of it would join nothing either.
 - The SQLite and fetch destination snapshots are read under
   `ignoreReadForScheduling`, so those addresses never become trigger reads;
   `cfc-write-destination-reads.md` under "The SQLite publication comparison"
@@ -483,14 +524,15 @@ region of `prepareBoundaryCommit` in `cfc/prepare.ts` re-mints an existence
 entry when a deleted path is re-created. Cross-space persistence commits the
 source-bearing fields of atoms through `transformCfcLabelForCrossSpacePersist`
 in `cfc/label-representation.ts`, classified by
-`cfc/label-field-classification.ts`, under `cfcLabelMetadataProtection:
+`runtime/memory/v2/cfc-label-fields.ts`, under `cfcLabelMetadataProtection:
 enforce`. [`cfc-template-population.md`](cfc-template-population.md),
 [`cfc-observation-classes.md`](cfc-observation-classes.md) and
 [`cfc-label-metadata-confidentiality.md`](cfc-label-metadata-confidentiality.md)
 are the designs.
 
-An owner release (§8.12.7 route 2c) is the one operation that lowers a
-still-existing path's existence entry. `releaseCellConfidentiality` in
+The two owner releases of §8.12.7, routes 2c and 2d, are the operations that
+lower a still-existing path's existence entry. For route 2c,
+`releaseCellConfidentiality` in
 `cfc/confidentiality-release.ts` is the host operation, the transaction's
 `releaseCfcConfidentiality` in `storage/extended-storage-transaction.ts` the
 privileged write, and `planConfidentialityRelease` in
@@ -531,6 +573,80 @@ step 4. @danfuzz's authorization to proceed ahead of unresolved specs
 dependencies does not supply a ruling; the gap still needs one and a
 reconciled pin.
 
+An owner release by intent (§8.12.7 route 2d) removes the clauses a request
+the space's owner signed names, whoever they stand for, from every component
+and observation class at one stored path of one document, the existence and
+membership entries included. `releaseConfidentialityByIntent` in
+`cfc/confidentiality-release.ts` is the host operation, the transaction's
+`releaseCfcConfidentialityByIntent` in
+`storage/extended-storage-transaction.ts` the privileged write, under its own
+builtin identity, and `planConfidentialityReleaseByIntent` in
+`cfc/confidentiality-release-plan.ts` the removal, which shares route 2c's
+core. What the store and the runtime share is
+`runtime/memory/v2/cfc-owner-release-by-intent.ts`: the purpose
+`cfc.owner-release-by-intent/1`, the request, the DAG-CBOR bytes signed, the
+record and its identity, derived from the document's id and the request's
+digest, and the digest of the envelope, taken over the `cfc` member as the
+store holds it. The canonical clause digest both sides name a clause by is
+`cfcCanonicalClauseDigest` in `runtime/memory/v2/cfc-clause-identity.ts`. The
+specification's `ownerReleaseByIntentAt` is decided twice: by the transaction
+operation before it writes, and by `judgeOwnerReleaseByIntent` in that memory
+module, which `applyCommitTransaction` in `runtime/memory/v2/engine.ts` calls
+for every record a commit creates, against the space's access list at the
+commit (`ownerReleaseByIntentSpaceOwner`, the list's `aclOwner`, or the
+space's own DID where it stores none). The store refuses the commit whole on
+any of the refusals the route lists, on a record whose content does not match
+its request, on any other write under the record id scheme, and on two
+releases of one document in one commit; and the interim admission rule of
+[specs#89](https://github.com/commonfabric/specs/pull/89) admits a dropped
+declared path that a verified release names (`admitsDroppedDeclaredPaths` in
+`runtime/memory/v2/envelope-admission.ts`). At the request's path the store
+compares the confidentiality clauses of every entry, component and class by
+component and class, so the commit removes exactly the clauses named there.
+What the commit does to the rest of the envelope, at other paths, to
+integrity, and in the components the store does not judge elsewhere, is the
+runtime's to get right, as it is for every write. An identity commit, a stale
+retry whose every operation leaves the store as it is, records nothing and
+releases nothing, so its record is not judged again. The intent is
+obtained by `cf cell release-by-intent` in `runtime/cli`, which signs only
+after the owner, at a terminal, is shown the request's target and its clauses
+and types a confirmation; nothing else in this repository signs under the
+purpose, and that obligation rests on the host holding the owner's key, as the
+route says. The request names its document directly, so no link is followed
+to choose it, and one stored path, matched literally against the stored
+entries' paths: a `*` segment names the wildcard position itself, such as a
+container's class templates, and none of the concrete positions it covers, so
+one request reaches one stored position. A membership stamp sits at the
+container's path and at its `*` position, so its full removal is a request for
+each, and the CLI names the other positions holding a clause it releases.
+Whether a request may name a wildcard position is not stated by the pending
+route, which says "exactly the one path"; this runtime reads a wildcard
+position as a path of its own.
+A clause is identified by its canonical clause digest throughout, in the
+runtime's plan and listing as in the request and the store, so two spellings
+of one clause, a field in plaintext and committed, are named and released
+apart. What may be named is what the label map holds at the path, which is
+what the store reads: a clause only the stored schema declares there, with no
+label-map entry, is not stored and is refused on both sides. The store also
+refuses a record whose stored label holds no declared `User(owner)` clause at
+its root. The runtime reads the space's access list only once it has loaded
+the list document from the store, so an owner other than the space's own DID
+is read as the list names it. Both owner releases re-derive the envelope's
+label-metadata templates from the payload entries they leave, as every
+persist does.
+
+Route 2d is pending ruling in
+[specs#90](https://github.com/commonfabric/specs/pull/90), which the pin does
+not incorporate, and the snapshot defines no `ownerReleaseByIntentAt` for the
+kernel manifest to carry a row for; the next regeneration after the ruling adds
+one. It lowers clauses at strict, with no default-off dial, which @danfuzz
+directed, so it does not satisfy the correspondence procedure's step 4; the
+deciding sites, in the store and in the runtime, carry its `SPEC-PENDING`
+marker. Against the pin it errs toward under-taint, in the way the route itself
+describes: a release removes a clause that stands for someone other than the
+owner, which no route under the pin removes, and every such removal is signed
+by the owner and recorded.
+
 **Residuals, with direction.**
 
 - Containers outside the wildcard scope: schemas mixing named `properties`
@@ -560,3 +676,100 @@ reconciled pin.
   disclosure residuals of the metadata channel; the specification's own
   alternative, treating the metadata as visible to the destination's readers,
   is what the runtime does for the fields it leaves public.
+
+## 9. Result-wiring membership (§8.9.1.3)
+
+The specification asks whether the runtime mints a pattern setup's
+result-wiring membership from the wiring's own stamp, and if so where it marks
+the wiring scope and how each marking site establishes that the wiring is
+build-decided; and that a restated wiring re-mints its membership when its
+value write is elided.
+
+**What the runtime does.** It mints from the wiring's own stamp. Setup's
+`#updateResultProjection` in `runner.ts` is the one marking site: it records a
+`result-wiring` write-policy input, under the runtime's authorization, for
+every setup, naming the result document, whether the wiring is
+build-decided, and the journal position the setup began at. It is
+build-decided unless the setup carries the stored result's name over, since
+that name is a reference the stored document chose. The
+wiring's references come from `unwrapOneLevelAndBindToDoc` over the pattern's
+result and the piece's identity, which reads no application content.
+`resultWiringsByTarget` in `cfc/prepare.ts` reads the records, and the persist
+region of `prepareBoundaryCommit` stamps a build-decided document's membership
+(its `enumerate` entries and `*`-child templates) from `deriveFlowJoin` with
+`journalBefore` at that position: what the transaction read before the setup
+began, the trigger reads among it. Those reads decided which pattern, and so
+which build, the setup sets up, which is what the specification's triggers
+stand for; a caller that reads data and sets up a pattern chosen by it, in
+the same transaction, carries that data onto the membership. A run the runtime
+defers is the exception, below. The specification's wiring scope adds nothing
+to it, since wiring, write-destination and runtime-internal reads contribute
+nothing to a join. The stamp carries no
+`TransformedBy`. Every other entry of the document, its frozen existence entry
+among them, keeps the attempt's join.
+
+`withRestatedResultWirings` takes every recorded wiring whose document holds
+nothing but references as written at the root of that document, whatever the
+setup wrote, so the root's membership is re-minted at each setup: when setup
+finds the wiring unchanged and writes nothing, and when it writes only the
+slots that changed.
+`ownRestampContainerPaths` includes the build-decided ones, so a setup's
+reads of its own stored membership do not feed the join it re-mints from. A
+wiring that carries the stored name over is left out of it: the name is a
+reference the stored document's membership guards, so the setup's read of it
+joins the stamp it re-mints. A container reached only through the restatement
+mints no existence entry.
+
+This implements [specs#88](https://github.com/commonfabric/specs/pull/88)
+ahead of its ruling, at strict and with no dial, at @danfuzz's direction. It
+narrows what is stored and so does not satisfy the correspondence procedure's
+step 4, which asks for a default-off dial; the two deciding sites carry its
+`SPEC-PENDING` marker.
+
+**Residuals.**
+
+- A wiring whose stored name is carried over is stamped from the attempt's
+  join, an over-taint where the name was itself build-decided.
+- Only a setup in the transaction it was asked in restates an unchanged
+  wiring (`#askingSetupTransactions` in `runner.ts`: the transaction a caller
+  hands `run`, `setup`, `runSynced` or `runInTransaction`, or the one `setup`
+  or `runSynced` makes for that call; a setup nested in another, such as a
+  pattern node its parent instantiates, takes that transaction's standing).
+  A `run` given no transaction is not one. A transaction the runner makes
+  later for a deferred start or a swap takes the standing of the transaction
+  whose reads it carries (§7) while that transaction is committing or has
+  committed, and not while it is open or once it is aborted or refused, so a
+  source update that leaves a result's wiring unchanged restates it in the
+  start that follows the update. The standing is read when the deferred
+  setup runs, so a refusal that arrives after that does not take it back.
+  Every setup in such a transaction begins at the transaction's start: what
+  decided it is the reads the transaction carries, and the transaction's own
+  earlier reads, such as an instantiation reading the result of a piece it
+  set up beside the nested one, chose nothing, so they join none of its
+  stamps. In a transaction a setup was asked in, a setup nested in it begins
+  where it does, so what the instantiation read before it, of the pieces set
+  up beside it, joins its stamp: an over-taint. Where the nested piece
+  carries its stored name over, that restatement keeps the
+  stored membership, as the carried-name rule above has any setup do, so
+  such an update leaves an earlier attempt's stamp in place. A setup repair,
+  and a swap to a pattern no setup in this runtime staged, carry no such
+  reads, and leave an unchanged wiring's stored membership as a setup that
+  wrote nothing would. One of them that changes the wiring writes it, and is
+  stamped from its own transaction.
+- A `run` given no transaction carries no earlier transaction's reads.
+  `wish.ts`'s suggestion fetch sets up the pattern an earlier transaction
+  chose this way, once the suggestion surface opens, so what that setup
+  writes, a changed wiring's membership stamp included, carries none of the
+  reads that chose the pattern: an under-taint.
+- The pre-setup bound applies to journaled reads with a position. A read
+  without one, and every label-metadata or external-content observation,
+  which carry none, joins the narrowed stamp whenever it happened: an
+  over-taint, which on a transaction with no activity clock leaves the stamp
+  the attempt's whole join.
+- A result wiring at a path below its document's root is restated and
+  narrowed only at the root.
+- A result document holding data beside its references is not restated, so
+  a setup that leaves it unchanged re-mints none of its membership: an
+  over-taint where an earlier attempt's stamp is wider than the setup's own.
+  Restating it would take a value stamp from what the setup read onto data no
+  write of the setup made.

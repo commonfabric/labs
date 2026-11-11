@@ -159,9 +159,10 @@ re-stated every time either side moves.
 ### The conformance statement (stage 2)
 
 §18.6.4 says a deployment claiming the reactive-runtime profile MUST document
-eight things: its relevance mechanism, its read exclusions, its reference
+nine things: its relevance mechanism, its read exclusions, its reference
 residuals, its integrity staging level, its matrix position, its persistence
-idempotence, its trigger-read treatment, and its observation-class residuals.
+idempotence, its trigger-read treatment, its observation-class residuals, and
+its result-wiring membership.
 No labs document answers that list. `docs/specs/cfc-conformance-statement.md`
 does, one section per item, each citing the adapter that implements it and the
 manifest rows it rests on, with every known non-conformance stated with its
