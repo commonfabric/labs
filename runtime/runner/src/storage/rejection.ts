@@ -246,8 +246,9 @@ export function isStaleReadConflict(
 }
 
 /**
- * A commit this replica refused before sending it, because a commit whose
- * optimistic layer its reads went through has been refused or dropped:
+ * A commit this replica refused without the server's verdict, sent or not,
+ * because a commit whose optimistic layer its reads went through has been
+ * refused or dropped:
  * `pending dependency rejected: localSeq=…` (storage/v2.ts
  * `#preSendRejection()`) and `pending dependency dropped locally: localSeq=…`
  * (`#makeCascadeRejection()`). Unlike the engine's `pending dependency not
