@@ -53,6 +53,8 @@ async function fixture() {
       access?: InviteAccess;
       ttlSeconds?: number;
       suggestedProfile?: InviteProfileSuggestion;
+      spaceName?: string;
+      issuerName?: string;
     } = {},
   ) => {
     const credentials = createInviteCredentials();
@@ -100,6 +102,12 @@ const sam: InviteProfileSuggestion = {
 function suggestionRows(f: Awaited<ReturnType<typeof fixture>>) {
   return f.engine.database.prepare(
     "SELECT inviteId FROM space_invite_suggestions",
+  ).all<{ inviteId: string }>();
+}
+
+function previewRows(f: Awaited<ReturnType<typeof fixture>>) {
+  return f.engine.database.prepare(
+    "SELECT inviteId FROM space_invite_previews",
   ).all<{ inviteId: string }>();
 }
 
@@ -825,6 +833,185 @@ describe("invites", () => {
           body: { ...plain.request, suggestedProfile: sam },
         })
       ).toThrow("invite-id-unavailable");
+    } finally {
+      await f.close();
+    }
+  });
+  it("shows the holder of an invitation's code its names and suggestion without consuming a use", async () => {
+    const f = await fixture();
+    try {
+      const invite = f.create({
+        suggestedProfile: sam,
+        spaceName: "Garden plans",
+        issuerName: "Pat Example",
+      });
+      const preview = { inviteId: invite.inviteId, code: invite.code };
+      expect(f.run({ operation: "preview", body: preview }, f.guest)).toEqual({
+        access: "READ",
+        spaceName: "Garden plans",
+        issuerName: "Pat Example",
+        suggestedProfile: sam,
+      });
+      // Anyone holding the code may look, as often as they like; nothing is
+      // used up and nothing is granted.
+      f.run({ operation: "preview", body: preview }, f.second);
+      expect(f.run({ operation: "list", body: {} })).toEqual([
+        expect.objectContaining({ usedCount: 0, remainingUses: 1 }),
+      ]);
+      expect(f.run({ operation: "receipts", body: {} })).toEqual([]);
+      expect(f.run({ operation: "redeem", body: invite }, f.guest))
+        .toMatchObject({ outcome: "redeemed", suggestedProfile: sam });
+      // Its redeemer still reads it once the invitation is used up; another
+      // holder of the code does not.
+      expect(f.run({ operation: "preview", body: preview }, f.guest))
+        .toEqual({
+          access: "READ",
+          spaceName: "Garden plans",
+          issuerName: "Pat Example",
+          suggestedProfile: sam,
+        });
+      unavailable(() =>
+        f.run({ operation: "preview", body: preview }, f.second)
+      );
+    } finally {
+      await f.close();
+    }
+  });
+  it("names any invitation, and previews one that carries no names with its access alone", async () => {
+    const f = await fixture();
+    try {
+      const shared = f.create({
+        maxUses: 5,
+        access: "WRITE",
+        spaceName: "Garden plans",
+      });
+      expect(
+        f.run({
+          operation: "preview",
+          body: { inviteId: shared.inviteId, code: shared.code },
+        }, f.guest),
+      ).toEqual({ access: "WRITE", spaceName: "Garden plans" });
+      const plain = f.create();
+      expect(
+        f.run({
+          operation: "preview",
+          body: { inviteId: plain.inviteId, code: plain.code },
+        }, f.guest),
+      ).toEqual({ access: "READ" });
+    } finally {
+      await f.close();
+    }
+  });
+  it("refuses every unreadable preview alike: unknown, wrong code, exhausted, revoked, expired, or orphaned", async () => {
+    const f = await fixture();
+    try {
+      const named = { spaceName: "Garden plans", issuerName: "Pat Example" };
+      const look = (
+        invite: { inviteId: string; code: string },
+        principal = f.guest,
+      ) =>
+        f.run({
+          operation: "preview",
+          body: { inviteId: invite.inviteId, code: invite.code },
+        }, principal);
+      const unknown = createInviteCredentials();
+      unavailable(() => look(unknown));
+      const wrong = f.create(named);
+      unavailable(() => look({ inviteId: wrong.inviteId, code: unknown.code }));
+      const exhausted = f.create(named);
+      f.run({ operation: "redeem", body: exhausted }, f.second);
+      unavailable(() => look(exhausted));
+      const revoked = f.create(named);
+      f.run({ operation: "redeem", body: revoked }, f.second);
+      f.run({ operation: "revoke", body: { inviteId: revoked.inviteId } });
+      // Revocation forgets the preview even for the one who redeemed it.
+      unavailable(() => look(revoked, f.second));
+      const orphaned = f.create(named);
+      const expiring = f.create({ ...named, ttlSeconds: 1 });
+      f.advance(1_000);
+      unavailable(() => look(expiring));
+      f.acl({ [f.second]: "OWNER" });
+      unavailable(() => look(orphaned));
+      // Malformed credentials are refused as malformed, before any lookup.
+      expect(() => look({ inviteId: "short", code: orphaned.code })).toThrow(
+        "invalid-request",
+      );
+      expect(previewRows(f).map((row) => row.inviteId)).not.toContain(
+        revoked.inviteId,
+      );
+      expect(previewRows(f).map((row) => row.inviteId)).not.toContain(
+        expiring.inviteId,
+      );
+    } finally {
+      await f.close();
+    }
+  });
+  it("refuses a malformed or oversized space or issuer name", async () => {
+    const f = await fixture();
+    try {
+      const { maxNameLength } = SPACE_INVITE_CAPABILITY.preview;
+      for (
+        const name of [
+          "",
+          " Garden",
+          "Garden ",
+          "Garden\nplans",
+          "Garden \uD800",
+          "G".repeat(maxNameLength + 1),
+        ]
+      ) {
+        expect(() => f.create({ spaceName: name })).toThrow("invalid-request");
+        expect(() => f.create({ issuerName: name })).toThrow(
+          "invalid-request",
+        );
+      }
+      f.create({
+        spaceName: "G".repeat(maxNameLength),
+        issuerName: "P".repeat(maxNameLength),
+      });
+      expect(f.run({ operation: "list", body: {} })).toHaveLength(1);
+      const body = {
+        inviteId: "A".repeat(22),
+        codeVerifier: "B".repeat(43),
+        access: "READ",
+        ttlSeconds: 60,
+      };
+      expect(parseInviteOperation("create", { ...body, spaceName: "G" }))
+        .toEqual({ operation: "create", body: { ...body, spaceName: "G" } });
+      expect(parseInviteOperation("create", { ...body, spaceName: 7 }))
+        .toBeNull();
+      expect(parseInviteOperation("create", { ...body, issuerName: {} }))
+        .toBeNull();
+      expect(
+        parseInviteOperation("preview", {
+          inviteId: "A".repeat(22),
+          code: "B".repeat(43),
+          spaceName: "G",
+        }),
+      ).toBeNull();
+    } finally {
+      await f.close();
+    }
+  });
+  it("treats an identical issuance retry with its names as the same invitation and refuses changed names", async () => {
+    const f = await fixture();
+    try {
+      const invite = f.create({ spaceName: "Garden plans" });
+      expect(f.run({ operation: "create", body: invite.request })).toEqual(
+        invite.result,
+      );
+      const { spaceName: _, ...withoutName } = invite.request;
+      for (
+        const request of [
+          withoutName,
+          { ...invite.request, spaceName: "Garden" },
+          { ...invite.request, issuerName: "Pat Example" },
+        ]
+      ) {
+        expect(() => f.run({ operation: "create", body: request })).toThrow(
+          "invite-id-unavailable",
+        );
+      }
     } finally {
       await f.close();
     }
