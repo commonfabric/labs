@@ -763,37 +763,57 @@ schema it already knows it has.
   space's replica records the document as held at the reference's seq, with
   the registry's value as its content. The registry retains a document for
   as long as a replica holds it by reference.
-- **Fetching a body.** For a hash the registry lacks, the client fetches the
-  body from the space whose frame named it, with a one-shot `graph.query`
-  whose root is the `cid:` document (memory-v2/04-protocol.md §4.3.3). The
-  fetch adds nothing to the session's watch set. Fetches coalesce across the
-  realm: one fetch per hash is in flight at a time, and a space whose frame
-  names a hash another space is already fetching waits for that fetch
-  rather than starting one. If that fetch fails, the waiting space fetches
-  from its own space. A fetched body is verified and registered like any
-  arriving schema document.
+- **Fetching a body.** For the hashes a frame names that the registry
+  lacks, the client sends one one-shot `graph.query` to the space whose
+  frame named them, with each `cid:` document as a root
+  (memory-v2/04-protocol.md §4.3.3). The fetch adds nothing to the
+  session's watch set. A hash already being fetched on the same connection,
+  for any space, is not asked for again: the frame waits for that fetch
+  instead. Only a body that verified ends such a wait; on any other outcome
+  the waiting frame's own space is asked. A fetched body is verified and
+  registered like any arriving schema document. Fetches coalesce per
+  connection rather than across the realm, so every wait is bounded by the
+  connection the frame arrived on.
+- **How a fetch ends.** A fetch is answered, or lost with its connection;
+  nothing times it out. An answer that returns a verified body resolves the
+  hash. An answer that returns none, returns content that does not verify,
+  or refuses the query leaves the reference unresolved. A fetch lost with
+  its connection discards the frames held for it: the server recorded them
+  as delivered, so the session's restore declares what its replica actually
+  holds (memory-v2/04-protocol.md §4.1.2), and the resume delivers them
+  again.
 - **Waiting for a body.** A frame that names a hash the registry lacks
   applies once every such body has arrived, and the session's later frames
   apply after it, in order, so arrival validation always runs over a frame
-  whose references resolve locally. Until then a load of a document the
-  frame carries waits rather than taking it for absent, and `synced()` and
-  `inputSynced()` wait too, as on the quarantine-heal path above. A fetch
-  that returns no document, or content that does not verify, leaves the
-  reference unresolved: the frame applies, and arrival validation
-  quarantines every document whose refs reach the hash, with its loud
-  diagnostic.
+  whose references resolve locally. Until then a load that waits on any of
+  those frames — the held one or one queued behind it — keeps waiting rather
+  than taking its document for absent, and the barriers that wait for every
+  frame the client has received (`inputSynced()`, and the frame-applied
+  barrier) wait for the held frames as well.
+- **An unresolved reference.** The client drops the reference from its
+  frame and applies the rest: the document is never recorded as held, so
+  it is never declared in holdings, and the client discards its delivery
+  baseline for the session, so the next restore declares what the session
+  holds and the server delivers the document again. Arrival validation
+  quarantines every document whose refs reach the hash, exactly as for any
+  broken ref. That quarantine is the only way the failure surfaces: there
+  is no new failure kind, and a reader sees the quarantine's diagnostic and
+  the failing load it already produces.
 - **Holdings.** A document held by reference is held like any other. A
   reconnecting client declares it at the seq its reference carried
   (memory-v2/04-protocol.md §4.1.2), and the server elides it as it elides
   any held document.
 - **What a fetch discloses.** A body fetch tells a space which hashes the
   client lacks, and so, by their absence, which it already holds from the
-  other spaces it reads. A schema document is derived from pattern code —
-  the schema generator's output and the defaults a pattern's author writes
-  — and not from user data. Label documents, whose labels can name
-  principals, are not resolved as schemas and keep their bodies. Whether
-  this disclosure is acceptable between hosts that serve different spaces
-  behind a memory router is open for a ruling (§ Open questions).
+  other spaces it reads. A schema the schema generator derives from pattern
+  code — with the defaults a pattern's author writes — holds no user data,
+  and that is most schema documents. A schema a pattern builds at run time
+  from what it reads can hold that data, in a `default`, `const` or `enum`
+  among others, and its hash then says what the client holds of it. Label
+  documents, whose labels can name principals, are not resolved as schemas
+  and keep their bodies. Whether this disclosure is acceptable between hosts
+  that serve different spaces behind a memory router is open for a ruling
+  (§ Open questions).
 
 ### Traversal and sync
 
@@ -995,7 +1015,8 @@ playbook:
    would buy marginal dedup at real debuggability cost.
 6. **What a body fetch discloses.** Under delivery by reference, the bodies
    a client fetches from a space tell that space which schema hashes the
-   client lacks, and so which it already holds from other spaces. Schema
-   documents derive from pattern code, not user data, and label documents
-   keep their bodies. Whether the disclosure is acceptable where different
-   hosts serve different spaces behind a memory router is open for a ruling.
+   client lacks, and so which it already holds from other spaces. A schema
+   generated from pattern code holds no user data; one a pattern builds at
+   run time from what it reads can. Label documents keep their bodies.
+   Whether the disclosure is acceptable where different hosts serve
+   different spaces behind a memory router is open for a ruling.
