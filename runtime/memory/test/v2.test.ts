@@ -178,6 +178,7 @@ describe("memory v2 flags", () => {
       syncCrossingsV1: true,
       watchRemoveV1: true,
       syncPartsV1: true,
+      syncCidReferencesV1: true,
       watchSetPartsV1: true,
       syncSchemaTableV2: false,
       syncLabelTableV1: true,
@@ -224,6 +225,7 @@ describe("memory v2 flags", () => {
       syncCrossingsV1: true,
       watchRemoveV1: true,
       syncPartsV1: true,
+      syncCidReferencesV1: true,
       watchSetPartsV1: true,
       syncSchemaTableV2: true,
       syncLabelTableV1: true,
@@ -273,6 +275,7 @@ describe("memory v2 flags", () => {
         syncCrossingsV1: false,
         watchRemoveV1: false,
         syncPartsV1: false,
+        syncCidReferencesV1: false,
         watchSetPartsV1: false,
       },
       {
@@ -314,6 +317,7 @@ describe("memory v2 flags", () => {
         syncCrossingsV1: false,
         watchRemoveV1: false,
         syncPartsV1: false,
+        syncCidReferencesV1: false,
         watchSetPartsV1: false,
       },
     ));
@@ -463,6 +467,7 @@ describe("parseMemoryProtocolFlags", () => {
       syncCrossingsV1: false,
       watchRemoveV1: false,
       syncPartsV1: false,
+      syncCidReferencesV1: false,
       watchSetPartsV1: false,
     });
     assertEquals(parseMemoryProtocolFlags({ modernCellRep: false }), {
@@ -502,6 +507,7 @@ describe("parseMemoryProtocolFlags", () => {
       syncCrossingsV1: false,
       watchRemoveV1: false,
       syncPartsV1: false,
+      syncCidReferencesV1: false,
       watchSetPartsV1: false,
     });
   });
@@ -548,6 +554,7 @@ describe("parseMemoryProtocolFlags", () => {
         syncCrossingsV1: false,
         watchRemoveV1: false,
         syncPartsV1: false,
+        syncCidReferencesV1: false,
         watchSetPartsV1: false,
       },
     );
@@ -584,7 +591,13 @@ describe("parseMemoryProtocolFlags", () => {
     );
   });
 
-  for (const flag of ["syncPartsV1", "watchSetPartsV1"] as const) {
+  for (
+    const flag of [
+      "syncPartsV1",
+      "syncCidReferencesV1",
+      "watchSetPartsV1",
+    ] as const
+  ) {
     it(`accepts the ${flag} capability key`, () => {
       assertEquals(parseMemoryProtocolFlags({})?.[flag], false);
       assertEquals(parseMemoryProtocolFlags({ [flag]: true })?.[flag], true);
@@ -644,6 +657,7 @@ describe("parseMemoryProtocolFlags", () => {
         syncCrossingsV1: false,
         watchRemoveV1: false,
         syncPartsV1: false,
+        syncCidReferencesV1: false,
         watchSetPartsV1: false,
         sqliteCommitRowLabelEval: false,
         sqliteQueryReader: false,
@@ -696,6 +710,7 @@ describe("parseMemoryProtocolFlags", () => {
         syncCrossingsV1: false,
         watchRemoveV1: false,
         syncPartsV1: false,
+        syncCidReferencesV1: false,
         watchSetPartsV1: false,
       },
     );
@@ -743,6 +758,7 @@ describe("parseMemoryProtocolFlags", () => {
         syncCrossingsV1: false,
         watchRemoveV1: false,
         syncPartsV1: false,
+        syncCidReferencesV1: false,
         watchSetPartsV1: false,
       },
     );
@@ -798,6 +814,7 @@ describe("parseMemoryProtocolFlags", () => {
         syncCrossingsV1: false,
         watchRemoveV1: false,
         syncPartsV1: false,
+        syncCidReferencesV1: false,
         watchSetPartsV1: false,
       },
     );
@@ -846,6 +863,7 @@ describe("parseMemoryProtocolFlags", () => {
         syncCrossingsV1: false,
         watchRemoveV1: false,
         syncPartsV1: false,
+        syncCidReferencesV1: false,
         watchSetPartsV1: false,
       },
     );
@@ -891,6 +909,7 @@ describe("parseMemoryProtocolFlags", () => {
         syncCrossingsV1: false,
         watchRemoveV1: false,
         syncPartsV1: false,
+        syncCidReferencesV1: false,
         watchSetPartsV1: false,
       },
     );
@@ -920,6 +939,7 @@ describe("parseMemoryProtocolFlags", () => {
         syncCrossingsV1: false,
         watchRemoveV1: false,
         syncPartsV1: false,
+        syncCidReferencesV1: false,
         watchSetPartsV1: false,
       }),
       {
@@ -959,6 +979,7 @@ describe("parseMemoryProtocolFlags", () => {
         syncCrossingsV1: false,
         watchRemoveV1: false,
         syncPartsV1: false,
+        syncCidReferencesV1: false,
         watchSetPartsV1: false,
       },
     );

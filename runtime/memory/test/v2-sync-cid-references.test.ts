@@ -1,0 +1,472 @@
+import { describe, it } from "@std/testing/bdd";
+import { expect } from "@std/expect";
+import type { JSONSchema } from "@commonfabric/api";
+import { internSchema } from "@commonfabric/data-model-schema";
+
+import { acquireSchemaRegistryLease } from "../../runner/src/schema-registry.ts";
+import { connect, loopback, type Transport } from "../v2/client.ts";
+import { Server } from "../v2/server.ts";
+import {
+  hasServerMessageCidReferences,
+  referenceServerMessageSchemaDocuments,
+  resolveServerMessageCidReferences,
+  type SchemaDocumentLookup,
+} from "../v2/sync-cid-references.ts";
+import {
+  encodeMemoryBoundary,
+  type EntitySnapshot,
+  getMemoryProtocolFlags,
+  type HelloOkMessage,
+  MEMORY_PROTOCOL,
+  type ResponseMessage,
+  type ServerMessage,
+  type SessionOpenAuthMetadata,
+  type SessionSync,
+  type WatchSetResult,
+} from "../v2.ts";
+import {
+  testSessionOpenAuthFactory,
+  testSessionOpenServerOptions,
+} from "./v2-auth-test-helpers.ts";
+
+const leafSchema = {
+  type: "string",
+  title: "sync-cid-references-leaf",
+} as const;
+const leafHash = internSchema(leafSchema, true).taggedHashString;
+const outerSchema = {
+  type: "object",
+  properties: { x: { $ref: `cid:${leafHash}` } },
+} as const;
+const outerHash = internSchema(outerSchema, true).taggedHashString;
+
+/** A lookup holding exactly the two schemas above. */
+const lookup: SchemaDocumentLookup = (hash) =>
+  hash === leafHash
+    ? leafSchema as JSONSchema
+    : hash === outerHash
+    ? outerSchema as JSONSchema
+    : undefined;
+
+/** A response carrying a sync of `upserts`. */
+const responseWith = (upserts: SessionSync["upserts"]): ServerMessage => ({
+  type: "response",
+  requestId: "req:1",
+  ok: {
+    serverSeq: 9,
+    sync: { type: "sync", fromSeq: 0, toSeq: 9, upserts, removes: [] },
+  },
+} as ServerMessage);
+
+/** The upserts of the sync `message` carries. */
+const upsertsOf = (message: unknown): SessionSync["upserts"] => {
+  const outer = message as Record<string, unknown>;
+  const sync = outer.type === "session/effect"
+    ? outer.effect
+    : (outer.ok as Record<string, unknown>).sync;
+  return (sync as SessionSync).upserts;
+};
+
+const leafUpsert = {
+  branch: "",
+  id: `cid:${leafHash}`,
+  seq: 3,
+  doc: { value: leafSchema },
+};
+const leafReference = {
+  branch: "",
+  id: `cid:${leafHash}`,
+  seq: 3,
+  byReference: true as const,
+};
+const carrierUpsert = {
+  branch: "",
+  id: "of:sync-cid-references-carrier",
+  seq: 4,
+  doc: { value: { name: "carrier" } },
+};
+
+/** A link to a target whose schema references `hash`. */
+const linkWithSchemaRef = (hash: string) => ({
+  "/": {
+    "link@1": {
+      id: "of:sync-cid-references-target",
+      path: [],
+      schema: { $ref: `cid:${hash}` },
+    },
+  },
+});
+
+/** The commit that installs both schema documents and a carrier of `outer`. */
+const closureOperations = (carrier: string) => [
+  { op: "set" as const, id: `cid:${leafHash}`, value: { value: leafSchema } },
+  { op: "set" as const, id: `cid:${outerHash}`, value: { value: outerSchema } },
+  {
+    op: "set" as const,
+    id: carrier,
+    value: { value: { x: linkWithSchemaRef(outerHash) } },
+  },
+];
+
+/**
+ * A loopback transport to `server` that counts the `graph.query` requests a
+ * client sends and the payloads it receives naming a document by
+ * reference, and calls `onReference` on each of the latter before the
+ * client sees it. With `queryAnswers`, an answer to a query reaches the
+ * client only once that promise settles.
+ */
+const countingTransport = (
+  server: Server,
+  onReference: () => void = () => {},
+  queryAnswers?: Promise<void>,
+) => {
+  const counts = { queries: 0, references: 0 };
+  const inner = loopback(server);
+  const transport: Transport = {
+    ...inner,
+    send: (payload: string) => {
+      if (payload.includes('"graph.query"')) counts.queries++;
+      return inner.send(payload);
+    },
+    close: () => inner.close(),
+    setReceiver(receiver: (payload: string) => void) {
+      inner.setReceiver((payload: string) => {
+        if (payload.includes('"byReference":true')) {
+          counts.references++;
+          onReference();
+        }
+        if (queryAnswers !== undefined && payload.includes('"entities"')) {
+          void queryAnswers.then(() => receiver(payload));
+        } else {
+          receiver(payload);
+        }
+      });
+    },
+  };
+  return { counts, transport };
+};
+
+/** The document `view` holds under `id`. */
+const documentIn = (view: { entities: EntitySnapshot[] }, id: string) =>
+  view.entities.find((entity) => entity.id === id)?.document;
+
+describe("sync-cid-references", () => {
+  describe("referenceServerMessageSchemaDocuments()", () => {
+    it("names a schema document the lookup holds by id and seq alone", () => {
+      const message = referenceServerMessageSchemaDocuments(
+        responseWith([leafUpsert, carrierUpsert]),
+        lookup,
+      );
+      expect(upsertsOf(message)).toStrictEqual([leafReference, carrierUpsert]);
+    });
+
+    it("rewrites an effect's sync as a response's is", () => {
+      const effect = {
+        type: "session/effect",
+        space: "did:key:z6Mk-sync-cid-references",
+        sessionId: "session-1",
+        effect: {
+          type: "sync",
+          fromSeq: 0,
+          toSeq: 9,
+          upserts: [leafUpsert],
+          removes: [],
+        },
+      } as ServerMessage;
+      expect(
+        upsertsOf(referenceServerMessageSchemaDocuments(effect, lookup)),
+      ).toStrictEqual([leafReference]);
+    });
+
+    it("keeps the body of a document the lookup does not hold", () => {
+      const message = responseWith([leafUpsert]);
+      expect(referenceServerMessageSchemaDocuments(message, () => undefined))
+        .toBe(message);
+    });
+
+    it("keeps the body of a document holding a member beside `value`", () => {
+      const message = responseWith([{
+        ...leafUpsert,
+        doc: { value: leafSchema, schema: true },
+      }]);
+      expect(referenceServerMessageSchemaDocuments(message, lookup)).toBe(
+        message,
+      );
+    });
+
+    it("keeps the body of a value that is not the schema its id names", () => {
+      const message = responseWith([{
+        ...leafUpsert,
+        doc: { value: { type: "number" } },
+      }]);
+      expect(referenceServerMessageSchemaDocuments(message, lookup)).toBe(
+        message,
+      );
+    });
+
+    it("keeps deleted and non-`cid:` upserts as they are", () => {
+      const message = responseWith([
+        { branch: "", id: `cid:${leafHash}`, seq: 5, deleted: true },
+        { ...carrierUpsert, id: `of:${leafHash}`, doc: { value: leafSchema } },
+      ]);
+      expect(referenceServerMessageSchemaDocuments(message, lookup)).toBe(
+        message,
+      );
+    });
+  });
+
+  describe("hasServerMessageCidReferences()", () => {
+    it("returns `true` only for a sync naming a document by reference", () => {
+      expect(hasServerMessageCidReferences(responseWith([leafReference])))
+        .toBe(true);
+      expect(hasServerMessageCidReferences(responseWith([leafUpsert])))
+        .toBe(false);
+      expect(hasServerMessageCidReferences({ type: "response" })).toBe(false);
+    });
+  });
+
+  describe("resolveServerMessageCidReferences()", () => {
+    it("replaces each reference with its registered schema as `value`", () => {
+      const resolved = resolveServerMessageCidReferences(
+        responseWith([leafReference, carrierUpsert]),
+        lookup,
+      );
+      expect(resolved.missing).toStrictEqual([]);
+      expect(upsertsOf(resolved.message)).toStrictEqual([
+        leafUpsert,
+        carrierUpsert,
+      ]);
+    });
+
+    it("returns the message as received and every hash that misses", () => {
+      const message = responseWith([leafReference, carrierUpsert]);
+      const resolved = resolveServerMessageCidReferences(
+        message,
+        () => undefined,
+      );
+      expect(resolved.missing).toStrictEqual([leafHash]);
+      expect(resolved.message).toBe(message);
+    });
+
+    it("drops a reference whose hash could not be fetched", () => {
+      const resolved = resolveServerMessageCidReferences(
+        responseWith([leafReference, carrierUpsert]),
+        () => undefined,
+        new Set([leafHash]),
+      );
+      expect(resolved.missing).toStrictEqual([]);
+      expect(upsertsOf(resolved.message)).toStrictEqual([carrierUpsert]);
+    });
+
+    it("throws on a reference that carries a body", () => {
+      expect(() =>
+        resolveServerMessageCidReferences(
+          responseWith([{ ...leafReference, doc: { value: leafSchema } }]),
+          lookup,
+        )
+      ).toThrow(TypeError);
+    });
+  });
+
+  describe("over a connection", () => {
+    it("names a schema document by reference and the client applies its body", async () => {
+      const server = new Server({
+        ...testSessionOpenServerOptions,
+        store: new URL("memory://sync-cid-references-hit"),
+        subscriptionRefreshDelayMs: 0,
+      });
+      const { counts, transport } = countingTransport(server);
+      const writerClient = await connect({ transport: loopback(server) });
+      const watcherClient = await connect({ transport });
+      const space = "did:key:z6Mk-sync-cid-references-hit";
+      const carrier = "of:sync-cid-references-hit";
+      try {
+        const writer = await writerClient.mount(
+          space,
+          {},
+          testSessionOpenAuthFactory,
+        );
+        await writer.transact({
+          localSeq: 1,
+          reads: { confirmed: [], pending: [] },
+          operations: closureOperations(carrier),
+        });
+        const watcher = await watcherClient.mount(
+          space,
+          {},
+          testSessionOpenAuthFactory,
+        );
+        const view = await watcher.watchSet([{
+          id: "carrier",
+          kind: "graph",
+          query: {
+            roots: [{ id: carrier, selector: { path: [], schema: false } }],
+          },
+        }]);
+        expect(counts.references).toBeGreaterThan(0);
+        expect(counts.queries).toBe(0);
+        expect(documentIn(view, `cid:${outerHash}`)).toEqual({
+          value: outerSchema,
+        });
+        expect(documentIn(view, `cid:${leafHash}`)).toEqual({
+          value: leafSchema,
+        });
+      } finally {
+        await writerClient.close();
+        await watcherClient.close();
+        await server.close();
+      }
+    });
+
+    it("fetches a body its registry lacks once for every space naming it", async () => {
+      const server = new Server({
+        ...testSessionOpenServerOptions,
+        store: new URL("memory://sync-cid-references-fetch"),
+        subscriptionRefreshDelayMs: 0,
+      });
+      // The client shares this realm's registry with the server, so each
+      // reference it receives empties the registry first, as a client in a
+      // realm of its own would hold nothing yet. The fetch's answer waits
+      // for both spaces' frames, so the second finds the first's fetch in
+      // flight.
+      const bothFramesArrived = Promise.withResolvers<void>();
+      const { counts, transport } = countingTransport(
+        server,
+        () => {
+          acquireSchemaRegistryLease()();
+          if (counts.references === 2) bothFramesArrived.resolve();
+        },
+        bothFramesArrived.promise,
+      );
+      const writerClient = await connect({ transport: loopback(server) });
+      const watcherClient = await connect({ transport });
+      const spaces = [
+        "did:key:z6Mk-sync-cid-references-fetch-a",
+        "did:key:z6Mk-sync-cid-references-fetch-b",
+      ];
+      const carrier = "of:sync-cid-references-fetch";
+      try {
+        for (const space of spaces) {
+          const writer = await writerClient.mount(
+            space,
+            {},
+            testSessionOpenAuthFactory,
+          );
+          await writer.transact({
+            localSeq: 1,
+            reads: { confirmed: [], pending: [] },
+            operations: closureOperations(carrier),
+          });
+        }
+        const watchers = await Promise.all(
+          spaces.map((space) =>
+            watcherClient.mount(space, {}, testSessionOpenAuthFactory)
+          ),
+        );
+        const views = await Promise.all(
+          watchers.map((watcher) =>
+            watcher.watchSet([{
+              id: "carrier",
+              kind: "graph",
+              query: {
+                roots: [{ id: carrier, selector: { path: [], schema: false } }],
+              },
+            }])
+          ),
+        );
+        expect(counts.references).toBe(2);
+        expect(counts.queries).toBe(1);
+        for (const view of views) {
+          expect(documentIn(view, `cid:${outerHash}`)).toEqual({
+            value: outerSchema,
+          });
+          expect(documentIn(view, `cid:${leafHash}`)).toEqual({
+            value: leafSchema,
+          });
+        }
+      } finally {
+        await writerClient.close();
+        await watcherClient.close();
+        await server.close();
+      }
+    });
+
+    it("sends every body to a client that does not advertise the flag", async () => {
+      const server = new Server({
+        ...testSessionOpenServerOptions,
+        store: new URL("memory://sync-cid-references-older"),
+        subscriptionRefreshDelayMs: 0,
+      });
+      const space = "did:key:z6Mk-sync-cid-references-older";
+      const carrier = "of:sync-cid-references-older";
+      const messages: ServerMessage[] = [];
+      const connection = server.connect((message) => messages.push(message));
+      const send = async (request: Record<string, unknown>) => {
+        messages.length = 0;
+        await connection.receive(encodeMemoryBoundary(request as never));
+        return messages.find((message) =>
+          message.type === "response" &&
+          (message as ResponseMessage<unknown>).requestId === request.requestId
+        ) as ResponseMessage<Record<string, unknown>>;
+      };
+      try {
+        const { syncCidReferencesV1: _omitted, ...flags } =
+          getMemoryProtocolFlags();
+        await connection.receive(encodeMemoryBoundary({
+          type: "hello",
+          protocol: MEMORY_PROTOCOL,
+          flags,
+        }));
+        const sessionOpen = (messages.shift() as HelloOkMessage)
+          .sessionOpen as SessionOpenAuthMetadata;
+        const opened = await send({
+          type: "session.open",
+          requestId: "open",
+          space,
+          session: {},
+          invocation: {
+            aud: sessionOpen.audience,
+            challenge: sessionOpen.challenge.value,
+          },
+        });
+        const sessionId = opened.ok!.sessionId;
+        await send({
+          type: "transact",
+          requestId: "write",
+          space,
+          sessionId,
+          commit: {
+            localSeq: 1,
+            reads: { confirmed: [], pending: [] },
+            operations: closureOperations(carrier),
+          },
+        });
+        const watched = await send({
+          type: "session.watch.set",
+          requestId: "watch",
+          space,
+          sessionId,
+          watches: [{
+            id: "carrier",
+            kind: "graph",
+            query: {
+              roots: [{ id: carrier, selector: { path: [], schema: false } }],
+            },
+          }],
+        });
+        const upserts = (watched.ok as unknown as WatchSetResult).sync.upserts;
+        const schemaUpserts = upserts.filter((upsert) =>
+          upsert.id.startsWith("cid:")
+        );
+        expect(schemaUpserts.length).toBe(2);
+        for (const upsert of schemaUpserts) {
+          expect(upsert.byReference).toBeUndefined();
+          expect(upsert.doc).toBeDefined();
+        }
+      } finally {
+        connection.close();
+        await server.close();
+      }
+    });
+  });
+});
