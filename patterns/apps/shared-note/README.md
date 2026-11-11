@@ -57,8 +57,8 @@ verbs below, which the mount exposes as callable files beside `index.md`.
 A save that replaces the body moves no comment. Memory moves a comment's anchors
 through edits made in the editor or by the verbs, and a whole-body write is
 neither, so a comment placed before any editor has changed the note keeps its
-old offsets after such a save and may sit on other text. Its row then shows the
-text it sits on after "now", beside the quote its author selected.
+old offsets after such a save and may sit on other text, which its mark then
+shows.
 
 ## Editing from a handler or an agent
 
@@ -137,21 +137,21 @@ everything typed while the person writes moves the anchors with their text. The
 panel lists comments in the order their text appears in the body.
 `commentAnchors` gives every comment's two anchors.
 
-Each row shows the comment's quote: the text its author selected, stored in the
-comment. When the text between the anchors differs from the quote, because
-someone has edited it since, the row also shows that text after "now". A comment
-whose text an edit deleted stays listed after the rest, marks nothing, and shows
-its quote struck through, beside "text no longer in note".
+The mark in the editor shows what a comment is about, so the row of a marked
+comment shows the comment, not its text. A row whose comment marks nothing — a
+draft, a resolved comment, or a comment whose text an edit deleted — also shows
+its quote, the text its author selected, which the comment stores. A comment
+whose text an edit deleted stays listed after the rest, and shows its quote
+struck through, beside "text no longer in note".
 
 Comments and replies are labeled `authored-by` the person each was written for,
 by the runtime, and only the handlers their write policies name can write them,
 so the profile badge on a comment is the one its author wrote it under.
 `cf-cfc-authorship` checks that label against the author's profile, and shows
-the quote, the comment and each reply only when they carry it. The text between
-the anchors is the note's, which anyone who can write the note can change, so it
-is shown outside that check. Replies and the resolved state are cells of their
-own, linked from the comment, so anyone who can write the note can reply or
-resolve while the comment itself stays its author's.
+the quote, the comment and each reply only when they carry it. Replies and the
+resolved state are cells of their own, linked from the comment, so anyone who
+can write the note can reply or resolve while the comment itself stays its
+author's.
 
 ## Editing failures
 

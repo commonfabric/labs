@@ -270,6 +270,13 @@ workflow. A run's lanes come from two jobs.
   Each runs `deno run -A tasks/ci-lane.ts --lane N --of M` with `plan`'s
   `args`. A lane packs the same plan from the manifest and the tree as every
   other lane of its run, and runs its own share of it.
+- Each job of `tests` mounts its checkout a second time, at
+  `$HOME/checkout 🦆`, and runs the lane from there. A test that turns a file
+  URL into a path without decoding it, which works in the workspace's plain
+  ASCII path, fails in one holding a space and an emoji. The lane's coverage
+  reports name each file of the repository by its path relative to the
+  checkout, so `Status` and the release job, which read them from the
+  workspace, resolve them to the same files.
 - Each job of `tests` plans before it runs. Its `🗺️ Plan the lane` step runs
   the lane with `--dry-run`, which prints the lane's share, what it is
   projected to take, and what was withheld, in a step of their own. The

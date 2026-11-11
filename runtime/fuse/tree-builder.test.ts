@@ -1193,9 +1193,8 @@ Deno.test("callable scripts begin with a cf exec shebang and shell fallback", ()
   assertEquals(node?.kind, "callable");
   if (node?.kind === "callable") {
     const [firstLine, secondLine] = decoder.decode(node.script).split("\n");
-    assertEquals(firstLine.startsWith("#!"), true);
-    assertEquals(firstLine.includes(" exec"), true);
-    assertEquals(secondLine.includes(' exec "$0" "$@"'), true);
+    assertEquals(firstLine, "#!/bin/sh");
+    assertEquals(secondLine, `exec '/tmp/cf-exec' exec "$0" "$@"`);
   }
 });
 

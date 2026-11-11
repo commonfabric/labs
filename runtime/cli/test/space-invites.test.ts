@@ -5,6 +5,7 @@ import { Identity } from "@commonfabric/identity";
 import {
   buildSpaceInviteCommand,
   type InviteStorageOpener,
+  inviteStorageOpener,
 } from "../commands/space-invites.ts";
 import {
   inviteCodeVerifier,
@@ -1008,5 +1009,43 @@ describe("space invite", () => {
     ]);
     expect(cli.requests).toEqual([]);
     expect(closed).toBe(3);
+  });
+
+  describe("inviteStorageOpener()", () => {
+    for (const namesInstances of [true, false]) {
+      it(`tells its storage manager \`instanceNames: ${namesInstances}\` when the deployment's settings give that`, async () => {
+        const signer = await Identity.fromPassphrase("invite storage opener", {
+          implementation: "noble",
+        });
+        const hosts: string[] = [];
+        const declared: boolean[] = [];
+        const open = inviteStorageOpener({
+          settings: () =>
+            Promise.resolve({
+              experimental: { instanceNames: namesInstances },
+              memoryHost: new URL("https://memory.example"),
+            }),
+          open: ({ memoryHost }) => {
+            hosts.push(memoryHost.href);
+            return {
+              setInstanceNames: (enabled) => {
+                declared.push(enabled);
+              },
+              close: () => Promise.resolve(),
+            };
+          },
+        });
+
+        const storage = await open({
+          as: signer,
+          apiUrl: new URL("https://fabric.example"),
+          space: signer.did(),
+        });
+        await storage.close();
+
+        expect(hosts).toEqual(["https://memory.example/"]);
+        expect(declared).toEqual([namesInstances]);
+      });
+    }
   });
 });

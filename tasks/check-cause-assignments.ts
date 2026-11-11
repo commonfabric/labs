@@ -25,7 +25,7 @@
  */
 
 import { parse as parseJsonc } from "@std/jsonc";
-import { join, toFileUrl } from "@std/path";
+import { fromFileUrl, join, toFileUrl } from "@std/path";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 import { EXPERIMENTAL_ENV_VARS } from "../runtime/runner/src/experimental-posture.ts";
 import { collectAllPatternFiles } from "./pattern-files.ts";
@@ -357,7 +357,7 @@ async function unevaluableIn(root: string): Promise<ReadonlySet<string>> {
     throw error;
   }
   const { UNEVALUABLE_PATTERNS: listed } = await import(
-    new URL(`file://${list}`).href
+    toFileUrl(list).href
   );
   return listed;
 }
@@ -525,8 +525,9 @@ async function dumpTree(
   outDir: string,
   label: string,
 ): Promise<DumpOutput> {
-  const dumper = new URL("./cause-assignments-dump.ts", import.meta.url)
-    .pathname;
+  const dumper = fromFileUrl(
+    new URL("./cause-assignments-dump.ts", import.meta.url),
+  );
   const parts = Array.from(
     { length: shards },
     (_, shard) => files.filter((_, index) => index % shards === shard),
