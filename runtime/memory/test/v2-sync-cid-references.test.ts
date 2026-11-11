@@ -4,7 +4,11 @@ import type { JSONSchema, JSONSchemaObj } from "@commonfabric/api";
 import { internSchema } from "@commonfabric/data-model-schema";
 
 import { decomposeSchema } from "../../runner/src/schema-decompose.ts";
-import { acquireSchemaRegistryLease } from "../../runner/src/schema-registry.ts";
+import {
+  acquireSchemaRegistryLease,
+  lookupSchemaDocument,
+  registerSchemaDocument,
+} from "../../runner/src/schema-registry.ts";
 import {
   connect,
   connectionError,
@@ -526,6 +530,27 @@ describe("sync-cid-references", () => {
 
     it("returns `true` for a schema naming a document the lookup does not hold", () => {
       expect(namesPrincipal(danglingSchema as JSONSchema, lookup)).toBe(true);
+    });
+
+    it("returns a settled `false` again after the registry clears", () => {
+      // Once a closure resolved with no DID, that is a fact about content:
+      // each reference names its document by hash. A clear that drops the
+      // referenced document does not unsettle it.
+      const leaf = {
+        type: "string",
+        title: "sync-cid-references-settled",
+      } as const;
+      const leafId = internSchema(leaf, true).taggedHashString;
+      const root = {
+        type: "object",
+        title: "sync-cid-references-settled-root",
+        properties: { x: { $ref: `cid:${leafId}` } },
+      } as JSONSchema;
+      registerSchemaDocument(leafId, leaf as JSONSchema);
+      expect(namesPrincipal(root, lookupSchemaDocument)).toBe(false);
+      acquireSchemaRegistryLease()();
+      expect(lookupSchemaDocument(leafId)).toBeUndefined();
+      expect(namesPrincipal(root, lookupSchemaDocument)).toBe(false);
     });
   });
 

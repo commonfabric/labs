@@ -32,7 +32,11 @@ export type SchemaDocumentLookup = (hash: string) => JSONSchema | undefined;
 /**
  * {@link namesPrincipal}'s settled answers, by the schema object it was asked
  * of. An answer is settled once every document the schema's closure reaches
- * has resolved, so that no later registration can change it.
+ * has resolved. It is then a fact about content: each `cid:` reference names
+ * its document by hash, and a lookup returns only a schema verified against
+ * that hash (`registerSchemaDocument()` refuses any other), so the closure
+ * holds a DID or does not whatever the registry holds later. A registry
+ * clear therefore leaves a settled answer as it is.
  */
 const principalNamingSchemas = new WeakMap<object, boolean>();
 
