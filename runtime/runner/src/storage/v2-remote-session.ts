@@ -1325,7 +1325,9 @@ class SharedSessionConnection implements SessionConnection {
 
   /** @inheritDoc */
   delivered(): Promise<void> {
-    return this.#client.delivered();
+    // The connection carries other spaces' sessions too; this share waits
+    // only for what is held for its own.
+    return this.#client.delivered(this.#session);
   }
 
   /** Ends the session and leaves the connection to its other sessions. */

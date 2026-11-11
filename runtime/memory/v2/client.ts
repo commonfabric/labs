@@ -1053,13 +1053,21 @@ export class Client {
   /**
    * Resolves once every server frame the transport held at the call has
    * reached this client, and every sync then held for the schema documents
-   * it names has been handed on or discarded. What a frame goes on
-   * to do from there — a response resolving, a sync frame handed to its
-   * session — is microtask work after that.
+   * it names has been handed on or discarded: every such sync, or with
+   * `session`, only that session's, so one space's barrier does not wait on
+   * another space's body fetch. What a frame goes on to do from there — a
+   * response resolving, a sync frame handed to its session — is microtask
+   * work after that.
    */
-  async delivered(): Promise<void> {
+  async delivered(
+    session?: { readonly space: string; readonly sessionId: string },
+  ): Promise<void> {
     await this.#transport.delivered?.();
-    const holds = [...this.#cidReferenceHolds.values()];
+    const holds = session === undefined
+      ? [...this.#cidReferenceHolds.values()]
+      : [this.#cidReferenceHolds.get(cidReferenceHoldKey(session))].filter(
+        (hold) => hold !== undefined,
+      );
     await Promise.all(holds.map((hold) => hold.ended.promise));
   }
 

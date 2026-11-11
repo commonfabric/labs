@@ -749,6 +749,107 @@ describe("sync-cid-references", () => {
       }
     });
 
+    it("resolves one session's `delivered()` while another session's sync waits for a body", async () => {
+      // Two spaces share the watcher's connection. Space A's frame names a
+      // body the registry lacks, and the answer to its fetch is held until
+      // the end. Space B's frame names none. B's barrier must not wait for
+      // A's fetch: by the time a further round trip of B's has come back, it
+      // has resolved.
+      const server = new Server({
+        ...testSessionOpenServerOptions,
+        store: new URL("memory://sync-cid-references-two-barriers"),
+        subscriptionRefreshDelayMs: 0,
+      });
+      const referenced = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const inner = loopback(server);
+      const transport: Transport = {
+        ...inner,
+        send: (payload: string) => inner.send(payload),
+        close: () => inner.close(),
+        setReceiver(receiver: (payload: string) => void) {
+          inner.setReceiver((payload: string) => {
+            if (payload.includes('"byReference":true')) {
+              acquireSchemaRegistryLease()();
+              referenced.resolve();
+            }
+            if (payload.includes('"entities"') && payload.includes(outerHash)) {
+              void release.promise.then(() => receiver(payload));
+            } else {
+              receiver(payload);
+            }
+          });
+        },
+      };
+      const writerClient = await connect({ transport: loopback(server) });
+      const watcherClient = await connect({
+        transport,
+        syncCidReferences: true,
+      });
+      const spaceA = "did:key:z6Mk-sync-cid-references-two-barriers-a";
+      const spaceB = "did:key:z6Mk-sync-cid-references-two-barriers-b";
+      const carrier = "of:sync-cid-references-two-barriers";
+      try {
+        const writerA = await writerClient.mount(
+          spaceA,
+          {},
+          testSessionOpenAuthFactory,
+        );
+        await writerA.transact({
+          localSeq: 1,
+          reads: { confirmed: [], pending: [] },
+          operations: closureOperations(carrier),
+        });
+        const writerB = await writerClient.mount(
+          spaceB,
+          {},
+          testSessionOpenAuthFactory,
+        );
+        await writerB.transact({
+          localSeq: 1,
+          reads: { confirmed: [], pending: [] },
+          operations: [{
+            op: "set",
+            id: carrier,
+            value: { value: { plain: true } },
+          }],
+        });
+        const a = await watcherClient.mount(
+          spaceA,
+          {},
+          testSessionOpenAuthFactory,
+        );
+        const b = await watcherClient.mount(
+          spaceB,
+          {},
+          testSessionOpenAuthFactory,
+        );
+        const watch = [{
+          id: "carrier",
+          kind: "graph" as const,
+          query: {
+            roots: [{ id: carrier, selector: { path: [], schema: false } }],
+          },
+        }];
+        const watchingA = a.watchSet(watch);
+        await referenced.promise;
+        await b.watchSet(watch);
+        let bDelivered = false;
+        const deliveredB = watcherClient.delivered(b).then(() => {
+          bDelivered = true;
+        });
+        await b.queryGraph({ roots: [] });
+        expect(bDelivered).toBe(true);
+        release.resolve();
+        await deliveredB;
+        await watchingA;
+      } finally {
+        await writerClient.close();
+        await watcherClient.close();
+        await server.close();
+      }
+    });
+
     it("delivers again the syncs held when the connection fetching their bodies closes", async () => {
       const server = new Server({
         ...testSessionOpenServerOptions,
