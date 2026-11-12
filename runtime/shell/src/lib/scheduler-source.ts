@@ -219,8 +219,9 @@ export function heatColor(
  * Returns where the source of `nodeId`'s action is, or `null` where the ID
  * names no source location. The pattern is the one the node belongs to where
  * `patternSources` holds it, and `currentPatternIdx` otherwise; the file is
- * the one the location names where that pattern holds it, and
- * `currentFileIdx` otherwise.
+ * the one the location names where that pattern holds it, and otherwise
+ * `currentFileIdx` when the pattern is the current one and the pattern's first
+ * file when it is not.
  */
 export function sourcePosition(
   nodeId: string,
@@ -240,9 +241,10 @@ export function sourcePosition(
   const fileIdx = patternSources[patternIdx]?.files.findIndex(
     (f) => f.name === loc.file,
   ) ?? -1;
+  const fallbackFileIdx = patternIdx === currentPatternIdx ? currentFileIdx : 0;
   return {
     patternIdx,
-    fileIdx: fileIdx >= 0 ? fileIdx : currentFileIdx,
+    fileIdx: fileIdx >= 0 ? fileIdx : fallbackFileIdx,
     line: loc.line,
   };
 }

@@ -221,6 +221,20 @@ describe("scheduler-source", () => {
       });
     });
 
+    it("returns the first file of another pattern that holds no file the location names", () => {
+      const id = "/missing.tsx:4:1";
+
+      expect(
+        sourcePosition(
+          id,
+          node(id, "effect", undefined, "pattern-a"),
+          sources,
+          1,
+          1,
+        ),
+      ).toEqual({ patternIdx: 0, fileIdx: 0, line: 4 });
+    });
+
     it("returns `null` for an ID that names no source location", () => {
       expect(sourcePosition("action:abc123", undefined, sources, 0, 0))
         .toBeNull();

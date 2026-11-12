@@ -576,7 +576,6 @@ export function cdfChart(stats: TimingStats): CdfChart {
     { length: TICK_COUNT + 1 },
     (_, i) => i / TICK_COUNT,
   );
-  const yTop = Math.max(maxTime, maxBaselineTime);
 
   let averagePosition = 0.5;
   let nearest = Infinity;
@@ -594,7 +593,7 @@ export function cdfChart(stats: TimingStats): CdfChart {
     maxTime,
     maxBaselineTime,
     xTicks: ticks,
-    yTicks: ticks.map((fraction) => fraction * yTop),
+    yTicks: ticks.map((fraction) => fraction * maxTime),
     averagePosition,
     path: pathThrough(points, y),
     baselinePath: baselinePoints

@@ -576,16 +576,16 @@ export function zoomAtPointer(
   );
   if (newZoom === zoom) return zoom;
 
-  // The pointer in the coordinates of the zoomed drawing.
+  // The pointer's offset in the viewport, and the point of the drawing under
+  // it, both read now: the browser may clamp the scroll offsets before the
+  // frame runs, when the drawing shrinks.
   const rect = viewport.getBoundingClientRect();
-  const pointX = pointer.clientX - rect.left + viewport.scrollLeft;
-  const pointY = pointer.clientY - rect.top + viewport.scrollTop;
+  const offsetX = pointer.clientX - rect.left;
+  const offsetY = pointer.clientY - rect.top;
+  const pointX = (offsetX + viewport.scrollLeft) / zoom;
+  const pointY = (offsetY + viewport.scrollTop) / zoom;
   schedule(() =>
-    scrollTo(
-      viewport,
-      (pointX / zoom) * newZoom - (pointX - viewport.scrollLeft),
-      (pointY / zoom) * newZoom - (pointY - viewport.scrollTop),
-    )
+    scrollTo(viewport, pointX * newZoom - offsetX, pointY * newZoom - offsetY)
   );
   return newZoom;
 }

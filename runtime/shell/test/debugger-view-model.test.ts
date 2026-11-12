@@ -509,6 +509,15 @@ describe("debugger-view-model", () => {
       expect(chart.yTicks.at(-1)).toBe(40);
     });
 
+    it("returns ticks on the main curve's scale when the baseline curve's total is larger", () => {
+      const chart = cdfChart(
+        timingStats(samples(10), { cdfSinceBaseline: samples(10, 30) }),
+      );
+
+      expect(chart.yTicks).toEqual([0, 2, 4, 6, 8, 10]);
+      expect(chart.y(chart.yTicks.at(-1)!)).toBe(25);
+    });
+
     it("returns an empty baseline path when no sample has arrived since the baseline", () => {
       const chart = cdfChart(
         timingStats(samples(10), { cdfSinceBaseline: [] }),

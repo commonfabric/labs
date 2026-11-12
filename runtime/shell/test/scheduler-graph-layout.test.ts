@@ -801,6 +801,21 @@ describe("scheduler-graph-layout", () => {
       expect(zoomAtPointer(viewport({}), 1, step(1), () => {})).toBe(0.9);
     });
 
+    it("keeps the point under the pointer in place when the browser clamps the scroll offsets before the frame", () => {
+      const view = viewport({ left: 100, top: 50, rectLeft: 10, rectTop: 20 });
+      const frames = frameQueue();
+
+      zoomAtPointer(view, 1, step(1), frames.schedule);
+      view.scrollLeft = 40;
+      view.scrollTop = 10;
+      frames.run();
+
+      // The pointer is at 200 by 100 of the drawing at zoom 1, 100 by 50
+      // into the viewport.
+      expect(view.scrollLeft).toBeCloseTo(200 * 0.9 - 100);
+      expect(view.scrollTop).toBeCloseTo(100 * 0.9 - 50);
+    });
+
     it("returns the zoom unchanged, scheduling nothing, at 5 going in and at 0.1 going out", () => {
       const frames = frameQueue();
 
