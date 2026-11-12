@@ -4075,7 +4075,8 @@ export class Scheduler {
    * failures served or not, so that a run reading into a space its principal
    * cannot read proceeds on the absence and holds no later event behind it,
    * as it would with no load in flight. Such a park's drop of a client event
-   * also reports the error the withdrawn run threw, which no later run will.
+   * also reports the error the withdrawn run threw, which no later run will,
+   * and abandons the work that run staged.
    *
    * `errors` holds every failed load's error, in the order they failed. A
    * served deferral reports the first; a client drop reports the first of
@@ -4111,6 +4112,7 @@ export class Scheduler {
         `Event dropped: required replica load failed ${when} ` +
           `(${keys}: ${detail})`,
       );
+      withdrawn?.abandonStagedWork();
       if (withdrawn?.error !== undefined) {
         this.#handleError(withdrawn.error, event.action, event.id);
       }

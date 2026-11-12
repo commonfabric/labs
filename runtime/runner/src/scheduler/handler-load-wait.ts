@@ -48,7 +48,8 @@ export function withdrawHandlerWhileLoading(
  * before the run, and the read returned the schema's default, or nothing, in
  * place of what the document holds. The reads that count are the ones the run
  * consumed the document's data with (`consumedReadsOf()`), in a space for
- * which `validated` returns `false`. A read in a space the run's commit
+ * which `validated` returns `false`, and not in a space whose access the
+ * runtime has authoritatively lost, which it reads as lost. A read in a space the run's commit
  * carries its reads to is held to the store's head there, and a stale one is
  * refused at that commit; a read in any other space is held to nothing.
  *
@@ -65,7 +66,13 @@ export function loadingReadKeysIn(
   const keys = new Set<string>();
   for (const read of consumedReadsOf(tx.tx)) {
     if (validated(read.space)) continue;
-    if (!isLoadingWithoutLocalBasis(runtime, read, identity)) continue;
+    if (
+      !isLoadingWithoutLocalBasis(runtime, read, identity, {
+        accessLossKnown: true,
+      })
+    ) {
+      continue;
+    }
     keys.add(entityKey(read, identity));
   }
   return [...keys];
@@ -100,18 +107,23 @@ export function* consumedReadsOf(
 /**
  * Whether the document `address` names, as the instance `identity` reaches,
  * has a load in flight and no local basis in the replica, not even a
- * confirmed absence. A document in a space whose access this runtime has
- * authoritatively lost (`spaceAccessError()`), refused or deleted, has a
- * known state however its load ends: the load delivers nothing, so it is not
- * one to wait for.
+ * confirmed absence. With `accessLossKnown`, a document in a space whose
+ * access this runtime has authoritatively lost (`spaceAccessError()`),
+ * refused or deleted, has a known state however its load ends, so its load
+ * is not one to wait for: the run reads the lost state, whether or not a
+ * retry of the space's access is in flight.
  */
 function isLoadingWithoutLocalBasis(
   runtime: Runtime,
   address: Pick<IMemorySpaceAddress, "space" | "id" | "scope">,
   identity: ScopeKeyIdentity,
+  { accessLossKnown = false }: { accessLossKnown?: boolean } = {},
 ): boolean {
   const { storageManager } = runtime;
-  if (storageManager.spaceAccessError?.(address.space) !== undefined) {
+  if (
+    accessLossKnown &&
+    storageManager.spaceAccessError?.(address.space) !== undefined
+  ) {
     return false;
   }
   const key = entityKey(address, identity);

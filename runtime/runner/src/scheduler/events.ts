@@ -2983,8 +2983,16 @@ export async function dispatchQueuedEvent(state: {
         state.parkHeadEventForLoads(
           requeueToRunAgain(),
           loadingReads,
-          error === undefined ? {} : {
-            error: error instanceof Error ? error : new Error(String(error)),
+          {
+            ...(error === undefined ? {} : {
+              error: error instanceof Error ? error : new Error(String(error)),
+            }),
+            abandonStagedWork: () =>
+              tx.abandonStagedWork(
+                eventAbandonError(
+                  "a document the withdrawn run read failed to load",
+                ),
+              ),
           },
         );
         return;

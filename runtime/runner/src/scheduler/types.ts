@@ -589,9 +589,15 @@ export type QueuedEvent = {
  * fails with an authorization-class failure releases such a park, served or
  * not, and the run that follows reads what the replica holds. A load that
  * fails otherwise ends the event as it would at the preflight, and a client
- * event's drop reports the error.
+ * event's drop reports the error and abandons what the run staged.
  */
 export interface LoadingReadWithdrawal {
   /** The error the withdrawn run threw, if it threw one. */
   readonly error?: Error;
+
+  /**
+   * Tells the work the withdrawn run's transaction staged that it will not
+   * happen, for a drop that leaves no run to follow.
+   */
+  readonly abandonStagedWork: () => void;
 }

@@ -742,6 +742,47 @@ describe("scheduler-event-loading-read", () => {
       ).toBeUndefined();
     });
 
+    it("abandons, once, the work a withdrawn run staged when the load it read fails otherwise than by authorization", async () => {
+      const { holder, log, eventCell, store } = await standUp(
+        "client-load-fails-staged",
+        ["a", "b", "c"],
+      );
+      const effects = { flushed: 0, abandoned: 0 };
+      const firstRun = Promise.withResolvers<void>();
+      reader.scheduler.addEventHandler(
+        (tx: IExtendedStorageTransaction) => {
+          firstRun.resolve();
+          tx.enqueuePostCommitEffect({
+            id: "staged-by-the-run",
+            kind: "test",
+            flush: () => {
+              effects.flushed++;
+            },
+            abandon: () => {
+              effects.abandoned++;
+            },
+          });
+          const offers = holder.withTx(tx).key("inbox").resolveAsCell()
+            .key("offers").asSchema(offersSchema).get() as string[];
+          log.withTx(tx).set([offers.join(",")]);
+        },
+        eventCell.getAsNormalizedFullLink(),
+        (depTx) => {
+          holder.withTx(depTx).get();
+        },
+      );
+      const fail = failReaderSyncFor(store.getAsNormalizedFullLink().id);
+
+      const status = send(eventCell);
+      await firstRun.promise;
+      fail();
+
+      expect(await status).not.toBe("done");
+      await reader.idle();
+      expect(effects).toEqual({ flushed: 0, abandoned: 1 });
+      expect(log.get()).toBeUndefined();
+    });
+
     it("commits only the stored value of a document it read while loading in a space it wrote", async () => {
       // The commit carries the run's reads in the space it wrote, and the
       // store refuses the one of a document it has a later value of, so the
@@ -969,6 +1010,57 @@ describe("scheduler-event-loading-read", () => {
       expect(reads).toEqual([[], ["a", "b", "c"]]);
       expect(log.get()).toEqual(["a,b,c"]);
       expect(outcomes).toEqual([]);
+    });
+
+    it("withdraws a run whose send resolves a cell through a document in a space the server refuses, as the read-time check always has", async () => {
+      // A recorded loss of a space's access counts as a known state only for
+      // the check made after the run. `resolveAsCell()`'s own check, made as
+      // the run reads, still finds the document loading with nothing of it
+      // in the replica, and withdraws the run rather than letting its send
+      // try a write into the refused space.
+
+      const { holder, log, eventCell } = await standUp(
+        "served-send-refused",
+        undefined,
+        { hop: false },
+      );
+      await reader.getCell(foreignSpace, "served-send-refused-opener").sync();
+      refuse(foreignSpace, "unauthorized");
+      await clock.settle();
+      expect(readerStorage.spaceAccessError?.(foreignSpace)).toBeDefined();
+      const firstRun = Promise.withResolvers<void>();
+      reader.scheduler.addEventHandler(
+        (tx: IExtendedStorageTransaction) => {
+          firstRun.resolve();
+          const frame = makeFrame({
+            frameKind: "handler",
+            runtime: reader,
+            tx,
+            space,
+          });
+          runInFrame(frame, () => {
+            holder.withTx(tx).key("inbox").resolveAsCell().key("receive")
+              .send({ title: "hello" });
+            log.withTx(tx).set(["sent"]);
+          });
+        },
+        eventCell.getAsNormalizedFullLink(),
+        (depTx) => {
+          holder.withTx(depTx).get();
+        },
+      );
+      const outcomes: ServedEventFailureOutcome[] = [];
+      const status = send(eventCell, outcomes);
+      await firstRun.promise;
+
+      expect(await status).not.toBe("done");
+      expect(log.get()).toBeUndefined();
+      expect(outcomes).toEqual([
+        expect.objectContaining({
+          kind: "deferred",
+          cause: "handler-not-run",
+        }),
+      ]);
     });
 
     it("does not withdraw the run for a loading read in its home space", async () => {
