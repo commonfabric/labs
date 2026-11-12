@@ -2485,11 +2485,11 @@ describe("Phase 3 events-down (serving side)", () => {
     // A probe on the pattern's stream reads a document of another space whose
     // label this space doesn't admit. For `commits` it writes nothing more;
     // for `refuses` it also copies the value into this space, which the
-    // writer-fit gate refuses; for `throws` it throws; for `plain` it reads
-    // nothing labeled. The
+    // writer-fit gate refuses; for `throws` it throws an error whose message
+    // is the foreign secret; for `plain` it reads nothing labeled. The
     // processed claim (`processed-claim.ts`) takes nothing of the join, so
-    // the two foreign-read handlings are delivered, and each records the
-    // outcome withheld, not how it ended.
+    // the foreign-read handlings are delivered, and each records the outcome
+    // withheld, not how it ended, so no failure message carries the secret.
     const foreignSigner = await Identity.fromPassphrase(
       "events down withheld foreign",
     );
@@ -2575,6 +2575,8 @@ describe("Phase 3 events-down (serving side)", () => {
     };
     /** The commit outcome of every served run of the probe, by event kind. */
     const commitOutcomes = new ArrivalLog<{ kind: string; error: unknown }>();
+    /** The message of every error the probe threw for `throws`. */
+    const thrownMessages: (string | undefined)[] = [];
     const cancelProbe = servingRuntime!.scheduler.addEventHandler(
       (tx, event) => {
         const kind = (event as { kind?: string }).kind ?? "unknown";
@@ -2587,7 +2589,10 @@ describe("Phase 3 events-down (serving side)", () => {
           undefined,
           tx,
         ).getRaw() as { secret?: string } | undefined;
-        if (kind === "throws") throw new Error("the probe threw");
+        if (kind === "throws") {
+          thrownMessages.push(read?.secret);
+          throw new Error(read?.secret);
+        }
         if (kind !== "refuses") return;
         servingRuntime!.getCell<{ copied?: string }>(
           space,
@@ -2654,6 +2659,13 @@ describe("Phase 3 events-down (serving side)", () => {
       expect(outcomeOf("refuses")).toEqual(withheld);
       expect(outcomeOf("throws")).toEqual(withheld);
       expect(outcomeOf("plain")).toEqual({ ...withheld, withheld: undefined });
+      // The `throws` handling threw the foreign secret as its message, and
+      // nothing of it reached the entry.
+      expect(thrownMessages.length).toBeGreaterThan(0);
+      expect(thrownMessages.every((message) => message === "s3cr3t")).toBe(
+        true,
+      );
+      expect(JSON.stringify(entryByKind("throws"))).not.toContain("s3cr3t");
 
       // Each sender is told the same: done, with the outcome withheld,
       // whether the handling committed or not.
