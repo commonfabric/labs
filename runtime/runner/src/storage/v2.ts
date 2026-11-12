@@ -178,6 +178,7 @@ import {
 } from "./event-append-queue.ts";
 import {
   type ClientUpdateRequired,
+  type DroppedSealedWrites,
   type ForeignScopedReadGrant,
   type IForeignScopedReadRefusedError,
   IMemoryAddress,
@@ -8946,42 +8947,18 @@ export class SpaceReplica
         record.confirmed.seq >= seq &&
         record.pending.some((entry) => entry.localSeq === localSeq);
     });
-    const shouldNotifySubscribers = changed.length > 0 &&
-      this.#hasNotificationSubscribers();
-    const shouldNotifySinks = changed.length > 0 &&
-      this.#hasSinkSubscribers(changed);
-    const before = shouldNotifySubscribers
-      ? Differential.checkout(
-        this,
-        changed.map(({ id, scope, scopeKey }) =>
-          snapshotState(this, id, scope, scopeKey)
-        ),
-        this.#scopeKeyIdentity(),
-      )
-      : undefined;
     // The confirmed view can advance between receipt and settlement, or
     // already cover the receipt. Covered operations are present in that value;
     // partial local wave promotions still need their pending contributions.
-    for (const { id, scope, scopeKey } of touched) {
-      const record = this.#record(id, scope, undefined, scopeKey);
-      for (const entry of record.pending) {
-        if (entry.localSeq === localSeq) entry.acceptedSeq = seq;
+    this.#integrateAround(changed, () => {
+      for (const { id, scope, scopeKey } of touched) {
+        const record = this.#record(id, scope, undefined, scopeKey);
+        for (const entry of record.pending) {
+          if (entry.localSeq === localSeq) entry.acceptedSeq = seq;
+        }
+        record.materialized = undefined;
       }
-      record.materialized = undefined;
-    }
-    if (before !== undefined) {
-      const changes = before.compare(this);
-      if ([...changes].length > 0) {
-        this.#subscription.next({
-          type: "integrate",
-          space: this.#space,
-          changes,
-        });
-        if (shouldNotifySinks) this.#notifySinks(changes);
-      }
-    } else if (shouldNotifySinks) {
-      this.#notifySinksForIds(changed);
-    }
+    });
   }
 
   async #settleSealedCommit(
@@ -9114,8 +9091,7 @@ export class SpaceReplica
       // served effect), and any A→B→A input cycle starved deduping
       // against the dead entry. Residual extrapolation over foreign
       // novelty self-heals through the engine's own dirtiness fan-out
-      // (`noteExecutorCommit` → frames), the same reconvergence
-      // per-doc-dropped seals already rely on (wave.ts §3d). Pushed
+      // (`noteExecutorCommit` → frames). Pushed
       // (socket) commits keep full settleAccept semantics — remote
       // parking is untouched.
       // The cover class: a sealed native commit is the co-hosted
@@ -9126,7 +9102,14 @@ export class SpaceReplica
       }
       this.#confirmPending(
         localSeq,
-        operations,
+        v.committed.dropped === undefined
+          ? operations
+          : this.#rollBackDroppedWrites(
+            localSeq,
+            operations,
+            v.committed.dropped,
+            identity,
+          ),
         {
           seq: v.committed.seq,
           branch: commit.branch ?? DEFAULT_BRANCH,
@@ -9138,6 +9121,113 @@ export class SpaceReplica
       return { ok: {} };
     } finally {
       this.#settleInFlightCommit(localSeq);
+    }
+  }
+
+  /**
+   * Rolls back the writes of the sealed commit at `localSeq` that its wave
+   * commit left out, and returns the operations the wave commit carried,
+   * whose layers stay pending for promotion at its seq. Each of `operations`
+   * applied one layer to its document, in order. An operation dropped whole
+   * takes its layer with it. A patch layer keeps the patches the wave commit
+   * carried, marked accepted, so that it replays them as the store applied
+   * them rather than showing the value its writer computed. Readers of the
+   * documents that changed are notified, and in-flight commits that read
+   * them through this commit's layers are rejected, as a withdrawal rejects
+   * them.
+   */
+  #rollBackDroppedWrites(
+    localSeq: number,
+    operations: NativeCommitOperation[],
+    dropped: DroppedSealedWrites,
+    identity?: ScopeKeyIdentity,
+  ): NativeCommitOperation[] {
+    const unclaimed = new Map<DocumentRecord, PendingVersion[]>();
+    const changes = operations.flatMap((operation, index) => {
+      // A reset since the verdict leaves no record, or no layer of this
+      // commit, to roll back.
+      const record = this.#docs.get(this.#docKeyOf(operation, identity));
+      if (record === undefined) return [];
+      let layers = unclaimed.get(record);
+      if (layers === undefined) {
+        layers = record.pending.filter((entry) => entry.localSeq === localSeq);
+        unclaimed.set(record, layers);
+      }
+      const layer = layers.shift();
+      const drop = dropped.get(index);
+      return layer === undefined || drop === undefined
+        ? []
+        : [{ operation, record, layer, drop }];
+    });
+    const removed = new Set<PendingVersion>();
+    this.#integrateAround(
+      this.#touchedOf(changes.map(({ operation }) => operation), identity),
+      () => {
+        for (const { record, layer, drop } of changes) {
+          if (drop === "operation") {
+            removed.add(layer);
+            continue;
+          }
+          if (layer.op !== "patch") continue;
+          const at = record.pending.indexOf(layer);
+          record.pending[at] = {
+            ...layer,
+            patches: layer.patches.filter((_, patch) => !drop.has(patch)),
+            accepted: true,
+          };
+          dropMaterializedSuffix(record, at);
+        }
+        if (removed.size > 0) this.#dropPending(localSeq, removed);
+      },
+    );
+    const addressOf = (address: { id: string; scope?: CellScope }) =>
+      `${normalizeCellScope(address.scope)}\0${address.id}`;
+    const changed = new Set(
+      changes.map(({ operation }) => addressOf(operation)),
+    );
+    this.#cascadeDroppedDependency(
+      localSeq,
+      (read) => changed.has(addressOf(read)),
+    );
+    return operations.filter((_, index) => dropped.get(index) !== "operation");
+  }
+
+  /**
+   * Runs `change`, then notifies the subscribers and sinks watching
+   * `touched` of what it changed there, as an `integrate` from `source`.
+   */
+  #integrateAround(
+    touched: LocalDocAddress[],
+    change: () => void,
+    source?: IStorageTransaction,
+  ): void {
+    const shouldNotifySubscribers = touched.length > 0 &&
+      this.#hasNotificationSubscribers();
+    const shouldNotifySinks = touched.length > 0 &&
+      this.#hasSinkSubscribers(touched);
+    const before = shouldNotifySubscribers
+      ? Differential.checkout(
+        this,
+        touched.map(({ id, scope, scopeKey }) =>
+          snapshotState(this, id, scope, scopeKey)
+        ),
+        this.#scopeKeyIdentity(),
+      )
+      : undefined;
+    change();
+    if (before !== undefined) {
+      const changes = before.compare(this);
+      if ([...changes].length > 0) {
+        this.#subscription.next({
+          type: "integrate",
+          space: this.#space,
+          changes,
+          ...(source !== undefined ? { source } : {}),
+        });
+        if (shouldNotifySinks) this.#notifySinks(changes);
+      }
+    } else if (shouldNotifySinks) {
+      this.#notifySinksForIds(touched);
     }
   }
 
@@ -10373,41 +10463,14 @@ export class SpaceReplica
     source: IStorageTransaction | undefined,
     identity?: ScopeKeyIdentity,
   ): Result<Unit, StorageTransactionRejected> {
-    const touched = this.#touchedOf(operations, identity);
-    const hasSemanticOperations = operations.length > 0;
-    const shouldNotifySubscribers = hasSemanticOperations &&
-      this.#hasNotificationSubscribers();
-    const shouldNotifySinks = hasSemanticOperations &&
-      this.#hasSinkSubscribers(touched);
-    const before = shouldNotifySubscribers
-      ? Differential.checkout(
-        this,
-        touched.map(({ id, scope, scopeKey }) =>
-          snapshotState(this, id, scope, scopeKey)
-        ),
-        this.#scopeKeyIdentity(),
-      )
-      : undefined;
-    this.#dropPending(localSeq);
-    if (before !== undefined) {
-      const changes = before.compare(this);
-      if ([...changes].length > 0) {
-        // The flip carries the retiring echo's own transaction as its
-        // source (speculation.md §4's "own retirement is not a trigger"
-        // rider): the writer's scheduler node skips its own flip.
-        this.#subscription.next({
-          type: "integrate",
-          space: this.#space,
-          changes,
-          ...(source !== undefined ? { source } : {}),
-        } as StorageNotification);
-        if (shouldNotifySinks) {
-          this.#notifySinks(changes);
-        }
-      }
-    } else if (shouldNotifySinks) {
-      this.#notifySinksForIds(touched);
-    }
+    // The flip carries the retiring echo's own transaction as its source
+    // (speculation.md §4's "own retirement is not a trigger" rider): the
+    // writer's scheduler node skips its own flip.
+    this.#integrateAround(
+      this.#touchedOf(operations, identity),
+      () => this.#dropPending(localSeq),
+      source,
+    );
     return { ok: {} };
   }
 
@@ -10471,8 +10534,8 @@ export class SpaceReplica
         this.#foldRefusedWrite(localSeq, touched, identity);
       }
       this.#dropPending(localSeq);
-      // Every drop funnels through here (server conflict, preempt, cascade,
-      // reset — this is dropPending's only call site), so scanning right
+      // Every rejection funnels through here (server conflict, preempt,
+      // cascade, reset), so scanning right
       // after the drop catches every dependant; transitivity emerges from
       // recursion (a victim's own finalizeRejection lands back here with its
       // localSeq).
@@ -12142,13 +12205,23 @@ export class SpaceReplica
    * via createMissing). Resolving the promises here queues the victims'
    * continuations on later microtasks; each victim snapshots its own revert
    * Differential before its own drop, so the scan itself never re-enters.
+   * Given `dropped`, only a commit with a pending read of that localSeq which
+   * `dropped` accepts is rejected: one that read a document whose layer the
+   * dropped commit lost, rather than one it kept.
    */
-  #cascadeDroppedDependency(droppedLocalSeq: number): void {
+  #cascadeDroppedDependency(
+    droppedLocalSeq: number,
+    dropped?: (read: ClientCommit["reads"]["pending"][number]) => boolean,
+  ): void {
     for (const entry of [...this.#inFlightCommits.values()]) {
       if (
         entry.settled ||
         entry.localRejectionValue !== undefined ||
-        !entry.dependencies.has(droppedLocalSeq)
+        !entry.dependencies.has(droppedLocalSeq) ||
+        (dropped !== undefined &&
+          !entry.commit.reads.pending.some((read) =>
+            [read.localSeq].flat().includes(droppedLocalSeq) && dropped(read)
+          ))
       ) {
         continue;
       }
@@ -12826,7 +12899,11 @@ export class SpaceReplica
     }
   }
 
-  #dropPending(localSeq: number): void {
+  /**
+   * Removes the pending layers of the commit at `localSeq`, or only those
+   * of them in `only`.
+   */
+  #dropPending(localSeq: number, only?: ReadonlySet<PendingVersion>): void {
     // A drop can LIFT the shadow floor without a promotion (review
     // thread r3739416417): a rejected/rolled-back own write emptying a
     // shadowed doc's pending set makes the foreign value visible and
@@ -12835,16 +12912,14 @@ export class SpaceReplica
     // until the input-wait timeout. Fire the same flag-gated wake when
     // the drop empties a shadowed doc's pending set.
     let shadowLifted = false;
+    const drops = (entry: PendingVersion) =>
+      entry.localSeq === localSeq && (only === undefined || only.has(entry));
     for (const [key, record] of this.#docs.entries()) {
-      const firstPendingIndex = record.pending.findIndex((entry) =>
-        entry.localSeq === localSeq
-      );
+      const firstPendingIndex = record.pending.findIndex(drops);
       if (firstPendingIndex === -1) {
         continue;
       }
-      record.pending = record.pending.filter((entry) =>
-        entry.localSeq !== localSeq
-      );
+      record.pending = record.pending.filter((entry) => !drops(entry));
       dropMaterializedSuffix(record, firstPendingIndex);
       const promotion = record.confirmed.localWavePromotion;
       const lastApplied = promotion?.entries.at(-1)?.localSeq;

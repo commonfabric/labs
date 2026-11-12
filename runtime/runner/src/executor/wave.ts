@@ -50,6 +50,7 @@ import type {
 } from "@commonfabric/memory/v2/server";
 import type {
   CommitError,
+  DroppedSealedWrites,
   IExtendedStorageTransaction,
   ISpaceReplica,
   IStorageTransaction,
@@ -409,7 +410,11 @@ export function delegatedCarriageOf(
 // teardown + reinstantiation, §3e) awaits this instead. Attached by the
 // accumulator at seal, same side-table mechanism as the run context.
 type WaveSettlement = Result<
-  Unit,
+  Unit & {
+    /** The documents this derivation's writes were dropped from as
+     * superseded, while the rest of its writes committed. */
+    supersededOutputs?: readonly SupersededOutput[];
+  },
   StorageTransactionRejected & {
     /** This run read a contribution whose optimistic state was withdrawn. */
     readDependencyWithdrawn?: true;
@@ -945,8 +950,8 @@ export type ContributionDisposition =
    * consequence's that the firing session overwrote; survivors rode the
    * wave commit. `droppedOps` counts each dropped op, and each dropped
    * patch of an op whose other patches committed. The sealed commit's
-   * local overlay rolls back whole and reconverges from the wave commit
-   * arriving as confirmed state. */
+   * local overlay rolls back the dropped writes and promotes the rest at
+   * the wave commit's seq. */
   | { kind: "partially-dropped"; droppedOps: number }
   /** All ops withdrawn: a fully superseded derivation or event
    * consequence, or a derivation that read a withdrawn contribution's
@@ -1786,25 +1791,24 @@ export class WaveAccumulator
           assembly.spaces.map((space) => space.sealed.settled),
         ).then((settled): Result<Unit, StorageTransactionRejected> =>
           settled.find((outcome) => outcome.error !== undefined) ?? { ok: {} }
-        )).then((outcome): WaveSettlement =>
-          outcome.error !== undefined &&
-            (contribution.readDependencyWithdrawn ||
-              contribution.supersededOutputs !== undefined)
-            ? {
+        )).then((outcome): WaveSettlement => {
+          const superseded = contribution.supersededOutputs === undefined
+            ? {}
+            : {
+              supersededOutputs: [...contribution.supersededOutputs.values()],
+            };
+          return outcome.error === undefined
+            ? { ok: { ...outcome.ok, ...superseded } }
+            : {
               error: {
                 ...outcome.error,
                 ...(contribution.readDependencyWithdrawn
                   ? { readDependencyWithdrawn: true }
                   : {}),
-                ...(contribution.supersededOutputs === undefined ? {} : {
-                  supersededOutputs: [
-                    ...contribution.supersededOutputs.values(),
-                  ],
-                }),
+                ...superseded,
               },
-            }
-            : outcome
-        ),
+            };
+        }),
       );
       return result;
     } finally {
@@ -3758,6 +3762,43 @@ export class WaveAccumulator
     );
   }
 
+  /**
+   * The writes of `contribution`'s home sealed commit that the wave commit
+   * leaves out, keyed by the index of their operation in the commit's
+   * operations: every operation on a document in `droppedDocs`, and the
+   * indexes of the patches `droppedPatches` names in a patch operation on
+   * any other document.
+   */
+  #droppedWritesOf(
+    contribution: WaveContribution,
+    droppedDocs: ReadonlySet<string>,
+    droppedPatches: ReadonlyMap<string, ReadonlySet<PatchOp>>,
+  ): DroppedSealedWrites {
+    const dropped = new Map<number, "operation" | ReadonlySet<number>>();
+    const home = this.#homeSealed(contribution);
+    if (home === undefined) return dropped;
+    for (const [index, operation] of home.sealed.commit.operations.entries()) {
+      if (operation.op === "sqlite") continue;
+      const key = docInstanceKey(
+        operation.id,
+        this.#scopeKeyFor(operation.scope, contribution.context),
+      );
+      if (droppedDocs.has(key)) {
+        dropped.set(index, "operation");
+        continue;
+      }
+      const superseded = droppedPatches.get(key);
+      if (superseded === undefined || operation.op !== "patch") continue;
+      const patches = new Set(
+        operation.patches.flatMap((patch, patchIndex) =>
+          superseded.has(patch) ? [patchIndex] : []
+        ),
+      );
+      if (patches.size > 0) dropped.set(index, patches);
+    }
+    return dropped;
+  }
+
   #buildHomeBatch(
     requeued: ReadonlySet<number>,
     droppedWhole: ReadonlySet<number>,
@@ -3818,22 +3859,24 @@ export class WaveAccumulator
       }
       const home = this.#homeSealed(contribution);
       if (home === undefined) continue;
-      for (const sealedOperation of home.sealed.commit.operations) {
+      const dropped = this.#droppedWritesOf(
+        contribution,
+        droppedDocs[contribution.index],
+        droppedPatches[contribution.index],
+      );
+      for (
+        const [index, sealedOperation] of home.sealed.commit.operations
+          .entries()
+      ) {
         let operation = sealedOperation;
-        if (operation.op !== "sqlite") {
-          const key = docInstanceKey(
-            operation.id,
-            this.#scopeKeyFor(operation.scope, context),
+        const drop = dropped.get(index);
+        if (drop === "operation") continue;
+        if (drop !== undefined && operation.op === "patch") {
+          const patches = operation.patches.filter((_, patch) =>
+            !drop.has(patch)
           );
-          if (droppedDocs[contribution.index].has(key)) continue;
-          const dropped = droppedPatches[contribution.index].get(key);
-          if (dropped !== undefined && operation.op === "patch") {
-            const patches = operation.patches.filter((patch) =>
-              !dropped.has(patch)
-            );
-            if (patches.length === 0) continue;
-            operation = { ...operation, patches };
-          }
+          if (patches.length === 0) continue;
+          operation = { ...operation, patches };
         }
         const opIndex = operations.length;
         operations.push(operation);
@@ -4325,7 +4368,11 @@ export class WaveAccumulator
     );
     const acceptedBySpace = new Map<
       MemorySpace,
-      Array<{ contribution: SealedSpaceContribution; seq: number }>
+      Array<{
+        contribution: SealedSpaceContribution;
+        seq: number;
+        dropped?: DroppedSealedWrites;
+      }>
     >();
     for (const contribution of this.#contributions) {
       const idx = contribution.index;
@@ -4365,6 +4412,7 @@ export class WaveAccumulator
         this.#withdraw(contribution, message, "contribution-dropped");
         continue;
       }
+      let dropped: DroppedSealedWrites | undefined;
       if (droppedDocs[idx].size > 0 || droppedPatches[idx].size > 0) {
         let droppedOps = 0;
         for (const key of droppedDocs[idx]) {
@@ -4376,39 +4424,48 @@ export class WaveAccumulator
         for (const [key, patches] of droppedPatches[idx]) {
           if (!droppedDocs[idx].has(key)) droppedOps += patches.size;
         }
-        const allDropped = droppedDocs[idx].size === homeWrites[idx].size &&
-          contribution.spaces.length === 1;
-        outcome.dispositions[idx] = allDropped
-          ? { kind: "dropped" }
-          : { kind: "partially-dropped", droppedOps };
         // No #warnDropped here: a superseded write is the EXPECTED path —
         // the superseding authored commit is the fresh state its readers
         // reconverge from — not the one-shot loss class the warn exists for.
-        // Any surviving ops rode the wave commit; the sealed commit's own
-        // overlay rolls back whole and reconverges from the wave commit
-        // (or, all-dropped, from the superseding authored commit) arriving
-        // as confirmed state.
-        const handler = context.kind === "event-handler";
-        this.#withdraw(
-          contribution,
-          (handler
-            ? "event consequence writes the firing session overwrote"
-            : "superseded pure derivation writes") +
-            " dropped from the wave commit (serving-loop.md §3d)",
-          allDropped ? "contribution-dropped" : undefined,
-        );
-        // A handler's superseded writes still consequence its event: the
-        // wave commit carries the event in `consequenceOf`, as it does for
-        // every surviving contribution.
         if (
-          handler && context.eventId !== undefined &&
-          !outcome.committedEventIds.includes(context.eventId)
+          droppedDocs[idx].size === homeWrites[idx].size &&
+          contribution.spaces.length === 1
         ) {
-          outcome.committedEventIds.push(context.eventId);
+          outcome.dispositions[idx] = { kind: "dropped" };
+          // The sealed commit's overlay rolls back whole and reconverges
+          // from the superseding authored commit arriving as confirmed
+          // state.
+          this.#withdraw(
+            contribution,
+            (context.kind === "event-handler"
+              ? "event consequence writes the firing session overwrote"
+              : "superseded pure derivation writes") +
+              " dropped from the wave commit (serving-loop.md §3d)",
+            "contribution-dropped",
+          );
+          // A handler's superseded writes still consequence its event: the
+          // wave commit carries the event in `consequenceOf`, as it does for
+          // every surviving contribution.
+          if (
+            context.kind === "event-handler" &&
+            context.eventId !== undefined &&
+            !outcome.committedEventIds.includes(context.eventId)
+          ) {
+            outcome.committedEventIds.push(context.eventId);
+          }
+          continue;
         }
-        continue;
+        outcome.dispositions[idx] = { kind: "partially-dropped", droppedOps };
+        // The writes that rode the wave commit promote at its seq, and only
+        // the dropped ones roll back.
+        dropped = this.#droppedWritesOf(
+          contribution,
+          droppedDocs[idx],
+          droppedPatches[idx],
+        );
+      } else {
+        outcome.dispositions[idx] = { kind: "committed" };
       }
-      outcome.dispositions[idx] = { kind: "committed" };
       contribution.emptySettlement?.resolve({ ok: {} });
       if (
         context.kind === "event-handler" && context.eventId !== undefined &&
@@ -4421,11 +4478,16 @@ export class WaveAccumulator
         outcome.committedEventIds.push(context.eventId);
       }
       for (const space of contribution.spaces) {
-        const seq = space.space === this.#space ? homeSeq : foreignSeqs.get(
+        const home = space.space === this.#space;
+        const seq = home ? homeSeq : foreignSeqs.get(
           this.#foreignBatchKeyFor(space.space, context),
         ) ?? homeSeq;
         const accepted = acceptedBySpace.get(space.space) ?? [];
-        accepted.push({ contribution: space, seq });
+        accepted.push({
+          contribution: space,
+          seq,
+          ...(home && dropped !== undefined ? { dropped } : {}),
+        });
         acceptedBySpace.set(space.space, accepted);
       }
     }
@@ -4434,8 +4496,10 @@ export class WaveAccumulator
     // batches in server order, preserving seal order within one batch.
     for (const accepted of acceptedBySpace.values()) {
       accepted.sort((a, b) => a.seq - b.seq);
-      for (const { contribution, seq } of accepted) {
-        contribution.resolveVerdict({ committed: { seq } });
+      for (const { contribution, seq, dropped } of accepted) {
+        contribution.resolveVerdict({
+          committed: { seq, ...(dropped === undefined ? {} : { dropped }) },
+        });
       }
     }
   }

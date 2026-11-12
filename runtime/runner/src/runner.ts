@@ -6845,10 +6845,8 @@ export class Runner {
               }
               // A WHOLE contribution drop is recoverable in the same sense the
               // stale-read refusal is, and the helper reports only if its one
-              // retry also loses. A partial drop is not: part of the
-              // contribution stands, so there is no rolled-back view to
-              // re-instantiate against, and it takes the same terminal arm a
-              // second failure takes.
+              // retry also loses. Any other withdrawal takes the same
+              // terminal arm a second failure takes.
               return await recoverInstantiation(
                 settled.error,
                 waveWithdrawalCause === "contribution-dropped"
