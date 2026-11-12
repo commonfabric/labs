@@ -641,7 +641,11 @@ loop's duty).
   that absence. So does a run reading a document in a space the
   server refuses the serving identity, which commits the schema's
   default: a load in a space whose access the runtime has lost
-  (`spaceAccessError()`) delivers nothing, so no run waits on one.
+  (`spaceAccessError()`) delivers nothing, so the check made after the
+  run does not wait on one, and a run that reads such a space reads the
+  lost state, whether or not a retry of the space's access is in flight.
+  The checks made as a run reads (`resolveAsCell()`, a send into another
+  space) take that load as they take any other.
   Sealing the skip is the
   defect this rule prevents: the mark committed ALONE — a 1-op derived
   commit, the user's event permanently consumed with zero effects and
