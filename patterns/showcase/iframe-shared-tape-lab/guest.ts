@@ -677,7 +677,9 @@ async function startPlayback(): Promise<void> {
     playbackOffsetSeconds = 0;
   }
   await audioContext.resume();
-  if (audio.paused || disposed) return;
+  // A pause and a second play while the engine resumed started another
+  // playback, which may have got here first.
+  if (audio.paused || disposed || activeSource) return;
 
   const source = audioContext.createBufferSource();
   source.buffer = audioBuffer;

@@ -61,6 +61,7 @@ describe("iframe-guest", () => {
 
       expect(cell.key?.("count").key?.("digits").get()).toBeUndefined();
       expect(cell.key?.("missing").get()).toBeUndefined();
+      expect(cell.key?.("constructor").get()).toBeUndefined();
     });
 
     it("refuses a write into a value that holds no fields", () => {

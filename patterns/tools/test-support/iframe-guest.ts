@@ -74,8 +74,9 @@ function valueAt(
   let value = root;
   for (const key of path) {
     if (Array.isArray(value)) value = value[Number(key)];
-    else if (isFabricPlainObject(value)) value = value[key];
-    else return undefined;
+    else if (isFabricPlainObject(value)) {
+      value = Object.hasOwn(value, key) ? value[key] : undefined;
+    } else return undefined;
   }
   return value;
 }
@@ -97,7 +98,8 @@ function withValueAt(
     return copy;
   }
   if (isFabricPlainObject(root)) {
-    return { ...root, [key]: withValueAt(root[key], rest, value) };
+    const current = Object.hasOwn(root, key) ? root[key] : undefined;
+    return { ...root, [key]: withValueAt(current, rest, value) };
   }
   throw new TypeError(`Cannot write \`${key}\` into a non-container value.`);
 }

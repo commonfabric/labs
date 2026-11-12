@@ -87,6 +87,7 @@ class AudioEngine {
   resumeFailure: Error | undefined;
   stopFailure: Error | undefined;
   heldDecode: Promise<void> | undefined;
+  heldResume: Promise<void> | undefined;
   closed = false;
   tracksStopped = 0;
   readonly #streamCreated = Promise.withResolvers<void>();
@@ -104,6 +105,7 @@ class AudioEngine {
       }
 
       resume(): Promise<void> {
+        if (engine.heldResume) return engine.heldResume;
         return engine.resumeFailure
           ? Promise.reject(engine.resumeFailure)
           : Promise.resolve();
@@ -694,6 +696,22 @@ describe("guest", () => {
       await Promise.resolve();
 
       expect(engine.sources).toEqual([]);
+    });
+
+    it("starts one source for a play, a pause and a play before the engine resumes", async () => {
+      const { engine } = await open();
+      const held = Promise.withResolvers<void>();
+      engine.heldResume = held.promise;
+
+      recording().play();
+      recording().pause();
+      recording().play();
+      held.resolve();
+      await page!.until(() => engine.playing !== undefined);
+      await page!.settled();
+
+      expect(engine.sources).toHaveLength(1);
+      expect(recording().paused).toBe(false);
     });
 
     it("shows why playback could not start, and pauses", async () => {

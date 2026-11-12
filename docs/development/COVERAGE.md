@@ -317,9 +317,9 @@ instance of the guest module against it, and serves the guest the resources a
 test supplies through the host end of the real bridge: in-memory cells,
 presence rooms and SQLite databases. The test drives the document as a person
 would and reads back both the document and what the guest wrote. Deno's
-coverage records the guest module like any other, so its lines count as
-covered. `patterns/examples/iframe-cursor-canvas/guest.test.ts` is the worked
-example.
+coverage records the guest module like any other, so the lines its tests run
+count as covered. `patterns/examples/iframe-cursor-canvas/guest.test.ts` is the
+worked example.
 
 A guest's writes cross the bridge, a message channel, before they reach a test's
 cells, so a check that the guest wrote nothing waits for the page's `settled()`
