@@ -55,6 +55,12 @@ Working references:
 
 ## Component Reference
 
+The attribute names below are the components' HTML attributes. In pattern JSX a
+prop sets the property, so write the camel-case property name: `default-size` is
+`defaultSize`, `button-text` is `buttonText`. Only `data-*`, `aria-*` and event
+props (`oncf-change`) keep a hyphen; the compiler refuses any other hyphenated
+prop.
+
 ### 1. cf-button
 
 **Purpose**: Interactive button element **Tag**: `<cf-button>` **Attributes**:
@@ -602,8 +608,9 @@ Default slot for cf-tab elements
   where there is not:
   `<cf-resizable-panel-group direction="horizontal" stackBelow={768}>`
   **Events**:
-- `cf-resize` - Fired on resize with detail: `{ panels }` **Slots**: Default
-  slot for panels and handles
+- `cf-resize` - Fired on the group itself (it does not bubble) when a person
+  resizes its panels, with detail `{ sizes }`: each panel's percentage, in
+  document order **Slots**: Default slot for panels and handles
 
 ### 30. cf-resizable-panel
 
