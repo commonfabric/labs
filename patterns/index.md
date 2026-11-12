@@ -139,9 +139,8 @@ are stored, while each viewer's pointer and a shape held mid-drag or mid-resize
 travel through a presence room and are stored nowhere),
 `examples/iframe-verb-list/` (a list in a sandboxed iframe whose guest adds an
 item only by sending the pattern's `addItem` verb, which writes the pattern's
-own state), `product/lobby/`, `apps/lunch-poll/`, `examples/math-note/` (a
-Markdown note whose `$…$` and `$$…$$` TeX the editor sets with KaTeX where the
-cursor is not), `examples/profile-group-chat/`, `apps/project-list/`,
+own state), `product/lobby/`, `apps/lunch-poll/`, `examples/math-note/`,
+`examples/profile-group-chat/`, `apps/project-list/`,
 [`apps/recommend-a-book/`](apps/recommend-a-book/README.md) (personal reading
 shelf and private visitor recommendations), `examples/router/`,
 `examples/scoped-group-chat/`, `examples/scoped-user-directory/`,
