@@ -29,6 +29,7 @@ import { isInertPlainObject } from "@commonfabric/js-values/objects";
 
 import { DummyLiveEnvironment } from "./fabric-instances/fixtures.ts";
 import {
+  assertAcyclicFabricValue,
   assertValidFabricValueLayer,
   convertibleJsFromFabricValue,
   deepFreeze,
@@ -37,6 +38,8 @@ import {
   FabricInstance,
   type FabricPrimitive,
   type FabricValue,
+  isDeepFrozen,
+  isValidDeepFrozenFabricValue,
   isValidFabricConvertibleJsValue,
   shallowCleanArray,
   shallowCleanPlainObject,
@@ -2147,6 +2150,37 @@ describe("convertible-js", () => {
         expect(() => fabricFromConvertibleJsValue(Symbol("bad"))).toThrow(
           "Not representable as a `FabricValue`: unique (uninterned) symbol",
         );
+      });
+    });
+
+    describe("the frozen and acyclic checks of its result", () => {
+      it("accept a result built from mutable input, sparse arrays, `null`, and `FabricPrimitive`s included", () => {
+        const sparse: unknown[] = [];
+        sparse[0] = { n: null };
+        sparse[2] = new Date(0);
+        const result = fabricFromConvertibleJsValue({
+          list: sparse,
+          nested: [[1, "two"], { three: 3n }],
+        });
+        expect(isValidDeepFrozenFabricValue(result)).toBe(true);
+        expect(() => assertAcyclicFabricValue(result)).not.toThrow();
+      });
+
+      it("refuse a result that shares a frozen cycle, from an object or an array", () => {
+        const cyclic: Record<string, FabricValue> = {};
+        cyclic.self = cyclic;
+        deepFreeze(cyclic);
+        for (const input of [{ cyclic }, [cyclic], { inner: [{ cyclic }] }]) {
+          const result = fabricFromConvertibleJsValue(input);
+          expect(() => assertAcyclicFabricValue(result)).toThrow(/cyclic/);
+        }
+      });
+
+      it("refuse a result that holds an unfrozen instance", () => {
+        const instance = new UnknownValue("Test@1", { n: 1 });
+        const result = fabricFromConvertibleJsValue([{ instance }]);
+        expect(isDeepFrozen(result)).toBe(false);
+        expect(isValidDeepFrozenFabricValue(result)).toBe(false);
       });
     });
 

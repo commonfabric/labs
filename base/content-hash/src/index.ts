@@ -4,7 +4,9 @@
  * implementation for the current environment.
  *
  * Priority:
- * 1. `node:crypto` (Deno/server) -- hardware-accelerated via OpenSSL
+ * 1. `node:crypto` (Deno/server) -- hardware-accelerated via OpenSSL, with
+ *    `hash-wasm` for inputs short enough that a `node:crypto` hasher's fixed
+ *    cost outweighs WASM's slower rounds
  * 2. `hash-wasm` (browser) -- WASM, about twice the speed of the fallback
  * 3. `@noble/hashes` (fallback) -- pure JS
  */
