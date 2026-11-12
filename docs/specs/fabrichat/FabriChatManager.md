@@ -91,12 +91,18 @@ rest of Home's housekeeping has started (`adoptCatalogRoomsOf()` in
 `runtime/piece/src/ops/adopt-catalog-rooms.ts`): it vets the space as a visit
 does, and sends the manager's `joinRoom` for the room the space declares,
 under a request id naming the entry and its revision, so the manager records
-the outcome, a membership or a refusal, once per revision. A space that
-declares no room has its root sent, which the manager refuses, and which keeps
-the entry from being tried again until it changes. The host adopts five
-entries at a time, and releases what it read after each five, so a catalog of
-many unadopted rooms costs a few rooms' documents at once rather than all of
-them. Once every entry is adopted, adopting reads only Home's own records.
+the outcome, a membership or a refusal, once per revision. A joined room joins
+the user to it, as a visit does: a user who saved a room has joined it. A
+space that declares no room, or that vetting refuses, is sent a `joinRoom`
+naming no room, which the manager refuses without reading anything, and which
+keeps the entry from being tried again until it changes; a visit to the room
+still joins it. An entry whose vetting fails otherwise is tried again at a
+later bring-up, and holds back no other entry. A membership adopted this way
+keeps the catalog entry's admission time as its `since`, so the room keeps its
+place in the list. The host adopts five entries at a time, and releases what
+it read after each five, so a catalog of many unadopted rooms costs a few
+rooms' documents at once rather than all of them. Once every entry is adopted,
+adopting reads only Home's own records.
 
 `direct` holds one entry per counterpart, including forgotten rooms, for direct
 rooms this manager created or accepted. `openDirect` finds a direct room there

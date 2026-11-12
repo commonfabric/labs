@@ -16,8 +16,11 @@ import {
   sendEvent,
   transactionFailureMessage,
 } from "@commonfabric/runner";
+import { getLogger } from "@commonfabric/logger";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 import { visitedRoomOf } from "./join-visited-room.ts";
+
+const logger = getLogger("piece.adopt-catalog-rooms");
 
 /** How many rooms one pass adopts before it releases what it read. */
 export const ADOPTION_BATCH_SIZE = 5;
@@ -119,9 +122,10 @@ async function unadoptedEntries(home: Cell<unknown>): Promise<Unadopted[]> {
 /**
  * Sends the manager's `joinRoom` for the room `entry`'s space declares, under
  * the entry's adoption request id, and resolves once the manager's handling
- * of it has committed. A space that declares no room has the manager refuse
- * its root, which records the refusal under that id. A space vetting refuses
- * gets nothing sent, and is tried again by a later adoption.
+ * of it has committed. A space that declares no room, or that vetting
+ * refuses, is sent a `joinRoom` naming no room, which the manager refuses,
+ * reading nothing, and records under that id, so that the entry is not tried
+ * again until it changes; a visit to it still joins it.
  */
 async function adopt(
   runtime: Runtime,
@@ -132,10 +136,7 @@ async function adopt(
   const visited = await visitedRoomOf(runtime, identity, entry.space);
   const event = "room" in visited
     ? { requestId: entry.requestId, ...visited }
-    : "root" in visited
-    ? { requestId: entry.requestId, room: visited.root }
-    : undefined;
-  if (event === undefined) return;
+    : { requestId: entry.requestId };
   await new Promise<void>((resolve, reject) =>
     sendEvent(joinRoom, event, (tx) => {
       const status = tx.status();
@@ -155,14 +156,13 @@ async function adopt(
  * the catalog. An entry is adopted once for each revision of it: its outcome,
  * a membership or a refusal, is recorded under its adoption request id.
  *
- * Resolves once no saved entry is left unadopted, other than those vetting
- * refuses, which a later adoption tries again, or once `signal` aborts or the
- * runtime begins disposal, after the batch under way. Does nothing for a Home
- * whose chat manager has no `joinRoom`.
+ * Resolves once every saved entry has been tried, or once `signal` aborts
+ * or the runtime begins disposal, after the batch under way. An entry whose
+ * vetting or handling fails, other than by a refusal, is logged and tried
+ * again by a later adoption, and holds back no other entry. Does nothing for
+ * a Home whose chat manager has no `joinRoom`.
  *
- * @throws When reading Home's records fails, when vetting a space fails other
- *   than by a refusal of access, or when the manager's handling of an
- *   adoption fails.
+ * @throws When reading Home's records fails.
  */
 export async function adoptCatalogRoomsOf(
   runtime: Runtime,
@@ -180,7 +180,16 @@ export async function adoptCatalogRoomsOf(
     if (batch.length === 0) return;
     for (const entry of batch) {
       tried.add(entry.requestId);
-      await adopt(runtime, joinRoom, identity, entry);
+      try {
+        await adopt(runtime, joinRoom, identity, entry);
+      } catch (error) {
+        // One entry that can't be adopted holds back no other; this one is
+        // tried again by a later adoption.
+        logger.warn("adoption-failed", () => [
+          `Adopting the catalog's entry for ${entry.space}:`,
+          error,
+        ]);
+      }
     }
     await runtime.idle();
     await runtime.releaseUnreadDocuments();

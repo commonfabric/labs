@@ -1246,6 +1246,7 @@ export class RuntimeProcessor {
     privateInboxEnsured: Promise<void> | undefined;
     profileRootsRepaired: Promise<void> | undefined;
     shareIntake: Promise<ShareIntake | undefined> | undefined;
+    catalogRoomsAdopted: Promise<void> | undefined;
     readonly homeBringUpReleased: Promise<void> | undefined;
     getSpaceCtx(space: DID): PiecesController;
   } {
@@ -1287,6 +1288,12 @@ export class RuntimeProcessor {
       },
       set shareIntake(value) {
         outerThis.#shareIntake = value;
+      },
+      get catalogRoomsAdopted() {
+        return outerThis.#catalogRoomsAdopted;
+      },
+      set catalogRoomsAdopted(value) {
+        outerThis.#catalogRoomsAdopted = value;
       },
       get homeBringUpReleased() {
         return outerThis.#homeBringUpReleased;
@@ -3302,9 +3309,10 @@ export class RuntimeProcessor {
    * Home space list's name-only entries, the private inbox ensure, the profile
    * root repair, the adoption of the catalog's rooms, the start of the share
    * intake, and the intake taking up every change it has been told of, and
-   * for the marks of deleted spaces on their way to Home's catalog. Returns the intake, when one is running. Never
-   * rejects: each step is held as a promise that does not, and a failure of
-   * the intake's own wait is reported rather than passed on.
+   * for the marks of deleted spaces on their way to Home's catalog. Returns the
+   * intake, when one is running. Never rejects: each step is held as a promise
+   * that does not, and a failure of the intake's own wait is reported rather
+   * than passed on.
    */
   async #homeHousekeepingIdle(): Promise<ShareIntake | undefined> {
     await this.#legacySpacesAdopted;

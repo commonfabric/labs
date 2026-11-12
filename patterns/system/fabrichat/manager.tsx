@@ -1693,12 +1693,15 @@ const performManagerAct = (
   }
   const counterpart = ownDirect ? undefined : creator;
   const title = room.key("about").get()?.title;
+  // A room the catalog lists already is listed from when the catalog
+  // admitted it, so recording its membership leaves its place in the list
+  // as it was.
   const entry: ChatIndexEntry = {
     room,
     kind,
     ...(counterpart === undefined ? {} : { counterpart }),
     ...(title === undefined ? {} : { title }),
-    since: epochNsecFromMsec(Date.now()),
+    since: epochNsecFromMsec(catalogEntries[space]?.since ?? Date.now()),
   };
   // Registers the room, or restores an archived entry at the revision just
   // read, as `listRoom` says: accepting the room, or joining it, is the
@@ -1873,7 +1876,8 @@ export interface FabriChatManagerOutput {
 
   /**
    * Every room this user belongs to and hasn't forgotten, newest first, other
-   * than one whose space is deleted.
+   * than one the catalog marks deleted: a deletion is marked once a runtime of
+   * this user hears of it, as opening the room does.
    */
   rooms: PerUser<ChatIndexEntry[]>;
 
@@ -2144,21 +2148,46 @@ const linkedEntryOf = (entry: ChatIndexEntry): LinkedEntry => ({
   room: linkedRoom(entry.room),
 });
 
+/** What reading one room's roster needs: the room, linked to declare it. */
+interface RoomRosterInput {
+  /** The room. */
+  // `Cell<…>` is written out rather than reached through an alias: a schema
+  // marks a reference position only where the wrapper is written in the type.
+  room: Cell<ChatRoomLink>;
+}
+
+/** One room's roster, once it is read. */
+interface RoomRosterOutput {
+  /** The profiles the room's roster lists; absent until the room is read. */
+  roster?: ManagerProfileCell[];
+}
+
 /**
- * The people the rosters of `rooms` list, other than `self`: by the principal
- * each profile's own label attests, the profiles attesting it, each once, in
- * the order the rooms, and then each room's roster, list them. A profile
+ * The roster of `room`, each room's read on its own, so that a room this
+ * replica can't serve holds back its own roster alone, and the people the
+ * other rooms list are drawn all the same.
+ */
+const RoomRoster = pattern<RoomRosterInput, RoomRosterOutput>(({ room }) => ({
+  roster: computed((): ManagerProfileCell[] | undefined => {
+    const roster = room.key("roster").get();
+    return roster === undefined ? undefined : [...roster];
+  }),
+}));
+
+/**
+ * The people the rosters in `rosters` list, other than `self`: by the
+ * principal each profile's own label attests, the profiles attesting it, each
+ * once, in the order the rosters, and then each roster, list them. A profile
  * attesting no principal, or a DID no principal can have, names no one to
- * offer a room to. It reads every room's roster, so it is handed rooms whose
- * links declare their rosters.
+ * offer a room to, and a roster not yet read names no one yet.
  */
 const peopleIn = (
-  rooms: readonly LinkedEntry[],
+  rosters: readonly (RoomRosterOutput | undefined)[],
   self: string | undefined,
 ): Record<string, ManagerProfileCell[]> =>
-  rooms.reduce<Record<string, ManagerProfileCell[]>>(
+  rosters.reduce<Record<string, ManagerProfileCell[]>>(
     (found, entry) =>
-      (entry.room.key("roster").get() ?? []).reduce((known, profile) => {
+      (entry?.roster ?? []).reduce((known, profile) => {
         const principal = profileOwnerOf(profile);
         if (!isPrincipalDID(principal) || principal === self) return known;
         const profiles = known[principal] ?? [];
@@ -2186,9 +2215,9 @@ const linkedNoticeOf = (notice: ChatManagerNotice): LinkedNotice => ({
 /**
  * The notices of `notices` with something left to tell: a notice whose
  * room's roster lists a profile attesting its recipient has none, since they
- * are in the room, and neither does a notice of a room the catalog says is
- * deleted. It reads each notice's room's roster, so it is handed notices
- * whose links declare their rosters.
+ * are in the room, and neither does a notice of a room the catalog or the
+ * memory server says is deleted. It reads each notice's room, so it is handed
+ * notices whose links declare their rosters.
  */
 const noticesToDeliver = (
   notices: readonly LinkedNotice[],
@@ -2196,6 +2225,7 @@ const noticesToDeliver = (
 ): ChatManagerNotice[] =>
   notices.filter((notice) =>
     !roomDeleted(catalog, notice.room) &&
+    spaceDeleted(notice.room) !== true &&
     !(notice.room.key("roster").get() ?? []).some((member) =>
       profileOwnerOf(member) === notice.recipient
     )
@@ -2315,13 +2345,17 @@ export const FabriChatManagerCore = pattern<
     const linkedRoomsForUser = computed((): PerUser<LinkedEntry[]> =>
       roomsForUser.map(linkedEntryOf)
     );
-    // The people the listed rooms' rosters hold, read beside the rooms that
-    // list them, and per user, as `roomsForUser` is: a profile attests no
-    // one to a reader its space refuses. Its binding's name is its cause, as
-    // `roomsForUser`'s is.
+    // Each listed room's roster, each read on its own and per user, as
+    // `roomsForUser` is: a room's space is read under the reader's access.
+    const rostersForUser = linkedRoomsForUser.map((entry) =>
+      RoomRoster.asScope("user")({ room: entry.room })
+    );
+    // The people the listed rooms' rosters hold, per user, as `roomsForUser`
+    // is: a profile attests no one to a reader its space refuses. Its
+    // binding's name is its cause, as `roomsForUser`'s is.
     const peopleForUser = computed(
       (): PerUser<Record<string, ManagerProfileCell[]>> =>
-        peopleIn(linkedRoomsForUser, profileOwnerOf(myProfile)),
+        peopleIn(rostersForUser, profileOwnerOf(myProfile)),
     );
     const joining = joinRooms({});
     const records = {

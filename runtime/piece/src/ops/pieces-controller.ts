@@ -2563,10 +2563,10 @@ export class PiecesController<T = unknown> {
    * that the manager, which lists a room by its membership alone, lists it.
    * This controller must be over the identity's Home space.
    *
-   * Resolves once no entry is left to adopt, or once `signal` aborts or the
-   * runtime begins disposal, after the batch under way. Rejects when Home
-   * cannot be brought up, when reading its records fails, or when the
-   * manager's handling of an adoption fails.
+   * Resolves once every entry has been tried, or once `signal` aborts or the
+   * runtime begins disposal, after the batch under way; an entry that fails
+   * to adopt is logged and tried again later. Rejects when Home cannot be
+   * brought up, or when reading its records fails.
    */
   async adoptCatalogRooms(signal?: AbortSignal): Promise<void> {
     this.#assertHomeSpace("adopt its catalog's rooms");

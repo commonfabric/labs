@@ -434,12 +434,15 @@ export const reactionTalliesOf = (
 //
 
 /**
- * A room as a manager links it: only the part of `ChatRoomOutput` the manager
- * reads through the link. The manager runs in its user's home, not in the
- * room's space, and a server running it reads only the documents the room's
- * space shares with every member, never the ones each member has of their
- * own. A served handler whose declared reads reach one of those never runs,
- * and the link's schema is part of every manager handler's declared reads.
+ * A room as a manager reads it: only the part of `ChatRoomOutput` the manager
+ * reads through a link to the room. The links the manager stores declare
+ * nothing of the room (`ChatIndexEntry.room`); this is what an event naming a
+ * room carries, and what the manager's derivations that read rooms re-type a
+ * stored link to. The manager runs in its user's home, not in the room's
+ * space, and a server running it reads only the documents the room's space
+ * shares with every member, never the ones each member has of their own. A
+ * served handler whose declared reads reach one of those never runs, and an
+ * event's room link is part of its handler's declared reads.
  *
  * So the link carries what the room's space shares with every member and
  * costs little to read: what the room says about itself, how many messages it
