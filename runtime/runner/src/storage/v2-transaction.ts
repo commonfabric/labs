@@ -545,6 +545,9 @@ const findArrayPatchPath = (
  * When presence flags are omitted they are inferred from value
  * definedness (legacy callers in the array fast-path, where presence
  * parity was already established via `in` checks).
+ *
+ * The caller passes a change: the two states differ in presence or in value,
+ * so a slot absent from both never reaches here.
  */
 const buildValuePatchCandidate = (
   path: readonly string[],
@@ -552,16 +555,9 @@ const buildValuePatchCandidate = (
   previousValue: FabricValue | undefined,
   valuePresent: boolean = value !== undefined,
   previousPresent: boolean = previousValue !== undefined,
-): PatchDraftCandidate | null => {
-  if (valuePresent === previousPresent && valueEqual(value, previousValue)) {
-    return null;
-  }
-
+): PatchDraftCandidate => {
   const pointer = encodePointer(path);
   if (!valuePresent) {
-    if (!previousPresent) {
-      return null;
-    }
     return {
       patch: { op: "remove", path: pointer },
       path,
@@ -594,6 +590,12 @@ const arrayTailIsDense = (
   return true;
 };
 
+/**
+ * Builds the patch candidates that take the value at `path` from `before` to
+ * `after`. The caller passes a change: `path` is the array a changed write
+ * beneath it is diffed as a change to (`findArrayPatchPath()`), and a value
+ * differs wherever a value beneath it does.
+ */
 const buildArrayPatchCandidates = (
   path: readonly string[],
   before: FabricValue | undefined,
@@ -601,19 +603,16 @@ const buildArrayPatchCandidates = (
   beforePresent: boolean = before !== undefined,
   afterPresent: boolean = after !== undefined,
 ): PatchDraftCandidate[] => {
-  if (beforePresent === afterPresent && valueEqual(before, after)) {
-    return [];
-  }
-
   if (!Array.isArray(before) || !Array.isArray(after)) {
-    const candidate = buildValuePatchCandidate(
-      path,
-      after,
-      before,
-      afterPresent,
-      beforePresent,
-    );
-    return candidate ? [candidate] : [];
+    return [
+      buildValuePatchCandidate(
+        path,
+        after,
+        before,
+        afterPresent,
+        beforePresent,
+      ),
+    ];
   }
 
   // Both sides are arrays from here on, so the array slot itself is present
@@ -621,20 +620,12 @@ const buildArrayPatchCandidates = (
   const overlappingLength = Math.min(before.length, after.length);
   for (let index = 0; index < overlappingLength; index += 1) {
     if ((index in before) !== (index in after)) {
-      const fallback = buildValuePatchCandidate(
-        path,
-        after,
-        before,
-        true,
-        true,
-      );
-      return fallback ? [fallback] : [];
+      return [buildValuePatchCandidate(path, after, before, true, true)];
     }
   }
 
   if (after.length > before.length && !arrayTailIsDense(after, before.length)) {
-    const fallback = buildValuePatchCandidate(path, after, before, true, true);
-    return fallback ? [fallback] : [];
+    return [buildValuePatchCandidate(path, after, before, true, true)];
   }
 
   const candidates: PatchDraftCandidate[] = [];
@@ -686,11 +677,6 @@ const buildArrayPatchCandidates = (
       coversDescendants: false,
       tailSpliceStartIndex: after.length,
     });
-  }
-
-  if (candidates.length === 0) {
-    const fallback = buildValuePatchCandidate(path, after, before, true, true);
-    return fallback ? [fallback] : [];
   }
 
   return candidates;
@@ -783,25 +769,6 @@ const isPrefixPath = (
   path: readonly string[],
 ): boolean => prefix.length <= path.length && pathsOverlap(prefix, path);
 
-const isSubsumedByTailSplice = (
-  spliceCandidate: PatchDraftCandidate,
-  candidatePath: readonly string[],
-): boolean => {
-  if (spliceCandidate.tailSpliceStartIndex === undefined) {
-    return false;
-  }
-  if (
-    !isPrefixPath(spliceCandidate.path, candidatePath) ||
-    candidatePath.length <= spliceCandidate.path.length
-  ) {
-    return false;
-  }
-  const childSegment = candidatePath[spliceCandidate.path.length];
-  return childSegment !== undefined &&
-    isArrayIndexPropertyName(childSegment) &&
-    Number(childSegment) >= spliceCandidate.tailSpliceStartIndex;
-};
-
 /**
  * The ops a document's commit sends, chosen from its patch candidates. A
  * covering candidate is dropped when a tail splice subsumes it, or when a
@@ -823,26 +790,30 @@ export const selectPatchOps = (
   nonCoverCandidates: readonly PatchDraftCandidate[],
   suppress: readonly OpSuppression[],
 ): PatchOp[] => {
-  const tailSplicesByPointer = new Map<string, PatchDraftCandidate[]>();
-  for (const candidate of nonCoverCandidates) {
-    if (candidate.tailSpliceStartIndex === undefined) continue;
-    const pointer = encodePointer(candidate.path);
-    const splices = tailSplicesByPointer.get(pointer);
-    if (splices === undefined) {
-      tailSplicesByPointer.set(pointer, [candidate]);
+  // The first index each tail splice touches, by the pointer of its array.
+  const tailSpliceStartsByPointer = new Map<string, number[]>();
+  for (const { path, tailSpliceStartIndex } of nonCoverCandidates) {
+    if (tailSpliceStartIndex === undefined) continue;
+    const pointer = encodePointer(path);
+    const starts = tailSpliceStartsByPointer.get(pointer);
+    if (starts === undefined) {
+      tailSpliceStartsByPointer.set(pointer, [tailSpliceStartIndex]);
     } else {
-      splices.push(candidate);
+      starts.push(tailSpliceStartIndex);
     }
   }
-  // A tail splice subsumes only what sits strictly beneath it, so a
-  // candidate's own pointer, the last of its prefixes, is not looked up.
+  // A tail splice subsumes only what sits strictly beneath it, at an element
+  // index at or past its start, so a candidate's own pointer, the last of its
+  // prefixes, is not looked up.
   const isSubsumedByAnyTailSplice = (
     candidatePath: readonly string[],
   ): boolean =>
-    prefixPointers(candidatePath).slice(0, -1).some((pointer) =>
-      tailSplicesByPointer.get(pointer)?.some((spliceCandidate) =>
-        isSubsumedByTailSplice(spliceCandidate, candidatePath)
-      ) ?? false
+    prefixPointers(candidatePath).slice(0, -1).some((pointer, length) =>
+      tailSpliceStartsByPointer.get(pointer)?.some((start) => {
+        const childSegment = candidatePath[length]!;
+        return isArrayIndexPropertyName(childSegment) &&
+          Number(childSegment) >= start;
+      }) ?? false
     );
 
   const retainedCoverCandidates = fullCoverCandidates
@@ -2758,14 +2729,15 @@ export class V2StorageTransaction implements IStorageTransaction {
     ) {
       return;
     }
-    const read = this.read({
+    // Every caller is a write that found the transaction editable, which is
+    // all a read that loads nothing can be refused for.
+    this.read({
       space,
       id: address.id,
       ...(address.type === undefined ? {} : { type: address.type }),
       ...(address.scope === undefined ? {} : { scope: address.scope }),
       path: [],
     }, { trackReadWithoutLoad: true, nonRecursive: true });
-    if (read.error) throw read.error;
   }
 
   /** Elision over a pending document retains its commit basis. */
@@ -4128,10 +4100,8 @@ export class V2StorageTransaction implements IStorageTransaction {
   #parseDocKey(
     key: string,
   ): { id: URI; type: MediaType; scope: CellScope } {
+    // `#docKey()` made the key, so the separator is there.
     const separator = key.indexOf("\0");
-    if (separator === -1) {
-      return { id: key as URI, type: DOCUMENT_MIME, scope: "space" };
-    }
     return {
       scope: normalizeCellScope(key.slice(0, separator) as CellScope),
       id: key.slice(separator + 1) as URI,
@@ -4227,16 +4197,15 @@ export class V2StorageTransaction implements IStorageTransaction {
 
     const fullCoverCandidates: PatchDraftCandidate[] = [];
     for (const detail of patchDetails.values()) {
-      const candidate = buildValuePatchCandidate(
-        detail.path,
-        detail.value,
-        detail.previousValue,
-        detail.valuePresent,
-        detail.previousPresent,
+      fullCoverCandidates.push(
+        buildValuePatchCandidate(
+          detail.path,
+          detail.value,
+          detail.previousValue,
+          detail.valuePresent,
+          detail.previousPresent,
+        ),
       );
-      if (candidate) {
-        fullCoverCandidates.push(candidate);
-      }
     }
 
     const nonCoverCandidates: PatchDraftCandidate[] = [];

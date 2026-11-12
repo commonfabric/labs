@@ -148,7 +148,8 @@ const changeIndexOf = (
 
 /**
  * The positions of `value` that `pattern` matches, limited to those at, above
- * or below `within`, and to the first `limit` of them. A `*` segment matches
+ * or below `within`, and to the first `limit` of them. Each segment of
+ * `within` is the pattern's own segment there or one its `*` matches. A `*` segment matches
  * each element of an array and each entry of a record. The walk stops at a
  * reference, which it reports as a position only where the pattern ends on
  * it.
@@ -160,8 +161,9 @@ const matchingPositions = (
   limit = Infinity,
 ): Position[] => {
   const positions: Position[] = [];
+  // A walk is entered only while fewer than `limit` positions are found: the
+  // loop over a `*` segment's keys checks before each step.
   const walk = (current: unknown, path: readonly string[]): void => {
-    if (positions.length >= limit) return;
     const depth = path.length;
     if (depth === pattern.length) {
       positions.push({ path, reference: isPrimitiveCellLink(current) });
@@ -176,7 +178,6 @@ const matchingPositions = (
       Object.hasOwn(current, key);
     const segment = depth < within.length ? within[depth]! : pattern[depth]!;
     if (segment !== "*") {
-      if (pattern[depth] !== "*" && pattern[depth] !== segment) return;
       if (holds(segment)) {
         walk((current as Record<string, unknown>)[segment], [...path, segment]);
       }

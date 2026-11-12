@@ -193,6 +193,25 @@ describe("cellFromUrl builtin", () => {
     expect(resolved).toBeUndefined();
   });
 
+  it("returns no cell when an explicit toolshed is not a URL", async () => {
+    const id = anExistingCell();
+    const routes: string[] = [];
+    runtime.registerSpaceHostDetailed = (_space, host) => {
+      routes.push(host);
+      return { accepted: true };
+    };
+
+    const { pending, id: resolved } = await resolve(
+      `//${space}/${id}`,
+      undefined,
+      "not a toolshed",
+    );
+
+    expect(pending).toBe(false);
+    expect(resolved).toBeUndefined();
+    expect(routes).toEqual([]);
+  });
+
   for (const memoryUrl of [undefined, new URL("https://router.example/")]) {
     describe(
       `an explicit toolshed ${
@@ -322,6 +341,85 @@ describe("cellFromUrl builtin", () => {
             expect(runtime.mappedHostFor(space)).toBeUndefined();
             expect(offeredToStorage).toEqual([]);
             expect(warnings.length).toBe(1);
+          });
+
+          it("stays pending when a memory host it no longer names finishes reading, and settles once the current one does", async () => {
+            // Each read finishes only when the test says so, and the order
+            // the test picks is the one a slow first host produces: its read
+            // finishes after the input has moved on to a second host.
+            // Clearing `pending` then would answer before the second host's
+            // read is done. The first host's read stands in for a real one,
+            // which would ask a host this case's fetch does not answer.
+            const read = runtime.resolveSpaceHost.bind(runtime);
+            const first = "https://elsewhere.example";
+            const second = "https://remote.example";
+            const gates = new Map([
+              [first, Promise.withResolvers<void>()],
+              [second, Promise.withResolvers<void>()],
+            ]);
+            const requested: string[] = [];
+            runtime.resolveSpaceHost = async (routedSpace, host) => {
+              requested.push(host);
+              await gates.get(host)?.promise;
+              return host === first
+                ? { accepted: true }
+                : await read(routedSpace, host);
+            };
+            const completions: Promise<unknown>[] = [];
+            runtime.asyncWorkObserver = (work) => void completions.push(work);
+            remoteMeta = { memoryUrl: "https://router.remote.example" };
+
+            const id = anExistingCell();
+            const spaceHost = runtime.getCell<string>(
+              space,
+              "cell-from-url-hosts",
+              { type: "string" },
+              tx,
+            );
+            spaceHost.withTx(tx).set(first);
+            const builtin = byRef("cellFromUrl");
+            const testPattern = pattern<{ url: string; spaceHost: string }>(
+              ({ url, spaceHost }) => builtin({ url, spaceHost }),
+            );
+            const resultCell = runtime.getCell(
+              space,
+              "cell-from-url-hosts-result",
+              undefined,
+              tx,
+            );
+            const result = runtime.run(
+              tx,
+              testPattern,
+              { url: `//${space}/${id}`, spaceHost },
+              resultCell,
+            );
+            tx.commit();
+            tx = runtime.edit();
+            await result.pull();
+            expect(result.key("pending").get()).toBe(true);
+
+            const edit = runtime.edit();
+            spaceHost.withTx(edit).set(second);
+            edit.commit();
+            await result.pull();
+            expect(result.key("pending").get()).toBe(true);
+
+            gates.get(first)?.resolve();
+            await completions[0];
+            await runtime.idle();
+            await result.pull();
+            expect(result.key("pending").get()).toBe(true);
+            expect(requested).toEqual([first, second]);
+
+            gates.get(second)?.resolve();
+            await runtime.settled();
+            await result.pull();
+            expect(result.key("pending").get()).toBe(false);
+            const slot = result.key("cell");
+            const sub = runtime.getCellFromLink(
+              parseLink(slot.getRaw(), slot)!,
+            );
+            expect(parseLink(sub.getRaw(), sub)?.id).toBe(id);
           });
 
           it("resolves through the memory URL's own origin, which is the default route", async () => {

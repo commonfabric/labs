@@ -3,10 +3,12 @@ import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
+import { forwardReference } from "../../src/builtins/forward-reference.ts";
 import type { Cell } from "../../src/cell.ts";
 import type { RuntimeProgram } from "../../src/harness/types.ts";
 import type { NormalizedFullLink } from "../../src/link-types.ts";
 import { parseLink } from "../../src/link-utils.ts";
+import type { RawNodeCause } from "../../src/module.ts";
 import { Runtime } from "../../src/runtime.ts";
 import { getTransactionReadActivities } from "../../src/storage/transaction-inspection.ts";
 
@@ -153,6 +155,43 @@ describe("forward-reference", () => {
         } finally {
           await tx.commit().settled;
         }
+      }
+    });
+  });
+
+  describe("a node with no output spot", () => {
+    // The result store is keyed by the output spot, so a node whose output
+    // binding reaches no write redirect has no store to declare or mint.
+
+    function build(outputSpot?: RawNodeCause["outputSpot"]) {
+      const inputsCell = runtime.getCell<any>(space, "no-spot inputs");
+      const parentCell = runtime.getCell<any>(space, "no-spot parent");
+      return forwardReference({
+        name: "ifElse",
+        inputsCell,
+        sendResult: () => {},
+        cause: { inputs: inputsCell, parents: parentCell.entityId, outputSpot },
+        parentCell,
+        runtime,
+        select: (truthy) => truthy ? "ifTrue" : "ifFalse",
+      });
+    }
+
+    it("declares no store writes", () => {
+      expect(build().storeWrites).toEqual([]);
+      expect(build({ space, id: "of:spot", path: ["v"] }).storeWrites)
+        .toHaveLength(1);
+    });
+
+    it("throws from its action rather than minting a store", async () => {
+      const { action } = build();
+      const tx = runtime.edit();
+      try {
+        expect(() => action(tx)).toThrow(
+          "ifElse: result store requires a write-redirect output binding",
+        );
+      } finally {
+        await tx.commit().settled;
       }
     });
   });

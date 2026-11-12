@@ -255,6 +255,26 @@ describe("minted-integrity", () => {
         ).toEqual([minted(["byName", "*"], STAMP)]);
       });
 
+      it("is stored at the `*` path when the other elements hold a reference or a primitive, beneath which it matches nothing", () => {
+        expect(
+          reconcile({
+            mints: [mint(["rows", "*", "text"], STAMP)],
+            changedPaths: [["rows"]],
+            value: { rows: [{ text: "a" }, REFERENCE, "b"] },
+          }),
+        ).toEqual([minted(["rows", "*", "text"], STAMP)]);
+      });
+
+      it("stores nothing for a mint of no atoms", () => {
+        expect(
+          reconcile({
+            mints: [mint(["list", "*"])],
+            changedPaths: [["list"]],
+            value: { list: ["a", "b"] },
+          }),
+        ).toEqual([]);
+      });
+
       it("stamps nothing under an array's `length`", () => {
         expect(
           reconcile({
@@ -350,6 +370,26 @@ describe("minted-integrity", () => {
             existing,
             changedPaths: [["list", "0"], ["list", "length"]],
             value: { list: [] },
+          }),
+        ).toEqual([]);
+      });
+
+      it("is kept when a change removed one entry of a record and others remain", () => {
+        expect(
+          reconcile({
+            existing: [minted(["byName", "*"], STAMP)],
+            changedPaths: [["byName", "c"]],
+            value: { byName: { a: 1, b: 2 } },
+          }),
+        ).toEqual([minted(["byName", "*"], STAMP)]);
+      });
+
+      it("is dropped when it states no atoms", () => {
+        expect(
+          reconcile({
+            existing: [minted(["list", "*"])],
+            changedPaths: [["other"]],
+            value: { list: ["a"] },
           }),
         ).toEqual([]);
       });

@@ -80,8 +80,7 @@ function collectIdleMaterializerSeeds(
   }
 
   for (const action of state.nodes.getInvalidNodes()) {
-    const record = state.nodes.get(action);
-    if (!record) continue;
+    const record = state.nodes.get(action)!;
     if (isIdleMaterializerRunnable(state, record)) {
       workSet.add(record.action);
     }
@@ -616,9 +615,7 @@ function maybeApplyBudgetBackoff(
     applied: true,
     actionCount: plan.actions.length,
     actions: plan.actions,
-    ...(plan.backoffUntil !== undefined
-      ? { backoffUntil: plan.backoffUntil }
-      : {}),
+    backoffUntil: plan.backoffUntil,
   };
 }
 

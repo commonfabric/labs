@@ -198,4 +198,35 @@ describe("growOnlyMergeDbTables (audit S8)", () => {
     expect(merged.t.properties.a.ifc?.confidentiality).toEqual(["x", "more"]);
     expect(merged.t.properties.b.ifc?.confidentiality).toEqual(["y"]);
   });
+
+  it("returns the prior tables when a re-derivation declares none", () => {
+    const prior = { t: table({ c: { ifc: { confidentiality: ["a"] } } }) };
+    expect(growOnlyMergeDbTables(prior, undefined)).toBe(prior);
+  });
+
+  it("keeps the prior integrity and write ceiling of a column a re-derivation declares neither for", () => {
+    const prior = {
+      t: table({ c: { ifc: { integrity: ["x"], maxConfidentiality: ["a"] } } }),
+    };
+    const next = { t: table({ c: { ifc: { confidentiality: ["b"] } } }) };
+    expect(growOnlyMergeDbTables(prior, next)).toEqual({
+      t: table({
+        c: {
+          ifc: {
+            confidentiality: ["b"],
+            integrity: ["x"],
+            maxConfidentiality: ["a"],
+          },
+        },
+      }),
+    });
+  });
+
+  it("takes the next declaration of a table the prior declared no columns for", () => {
+    // Without prior columns there is no prior label to keep, so the
+    // re-declaration stands as it is, an ifc-free column included.
+    const prior = { t: { type: "object" }, u: undefined };
+    const next = { t: table({ c: {} }), u: table({ d: {} }) };
+    expect(growOnlyMergeDbTables(prior, next)).toEqual(next);
+  });
 });

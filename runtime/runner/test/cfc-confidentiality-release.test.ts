@@ -24,6 +24,7 @@ import { Runtime } from "../src/runtime.ts";
 import { isAllowedAuthoredImportSpecifier } from "../src/sandbox/runtime-module-policy.ts";
 import { getRuntimeModuleExports } from "../src/sandbox/runtime-modules.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
+import { createTransactionCommitReceipt } from "../src/storage/commit-receipt.ts";
 import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
@@ -304,6 +305,67 @@ describe("confidentiality release", () => {
       });
     });
 
+    it("removes a declaration reached through `additionalProperties` at a `*` segment of a record naming no property", () => {
+      const schema = {
+        type: "object",
+        properties: {
+          record: {
+            type: "object",
+            additionalProperties: {
+              type: "string",
+              ifc: { confidentiality: [owner] },
+            },
+          },
+        },
+      } as const satisfies JSONSchema;
+      const plan = planConfidentialityRelease({
+        actor,
+        path: ["record", "*"],
+        entries: [],
+        schema,
+        keep: [],
+      });
+
+      expect(plan.released).toEqual([owner]);
+      expect(plan.schema).toEqual({
+        type: "object",
+        properties: {
+          record: {
+            type: "object",
+            additionalProperties: { type: "string" },
+          },
+        },
+      });
+    });
+
+    it("removes the declaration at the one tuple position a concrete segment names", () => {
+      const secret = {
+        type: "string",
+        ifc: { confidentiality: [owner] },
+      } as const satisfies JSONSchema;
+      const schema = {
+        type: "object",
+        properties: {
+          tuple: { type: "array", prefixItems: [secret, secret] },
+        },
+      } as const satisfies JSONSchema;
+      const plan = planConfidentialityRelease({
+        actor,
+        path: ["tuple", "1"],
+        entries: [],
+        schema,
+        keep: [],
+      });
+
+      expect(plan.paths).toEqual([["tuple", "1"]]);
+      expect(plan.schema).toEqual({
+        type: "object",
+        properties: {
+          tuple: { type: "array", prefixItems: [secret, { type: "string" }] },
+        },
+      });
+    });
+
     it("removes the declarations at every named property and tuple position a `*` segment matches", () => {
       const secret = {
         type: "string",
@@ -536,6 +598,27 @@ describe("confidentiality release", () => {
         expect(metadataOf()?.labelMap.documentEntries).toEqual(
           labelMetadataTemplatesFor([kept]),
         );
+      });
+
+      it("throws when the storage layer refuses the commit, and writes nothing", async () => {
+        const before = storedEntries(secret);
+        const edit = runtime.edit.bind(runtime);
+        try {
+          runtime.edit = (...args: Parameters<typeof runtime.edit>) => {
+            const tx = edit(...args);
+            const commit = tx.commit.bind(tx);
+            tx.commit = (options) => {
+              tx.abort(new Error("the space refused the write"));
+              return commit(options);
+            };
+            return tx;
+          };
+          await expect(releaseCellConfidentiality(secret, [])).rejects
+            .toThrow("Lowering confidentiality failed:");
+        } finally {
+          runtime.edit = edit;
+        }
+        expect(storedEntries(secret)).toEqual(before);
       });
 
       it("releases and records nothing when every stored clause is kept", async () => {
@@ -798,6 +881,105 @@ describe("confidentiality release", () => {
           await expect(releaseCellConfidentiality(cell.key("profile"), []))
             .rejects.toThrow("the label of a write redirect the path follows");
           expect(storedEntries(cell)).toEqual([slotEntry]);
+          expect(storedEntries(secret)).toEqual(target);
+        });
+      });
+
+      describe("through a write redirect in an unlabeled slot", () => {
+        // A document whose `profile` slot holds a write redirect to `secret`
+        // and no label of its own, so the release lowers `secret`.
+
+        /**
+         * Stores the document with `link` in its slot, in an envelope of
+         * `version`, and returns its cell.
+         */
+        const seedRedirect = async (
+          cause: string,
+          link: unknown,
+          version = 1,
+        ) => {
+          const cell = runtime.getCell<unknown>(actor, cause);
+          const tx = runtime.edit();
+          writeSeedEnvelopeDoc(tx, actor);
+          seedStoredEnvelope(tx, {
+            ...cell.getAsNormalizedFullLink(),
+            path: [],
+          }, {
+            value: { profile: link },
+            cfc: {
+              version,
+              schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+              labelMap: { version: 1, entries: [] },
+            },
+          } as never);
+          expect((await tx.commit().settled).error).toBeUndefined();
+          return cell;
+        };
+
+        it("lowers the document the redirect leads to", async () => {
+          const cell = await seedRedirect(
+            "runner-cfc-release-redirect",
+            secret.getAsWriteRedirectLink(),
+          );
+
+          const release = await releaseCellConfidentiality(
+            cell.key("profile"),
+            [],
+          );
+
+          expect(release.released).toEqual([owner]);
+          expect(storedEntries(secret)).toEqual([]);
+        });
+
+        it("fails at the commit when the slot is retargeted as it commits, and writes nothing", async () => {
+          // Nothing yields between the release resolving the path and its
+          // commit, so the retargeting lands as the commit begins, as another
+          // client's would reach the store first.
+
+          const cause = "runner-cfc-release-redirect-retargeted";
+          const cell = await seedRedirect(
+            cause,
+            secret.getAsWriteRedirectLink(),
+          );
+          const elsewhere = await seed(
+            runtime,
+            "runner-cfc-release-elsewhere",
+            [owner],
+          );
+          const target = storedEntries(secret);
+          const edit = runtime.edit.bind(runtime);
+          try {
+            runtime.edit = (...args: Parameters<typeof runtime.edit>) => {
+              const tx = edit(...args);
+              const commit = tx.commit.bind(tx);
+              tx.commit = (options) =>
+                createTransactionCommitReceipt((async () => {
+                  runtime.edit = edit;
+                  await seedRedirect(cause, elsewhere.getAsWriteRedirectLink());
+                  return await commit(options).settled;
+                })());
+              return tx;
+            };
+            await expect(releaseCellConfidentiality(cell.key("profile"), []))
+              .rejects.toThrow("Lowering confidentiality failed");
+          } finally {
+            runtime.edit = edit;
+          }
+          expect(storedEntries(secret)).toEqual(target);
+        });
+
+        it("throws when the labels of the document holding the slot cannot be read, and writes nothing", async () => {
+          const cell = await seedRedirect(
+            "runner-cfc-release-redirect-unreadable",
+            secret.getAsWriteRedirectLink(),
+            3,
+          );
+          const target = storedEntries(secret);
+
+          await expect(releaseCellConfidentiality(cell.key("profile"), []))
+            .rejects.toThrow(
+              "Cannot lower confidentiality: the labels at the path could not be read.",
+            );
           expect(storedEntries(secret)).toEqual(target);
         });
       });

@@ -811,27 +811,6 @@ function fetchBuiltin(kind: FetchKind) {
                     error.withTx(tx).set(undefined);
                   });
 
-                  // Check if URL became empty while waiting for mutex
-                  if (!inputsSnapshot.url) {
-                    // Release the lock and clear state
-                    myRequestId = undefined;
-                    runtime.editWithRetry((tx) => {
-                      if (identity !== undefined) {
-                        tx.tx.scopeKeyIdentity = identity;
-                      }
-                      markEffectCompletion(tx, effectKey);
-                      pending.withTx(tx).set(false);
-                      result.withTx(tx).set(undefined);
-                      error.withTx(tx).set(undefined);
-                      internal.withTx(tx).set({
-                        requestId: "",
-                        lastActivity: 0,
-                        inputHash: "",
-                      });
-                    });
-                    return;
-                  }
-
                   abortController = new AbortController();
 
                   // We claimed the mutex, start the fetch. `startFetch` compares

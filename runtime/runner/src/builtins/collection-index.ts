@@ -244,13 +244,12 @@ function createCollectionIndexInstance(
         scope,
       );
       if (!isConfirmed([index, state])) return;
+      // `output` decides only whether the container's setup is owed. A
+      // reconcile that installs it and then fails leaves that setup owed
+      // whichever index `output` names afterwards (`trackListSetupRollback`
+      // marks it owed again), so a failed install is not rolled back.
       if (!output || !output.equalLinks(index)) {
-        const previous = output;
         output = index.withTx();
-        const installed = output;
-        rollback.resultReplaced(() => {
-          if (output === installed) output = previous;
-        });
         setup.needsSetup = true;
       }
       const needed = new Set<string>();

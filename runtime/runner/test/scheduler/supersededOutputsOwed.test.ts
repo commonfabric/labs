@@ -139,6 +139,33 @@ describe("supersededOutputsOwed()", () => {
     expect(supersededOutputsOwed(runtime, [output])).toBe(true);
   });
 
+  it("takes a commit through the store read-through without loading the document", async () => {
+    // A serving runtime reads its own store through the replica, so a commit
+    // the store already holds is there for the replica to take.
+
+    const held = await authored(runtime, "read-through", structureOnly);
+    const output = { ...held, seq: held.seq + 1 };
+    runtime.storageManager.installStoreReadThrough?.(
+      space,
+      ({ id, scopeKey }) => ({
+        branch: "",
+        id,
+        scope: "space",
+        scopeKey,
+        seq: output.seq,
+        doc: {},
+      }),
+    );
+    using syncCell = stub(
+      runtime.storageManager,
+      "syncCell",
+      () => Promise.reject(new Error("no load expected")),
+    );
+
+    expect(await supersededOutputsOwed(runtime, [output])).toBe(true);
+    expect(syncCell.calls.length).toBe(0);
+  });
+
   it("returns false for a document that does not exist", async () => {
     const value = await authored(runtime, "gone", (cell) => cell.set(99));
     const output = { ...value, id: `${value.id}-absent`, seq: 0 };

@@ -417,4 +417,42 @@ describe("wish commit-failure reporting", () => {
       runtime.stampServerRun = stampServerRun;
     }
   });
+
+  it("prints the refusal, and why it went unreported, when the report itself throws", async () => {
+    // A throw out of the report's own transaction is not a refusal the report
+    // can retry or name in the document, so the console is the one place the
+    // refusal and the throw are both said.
+    const stampServerRun = runtime.stampServerRun;
+    const prepareTxForCommit = runtime.prepareTxForCommit;
+    const reportTransactions = new WeakSet<object>();
+    runtime.stampServerRun = (tx, info) => {
+      stampServerRun.call(runtime, tx, info);
+      if (info.actionId.startsWith("wish/commit-failure-ui/")) {
+        reportTransactions.add(tx);
+      }
+    };
+    runtime.prepareTxForCommit = (tx) => {
+      if (reportTransactions.has(tx)) {
+        throw new Error("report preparation crashed");
+      }
+      return prepareTxForCommit.call(runtime, tx);
+    };
+    try {
+      const { reports, value } = await refusedWishReport(
+        ambiguousWishShapedSchema,
+        true,
+      );
+      const unreported = reports.filter((line) =>
+        line.includes("Can't report")
+      );
+      expect(unreported.length).toBe(1);
+      expect(unreported[0]).toMatch(/divergent anyOf|commit-prep/);
+      expect(unreported[0]).toContain("report preparation crashed");
+      expect(value.error).toBeUndefined();
+      expect(value.result).toEqual({ name: "Bob" });
+    } finally {
+      runtime.prepareTxForCommit = prepareTxForCommit;
+      runtime.stampServerRun = stampServerRun;
+    }
+  });
 });
