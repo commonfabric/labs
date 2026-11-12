@@ -1,11 +1,12 @@
 /**
- * The vocabularies that range over the concrete primitive classes, one entry
- * per class in each: the tag a class reports to the `tagOf*()` dispatches, and
- * the tag its codec writes to the wire. They are nominally distinct from each
- * other and from the names the classes have in the schema `type` vocabulary,
- * and a class's entry in one need not match its entry in another. Adding a
- * primitive means adding to each, and they sit together so that one visit
- * does it.
+ * The vocabularies that range over the concrete primitive classes: the tag a
+ * class reports to the `tagOf*()` dispatches, which every class has, and the
+ * tag its codec writes to the wire, which only a class binding a codec has.
+ * They are nominally distinct from each other and from the names the classes
+ * have in the schema `type` vocabulary, and a class's entry in one need not
+ * match its entry in another. Adding a primitive means adding to the first,
+ * and to the second when it binds a codec, and they sit together so that one
+ * visit does it.
  *
  * The schema `type` vocabulary is the one that is elsewhere, in `api.ts`. A
  * pattern compiles against that module, which can import nothing, and the
@@ -40,8 +41,8 @@ export type FabricPrimitiveValueTag =
   typeof FABRIC_PRIMITIVE_VALUE_TAGS[keyof typeof FABRIC_PRIMITIVE_VALUE_TAGS];
 
 /**
- * Canonical codec tags for the primitive classes, in `<Type>@<Version>` form.
- * These tags are for wire formats in which instances of (one or more of) these
+ * Canonical codec tags for the primitive classes that bind a codec, in
+ * `<Type>@<Version>` form. These tags are for wire formats in which instances of (one or more of) these
  * classes have no protocol-specific form. `CODEC_TYPE_TAGS` includes them all.
  */
 export const FABRIC_PRIMITIVE_CODEC_TYPE_TAGS = Object.freeze(
