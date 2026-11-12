@@ -5359,6 +5359,24 @@ Deno.test("JSX Prop Name Validation", async (t) => {
   );
 
   await t.step(
+    "leaves a component's props and a namespaced name alone",
+    async () => {
+      const { diagnostics } = await validateSource(
+        [
+          "/// <cts-enable />",
+          'import { pattern, UI } from "commonfabric";',
+          'const Badge = (props: { "badge-tone"?: string }) => <span>{props["badge-tone"]}</span>;',
+          "export default pattern<{ open: boolean }>(() => ({",
+          '  [UI]: <div><Badge badge-tone="warm" /><svg xlink:title-text="t" /></div>,',
+          "}));",
+        ].join("\n"),
+        { types: COMMONFABRIC_TYPES },
+      );
+      assertEquals(misnamed(diagnostics), []);
+    },
+  );
+
+  await t.step(
     "accepts events, data-* and aria-* names, and property names",
     async () => {
       const { diagnostics } = await validateSource(
