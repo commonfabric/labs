@@ -491,13 +491,14 @@ await input.pressSequentially("user@example.com");
 
 **Purpose**: Tabbed interface container **Tag**: `<cf-tabs>` **Attributes**:
 
-- `default-value` - string (initially active tab)
+- `value` - string, the active tab; a property only, with no attribute (bind a
+  cell with `$value`)
 - `orientation` - "horizontal" | "vertical" **Events**:
 - `cf-change` - Fired on tab change with detail: `{ value }` **Slots**: Default
   slot for cf-tab-list and cf-tab-panel elements **Example**:
 
 ```html
-<cf-tabs default-value="tab1">
+<cf-tabs value="tab1">
   <cf-tab-list>
     <cf-tab value="tab1">Tab 1</cf-tab>
     <cf-tab value="tab2">Tab 2</cf-tab>
@@ -839,7 +840,7 @@ automatically on its own.
     </cf-grid>
   </cf-card>
 
-  <cf-tabs default-value="overview">
+  <cf-tabs value="overview">
     <cf-tab-list>
       <cf-tab value="overview">Overview</cf-tab>
       <cf-tab value="analytics">Analytics</cf-tab>
