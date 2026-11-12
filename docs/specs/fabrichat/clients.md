@@ -73,9 +73,9 @@ longer admits the person, stays listed until a runtime of theirs hears of it.
 Opening it is how one does. The runtime refuses each read of the room's space,
 and reports it once for the space, as the runtime client's `spaceaccesslost`
 notification, which carries the space and, for a deleted space, `deleted:
-true`. Each refused read fails with a code as well, `space-deleted` for a
-deleted space and `space-access-refused` otherwise, so a client that missed the
-notice learns the same from the read. A client MUST show the room as gone, or
+true`. A read the runtime fails for the refusal carries a code as well,
+`space-deleted` for a deleted space and `space-access-refused` otherwise, so a
+client that missed the notice learns the same from the read. A client MUST show the room as gone, or
 as no longer open to the person, when it receives either for a room it is
 opening, and MUST NOT wait on the room's contents instead. The runtime that hears of a deletion records it in
 Home's catalog, and the room then moves to `deletedRooms`.

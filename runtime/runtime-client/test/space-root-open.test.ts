@@ -391,25 +391,52 @@ describe("space-root-open", () => {
   });
 
   describe("a space that refuses the runtime", () => {
+    /**
+     * Each read of `space` that `client` can ask the worker for which fails
+     * for a space that refuses it.
+     */
+    const reads = (client: RuntimeClient, space: MemorySpace) => [
+      () => fieldsIn(client, space),
+      () => client.getSpaceRootPattern(space),
+      () => client.getSpaceRootPattern(space, { start: false }),
+    ];
+
     it("fails each read with `SpaceAccessRefused` for a principal it never admitted", async () => {
       await using room = await rootlessSpace({});
+      await room.owner.getSpaceRootPattern(room.space);
 
-      expect(await codeOf(fieldsIn(room.visitor, room.space)))
-        .toBe(RuntimeErrorCode.SpaceAccessRefused);
-      expect(await codeOf(room.visitor.getSpaceRootPattern(room.space)))
-        .toBe(RuntimeErrorCode.SpaceAccessRefused);
+      for (const read of reads(room.visitor, room.space)) {
+        expect(await codeOf(read())).toBe(RuntimeErrorCode.SpaceAccessRefused);
+      }
     });
 
     it("fails each read with `SpaceAccessRefused` for a principal it stopped admitting", async () => {
       await using room = await rootlessSpace({ [visitor.did()]: "READ" });
+      await room.owner.getSpaceRootPattern(room.space);
       expect(await fieldsIn(room.visitor, room.space)).toBeUndefined();
 
       await room.revokeVisitor();
 
-      expect(await codeOf(fieldsIn(room.visitor, room.space)))
-        .toBe(RuntimeErrorCode.SpaceAccessRefused);
-      expect(await codeOf(room.visitor.getSpaceRootPattern(room.space)))
-        .toBe(RuntimeErrorCode.SpaceAccessRefused);
+      for (const read of reads(room.visitor, room.space)) {
+        expect(await codeOf(read())).toBe(RuntimeErrorCode.SpaceAccessRefused);
+      }
+    });
+
+    it("fails a denied operation with no code while the space stays readable", async () => {
+      // The memory server refuses a `WRITE` member's change to the access
+      // list as an `AuthorizationError`, as it refuses a read, but the space
+      // is still the member's to read.
+      await using room = await rootlessSpace({ [visitor.did()]: "WRITE" });
+
+      const denied = room.visitor.setSpaceAclEntry(
+        room.space,
+        visitor.did(),
+        "OWNER",
+      );
+
+      await expect(denied).rejects.toThrow("lacks OWNER");
+      expect(await codeOf(denied)).toBe(undefined);
+      expect(await fieldsIn(room.visitor, room.space)).toBeUndefined();
     });
 
     it("fails a read with `SpaceDeleted` instead once the space is deleted", async () => {
