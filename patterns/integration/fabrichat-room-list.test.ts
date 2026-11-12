@@ -55,6 +55,12 @@ const ROW = {
   },
 } as const;
 
+/** A room's roster, as the manager's `people` reads it. */
+const ROSTER = {
+  type: "object",
+  properties: { roster: { type: "array", items: HANDLE } },
+} as const;
+
 /** What a client that draws natively reads of the manager's chats view. */
 const CHATS = {
   type: "object",
@@ -157,19 +163,19 @@ describe("fabrichat-room-list", () => {
   }
 
   /**
-   * Starts a fresh client of the person's Home, recording every document a
-   * space delivers to it and every space it is refused, from before Home is
-   * brought up, and brings Home up, with the housekeeping that adopts the
-   * catalog's rooms unless `adopt` is false. With `early`, the client
-   * subscribes to the chats view before Home is brought up, and holds it.
+   * Starts a runtime of `person`'s that records every document a space
+   * delivers to it and every space it is refused, from its start on, and
+   * brings up nothing.
    */
-  async function bootClient(
-    { adopt = true, early = false } = {},
-  ): Promise<Client> {
+  async function startRecording(person: Identity): Promise<{
+    controller: PiecesController;
+    arrived: Map<string, Set<string>>;
+    refused: Map<string, Error>;
+  }> {
     const controller = await initializePiecesController({
-      space: owner.did(),
+      space: person.did(),
       apiUrl: server.url,
-      identity: owner,
+      identity: person,
     });
     const arrived = new Map<string, Set<string>>();
     const refused = new Map<string, Error>();
@@ -191,6 +197,21 @@ describe("fabrichat-room-list", () => {
     controller.runtime.storageManager.subscribeSpaceAccessLoss?.(
       (space, error) => refused.set(space, error),
     );
+    return { controller, arrived, refused };
+  }
+
+  /**
+   * Starts a fresh client of `person`'s Home, the person's unless another is
+   * named, recording every document a space delivers to it and every space
+   * it is refused, from before Home is brought up, and brings Home up, with
+   * the housekeeping that adopts the catalog's rooms unless `adopt` is false.
+   * With `early`, the client subscribes to the chats view before Home is
+   * brought up, and holds it.
+   */
+  async function bootClient(
+    { adopt = true, early = false, person = owner } = {},
+  ): Promise<Client> {
+    const { controller, arrived, refused } = await startRecording(person);
     const waits = new MemberWaits(controller.runtime.scheduler);
     if (early) {
       const root = await controller.getDefaultPattern(false);
@@ -493,6 +514,84 @@ describe("fabrichat-room-list", () => {
     it("reads the adopted room's space, and no other room's", () => {
       expect(client.arrived.get(legacy)?.size ?? 0).toBeGreaterThan(0);
       expect(arrivedIn(client, kept)).toEqual(kept.map(() => 0));
+    });
+  });
+
+  //
+  // A fresh client once the people list has been read
+  //
+
+  describe("a fresh client once another has read the people list", () => {
+    // Reading `people` derives each listed room's roster, and a later
+    // client's bring-up names what those derivations read, so what it takes
+    // from a room's space is bounded by what reading the room's roster takes.
+    // A list the manager stored with its rooms typed as more than handles
+    // would be walked into each room in full. Carol keeps rooms of her own,
+    // so nothing here reaches the rooms the other tests count.
+
+    let carol: Identity;
+    const rooms: DID[] = [];
+    let client: Client;
+
+    /** What reading each of `rooms`' rosters alone delivers, by space. */
+    let rosterRead: Map<string, Set<string>>;
+
+    beforeAll(async () => {
+      carol = await Identity.fromPassphrase(
+        `fabrichat-room-list carol ${crypto.randomUUID()}`,
+        { implementation: "noble" },
+      );
+      const member = await openMember(server.url, carol, 0);
+      try {
+        for (let index = 0; index < 2; index++) {
+          rooms.push(
+            await createGroup(member, `carol-${index}`, `Carol's ${index}`),
+          );
+        }
+      } finally {
+        await closeMember(member);
+      }
+      const reader = await bootClient({ person: carol });
+      try {
+        const people = reader.home.key("chatManager").key("people").asSchema({
+          type: "object",
+          additionalProperties: { type: "array", items: HANDLE },
+        });
+        people.sink(() => {});
+        await people.pull();
+        await reader.controller.runtime.idle();
+        await reader.controller.synced();
+      } finally {
+        await reader.controller.dispose();
+      }
+      client = await bootClient({ person: carol });
+      const rows = await listRooms(client, rooms.length);
+      const control = await startRecording(carol);
+      try {
+        for (const row of rows) {
+          await control.controller.runtime.getCellFromLink(
+            row.room.getAsNormalizedFullLink(),
+          ).asSchema(ROSTER).pull();
+        }
+        await control.controller.runtime.idle();
+        await control.controller.synced();
+        rosterRead = control.arrived;
+      } finally {
+        await control.controller.dispose();
+      }
+    });
+
+    afterAll(async () => {
+      await client?.controller.dispose();
+    });
+
+    it("receives from a room's space no document that reading its roster doesn't", () => {
+      for (const space of rooms) {
+        const read = rosterRead.get(space) ?? new Set<string>();
+        const beyond = [...client.arrived.get(space) ?? []]
+          .filter((id) => !read.has(id));
+        expect({ space, beyond }).toEqual({ space, beyond: [] });
+      }
     });
   });
 
