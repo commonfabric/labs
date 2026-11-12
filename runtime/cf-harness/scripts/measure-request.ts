@@ -47,6 +47,7 @@ const TAGS: readonly (HarnessTaskTag | "fallback")[] = [
 
 const ADDITIONAL = "\nAdditional instructions:\n";
 const SCHEMA = "Result schema (JSON):\n";
+const CONTRACT = "\n\nStructured result contract:\n";
 
 const bytes = (text: string): number =>
   new TextEncoder().encode(text).byteLength;
@@ -131,11 +132,15 @@ export const measureRequest = async (
     content: string;
   }[];
   const system = recorded[0].content;
+  // The result contract follows the caller's instructions; a run recorded
+  // before that order put it ahead of them, and its instructions run to the end.
   const additionalAt = system.indexOf(ADDITIONAL);
-  const additional = additionalAt === -1
-    ? undefined
-    : system.slice(additionalAt + ADDITIONAL.length);
-  const schemaAt = system.indexOf(SCHEMA);
+  const contractAt = system.lastIndexOf(CONTRACT);
+  const additional = additionalAt === -1 ? undefined : system.slice(
+    additionalAt + ADDITIONAL.length,
+    contractAt > additionalAt ? contractAt : undefined,
+  );
+  const schemaAt = system.lastIndexOf(SCHEMA);
   const schema = schemaAt === -1
     ? undefined
     : JSON.parse(system.slice(schemaAt + SCHEMA.length).split("\n")[0]);
