@@ -8,9 +8,10 @@
  * adds Grace to a group from the room, finds a direct room with her again with
  * a notice for her still waiting, which stays until the offer lists her on
  * the room's roster, and creates a group naming her profile. Each
- * request's outcome lands in Ada's records, and, with handlers run by each
- * session's own runtime, each offer reaches Grace's inbox and lists her on the
- * room's roster.
+ * request's outcome lands in Ada's records, and, in either server-execution
+ * posture, each offer lists her on the room's roster, from a run that reads
+ * no pointer, and reaches Grace's inbox, from one that reads hers and writes
+ * nothing in Ada's home.
  *
  * Both stand-ins share the harness's one space, Ada's home, so the server runs
  * with no access list: a home space grants no one but its owner.
@@ -25,7 +26,6 @@ import { Identity } from "@commonfabric/identity";
 import {
   MultiRuntimeHarness,
   type MultiRuntimeSession,
-  resolveServerExecution,
 } from "./multi-runtime-harness.ts";
 
 const PROGRAM_PATH = join(
@@ -35,9 +35,6 @@ const PROGRAM_PATH = join(
   "main.tsx",
 );
 const ROOT_PATH = join(import.meta.dirname!, "..");
-
-/** Whether this run's harness serves handlers from a serving loop. */
-const SERVER_EXECUTION = resolveServerExecution();
 
 /** Ada's session, whose home space the harness's space is. */
 const ADA = "fabrichat-labeled-inbox-ada";
@@ -130,16 +127,6 @@ describe("fabrichat labeled inbox pointer across runtimes", () => {
       (await graceHolds(id) && await rosterListsGrace(room)) ||
       await refusals() > refusedBefore
     );
-    if (SERVER_EXECUTION) {
-      // TODO(danfuzz): Expect the offer to arrive under server execution too.
-      // The served `offerRooms` reads Grace's labeled pointer, so its sends
-      // and its mark that it handled its event, which live in Ada's home
-      // space, are refused, and nothing reaches Grace. That holds until a
-      // served handler reading another person's labeled data can commit them.
-      expect(await refusals()).toBeGreaterThan(refusedBefore);
-      expect(await graceHolds(id)).toBe(false);
-      return;
-    }
     expect(await refusals()).toBe(refusedBefore);
     expect(await graceHolds(id)).toBe(true);
     expect(await rosterListsGrace(room)).toBe(true);
@@ -243,13 +230,9 @@ describe("fabrichat labeled inbox pointer across runtimes", () => {
     expect(await ada.read(["requests", "d-again", "status"])).toBe("done");
     await expectOffered(direct, "d-again", refusedBefore);
 
-    // Her notice stays, should the offer not be sent, and is no longer listed
-    // once the offer puts her on the room's roster. Under server execution
-    // the offer is refused, as `expectOffered()` pins, and the notice is
-    // still listed.
-    expect(await ada.read(["outgoingNotices", "length"])).toBe(
-      SERVER_EXECUTION ? 1 : 0,
-    );
+    // Her notice is no longer listed once the offer puts her on the room's
+    // roster.
+    expect(await ada.read(["outgoingNotices", "length"])).toBe(0);
   });
 
   it("offers a group created naming the member's profile", async () => {

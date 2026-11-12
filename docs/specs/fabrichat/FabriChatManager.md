@@ -109,11 +109,10 @@ rooms this manager created or accepted. `openDirect` finds a direct room there
 and restores its membership. A room found there that has a notice for its
 counterpart still waiting in `outgoingNotices`, since the room was offered them
 nothing, is offered to them, as step 3 of [creating a room](#creating-a-room)
-offers a new room, once a request names a profile of theirs. The notice stays,
-so that it still tells them of the room should the offer not be sent, and
-`outgoingNotices` leaves it out once the offer puts them on the room's roster. A
-counterpart the room's roster already lists
-has joined the room, and is offered nothing. A room another manager created and
+offers a new room, once a request names a profile of theirs. The offer puts
+them on the room's roster by that profile, wherever it points, and
+`outgoingNotices` leaves the notice out from then on. A counterpart the room's
+roster already lists has joined the room, and is offered nothing. A room another manager created and
 offered the user is there too once the host's share intake accepts it on the
 user's behalf. `rooms` can also hold a second direct room with the same
 counterpart, after crossing creations.
@@ -170,16 +169,20 @@ create a space for the conversation, with the room as its root, in four steps:
    member may add others.
 3. Offer the room to each other member whose profile the request names,
    through each distinct share inbox their profiles point at, once per inbox,
-   even an inbox profiles of more than one member point at, and add to the
-   room's participants each member it is offered to, once, by the first
-   profile it is offered through. Add a notice to `outgoingNotices`, for a
-   client to deliver, for each other member offered nothing: one the request
-   names only by principal, or one whose profile points at no inbox. Offers and
-   notices alike are made by an event of their own that follows the room's
-   creation. A notice is added to the manager's own records, which can carry
-   their owner's `PersonalSpace` label as the catalog can, and a profile's
-   inbox pointer can carry a label, such as its owner's `PersonalSpace`, that
-   neither the room's space nor this user's records admit.
+   even an inbox profiles of more than one member point at, and add each of
+   those members to the room's participants, once, by the first profile the
+   request names for them, wherever it points. Add a notice to
+   `outgoingNotices`, for a client to deliver, for each other member the
+   request names only by principal. Offers and notices alike are made by
+   events of their own that follow the room's creation: one adds the members
+   and queues the notices, reading no inbox pointer, and a second reads the
+   pointers and sends the offers, writing nothing else. A notice is added to
+   the manager's own records, which can carry their owner's `PersonalSpace`
+   label as the catalog can, and a profile's inbox pointer can carry a label,
+   such as its owner's `PersonalSpace`, that neither the room's space nor
+   this user's records admit, so where a profile points decides nothing either
+   of them holds. A member whose profiles point at no inbox that takes offers
+   is sent nothing, and nothing records that.
 4. Record the entry in `rooms`, and in `direct` for a direct room, register the
    room's space in the user's catalog, and mark the request `done`. The
    registration, like adding this user to the room's participants, is an
@@ -212,9 +215,8 @@ only an address, through the profiles `people` lists for that person, as the
 user sending it reads `people`, from an event of its own like step 3's, so
 that its own transaction reads no inbox pointer. It records `noticed` under the
 request's id at once for a person with no profile known for them, and
-`offered` for anyone else, which the event offering the room turns to
-`noticed` when no profile points at an inbox. The room reads it back as the
-add's `delivery`.
+`offered` for anyone else, wherever their profiles point. The room reads it
+back as the add's `delivery`.
 
 ## Prerequisites
 
@@ -244,11 +246,11 @@ When a request names a member's profile, as `openDirect` does with its `profile`
 and `createGroup` with its `profiles`, step 3 offers the
 room there, in that envelope, from an event of its own that follows the room's
 creation, since the offer names the room's space (see
-[`ChatManagerOutput`](ChatManagerOutput.md#offers)). The same event reads the
-profile's `inbox`, which the creating transaction never reads, and adds the
-member's profile to the room's participants, through the room's
-`addParticipant`, before they have opened the room, whose space already grants
-them OWNER. The recipient's host reads the offer and vets it before it registers
+[`ChatManagerOutput`](ChatManagerOutput.md#offers)). The first of its two
+events adds the member's profile to the room's participants, through the
+room's `addParticipant`, before they have opened the room, whose space already
+grants them OWNER, and the second reads the profile's `inbox`, which neither
+the creating transaction nor the first event reads. The recipient's host reads the offer and vets it before it registers
 the room's space in the recipient's Home catalog ([the share
 intake](../../features/private-inbox.md#the-share-intake)). Once the host has
 registered a new entry for the room, it sends the room to the recipient's own
@@ -262,12 +264,12 @@ writer, but that is the `"*"` grant a room has only when its creator makes a
 group joinable by its link, and then its address, sent some other way, is the
 notice.
 
-That is why step 3 hands a notice for each member offered nothing to a client
-through `outgoingNotices` (see
-[`ChatManagerOutput`](ChatManagerOutput.md#delivering-notices)). A profile
-pointing at no inbox gets a notice too, decided by the event that reads the
-pointer, and so does one whose pointer leads to nothing the event can send to
-(see [`ChatManagerOutput`](ChatManagerOutput.md#offers)), which leaves the
-offers to the request's other members standing. A member sent an offer gets no
-notice, and nothing tells the sender whether the offer arrived. Once offers
+That is why step 3 hands a notice for each member named only by principal to
+a client through `outgoingNotices` (see
+[`ChatManagerOutput`](ChatManagerOutput.md#delivering-notices)). A member named
+by a profile gets no notice, wherever the profile points, even at nothing the
+event sending the offer can send to (see
+[`ChatManagerOutput`](ChatManagerOutput.md#offers)), and the offers to the
+request's other members stand. Nothing tells the sender whether the offer
+arrived. Once offers
 deliver end to end, the manager can deliver notices itself.
