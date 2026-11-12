@@ -33,7 +33,7 @@ const warnedMisnamedProps = new Set<string>();
 
 /**
  * Warns, once for each element name and prop, of a prop whose name names no
- * property. The compiler refuses one written as a JSX prop; this catches one
+ * property. The compiler warns of one written as a JSX prop; this catches one
  * that reaches the renderer by another way, a spread object or a direct call
  * to `h()`, which would otherwise set a property nothing reads.
  */

@@ -2,7 +2,7 @@
  * The JSX types declare each element's props by the names the renderer can
  * apply, so a prop TypeScript accepts is one that takes effect. A hyphenated
  * name other than an event, `data-*` or `aria-*` names no property: the
- * compiler refuses it in a pattern, and declaring it here would only teach a
+ * compiler warns of it in a pattern, and declaring it here would only teach a
  * spelling that cannot work.
  */
 

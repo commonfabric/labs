@@ -5303,7 +5303,7 @@ Deno.test("Paren-Invariance Twins", async (t) => {
 Deno.test("JSX Prop Name Validation", async (t) => {
   const misnamed = (diagnostics: readonly TransformationDiagnostic[]) =>
     diagnostics.filter((d) =>
-      d.type === "jsx:misnamed-prop" && d.severity === "error"
+      d.type === "jsx:misnamed-prop" && d.severity === "warning"
     );
   const inPattern = (jsx: string) =>
     [

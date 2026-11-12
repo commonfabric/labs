@@ -1259,7 +1259,7 @@ callback diagnostic would.
 `JsxPropNameValidationTransformer` (stage 10) reports a JSX prop whose name
 can name no property of the element it is written on:
 
-- **Error** `jsx:misnamed-prop`
+- **Warning** `jsx:misnamed-prop`
   (`src/transformers/jsx-prop-name-validation.ts`) — a prop on an intrinsic
   element (a tag starting with a lower-case letter or holding a hyphen) whose
   name holds a hyphen and is neither an event prop (`on…`, such as
@@ -1277,6 +1277,10 @@ are event, attribute and misnamed props is decided by
 `@commonfabric/pattern-contract/jsx-prop-names`, which the renderer applies
 too. A component's props are not checked: they are its parameter's fields,
 which may hold any name.
+
+It is a warning rather than an error because a pattern source already stored
+in a space may hold such a prop, and a stored source has to keep compiling; the
+prop does nothing either way.
 
 The stage walks every node, including the expression inside a JSX expression
 container, and changes nothing.

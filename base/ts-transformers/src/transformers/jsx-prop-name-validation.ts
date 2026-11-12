@@ -8,7 +8,7 @@ import { HelpersOnlyTransformer, TransformationContext } from "../core/mod.ts";
 /**
  * JSX Prop Name Validation Transformer
  *
- * Reports a compile-time error for a hyphenated prop on an intrinsic element,
+ * Reports a compile-time warning for a hyphenated prop on an intrinsic element,
  * such as `<cf-resizable-panel default-size={28}>`, unless it is an event
  * (`oncf-change`) or a `data-*` or `aria-*` attribute.
  *
@@ -16,9 +16,13 @@ import { HelpersOnlyTransformer, TransformationContext } from "../core/mod.ts";
  * and no property name holds a hyphen, so such a prop adds a property nothing
  * reads and the element keeps its default. TypeScript does not report it
  * either: a hyphenated JSX name the element's type does not declare is
- * accepted unchecked. Refusing the hyphenated form leaves the property name
- * as the one spelling, and TypeScript checks that one against the element's
- * declared props.
+ * accepted unchecked. Reporting the hyphenated form leaves the property name
+ * as the one spelling to write, and TypeScript checks that one against the
+ * element's declared props.
+ *
+ * It is a warning, not an error, because a pattern source stored in a space
+ * may hold such a prop, and a stored source has to keep compiling: the prop
+ * did nothing before, and it does nothing still.
  *
  * `@commonfabric/pattern-contract/jsx-prop-names` holds the rule, which the
  * renderer applies too.
@@ -51,7 +55,7 @@ export class JsxPropNameValidationTransformer extends HelpersOnlyTransformer {
           property,
         ) !== undefined;
     context.reportDiagnostic({
-      severity: "error",
+      severity: "warning",
       type: "jsx:misnamed-prop",
       message: known
         ? `\`${name}\` on <${tag.text}> sets nothing: a JSX prop sets the ` +
