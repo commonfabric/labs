@@ -862,6 +862,15 @@ describe("cfc-writeback", () => {
           .toEqual([]);
       });
 
+      it("makes an existing store readable and writable by its owner alone", () => {
+        Deno.writeTextFileSync(storagePath, "");
+        Deno.chmodSync(storagePath, 0o644);
+
+        new CfcWritebackStore({ storagePath });
+
+        expect(Deno.statSync(storagePath).mode! & 0o777).toBe(0o600);
+      });
+
       it("throws for a file that is not a version 1 store, and leaves the file as it was", () => {
         for (
           const [text, reason] of [

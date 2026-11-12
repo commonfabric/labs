@@ -1240,6 +1240,9 @@ export class CfcWritebackStore {
       if (e instanceof Deno.errors.NotFound) return;
       throw e;
     }
+    // The store holds labels its readers may not see, so a store left
+    // readable by others is made private, as `#persist()` writes it.
+    Deno.chmodSync(storagePath, 0o600);
     if (text.trim() === "") return;
     const refuse = (reason: string): never => {
       throw new Error(
