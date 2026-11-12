@@ -227,6 +227,11 @@ export type Transport = {
    * can stop once its own write keeps failing. Any other rejection fails the
    * request with that error. A response that arrived before the rejection
    * answers the request.
+   *
+   * A send settles once its connection is lost, if not before: a reconnect
+   * waits for the watch changes its sessions sent on the connection that
+   * dropped, so one send left pending there would hold every session's
+   * restore.
    */
   send(payload: string): Promise<void>;
 
@@ -1066,8 +1071,52 @@ export class Client {
     return { session, redemption: result.invite };
   }
 
-  /** Helper for `mount()`, which also returns the open's result. */
+  /**
+   * Helper for `mount()` and `mountRedeeming()`, which also returns the
+   * open's result. A mount its connection lost, before its `session.open`
+   * was sent or after, fails carrying a `readyToRetry()` that resolves once
+   * the client is connected again, on a later connection where the open was
+   * sent, so that a caller can mount again then. It rejects as a mount does
+   * once the client has closed or failed for good, and with `signal`'s
+   * reason once that aborts.
+   */
   async #mount(
+    space: string,
+    options: MountOptions,
+    auth: SessionAuth | undefined,
+    signal: AbortSignal | undefined,
+  ): Promise<{ session: SpaceSession; result: SessionOpenResult }> {
+    const epoch = this.#connectionEpoch;
+    try {
+      return await this.#mountOnConnection(space, options, auth, signal);
+    } catch (error) {
+      const delivery = connectionDeliveryOf(error);
+      if (delivery === undefined) throw error;
+      const laterThan = delivery === "unacknowledged" ? epoch : -1;
+      throw withReadyToRetry(
+        error as Error,
+        delivery,
+        () => this.#connectedSince(laterThan, signal),
+      );
+    }
+  }
+
+  /** Helper for `#mount()`; see there. */
+  async #connectedSince(epoch: number, signal?: AbortSignal): Promise<void> {
+    for (;;) {
+      if (signal?.aborted) throw mountCancelled(signal);
+      this.requireUsable();
+      if (this.#connected && this.#connectionEpoch > epoch) return;
+      await runWithAbortSignal(
+        signal,
+        "memory session mount cancelled",
+        () => this.whenStateChanged(),
+      );
+    }
+  }
+
+  /** Helper for `#mount()`, which mounts on the connection that is up. */
+  async #mountOnConnection(
     space: string,
     options: MountOptions,
     auth: SessionAuth | undefined,
@@ -1173,11 +1222,13 @@ export class Client {
 
   /**
    * Sends `message` and returns the `ok` of the server's response, or throws
-   * its error. A request made while the connection is down waits for the
-   * reconnect, unless `options.whileConnected` is set, in which case it
-   * throws a `ConnectionError`: a request a session's restore makes would
-   * otherwise wait for the reconnect that is running that restore. One made
-   * with `options.epoch` throws a `ConnectionError` unless it goes on that
+   * its error. A request made while the client is connecting fails at once
+   * with `notSentError()`: nothing waits here for a later connection. One a
+   * session's restore makes sets `options.whileConnected`, and fails then
+   * with the `ConnectionError` its reconnect reads as a restore the
+   * connection dropped under. One whose connection drops before it is
+   * answered fails with `unacknowledgedError()`. One made with
+   * `options.epoch` throws a `ConnectionError` unless it goes on that
    * connection, whose negotiation `options.encoded`, `message` encoded for
    * it, then belongs to.
    *
@@ -1345,14 +1396,15 @@ export class Client {
     message: WatchSetRequest,
     options: { whileConnected?: boolean } = {},
   ): Promise<WatchSetResult> {
-    // The split reads the connection's bounds, so it waits for the
-    // connection. A connected client issues the parts without an await, in
-    // the order the caller's other requests would be issued.
-    if (!this.#connected && options.whileConnected !== true) {
-      this.#requireConnected();
-    }
+    // The split reads the connection's bounds, so a set made while the
+    // client is connecting fails here, as `request()` fails it. A connected
+    // client issues the parts without an await, in the order the caller's
+    // other requests would be issued.
     if (!this.#connected) {
-      return await this.request<WatchSetResult>(message, options);
+      if (options.whileConnected === true) {
+        throw connectionLostWhileRestoring();
+      }
+      this.#requireConnected();
     }
     const epoch = this.#connectionEpoch;
     const encoded = this.#encodeRequest(message);
@@ -1381,8 +1433,8 @@ export class Client {
 
   /**
    * Helper for the requests, which encodes `message` for this connection.
-   * Retained requests stay inline so replay uses the next connection's
-   * negotiation; only the value handed to the transport encoder is compacted.
+   * Only the value handed to the transport encoder is compacted, under this
+   * connection's negotiation; `message` is left as it was.
    */
   #encodeRequest(message: FabricPlainObject): string {
     return encodeMemoryBoundary(
@@ -1710,7 +1762,10 @@ export class Client {
           return result;
         },
       );
-      this.#signedOpens = opened.catch(() => undefined);
+      // The next open's turn comes once this one and the one ahead of it
+      // have both ended. A mount whose caller cancels it while it waits its
+      // turn ends at once, with the open ahead still signing the challenge.
+      this.#signedOpens = Promise.allSettled([previous, opened]);
       const result = await opened;
       if (result === STALE) {
         requireUncancelled();
@@ -1766,6 +1821,19 @@ export class Client {
 
   isConnected(): boolean {
     return this.#connected;
+  }
+
+  /**
+   * @internal Throws what a request made of this client now fails with once
+   * it has closed or failed for good, and returns otherwise.
+   */
+  requireUsable(): void {
+    if (this.#closed) {
+      throw new Error("memory client is closed");
+    }
+    if (this.#fatalError) {
+      throw this.#fatalError;
+    }
   }
 
   /**
@@ -2330,10 +2398,10 @@ export class Client {
     if (this.#fatalError) throw this.#fatalError;
     if (!this.#connected) {
       await this.#reconnect();
-      // #reconnect() resolves without connecting when it gives up on a
-      // permanent handshake failure; surface it rather than returning as if
-      // connected.
-      if (this.#fatalError) throw this.#fatalError;
+      // `#reconnect()` resolves without connecting when a close ends it, or
+      // when it gives up on a permanent handshake failure. Either is thrown
+      // here rather than returning as if connected.
+      this.requireUsable();
     }
     await this.#reconnecting;
   }
@@ -2782,12 +2850,7 @@ export class Client {
 
   /** Returns the observed connection epoch for post-await readiness checks. */
   #requireConnected(): number {
-    if (this.#closed) {
-      throw new Error("memory client is closed");
-    }
-    if (this.#fatalError) {
-      throw this.#fatalError;
-    }
+    this.requireUsable();
     if (this.#connected) {
       return this.#connectionEpoch;
     }
@@ -2952,9 +3015,8 @@ export class Client {
       }
       return false;
     }
-    // Requests lost with this connection have no server verdict. Keep their
-    // commits outstanding for replay, regardless of which error caused a
-    // session's restore to fail.
+    // Requests lost with this connection have no server verdict, whichever
+    // error caused a session's restore to fail: each fails as lost with it.
     this.#rejectPending(lostWithConnection(err));
     for (const session of this.#spaces) {
       session.handleDisconnect();
@@ -3247,8 +3309,9 @@ export class SpaceSession {
 
   /**
    * Whether this session is waiting on its own restore after a retriable
-   * denial, such as the router's while its space's toolshed is down. Its
-   * requests wait meanwhile, while the connection's other sessions work.
+   * denial, such as the router's while its space's toolshed is down. A
+   * request made of it meanwhile fails at once as not sent, while the
+   * connection's other sessions work.
    */
   get held(): boolean {
     return this.#held;
@@ -3318,6 +3381,27 @@ export class SpaceSession {
   }
 
   /**
+   * Helper for the session's requests other than commits and watch changes,
+   * which makes `request` once this session is open on the connection that
+   * is up (see `#ensureSessionRestored()`). A request the connection lost,
+   * before it was sent or after, fails carrying a `readyToRetry()` that says
+   * when the session can take it again (see `#withReadyToRetry()`). Whether
+   * one that was sent and not answered can be made twice is its caller's to
+   * know.
+   */
+  async #onceRestored<T>(request: () => Promise<T>): Promise<T> {
+    // The wait for a restore ends with the connection it began on, so a
+    // request that is sent is sent on this one.
+    const sentOn = { epoch: this.#client.connectionEpoch };
+    try {
+      await this.#ensureSessionRestored();
+      return await request();
+    } catch (error) {
+      throw this.#withReadyToRetry(error, sentOn);
+    }
+  }
+
+  /**
    * `beforeIssue` runs after the open-session check and before this mutation
    * enters the session's outstanding request state. Throwing prevents issue.
    */
@@ -3341,20 +3425,17 @@ export class SpaceSession {
     // open there: made while the client is connecting or the session is
     // held, or still waiting when that connection drops, it fails with
     // `notSentError()`. Commits waiting for the restore are sent in the order
-    // they were made. A failure's `readyToRetry()` waits for a connection
-    // later than the one the commit was made on.
-    const madeOn = {
-      epoch: this.#client.connectionEpoch,
-      sessionId: this.#sessionId,
-    };
+    // they were made.
     try {
       const signal = this.#client.connectionSignal;
       this.#requireAvailable(signal);
+      // Awaited only where there is a restore to wait for: an await with
+      // nothing behind it would still hand the commit over a turn later.
       if (this.#restoreComplete !== undefined) {
         await this.#ensureSessionRestored(signal);
       }
     } catch (error) {
-      throw this.#withReadyToRetry(error, madeOn);
+      throw this.#withReadyToRetry(error);
     }
     const raced = this.#outstandingCommits.get(commit.localSeq);
     if (raced) {
@@ -3367,40 +3448,42 @@ export class SpaceSession {
       pending: Promise.withResolvers<AppliedCommit>(),
     };
     this.#outstandingCommits.set(commit.localSeq, outstanding);
-    this.#sendOutstandingCommit(commit.localSeq, outstanding, madeOn);
+    this.#sendOutstandingCommit(commit.localSeq, outstanding);
     return await outstanding.pending.promise;
   }
 
   async queryGraph(query: GraphQuery): Promise<GraphQueryResult> {
-    await this.#ensureSessionRestored();
-    const result = await this.#client.request<GraphQueryResult>({
-      type: "graph.query",
-      requestId: crypto.randomUUID(),
-      space: this.space,
-      sessionId: this.#sessionId,
-      query,
-    });
+    return await this.#onceRestored(async () => {
+      const result = await this.#client.request<GraphQueryResult>({
+        type: "graph.query",
+        requestId: crypto.randomUUID(),
+        space: this.space,
+        sessionId: this.#sessionId,
+        query,
+      });
 
-    this.#noteResult(result.serverSeq);
-    return result;
+      this.#noteResult(result.serverSeq);
+      return result;
+    });
   }
 
   async queryOperationField(
     query: Omit<OperationFieldQuery, "principal" | "sessionId">,
   ): Promise<OperationFieldQueryResult> {
-    await this.#ensureSessionRestored();
-    if (this.#client.serverFlags?.applyOp !== true) {
-      throw protocolError("memory server does not support apply-op");
-    }
-    const result = await this.#client.request<OperationFieldQueryResult>({
-      type: "op.query",
-      requestId: crypto.randomUUID(),
-      space: this.space,
-      sessionId: this.#sessionId,
-      query,
+    return await this.#onceRestored(async () => {
+      if (this.#client.serverFlags?.applyOp !== true) {
+        throw protocolError("memory server does not support apply-op");
+      }
+      const result = await this.#client.request<OperationFieldQueryResult>({
+        type: "op.query",
+        requestId: crypto.randomUUID(),
+        space: this.space,
+        sessionId: this.#sessionId,
+        query,
+      });
+      this.#noteResult(result.serverSeq);
+      return result;
     });
-    this.#noteResult(result.serverSeq);
-    return result;
   }
 
   /**
@@ -3451,86 +3534,88 @@ export class SpaceSession {
     room: string,
     observer: (event: PresenceEvent) => void,
   ): Promise<PresenceMembership> {
-    await this.#ensureSessionRestored();
-    if (this.#client.serverFlags?.presenceV1 !== true) {
-      throw protocolError("memory server does not support presence");
-    }
-    if (!isPresenceRoom(room)) {
-      throw new PresenceError("Presence room id is invalid");
-    }
-    // The room's last observer may leave while the join is awaited, taking
-    // the state with it; a state that is no longer the room's is not one to
-    // attach to, so the join starts over on a fresh one.
-    let state: PresenceRoomState;
-    for (;;) {
-      const existing = this.#presenceRooms.get(room);
-      if (existing === undefined) {
-        const created: PresenceRoomState = {
-          room,
-          observers: new Set(),
-          participantId: "",
-          participants: new Map(),
-          revision: 0,
-          publication: null,
-          joined: Promise.resolve(),
-        };
-        created.joined = this.#joinPresence(created);
-        this.#presenceRooms.set(room, created);
-        state = created;
-      } else {
-        state = existing;
+    return await this.#onceRestored(async () => {
+      if (this.#client.serverFlags?.presenceV1 !== true) {
+        throw protocolError("memory server does not support presence");
       }
-      try {
-        await state.joined;
-      } catch (error) {
-        if (
-          this.#presenceRooms.get(room) === state && state.observers.size === 0
-        ) {
-          this.#presenceRooms.delete(room);
+      if (!isPresenceRoom(room)) {
+        throw new PresenceError("Presence room id is invalid");
+      }
+      // The room's last observer may leave while the join is awaited, taking
+      // the state with it; a state that is no longer the room's is not one to
+      // attach to, so the join starts over on a fresh one.
+      let state: PresenceRoomState;
+      for (;;) {
+        const existing = this.#presenceRooms.get(room);
+        if (existing === undefined) {
+          const created: PresenceRoomState = {
+            room,
+            observers: new Set(),
+            participantId: "",
+            participants: new Map(),
+            revision: 0,
+            publication: null,
+            joined: Promise.resolve(),
+          };
+          created.joined = this.#joinPresence(created);
+          this.#presenceRooms.set(room, created);
+          state = created;
+        } else {
+          state = existing;
         }
-        throw error;
+        try {
+          await state.joined;
+        } catch (error) {
+          if (
+            this.#presenceRooms.get(room) === state &&
+            state.observers.size === 0
+          ) {
+            this.#presenceRooms.delete(room);
+          }
+          throw error;
+        }
+        this.#assertOpen();
+        if (this.#presenceRooms.get(room) === state) break;
       }
-      this.#assertOpen();
-      if (this.#presenceRooms.get(room) === state) break;
-    }
-    state.observers.add(observer);
-    this.#deliverPresenceTo(observer, {
-      kind: "snapshot",
-      participantId: state.participantId,
-      participants: [...state.participants.values()],
+      state.observers.add(observer);
+      this.#deliverPresenceTo(observer, {
+        kind: "snapshot",
+        participantId: state.participantId,
+        participants: [...state.participants.values()],
+      });
+      const joined = state;
+      let left = false;
+      return {
+        get participantId() {
+          return joined.participantId;
+        },
+        publish: (publication) => {
+          if (left || this.#closed) return;
+          validatePresencePublication(publication);
+          joined.publication = publication;
+          joined.revision += 1;
+          this.#publishPresence(joined, joined.revision);
+        },
+        leave: async () => {
+          if (left) return;
+          left = true;
+          joined.observers.delete(observer);
+          if (joined.observers.size > 0) return;
+          if (this.#presenceRooms.get(room) === joined) {
+            this.#presenceRooms.delete(room);
+          }
+          if (this.#closed) return;
+          await joined.joined.catch(() => undefined);
+          await this.#client.request({
+            type: "presence.leave",
+            requestId: crypto.randomUUID(),
+            space: this.space,
+            sessionId: this.#sessionId,
+            room,
+          }).catch(() => undefined);
+        },
+      };
     });
-    const joined = state;
-    let left = false;
-    return {
-      get participantId() {
-        return joined.participantId;
-      },
-      publish: (publication) => {
-        if (left || this.#closed) return;
-        validatePresencePublication(publication);
-        joined.publication = publication;
-        joined.revision += 1;
-        this.#publishPresence(joined, joined.revision);
-      },
-      leave: async () => {
-        if (left) return;
-        left = true;
-        joined.observers.delete(observer);
-        if (joined.observers.size > 0) return;
-        if (this.#presenceRooms.get(room) === joined) {
-          this.#presenceRooms.delete(room);
-        }
-        if (this.#closed) return;
-        await joined.joined.catch(() => undefined);
-        await this.#client.request({
-          type: "presence.leave",
-          requestId: crypto.randomUUID(),
-          space: this.space,
-          sessionId: this.#sessionId,
-          room,
-        }).catch(() => undefined);
-      },
-    };
   }
 
   /** Applies one presence push from the relay to its room's observers. */
@@ -3561,19 +3646,20 @@ export class SpaceSession {
     sidecarId: string,
     action: "retry" | "dismiss",
   ): Promise<EventAttentionResolveResult> {
-    await this.#ensureSessionRestored();
-    const result = await this.#client.request<EventAttentionResolveResult>({
-      type: "event.attention.resolve",
-      requestId: crypto.randomUUID(),
-      space: this.space,
-      sessionId: this.#sessionId,
-      eventId,
-      seq,
-      sidecarId,
-      action,
+    return await this.#onceRestored(async () => {
+      const result = await this.#client.request<EventAttentionResolveResult>({
+        type: "event.attention.resolve",
+        requestId: crypto.randomUUID(),
+        space: this.space,
+        sessionId: this.#sessionId,
+        eventId,
+        seq,
+        sidecarId,
+        action,
+      });
+      this.#noteResult(result.serverSeq);
+      return result;
     });
-    this.#noteResult(result.serverSeq);
-    return result;
   }
 
   /**
@@ -3595,35 +3681,36 @@ export class SpaceSession {
     verb: PatternLifecycleVerb,
     body: FabricPlainObject,
   ): Promise<FabricPlainObject> {
-    await this.#ensureSessionRestored();
-    if (this.#client.serverFlags?.patternLifecycle !== true) {
-      throw lifecycleRefusal(
-        "lifecycle-unsupported",
-        "The memory server does not advertise `patternLifecycle`",
+    return await this.#onceRestored(async () => {
+      if (this.#client.serverFlags?.patternLifecycle !== true) {
+        throw lifecycleRefusal(
+          "lifecycle-unsupported",
+          "The memory server does not advertise `patternLifecycle`",
+        );
+      }
+      const message = {
+        type: "pattern.lifecycle",
+        requestId: crypto.randomUUID(),
+        space: this.space,
+        sessionId: this.#sessionId,
+        verb,
+        body,
+      };
+      const limit = Math.min(
+        PATTERN_LIFECYCLE_MAX_BYTES,
+        this.#client.requestBytesLimit ?? PATTERN_LIFECYCLE_MAX_BYTES,
       );
-    }
-    const message = {
-      type: "pattern.lifecycle",
-      requestId: crypto.randomUUID(),
-      space: this.space,
-      sessionId: this.#sessionId,
-      verb,
-      body,
-    };
-    const limit = Math.min(
-      PATTERN_LIFECYCLE_MAX_BYTES,
-      this.#client.requestBytesLimit ?? PATTERN_LIFECYCLE_MAX_BYTES,
-    );
-    const bytes = new TextEncoder().encode(encodeMemoryBoundary(message))
-      .length;
-    if (bytes > limit) {
-      throw lifecycleRefusal(
-        "payload-too-large",
-        `A \`pattern.lifecycle\` request takes at most ${limit} bytes on ` +
-          `this connection, and this one takes ${bytes}`,
-      );
-    }
-    return await this.#client.request<FabricPlainObject>(message);
+      const bytes = new TextEncoder().encode(encodeMemoryBoundary(message))
+        .length;
+      if (bytes > limit) {
+        throw lifecycleRefusal(
+          "payload-too-large",
+          `A \`pattern.lifecycle\` request takes at most ${limit} bytes on ` +
+            `this connection, and this one takes ${bytes}`,
+        );
+      }
+      return await this.#client.request<FabricPlainObject>(message);
+    });
   }
 
   /**
@@ -3646,35 +3733,36 @@ export class SpaceSession {
     kind: ServedRequestKind,
     body: FabricPlainObject,
   ): Promise<FabricPlainObject> {
-    await this.#ensureSessionRestored();
-    if (this.#client.serverFlags?.servedRequests !== true) {
-      throw servedRefusal(
-        "served-unsupported",
-        "The memory server does not advertise `servedRequests`",
+    return await this.#onceRestored(async () => {
+      if (this.#client.serverFlags?.servedRequests !== true) {
+        throw servedRefusal(
+          "served-unsupported",
+          "The memory server does not advertise `servedRequests`",
+        );
+      }
+      const message = {
+        type: "served",
+        requestId: crypto.randomUUID(),
+        space: this.space,
+        sessionId: this.#sessionId,
+        kind,
+        body,
+      };
+      const limit = Math.min(
+        SERVED_REQUEST_MAX_BYTES,
+        this.#client.requestBytesLimit ?? SERVED_REQUEST_MAX_BYTES,
       );
-    }
-    const message = {
-      type: "served",
-      requestId: crypto.randomUUID(),
-      space: this.space,
-      sessionId: this.#sessionId,
-      kind,
-      body,
-    };
-    const limit = Math.min(
-      SERVED_REQUEST_MAX_BYTES,
-      this.#client.requestBytesLimit ?? SERVED_REQUEST_MAX_BYTES,
-    );
-    const bytes = new TextEncoder().encode(encodeMemoryBoundary(message))
-      .length;
-    if (bytes > limit) {
-      throw servedRefusal(
-        "payload-too-large",
-        `A \`served\` request takes at most ${limit} bytes on this ` +
-          `connection, and this one takes ${bytes}`,
-      );
-    }
-    return await this.#client.request<FabricPlainObject>(message);
+      const bytes = new TextEncoder().encode(encodeMemoryBoundary(message))
+        .length;
+      if (bytes > limit) {
+        throw servedRefusal(
+          "payload-too-large",
+          `A \`served\` request takes at most ${limit} bytes on this ` +
+            `connection, and this one takes ${bytes}`,
+        );
+      }
+      return await this.#client.request<FabricPlainObject>(message);
+    });
   }
 
   /**
@@ -3690,64 +3778,67 @@ export class SpaceSession {
   async administerInvites(
     invite: InviteAdministration,
   ): Promise<FabricValue> {
-    await this.#ensureSessionRestored();
-    if (this.#client.serverFlags?.spaceInvites !== true) {
-      throw spaceInviteRefusalError(
-        "invite-service-unsupported",
-        "The memory server does not administer invitations",
-      );
-    }
-    return await this.#client.request<FabricValue>({
-      type: "space.invite",
-      requestId: crypto.randomUUID(),
-      space: this.space,
-      sessionId: this.#sessionId,
-      invite,
+    return await this.#onceRestored(async () => {
+      if (this.#client.serverFlags?.spaceInvites !== true) {
+        throw spaceInviteRefusalError(
+          "invite-service-unsupported",
+          "The memory server does not administer invitations",
+        );
+      }
+      return await this.#client.request<FabricValue>({
+        type: "space.invite",
+        requestId: crypto.randomUUID(),
+        space: this.space,
+        sessionId: this.#sessionId,
+        invite,
+      });
     });
   }
 
   async listEntityIds(
     options: EntityIdListOptions = {},
   ): Promise<EntityIdListResult | undefined> {
-    await this.#ensureSessionRestored();
-    if (this.#client.serverFlags?.entityIdListing !== true) {
-      return undefined;
-    }
-    const pagination = this.#client.serverFlags.entityIdPagination === true;
-    if (!pagination && Object.keys(options).length > 0) {
-      return undefined;
-    }
-    const result = await this.#client.request<EntityIdListResult>({
-      type: "entity-id.list",
-      requestId: crypto.randomUUID(),
-      space: this.space,
-      sessionId: this.#sessionId,
-      ...(pagination
-        ? { ...options, limit: options.limit ?? MAX_ENTITY_ID_PAGE_SIZE }
-        : {}),
-    });
+    return await this.#onceRestored(async () => {
+      if (this.#client.serverFlags?.entityIdListing !== true) {
+        return undefined;
+      }
+      const pagination = this.#client.serverFlags.entityIdPagination === true;
+      if (!pagination && Object.keys(options).length > 0) {
+        return undefined;
+      }
+      const result = await this.#client.request<EntityIdListResult>({
+        type: "entity-id.list",
+        requestId: crypto.randomUUID(),
+        space: this.space,
+        sessionId: this.#sessionId,
+        ...(pagination
+          ? { ...options, limit: options.limit ?? MAX_ENTITY_ID_PAGE_SIZE }
+          : {}),
+      });
 
-    this.#noteResult(result.serverSeq);
-    return result;
+      this.#noteResult(result.serverSeq);
+      return result;
+    });
   }
 
   async entityIdExists(
     id: EntityId,
   ): Promise<EntityIdLookupResult | undefined> {
-    await this.#ensureSessionRestored();
-    if (this.#client.serverFlags?.entityIdLookup !== true) {
-      return undefined;
-    }
-    const result = await this.#client.request<EntityIdLookupResult>({
-      type: "entity-id.exists",
-      requestId: crypto.randomUUID(),
-      space: this.space,
-      sessionId: this.#sessionId,
-      id,
-    });
+    return await this.#onceRestored(async () => {
+      if (this.#client.serverFlags?.entityIdLookup !== true) {
+        return undefined;
+      }
+      const result = await this.#client.request<EntityIdLookupResult>({
+        type: "entity-id.exists",
+        requestId: crypto.randomUUID(),
+        space: this.space,
+        sessionId: this.#sessionId,
+        id,
+      });
 
-    this.#noteResult(result.serverSeq);
-    return result;
+      this.#noteResult(result.serverSeq);
+      return result;
+    });
   }
 
   /** Run a server-side read-only SQLite query against a cell-derived db. */
@@ -3757,34 +3848,35 @@ export class SpaceSession {
     params?: SqliteParamsWire,
     reader?: SqliteQueryReader,
   ): Promise<SqliteQueryResult> {
-    await this.#ensureSessionRestored();
-    if (
-      reader !== undefined &&
-      this.#client.serverFlags?.sqliteQueryReader !== true
-    ) {
-      throw new Error(
-        "sqlite: server does not support carried reader authorization",
-      );
-    }
-    const paramFields = params === undefined
-      ? {}
-      : !Array.isArray(params) && unsafeObjectKeyIn(params) !== undefined
-      ? { namedParams: Object.entries(params) }
-      : { params };
-    const result = await this.#client.request<SqliteQueryWireResult>({
-      type: "sqlite.query",
-      requestId: crypto.randomUUID(),
-      space: this.space,
-      sessionId: this.#sessionId,
-      db,
-      sql,
-      ...paramFields,
-      ...(reader === undefined ? {} : { reader }),
+    return await this.#onceRestored(async () => {
+      if (
+        reader !== undefined &&
+        this.#client.serverFlags?.sqliteQueryReader !== true
+      ) {
+        throw new Error(
+          "sqlite: server does not support carried reader authorization",
+        );
+      }
+      const paramFields = params === undefined
+        ? {}
+        : !Array.isArray(params) && unsafeObjectKeyIn(params) !== undefined
+        ? { namedParams: Object.entries(params) }
+        : { params };
+      const result = await this.#client.request<SqliteQueryWireResult>({
+        type: "sqlite.query",
+        requestId: crypto.randomUUID(),
+        space: this.space,
+        sessionId: this.#sessionId,
+        db,
+        sql,
+        ...paramFields,
+        ...(reader === undefined ? {} : { reader }),
+      });
+      return {
+        rows: result.rows.map(sqliteRowFromWire),
+        columns: result.columns,
+      };
     });
-    return {
-      rows: result.rows.map(sqliteRowFromWire),
-      columns: result.columns,
-    };
   }
 
   // No `sqliteExecute` write RPC: writes go through the commit fold (a `sqlite`
@@ -3801,16 +3893,17 @@ export class SpaceSession {
     path: string,
     beforeIssue?: () => void,
   ): Promise<SqliteRegisterDiskSourceResult> {
-    await this.#ensureSessionRestored();
-    const requestId = crypto.randomUUID();
-    beforeIssue?.();
-    return await this.#client.request<SqliteRegisterDiskSourceResult>({
-      type: "sqlite.register-disk-source",
-      requestId,
-      space: this.space,
-      sessionId: this.#sessionId,
-      id,
-      path,
+    return await this.#onceRestored(async () => {
+      const requestId = crypto.randomUUID();
+      beforeIssue?.();
+      return await this.#client.request<SqliteRegisterDiskSourceResult>({
+        type: "sqlite.register-disk-source",
+        requestId,
+        space: this.space,
+        sessionId: this.#sessionId,
+        id,
+        path,
+      });
     });
   }
 
@@ -4088,10 +4181,11 @@ export class SpaceSession {
       },
       "apply",
       {
-        // Cancellation is local intent from the moment this removal's turn
-        // comes, while it waits for a restore and even when its request
-        // fails: a reconnect must not restore a watch its last subscriber
-        // removed.
+        // Cancellation is local intent from the moment this removal's
+        // request is sent, even when that request then fails unanswered: a
+        // reconnect must not restore a watch its last subscriber removed. A
+        // removal that fails before it is sent leaves the watch set as it
+        // was, and its caller to make it again.
         onTurn: () => {
           watches = this.#watchSpecs.filter((watch) => !removed.has(watch.id));
           this.#replaceWatchSpecs(watches);
@@ -4347,9 +4441,8 @@ export class SpaceSession {
    */
   #holdRestore(floorMs = 0): void {
     // After a denial in the watch phase the reopen has already made this
-    // session ready. Only this keeps `restore()`'s `finally` from replaying
-    // its commits, and `transact()` from sending new ones, before the
-    // session is restored.
+    // session ready. This keeps a watch change queued behind the restore
+    // from being sent before the session is restored.
     this.#readyOnConnection = false;
     const signal = this.#routeSignal;
     // A route already cancelled, as it can be while the watch set is
@@ -4801,13 +4894,14 @@ export class SpaceSession {
    * it still claims its place in issue order, so later mutations wait behind
    * it.
    *
-   * A mutation whose turn comes while its session is disconnected or has not
-   * reopened keeps the turn and waits in it until the restore completes, so
-   * mutations reach the wire in call order across a reconnect. `onTurn` runs
-   * when the turn comes, before that wait. A request lost with its connection
-   * is sent again by the restore that follows, and its mutation applies the
-   * response to that (see `#applyWatchResponse()`). `restoring` marks the
-   * watch set `restore()` re-establishes, which does not queue here at all.
+   * A mutation whose turn comes while its session has not yet reopened on
+   * the connection that is up keeps the turn and waits in it until the
+   * restore completes, so mutations reach the wire in call order. `onTurn`
+   * runs when the turn comes and the request is about to be sent. A mutation
+   * made while the client is connecting, or whose connection drops before it
+   * is answered, fails carrying `readyToRetry()` (see `#withReadyToRetry()`),
+   * and nothing here sends it again. `restoring` marks the watch set
+   * `restore()` re-establishes, which does not queue here at all.
    */
   async #runWatchMutation<R, T>(
     send: () => Promise<R>,
@@ -4821,15 +4915,13 @@ export class SpaceSession {
     // A watch change its connection lost fails ready to be made again once
     // this session can take it, as a commit does (`#withReadyToRetry()`),
     // on whichever server session it then has: a re-established session
-    // holds the watch set this one does.
-    const madeOn = {
-      epoch: this.#client.connectionEpoch,
-      sessionId: undefined,
-    };
+    // holds the watch set this one does. A change is sent on the connection
+    // it was made on or on none.
+    const sentOn = { epoch: this.#client.connectionEpoch };
     try {
       return await this.#issueWatchMutation(send, apply, sendAfter, options);
     } catch (error) {
-      throw this.#withReadyToRetry(error, madeOn);
+      throw this.#withReadyToRetry(error, sentOn);
     }
   }
 
@@ -5213,41 +5305,40 @@ export class SpaceSession {
   /**
    * Returns `error`, attaching to a `notSentError()` or `unacknowledgedError()`
    * a `readyToRetry()` that resolves once this session can take the request
-   * again: once it is open on the connection that is up, and, for an
-   * unacknowledged request, on one later than the request was sent on, which
-   * is gone (`madeOn`, as the client and this session stood when it was made),
-   * so that a caller can send
-   * the request again then: a commit under its own `localSeq`, which the
-   * server answers from its record if it landed. It rejects with the session's
-   * close error, or with a `SessionReplacedError` when the server opened a new
-   * session in this one's place, which judges a resent commit as a new one.
+   * again, so that a caller can make it again then. A request that was never
+   * sent is ready once the session is open on the connection that is up,
+   * whichever server session it then has. One that was sent and not answered
+   * is ready once the session is open on a connection later than the one it
+   * was sent on (`sentOn.epoch`), which is gone.
+   *
+   * A commit sent and not answered names the server session it was sent on
+   * (`sentOn.sessionId`). The server answers it from its record when it is
+   * sent again on that session, under its own `localSeq`. A session the
+   * server opened in that one's place has no such record and would judge the
+   * commit as a new one, so `readyToRetry()` rejects then, with a
+   * `SessionReplacedError`. It rejects with the session's close error once
+   * the session has closed, and as a request does once the client has closed
+   * or failed for good.
    */
   #withReadyToRetry(
     error: unknown,
-    madeOn: { epoch: number; sessionId: string | undefined },
+    sentOn?: { epoch: number; sessionId?: string },
   ): Error {
     const failure = error instanceof Error ? error : new Error(String(error));
     const delivery = connectionDeliveryOf(failure);
     if (delivery === undefined) return failure;
-    // A drop fails every request it carried with one error; each request's
-    // failure gets one of its own, so that the readiness attached here is
-    // this request's.
-    const own = delivery === "notSent"
-      ? notSentError(failure.message)
-      : unacknowledgedError(failure.message, failure.cause);
-    if (isOwnWriteFailure(failure)) {
-      Object.assign(own, { ownWriteFailed: true });
-    }
-    const laterThan = delivery === "unacknowledged" ? madeOn.epoch : -1;
-    return Object.assign(own, {
-      readyToRetry: () => this.#reopenedSince(laterThan, madeOn.sessionId),
-    });
+    const sent = delivery === "unacknowledged" ? sentOn : undefined;
+    return withReadyToRetry(
+      failure,
+      delivery,
+      () => this.#reopenedSince(sent?.epoch ?? -1, sent?.sessionId),
+    );
   }
 
   /**
-   * Helper for `#withReadyToRetry()`; see there. A request made on the server
-   * session `sessionId` is not ready again on another; one made with none
-   * named, such as a watch change, is.
+   * Helper for `#withReadyToRetry()`; see there. Resolves once this session
+   * is open on a connection later than `epoch`, and rejects if it then has a
+   * server session other than `sessionId`, where one is named.
    */
   async #reopenedSince(
     epoch: number,
@@ -5255,11 +5346,9 @@ export class SpaceSession {
   ): Promise<void> {
     for (;;) {
       this.#assertOpen();
-      if (sessionId !== undefined && this.#sessionId !== sessionId) {
-        throw sessionReplacedError(
-          `memory session ${sessionId} was replaced by ${this.#sessionId}`,
-        );
-      }
+      // A closed or failed client restores nothing, and settles no state
+      // after the one that says so.
+      this.#client.requireUsable();
       const restore = this.#restoreComplete;
       if (restore !== undefined) {
         await restore.promise;
@@ -5268,7 +5357,14 @@ export class SpaceSession {
       if (
         this.#client.isConnected() && this.#client.connectionEpoch > epoch &&
         !this.#held
-      ) return;
+      ) {
+        if (sessionId !== undefined && this.#sessionId !== sessionId) {
+          throw sessionReplacedError(
+            `memory session ${sessionId} was replaced by ${this.#sessionId}`,
+          );
+        }
+        return;
+      }
       await this.#client.whenStateChanged();
     }
   }
@@ -5282,8 +5378,13 @@ export class SpaceSession {
   #sendOutstandingCommit(
     localSeq: number,
     pendingCommit: OutstandingCommit,
-    madeOn: { epoch: number; sessionId: string },
   ): Promise<void> {
+    // The connection and the server session the commit is handed to: a
+    // restore the commit waited for may have opened a new server session.
+    const sentOn = {
+      epoch: this.#client.connectionEpoch,
+      sessionId: this.#sessionId,
+    };
     const task = (async () => {
       try {
         const applied = await this.#client.request<AppliedCommit>({
@@ -5312,7 +5413,7 @@ export class SpaceSession {
         if (isRetryableConflict(error)) {
           error.readyToRetry = () => this.#waitForCaughtUpLocalSeq(localSeq);
         }
-        pendingCommit.pending.reject(this.#withReadyToRetry(error, madeOn));
+        pendingCommit.pending.reject(this.#withReadyToRetry(error, sentOn));
       }
     })();
     this.#queueBackground(task);
@@ -5864,6 +5965,25 @@ export const unacknowledgedError = (message: string, cause?: unknown): Error =>
     delivery: "unacknowledged" satisfies ConnectionDelivery,
     ...(isOwnWriteFailure(cause) ? { ownWriteFailed: true } : {}),
   });
+
+/**
+ * Returns a failure like `failure`, which got as far as `delivery` says, that
+ * carries `readyToRetry`: a function resolving once the request can be made
+ * again. A drop fails every request it carried with one error, so each
+ * request's failure is an error of its own, and the readiness one carries is
+ * that request's.
+ */
+const withReadyToRetry = (
+  failure: Error,
+  delivery: ConnectionDelivery,
+  readyToRetry: () => Promise<void>,
+): Error =>
+  Object.assign(
+    delivery === "notSent"
+      ? notSentError(failure.message)
+      : unacknowledgedError(failure.message, failure.cause),
+    { readyToRetry },
+  );
 
 /** Returns how far the request `error` failed got, if it says. */
 export const connectionDeliveryOf = (
