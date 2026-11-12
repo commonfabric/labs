@@ -15,11 +15,13 @@ import { newSharedServer } from "./memory-v2-test-utils.ts";
 import {
   commitCustodySeal,
   CUSTODY_SEAL_READER,
+  type CustodyAnswerWatchUpdate,
   type CustodyRoom,
   prepareCustodySeal,
   publishCustodyAnswer,
   readCustodyAnswer,
   TRUSTED_DECLASSIFIER_CONCEPT,
+  watchCustodyAnswer,
 } from "../src/cfc/custody-seal.ts";
 import { ACLManager } from "../src/acl-manager.ts";
 import {
@@ -829,5 +831,178 @@ describe("custody answers", () => {
     } finally {
       await fixture.dispose();
     }
+  });
+
+  describe("watching", () => {
+    /**
+     * Watches the room as `identity`'s host does, and answers each report
+     * that satisfies a test, resolved by the watch's own report rather than
+     * by polling.
+     */
+    const watch = (
+      fixture: Fixture,
+      identity: Identity,
+      output: Cell<unknown>,
+      room: CustodyRoom = fixture.room(identity),
+    ) => {
+      const runtime = fixture.runtimes.get(identity)!;
+      const reports: CustodyAnswerWatchUpdate[] = [];
+      let waiting:
+        | {
+          test: (update: CustodyAnswerWatchUpdate) => boolean;
+          resolve: (update: CustodyAnswerWatchUpdate) => void;
+        }
+        | undefined;
+      const cancel = watchCustodyAnswer(
+        room,
+        runtime.getCellFromLink(output.getAsNormalizedFullLink()),
+        (update) => {
+          reports.push(update);
+          if (waiting?.test(update)) {
+            waiting.resolve(update);
+            waiting = undefined;
+          }
+        },
+      );
+      return {
+        reports,
+        cancel,
+        /** The first report from now on that `test` admits. */
+        until(test: (update: CustodyAnswerWatchUpdate) => boolean) {
+          const { promise, resolve } = Promise.withResolvers<
+            CustodyAnswerWatchUpdate
+          >();
+          waiting = { test, resolve };
+          return promise;
+        },
+      };
+    };
+    const published = (update: CustodyAnswerWatchUpdate) =>
+      update.status === "published";
+
+    it("publishes once the last seat seals, though the projected answer does not change", async () => {
+      // The projector answers before every seat has sealed, and its answer
+      // is the same once the last one has, so nothing the projected answer
+      // does says the room is ready: the box does.
+
+      const fixture = await setup();
+      try {
+        const box = boxOf(fixture);
+        const output = outputOf(fixture);
+        await fixture.seal(alice, "sushi", box);
+        expect(await fixture.project(alice, box, output)).toBe("sushi");
+        const watching = watch(fixture, bob, output);
+        try {
+          await watching.until((update) => update.status === "pending");
+          expect(watching.reports.every((update) => !("error" in update)))
+            .toBe(true);
+
+          const shown = watching.until(published);
+          await fixture.seal(bob, "sushi", box);
+          const update = await shown;
+
+          expect(update).toMatchObject({
+            status: "published",
+            publishedHere: true,
+            value: "sushi",
+          });
+          expect(await fixture.shown(mallory)).toBe("sushi");
+        } finally {
+          watching.cancel();
+        }
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("reports an answer another member published as not its own", async () => {
+      const fixture = await setup();
+      try {
+        const box = boxOf(fixture);
+        const output = outputOf(fixture);
+        await fixture.seal(alice, "sushi", box);
+        await fixture.seal(bob, "sushi", box);
+        expect(await fixture.project(bob, box, output)).toBe("sushi");
+        const { instance } = await fixture.publish(bob, output);
+        const watching = watch(fixture, mallory, output);
+        try {
+          expect(await watching.until(published)).toMatchObject({
+            status: "published",
+            instance,
+            publishedHere: false,
+            value: "sushi",
+          });
+        } finally {
+          watching.cancel();
+        }
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("reports pending, with no error, while the room has not proposed", async () => {
+      const fixture = await setup();
+      try {
+        const runtime = fixture.runtimes.get(bob)!;
+        const watching = watch(fixture, bob, outputOf(fixture), {
+          terms: runtime.getCell(S, "terms-not-yet-proposed"),
+          policy: fixture.policy,
+        });
+        try {
+          expect(await watching.until(() => true)).toEqual({
+            status: "pending",
+          });
+        } finally {
+          watching.cancel();
+        }
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("follows the room's terms to a fresh instance, which has published nothing", async () => {
+      const fixture = await setup();
+      try {
+        const box = boxOf(fixture);
+        const output = outputOf(fixture);
+        await fixture.seal(alice, "sushi", box);
+        await fixture.seal(bob, "sushi", box);
+        expect(await fixture.project(bob, box, output)).toBe("sushi");
+        const watching = watch(fixture, bob, output);
+        try {
+          const first = await watching.until(published);
+          const fresh = watching.until((update) => update.status === "pending");
+          await fixture.setTerms("Where should we eat tomorrow?");
+          expect(await fresh).toEqual({ status: "pending" });
+          expect(first).toMatchObject({ publishedHere: true });
+        } finally {
+          watching.cancel();
+        }
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("reports a policy the seal will not publish under as an error", async () => {
+      const fixture = await setup({ witnessed: false });
+      try {
+        const box = boxOf(fixture);
+        const output = outputOf(fixture);
+        await fixture.seal(alice, "sushi", box);
+        await fixture.seal(bob, "sushi", box);
+        const watching = watch(fixture, bob, output);
+        try {
+          const update = await watching.until(() => true);
+          expect(update.status).toBe("pending");
+          expect("error" in update && update.error).toContain(
+            "requires a policy whose every rule requires the seal's witness",
+          );
+        } finally {
+          watching.cancel();
+        }
+      } finally {
+        await fixture.dispose();
+      }
+    });
   });
 });

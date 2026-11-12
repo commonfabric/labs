@@ -46,11 +46,13 @@ import {
   isActorOwnedAlternative,
 } from "@commonfabric/memory/v2/cfc-release-authority";
 import { toUnpaddedBase64url } from "@commonfabric/bytes/base64url";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 import { utf8Compare } from "@commonfabric/text/utf8";
 
 import { profileNameWrittenAt } from "../builder/principal-of.ts";
+import type { Cancel } from "../cancel.ts";
 import { type Cell, cellRuntime, isCell } from "../cell.ts";
 import { resolveLink } from "../link-resolution.ts";
 import {
@@ -2084,6 +2086,30 @@ export async function commitCustodySeal(
   };
 }
 
+/**
+ * The refusals {@link publishCustodyAnswer} makes while an instance's answer
+ * is not, or is already, published: the seal is waiting for a seat, for the
+ * projector, or for a room that changed beneath it, or another member
+ * published first. Asking again later is how each one ends.
+ */
+const NOT_EVERY_SEAT_SEALED =
+  "Custody answer requires every seat to have sealed";
+const NOT_RELEASED_TO_SEAL =
+  "Custody answer requires a value the room's policy releases to the seal";
+const ALREADY_PUBLISHED =
+  "Custody answer is already published for this instance";
+const ROOM_CHANGED = "Custody answer's room changed while publishing";
+
+/**
+ * Whether `error` is one of the refusals {@link publishCustodyAnswer} makes
+ * while the instance's answer is not, or is already, published, rather than a
+ * failure: the instance's slot says which.
+ */
+export const isCustodyAnswerPending = (error: unknown): boolean =>
+  error instanceof Error &&
+  [NOT_EVERY_SEAT_SEALED, NOT_RELEASED_TO_SEAL, ALREADY_PUBLISHED, ROOM_CHANGED]
+    .includes(error.message);
+
 /** What {@link publishCustodyAnswer} published. */
 export interface CustodyAnswerResult {
   /** The instance's answer slot, in the room space. */
@@ -2248,35 +2274,107 @@ const sealedAnswer = (
   return { value: snapshotJsonValue((stored as { answer?: unknown }).answer) };
 };
 
+/** Where an instance's answer is published, as {@link locateCustodyAnswer} finds it. */
+export interface CustodyAnswerLocation {
+  /** The instance the room's terms digest to. */
+  readonly instance: string;
+
+  /**
+   * The instance's box, which holds an entry per seat once every seat has
+   * sealed.
+   */
+  readonly box: Cell<unknown>;
+
+  /** The instance's answer slot, in the room space. */
+  readonly slot: Cell<unknown>;
+
+  /**
+   * The published answer, verified to be the seal's write: the cell within
+   * the slot that holds it, and its value. `undefined` while nothing is
+   * published.
+   */
+  readonly published?: {
+    readonly answer: Cell<unknown>;
+    readonly value: JSONValue;
+  };
+}
+
 /**
- * Reads a custody instance's published answer: the value its answer slot
- * holds, verified to be the seal's own write, or `undefined` while nothing is
- * published. A host renders this, never a link a room holds, which the room's
- * members can write. The slot is that of the instance `room.terms` digest to,
- * under the policy `room.policy` names. Its content is create-only and the
- * seal's own, so the answer published for an instance never changes; which
- * instance this reads moves with `room.terms` and `room.policy`, which a room
- * member's own code can repoint at another instance's terms or at terms whose
- * slot is empty. A writer claim on the room's cells does not close that in
- * general, as write authority is keyed by code (normative CFC §8.15.8).
+ * Whether the room has proposed: its terms are written and, where its policy
+ * is a cell, so is that cell. A room whose `propose` has not run has no
+ * instance, which is not a room the seal refuses.
+ */
+const roomProposed = (runtime: Runtime, room: CustodyRoom): boolean => {
+  const tx = runtime.edit();
+  try {
+    const written = (cell: Cell<unknown>) => {
+      const value = cell.withTx(tx).resolveAsCell().getRawUntyped();
+      return value !== undefined && value !== null;
+    };
+    return written(room.terms) &&
+      (!isCell(room.policy) || written(room.policy));
+  } finally {
+    tx.abort();
+  }
+};
+
+/**
+ * Finds a custody instance's answer slot, and the answer it holds, verified
+ * to be the seal's own write; `undefined` while the room has no terms or no
+ * policy, as before its `propose` runs. A host shows the published answer,
+ * never a link a room holds, which the room's members can write. The slot is
+ * that of the instance `room.terms` digest to, under the policy
+ * `room.policy` names. Its content is create-only and the seal's own, so the
+ * answer published for an instance never changes; which instance this finds
+ * moves with `room.terms` and `room.policy`, which a room member's own code
+ * can repoint at another instance's terms or at terms whose slot is empty. A
+ * writer claim on the room's cells does not close that in general, as write
+ * authority is keyed by code (normative CFC §8.15.8).
  *
- * @throws If the slot holds something the seal did not write.
+ * @throws If the room's terms or policy are not ones the seal accepts, or the
+ *   slot holds something the seal did not write.
+ */
+export async function locateCustodyAnswer(
+  room: CustodyRoom,
+): Promise<CustodyAnswerLocation | undefined> {
+  const runtime = cellRuntime(room.terms);
+  await Promise.all([
+    syncResolved(room.terms),
+    isCell(room.policy) ? syncResolved(room.policy) : undefined,
+  ]);
+  if (!roomProposed(runtime, room)) return undefined;
+  const { policy, terms } = await inspectRoom(runtime, room, []);
+  const instance = hashStringOf(terms);
+  const box = boxCell(runtime, policy, instance);
+  const slot = answerCell(runtime, policy, instance);
+  await Promise.all([box.sync(), slot.sync()]);
+  const tx = runtime.edit();
+  try {
+    const sealed = sealedAnswer(tx, slot.getAsNormalizedFullLink(), instance);
+    return {
+      instance,
+      box,
+      slot,
+      ...(sealed === undefined
+        ? {}
+        : { published: { answer: slot.key("answer"), value: sealed.value } }),
+    };
+  } finally {
+    tx.abort();
+  }
+}
+
+/**
+ * Reads a custody instance's published answer, as
+ * {@link locateCustodyAnswer} finds it: `undefined` while nothing is
+ * published, or while the room has no terms or policy.
+ *
+ * @throws As {@link locateCustodyAnswer} does.
  */
 export async function readCustodyAnswer(
   room: CustodyRoom,
 ): Promise<JSONValue | undefined> {
-  const runtime = cellRuntime(room.terms);
-  await syncResolved(room.terms);
-  const { policy, terms } = await inspectRoom(runtime, room, []);
-  const instance = hashStringOf(terms);
-  const slot = answerCell(runtime, policy, instance);
-  await slot.sync();
-  const tx = runtime.edit();
-  try {
-    return sealedAnswer(tx, slot.getAsNormalizedFullLink(), instance)?.value;
-  } finally {
-    tx.abort();
-  }
+  return (await locateCustodyAnswer(room))?.published?.value;
 }
 
 /**
@@ -2331,13 +2429,13 @@ export async function publishCustodyAnswer(
   const written = await runtime.editWithRetry((tx) => {
     // The room read at inspection is the room published for.
     if (!evidenceHolds(tx, evidence)) {
-      throw new Error("Custody answer's room changed while publishing");
+      throw new Error(ROOM_CHANGED);
     }
     setCfcImplementationIdentity(tx, sealIdentity(instance));
     const answer = answerCell(runtime, policy, instance, tx);
     const answerLink = answer.getAsNormalizedFullLink();
     if (sealedAnswer(tx, answerLink, instance) !== undefined) {
-      throw new Error("Custody answer is already published for this instance");
+      throw new Error(ALREADY_PUBLISHED);
     }
     const anchorLink = anchor.getAsNormalizedFullLink();
     const boxLink = box.getAsNormalizedFullLink();
@@ -2349,7 +2447,7 @@ export async function publishCustodyAnswer(
       !absentOrSealed(tx, boxLink, instance) || !isObjectNotArray(entries) ||
       Object.keys(entries).length !== seats
     ) {
-      throw new Error("Custody answer requires every seat to have sealed");
+      throw new Error(NOT_EVERY_SEAT_SEALED);
     }
     const { value, released } = releasedToSeal(
       runtime,
@@ -2360,9 +2458,7 @@ export async function publishCustodyAnswer(
       instance,
     );
     if (!released) {
-      throw new Error(
-        "Custody answer requires a value the room's policy releases to the seal",
-      );
+      throw new Error(NOT_RELEASED_TO_SEAL);
     }
     // The one labeled read, as in the entry transaction: it attributes the
     // slot to the seal, which is what a reader verifies.
@@ -2378,3 +2474,156 @@ export async function publishCustodyAnswer(
   }
   return { answer: slot, instance, value: published!.value };
 }
+
+/** What {@link watchCustodyAnswer} reports each time it looks at the room. */
+export type CustodyAnswerWatchUpdate =
+  | {
+    /**
+     * Nothing is published for the room's instance, or the room has not
+     * proposed.
+     */
+    readonly status: "pending";
+
+    /**
+     * Why the last attempt to find or publish the answer failed, when it
+     * failed other than as the seal does while it waits
+     * ({@link isCustodyAnswerPending}).
+     */
+    readonly error?: string;
+  }
+  | {
+    /** The room's instance has a published answer. */
+    readonly status: "published";
+
+    /** The instance the answer was published for. */
+    readonly instance: string;
+
+    /** Whether this watch published it, rather than finding it published. */
+    readonly publishedHere: boolean;
+
+    /** The cell within the slot that holds the answer. */
+    readonly answer: Cell<unknown>;
+
+    /** The answer, verified to be the seal's write. */
+    readonly value: JSONValue;
+  };
+
+/**
+ * Publishes a room's answer once it can be, and reports what the room's
+ * instance has published, for as long as the watch lasts.
+ *
+ * Whether the seal can publish is decided by cells only the seal may read:
+ * the instance's box, which fills as members seal, and the projected answer,
+ * which the room's policy releases to the seal alone. So the watch, not its
+ * host, follows them. It looks at the room when it starts and whenever the
+ * terms, the policy cell, `output`, or the instance's box or answer slot
+ * change: it finds the instance's slot ({@link locateCustodyAnswer}), asks
+ * the seal to publish while the slot is empty ({@link publishCustodyAnswer}),
+ * and reports what the slot then holds. Looks are made one at a time, and
+ * changes made during one are looked at once after it. A box that fills
+ * without changing what the projector computes still publishes, since the
+ * watch follows the box itself.
+ *
+ * `onUpdate` is called after every look, with the same report again where
+ * nothing it reports changed. Nothing is reported or published once the
+ * watch is cancelled.
+ */
+export function watchCustodyAnswer(
+  room: CustodyRoom,
+  output: Cell<unknown>,
+  onUpdate: (update: CustodyAnswerWatchUpdate) => void,
+): Cancel {
+  let cancelled = false;
+  let running = false;
+  let again = false;
+  // The instance whose box and slot are followed, and how to stop.
+  let followed: { instance: string; cancel: Cancel } | undefined;
+  // The instances this watch published, which it says so of for as long as
+  // it reports them.
+  const publishedHere = new Set<string>();
+
+  const follow = (location: CustodyAnswerLocation | undefined): void => {
+    if (followed?.instance === location?.instance) return;
+    followed?.cancel();
+    followed = undefined;
+    if (location === undefined) return;
+    const cancelBox = location.box.sink(look);
+    const cancelSlot = location.slot.sink(look);
+    followed = {
+      instance: location.instance,
+      cancel: () => {
+        cancelBox();
+        cancelSlot();
+      },
+    };
+  };
+
+  const once = async (): Promise<void> => {
+    let location: CustodyAnswerLocation | undefined;
+    let error: string | undefined;
+    try {
+      location = await locateCustodyAnswer(room);
+      if (location !== undefined && !location.published && !cancelled) {
+        try {
+          publishedHere.add(
+            (await publishCustodyAnswer(room, output)).instance,
+          );
+        } catch (refused) {
+          if (!isCustodyAnswerPending(refused)) {
+            error = describeFailure(refused);
+          }
+        }
+        location = await locateCustodyAnswer(room);
+      }
+    } catch (failed) {
+      error = describeFailure(failed);
+    }
+    if (cancelled) return;
+    follow(location);
+    const published = location?.published;
+    onUpdate(
+      published === undefined
+        ? { status: "pending", ...(error === undefined ? {} : { error }) }
+        : {
+          status: "published",
+          instance: location!.instance,
+          publishedHere: publishedHere.has(location!.instance),
+          answer: published.answer,
+          value: published.value,
+        },
+    );
+  };
+
+  function look(): void {
+    if (cancelled) return;
+    if (running) {
+      again = true;
+      return;
+    }
+    running = true;
+    void (async () => {
+      try {
+        do {
+          again = false;
+          await once();
+        } while (again && !cancelled);
+      } finally {
+        running = false;
+      }
+    })();
+  }
+
+  const cancelTerms = room.terms.sink(look);
+  const cancelPolicy = isCell(room.policy) ? room.policy.sink(look) : noop;
+  const cancelOutput = output.sink(look);
+  return () => {
+    cancelled = true;
+    cancelTerms();
+    cancelPolicy();
+    cancelOutput();
+    followed?.cancel();
+    followed = undefined;
+  };
+}
+
+const noop: Cancel = () => {};
