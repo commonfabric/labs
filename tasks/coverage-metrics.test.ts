@@ -834,6 +834,16 @@ Deno.test("collectMeasuredSetDebt reads a record with no line as none at all", a
     });
     assertEquals(measured.files, 0);
     assertEquals(measured.uncoveredLines, 4);
+    // The group total reads it the same way.
+    expect(
+      await collectCoverageDebtMetricsFromLcov({
+        rootDir,
+        lcov: `SF:${bakery}\nend_of_record\n`,
+      }),
+    ).toContainEqual({
+      name: "coverage-debt: runtime/bakery uncovered lines",
+      uncoveredLines: 4,
+    });
   });
 });
 

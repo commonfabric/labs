@@ -145,8 +145,8 @@ export interface FileCoverageDebt {
   uncoveredLines: number;
 
   /**
-   * Whether the report has a record for the file. A file without one was
-   * charged by `debtWithoutCoverageRecord()`.
+   * Whether the report has a record naming at least one line of the
+   * file. A file without one was charged by `debtWithoutCoverageRecord()`.
    */
   hasRecord: boolean;
 }
@@ -161,7 +161,11 @@ export async function collectFileCoverageDebt(options: {
 }): Promise<FileCoverageDebt[]> {
   const files: FileCoverageDebt[] = [];
   for (const source of options.sourceFiles) {
-    const coverage = options.coverage.get(source.absolutePath);
+    const record = options.coverage.get(source.absolutePath);
+    // A record naming a file and carrying no line says nothing about it,
+    // so it is read as the absence of a record rather than as a file
+    // every line of which ran.
+    const coverage = record?.lineHits.size ? record : undefined;
     files.push({
       relativePath: source.relativePath,
       metricGroup: source.metricGroup,
@@ -249,21 +253,14 @@ export async function collectMeasuredSetDebt(
     options.member,
     options.members,
   );
-  const lcovCoverage = parseLcov(options.lcov, options.rootDir);
-  let uncoveredLines = 0;
-  let files = 0;
-  for (const source of sourceFiles) {
-    const record = lcovCoverage.get(source.absolutePath);
-    // A record naming a file and carrying no line says nothing about it,
-    // so it is read as the absence of a record rather than as a file
-    // every line of which ran.
-    const coverage = record?.lineHits.size ? record : undefined;
-    if (coverage) files += 1;
-    uncoveredLines += coverage
-      ? countUncoveredProfileLines(coverage)
-      : await debtWithoutCoverageRecord(source);
-  }
-  return { uncoveredLines, files };
+  const scored = await collectFileCoverageDebt({
+    sourceFiles,
+    coverage: parseLcov(options.lcov, options.rootDir),
+  });
+  return {
+    uncoveredLines: scored.reduce((sum, file) => sum + file.uncoveredLines, 0),
+    files: scored.filter((file) => file.hasRecord).length,
+  };
 }
 
 /** The tracked source files one workspace member owns. */

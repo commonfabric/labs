@@ -894,10 +894,11 @@ with equal counts are in path order, with paths compared character by character,
 so that capital letters come before lowercase ones. A line gives the file's
 uncovered line count, then `record` or `no-record`, then the file's
 repository-relative path. A `no-record` file is one the report has no record
-for. [How the two are scored](#how-the-two-are-scored) says what such a file is
-charged. The counts of a group's files add up to that group's total. `--under`
-limits the listing to the files at or below one repository-relative path, such
-as `--under=runtime/memory`. A path holding no tracked source file is an error.
+for, or only a record that names none of its lines. [How the two are
+scored](#how-the-two-are-scored) says what such a file is charged. The counts of
+a group's files add up to that group's total. `--under` limits the listing to
+the files at or below one repository-relative path, such as
+`--under=runtime/memory`. A path holding no tracked source file is an error.
 
 `--lcov` reads an LCOV file in place of `--profile-dir`. One such file is the
 [combined report](#a-combined-report-for-ides) of a `main` commit, which gives
