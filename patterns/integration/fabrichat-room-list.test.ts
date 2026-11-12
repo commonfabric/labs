@@ -44,6 +44,7 @@ import {
   listenServingMemoryServer,
   runsInWorker,
 } from "@commonfabric/runner/executor/serving-memory-server.deno";
+import { getTimingStatsBreakdown } from "@commonfabric/logger";
 import { rendererVDOMSchema } from "@commonfabric/runner/schemas";
 import {
   claimPatternEnvironment,
@@ -291,6 +292,14 @@ describe("fabrichat-room-list", () => {
     );
     return spaces.filter((space) => opened.has(space));
   };
+
+  /**
+   * How many plan reads the resume pre-sync's cross-space pass has made in
+   * this process (`runner/start/resumeCrossSpaceRead`).
+   */
+  const crossSpaceReads = (): number =>
+    getTimingStatsBreakdown().runner?.["start/resumeCrossSpaceRead"]?.count ??
+      0;
 
   /** How many documents `client` holds now in each of `spaces`. */
   function heldIn(client: Client, spaces: readonly DID[]): number[] {
@@ -651,6 +660,9 @@ describe("fabrichat-room-list", () => {
     let reader: Client;
     let client: Client;
 
+    /** The plan reads the resume pre-sync's cross-space pass made. */
+    let crossSpaceReadsAtBringUp: number;
+
     beforeAll(async () => {
       const made = await personWithRooms("carol", 2);
       rooms = made.rooms;
@@ -666,8 +678,10 @@ describe("fabrichat-room-list", () => {
       } finally {
         await reader.controller.dispose();
       }
+      const before = crossSpaceReads();
       client = await bootClient({ person: made.person });
       await listRooms(client, rooms.length);
+      crossSpaceReadsAtBringUp = crossSpaceReads() - before;
     });
 
     afterAll(async () => {
@@ -691,6 +705,13 @@ describe("fabrichat-room-list", () => {
 
     it("opens no session to any room's space, from bring-up on", () => {
       expect(openedOf(client, rooms)).toEqual([]);
+    });
+
+    it("runs no cross-space pass while it brings Home up", () => {
+      // The serving loop runs in this process under server execution, and
+      // its pass is counted with the clients'.
+      if (serving) return;
+      expect(crossSpaceReadsAtBringUp).toBe(0);
     });
   });
 
