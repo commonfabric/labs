@@ -1,6 +1,11 @@
 import { css, html, type PropertyValues } from "lit";
 import { BaseElement } from "../../core/base-element.ts";
 import { CFResizablePanel } from "../cf-resizable-panel/cf-resizable-panel.ts";
+import {
+  adopt,
+  owningGroupElement,
+  type PanelGroupMembers,
+} from "./membership.ts";
 
 /**
  * @fileoverview UI Resizable Panel Group Component - Container for resizable panels
@@ -64,7 +69,9 @@ interface PanelInfo {
  * @attribute {string} data-orientation - Set by the group: the direction its
  *   panels lie in now, "horizontal" or "vertical"
  *
- * @event {CustomEvent} cf-resize - Fired when panels are resized
+ * @event {CustomEvent} cf-resize - Fired on the group when a person resizes
+ *   its panels. It does not bubble, so a group nested in a panel does not
+ *   reach a listener on the outer group.
  *   @detail {Object} detail - Event detail object
  *   @detail {Array<{element: HTMLElement, size: number}>} detail.panels - Array of panel elements with their current sizes
  *
@@ -72,7 +79,8 @@ interface PanelInfo {
  *
  * @csspart panel-group - The main container element
  */
-export class CFResizablePanelGroup extends BaseElement {
+export class CFResizablePanelGroup extends BaseElement
+  implements PanelGroupMembers {
   static override properties = {
     direction: { type: String },
     stackBelow: { type: Number, attribute: "stack-below" },
@@ -128,41 +136,9 @@ export class CFResizablePanelGroup extends BaseElement {
       pointer-events: none;
     }
 
-    :host(.resizing) ::slotted(cf-resizable-handle) {
-      pointer-events: auto;
-    }
-
-    ::slotted(cf-resizable-panel) {
-      overflow: hidden;
-      position: relative;
-    }
-
-    ::slotted(cf-resizable-handle) {
-      flex-shrink: 0;
-      z-index: 10;
-    }
-
-    /* Horizontal layout */
-    .panel-group.direction-horizontal ::slotted(cf-resizable-panel) {
-      height: 100%;
-    }
-
-    .panel-group.direction-horizontal ::slotted(cf-resizable-handle) {
-      width: 6px;
-      height: 100%;
-      cursor: col-resize;
-    }
-
-    /* Vertical layout */
-    .panel-group.direction-vertical ::slotted(cf-resizable-panel) {
-      width: 100%;
-    }
-
-    .panel-group.direction-vertical ::slotted(cf-resizable-handle) {
-      width: 100%;
-      height: 6px;
-      cursor: row-resize;
-    }
+    /* Panels and handles lay themselves out by the data-orientation this
+    * group gives them, so one wrapped in another element, as an array's
+    * items are, is drawn as a direct child is. */
   `;
 
   constructor() {
@@ -175,7 +151,14 @@ export class CFResizablePanelGroup extends BaseElement {
   private _activeHandle: HTMLElement | null = null;
   private _startPosition = 0;
   private _startSizes: number[] = [];
-  private _observer: MutationObserver | null = null;
+  /** Each handle with a panel on both sides of it, and the indexes of those
+   * two panels. A handle at either end moves nothing. */
+  #handleNeighbors = new Map<HTMLElement, [number, number]>();
+  /** The panels and handles that joined this group, in no order. */
+  #members = new Set<HTMLElement>();
+  /** Set while the group adopts the members already in place, so that it
+   * reads them once rather than once for each. */
+  #adopting = false;
   /** The axis the panels' sizes were last written along. */
   #sizedDimension: "width" | "height" | undefined;
   /** The orientation the handles and panels were last given. */
@@ -196,28 +179,38 @@ export class CFResizablePanelGroup extends BaseElement {
   override connectedCallback() {
     super.connectedCallback();
 
-    // Set up mutation observer to watch for panel changes
-    this._observer = new MutationObserver(() => this.updatePanels());
-    this._observer.observe(this, { childList: true });
-    this.addEventListener("cf-panel-sizes", this.#onPanelSizes);
-    this.addEventListener("cf-panel-shown", this.#onPanelShown);
+    this.addEventListener("mousedown", this.handleMouseDown);
+    this.addEventListener("touchstart", this.handleTouchStart);
     this.#resizeObserver ??= new ResizeObserver((entries) => {
       const entry = entries.at(-1);
       if (entry) this._width = entry.contentRect.width;
     });
     this.#resizeObserver.observe(this);
 
-    // Initial panel setup
+    // Members join as they connect. Those already in place connected before
+    // this element was upgraded, or connect just after it in the same
+    // insertion; either way the group adopts them now.
+    this.#adopting = true;
+    try {
+      for (
+        const member of this.querySelectorAll<HTMLElement>(
+          "cf-resizable-panel, cf-resizable-handle",
+        )
+      ) {
+        if (owningGroupElement(member) === this) adopt(member, this);
+      }
+    } finally {
+      this.#adopting = false;
+    }
     this.updatePanels();
   }
 
   override disconnectedCallback() {
     super.disconnectedCallback();
 
-    // Clean up observer
-    this._observer?.disconnect();
-    this.removeEventListener("cf-panel-sizes", this.#onPanelSizes);
-    this.removeEventListener("cf-panel-shown", this.#onPanelShown);
+    if (this._activeHandle) this.#cancelResize();
+    this.removeEventListener("mousedown", this.handleMouseDown);
+    this.removeEventListener("touchstart", this.handleTouchStart);
     this.#resizeObserver?.disconnect();
     // Children taken out with the group are drawn wherever they go next.
     for (const [element, display] of this.#hidden) {
@@ -225,7 +218,6 @@ export class CFResizablePanelGroup extends BaseElement {
     }
     this.#hidden.clear();
     this.#laidOut = undefined;
-    this.#releaseHandles();
   }
 
   override render() {
@@ -273,22 +265,35 @@ export class CFResizablePanelGroup extends BaseElement {
     this.applyPanelSizes();
   }
 
-  /** A panel's sizes changed. The event bubbles, so a panel of a group
-   * nested in this one reaches this one too, and only its own group reads it. */
-  #onPanelSizes = (event: Event): void => {
-    if (this.#owns(event.target)) this.updatePanels();
-  };
+  memberJoined(member: HTMLElement): void {
+    this.#members.add(member);
+    if (this.isConnected && !this.#adopting) this.updatePanels();
+  }
+
+  memberLeft(member: HTMLElement): void {
+    if (!this.#members.delete(member)) return;
+    // A member leaves as this group found it: unsized and unoriented.
+    if (this.#sizedDimension) member.style[this.#sizedDimension] = "";
+    delete member.dataset.orientation;
+    // The members leave after the group when it is taken out with them.
+    if (this.isConnected) this.updatePanels();
+  }
+
+  panelSizesChanged(panel: HTMLElement): void {
+    if (this.#members.has(panel)) this.updatePanels();
+  }
+
   /** A panel's hideWhenStacked changed: its sizes did not, so a drag goes
    * on. */
-  #onPanelShown = (event: Event): void => {
-    if (this.#owns(event.target)) this.#relayOut();
-  };
+  panelShownChanged(panel: HTMLElement): void {
+    if (this.#members.has(panel)) this.#relayOut();
+  }
 
-  /** Whether `node` is this group's own: a group nested in one of its panels
-   * owns the panels and handles inside it. */
-  #owns(node: EventTarget | null): boolean {
-    return node instanceof Element &&
-      node.parentElement?.closest("cf-resizable-panel-group") === this;
+  /** The members, in document order. */
+  #ordered(): HTMLElement[] {
+    return [...this.#members].sort((a, b) =>
+      a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1
+    );
   }
 
   private updatePanels(): void {
@@ -296,14 +301,14 @@ export class CFResizablePanelGroup extends BaseElement {
     if (this._activeHandle) this.#cancelResize();
     const previous = new Map(this._panels);
     this._panels.clear();
-    this.#releaseHandles();
 
-    const panels = Array.from(this.querySelectorAll("cf-resizable-panel"))
-      .filter((panel) =>
-        panel instanceof CFResizablePanel && this.#owns(panel)
-      );
-    const handles = Array.from(this.querySelectorAll("cf-resizable-handle"))
-      .filter((handle) => this.#owns(handle));
+    const members = this.#ordered();
+    const panels = members.filter((member) =>
+      member instanceof CFResizablePanel
+    );
+    this._handles = members.filter((member) =>
+      !(member instanceof CFResizablePanel)
+    );
 
     // A panel's sizes are its properties, which its attributes set too: a
     // renderer assigns properties and sets no attribute. The sizes a person
@@ -331,53 +336,48 @@ export class CFResizablePanelGroup extends BaseElement {
       });
     });
 
-    // Set up handle event listeners
-    handles.forEach((handle) => {
-      this._handles.push(handle as HTMLElement);
-      (handle as HTMLElement).addEventListener(
-        "mousedown",
-        this.handleMouseDown,
-      );
-      (handle as HTMLElement).addEventListener(
-        "touchstart",
-        this.handleTouchStart,
-      );
-      handle.addEventListener(
-        "cf-handle-adjust",
-        this.handleAdjust as EventListener,
-      );
-      this.#orient(handle);
-    });
+    // A handle moves the nearest panel on each side of it.
+    this.#handleNeighbors.clear();
+    let before = -1;
+    let pending: HTMLElement[] = [];
+    for (const member of members) {
+      if (member instanceof CFResizablePanel) {
+        const index = panels.indexOf(member);
+        for (const handle of pending) {
+          if (before !== -1) this.#handleNeighbors.set(handle, [before, index]);
+        }
+        pending = [];
+        before = index;
+      } else pending.push(member);
+    }
 
-    // Apply initial sizes
+    for (const handle of this._handles) this.#orient(handle);
     this.applyPanelSizes();
   }
 
-  /** Stops answering the handles the group last found, and forgets them. */
-  #releaseHandles(): void {
-    for (const handle of this._handles) {
-      handle.removeEventListener("mousedown", this.handleMouseDown);
-      handle.removeEventListener("touchstart", this.handleTouchStart);
-      handle.removeEventListener(
-        "cf-handle-adjust",
-        this.handleAdjust as EventListener,
-      );
-    }
-    this._handles = [];
+  /** The handle a pointer went down on, if it is one of this group's: a
+   * press on a nested group's handle reaches this group too. */
+  #pressedHandle(event: Event): HTMLElement | undefined {
+    const path = event.composedPath();
+    return this._handles.find((handle) => path.includes(handle));
   }
 
   private handleMouseDown = (e: MouseEvent): void => {
+    const handle = this.#pressedHandle(e);
+    if (!handle) return;
     e.preventDefault();
-    this.startResize(e.target as HTMLElement, e.clientX, e.clientY);
+    this.startResize(handle, e.clientX, e.clientY);
 
     document.addEventListener("mousemove", this.handleMouseMove);
     document.addEventListener("mouseup", this.handleMouseUp);
   };
 
   private handleTouchStart = (e: TouchEvent): void => {
+    const handle = this.#pressedHandle(e);
+    if (!handle) return;
     e.preventDefault();
     const touch = e.touches[0];
-    this.startResize(e.target as HTMLElement, touch.clientX, touch.clientY);
+    this.startResize(handle, touch.clientX, touch.clientY);
 
     document.addEventListener("touchmove", this.handleTouchMove);
     document.addEventListener("touchend", this.handleTouchEnd);
@@ -420,7 +420,9 @@ export class CFResizablePanelGroup extends BaseElement {
   private resize(x: number, y: number): void {
     if (!this._activeHandle) return;
 
-    const handleIndex = this._handles.indexOf(this._activeHandle);
+    const neighbors = this.#handleNeighbors.get(this._activeHandle);
+    if (!neighbors) return;
+    const [before, after] = neighbors;
 
     const panels = Array.from(this._panels.values());
     const horizontal = this.orientation === "horizontal";
@@ -432,29 +434,29 @@ export class CFResizablePanelGroup extends BaseElement {
     const deltaPercent = (delta / totalSize) * 100 / this.#scale;
 
     // Update sizes of panels adjacent to the handle
-    const leftPanel = panels[handleIndex];
-    const rightPanel = panels[handleIndex + 1];
+    const leftPanel = panels[before];
+    const rightPanel = panels[after];
 
     if (leftPanel && rightPanel) {
       const newLeftSize = Math.max(
         leftPanel.minSize,
         Math.min(
           leftPanel.maxSize,
-          this._startSizes[handleIndex] + deltaPercent,
+          this._startSizes[before] + deltaPercent,
         ),
       );
       const newRightSize = Math.max(
         rightPanel.minSize,
         Math.min(
           rightPanel.maxSize,
-          this._startSizes[handleIndex + 1] - deltaPercent,
+          this._startSizes[after] - deltaPercent,
         ),
       );
 
       // Ensure the total size remains constant
       const totalNewSize = newLeftSize + newRightSize;
-      const totalOldSize = this._startSizes[handleIndex] +
-        this._startSizes[handleIndex + 1];
+      const totalOldSize = this._startSizes[before] +
+        this._startSizes[after];
 
       if (Math.abs(totalNewSize - totalOldSize) < 0.1) {
         leftPanel.currentSize = newLeftSize;
@@ -462,12 +464,7 @@ export class CFResizablePanelGroup extends BaseElement {
         this.applyPanelSizes();
 
         // Emit resize event
-        this.emit("cf-resize", {
-          panels: panels.map((p) => ({
-            element: p.element,
-            size: p.currentSize,
-          })),
-        });
+        this.#emitResize(panels);
       }
     }
   }
@@ -486,16 +483,15 @@ export class CFResizablePanelGroup extends BaseElement {
     this.endResize();
   }
 
-  private handleAdjust = (e: CustomEvent<{ delta: number }>): void => {
-    const handle = e.target as HTMLElement;
-    const handleIndex = this._handles.indexOf(handle);
+  handleAdjusted(handle: HTMLElement, delta: number): void {
+    const neighbors = this.#handleNeighbors.get(handle);
+    if (!neighbors) return;
 
     const panels = Array.from(this._panels.values());
-    const leftPanel = panels[handleIndex];
-    const rightPanel = panels[handleIndex + 1];
+    const leftPanel = panels[neighbors[0]];
+    const rightPanel = panels[neighbors[1]];
 
     if (leftPanel && rightPanel) {
-      const delta = e.detail.delta;
       const adjustAmount = Math.min(Math.abs(delta), 5) * Math.sign(delta) /
         this.#scale;
 
@@ -525,15 +521,18 @@ export class CFResizablePanelGroup extends BaseElement {
         handle.setAttribute("aria-valuenow", percentage.toString());
 
         // Emit resize event
-        this.emit("cf-resize", {
-          panels: panels.map((p) => ({
-            element: p.element,
-            size: p.currentSize,
-          })),
-        });
+        this.#emitResize(panels);
       }
     }
-  };
+  }
+
+  /** Tells listeners on this group the panels' sizes. It does not bubble,
+   * so a listener on a group never hears a group nested inside it. */
+  #emitResize(panels: PanelInfo[]): void {
+    this.emit("cf-resize", {
+      panels: panels.map((p) => ({ element: p.element, size: p.currentSize })),
+    }, { bubbles: false, composed: false });
+  }
 
   /** Gives a handle the group's orientation: its grip reads
    * `data-orientation`, and assistive technology reads `aria-orientation`,
@@ -576,10 +575,12 @@ export class CFResizablePanelGroup extends BaseElement {
       if (hide[i]) hidden.add(panel.element);
       if (stale) panel.element.style[stale] = "";
       panel.element.style[dimension] = `${panel.currentSize * scale}%`;
+      panel.element.dataset.orientation = orientation;
     });
-    this._handles.forEach((handle, i) => {
-      if (hide[i] || hide[i + 1]) hidden.add(handle);
-    });
+    for (const handle of this._handles) {
+      const neighbors = this.#handleNeighbors.get(handle);
+      if (neighbors?.some((i) => hide[i])) hidden.add(handle);
+    }
     for (const [element, display] of this.#hidden) {
       if (hidden.has(element)) continue;
       element.style.display = display;

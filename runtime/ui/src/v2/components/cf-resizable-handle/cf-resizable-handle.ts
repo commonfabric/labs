@@ -1,6 +1,10 @@
 import { css, html } from "lit";
 import { BaseElement } from "../../core/base-element.ts";
-import type { CFResizablePanelGroup } from "../cf-resizable-panel-group/cf-resizable-panel-group.ts";
+import {
+  groupOf,
+  joinGroup,
+  leaveGroup,
+} from "../cf-resizable-panel-group/membership.ts";
 
 /**
  * @component cf-resizable-handle
@@ -8,11 +12,9 @@ import type { CFResizablePanelGroup } from "../cf-resizable-panel-group/cf-resiz
  *
  * @tag cf-resizable-handle
  *
- * @attribute {boolean} with-handle - Whether to show the visual grip indicator. Defaults to true.
- *
- * @event {CustomEvent} cf-handle-adjust - Fired when handle is adjusted via keyboard
- * @event-detail {Object} detail - Event detail object
- * @event-detail {number} detail.delta - The adjustment amount (-100 to 100)
+ * @property {boolean} withHandle - Whether to show the visual grip
+ *   indicator. Defaults to true; the property turns it off, since a boolean
+ *   attribute is true whatever its value.
  *
  * @csspart handle - The handle container element
  * @csspart grip - The visual grip indicator (when with-handle is true)
@@ -30,8 +32,11 @@ import type { CFResizablePanelGroup } from "../cf-resizable-panel-group/cf-resiz
  *   </cf-resizable-panel>
  * </cf-resizable-panel-group>
  *
- * <!-- Handle without visual indicator -->
- * <cf-resizable-handle with-handle="false"></cf-resizable-handle>
+ * ```
+ *
+ * A handle without the grip, in a pattern:
+ * ```tsx
+ * <cf-resizable-handle withHandle={false} />
  * ```
  *
  * @accessibility
@@ -47,7 +52,8 @@ import type { CFResizablePanelGroup } from "../cf-resizable-panel-group/cf-resiz
  * - Home - Set to minimum size
  * - End - Set to maximum size
  *
- * @note Must be used between cf-resizable-panel elements within a cf-resizable-panel-group
+ * @note Moves the nearest panel on each side of it in its group: the nearest
+ *   cf-resizable-panel-group above it, whatever elements stand between them
  */
 export class CFResizableHandle extends BaseElement {
   static override properties = {
@@ -65,6 +71,25 @@ export class CFResizableHandle extends BaseElement {
 
     :host(:hover) {
       background: var(--border-hover, hsl(0, 0%, 78%));
+    }
+
+    /* Set by the group: the handle is a line across the axis the panels lie
+    * on. */
+    :host([data-orientation]) {
+      flex-shrink: 0;
+      z-index: 10;
+    }
+
+    :host([data-orientation="horizontal"]) {
+      width: 6px;
+      height: 100%;
+      cursor: col-resize;
+    }
+
+    :host([data-orientation="vertical"]) {
+      width: 100%;
+      height: 6px;
+      cursor: row-resize;
     }
 
     :host(:focus-visible) {
@@ -175,11 +200,13 @@ export class CFResizableHandle extends BaseElement {
 
     // Add keyboard support
     this.addEventListener("keydown", this.handleKeyDown);
+    joinGroup(this);
   }
 
   override disconnectedCallback() {
     super.disconnectedCallback();
     this.removeEventListener("keydown", this.handleKeyDown);
+    leaveGroup(this);
   }
 
   override render() {
@@ -195,9 +222,7 @@ export class CFResizableHandle extends BaseElement {
   }
 
   private handleKeyDown = (e: KeyboardEvent): void => {
-    const panelGroup = this.closest<CFResizablePanelGroup>(
-      "cf-resizable-panel-group",
-    );
+    const panelGroup = groupOf(this);
     if (!panelGroup) return;
 
     // The group's orientation, not its attribute: a renderer assigns
@@ -249,7 +274,6 @@ export class CFResizableHandle extends BaseElement {
   };
 
   private adjustSize(delta: number): void {
-    // Emit a custom event that the panel group can listen to
-    this.emit("cf-handle-adjust", { delta });
+    groupOf(this)?.handleAdjusted(this, delta);
   }
 }
