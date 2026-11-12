@@ -2271,7 +2271,13 @@ const settleRetirement = (
       if (retirement.candidates.size > 0) continue;
       if (retirement.suspects.size === 0) break;
       sweepSuspects(state, retirement, changedMisses);
-      if (retirement.emptied.size === 0) break;
+      // A record the sweep retires can orphan what its walk reached, with
+      // or without emptying a document.
+      if (
+        retirement.emptied.size === 0 && retirement.candidates.size === 0
+      ) {
+        break;
+      }
       continue;
     }
     const docs = [...retirement.rewalkDocs];

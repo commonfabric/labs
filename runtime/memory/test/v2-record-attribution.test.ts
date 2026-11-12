@@ -273,6 +273,73 @@ describe("v2-record-attribution", () => {
       });
     });
 
+    it("retracts what a cycle between records reached when every document of the cycle keeps another record", async () => {
+      // As above, but `of:y` has a watch of its own too, so retiring the
+      // cycle empties no document, and only the cycle's record of `of:y`
+      // reaches `of:z`.
+
+      await withEngine((engine) => {
+        commit(engine, [
+          set("of:list", { item: link("of:x") }),
+          set("of:x", { name: "x", child: link("of:y") }),
+          set("of:y", { name: "y", back: link("of:x"), next: link("of:z") }),
+          set("of:z", { name: "z" }),
+        ]);
+        const x = {
+          type: "object",
+          properties: {
+            name: { type: "string" },
+            child: {
+              type: "object",
+              properties: { back: { $ref: "#/$defs/X" }, next: nameOnly },
+            },
+          },
+        } as const;
+        const tracked = trackGraph(
+          space,
+          engine,
+          {
+            roots: [
+              {
+                id: "of:list",
+                selector: {
+                  path: [],
+                  schema: {
+                    $defs: { X: x },
+                    type: "object",
+                    properties: { item: { $ref: "#/$defs/X" } },
+                  },
+                },
+              },
+              xRoot(nameOnly),
+              {
+                id: "of:y",
+                selector: { path: [], schema: nameOnly },
+              },
+            ],
+          },
+          undefined,
+          identity,
+        );
+        expect(ids(tracked.state.entities.keys())).toContain("of:z");
+
+        commit(engine, [set("of:list", {})]);
+        const refreshed = refreshTrackedGraph(
+          space,
+          engine,
+          tracked.state,
+          new Set([toDirtyKey("of:list")]),
+        );
+
+        expect(ids(refreshed!.removed)).toEqual(["of:z"]);
+        expect(ids(tracked.state.entities.keys())).toEqual([
+          "of:list",
+          "of:x",
+          "of:y",
+        ]);
+      });
+    });
+
     it("keeps what a root reaches through a document it walks without a schema after another record of the document stops reaching it", async () => {
       // A `true` schema walks `of:x`'s `a` link by link: `first` reaches
       // `of:y`, which links back to `of:x` under a record of its own, and

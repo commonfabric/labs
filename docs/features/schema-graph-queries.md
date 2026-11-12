@@ -66,11 +66,12 @@ caller keeps them, walks them under a schema, and records what it reached.
   consumers of traversed values observe; see the OFF-ARM NEUTRALITY note at
   that site for what gates enabling it.
 - A walk reports each tracker record it makes, or finds the tracker already
-  holding, to the `onTrackedDoc` hook of its options, with the record whose
-  walk needed it (`trackedRecordKey`, one document under one selector): the
-  record of the document holding the link that was followed, or of the
-  document whose schema or `cfc` envelope named a schema document, or the
-  referrer `visit()` was given for a root. A document is walked under the
+  holding, to the `onTrackedDoc` hook of its options: the record's tracker
+  key and selector, and the referrer whose walk needed it, which is the key
+  (`trackedRecordKey`, one document under one selector) of the record
+  walking the document that holds the link that was followed, or whose
+  schema or `cfc` envelope named a schema document, or the referrer
+  `visit()` was given for a root. A document is walked under the
   record a visit or a followed link entered it by while the traversal of
   the position that entered it lasts, which the traversal reports through
   `TraversalContext.records`; the schema memo is kept per record, so a

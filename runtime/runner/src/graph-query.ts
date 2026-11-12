@@ -145,8 +145,10 @@ export type GraphQueryWalkOptions = {
   /**
    * Receives one call per SAME-SPACE document a value-link hop tried to
    * read and found ABSENT: the miss's tracker-style key, the
-   * target-rooted selector the read needed, and the key of the REFERRER
-   * document whose link dead-ended. A value link the walk dead-ends on
+   * target-rooted selector the read needed, and the REFERRER whose link
+   * dead-ended: the record walking the document that holds the link
+   * (`trackedRecordKey`), or that document's tracker key where the walk
+   * entered no record of it. A value link the walk dead-ends on
    * is a READ of that document, so the graph must stay reactive to it:
    * the recorded miss is what lets the target's later CREATION re-fire
    * the query — the session wake pass and the dirty refresh both consult
@@ -172,8 +174,8 @@ export type GraphQueryWalkOptions = {
   /**
    * Receives one call per value link the walk followed into ANOTHER space:
    * the target's crossing key (`crossingDocKey`), the target-rooted
-   * selector the read needed there, and the key of the referrer document
-   * whose link crossed. The walk reads one space, so the target is never
+   * selector the read needed there, and the referrer whose link crossed,
+   * named as a miss's referrer is. The walk reads one space, so the target is never
    * loaded here; a client told of the crossing loads it from the target
    * space under that selector. Attributed to the referrer the way a miss
    * is, so a referrer re-walked without the link retires it.
@@ -188,9 +190,11 @@ export type GraphQueryWalkOptions = {
    * Receives one call per selector the walk records in the schema tracker,
    * or finds the tracker already covering (see
    * `TraversalContext.onTrackedDoc`): the tracker key, the selector, the
-   * key of the REFERRER whose walk needed it — a document reached through
-   * a link attributes to the document holding the link, a root to the
-   * referrer `visit()` was given — and whether the referrer's walk recorded
+   * REFERRER whose walk needed it — for a document reached through a link,
+   * the record walking the document that holds the link
+   * (`trackedRecordKey`), or that document's tracker key where the walk
+   * entered no record of it; for a root, the referrer `visit()` was given —
+   * and whether the referrer's walk recorded
    * the selector (`walked`) or was skipped because it covers the
    * referrer's own (`covered`). Attributed like a miss, so a referrer
    * re-walked without the link, or a root released, retires what nothing
@@ -341,9 +345,13 @@ export class GraphQueryWalk {
           // A walked record other than the one the source is walked under,
           // another document's or another of its own, is the record the
           // walk continues under for as long as the position being
-          // traversed now lasts, if it continues into that document.
+          // traversed now lasts, if it continues into that document. The
+          // traversal's own record of an explicit instance's root, under
+          // the derived key, is the root's walk, not another.
           if (
-            kind === "walked" && referrer !== trackedRecordKey(key, selector)
+            kind === "walked" &&
+            referrer !==
+              trackedRecordKey(this.#keyOverrides.get(key) ?? key, selector)
           ) {
             this.#enter(key, selector);
           }
@@ -360,12 +368,15 @@ export class GraphQueryWalk {
     this.stats = options.stats ?? createGraphQueryWalkStats();
   }
 
-  /** Notes that the walk entered `docKey`'s record under `selector`. */
+  /** Notes that the walk entered `docKey`'s record under `selector`, kept
+   * under the key a referrer in that document resolves to, which is the
+   * explicit instance's when a visit to one is overriding `docKey`. */
   #enter(docKey: string, selector: SchemaPathSelector): void {
-    let entered = this.#entered.get(docKey);
+    const at = this.#keyOverrides.get(docKey) ?? docKey;
+    let entered = this.#entered.get(at);
     if (entered === undefined) {
       entered = [];
-      this.#entered.set(docKey, entered);
+      this.#entered.set(at, entered);
     }
     entered.push({
       record: trackedRecordKey(docKey, selector),

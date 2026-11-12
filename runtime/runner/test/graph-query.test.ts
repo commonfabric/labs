@@ -545,6 +545,49 @@ describe("graph-query", () => {
             trackedRecordKey(keyFor("of:x"), selector),
           ]);
         });
+
+        it("attributes what a document entered again reaches to that record when the root names an explicit instance", () => {
+          // The root's own record is kept under the instance's key, and the
+          // record a link enters under the key the tracker resolves, so a
+          // lookup by either key finds the record walking the document.
+
+          const explicitKey = `${SPACE}/user:did%3Atest%3Abob/of:x` as const;
+          const inner = {
+            type: "object",
+            properties: {
+              last: { type: "object", properties: { n: { type: "number" } } },
+            },
+          } as const;
+          const outer = {
+            path: ["value"],
+            schema: {
+              type: "object",
+              properties: {
+                first: { type: "object", properties: { back: inner } },
+              },
+            },
+          } satisfies SchemaPathSelector;
+          const reports: [string, SchemaPathSelector, string | undefined][] =
+            [];
+          const { manager, walk } = walkOver(documents, {
+            onTrackedDoc: (key, selector, referrer, kind) => {
+              if (kind === "walked") reports.push([key, selector, referrer]);
+            },
+          });
+
+          walk.visit(documentFor(manager, "of:x"), outer, explicitKey, "root");
+
+          const entered = reports.filter(([key, , referrer]) =>
+            key === keyFor("of:x") &&
+            referrer?.startsWith(`${keyFor("of:y")}\0`)
+          );
+          expect(entered).toHaveLength(1);
+          expect(
+            reports.filter(([key]) => key === keyFor("of:z")).map((
+              [, , referrer],
+            ) => referrer),
+          ).toEqual([trackedRecordKey(keyFor("of:x"), entered[0][1])]);
+        });
       });
 
       describe("over a document two documents link to", () => {
