@@ -59,13 +59,30 @@ const ROOT_PATH = join(import.meta.dirname!, "..");
 /** Whether this run's harness serves handlers from a serving loop. */
 const SERVER_EXECUTION = resolveServerExecution();
 
+/**
+ * The count of messages the CFC logger keyed `key`, out of one runtime's
+ * logger counts.
+ */
+const cfcCount = (
+  counts: Record<string, Record<string, { total: number }> | number>,
+  key: string,
+): number => {
+  const cfc = counts.cfc;
+  return typeof cfc === "object" ? cfc[key]?.total ?? 0 : 0;
+};
+
 /** The CFC write gate's refusals, out of one runtime's logger counts. */
 const writeRefusals = (
   counts: Record<string, Record<string, { total: number }> | number>,
-): number => {
-  const cfc = counts.cfc;
-  return typeof cfc === "object" ? cfc["write-policy-gate"]?.total ?? 0 : 0;
-};
+): number => cfcCount(counts, "write-policy-gate");
+
+/**
+ * The writer-fit misfits of a served run's cross-holder clauses (§8.12.5.1),
+ * out of one runtime's logger counts.
+ */
+const crossHolderMisfits = (
+  counts: Record<string, Record<string, { total: number }> | number>,
+): number => cfcCount(counts, "writer-fit-cross-holder");
 
 /**
  * The trusted surface and action of the button on Home's refusal notice, as
@@ -1347,15 +1364,15 @@ describe("private inbox across runtimes", () => {
   }, async () => {
     await offer("private");
 
-    const refusedBefore = writeRefusals(
-      (await harness.servingDiagnostics()).loggerCounts,
-    );
+    const before = (await harness.servingDiagnostics()).loggerCounts;
     await stranger.send("copyOffers");
     await harness.settle();
-    expect(writeRefusals((await harness.servingDiagnostics()).loggerCounts))
-      .toBeGreaterThan(
-        refusedBefore,
-      );
+    // Refused for the copy's own write: the misfit is the holder rule's.
+    const after = (await harness.servingDiagnostics()).loggerCounts;
+    expect(writeRefusals(after)).toBeGreaterThan(writeRefusals(before));
+    expect(crossHolderMisfits(after)).toBeGreaterThan(
+      crossHolderMisfits(before),
+    );
     expect(await stranger.read(["copiedOffers"])).toEqual([]);
   });
 
