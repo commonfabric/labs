@@ -273,10 +273,23 @@ export class CFResizablePanelGroup extends BaseElement {
     this.applyPanelSizes();
   }
 
-  #onPanelSizes = (): void => this.updatePanels();
+  /** A panel's sizes changed. The event bubbles, so a panel of a group
+   * nested in this one reaches this one too, and only its own group reads it. */
+  #onPanelSizes = (event: Event): void => {
+    if (this.#owns(event.target)) this.updatePanels();
+  };
   /** A panel's hideWhenStacked changed: its sizes did not, so a drag goes
    * on. */
-  #onPanelShown = (): void => this.#relayOut();
+  #onPanelShown = (event: Event): void => {
+    if (this.#owns(event.target)) this.#relayOut();
+  };
+
+  /** Whether `node` is this group's own: a group nested in one of its panels
+   * owns the panels and handles inside it. */
+  #owns(node: EventTarget | null): boolean {
+    return node instanceof Element &&
+      node.parentElement?.closest("cf-resizable-panel-group") === this;
+  }
 
   private updatePanels(): void {
     // A drag measures from the sizes it started with, so a re-read ends it.
@@ -286,8 +299,11 @@ export class CFResizablePanelGroup extends BaseElement {
     this.#releaseHandles();
 
     const panels = Array.from(this.querySelectorAll("cf-resizable-panel"))
-      .filter((panel) => panel instanceof CFResizablePanel);
-    const handles = Array.from(this.querySelectorAll("cf-resizable-handle"));
+      .filter((panel) =>
+        panel instanceof CFResizablePanel && this.#owns(panel)
+      );
+    const handles = Array.from(this.querySelectorAll("cf-resizable-handle"))
+      .filter((handle) => this.#owns(handle));
 
     // A panel's sizes are its properties, which its attributes set too: a
     // renderer assigns properties and sets no attribute. The sizes a person

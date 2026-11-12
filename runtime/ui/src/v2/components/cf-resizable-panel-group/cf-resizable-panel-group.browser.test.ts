@@ -501,3 +501,44 @@ Deno.test("a panel marked in the same turn the group starts stacking still turns
   expect(page.handle.dataset.orientation).toBe("vertical");
   expect(page.first.style.display).toBe("none");
 });
+
+Deno.test("a group nested in a panel sizes its own panels, and the outer group sizes only its own", async () => {
+  using outer = built("horizontal");
+  const inner = new CFResizablePanelGroup();
+  inner.direction = "vertical";
+  const top = new CFResizablePanel();
+  top.setAttribute("default-size", "30");
+  const innerHandle = new CFResizableHandle();
+  const bottom = new CFResizablePanel();
+  bottom.setAttribute("default-size", "70");
+  inner.append(top, innerHandle, bottom);
+  outer.first.append(inner);
+  document.body.append(outer.group);
+  await laidOut(outer.group);
+  await inner.updateComplete;
+
+  expect(outer.first.style.width).toBe("36%");
+  expect(outer.second.style.width).toBe("64%");
+  expect(top.style.height).toBe("30%");
+  expect(bottom.style.height).toBe("70%");
+  expect(top.style.width).toBe("");
+  expect(bottom.style.width).toBe("");
+  expect(innerHandle.dataset.orientation).toBe("vertical");
+  expect(top.getBoundingClientRect().width).toBe(
+    outer.first.getBoundingClientRect().width,
+  );
+
+  // A size change in the inner group is the inner group's alone.
+  top.defaultSize = 40;
+  await laidOut(outer.group);
+  expect(top.style.height).toBe("40%");
+  expect(top.style.width).toBe("");
+  expect(outer.first.style.width).toBe("36%");
+
+  // The outer handle moves the outer panels and leaves the inner ones be.
+  outer.handle.focus();
+  await pressKey("ArrowRight");
+  expect(outer.first.style.width).toBe("37%");
+  expect(top.style.height).toBe("40%");
+  expect(top.style.width).toBe("");
+});
