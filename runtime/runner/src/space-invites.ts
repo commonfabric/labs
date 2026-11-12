@@ -263,8 +263,9 @@ export class SpaceInviteClient {
    * Reads, as the signer, what the invitation shows before it is redeemed:
    * its access, the names its issuer gave the space and themself, and the
    * profile its issuer suggests. Consumes no use. Always a signed HTTP
-   * request: the one previewing holds no grant on the space, so it has no
-   * session to send on. A service whose capability lacks `preview` answers
+   * request, even when this client holds a session or has redeemed, so it
+   * works for one still deciding whether to redeem, who has no session. A
+   * service whose capability lacks `preview` answers
    * `invite-service-unsupported`.
    *
    * @throws SpaceInviteError with the service's code when the service refuses
