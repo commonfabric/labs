@@ -50,7 +50,6 @@ import {
   type NearestResult,
 } from "./lib/interaction.ts";
 
-const RESIZE_DEBOUNCE_MS = 100;
 const DEFAULT_HEIGHT = 200;
 
 /** Normalize boolean | AxisConfig → AxisConfig | null */
@@ -87,19 +86,14 @@ export class CFChart extends BaseElement {
   declare padding: number | [number, number, number, number] | undefined;
   declare crosshair: boolean;
 
-  //
-  // Internal state
-  //
-
-  private _width = 0;
-  private _childMarks: MarkElement[] = [];
-  private _resizeObserver: ResizeObserver | null = null;
-  private _resizeTimeoutId: ReturnType<typeof setTimeout> | null = null;
-  private _crosshairX: number | null = null;
-  private _tooltipInfo: NearestResult | null = null;
+  #width = 0;
+  #childMarks: MarkElement[] = [];
+  #resizeObserver: ResizeObserver | null = null;
+  #crosshairX: number | null = null;
+  #tooltipInfo: NearestResult | null = null;
 
   /** Cell controller for the `$marks` prop. */
-  private _marksController = createCellController<MarkConfig[]>(this, {
+  #marksController = createCellController<MarkConfig[]>(this, {
     timing: { strategy: "immediate" },
   });
 
@@ -113,64 +107,48 @@ export class CFChart extends BaseElement {
 
   override connectedCallback(): void {
     super.connectedCallback();
-    this.addEventListener("mark-update", this._onMarkUpdate as EventListener);
+    this.addEventListener("mark-update", this.#onMarkUpdate);
   }
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
-    this.removeEventListener("mark-update", this._onMarkUpdate as EventListener);
-    this._cleanup();
+    this.removeEventListener("mark-update", this.#onMarkUpdate);
+    this.#resizeObserver?.disconnect();
+    this.#resizeObserver = null;
   }
 
-  protected override firstUpdated(_changedProperties: PropertyValues): void {
-    super.firstUpdated(_changedProperties);
-
-    if (this.marks !== undefined) {
-      this._marksController.bind(this.marks);
-    }
-
-    // Set up ResizeObserver
-    const container = this.shadowRoot?.querySelector(".chart-container") as HTMLElement;
-    if (container) {
-      this._resizeObserver = new ResizeObserver((entries) => {
-        if (this._resizeTimeoutId !== null) {
-          clearTimeout(this._resizeTimeoutId);
-        }
-        this._resizeTimeoutId = setTimeout(() => {
-          const entry = entries[0];
-          if (entry) {
-            this._width = entry.contentRect.width;
-            this.requestUpdate();
-          }
-          this._resizeTimeoutId = null;
-        }, RESIZE_DEBOUNCE_MS);
-      });
-      this._resizeObserver.observe(container);
-
-      // Initial width measurement
-      this._width = container.clientWidth;
-    }
-
-    // Discover initial slotted marks
-    this._discoverChildMarks();
-  }
-
-  protected override updated(changedProperties: PropertyValues): void {
-    super.updated(changedProperties);
-
+  protected override willUpdate(changedProperties: PropertyValues): void {
+    super.willUpdate(changedProperties);
     if (changedProperties.has("marks") && this.marks !== undefined) {
-      this._marksController.bind(this.marks);
+      this.#marksController.bind(this.marks);
     }
+  }
+
+  protected override firstUpdated(changedProperties: PropertyValues): void {
+    super.firstUpdated(changedProperties);
+
+    // The observer reports the container's size when it starts observing,
+    // and again whenever that size changes.
+    const container = this.shadowRoot?.querySelector(".chart-container");
+    if (container) {
+      this.#resizeObserver = new ResizeObserver(([entry]) => {
+        this.#width = entry.contentRect.width;
+        this.requestUpdate();
+      });
+      this.#resizeObserver.observe(container);
+    }
+
+    this.#discoverChildMarks();
   }
 
   override render() {
-    const chartPadding = this._computePadding();
-    const plotWidth = Math.max(0, this._width - chartPadding.left - chartPadding.right);
+    const chartPadding = this.#computePadding();
+    const plotWidth = Math.max(0, this.#width - chartPadding.left - chartPadding.right);
     const plotHeight = Math.max(0, this.height - chartPadding.top - chartPadding.bottom);
 
     // Collect mark data
-    const configMarks = this._getConfigMarks();
-    const allMarks = collectAllMarkData(configMarks, this._childMarks);
+    const configMarks = this.#getConfigMarks();
+    const allMarks = collectAllMarkData(configMarks, this.#childMarks);
 
     // Compute scales (skip if no data or no width)
     let xScale: XScale | null = null;
@@ -178,7 +156,7 @@ export class CFChart extends BaseElement {
     let xType: XScaleType = "linear";
 
     if (allMarks.some((m) => m.points.length > 0) && plotWidth > 0 && plotHeight > 0) {
-      const scales = createScales(allMarks, this._width, this.height, chartPadding, {
+      const scales = createScales(allMarks, this.#width, this.height, chartPadding, {
         xType: this.xType,
         yType: this.yType,
         xDomain: this.xDomain,
@@ -190,7 +168,7 @@ export class CFChart extends BaseElement {
     }
 
     const svgContent = xScale && yScale
-      ? this._renderChartContent(
+      ? this.#renderChartContent(
         allMarks,
         xScale,
         yScale,
@@ -202,12 +180,12 @@ export class CFChart extends BaseElement {
       )
       : svg``;
 
-    const tooltip = this._tooltipInfo
-      ? this._renderTooltip(chartPadding)
+    const tooltip = this.#tooltipInfo
+      ? this.#renderTooltip(this.#tooltipInfo, chartPadding)
       : html``;
 
-    const w = this._width || "100%";
-    const vw = this._width || 1;
+    const w = this.#width || "100%";
+    const vw = this.#width || 1;
 
     return html`
       <div class="chart-container" style="height: ${this.height}px;">
@@ -215,7 +193,7 @@ export class CFChart extends BaseElement {
           ${svgContent}
         </svg>
         ${tooltip}
-        <slot @slotchange=${this._onSlotChange}></slot>
+        <slot @slotchange=${this.#onSlotChange}></slot>
       </div>
     `;
   }
@@ -224,7 +202,7 @@ export class CFChart extends BaseElement {
   // Chart content rendering
   //
 
-  private _renderChartContent(
+  #renderChartContent(
     allMarks: CollectedMarkData[],
     xScale: XScale,
     yScale: YScale,
@@ -234,8 +212,8 @@ export class CFChart extends BaseElement {
     padding: ChartPadding,
     configMarks: readonly MarkConfig[],
   ) {
-    const marks = this._renderAllMarks(
-      allMarks, xScale, yScale, plotWidth, plotHeight, configMarks,
+    const marks = this.#renderAllMarks(
+      allMarks, xScale, yScale, plotHeight, configMarks,
     );
     const xAxisConfig = resolveAxisConfig(this.xAxis);
     const yAxisConfig = resolveAxisConfig(this.yAxis);
@@ -245,29 +223,28 @@ export class CFChart extends BaseElement {
     const yAxisSvg = yAxisConfig
       ? renderYAxis(yScale, plotWidth, plotHeight, yAxisConfig)
       : svg``;
-    const crosshairSvg = this.crosshair && this._crosshairX !== null
-      ? renderCrosshair(this._crosshairX, plotHeight)
+    const crosshairSvg = this.crosshair && this.#crosshairX !== null
+      ? renderCrosshair(this.#crosshairX, plotHeight)
       : svg``;
 
     const onMove = (e: MouseEvent) =>
-      this._handleMouseMove(e, allMarks, xScale, yScale, xType);
+      this.#handleMouseMove(e, allMarks, xScale, yScale, xType);
     const onClick = (e: MouseEvent) =>
-      this._handleClick(e, allMarks, xScale, yScale, xType);
+      this.#handleClick(e, allMarks, xScale, yScale, xType);
     const tx = padding.left;
     const ty = padding.top;
 
-    return svg`<g transform="translate(${tx}, ${ty})">${marks}${xAxisSvg}${yAxisSvg}${crosshairSvg}<rect class="interaction-overlay" width="${plotWidth}" height="${plotHeight}" @mousemove=${onMove} @click=${onClick} @mouseleave=${this._handleMouseLeave} /></g>`;
+    return svg`<g transform="translate(${tx}, ${ty})">${marks}${xAxisSvg}${yAxisSvg}${crosshairSvg}<rect class="interaction-overlay" width="${plotWidth}" height="${plotHeight}" @mousemove=${onMove} @click=${onClick} @mouseleave=${this.#handleMouseLeave} /></g>`;
   }
 
   //
   // Mark rendering
   //
 
-  private _renderAllMarks(
+  #renderAllMarks(
     allMarks: CollectedMarkData[],
     xScale: XScale,
     yScale: YScale,
-    _plotWidth: number,
     plotHeight: number,
     configMarks: readonly MarkConfig[],
   ) {
@@ -276,7 +253,7 @@ export class CFChart extends BaseElement {
     const groups = allMarks.map((markData, i) => {
       const config = i < configCount
         ? configMarks[i]
-        : this._childMarks[i - configCount];
+        : this.#childMarks[i - configCount];
 
       const rendered = renderMark(
         markData.type,
@@ -284,7 +261,7 @@ export class CFChart extends BaseElement {
         xScale,
         yScale,
         plotHeight,
-        config as MarkConfig | MarkElement,
+        config,
       );
 
       return svg`<g class="mark-group" data-mark-index="${i}">${rendered}</g>`;
@@ -297,16 +274,11 @@ export class CFChart extends BaseElement {
   // Tooltip rendering
   //
 
-  private _renderTooltip(padding: ChartPadding) {
-    if (!this._tooltipInfo) return html``;
-
-    const { pixelX, pixelY, point, label } = this._tooltipInfo;
+  #renderTooltip(info: NearestResult, padding: ChartPadding) {
+    const { pixelX, pixelY, point, label } = info;
     const x = pixelX + padding.left;
     const y = pixelY + padding.top;
-
-    const yVal = typeof point.y === "number"
-      ? (Number.isInteger(point.y) ? point.y : point.y.toFixed(2))
-      : point.y;
+    const yVal = Number.isInteger(point.y) ? point.y : point.y.toFixed(2);
 
     return html`
       <div class="tooltip" style="left: ${x}px; top: ${y}px;">
@@ -320,7 +292,7 @@ export class CFChart extends BaseElement {
   // Event handlers
   //
 
-  private _handleMouseMove(
+  #handleMouseMove(
     e: MouseEvent,
     allMarks: CollectedMarkData[],
     xScale: XScale,
@@ -337,15 +309,15 @@ export class CFChart extends BaseElement {
     );
 
     if (this.crosshair && nearest) {
-      this._crosshairX = nearest.pixelX;
-      this._tooltipInfo = nearest;
+      this.#crosshairX = nearest.pixelX;
+      this.#tooltipInfo = nearest;
       this.requestUpdate();
     }
 
     this.emit("cf-hover", detail);
   }
 
-  private _handleClick(
+  #handleClick(
     e: MouseEvent,
     allMarks: CollectedMarkData[],
     xScale: XScale,
@@ -363,9 +335,9 @@ export class CFChart extends BaseElement {
     this.emit("cf-click", detail);
   }
 
-  private _handleMouseLeave = (): void => {
-    this._crosshairX = null;
-    this._tooltipInfo = null;
+  #handleMouseLeave = (): void => {
+    this.#crosshairX = null;
+    this.#tooltipInfo = null;
     this.requestUpdate();
     this.emit("cf-leave", {});
   };
@@ -374,24 +346,18 @@ export class CFChart extends BaseElement {
   // Slot management
   //
 
-  private _onSlotChange = (): void => {
-    this._discoverChildMarks();
+  #onSlotChange = (): void => {
+    this.#discoverChildMarks();
     this.requestUpdate();
   };
 
-  private _onMarkUpdate = (): void => {
+  #onMarkUpdate = (): void => {
     this.requestUpdate();
   };
 
-  private _discoverChildMarks(): void {
+  #discoverChildMarks(): void {
     const slot = this.shadowRoot?.querySelector("slot");
-    if (!slot) {
-      this._childMarks = [];
-      return;
-    }
-
-    const nodes = slot.assignedElements({ flatten: true });
-    this._childMarks = nodes.filter(
+    this.#childMarks = (slot?.assignedElements({ flatten: true }) ?? []).filter(
       (n): n is MarkElement => n instanceof MarkElement,
     );
   }
@@ -400,15 +366,15 @@ export class CFChart extends BaseElement {
   // Config marks
   //
 
-  private _getConfigMarks(): readonly MarkConfig[] {
-    return this._marksController.getValue() || [];
+  #getConfigMarks(): readonly MarkConfig[] {
+    return this.#marksController.getValue() || [];
   }
 
   //
   // Padding computation
   //
 
-  private _computePadding(): ChartPadding {
+  #computePadding(): ChartPadding {
     if (this.padding !== undefined) {
       if (typeof this.padding === "number") {
         return {
@@ -431,21 +397,6 @@ export class CFChart extends BaseElement {
       bottom: xConfig ? (xConfig.label ? 40 : 28) : 8,
       left: yConfig ? (yConfig.label ? 56 : 48) : 8,
     };
-  }
-
-  //
-  // Cleanup
-  //
-
-  private _cleanup(): void {
-    if (this._resizeTimeoutId !== null) {
-      clearTimeout(this._resizeTimeoutId);
-      this._resizeTimeoutId = null;
-    }
-    if (this._resizeObserver) {
-      this._resizeObserver.disconnect();
-      this._resizeObserver = null;
-    }
   }
 }
 
