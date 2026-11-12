@@ -73,7 +73,8 @@ interface PanelInfo {
  *   its panels. It does not bubble, so a group nested in a panel does not
  *   reach a listener on the outer group.
  *   @detail {Object} detail - Event detail object
- *   @detail {Array<{element: HTMLElement, size: number}>} detail.panels - Array of panel elements with their current sizes
+ *   @detail {number[]} detail.sizes - Each panel's size, a percentage of the
+ *   group, in document order
  *
  * @slot default - Container for cf-resizable-panel and cf-resizable-handle elements
  *
@@ -530,7 +531,7 @@ export class CFResizablePanelGroup extends BaseElement
    * so a listener on a group never hears a group nested inside it. */
   #emitResize(panels: PanelInfo[]): void {
     this.emit("cf-resize", {
-      panels: panels.map((p) => ({ element: p.element, size: p.currentSize })),
+      sizes: panels.map((panel) => panel.currentSize),
     }, { bubbles: false, composed: false });
   }
 
