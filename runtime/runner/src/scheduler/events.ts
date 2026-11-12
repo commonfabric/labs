@@ -2553,10 +2553,13 @@ export async function dispatchQueuedEvent(state: {
     }
     const actionId = state.getActionId(action);
 
-    // Re-queue this event for an immediate re-run (RetryImmediately). On the
-    // inSpace-name resolution path the run referenced a pattern space by name
-    // that has now been resolved, so re-running resolves it synchronously from
-    // the cache. On the access-list path the run's access-list commit
+    // Re-queue this event, its carriage and retry budget kept, to run again:
+    // at once after a RetryImmediately, and otherwise behind whatever the
+    // caller holds the requeued event on, such as the load of a grant still
+    // being asked for or the loads a run read while they were in flight.
+    // Among the RetryImmediately paths, on the inSpace-name resolution path
+    // the run referenced a pattern space by name that has now been resolved,
+    // so re-running resolves it synchronously from the cache. On the access-list path the run's access-list commit
     // conflicted, and the re-run stages its change against the list as it now
     // stands. On the space-answer path the run asked `spaceDeleted()` about a
     // space the memory server has since answered for, and the re-run reads
@@ -2572,8 +2575,8 @@ export async function dispatchQueuedEvent(state: {
     // while the retry is queued cannot remove it, and the post-settlement
     // originStatus() fallback ("confirmed") would let a descendant of a failed
     // origin run.
-    const requeueForNameResolution = () => {
-      // A served name-resolution retry re-enters this scheduler settle. If it
+    const requeueToRunAgain = () => {
+      // A served re-run requeued here re-enters this scheduler settle. If it
       // runs before the flush deadline, the installed destination seals its
       // warmed-cache run into the current wave; a cut instead leaves the
       // existing LT1-purge/durable-drain cadence in charge. The retry keeps the
@@ -2637,7 +2640,7 @@ export async function dispatchQueuedEvent(state: {
       runAt: number | undefined,
       notRunBackoffs: number | undefined = queuedEvent.notRunBackoffs,
     ): QueuedEvent => {
-      // Same served-absence assert as the name-resolution requeue above:
+      // Same served-absence assert as `requeueToRunAgain()` above:
       // served copies queue with retries: false, so a stale-basis failure
       // classifies give-up "opt-out" and never reaches the backoff window —
       // the wave is a served copy's retry cadence. A served entry rebuilt
@@ -2651,7 +2654,7 @@ export async function dispatchQueuedEvent(state: {
       }
       const requeued: QueuedEvent = {
         id: queuedEvent.id,
-        // Same as the name-resolution requeue above: the flag travels with the
+        // Same as `requeueToRunAgain()` above: the flag travels with the
         // id, or the collapse-survivor exclusion silently ends at the first
         // retry.
         callerSuppliedId: queuedEvent.callerSuppliedId,
@@ -2769,7 +2772,7 @@ export async function dispatchQueuedEvent(state: {
             ),
           );
         }
-        const requeued = requeueForNameResolution();
+        const requeued = requeueToRunAgain();
         requeued.retryReadinessPending = true;
         const manager = state.runtime.storageManager;
         const identity = tx.tx.scopeKeyIdentity ??
@@ -2894,7 +2897,7 @@ export async function dispatchQueuedEvent(state: {
           tx.abort(error);
         }
         if (rerun) {
-          requeueForNameResolution();
+          requeueToRunAgain();
         } else {
           // An unserved retries:false event is a one-shot; it does not re-run to
           // resolve names or after an access-list conflict. Served events take
@@ -2958,7 +2961,7 @@ export async function dispatchQueuedEvent(state: {
             tx.abort(new Error(`served run ${reason}`));
           }
           state.parkHeadEventForLoads(
-            requeueForNameResolution(),
+            requeueToRunAgain(),
             loadingReads,
           );
           runFinalCommitCallback();
