@@ -19,6 +19,14 @@ import type { DragState } from "../../core/drag-state.ts";
  * @fires cf-drag-leave - When a drag leaves the zone
  * @fires cf-drop - When a valid drop occurs (drag ends while over this zone)
  *
+ * A detail's `sourceCell` is the dragged cell's link rather than its
+ * `CellHandle`. A detail crosses to the worker as a `FabricValue`, which a
+ * handle is not, and the crossing converts only a detail that is a handle
+ * outright (`toSerializableValue()` in `@commonfabric/html`'s
+ * `src/main/events.ts`). A handler that declares `sourceCell` a `Writable<T>`
+ * receives the link as that cell. `sourceCellRef` names the same cell as plain
+ * id, space and path, leaving out the main thread's display copy of its label.
+ *
  * @slot - Default slot for wrapped content
  *
  * @example
@@ -150,7 +158,7 @@ export class CFDropZone extends BaseElement {
 
     if (isOver && dragState) {
       this.emit("cf-drag-enter", {
-        sourceCell: dragState.cell,
+        sourceCell: dragState.cell.toSigilLink(),
         type: dragState.type,
       });
     } else {
@@ -174,9 +182,10 @@ export class CFDropZone extends BaseElement {
       const dropZoneRect = this.getBoundingClientRect();
 
       // Emit drop event with pointer coordinates and drop zone rect
+      const { id, space, path } = dragState.cell.ref();
       this.emit("cf-drop", {
-        sourceCell: dragState.cell,
-        sourceCellRef: dragState.cell.ref(),
+        sourceCell: dragState.cell.toSigilLink(),
+        sourceCellRef: { id, space, path },
         type: dragState.type,
         pointerX: dragState.pointerX,
         pointerY: dragState.pointerY,

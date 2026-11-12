@@ -786,8 +786,22 @@ const resetGameHandler = handler<
   message.set("Game reset. Join again to draw a fresh rack.");
 });
 
+/**
+ * A `cf-drop`'s detail. `sourceCell` arrives as the dragged tile's link, and
+ * declaring it `Writable` is what hands the handler that tile's cell rather
+ * than a copy of its value.
+ */
+interface TileDropEvent {
+  detail?: {
+    sourceCell?: Writable<unknown>;
+    pointerX: number;
+    pointerY: number;
+    dropZoneRect?: { left: number; top: number; width: number; height: number };
+  };
+}
+
 const dropOnBoard = handler<
-  any,
+  TileDropEvent,
   {
     rack: RackCell;
     placed: PlacedCell;
@@ -799,7 +813,10 @@ const dropOnBoard = handler<
   const dropZoneRect = event.detail?.dropZoneRect;
   const pointerX = event.detail?.pointerX;
   const pointerY = event.detail?.pointerY;
-  if (!sourceCell || !dropZoneRect) return;
+  if (
+    !sourceCell || !dropZoneRect || pointerX === undefined ||
+    pointerY === undefined
+  ) return;
 
   const letterId = getDraggedLetterId(sourceCell);
   if (!letterId) {
@@ -921,7 +938,7 @@ const placeTileOnBoard = handler<
 });
 
 const returnToRack = handler<
-  any,
+  TileDropEvent,
   { rack: RackCell; placed: PlacedCell; message: MessageCell }
 >((event, { rack, placed, message }) => {
   const sourceCell = event.detail?.sourceCell;
