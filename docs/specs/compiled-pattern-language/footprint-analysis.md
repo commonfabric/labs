@@ -659,20 +659,37 @@ at the abstract value the joined return value has there:
 - alternatives that are all such projections give `reference: { oneOf }`;
 - anything else gives no entry, and the path is computed.
 
+Each form names an `identity` entry by where the entry is in the body's
+record (`GivenReference` in `plan-and-label-templates.md` §1.1). An entry
+on an input bound to a slot root is a slot of `Body.reads`, and its name is
+the slot's index. An entry on an input bound to a value the instance
+computed is an entry of `Body.computed`, and its name is `{ computed }`
+with the entry's index there ([§1.1](#11-what-the-analysis-computes)). A
+handle or a container that reached the body in a computed value is named
+in the second way. The label of the path then has the entry's template in
+the place of a slot, and the reference the runtime compares with is the
+one it placed at the entry's position in the argument
+(`plan-and-label-templates.md` §3.9, "A reference from a computed input").
+
 A handle that a static `resolveAsCell()` returned names the resolved
 `identity` entry, and the reference the runtime compares is the resolved
 one ([§7.1](#71-what-a-body-may-do-with-a-handle)). A handle that a
 journaled `resolveAsCell()` returned names the plain entry it started from.
 Where the resolution followed a further link, the returned reference is not
 the stored one, the comparison fails, and the path takes the body's
-template.
+template. A resolution of a handle from a computed input is always
+journaled ([§7.2](#72-static-and-dynamic-reads)), so the handle it returned
+names the plain entry of `Body.computed`.
 
 The runtime verifies both forms by reference identity
 (`plan-and-label-templates.md` §3.9), so an error in this part of the
 analysis costs precision and cannot produce a wrong label. `required` is
-read from the result schema and not from the analysis. The same two forms
-apply to each path of a value the body writes
-([§6.5](#65-the-label-of-a-written-value)).
+read from the result schema and not from the analysis. The same two forms,
+with the same names, apply to each path of a value the body writes
+([§6.5](#65-the-label-of-a-written-value)), and to each path bound by
+reference among the state paths of a binding
+([§8.5](#85-binding-a-handler)) and the parameter paths of an inline
+pattern ([§8.1](#81-instantiating-a-pattern)).
 
 ## 4. Implicit flows
 
@@ -902,11 +919,23 @@ A write target is classified by what the analysis knows of its address.
 - **Static.** The handle is an anchored handle, or a set of alternatives
   that are all anchored, and the path below it has only static segments. The
   target is a `WriteEdge` whose target has the kind `handle`: it names the
-  handle's `identity` slot and the path below the handle's cell
-  (`plan-and-label-templates.md` §1.1, §3.11). The address that slot links
-  to is bound when the instance is, like any slot. A set of alternatives
-  gives one edge per alternative. Where the body is used with a state cell
-  of the instance as the handle, the target has the kind `state`.
+  handle's `identity` entry and the path below the handle's cell
+  (`plan-and-label-templates.md` §1.1, §3.11). A set of alternatives gives
+  one edge per alternative. How the target names the entry depends on what
+  the handle's formal input is bound to where the body is used (§1.1).
+  - For an input bound to a slot root, the target names the handle's
+    `identity` slot. The address that slot links to is bound when the
+    instance is, like any slot.
+  - For an input bound to a value the instance computed, the target names
+    the handle's `identity` entry of `Body.computed`, in the `computed`
+    variant of the `handle` target. The plan has no root and path for the
+    cell. The runtime knows the cell once the cone that produces the value
+    has been evaluated, which is before the body runs
+    (`plan-and-label-templates.md` §3.11, "A handle from a computed
+    input"). The target is static all the same
+    ([§6.3](#63-computations-static-side-write-or-materializer)).
+  - Where the body is used with a state cell of the instance as the
+    handle, the target has the kind `state`.
 - **Dynamic.** The write goes to another cell, and which one depends on
   data the body read: the handle is an element of a list of handles, or a
   handle found in a value the body read, or a cell the body created under a
@@ -927,27 +956,34 @@ For a dynamic target and for one that is too broad, the analysis records an
 (`plan-and-label-templates.md` §1.1).
 
 - **`handle`**: at or below a path of the cell a handle links to. The
-  envelope names the handle's `identity` slot and a path.
+  envelope names the handle's `identity` entry and a path. It names the
+  entry as a static target does: by its slot, or, for a handle that reached
+  the body in a value the instance computed, by its entry of
+  `Body.computed`, in the `computed` variant of the `handle` envelope.
   - For a key that is not static below an anchored handle, the path is the
     path to the keyed container, `*` at the key, and the static segments
     written below it.
-  - For an element of a list of handles, the slot is the `identity` entry at
-    `list/*`, which stands for every cell an element links to, and the path
-    is the one written below the element.
+  - For an element of a list of handles, the envelope names the `identity`
+    entry at `list/*`, which stands for every cell an element links to, and
+    the path is the one written below the element.
   - For a handle the body found by reading through another handle, the slot
     is at the position where it was found. Its path crosses the first
     handle's link and has `*` at each segment the analysis cannot name.
     That slot is in no `Body.reads`: it names the place, nothing is
     materialized for it, and it joins no template
-    (`plan-and-label-templates.md` §3.11).
+    (`plan-and-label-templates.md` §3.11). Where the first handle reached
+    the body in a value the instance computed, no slot path leads to the
+    position ([§13](#13-open-questions), request 20).
   - For a handle the analysis lost track of, there is one envelope for each
     writable handle among the body's inputs, over the handle's whole cell.
 - **`created`**: a cell that a `createCell` site creates under a cause
   computed from data. The envelope names the site.
 
 `plan-and-label-templates.md` §3.11 says what each form gives the
-scheduler. A `handle` envelope names addresses once its slot is bound, so a
-reader can be found inside it before the body runs. A `created` envelope
+scheduler. A `handle` envelope names addresses once its slot is bound, or,
+where it names an entry of `Body.computed`, once the cone that produces the
+value has been evaluated. Both happen before the body runs, so a reader
+can be found inside the envelope ahead of it. A `created` envelope
 names no address: it bounds what the body may write and gives nothing to
 order by.
 
@@ -965,7 +1001,9 @@ the plain one where the body journals it
 write records at the handle (§6.1). The flag says that the write lands
 where the resolution ends, and the runtime resolves the reference when the
 write is made (`plan-and-label-templates.md` §3.11). An envelope for a
-write through a resolved handle has the flag in the same way.
+write through a resolved handle has the flag in the same way. For a handle
+from a computed input the resolution is journaled (§7.2), so the target or
+the envelope names the plain entry of `Body.computed`, with the flag.
 
 ### 6.3 Computations: static side-write or materializer
 
@@ -977,7 +1015,7 @@ analysis decides the tier.
 | The body's writes | Tier | What the plan records |
 | --- | --- | --- |
 | Only its return value | Primary output | Nothing beyond the body |
-| Side-writes whose targets are all static | Static side-write targets | One `WriteEdge` per target on the body. Each is one more output edge of the cone that runs the body, and the plan lists a `ConeEdge` from that cone to each cone with a slot that reads the target |
+| Side-writes whose targets are all static | Static side-write targets | One `WriteEdge` per target on the body. Each is one more output edge of the cone that runs the body. Where the target is a state cell or names its handle by a slot, the plan lists a `ConeEdge` from that cone to each cone with a slot that reads the target |
 | At least one side-write whose target is dynamic or too broad | Materializer | An `Operation` of kind `materializer` implemented by the body. Its declared write envelope is the body's `writes` and `envelopes` |
 
 The classification is per body. A body with one write that is not static is
@@ -986,6 +1024,17 @@ today. Envelopes come from the analysis and never from observed writes,
 which is the rule Scheduler v2 states for them: "Membership and envelopes
 are **declared**". The records are those of
 `plan-and-label-templates.md` §3.11.
+
+**A handle from a computed input.** A write edge that names its handle by
+`computed` (§6.2) is a static target, and the write is a static side-write.
+It does not make the body a materializer
+(`plan-and-label-templates.md` §3.11, "A handle from a computed input").
+The tier is decided on the body alone, and one body can be used with the
+handle as a slot in one place and as a computed value in another, so the
+tier does not depend on which of the two it is. Such a target has no root
+and no path to compare with a slot, so the plan lists no `ConeEdge` for it.
+The cones that read the cell are found at run time, from the address the
+reference leads to and the addresses the slots are bound to.
 
 A computation that creates a cell under a constant cause writes a static
 target. `plan-and-label-templates.md` §3.14 makes that cell a `StateCell` of
@@ -1052,11 +1101,13 @@ check runs when the write is made.
 Every value a body writes carries the body's template, by §4.1. The
 reference rules of §3.8 apply to each path of the written value: a path that
 holds one projection of container, handle, or reference type is a reference
-the body passed on, and its template is that projection's `identity` slot.
+the body passed on, and its template is that projection's `identity` entry:
+the slot, or, for an entry of `Body.computed`, the entry's template.
 
 The plan records such a path as a `WriteEdge` of its own. Its target is the
 sub-path, and its `reference` member names the entry, as `passes`, or the
-entries the reference is one of, as `oneOf`
+entries the reference is one of, as `oneOf`. Each name is a slot's index,
+or `{ computed }` for an entry of `Body.computed`, as §3.8 has it
 (`plan-and-label-templates.md` §1.1, §3.9). The runtime verifies the
 reference by identity, and the edge's `template`, which is the body's,
 applies where the check fails. The same holds for a path of a child's
@@ -1096,9 +1147,12 @@ the addresses the slots and the targets are bound to
 
 The compiler's report of cycles is computed from `Plan.edges`, which hold an
 edge for every static write of a cone, through a state cell or through a
-handle (`plan-and-label-templates.md` §3.11;
+handle that a slot names (`plan-and-label-templates.md` §3.11;
 `scheduler-and-serving-loop.md` §8.2). The write edges of this analysis are
-what those edges are built from.
+what those edges are built from. A write through a handle from a computed
+input has no edge there (§6.3), so the report does not see it, and a cycle
+through it ends at the bound on evaluations of a cone
+(`plan-and-label-templates.md` §3.11, §5.2).
 
 `language-subset.md` §10.3 has the reports: `side-write:not-idempotent`, a
 warning, for the three shapes, and `side-write:cycle`, a warning, for a
@@ -1156,7 +1210,11 @@ of two ways (`plan-and-label-templates.md` §2.5, §3.16).
 - **Journaled** otherwise. The resolution records a plain `identity` entry
   at the operand, at each alternative, or at the path with its `*`, and the
   links followed below that reference are a dynamic read of kind `link`
-  through the entry's slot.
+  through the entry. The read names the entry by its slot, or, for an entry
+  of `Body.computed`, by the body and the entry's index there
+  (`ComputedReference` in `plan-and-label-templates.md` §1.1). A
+  resolution whose operand reached the body in a value the instance
+  computed is journaled whatever the three conditions say (§7.2).
 
 These are the three conditions of §7.2 with the operand in place of the
 path of a read, and the reason is the same. Today the runtime records the
@@ -1193,7 +1251,17 @@ the handle's formal input bound to a value the instance computed, the plan
 cannot name the path, and the read is dynamic there whatever the
 conditions say: the handle's entry of `Body.handles` names its `identity`
 entry of `Body.computed` (`plan-and-label-templates.md` §2.5, §3.10). A
-resolution of such a handle is journaled for the same reason.
+resolution of such a handle is journaled for the same reason, and the
+dynamic read of kind `link` names the same entry
+(`plan-and-label-templates.md` §3.10, §3.16).
+
+The entry of `Body.computed` is also what the record names for everything
+else the body does with such a handle, in the place of a slot: a reference
+the body passes on ([§3.8](#38-what-leaves-the-body)), the target or the
+envelope of a write through it ([§6.2](#62-targets)), and a state path or a
+parameter path it is bound to ([§8.5](#85-binding-a-handler),
+[§8.1](#81-instantiating-a-pattern)). The same holds for a container the
+body passes on unchanged from such an input.
 
 `Body.handles` lists a handle only when some read through it is dynamic. A
 handle the body passes on, writes through, or reads at static entries alone
@@ -1215,7 +1283,9 @@ at its last segment and observes whether the position holds anything, a
 link included. A `shape` slot without the flag resolves through a link at
 its last segment and observes the root of the cell the link leads to. The
 analysis emits the first for a `shape` entry at a position of handle type
-or of reference type, and the second for a `shape` entry at `profile->`.
+or of reference type, the two kinds of position at which
+`plan-and-label-templates.md` §2.5 sets the flag, and the second for a
+`shape` entry at `profile->`.
 
 **Why the conditions.** They are the cases in which a static entry reads
 exactly what the body's transaction reads today, on a run that returns
@@ -1372,7 +1442,7 @@ what is specific to a body that is evaluated again follows it.
 | Part of the call | Recorded |
 | --- | --- |
 | The callee, when it is a factory value | `identity` at the position that holds it |
-| The callee, when it is an inline `pattern(...)` written at the call | The `Child` of the site has a `Closure` as its callee, and each value the inline pattern captures from the body is a path of `Closure.params`. A path is bound as a state path of a handler binding is bound ([§8.5](#85-binding-a-handler)), with what the inline pattern's plan reads below its `params` root in place of the handler's footprint. A handle, and a container passed on unchanged, record `identity` and stay links. A scalar records `value` and is copied. A container the body computed is copied by the rows §8.5 has for one (below) |
+| The callee, when it is an inline `pattern(...)` written at the call | The `Child` of the site has a `Closure` as its callee, and each value the inline pattern captures from the body is a path of `Closure.params`. A path is bound as a state path of a handler binding is bound ([§8.5](#85-binding-a-handler)), with what the inline pattern's plan reads below its `params` root in place of the handler's footprint (`plan-and-label-templates.md` §3.15, "How much a copy holds"). A handle, and a container passed on unchanged, record `identity` and stay links. A scalar records `value` and is copied. A container the body computed is copied by the rows §8.5 has for one (below) |
 | Each path of the argument | A `WriteEdge` with target `argument`, and the argument's members by the reference rule. A path that holds a passed reference is an edge with `reference` ([§6.5](#65-the-label-of-a-written-value)) |
 | `.for(tag)` | The tag by the reference rule. The site is `identifiedBy: "tag"` |
 | `asScope(scope)` | Nothing. The scope is a constant of the site (`Child.scope`) |
@@ -1384,13 +1454,27 @@ The target and each option of an `inSpace` request is a `RequestValue` of
 one projection it is; or, for a value the body computes, the body, whose
 template the value then carries.
 
+Three of these records name a slot and have no form for an entry of
+`Body.computed`: the factory of `Child.callee`, the cell of a
+`SpaceRequest` target of kind `spaceOf`, and the slot of a `RequestValue`.
+*Assumed,* where the body is used with the input bound to a value the
+instance computed: a target or an option that is one projection is
+recorded as the body, whose template joins the entry's, and the factory
+and the cell are named by `{ computed }`, as a `GivenReference` names an
+entry ([§13](#13-open-questions), request 20).
+
 *Assumed,* for an inline pattern: the ruling on what a handler binding
 holds applies to its captures, on which the owner has not ruled
-(`plan-and-label-templates.md` §3.15, and open question 23 there). The
-analysis fills `capture` and `reference` for each path of `Closure.params`
-as it fills them for a path of `Binding.state` (§8.5). The parameters are
-stored with the instance, and each evaluation that makes the instance
-writes them as it writes the argument.
+(`plan-and-label-templates.md` §3.15, "Written at an instantiation in a
+function body", and open question 23 there). The analysis fills `capture`
+and `reference` for each path of `Closure.params` as it fills them for a
+path of `Binding.state` (§8.5), and a `reference` names its entries as
+[§3.8](#38-what-leaves-the-body) has it. `Closure.params` records no class
+for a copied path. The copy holds the paths at which the inline pattern's
+plan has a slot with root `params`, each narrowed to that slot's class
+(`plan-and-label-templates.md` §3.15, "How much a copy holds"). The
+parameters are stored with the instance, and each evaluation that makes
+the instance writes them as it writes the argument.
 
 **In a `lift` or a `computed`.** The analysis of the call is the one above:
 the members of the argument are recorded by the reference rule, each
@@ -1515,6 +1599,15 @@ on its account.
 The access-list reads and the reads `resultOwnerOf` makes are dynamic
 wherever the call is, since which space or document is read is data.
 
+**An operand from a computed input.** Where the body is used with the
+operand's formal input bound to a value the instance computed, the
+resolution and the observation of label metadata are journaled whatever
+the conditions say (`plan-and-label-templates.md` §3.16, "Static and
+journaled"). The operand's entry is then an entry of `Body.computed`, and
+a dynamic read of kind `link` or of kind `space` names it by the body and
+the entry's index there (`ComputedReference` in
+`plan-and-label-templates.md` §1.1).
+
 ### 8.5 Binding a handler
 
 A binding is made by `action(...)`, by an inline event handler in JSX the
@@ -1540,7 +1633,7 @@ paths of that value.
 | | `identity` at a path: the handler passes the value there on whole, or compares it | `value` at each scalar projection the computed value holds at or below that path | The subtree. The reference the handler observes is the reference to the copy |
 | | `labelMetadata` at a path | What the other entries at the path record, and nothing for this one | The handler observes the label stored for the copy |
 | | No entry at or below a path | Nothing | Nothing |
-| A container the body computed, when the handler is a factory value | Not known when the site is compiled | `value` at each scalar projection the computed value holds, in the subtree the handler's declared state type covers (`plan-and-label-templates.md` §3.21) | That subtree |
+| A container the body computed, when the handler is a factory value | Not known when the site is compiled | `value` at each scalar projection the computed value holds, in the subtree the handler's declared state type covers (`plan-and-label-templates.md` §3.14, "How much a copy holds", and §3.21) | That subtree, as `value` |
 | The callee, when it is a handler factory value | | `identity` at the position that holds it (`plan-and-label-templates.md` §3.21) | |
 
 **Which kind a value is.** The analysis tells the kinds apart by the
@@ -1584,8 +1677,11 @@ address (`plan-and-label-templates.md` §3.14).
 - A path bound by reference has `capture: "link"`. Its `reference` names
   the `identity` entry of the one projection, as `passes`, or the entries
   of the alternatives, as `oneOf`, as for a path of a written value
-  ([§6.5](#65-the-label-of-a-written-value)). The runtime verifies it by
-  identity.
+  ([§6.5](#65-the-label-of-a-written-value)). Each name is a slot's index,
+  or `{ computed }` for a handle or a container that reached the body in a
+  value the instance computed ([§3.8](#38-what-leaves-the-body)). The entry
+  is one of the body whose `bind` site refers to the binding. The runtime
+  verifies the reference by identity.
 - A copied path has `capture: "copy"` and no `reference`.
 - A reference inside a computed container is a path of its own, bound by
   reference, below the copied path.
@@ -1595,10 +1691,14 @@ address (`plan-and-label-templates.md` §3.14).
 The rows for a computed container use the record of the hoisted or named
 handler, which the compiler has. The copy holds the paths that record
 names, each as its class observes it, and no others (`language-subset.md`
-§5.2). `Binding.state` records no class for a copied path. *Assumed:* the
-runtime narrows the copy by the handler's slots with root `binding`, as it
-narrows the handler's argument, and builds the stand-ins it builds for an
-argument ([§13](#13-open-questions), request 8).
+§5.2). `Binding.state` records no class for a copied path, because the
+handler's own record has it: the runtime narrows the copy by the handler's
+slots with root `binding` at or below the path, as it narrows the
+handler's argument (`plan-and-label-templates.md` §3.14, "How much a copy
+holds"). For a handler received as a factory value the compiler does not
+have that record, and the copy holds the subtree the declared state type
+covers, as `value` (the same paragraph there). The stand-ins a copy holds
+are the ones an argument holds ([§13](#13-open-questions), request 8).
 
 The `identity` row for a computed container follows from the copy. A
 computed container has no stored address but the binding's state document.
@@ -2428,9 +2528,13 @@ body `B0`. Applying this analysis to the source gives that record.
   is too broad to predict, so the body has a `handle` envelope over the
   children of `threadInfo` (§6.2).
 
-The plan's listing is a slice. It leaves out the `shape` entries this
-analysis records at optional positions, such as `event.target` and the
-positions of the optional handles, which change no label in the example.
+The plan's listing is a slice, and §6.2 there says what it leaves out: the
+`shape` entries this analysis records at optional positions. One is at a
+data position, `event.target`. The others are in place, at the positions
+of the optional handles, among them `state.myProfile`, `state.joined`,
+`event.replyTo/thread`, and `event.replyTo/quotes`. All of them are in the
+footprint of `B0` and join its template, and with FabriChat's labels none
+changes an instantiated label.
 
 ## 13. Open questions
 
@@ -2533,13 +2637,16 @@ asked.
    The runtime has to hand a body a value for an entry of class `shape`,
    `enumeration`, or `identity` that carries that observation and no more:
    a stand-in of the right kind, a container with the right keys or length,
-   a reference that can be passed on and not read. The copy a binding holds
-   needs the same stand-ins, narrowed by the bound handler's slots with
-   root `binding` (§8.5). *Assumed:* it does, as the opaque and
-   comparable cells and the `unknown` items of today's schemas do. The same
-   document has to confirm that a value passed on unchanged is stored as a
-   reference (question 2 above), that a handle's `get()` and `sample()`
-   return the value narrowed to the entry's envelope
+   a reference that can be passed on and not read. *Assumed:* it does, as
+   the opaque and comparable cells and the `unknown` items of today's
+   schemas do. The copy a binding holds, and the copied capture of an
+   inline pattern, need the same stand-ins. What narrows such a copy is
+   decided in `plan-and-label-templates.md` §3.14 and §3.15 ("How much a
+   copy holds" in each): the bound handler's slots with root `binding`,
+   and the inline pattern's slots with root `params` (§8.5 and §8.1 here;
+   request 19). The same document has to confirm that a value passed on
+   unchanged is stored as a reference (question 2 above), that a handle's
+   `get()` and `sample()` return the value narrowed to the entry's envelope
    (`plan-and-label-templates.md` §3.9), and that the reference a body is
    handed for a resolved entry is the resolved one.
 9. **Static reads and the scheduler** (to
@@ -2626,3 +2733,47 @@ asked.
     (§8.1). `BodyCall` records the first as `identifiedBy: "order"` and
     the second as `identifiedBy: "tag"`. The rule is an assumption there,
     pending the owner (open question 26 there).
+19. **Four further forms of the record** (to
+    `plan-and-label-templates.md`). Met by §1.1 there, form by form.
+    - **A handle or a container that reached the body in a value the
+      instance computed, where the body passes it on, binds it, writes
+      through it, or resolves it:** its `identity` entry of
+      `Body.computed`. `GivenReference` names it in
+      `BodyOutput.reference`, `WriteEdge.reference`, `Binding.state`, and
+      `Closure.params`. The `computed` variant of a `handle` target and of
+      a `handle` envelope names it for a write. `ComputedReference` names
+      it in a dynamic read of kind `link` or of kind `space` (§3.9, §3.10,
+      §3.11, and §3.16 there; §3.8, §6.2, §6.5, §7.1, §7.2, §8.1, §8.4,
+      and §8.5 here).
+    - **The class of a copied path:** none is recorded in `Binding.state`
+      or in `Closure.params`. The runtime narrows the copy by the bound
+      handler's slots with root `binding`, or by the inline pattern's
+      slots with root `params`. For a handler received as a factory value
+      the copy holds the subtree the declared state type covers, as
+      `value` (§3.14 and §3.15 there; §8.5 and §8.1 here).
+    - **`shape` at a position of reference type:** a `shape` slot with
+      `inPlace`, as at a position of handle type (§2.5 there; §7.2 here).
+    - **The tier of a write through a handle from a computed input:** a
+      write edge that names its handle by `computed` is a static
+      side-write and does not make the body a materializer (§3.11 there;
+      §6.2 and §6.3 here).
+20. **Records that name a slot only** (to `plan-and-label-templates.md`).
+    Five places of the record have a form that names a slot and none for
+    a body used with the input bound to a value the instance computed.
+    - `Child.callee` of kind `factory`, for a factory value the body
+      instantiates (§8.1).
+    - `Binding.handler` of kind `factory`, for a handler factory value
+      the body binds (§8.5).
+    - A `SpaceRequest` target of kind `spaceOf`, for the cell (§8.1).
+    - `RequestValue`, for a target or an option of an `inSpace` request
+      that is one projection (§8.1).
+    - A `handle` envelope for a handle the body found by a read through a
+      handle from a computed input. The found handle has no entry of
+      `Body.computed`, and no slot path leads to its position (§6.2).
+
+    *Assumed:* the first three are named by `{ computed }`, as a
+    `GivenReference` names an entry. A `RequestValue` of that kind is
+    recorded as the body, whose template joins the entry's. The envelope
+    names the first handle's entry of `Body.computed`, and its path crosses
+    the link at the position of the found handle, with `*` at each segment
+    the analysis cannot name.

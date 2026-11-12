@@ -897,11 +897,11 @@ uses these facts in two places.
   request, it takes this joined label.
 - **What is hashed is followed too.** Some operands enter the request hash
   and are not sent, such as `reactOn` of `sqliteQuery`. The stored hash is
-  a function of their content. *Assumed:* the transaction that checks the
-  ceiling follows such an operand as it follows one that is sent, so that
-  the label of the stored hash covers what the hash was computed from.
-  `plan-and-label-templates.md` §3.14 states the rule for what the effect
-  serializes and does not mention the hash.
+  a function of their content. The transaction that checks the ceiling
+  follows such an operand as it follows one that is sent, as far as the
+  hash reads it, so that the label of the stored hash covers what the hash
+  was computed from (`plan-and-label-templates.md` §3.14, "What is hashed
+  is followed too").
 
 These paragraphs have two limits. They state what is read when the request
 is made. A language-model built-in also sends content during a tool loop
