@@ -50,18 +50,19 @@ uploads it as its `lane-kept` artifact. In every other case the directory
 goes when the lane ends. The workflow jobs that predate the lanes upload the
 same file as an artifact, named for the job that wrote it.
 
-With server execution on, the server runs a piece created in another space
-(`.inSpace()`) from that space, so it can load the piece only once the
-pattern's program has been copied there; the session that created the piece
-needs no copy. The Toolshed log records each copy the server makes out of
-another space as `closure-replication-issued`, with its source and target
-spaces and a ticket number, and then one line with the same ticket saying how
-it ended: `closure-replication-committed` once its writes have committed,
-`closure-replication-failed`, or `closure-copy-refused` for a copy into a space
-the session may only read. A serving wave can still withdraw a committed write,
-which it logs as `compile-cache-writeback-withdrawn` with the entry and the
-space. A space whose piece never runs shows in that log whether its copy was
-never issued, was issued and never ended, failed, or was withdrawn.
+With server execution on, a fresh runtime, such as the server's, loads a piece
+created in another space (`.inSpace()`) from that space, and can do so only once
+the pattern's program has been copied there; the session that created the piece
+can load it without that copy. The Toolshed log records each copy the server
+makes out of another space as `closure-replication-issued`, with its source and
+target spaces and a ticket number, and then one line with the same ticket saying
+how it ended: `closure-replication-committed` once its writes have been
+accepted, `closure-replication-failed`, or `closure-copy-refused` for a copy a
+load started into a space the session may only read. A serving wave can still
+withdraw a write it accepted, which it logs as
+`compile-cache-writeback-withdrawn` with the entry and the space. A space whose
+piece never runs shows in that log whether its copy was never issued, was issued
+and never ended, failed, or was withdrawn.
 
 Local full-stack repro for CI-only integration failures (see
 [LOCAL_DEV_SERVERS](../LOCAL_DEV_SERVERS.md) for the dev-server details):

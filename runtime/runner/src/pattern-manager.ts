@@ -1569,11 +1569,11 @@ export class PatternManager {
    * grant.
    *
    * Each replication logs `closure-replication-issued` and then exactly one
-   * of `closure-replication-committed`, once its writes have committed,
+   * of `closure-replication-committed`, once its writes have been accepted,
    * `closure-copy-refused` or `closure-replication-failed`, all at info or
    * above and all naming its ticket, so a space left without a closure shows
    * in the log whether its copy was issued and how it ended. A serving wave
-   * that later withdraws a committed write logs
+   * that later withdraws a write it accepted logs
    * `compile-cache-writeback-withdrawn` with the entry and the space. */
   #issueReplication(
     replication: ClosureReplication,
@@ -1820,7 +1820,9 @@ export class PatternManager {
    * began is supplied by the next session that writes it), and a space the
    * session has written into, or is writing into, is copied into no more. A
    * space the session may only read refuses the copy, and the refusal is
-   * logged at info as `closure-copy-refused`, not as a failed replication:
+   * logged at info as `closure-copy-refused`, not as a failed replication
+   * (a repair from a retained compile logs its own refusal at debug, as
+   * `compile-cache-repair-refused`):
    * the next session that writes the closure as a principal who may write
    * that space supplies it.
    */

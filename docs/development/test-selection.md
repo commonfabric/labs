@@ -398,8 +398,9 @@ another lane or an earlier commit left and saves a fresher one.
 A lane uploads three artifacts. `lane-kept-tests-<lane>-a<attempt>`, where
 the lane failed or excused a failure too flaky to fail the run for, holds the
 working directory it kept, with each Toolshed server's log, and the core of any
-process in the lane that crashed natively. A lane that passed says it kept its
-directory through the lane step's `kept` output, which the upload step reads.
+process in the lane that crashed natively. A lane that passed after excusing a
+failure says it kept its directory through the lane step's `kept` output, which
+the upload step reads.
 The cores come from the lane step: the lane step runs with `ulimit -c unlimited`
 and puts cores under `$RUNNER_TEMP/ci-lane-cores`. `lane-coverage-tests-<lane>`
 holds `coverage/`: each report at
