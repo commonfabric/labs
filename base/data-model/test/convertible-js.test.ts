@@ -568,7 +568,6 @@ describe("convertible-js", () => {
       state: unknown;
     }
 
-    const badRegExp = { flavor: "es2025", source: "(", flags: "" };
     const badUnavailable = { reason: "error" };
     const cases: FallbackCase[] = [
       { name: "`BigInt@1`", codec: new BigIntCodec(), state: "" },
@@ -606,16 +605,6 @@ describe("convertible-js", () => {
         name: "`FabricKeyPair` JSON",
         codec: FabricKeyPair[JSON_CODEC],
         state: { algorithm: "Ed25519", publicKey: "!", privateKey: "!" },
-      },
-      {
-        name: "`FabricRegExp` JSON",
-        codec: FabricRegExp[JSON_CODEC],
-        state: badRegExp,
-      },
-      {
-        name: "`FabricRegExp` realm",
-        codec: FabricRegExp[REALM_CODEC],
-        state: badRegExp,
       },
       {
         name: "`FabricUnavailable` JSON",

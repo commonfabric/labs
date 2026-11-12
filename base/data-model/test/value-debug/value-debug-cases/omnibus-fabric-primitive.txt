@@ -63,17 +63,9 @@ bytes, empty:
 /Bytes(buf [])
 
 regexp:
-/RegExp(source:"ab+c",flags:"gi",flavor:"es2025")
-/RegExp(
-  source: "ab+c",
-  flags: "gi",
-  flavor: "es2025"
-)
-/RegExp(
-  source: "ab+c",
-  flags: "gi",
-  flavor: "es2025"
-)
+/FabricRegExp(...)
+/FabricRegExp(...)
+/FabricRegExp(...)
 
 hash:
 /Hash(tag:"fid1",hash:buf[d1c04643 83760680 8cda3212 bb7b6d73 fd1186ee 69860443 9d6caf95 759e06ae])

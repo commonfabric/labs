@@ -45,6 +45,13 @@ const STUB_CODEC_CLASSES: ReadonlySet<string> = new Set([
   "FabricSet",
 ]);
 
+/**
+ * The classes that bind no codec, and so have no text.
+ *
+ * TODO(danfuzz): Remove, with its use below, once `FabricRegExp` is deleted.
+ */
+const NO_CODEC_CLASSES: ReadonlySet<string> = new Set(["FabricRegExp"]);
+
 /** One entry of the fixture, as `fvj1-conformance.md` defines it. */
 interface FixtureEntry {
   readonly name: string;
@@ -249,7 +256,7 @@ describe("fvj1-conformance", () => {
     }
   });
 
-  it("has a case whose value is an instance of each concrete class but those with stub codecs", () => {
+  it("has a case whose value is an instance of each concrete class but those with stub codecs or none", () => {
     const values = FVJ1_CONFORMANCE_CASES_FOR_TESTING_ONLY.flatMap((c) =>
       "make" in c ? [c.make()] : []
     );
@@ -259,7 +266,10 @@ describe("fvj1-conformance", () => {
     };
     for (const [name, cls] of Object.entries(classes)) {
       expect({ name, covered: values.some((v) => v instanceof cls) })
-        .toEqual({ name, covered: !STUB_CODEC_CLASSES.has(name) });
+        .toEqual({
+          name,
+          covered: !STUB_CODEC_CLASSES.has(name) && !NO_CODEC_CLASSES.has(name),
+        });
     }
   });
 
