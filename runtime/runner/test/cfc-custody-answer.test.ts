@@ -13,11 +13,13 @@ import {
   MODULE,
   OTHER_MODULE,
   otherArtifact,
+  PROJECT,
   S,
 } from "./support/custody-room.ts";
 import {
   type CustodyAnswerWatchUpdate,
   type CustodyRoom,
+  publishCustodyAnswer,
   watchCustodyAnswer,
 } from "../src/cfc/custody-seal.ts";
 import type { Cell } from "../src/cell.ts";
@@ -467,6 +469,113 @@ describe("custody answers", () => {
       );
       expect(await fixture.project(bob, second, output)).toBe("tacos");
       expect((await fixture.publish(bob, output)).value).toBe("tacos");
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
+  it("refuses an answer that is not a scalar, and publishes the scalar the same projection computes", async () => {
+    const fixture = await setup();
+    try {
+      const box = boxOf(fixture);
+      const output = outputOf(fixture);
+      await fixture.seal(alice, "sushi", box);
+      await fixture.seal(bob, "sushi", box);
+      expect(await fixture.project(bob, box, output)).toBe("sushi");
+      // The room's projector, over the same box, writing a record instead.
+      const runtime = fixture.runtimes.get(bob)!;
+      const local = runtime.getCellFromLink(box.getAsNormalizedFullLink());
+      const record = runtime.getCell(S, "custody-room-record", {
+        type: "object",
+        ifc: {
+          confidentiality: [{
+            ...fixture.policy,
+            subject: { __ctOwningSpace: true },
+          }],
+        },
+      } as never);
+      await record.sync();
+      const written = await runtime.editWithRetry((tx) => {
+        setCfcImplementationIdentity(tx, PROJECT);
+        const entries = (local.withTx(tx).get() ?? {}) as Record<
+          string,
+          unknown
+        >;
+        record.withTx(tx).set({ count: Object.keys(entries).length } as never);
+      });
+      expect(written.error).toBeUndefined();
+
+      await expect(fixture.publish(bob, record)).rejects.toThrow(
+        "Custody answer requires a value the room's policy releases to the seal",
+      );
+      expect((await fixture.publish(bob, output)).value).toBe("sushi");
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
+  it("refuses an output held by another runtime", async () => {
+    const fixture = await setup();
+    try {
+      await expect(
+        publishCustodyAnswer(
+          fixture.room(alice),
+          fixture.runtimes.get(bob)!.getCell(S, "custody-room-choice"),
+        ),
+      ).rejects.toThrow("Custody seal handles must belong to the same runtime");
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
+  it("refuses an answer whose room changed while it was being published", async () => {
+    // The terms change after the room was inspected and before the
+    // publishing transaction runs, which re-reads what the inspection read.
+    const fixture = await setup();
+    try {
+      const box = boxOf(fixture);
+      const output = outputOf(fixture);
+      await fixture.seal(alice, "sushi", box);
+      await fixture.seal(bob, "sushi", box);
+      expect(await fixture.project(alice, box, output)).toBe("sushi");
+      const runtime = fixture.runtimes.get(alice)!;
+      const original = runtime.editWithRetry.bind(runtime);
+      runtime.editWithRetry = (async (
+        ...args: Parameters<Runtime["editWithRetry"]>
+      ) => {
+        runtime.editWithRetry = original;
+        await fixture.setTerms("Where should we eat tomorrow?");
+        return await original(...args);
+      }) as Runtime["editWithRetry"];
+      await expect(fixture.publish(alice, output)).rejects.toThrow(
+        "Custody answer's room changed while publishing",
+      );
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
+  it("refuses an answer whose publication the store refuses", async () => {
+    const fixture = await setup();
+    try {
+      const box = boxOf(fixture);
+      const output = outputOf(fixture);
+      await fixture.seal(alice, "sushi", box);
+      await fixture.seal(bob, "sushi", box);
+      expect(await fixture.project(bob, box, output)).toBe("sushi");
+      // The room is refused once the answer is checked and about to commit.
+      const runtime = fixture.runtimes.get(bob)!;
+      const original = runtime.editWithRetry.bind(runtime);
+      runtime.editWithRetry = ((
+        ...args: Parameters<Runtime["editWithRetry"]>
+      ) => {
+        runtime.editWithRetry = original;
+        fixture.refuse(S);
+        return original(...args);
+      }) as Runtime["editWithRetry"];
+      await expect(fixture.publish(bob, output)).rejects.toThrow(
+        "Custody answer failed",
+      );
     } finally {
       await fixture.dispose();
     }

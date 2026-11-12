@@ -1,4 +1,4 @@
-import { css, html, unsafeCSS } from "lit";
+import { css, html, nothing, unsafeCSS } from "lit";
 import { BaseElement } from "../../core/base-element.ts";
 import { surfaceRecipesCSS } from "../../styles/variables.ts";
 
@@ -197,19 +197,14 @@ export class CFCard extends BaseElement {
   constructor() {
     super();
     this.clickable = false;
-  }
-
-  override connectedCallback() {
-    super.connectedCallback();
-    if (this.clickable) {
-      this.addEventListener("click", this._handleClick);
-      this.addEventListener("keydown", this._handleKeydown);
-    }
+    // Each handler does nothing unless the card is clickable.
+    this.addEventListener("click", this._handleClick);
+    this.addEventListener("keydown", this._handleKeydown);
   }
 
   override firstUpdated() {
     // Set up slot change listeners to detect empty slots
-    this.shadowRoot?.querySelectorAll("slot").forEach((slot) => {
+    this.renderRoot.querySelectorAll("slot").forEach((slot) => {
       slot.addEventListener("slotchange", () => this._updateEmptyStates());
     });
 
@@ -217,31 +212,13 @@ export class CFCard extends BaseElement {
     this._updateEmptyStates();
   }
 
-  override disconnectedCallback() {
-    super.disconnectedCallback();
-    this.removeEventListener("click", this._handleClick);
-    this.removeEventListener("keydown", this._handleKeydown);
-  }
-
-  override updated(changedProperties: Map<string, any>) {
-    if (changedProperties.has("clickable")) {
-      if (this.clickable) {
-        this.addEventListener("click", this._handleClick);
-        this.addEventListener("keydown", this._handleKeydown);
-      } else {
-        this.removeEventListener("click", this._handleClick);
-        this.removeEventListener("keydown", this._handleKeydown);
-      }
-    }
-  }
-
   override render() {
     return html`
       <div
         class="card"
         part="card"
-        tabindex="${this.clickable ? "0" : null}"
-        role="${this.clickable ? "button" : null}"
+        tabindex="${this.clickable ? "0" : nothing}"
+        role="${this.clickable ? "button" : nothing}"
       >
         <div class="card-header" part="header">
           <slot name="header">
@@ -264,61 +241,34 @@ export class CFCard extends BaseElement {
     `;
   }
 
-  /** Check if slot has real content (not just whitespace) */
-  private _slotHasContent(slot: HTMLSlotElement | null): boolean {
-    if (!slot) return false;
-    return slot.assignedNodes().some((node) => {
-      if (node.nodeType === Node.TEXT_NODE) {
-        return node.textContent?.trim() !== "";
-      }
-      return true;
-    });
-  }
-
   /** Update empty state classes based on slot content */
   private _updateEmptyStates(): void {
-    const getSlot = (name: string) =>
-      this.shadowRoot?.querySelector(`slot[name="${name}"]`) as
-        | HTMLSlotElement
-        | null;
-
-    const headerSlot = getSlot("header");
-    const contentSlot = getSlot("content");
-    const defaultSlot = contentSlot?.querySelector("slot:not([name])") as
-      | HTMLSlotElement
-      | null;
-    const footerSlot = getSlot("footer");
-    const titleSlot = getSlot("title");
-    const actionSlot = getSlot("action");
-    const descriptionSlot = getSlot("description");
-
-    const hasHeader = this._slotHasContent(headerSlot);
-    const hasContent = this._slotHasContent(contentSlot) ||
-      this._slotHasContent(defaultSlot);
-    const hasFooter = this._slotHasContent(footerSlot);
-    const hasTitle = this._slotHasContent(titleSlot);
-    const hasAction = this._slotHasContent(actionSlot);
-    const hasDescription = this._slotHasContent(descriptionSlot);
-
-    const showHeader = hasHeader || hasTitle || hasAction || hasDescription;
-    const showTitleWrapper = hasTitle || hasAction;
-
-    this.shadowRoot?.querySelector(".card-header")?.classList.toggle(
-      "empty",
-      !showHeader,
+    // The names of the slots with real content (not just whitespace), with
+    // "" for the default slot.
+    const filled = new Set(
+      [...this.renderRoot.querySelectorAll("slot")]
+        .filter((slot) =>
+          slot.assignedNodes().some((node) =>
+            node.nodeType !== Node.TEXT_NODE ||
+            node.textContent?.trim() !== ""
+          )
+        )
+        .map((slot) => slot.name),
     );
-    this.shadowRoot?.querySelector(".card-content")?.classList.toggle(
-      "empty",
-      !hasContent,
-    );
-    this.shadowRoot?.querySelector(".card-footer")?.classList.toggle(
-      "empty",
-      !hasFooter,
-    );
-    this.shadowRoot?.querySelector(".card-title-wrapper")?.classList.toggle(
-      "empty",
-      !showTitleWrapper,
-    );
+    const showTitleWrapper = filled.has("title") || filled.has("action");
+    const empty = {
+      ".card-header": !filled.has("header") && !showTitleWrapper &&
+        !filled.has("description"),
+      ".card-content": !filled.has("content") && !filled.has(""),
+      ".card-footer": !filled.has("footer"),
+      ".card-title-wrapper": !showTitleWrapper,
+    };
+    for (const [selector, isEmpty] of Object.entries(empty)) {
+      this.renderRoot.querySelector(selector)?.classList.toggle(
+        "empty",
+        isEmpty,
+      );
+    }
   }
 
   private _handleClick = (_event: Event): void => {

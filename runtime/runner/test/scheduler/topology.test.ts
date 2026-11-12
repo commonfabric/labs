@@ -433,4 +433,48 @@ describe("topologicalSort()", () => {
       expect(order).toEqual(actions);
     });
   });
+
+  describe("without maintained edges", () => {
+    // With no `dependents`, the sort derives its data edges from each
+    // action's read log and the writes it might make.
+
+    const document = {
+      space: "did:key:topology-read-logs",
+      id: "of:shared",
+      path: ["value"],
+    } as const;
+
+    it("places a writer with a read log before the action that reads what it writes", () => {
+      const reader: Action = function reader() {};
+      const writer: Action = function writer() {};
+      const dependencies = new WeakMap([
+        [reader, { reads: [document], shallowReads: [], writes: [] }],
+        [writer, { reads: [], shallowReads: [], writes: [document] }],
+      ]);
+
+      const order = topologicalSort(
+        new Set([reader, writer]),
+        dependencies,
+        new WeakMap([[writer, [document]]]),
+      );
+
+      expect(names(order)).toEqual(["writer", "reader"]);
+    });
+
+    it("orders no edge from a writer that has no read log", () => {
+      const reader: Action = function reader() {};
+      const writer: Action = function writer() {};
+      const dependencies = new WeakMap([
+        [reader, { reads: [document], shallowReads: [], writes: [] }],
+      ]);
+
+      const order = topologicalSort(
+        new Set([reader, writer]),
+        dependencies,
+        new WeakMap([[writer, [document]]]),
+      );
+
+      expect(names(order)).toEqual(["reader", "writer"]);
+    });
+  });
 });

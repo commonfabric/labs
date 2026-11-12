@@ -16,9 +16,11 @@ import { internSchema } from "@commonfabric/data-model-schema";
 
 import {
   bindImmutableCells,
+  IMMUTABLE_SNAPSHOTS_NO_SPACE,
   immutableCellsFor,
   ImmutableCellStore,
   immutableSnapshot,
+  liveImmutableSnapshotsBySpace,
   mintedFromUnstoredValue,
   ownImmutableCells,
 } from "../src/immutable-cell.ts";
@@ -507,6 +509,77 @@ describe("immutable-cell", () => {
     }
   });
 
+  it("attributes a snapshot whose origin names a space but no document to that space", () => {
+    // A base with no document still says which space the value was read
+    // in, so the snapshot is not one minted from an unstored value.
+    const SPACE = "did:key:z6MkiSnapshotOriginWithoutDocument";
+    const store = new ImmutableCellStore();
+    try {
+      const before = liveImmutableSnapshotsBySpace();
+      const unstored = store.create({ attributed: "nowhere" });
+      const spaced = store.create({ attributed: "space" }, {
+        space: SPACE,
+        path: [],
+      });
+      const after = liveImmutableSnapshotsBySpace();
+
+      expect(mintedFromUnstoredValue(spaced.id)).toBe(false);
+      expect(mintedFromUnstoredValue(unstored.id)).toBe(true);
+      expect(after.get(SPACE)).toBe(1);
+      expect(before.get(SPACE)).toBeUndefined();
+      expect(after.get(IMMUTABLE_SNAPSHOTS_NO_SPACE)).toBe(
+        (before.get(IMMUTABLE_SNAPSHOTS_NO_SPACE) ?? 0) + 1,
+      );
+    } finally {
+      store.dispose();
+    }
+  });
+
+  it("throws on creating a value that links to an expired snapshot", () => {
+    const source = new ImmutableCellStore();
+    const expired = source.create({ expires: true });
+    const live = source.create({ expires: false });
+    const store = new ImmutableCellStore();
+    try {
+      expect(store.create({ ref: linkRefFrom({ id: live.id }) }).value)
+        .toEqual({ ref: linkRefFrom({ id: live.id }) });
+      source.dispose();
+      expect(() => store.create({ ref: linkRefFrom({ id: expired.id }) }))
+        .toThrow("Unknown or expired immutable cell");
+    } finally {
+      source.dispose();
+      store.dispose();
+    }
+  });
+
+  it("returns a snapshot it holds by identifier, and throws for one it does not", () => {
+    const store = new ImmutableCellStore();
+    const other = new ImmutableCellStore();
+    try {
+      const held = store.create({ held: true });
+      const elsewhere = other.create({ held: false });
+
+      expect(store.get(held.id)).toBe(held);
+      expect(() => store.get(elsewhere.id)).toThrow("Unknown immutable cell");
+    } finally {
+      store.dispose();
+      other.dispose();
+    }
+  });
+
+  it("throws on an element snapshot of a value that is not a container", () => {
+    const store = new ImmutableCellStore();
+    const base = { id: "of:element-source" as const, path: [] };
+    try {
+      expect(store.createElement([1], base).value).toEqual([1]);
+      expect(() => store.createElement(1, base)).toThrow(
+        "Element snapshots require a container",
+      );
+    } finally {
+      store.dispose();
+    }
+  });
+
   it("deduplicates equal content regardless of object key order", () => {
     const store = new ImmutableCellStore();
     try {
@@ -752,5 +825,7 @@ describe("immutable-cell", () => {
     store.dispose();
     expect(() => immutableSnapshot(id)).toThrow("expired");
     expect(() => store.create({ n: 2 })).toThrow("disposed");
+    expect(() => store.createOwned({ n: 2 })).toThrow("disposed");
+    expect(() => store.retainSchema({ type: "number" })).toThrow("disposed");
   });
 });

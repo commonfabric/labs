@@ -10,6 +10,7 @@
  */
 
 import { assertEquals, assertStrictEquals, assertThrows } from "@std/assert";
+import { expect } from "@std/expect";
 
 import { deepFreeze } from "@commonfabric/data-model";
 import { FabricError } from "@commonfabric/data-model/fabric-instances";
@@ -298,4 +299,55 @@ Deno.test("writeDetailValueForTarget: refuses an overlay through a nested `Fabri
     "FabricInstance",
   );
   assertEquals(Object.getOwnPropertyNames(err), []);
+});
+
+Deno.test("writeDetailValueForTarget: overlays descendant writes onto a fresh record where the base is not a container", () => {
+  // A leaf written at the target and then written beneath, as a value
+  // replaced by a record field by field, reconstructs as the fields alone:
+  // the leaf has nothing for them to land in.
+  const tx = txWith([
+    detail(["value", "item"], "leaf"),
+    detail(["value", "item", "origin"], "imported"),
+  ]);
+  expect(writeDetailValueForTarget(tx, target(["item"]), "value")).toEqual({
+    origin: "imported",
+  });
+});
+
+Deno.test("writeDetailValueForTarget: overlays index-named descendant writes onto a fresh array where the base is not a container", () => {
+  const tx = txWith([
+    detail(["value", "item"], 7),
+    detail(["value", "item", "0"], "a"),
+    detail(["value", "item", "1"], "b"),
+  ]);
+  expect(writeDetailValueForTarget(tx, target(["item"]), "value")).toEqual([
+    "a",
+    "b",
+  ]);
+});
+
+Deno.test("writeDetailValueForTarget: ignores a write to the same id in another scope", () => {
+  const tx = txWith([
+    detail(["value"], { origin: "space-scoped" }),
+    {
+      address: {
+        space: SPACE,
+        id: ID,
+        scope: normalizeCellScope("user"),
+        path: toDocumentPath(["value"]),
+      },
+      // deno-lint-ignore no-explicit-any
+      value: { origin: "user-scoped" } as any,
+    },
+  ]);
+  expect(writeDetailValueForTarget(tx, target([]), "value")).toEqual({
+    origin: "space-scoped",
+  });
+  expect(
+    writeDetailValueForTarget(
+      tx,
+      { ...target([]), scope: normalizeCellScope("user") },
+      "value",
+    ),
+  ).toEqual({ origin: "user-scoped" });
 });

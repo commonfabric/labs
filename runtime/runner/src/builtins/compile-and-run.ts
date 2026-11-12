@@ -316,41 +316,46 @@ export function compileAndRun(
     // Capture requestId for this compilation run
     const thisRequestId = requestId;
 
+    // Named rather than written inline at the call, so that each callback's
+    // lines are its own (docs/development/COVERAGE.md, "A line two callbacks
+    // share").
+    const reportCompileFailure = (err: Error) => {
+      // Only process this error if the request hasn't been superseded
+      if (requestId !== thisRequestId) return;
+      if (abortController?.signal.aborted) return;
+
+      runtime.editWithRetry((asyncTx) => {
+        // Extract structured errors if this is a CompilerError
+        if (err instanceof CompilerError) {
+          const structuredErrors = err.errors.map((e) => ({
+            line: e.line ?? 1,
+            column: e.column ?? 1,
+            message: e.message,
+            type: e.type,
+            file: e.file,
+          }));
+          errors.withTx(asyncTx).set(structuredErrors);
+        } else {
+          error.withTx(asyncTx).set(
+            err.message + (err.stack ? "\n" + err.stack : ""),
+          );
+        }
+      });
+    };
+    const clearPending = () => {
+      // Only update pending if this is still the current request
+      if (requestId !== thisRequestId) return;
+      // Always clear pending state, even if cancelled, to avoid stuck state
+
+      runtime.editWithRetry((asyncTx) => {
+        pending.withTx(asyncTx).set(false);
+      });
+    };
+
     const compilePromise = runtime.patternManager
       .compileOrGetPattern(program, parentCell.space)
-      .catch(
-        (err) => {
-          // Only process this error if the request hasn't been superseded
-          if (requestId !== thisRequestId) return;
-          if (abortController?.signal.aborted) return;
-
-          runtime.editWithRetry((asyncTx) => {
-            // Extract structured errors if this is a CompilerError
-            if (err instanceof CompilerError) {
-              const structuredErrors = err.errors.map((e) => ({
-                line: e.line ?? 1,
-                column: e.column ?? 1,
-                message: e.message,
-                type: e.type,
-                file: e.file,
-              }));
-              errors.withTx(asyncTx).set(structuredErrors);
-            } else {
-              error.withTx(asyncTx).set(
-                err.message + (err.stack ? "\n" + err.stack : ""),
-              );
-            }
-          });
-        },
-      ).finally(() => {
-        // Only update pending if this is still the current request
-        if (requestId !== thisRequestId) return;
-        // Always clear pending state, even if cancelled, to avoid stuck state
-
-        runtime.editWithRetry((asyncTx) => {
-          pending.withTx(asyncTx).set(false);
-        });
-      });
+      .catch(reportCompileFailure)
+      .finally(clearPending);
 
     compilePromise.then((pattern) => {
       // Only run the result if this is still the current request

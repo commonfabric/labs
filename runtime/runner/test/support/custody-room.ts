@@ -19,6 +19,7 @@ import {
   writeSeedEnvelopeDoc,
 } from "../cfc-seed-envelope.ts";
 import { newSharedServer } from "../memory-v2-test-utils.ts";
+import { refusingServer } from "./refusing-server.ts";
 import {
   commitCustodySeal,
   CUSTODY_SEAL_READER,
@@ -56,7 +57,7 @@ const SEALED_BY = {
   identity: { kind: "builtin", builtinId: "cfc-custody-seal" },
 };
 
-const PROJECT: ImplementationIdentity = {
+export const PROJECT: ImplementationIdentity = {
   kind: "verified",
   moduleIdentity: MODULE,
   symbol: "projectChoice",
@@ -178,12 +179,16 @@ export const custodyRoom = async ({ witnessed = true, toSeal = true } = {}) => {
   const server: MemoryV2Server.Server = newSharedServer({
     subscriptionRefreshDelayMs: 0,
   });
+  // Every runtime reaches the server through this stand-in, so a test can
+  // have it refuse a space from some point on.
+  const refusing = refusingServer(server);
   const managers: EmulatedStorageManager[] = [];
   const created: Runtime[] = [];
   const runtimeFor = (identity: Identity): Runtime => {
-    const storageManager = EmulatedStorageManager.connectTo(server, {
-      as: identity,
-    });
+    const storageManager = EmulatedStorageManager.connectTo(
+      refusing.server as MemoryV2Server.Server,
+      { as: identity },
+    );
     managers.push(storageManager);
     const runtime = new Runtime({
       apiUrl: new URL("http://toolshed.test"),
@@ -231,6 +236,8 @@ export const custodyRoom = async ({ witnessed = true, toSeal = true } = {}) => {
 
   const fixture = {
     runtimes,
+    /** From now on, refuses every request naming `space`. */
+    refuse: (space: string) => refusing.refuse(space, "unauthorized"),
     policy,
     terms: terms.withTx(undefined),
     room(identity: Identity, box?: Cell<unknown>): CustodyRoom {

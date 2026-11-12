@@ -26,6 +26,7 @@ import {
   PatternCoverageCollector,
   type PatternCoverageSpan,
 } from "../src/pattern-coverage.ts";
+import { MAX_RETAINED_COMPILES } from "../src/pattern-manager.ts";
 import { type MemorySpace, Runtime } from "../src/runtime.ts";
 import {
   buildRecordsFromCompiled,
@@ -33,6 +34,7 @@ import {
 } from "../src/sandbox/module-record-compiler.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { compileCacheVersionOf } from "./support/compile-cache-version.ts";
+import { captureLogs } from "./support/captured-logs.ts";
 import { observeColdCompiles } from "./support/telemetry-observers.ts";
 
 const signer = await Identity.fromPassphrase("load-by-identity");
@@ -1215,6 +1217,7 @@ describe("load by module identity (warm + version-bump recovery)", () => {
       const { entryIdentity } = fixture;
       await storeSourceIn(fixture, [space, spaceB]);
       const manager = runtime.patternManager.accessForTestingOnly;
+      const defaultWriter = manager.compileCacheWriter;
       const firstWriteStarted = Promise.withResolvers<void>();
       const release = Promise.withResolvers<void>();
       let writes = 0;
@@ -1254,7 +1257,7 @@ describe("load by module identity (warm + version-bump recovery)", () => {
         expect(await holdsClosure(spaceB, entryIdentity)).toBe(true);
       } finally {
         release.resolve();
-        manager.compileCacheWriter = undefined;
+        manager.compileCacheWriter = defaultWriter;
       }
     });
 
@@ -1619,10 +1622,14 @@ describe("load by module identity (warm + version-bump recovery)", () => {
         expect(typeof loaded).toBe("function");
         expect(await holdsClosure(spaceB, entryIdentity)).toBe(false);
 
+        using logs = captureLogs("pattern-manager");
         expect(await load(entryIdentity, spaceC)).toBe(loaded);
         await flushed();
         expect(compiles()).toBe(1);
         expect(await holdsClosure(spaceC, entryIdentity)).toBe(true);
+        expect(logs.textsOf("retained-compile-written-back")).toEqual([
+          `entry=${entryIdentity} to=${spaceC} trigger=load-from-memory`,
+        ]);
       } finally {
         manager.compileCacheWriter = undefined;
       }
@@ -1694,6 +1701,35 @@ describe("load by module identity (warm + version-bump recovery)", () => {
       } finally {
         manager.compileCacheWriter = undefined;
       }
+    });
+
+    it("retains the newest previews' compiles up to its cap, evicting the oldest", async () => {
+      const manager = runtime.patternManager.accessForTestingOnly;
+      using logs = captureLogs("pattern-manager");
+      const previewed: string[] = [];
+      for (let n = 0; n <= MAX_RETAINED_COMPILES; n++) {
+        const fixture = await engine.compileToRecordGraph({
+          ...PROGRAM,
+          files: PROGRAM.files.map((file) =>
+            file.name === "/util.ts"
+              ? {
+                ...file,
+                contents: `export const double = (x:number)=>x*${n + 2};`,
+              }
+              : file
+          ),
+        });
+        await storeSourceIn(fixture, [spaceB]);
+        await load(fixture.entryIdentity, spaceB, { repairCache: false });
+        previewed.push(fixture.entryIdentity);
+      }
+
+      expect([...manager.retainedCompiles.keys()]).toEqual(
+        previewed.slice(1),
+      );
+      expect(logs.textsOf("retained-compile-evicted")).toEqual([
+        `entry=${previewed[0]} cap=${MAX_RETAINED_COMPILES}`,
+      ]);
     });
 
     it("neither recompiles nor writes into an exhausted space once its retained compile is evicted", async () => {
@@ -1812,9 +1848,14 @@ describe("load by module identity (warm + version-bump recovery)", () => {
         );
       };
       try {
+        using logs = captureLogs("pattern-manager");
         const loaded = await load(entryIdentity, spaceB);
         await flushed();
         expect(writes).toBe(1);
+        expect(logs.textsOf("compile-cache-repair-refused")).toEqual([
+          `entry=${entryIdentity} symbol=default space=${spaceB} ` +
+          "AuthorizationError: no grant to write the space",
+        ]);
         for (let attempt = 0; attempt < 3; attempt++) {
           expect(await load(entryIdentity, spaceB)).toBe(loaded);
           await flushed();

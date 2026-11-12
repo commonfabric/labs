@@ -330,6 +330,38 @@ describe("external content observation", () => {
     });
   });
 
+  it("refuses when the final read starts a link-target load the traversal did not", async () => {
+    await withRuntime(async (runtime, storageManager) => {
+      // The traversal converges on its first check, and the check after the
+      // final read finds a load in flight.
+      let pendingChecks = 0;
+      using _pending = stub(
+        storageManager,
+        "pendingCrossSpacePromiseCount",
+        () => pendingChecks++ === 0 ? 0 : 1,
+      );
+      const targetTx = runtime.edit();
+      identifyProducer(targetTx);
+
+      try {
+        await expect(runtime.prepareExternalContentObservation({
+          targetTx,
+          space,
+          cause: "unloaded-final-external-content-row",
+          schema: ROW_SCHEMA,
+          value: { title: "private row" },
+          producer: PRODUCER,
+        })).rejects.toMatchObject({
+          name: "CfcCommitRefusalError",
+          message: expect.stringContaining("reached an unloaded document"),
+        });
+        expect(pendingChecks).toBe(2);
+      } finally {
+        targetTx.abort("test complete");
+      }
+    });
+  });
+
   it("records canonical flow and egress evidence without persisting the observed value", async () => {
     await withRuntime(async (runtime, storageManager) => {
       const targetTx = runtime.edit();

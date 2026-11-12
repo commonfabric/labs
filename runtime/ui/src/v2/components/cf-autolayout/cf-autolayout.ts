@@ -506,14 +506,6 @@ export class CFAutoLayout extends BaseElement {
     if (opening && this._isMobile()) {
       this.rightOpen = false;
     }
-    this.dispatchEvent(
-      new CustomEvent("cf-toggle-left", {
-        bubbles: true,
-        composed: true,
-        detail: { open: this.leftOpen },
-      }),
-    );
-    this.requestUpdate();
   }
 
   private _toggleRight(trigger?: Element) {
@@ -524,22 +516,10 @@ export class CFAutoLayout extends BaseElement {
     if (opening && this._isMobile()) {
       this.leftOpen = false;
     }
-    this.dispatchEvent(
-      new CustomEvent("cf-toggle-right", {
-        bubbles: true,
-        composed: true,
-        detail: { open: this.rightOpen },
-      }),
-    );
-    this.requestUpdate();
   }
 
   private _isMobile(): boolean {
-    try {
-      return globalThis.matchMedia?.("(max-width: 768px)")?.matches ?? false;
-    } catch {
-      return false;
-    }
+    return globalThis.matchMedia?.("(max-width: 768px)")?.matches ?? false;
   }
 
   private _closePanels() {
@@ -550,7 +530,6 @@ export class CFAutoLayout extends BaseElement {
       // Return focus to the last toggle trigger
       this._lastToggleEl.focus();
     }
-    this.requestUpdate();
   }
 
   private _onKeydown(e: KeyboardEvent) {

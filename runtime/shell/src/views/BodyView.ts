@@ -188,6 +188,16 @@ export class XBodyView extends BaseView {
   @property({ type: Boolean })
   accessor embedded = false;
 
+  /** The task that finds the sidebar, which a test runs directly. */
+  get accessForTestingOnly(): {
+    readonly subPages: Task<
+      readonly [PieceHandle | undefined, boolean, string],
+      { sidebarUI: CellHandle<VNode> | undefined }
+    >;
+  } {
+    return { subPages: this.#subPages };
+  }
+
   #subPages = new Task(this, {
     task: async ([_activePattern, embedded, _path]) => {
       if (embedded) {

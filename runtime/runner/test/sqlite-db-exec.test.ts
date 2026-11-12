@@ -9,6 +9,12 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  all,
+  dbOwner,
+  match,
+  principal,
+} from "@commonfabric/memory/sqlite/row-label";
 import { table } from "@commonfabric/memory/sqlite/schema";
 import type { SqliteDbRef } from "@commonfabric/memory/v2";
 import { Runtime } from "../src/runtime.ts";
@@ -325,6 +331,114 @@ describe("SqliteDb .exec (commit-folded write)", () => {
   it("rejects nested undefined in positional statements without a column list", () => {
     expect(() => encodeSqliteParams("SELECT ?", [{ value: undefined }]))
       .toThrow("sqlite: param is undefined");
+  });
+
+  it("encodes a cell's query-result view as the link the cell encodes to", () => {
+    const tx = runtime.edit();
+    const author = runtime.getCell<{ name: string }>(
+      space,
+      "view-author",
+      undefined,
+      tx,
+    );
+    author.set({ name: "Ada" });
+    const sql = "INSERT INTO people (author_cf_link) VALUES (:author_cf_link)";
+
+    const fromView = encodeSqliteParams(sql, {
+      author_cf_link: author.getAsQueryResult(),
+    }) as Record<string, unknown>;
+
+    expect(typeof fromView.author_cf_link).toBe("string");
+    expect(fromView).toEqual(
+      encodeSqliteParams(sql, { author_cf_link: author }),
+    );
+    tx.abort();
+  });
+
+  it("throws for a nested cell that has no durable link", () => {
+    const unlinked = createCell(runtime, { path: [], space });
+
+    expect(() =>
+      encodeSqliteParams("SELECT :payload", { payload: { links: [unlinked] } })
+    ).toThrow("sqlite: a nested Cell parameter must have a durable link");
+  });
+
+  it("throws for a cell bound by name to a column that is not a `_cf_link` column", () => {
+    const tx = runtime.edit();
+    const cell = runtime.getCell<{ n: string }>(space, "named", undefined, tx);
+    cell.set({ n: "x" });
+
+    expect(() =>
+      encodeSqliteParams("UPDATE notes SET body = :body", { body: cell })
+    ).toThrow("cells may only be bound to _cf_link columns");
+    expect(
+      typeof (encodeSqliteParams(
+        "UPDATE people SET author_cf_link = :author_cf_link",
+        { author_cf_link: cell },
+      ) as Record<string, unknown>).author_cf_link,
+    ).toBe("string");
+    tx.abort();
+  });
+
+  it("throws for `.exec()` on a cell bound to no transaction", () => {
+    const dbRef: SqliteDbRef = {
+      id: `of:exec-no-tx-${crypto.randomUUID()}`,
+      tables: { notes: table({ id: "integer primary key", body: "text" }) },
+    };
+    const tx = runtime.edit();
+    const handle = runtime.getCell(space, "db-no-tx", undefined, tx);
+    handle.set(dbRef);
+    const db = createCell(
+      runtime,
+      handle.getAsNormalizedFullLink(),
+      undefined,
+      false,
+      "sqlite",
+    ) as unknown as SqliteDbCell;
+
+    expect(() => db.exec("INSERT INTO notes (body) VALUES (?)", ["hi"]))
+      .toThrow(".exec() must be called within a transaction");
+    tx.abort();
+  });
+
+  describe("on a table that declares a row-label rule", () => {
+    // A columnless `INSERT` cannot be attributed to the rule's columns, so
+    // only a server that evaluates row labels at commit admits it.
+
+    const rowLabelDbRef = (): SqliteDbRef => ({
+      id: `of:exec-row-label-${crypto.randomUUID()}`,
+      tables: {
+        emails: table(
+          { id: "integer primary key", from_addr: "text" },
+          (f) => ({
+            confidentiality: all(
+              principal("mailto", match(f.from_addr, /\S+@\S+/g, { min: 1 })),
+              dbOwner(),
+            ),
+          }),
+        ),
+      },
+    });
+
+    it("refuses an unattributable write where the provider does not say whether the server evaluates row labels", () => {
+      storageManager.open(space).sqliteServerCommitRowLabelEval = undefined;
+      const tx = runtime.edit();
+      const db = sqliteDb(rowLabelDbRef(), tx, "db-row-label-unknown");
+
+      expect(() => db.exec("INSERT INTO emails DEFAULT VALUES", []))
+        .toThrow("fail closed");
+      tx.abort();
+    });
+
+    it("admits an unattributable write where the provider says the server evaluates row labels", () => {
+      storageManager.open(space).sqliteServerCommitRowLabelEval = () => true;
+      const tx = runtime.edit();
+      const db = sqliteDb(rowLabelDbRef(), tx, "db-row-label-evaluated");
+
+      expect(() => db.exec("INSERT INTO emails DEFAULT VALUES", [])).not
+        .toThrow();
+      tx.abort();
+    });
   });
 
   it("encodes link cells across a multi-row INSERT (cols cycle per tuple)", async () => {

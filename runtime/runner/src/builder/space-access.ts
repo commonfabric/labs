@@ -7,7 +7,7 @@ import type {
 import { debugStr } from "@commonfabric/data-model";
 import { isDID, isWellFormedDID } from "@commonfabric/identity/did";
 import { aclDocId, ANYONE_USER, isACL } from "@commonfabric/memory/acl";
-import type { MemorySpace, URI } from "@commonfabric/memory/interface";
+import type { ACL, MemorySpace, URI } from "@commonfabric/memory/interface";
 import { isDeletedSpaceError } from "@commonfabric/memory/v2/client";
 
 import { type Cell, unwrapCell } from "../cell.ts";
@@ -75,7 +75,7 @@ export function spaceAccess(
     principal,
     reactive,
     true,
-  );
+  )?.level;
 }
 
 /**
@@ -135,7 +135,7 @@ export function spaceAccessOf(
     principal,
     kind === "lift",
     false,
-  );
+  )?.level;
 }
 
 /**
@@ -174,19 +174,14 @@ export function spaceMembers(
   );
   if (target === undefined) return undefined;
   const space = spaceOfTarget(target, "spaceMembers(target)");
-  const level = accessLevel(runtime, tx, space, principal, reactive, true);
-  if (level === undefined || level === "none") return undefined;
-
-  // A level other than `none` comes from a well-formed list, so the check
-  // below only narrows its type.
-  const acl = aclOf(runtime, tx, space);
-  if (!isACL(acl)) return undefined;
+  const acl = accessLevel(runtime, tx, space, principal, reactive, true)
+    ?.grantedBy;
+  if (acl === undefined) return undefined;
   const principals: Record<DID, SpaceGrantLevel> = {};
   let anyone: SpaceGrantLevel | undefined;
   for (const [user, entry] of Object.entries(acl)) {
-    if (entry === undefined) continue;
     if (user === ANYONE_USER) anyone = entry;
-    else if (isDID(user)) principals[user] = entry;
+    else if (isDID(user) && entry !== undefined) principals[user] = entry;
   }
   return anyone === undefined ? { principals } : { principals, anyone };
 }
@@ -453,8 +448,9 @@ function ownCall(name: string, args: [target?: unknown]): {
 /**
  * Helper for {@link spaceAccess} and its siblings, which returns
  * `principal`'s access to `space`, reading the space's access list through
- * `tx`. With `reactive`, a change to whether the memory server admits this
- * runtime to `space` runs the executing action again. `own` says whether
+ * `tx`, along with the list when it grants `principal` access. With
+ * `reactive`, a change to whether the memory server admits this runtime to
+ * `space` runs the executing action again. `own` says whether
  * `principal` is the one the calling code runs for, whose session this
  * runtime's may be; the session says nothing about any other principal, unless
  * the refusal says the space is deleted, which holds for all of them.
@@ -466,7 +462,7 @@ function accessLevel(
   principal: string | undefined,
   reactive: boolean,
   own: boolean,
-): SpaceAccessLevel | undefined {
+): { level: SpaceAccessLevel; grantedBy?: ACL } | undefined {
   if (principal === undefined) return undefined;
 
   const action = runtime.scheduler.executingAction;
@@ -483,17 +479,22 @@ function accessLevel(
   // refusal that says so holds whoever's session heard it, and what the
   // replica kept of the list no longer grants anything.
   const refusal = refusalOf(runtime, space);
-  if (isDeletedSpaceError(refusal)) return "none";
-  if (own && !runtime.servingPosture && refusal !== undefined) return "none";
+  if (isDeletedSpaceError(refusal)) return { level: "none" };
+  if (own && !runtime.servingPosture && refusal !== undefined) {
+    return { level: "none" };
+  }
   if (acl === undefined) return undefined;
-  const role = spaceReaderRole(isACL(acl) ? acl : undefined, principal);
-  return role === null ? "none" : LEVEL_OF_ROLE[role];
+  // A role comes only from a well-formed list.
+  const list = isACL(acl) ? acl : undefined;
+  const role = spaceReaderRole(list, principal);
+  return role === null
+    ? { level: "none" }
+    : { level: LEVEL_OF_ROLE[role], grantedBy: list };
 }
 
 /**
- * Helper for {@link accessLevel}, {@link spaceMembers} and
- * {@link spaceDeleted}, which returns the value of `space`'s access list, read
- * through `tx`: `undefined` while it has
+ * Helper for {@link accessLevel} and {@link spaceDeleted}, which returns the
+ * value of `space`'s access list, read through `tx`: `undefined` while it has
  * not arrived, and for a space that has none.
  */
 function aclOf(

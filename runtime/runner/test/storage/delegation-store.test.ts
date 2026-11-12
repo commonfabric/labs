@@ -8,6 +8,7 @@ import {
   Identity,
   issueDelegation,
 } from "@commonfabric/identity";
+import { MAX_PROOF_CHAIN_LENGTH } from "@commonfabric/memory/v2/session-open-auth";
 
 import { DelegationStore } from "../../src/storage/delegation-store.ts";
 
@@ -92,6 +93,24 @@ describe("DelegationStore", () => {
       await expect(new DelegationStore().add([])).rejects.toThrow(
         "the chain is empty",
       );
+    });
+
+    it("holds a chain of the longest length a proof may carry, and throws for one a link longer", async () => {
+      // Alternating alice and bob keeps each link issued by the previous
+      // audience, so only the length can refuse the longer chain.
+      const links = [await delegate(space, alice)];
+      for (let i = 1; i <= MAX_PROOF_CHAIN_LENGTH; i++) {
+        const [issuer, aud] = i % 2 === 1 ? [alice, bob] : [bob, alice];
+        links.push(await delegate(issuer, aud));
+      }
+      const bytes = links.map((link) => link.bytes);
+      const store = new DelegationStore();
+
+      await expect(store.add(bytes)).rejects.toThrow(
+        `the chain is longer than ${MAX_PROOF_CHAIN_LENGTH} delegations`,
+      );
+      expect(cids(await store.add(bytes.slice(0, MAX_PROOF_CHAIN_LENGTH))))
+        .toEqual(links.slice(0, MAX_PROOF_CHAIN_LENGTH).map((d) => d.cid));
     });
 
     it("keeps the bytes it was given, whatever the caller does with its array after", async () => {

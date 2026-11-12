@@ -15,6 +15,7 @@ import {
   SHELL_DEPLOYMENT_FLAGS,
   SHELL_FLAG_SOURCES,
   shellFlagsFromDeclared,
+  waitUnlessAborted,
 } from "../src/deployment-meta.ts";
 import { SERVING_RUNTIME_EXPERIMENTAL } from "../src/executor/serving-runtime.ts";
 import { EXPERIMENTAL_FLAG_AUTHORITY } from "../src/experimental-posture.ts";
@@ -1635,6 +1636,38 @@ describe("deployment-meta", () => {
         ' Memory opens on "https://router.example/", which the health ' +
           "check does not ask.",
       );
+    });
+  });
+
+  describe("waitUnlessAborted()", () => {
+    /** Whether `promise` has settled once pending work has run. */
+    const settledYet = async (promise: Promise<void>) => {
+      let settled = false;
+      promise.then(() => settled = true);
+      await clock.settle();
+      return settled;
+    };
+
+    it("resolves once `ms` have passed", async () => {
+      const wait = waitUnlessAborted(1_000, new AbortController().signal);
+      expect(await settledYet(wait)).toBe(false);
+      await clock.tick(999);
+      expect(await settledYet(wait)).toBe(false);
+      await clock.tick(1);
+      expect(await settledYet(wait)).toBe(true);
+    });
+
+    it("resolves when the signal aborts before `ms` have passed", async () => {
+      const controller = new AbortController();
+      const wait = waitUnlessAborted(1_000, controller.signal);
+      expect(await settledYet(wait)).toBe(false);
+      controller.abort();
+      expect(await settledYet(wait)).toBe(true);
+    });
+
+    it("resolves at once for a signal that has already aborted", async () => {
+      const wait = waitUnlessAborted(1_000, AbortSignal.abort());
+      expect(await settledYet(wait)).toBe(true);
     });
   });
 });

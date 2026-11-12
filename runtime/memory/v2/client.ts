@@ -265,7 +265,9 @@ export type Transport = {
    * itself. A transport whose write of this very payload failed on an open
    * connection rejects with `writeFailedError()` instead, so that the client
    * stops replaying a commit whose own write keeps failing. Any other
-   * rejection fails the request with that error.
+   * rejection fails the request with that error. A response that arrived
+   * before the rejection answers the request instead, whatever the
+   * rejection.
    */
   send(payload: string): Promise<void>;
 
@@ -812,7 +814,7 @@ export async function settleBounded<T>(
 /** A request awaiting its response; see {@link Client.request}. */
 type PendingRequest = PromiseWithResolvers<unknown> & {
   /** Hears the response as the client handles it, before any frame after it. */
-  onResponse?: (response: ResponseMessage<unknown>) => void;
+  onResponse: (response: ResponseMessage<unknown>) => void;
 };
 
 export class Client {
@@ -1186,16 +1188,17 @@ export class Client {
       resumeKey: crypto.randomUUID(),
       resumeAttempt: 1,
     };
-    let opening: Promise<SessionOpenResult> | undefined;
+    let opening: Promise<{ result: SessionOpenResult }> | undefined;
     let result: SessionOpenResult;
+    let answeredOnEpoch: number | undefined;
     try {
-      result = await runWithAbortSignal(
+      ({ result, answeredOnEpoch } = await runWithAbortSignal(
         signal,
         "memory session mount cancelled",
-        () => (opening = this.openSession(space, options, auth, undefined, {
+        () => (opening = this.#openSession(space, options, auth, undefined, {
           signal,
         })),
-      );
+      ));
       if (signal?.aborted) {
         throw signal.reason instanceof Error
           ? signal.reason
@@ -1205,7 +1208,7 @@ export class Client {
       // A cancelled mount hands out no session, so one the server opened for
       // it has no holder to close it.
       if (signal?.aborted) {
-        void opening?.then(({ sessionId }) =>
+        void opening?.then(({ result: { sessionId } }) =>
           this.#closeUnheldSession(space, sessionId)
         ).catch(() => undefined);
       }
@@ -1232,6 +1235,28 @@ export class Client {
       result.serverBuild,
     );
     this.#spaces.add(session);
+    // The server answered the open on a connection the client has since
+    // replaced: the reconnect restored the client's sessions without this
+    // one, which is open only on the connection that is gone. It is restored
+    // on the connection that is up before it is handed out.
+    if (answeredOnEpoch !== undefined && this.#staleSince(answeredOnEpoch)) {
+      try {
+        session.handleDisconnect();
+        await this.restoreConnection();
+        // A reconnect that had not yet taken stock of the client's sessions
+        // when this one was registered has restored it already, or holds it
+        // after a refusal for now. A held session is left to the retry its
+        // hold has scheduled: a restore made here would send its open again
+        // at once, ahead of the backoff the hold keeps.
+        if (session.restorePending && !session.held) await session.restore();
+        // A restore that a permanent denial ended terminated the session
+        // rather than failing; one a refusal for now holds is still pending.
+        await session.whenRestored();
+      } catch (error) {
+        await session.close().catch(() => undefined);
+        throw error;
+      }
+    }
     return { session, result };
   }
 
@@ -1305,12 +1330,19 @@ export class Client {
     const encoded = options.encoded !== undefined && options.epoch === epoch
       ? options.encoded
       : this.#encodeRequest(message);
-    const pending: PendingRequest = Promise.withResolvers<unknown>();
     const { onResponse } = options;
-    if (onResponse !== undefined) {
-      pending.onResponse = (response) =>
-        onResponse(response as ResponseMessage<Result>);
-    }
+    // Set as the response arrives, which on some transports is before the
+    // send settles.
+    let answered = false;
+    const pending: PendingRequest = Object.assign(
+      Promise.withResolvers<unknown>(),
+      {
+        onResponse: (response: ResponseMessage<unknown>) => {
+          answered = true;
+          onResponse?.(response as ResponseMessage<Result>);
+        },
+      },
+    );
     // The rejection handler below only attaches after the transport send
     // completes, and send suspends across event-loop turns on any real
     // transport — close()'s rejectPending() can fire in that window with
@@ -1339,14 +1371,28 @@ export class Client {
     try {
       await this.#transport.send(encoded);
     } catch (error) {
-      // A send the transport refused outright gets no response, so its entry
-      // would otherwise stay until the connection closes. A send lost with its
-      // connection is settled by the close that reports the loss.
-      if (!isConnectionError(error)) {
-        this.#pending.delete(requestId);
-        this.#pendingSessions.delete(requestId);
+      // A response that arrived before the send settled answers the request,
+      // whatever the send then reports: the server has acted on it.
+      if (answered) {
+        // The close that reports a lost connection records a send lost with
+        // it. Any other failure is recorded only here, since the request
+        // itself no longer fails with it.
+        if (!isConnectionError(error)) {
+          logger.warn("send-failed-after-answer", () => [
+            `request ${requestId} was answered before its send failed: ` +
+            describeError(error),
+          ]);
+        }
+      } else {
+        // A send the transport refused outright gets no response, so its
+        // entry would otherwise stay until the connection closes. A send lost
+        // with its connection is settled by the close that reports the loss.
+        if (!isConnectionError(error)) {
+          this.#pending.delete(requestId);
+          this.#pendingSessions.delete(requestId);
+        }
+        throw error;
       }
-      throw error;
     }
     const result = await pending.promise as ResponseMessage<Result>;
     if (result.error) {
@@ -1532,7 +1578,35 @@ export class Client {
     holdings?: SessionHolding[],
     options: { restoring?: boolean; signal?: AbortSignal } = {},
   ): Promise<SessionOpenResult> {
+    const { result } = await this.#openSession(
+      space,
+      mount,
+      auth,
+      holdings,
+      options,
+    );
+    return result;
+  }
+
+  /**
+   * Helper for `openSession()` and `#mount()`, which also returns the epoch
+   * of the connection that answered the `session.open`.
+   */
+  async #openSession(
+    space: string,
+    mount: MountOptions,
+    auth: SessionAuth | undefined,
+    holdings: SessionHolding[] | undefined,
+    options: { restoring?: boolean; signal?: AbortSignal },
+  ): Promise<{ result: SessionOpenResult; answeredOnEpoch?: number }> {
     if (this.#clientUpdateError !== undefined) throw this.#clientUpdateError;
+    // Set as the answer to the open arrives.
+    let answeredOnEpoch: number | undefined;
+    const noteAnswer = {
+      onResponse: () => {
+        answeredOnEpoch = this.#connectionEpoch;
+      },
+    };
     const session: SessionDescriptor = {
       ...mount,
       client: this.#clientInfo,
@@ -1639,7 +1713,7 @@ export class Client {
             requireUncancelled();
             // The chain rides outside any signature here: the connection
             // authenticated the key, and each proof carries its own.
-            return await this.request<SessionOpenResult>({
+            const result = await this.request<SessionOpenResult>({
               type: "session.open",
               requestId: this.#nextRequestId(),
               space,
@@ -1655,7 +1729,8 @@ export class Client {
               ...(holdings !== undefined
                 ? { holdings: this.declarableHoldings(holdings) }
                 : {}),
-            }, { whileConnected });
+            }, { whileConnected, ...noteAnswer });
+            return { result, answeredOnEpoch };
           }
         } catch (error) {
           // A router's refusal for now passes without a new connection,
@@ -1705,8 +1780,12 @@ export class Client {
             session,
             ...(signed ? signed : {}),
             ...(holdings !== undefined ? { holdings } : {}),
-          }, { whileConnected });
-          this.#updateSessionOpenAuthContext(result.sessionOpen);
+          }, { whileConnected, ...noteAnswer });
+          // The next challenge an answer carries is its connection's: one
+          // answered on a connection since replaced has none for this one.
+          if (!this.#staleSince(epoch)) {
+            this.#updateSessionOpenAuthContext(result.sessionOpen);
+          }
           return result;
         },
       );
@@ -1716,7 +1795,7 @@ export class Client {
         await this.#ensureConnected();
         continue;
       }
-      return result;
+      return { result, answeredOnEpoch };
     }
   }
 
@@ -2734,7 +2813,7 @@ export class Client {
         this.#pending.delete(message.requestId);
         this.#pendingSessions.delete(message.requestId);
         try {
-          pending.onResponse?.(message);
+          pending.onResponse(message);
         } catch (cause) {
           console.error("request response observer threw:", cause);
         }
@@ -3571,6 +3650,14 @@ export class SpaceSession {
    */
   get held(): boolean {
     return this.#held;
+  }
+
+  /**
+   * @internal Whether this session has a restore pending: its connection
+   * dropped, or a restore has not finished, since it was last restored.
+   */
+  get restorePending(): boolean {
+    return this.#restoreComplete !== undefined;
   }
 
   #assertOpen(): void {
@@ -4768,8 +4855,7 @@ export class SpaceSession {
     const background = [...this.#background];
     this.#background.clear();
     await Promise.allSettled(background);
-    // A commit whose send failed after its acceptance arrived is outstanding
-    // still, and settles with its verdict.
+    // No send is still in flight, so a commit still outstanding has no answer.
     this.#settleOutstandingCommits(new Error("memory session closed"));
     this.#replaceWatchSpecs([]);
     this.#viewInterests = [];
