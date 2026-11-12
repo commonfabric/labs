@@ -758,15 +758,19 @@ function throwNoDiscoveryMatch(ctx: WishContext, message: string): never {
   throw new WishError(message, "no-match");
 }
 
-/** Searches favorites in home space for pieces matching a hashtag. */
+/**
+ * Searches favorites in home space for pieces matching a hashtag, or returns
+ * `undefined` when there is no home space to search: a serving runtime whose
+ * run carries no requesting identity (see `homeSpaceUserDID`).
+ */
 function searchFavoritesForHashtag(
   ctx: WishContext,
   searchTermWithoutHash: string,
   pathPrefix: string[],
-): BaseResolution[] {
+): BaseResolution[] | undefined {
   const queryKey = sanitizeQueryKey(`#${searchTermWithoutHash}`);
   const userDID = homeSpaceUserDID(ctx);
-  if (!userDID) return [];
+  if (!userDID) return undefined;
 
   const favoritesCell = measureWishPhase(
     "favorites-cell",
@@ -978,6 +982,9 @@ function searchByHashtag(
   const searchProfile = ctx.scope?.includes("profile");
 
   const allMatches: BaseResolution[] = [];
+  // Whether a searched scope could not be looked at, so that finding nothing
+  // is not reported as confirmed none.
+  let favoritesUnsearched = false;
 
   if (searchFavorites) {
     const matches = searchFavoritesForHashtag(
@@ -985,7 +992,8 @@ function searchByHashtag(
       searchTermWithoutHash,
       parsed.path,
     );
-    for (const match of matches) allMatches.push(match);
+    if (matches === undefined) favoritesUnsearched = true;
+    for (const match of matches ?? []) allMatches.push(match);
   }
 
   if (searchMentionables) {
@@ -1020,6 +1028,12 @@ function searchByHashtag(
   }
 
   if (allMatches.length === 0) {
+    if (favoritesUnsearched) {
+      throw new WishError(
+        `User identity DID not available to search favorites for ` +
+          `"${searchTerm}"`,
+      );
+    }
     const parts: string[] = [];
     if (searchFavorites) parts.push("favorites");
     if (searchMentionables) parts.push("mentionables");
