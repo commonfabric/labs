@@ -59,9 +59,12 @@ function releaseHasher(hasher: IHasher) {
 const theOneShotHasher: IHasher[] = [];
 
 /**
- * Promised result of the call to `initIfNecessaryAndPossible()` or `null` if
- * not yet called.
+ * Promised result of the call to `initWasmOneShot()` or `null` if not yet
+ * called.
  */
+let oneShotInitResult: Promise<boolean> | null = null;
+
+/** Promised result of the call to `initWasm()` or `null` if not yet called. */
 let initResult: Promise<boolean> | null = null;
 
 /** Whether this module is actually usable. */
@@ -143,26 +146,46 @@ class WasmUpdatingHasher extends BaseSmallChunkUpdatingHasher {
 }
 
 /**
- * Performs module-level setup if (a) possible and (b) not already done.
- * Returns (a promise to) `true` if initialization was successful, `false`
- * if not.
+ * Sets up the one-shot hasher, which is all `sha256Wasm()` needs, if (a)
+ * possible and (b) not already done. Returns (a promise to) `true` if this
+ * module is usable, `false` if not.
  */
-export function initWasm() {
-  if (!initResult) {
-    initResult = (async () => {
-      try {
-        theOneShotHasher.push(await createSHA256());
-        for (let i = 0; i < HASHER_POOL_SIZE; i++) {
-          hasherPool.push(await createSHA256());
-        }
-        moduleIsUsable = true;
-      } catch {
-        // `hash-wasm` not available, or couldn't be fully initialized.
-      }
+export function initWasmOneShot(): Promise<boolean> {
+  oneShotInitResult ??= (async () => {
+    try {
+      theOneShotHasher.push(await createSHA256());
+      moduleIsUsable = true;
+    } catch {
+      // `hash-wasm` not available.
+    }
 
-      return moduleIsUsable;
-    })();
-  }
+    return moduleIsUsable;
+  })();
+
+  return oneShotInitResult;
+}
+
+/**
+ * Performs module-level setup if (a) possible and (b) not already done: the
+ * one-shot hasher, and the pool of hashers `createHasherWasm()` draws from.
+ * Returns (a promise to) `true` if this module is usable, `false` if not. A
+ * pool that could not be filled leaves `createHasherWasm()` collecting its
+ * input for the one-shot hasher.
+ */
+export function initWasm(): Promise<boolean> {
+  initResult ??= (async () => {
+    if (!await initWasmOneShot()) return false;
+
+    try {
+      for (let i = 0; i < HASHER_POOL_SIZE; i++) {
+        hasherPool.push(await createSHA256());
+      }
+    } catch {
+      // The pool is an optimization; `createHasherWasm()` works without it.
+    }
+
+    return true;
+  })();
 
   return initResult;
 }

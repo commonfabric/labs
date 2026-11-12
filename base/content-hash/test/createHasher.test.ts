@@ -121,6 +121,15 @@ for (const createFunc of createFuncs) {
           expect(got).toEqual(hashBytes);
         });
 
+        it("produces the expected byte-array hash from a short `update()` followed by the rest at once", () => {
+          const hasher = createFunc();
+          const split = Math.min(3, bytes.length);
+          hasher.update(bytes.subarray(0, split));
+          hasher.update(bytes.subarray(split));
+          const got = hasher.digest();
+          expect(got).toEqual(hashBytes);
+        });
+
         it("produces the expected byte-array hash from varied multi-byte use", () => {
           const hasher = createFunc();
           let i = 0;
