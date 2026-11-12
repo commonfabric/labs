@@ -6,12 +6,14 @@
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import { FakeTime } from "@std/testing/time";
 import { Identity } from "@commonfabric/identity";
 import { setModernCellRepConfig } from "@commonfabric/data-model/cell-rep";
 import { getMemoryProtocolFlags } from "../v2.ts";
 import {
   connect,
   connectionDeliveryOf,
+  connectionError,
   isNotSentError,
   RESTORE_CONCURRENCY,
   type SessionPrincipal,
@@ -1598,6 +1600,57 @@ describe("client", () => {
         await adding;
 
         expect(changes.watching()).toEqual(["a", "b"]);
+      } finally {
+        await client.close();
+      }
+    });
+
+    it("leaves a session the reconnect holds to its retry's backoff when its mount was answered on the connection before", async () => {
+      // The mount's open is answered, the connection drops, and the open's
+      // send then fails as lost with it. The reconnect finds the session
+      // among the client's, is refused its reopen for now, and holds it. The
+      // mount waits for the hold's retry: an open of its own would reach the
+      // router ahead of the backoff the hold keeps.
+
+      using time = new FakeTime();
+      const peer = new RoutedPeer((_space, open) =>
+        open === 2 ? "retriable" : "ok"
+      );
+      const send = peer.send.bind(peer);
+      const dropped = Promise.withResolvers<void>();
+      const handshake = Promise.withResolvers<void>();
+      let mountOpen = true;
+      peer.send = (payload: string) => {
+        if (!mountOpen || !payload.includes('"type":"session.open"')) {
+          return send(payload);
+        }
+        mountOpen = false;
+        void send(payload);
+        peer.helloGate = handshake.promise;
+        peer.drop();
+        dropped.resolve();
+        return Promise.reject(connectionError("connection dropped"));
+      };
+      const client = await connect({ transport: peer });
+      const reconnected = Promise.withResolvers<void>();
+      client.subscribeReconnected(() => reconnected.resolve());
+      try {
+        const mounting = client.mount(SPACE_A, {}, principal());
+        await dropped.promise;
+        // The mount registers its session before the handshake is answered,
+        // so the reconnect restores it.
+        await time.runMicrotasks();
+        handshake.resolve();
+        await reconnected.promise;
+        await time.runMicrotasks();
+
+        expect(peer.opens.get(SPACE_A)).toBe(2);
+
+        await time.tickAsync(60_000);
+        const session = await mounting;
+
+        expect(peer.opens.get(SPACE_A)).toBe(3);
+        expect(session.held).toBe(false);
       } finally {
         await client.close();
       }
