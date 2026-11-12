@@ -47,7 +47,7 @@ export class CFScrollArea extends BaseElement {
   static override styles = unsafeCSS(scrollAreaStyles);
 
   static override properties = {
-    orientation: { type: String },
+    orientation: { type: String, reflect: true },
     _isDraggingVertical: { type: Boolean, state: true },
     _isDraggingHorizontal: { type: Boolean, state: true },
   };
