@@ -1084,8 +1084,8 @@ export const compactStore = async (
     const tx = <T>(fn: () => T): T => db.transaction(fn).immediate();
 
     // 1. The compaction commit, at the next seq, with the run's plan as its
-    //    payload (I4). The branch head advances to it so the head read keeps
-    //    using the head statement.
+    //    payload (I4). The branch head advances to it, so the branch's
+    //    history reaches the revisions the run writes at that seq.
     const commitSeq = tx(() => {
       const seq = db.prepare(
         `SELECT COALESCE(MAX(seq), 0) + 1 AS seq FROM "commit"`,

@@ -3762,11 +3762,10 @@ Deno.test("read forwards an explicit scopeKey to readState (protocol.md §2's re
 });
 
 Deno.test("memory v2 engine reads a branch head another connection advanced", async () => {
-  // A connection that read a branch's head serves later reads from what it
-  // read, and a commit through another connection to the same store moves
-  // that head: the serving loop's worker and the memory server beside it
-  // are two such connections. The read after the other's commit sees the
-  // document that commit wrote.
+  // A commit through another connection to the same store moves a branch's
+  // head: the serving loop's worker and the memory server beside it are two
+  // such connections. The read after the other's commit sees the document
+  // that commit wrote.
   const { engine, path } = await createEngine();
   const other = await open({ url: toFileUrl(path) });
   const commit = (target: Engine, n: number) =>
