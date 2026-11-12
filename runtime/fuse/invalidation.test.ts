@@ -1,5 +1,10 @@
 import { assert, assertEquals } from "@std/assert";
+import { expect } from "@std/expect";
+import { describe, it } from "@std/testing/bdd";
+import { FakeTime } from "@std/testing/time";
 import {
+  connectReverseInvalidation,
+  type InvalidationSource,
   type ReverseInvalidationDeps,
   ReverseInvalidationQueue,
 } from "./invalidation.ts";
@@ -305,4 +310,80 @@ Deno.test("both synchronous and asynchronous notify results are drained", async 
   queue.addEntry(1n, ["sync", "async"]);
   await queue.flush();
   assertEquals(rec.entryCalls.map((c) => c.name), ["sync", "async"]);
+});
+
+describe("connectReverseInvalidation()", () => {
+  /** A bridge's hooks, connected to a queue whose notify calls are recorded. */
+  function connect() {
+    const source: InvalidationSource = {
+      onInvalidate: null,
+      onInvalidateInode: null,
+    };
+    const sent: string[] = [];
+    const inodeSent = Promise.withResolvers<void>();
+    let pending = 0;
+    const invalidation = connectReverseInvalidation(source, {
+      invalidateEntry: (parentIno, nameBuf) => {
+        sent.push(`entry ${parentIno} ${decoder.decode(nameBuf)}`);
+        return 0;
+      },
+      invalidateInode: (ino) => {
+        sent.push(`inode ${ino}`);
+        inodeSent.resolve();
+        return 0;
+      },
+      isUnmounting: () => false,
+      debug: false,
+      pendingReplyCount: () => pending,
+    });
+    return {
+      source,
+      sent,
+      inodeSent: inodeSent.promise,
+      invalidation,
+      setPending: (count: number) => pending = count,
+    };
+  }
+
+  it("sends the bridge's invalidations to the kernel off the request path", async () => {
+    using time = new FakeTime();
+    const { source, sent, inodeSent } = connect();
+
+    source.onInvalidate!(1n, ["a", "b"]);
+    source.onInvalidateInode!(9n);
+    expect(sent).toEqual([]);
+    await time.tickAsync(0);
+    await inodeSent;
+
+    expect(sent).toEqual(["entry 1 a\0", "entry 1 b\0", "inode 9"]);
+  });
+
+  it("waits until no reply is held back, and sends once told the last one went", async () => {
+    using time = new FakeTime();
+    const { source, sent, inodeSent, invalidation, setPending } = connect();
+    setPending(1);
+
+    source.onInvalidateInode!(9n);
+    await time.tickAsync(0);
+    expect(sent).toEqual([]);
+    setPending(0);
+    invalidation.repliesDrained();
+    await time.tickAsync(0);
+    await inodeSent;
+
+    expect(sent).toEqual(["inode 9"]);
+  });
+
+  it("sends nothing once closed, including what was waiting to be sent", async () => {
+    using time = new FakeTime();
+    const { source, sent, invalidation } = connect();
+    source.onInvalidateInode!(9n);
+
+    await invalidation.close();
+    source.onInvalidate!(1n, ["a"]);
+    invalidation.repliesDrained();
+    await time.tickAsync(0);
+
+    expect(sent).toEqual([]);
+  });
 });

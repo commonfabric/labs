@@ -374,8 +374,11 @@ can reconcile them without exposing lower labels. Use
 `--cfc-writeback-state=<path>` to choose the recovery file; otherwise CFC modes
 use a mountpoint-derived file under `$CF_CFC_WRITEBACK_STATE_DIR`,
 `$XDG_STATE_HOME/commonfabric-fuse`, or `~/.cache/commonfabric-fuse`, in that
-order. The mount `.status` file includes a `cfc` section with writeback phase
-counts and recent diagnostics.
+order. A recovery file that is not JSON, or is from another format version,
+stops the mount from starting, and the error names the file; move it aside to
+start without its records. A record in it that the mount does not recognize is
+kept as it is and written back with the rest. The mount `.status` file includes
+a `cfc` section with writeback phase counts and recent diagnostics.
 
 Arbitrary symlink targets and callable-send writeback are still out of scope for
 CFC enforcing modes and are rejected there. gVisor remains responsible for

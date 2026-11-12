@@ -837,16 +837,12 @@ function pairedRenameNameMatches(
 
 function renameNamesMatch(
   prepared: CfcPreparedWriteback,
-  requestedOperation: CfcNamespaceMutationWritebackOperation,
+  requestedOperation: "rename-source" | "rename-destination",
   requestedName: string,
 ): boolean {
-  if (requestedOperation === "rename-source") {
-    return prepared.target.sourceName === requestedName;
-  }
-  if (requestedOperation === "rename-destination") {
-    return prepared.target.destinationName === requestedName;
-  }
-  return false;
+  return (requestedOperation === "rename-source"
+    ? prepared.target.sourceName
+    : prepared.target.destinationName) === requestedName;
 }
 
 function validPreparedForSymlink(options: {
@@ -902,6 +898,12 @@ const RECOVERY_STATUSES: CfcPreparedWritebackStatus[] = [
 export class CfcWritebackStore {
   #prepared = new Map<string, CfcPreparedWriteback>();
   #records = new Map<string, CfcWritebackRecoveryRecord>();
+
+  /**
+   * Records the store file held that this mount does not recognize, such as
+   * those of a newer mount, kept as they were and written back with the rest.
+   */
+  #unrecognizedRecords: unknown[] = [];
   #malformedCounter = 0;
   #storagePath: string | undefined;
 
@@ -1128,7 +1130,12 @@ export class CfcWritebackStore {
         result.stale++;
       }
 
-      applyPreparedForRecovery(tree, match.ino, record);
+      applyPreparedForRecovery(
+        tree,
+        match.ino,
+        record.prepared,
+        record.requestedFields,
+      );
       result.reapplied++;
     }
 
@@ -1216,39 +1223,46 @@ export class CfcWritebackStore {
     this.#persist();
   }
 
+  /**
+   * Reads the records the store file holds. A missing or empty file is an
+   * empty store. Throws for a file that is not a store this mount can read,
+   * rather than starting without its records and overwriting it at the next
+   * write.
+   */
   #load(): void {
-    if (!this.#storagePath) return;
+    const storagePath = this.#storagePath;
+    if (!storagePath) return;
     let text: string;
     try {
-      text = Deno.readTextFileSync(this.#storagePath);
-    } catch {
-      return;
+      text = Deno.readTextFileSync(storagePath);
+    } catch (e) {
+      if (e instanceof Deno.errors.NotFound) return;
+      throw e;
     }
     if (text.trim() === "") return;
+    const refuse = (reason: string): never => {
+      throw new Error(
+        `Cannot read the CFC writeback recovery store ${storagePath}: ` +
+          `${reason}. Move it aside to start without its records.`,
+      );
+    };
     let parsed: unknown;
     try {
       parsed = JSON.parse(text);
     } catch {
-      this.#recordMalformed(
-        0n,
-        this.#storagePath,
-        "invalid recovery store JSON",
-      );
-      return;
+      return refuse("it is not JSON");
     }
     if (
       !isObjectNotArray(parsed) || parsed.version !== 1 ||
       !Array.isArray(parsed.records)
     ) {
-      this.#recordMalformed(
-        0n,
-        this.#storagePath,
-        "unsupported recovery store",
-      );
-      return;
+      return refuse("it is not a version 1 store");
     }
     for (const record of parsed.records) {
-      if (!isRecoveryRecord(record)) continue;
+      if (!isRecoveryRecord(record)) {
+        this.#unrecognizedRecords.push(record);
+        continue;
+      }
       const cloned = cloneRecoveryRecord(record, false);
       this.#records.set(cloned.key, cloned);
       if (cloned.prepared) this.#prepared.set(cloned.key, cloned.prepared);
@@ -1256,19 +1270,42 @@ export class CfcWritebackStore {
   }
 
   #persist(): void {
-    if (!this.#storagePath) return;
-    const slash = this.#storagePath.lastIndexOf("/");
-    if (slash > 0) {
-      Deno.mkdirSync(this.#storagePath.slice(0, slash), { recursive: true });
+    const storagePath = this.#storagePath;
+    if (!storagePath) return;
+    const slash = storagePath.lastIndexOf("/");
+    const directory = slash > 0 ? storagePath.slice(0, slash) : ".";
+    Deno.mkdirSync(directory, { recursive: true });
+    // Written beside the store, flushed to disk, and renamed over it, so a
+    // crash or a power loss leaves the previous store whole rather than one
+    // the next mount refuses or reads as empty.
+    const scratchPath = `${storagePath}.${Deno.pid}.tmp`;
+    try {
+      Deno.writeTextFileSync(
+        scratchPath,
+        canonicalCfcJsonStringify({
+          version: 1,
+          records: [...this.#records.values(), ...this.#unrecognizedRecords],
+        }),
+      );
+      syncPath(scratchPath);
+      Deno.renameSync(scratchPath, storagePath);
+    } catch (e) {
+      try {
+        Deno.removeSync(scratchPath);
+      } catch (removal) {
+        // A write that failed before creating the scratch file left none.
+        if (!(removal instanceof Deno.errors.NotFound)) throw removal;
+      }
+      throw e;
     }
-    Deno.writeTextFileSync(
-      this.#storagePath,
-      canonicalCfcJsonStringify({
-        version: 1,
-        records: [...this.#records.values()],
-      }),
-    );
+    syncPath(directory);
   }
+}
+
+/** Flushes the file or directory at `path` to disk. */
+function syncPath(path: string): void {
+  using file = Deno.openSync(path, { read: true });
+  file.syncSync();
 }
 
 function parsePreparedWriteback(value: string): CfcPreparedWriteback | null {
@@ -1393,10 +1430,9 @@ function isCoherentExactAnnotation(annotation: CfcNodeAnnotation): boolean {
 function applyPreparedForRecovery(
   tree: FsTree,
   ino: bigint,
-  record: CfcWritebackRecoveryRecord,
+  prepared: CfcPreparedWriteback,
+  requestedFields: CfcMetadataLabelKey[] | undefined,
 ): void {
-  const prepared = record.prepared;
-  if (!prepared) return;
   if (prepared.operation === "write" || prepared.operation === "truncate") {
     applyPreparedExistingWrite(tree, ino, prepared);
     return;
@@ -1406,7 +1442,7 @@ function applyPreparedForRecovery(
       tree,
       ino,
       prepared,
-      record.requestedFields ?? prepared.target.metadataFields ??
+      requestedFields ?? prepared.target.metadataFields ??
         allMetadataLabelKeys,
     );
     return;

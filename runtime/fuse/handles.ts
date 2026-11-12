@@ -28,7 +28,8 @@ export function validateVirtualFileRange(
   return { ok: true };
 }
 
-export interface HandleState {
+/** An open descriptor's buffer, and `Target`, where its writes go. */
+export interface HandleState<Target = unknown> {
   ino: bigint;
   flags: number;
   dirty: boolean;
@@ -37,7 +38,7 @@ export interface HandleState {
   bufferValid: boolean;
   truncatePending: boolean;
   version: number;
-  writeTarget?: unknown;
+  writeTarget?: Target;
   cfcAuthorizedOperations: Set<CfcExistingWritebackOperation>;
   cfcAuthorizationAnnotation?: CfcNodeAnnotation;
 
@@ -64,9 +65,10 @@ export function handleHasBufferedContent(
   );
 }
 
-export class HandleMap {
+/** The open descriptors of a mount, each writing to a `Target`. */
+export class HandleMap<Target = unknown> {
   #nextFh = 1n;
-  #handles = new Map<bigint, HandleState>();
+  #handles = new Map<bigint, HandleState<Target>>();
 
   /**
    * Open a file handle. Copies current content into buffer if writable.
@@ -80,7 +82,7 @@ export class HandleMap {
     flags: number,
     content?: Uint8Array,
     options?: {
-      writeTarget?: unknown;
+      writeTarget?: Target;
       cfcAuthorizedOperations?: CfcExistingWritebackOperation[];
       cfcAuthorizationAnnotation?: CfcNodeAnnotation;
       readSnapshot?: Uint8Array;
@@ -109,11 +111,11 @@ export class HandleMap {
     return fh;
   }
 
-  get(fh: bigint): HandleState | undefined {
+  get(fh: bigint): HandleState<Target> | undefined {
     return this.#handles.get(fh);
   }
 
-  close(fh: bigint): HandleState | undefined {
+  close(fh: bigint): HandleState<Target> | undefined {
     const state = this.#handles.get(fh);
     if (state) {
       this.#handles.delete(fh);
@@ -139,12 +141,15 @@ export class HandleMap {
     return true;
   }
 
-  /** Write data into the handle's buffer at offset, extending if needed. */
-  write(fh: bigint, data: Uint8Array, offset: number): boolean {
-    const state = this.#handles.get(fh);
-    if (!state) return false;
-
-    if (!validateVirtualFileRange(offset, data.length).ok) return false;
+  /**
+   * Writes `data` into the buffer of open handle `fh` at `offset`, extending
+   * it as needed.
+   *
+   * @throws If `fh` is not open, or the range is not a valid one.
+   */
+  write(fh: bigint, data: Uint8Array, offset: number): void {
+    const state = this.#open(fh);
+    validRange(offset, data.length);
     const end = offset + data.length;
     if (end > state.buffer.length) {
       // Extend buffer
@@ -163,80 +168,88 @@ export class HandleMap {
         otherState.truncatePending = false;
       }
     }
-
-    return true;
   }
 
-  /** Mark a handle as truncated to an empty buffer without committing yet. */
-  markTruncated(fh: bigint): boolean {
-    const state = this.#handles.get(fh);
-    if (!state) return false;
-    state.buffer = new Uint8Array(0);
-    state.bufferValid = true;
-    state.dirty = false;
-    state.truncatePending = true;
-    state.version++;
-    return true;
-  }
-
-  /** Truncate all handles for a given inode to the specified size. */
-  truncateByIno(
-    ino: bigint,
-    size: number,
-    options?: { pendingFh?: bigint },
-  ): boolean {
-    if (!validateVirtualFileRange(0, size).ok) return false;
+  /**
+   * Truncates the buffers of all handles for `ino` to `size`, leaving the
+   * change pending on `pendingFh` alone.
+   *
+   * A handle holding no buffer reads the inode's own content. Truncated to
+   * zero it is given an empty buffer, which is the truncated content whatever
+   * the inode held. Truncated to another size it goes on reading the inode,
+   * which takes the truncated content when the truncate is flushed.
+   *
+   * @throws If `pendingFh` holds no buffer, or `size` is not a valid file
+   * size.
+   */
+  truncateByIno(ino: bigint, size: number, pendingFh: bigint): void {
+    this.#buffered(pendingFh);
+    validRange(0, size);
     for (const [fh, state] of this.#handles) {
-      if (state.ino === ino) {
-        const shouldFlush = options?.pendingFh === undefined ||
-          options.pendingFh === fh;
-        if (size === 0) {
-          state.buffer = new Uint8Array(0);
-          state.bufferValid = true;
-          state.dirty = false;
-          state.truncatePending = shouldFlush;
-        } else {
-          if (size < state.buffer.length) {
-            state.buffer = state.buffer.slice(0, size);
-          } else if (size > state.buffer.length) {
-            const newBuf = new Uint8Array(size);
-            newBuf.set(state.buffer);
-            state.buffer = newBuf;
-          }
-          state.bufferValid = true;
-          state.dirty = shouldFlush;
-          state.truncatePending = false;
-        }
-        state.version++;
-      }
+      if (state.ino !== ino || (!state.bufferValid && size > 0)) continue;
+      resizeBuffer(state, size, fh === pendingFh);
     }
-    return true;
   }
 
-  /** Truncate the handle's buffer to the given size. */
-  truncate(fh: bigint, size: number): boolean {
+  /**
+   * Truncates the buffer of open handle `fh` to `size`; at zero, the empty
+   * buffer is a pending truncate rather than content.
+   *
+   * @throws If `fh` holds no buffer, or `size` is not a valid file size.
+   */
+  truncate(fh: bigint, size: number): void {
+    const state = this.#buffered(fh);
+    validRange(0, size);
+    resizeBuffer(state, size, true);
+  }
+
+  #open(fh: bigint): HandleState<Target> {
     const state = this.#handles.get(fh);
-    if (!state) return false;
-    if (!validateVirtualFileRange(0, size).ok) return false;
-
-    if (size === 0) {
-      state.buffer = new Uint8Array(0);
-      state.bufferValid = true;
-      state.dirty = false;
-      state.truncatePending = true;
-    } else {
-      if (size < state.buffer.length) {
-        state.buffer = state.buffer.slice(0, size);
-      } else if (size > state.buffer.length) {
-        const newBuf = new Uint8Array(size);
-        newBuf.set(state.buffer);
-        state.buffer = newBuf;
-      }
-      state.bufferValid = true;
-      state.dirty = true;
-      state.truncatePending = false;
-    }
-    state.version++;
-    return true;
+    if (!state) throw new Error(`No open file handle ${fh}`);
+    return state;
   }
+
+  /** A descriptor opened for writing, or a snapshot, holds a buffer. */
+  #buffered(fh: bigint): HandleState<Target> {
+    const state = this.#open(fh);
+    if (!state.bufferValid) {
+      throw new Error(`File handle ${fh} holds no buffer to truncate`);
+    }
+    return state;
+  }
+}
+
+/** @throws A `RangeError` unless `offset` and `length` make a valid range. */
+function validRange(offset: number, length: number): void {
+  const validation = validateVirtualFileRange(offset, length);
+  if (!validation.ok) {
+    throw new RangeError(
+      `${validation.reason} file range: ${length} bytes at ${offset}`,
+    );
+  }
+}
+
+/**
+ * Truncates or zero-extends `state`'s buffer to `size`. With `flush` set, the
+ * change is pending for the next flush: an empty buffer as a pending truncate,
+ * and any other size as dirty content.
+ */
+function resizeBuffer(state: HandleState, size: number, flush: boolean): void {
+  if (size === 0) {
+    state.buffer = new Uint8Array(0);
+    state.dirty = false;
+    state.truncatePending = flush;
+  } else {
+    if (size < state.buffer.length) {
+      state.buffer = state.buffer.slice(0, size);
+    } else if (size > state.buffer.length) {
+      const newBuf = new Uint8Array(size);
+      newBuf.set(state.buffer);
+      state.buffer = newBuf;
+    }
+    state.dirty = flush;
+    state.truncatePending = false;
+  }
+  state.bufferValid = true;
+  state.version++;
 }

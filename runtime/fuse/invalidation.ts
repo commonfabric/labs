@@ -243,3 +243,67 @@ export class ReverseInvalidationQueue {
     }
   }
 }
+
+/** The bridge hooks through which cached entries and inodes go stale. */
+export interface InvalidationSource {
+  onInvalidate: ((parentIno: bigint, names: string[]) => void) | null;
+  onInvalidateInode: ((ino: bigint) => void) | null;
+}
+
+/** A queue fed by a bridge's invalidations; see `connectReverseInvalidation`. */
+export interface ReverseInvalidation {
+  /** Tells the queue the last reply the mount was holding back has gone. */
+  repliesDrained(): void;
+
+  /**
+   * Stops the queue, and settles once a flush already running has finished.
+   * Await it before the session is destroyed.
+   */
+  close(): Promise<void>;
+}
+
+/**
+ * Sends `source`'s invalidations to the kernel through a queue drained off the
+ * isolate thread.
+ *
+ * libfuse reverse invalidation can block while the kernel answers the notify
+ * request. Some bridge paths run while a FUSE request is still awaiting its
+ * reply (for example, lookup -> connectSpace -> syncPieceList). notify takes
+ * the parent directory's inode lock for write, which a concurrent lookup
+ * holds for read until the daemon answers it; the daemon answers on the
+ * isolate thread, so a notify on that thread would block behind a lookup only
+ * that thread can complete. So a drain waits until `pendingReplyCount()` is
+ * zero, and `repliesDrained()` schedules the one that waited.
+ */
+export function connectReverseInvalidation(
+  source: InvalidationSource,
+  deps: ReverseInvalidationDeps & { pendingReplyCount(): number },
+): ReverseInvalidation {
+  const queue = new ReverseInvalidationQueue(deps);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let closed = false;
+  const scheduleFlush = () => {
+    if (closed || timer !== undefined) return;
+    timer = setTimeout(() => {
+      timer = undefined;
+      if (deps.pendingReplyCount() > 0) return;
+      queue.flush();
+    }, 0);
+  };
+  source.onInvalidate = (parentIno, names) => {
+    if (queue.addEntry(parentIno, names)) scheduleFlush();
+  };
+  source.onInvalidateInode = (ino) => {
+    if (queue.addInode(ino)) scheduleFlush();
+  };
+  return {
+    repliesDrained: scheduleFlush,
+    async close() {
+      closed = true;
+      queue.close();
+      clearTimeout(timer);
+      timer = undefined;
+      await queue.active().catch(() => {});
+    },
+  };
+}

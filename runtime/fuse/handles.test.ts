@@ -1,4 +1,6 @@
 import { assertEquals } from "@std/assert";
+import { expect } from "@std/expect";
+import { describe, it } from "@std/testing/bdd";
 import {
   handleHasBufferedContent,
   handleHasPendingChanges,
@@ -9,6 +11,7 @@ import {
 import { O_RDONLY, O_RDWR } from "./platform.ts";
 
 const encoder = new TextEncoder();
+const decoder = new TextDecoder();
 
 Deno.test("HandleMap marks empty truncates as pending without treating them as buffered writes", () => {
   const handles = new HandleMap();
@@ -16,7 +19,7 @@ Deno.test("HandleMap marks empty truncates as pending without treating them as b
 
   assertEquals(handleHasPendingChanges(handles.get(fh)), false);
 
-  handles.markTruncated(fh);
+  handles.truncate(fh, 0);
 
   const handle = handles.get(fh);
   assertEquals(handle?.buffer.length, 0);
@@ -30,7 +33,7 @@ Deno.test("HandleMap clears pending truncates when content arrives", () => {
   const handles = new HandleMap();
   const fh = handles.open(1n, O_RDWR, encoder.encode("hello"));
 
-  handles.markTruncated(fh);
+  handles.truncate(fh, 0);
   handles.write(fh, encoder.encode("world"), 0);
 
   const handle = handles.get(fh);
@@ -45,8 +48,8 @@ Deno.test("HandleMap clears sibling pending truncates when content arrives", () 
   const writer = handles.open(1n, O_RDWR, encoder.encode("hello"));
   const duplicate = handles.open(1n, O_RDWR, encoder.encode("hello"));
 
-  handles.truncateByIno(1n, 0, { pendingFh: writer });
-  handles.truncateByIno(1n, 0, { pendingFh: duplicate });
+  handles.truncateByIno(1n, 0, writer);
+  handles.truncateByIno(1n, 0, duplicate);
   handles.write(writer, encoder.encode("fresh"), 0);
 
   const writerHandle = handles.get(writer);
@@ -69,13 +72,13 @@ Deno.test("HandleMap truncates every open handle for an inode", () => {
 
   handles.write(first, encoder.encode("stale"), 0);
 
-  assertEquals(handles.truncateByIno(1n, 0), true);
+  handles.truncateByIno(1n, 0, first);
 
   for (const fh of [first, second]) {
     const handle = handles.get(fh);
     assertEquals(handle?.buffer.length, 0);
     assertEquals(handle?.dirty, false);
-    assertEquals(handle?.truncatePending, true);
+    assertEquals(handle?.truncatePending, fh === first);
   }
   assertEquals(new TextDecoder().decode(handles.get(other)?.buffer), "other");
 
@@ -93,7 +96,7 @@ Deno.test("HandleMap only marks the truncating handle pending when provided", ()
 
   handles.write(stale, encoder.encode("dirty"), 0);
 
-  assertEquals(handles.truncateByIno(1n, 0, { pendingFh: truncating }), true);
+  handles.truncateByIno(1n, 0, truncating);
 
   const staleHandle = handles.get(stale);
   assertEquals(staleHandle?.buffer.length, 0);
@@ -114,11 +117,11 @@ Deno.test("HandleMap rejects invalid and oversized write allocations", () => {
   const handles = new HandleMap();
   const fh = handles.open(1n, O_RDWR, new Uint8Array(0));
 
-  assertEquals(handles.write(fh, encoder.encode("x"), -1), false);
-  assertEquals(
-    handles.write(fh, encoder.encode("x"), MAX_VIRTUAL_FILE_SIZE),
-    false,
+  expect(() => handles.write(fh, encoder.encode("x"), -1)).toThrow(
+    RangeError,
   );
+  expect(() => handles.write(fh, encoder.encode("x"), MAX_VIRTUAL_FILE_SIZE))
+    .toThrow(RangeError);
 
   const handle = handles.get(fh);
   assertEquals(handle?.buffer.length, 0);
@@ -129,8 +132,10 @@ Deno.test("HandleMap rejects oversized truncates without resizing buffers", () =
   const handles = new HandleMap();
   const fh = handles.open(1n, O_RDWR, encoder.encode("hello"));
 
-  assertEquals(handles.truncate(fh, MAX_VIRTUAL_FILE_SIZE + 1), false);
-  assertEquals(handles.truncate(fh, -1), false);
+  expect(() => handles.truncate(fh, MAX_VIRTUAL_FILE_SIZE + 1)).toThrow(
+    RangeError,
+  );
+  expect(() => handles.truncate(fh, -1)).toThrow(RangeError);
   assertEquals(new TextDecoder().decode(handles.get(fh)?.buffer), "hello");
 });
 
@@ -221,4 +226,215 @@ Deno.test("HandleMap ignores a snapshot time without a snapshot", () => {
     readSnapshotMtime: 1_700_000_000_500,
   });
   assertEquals(handles.get(fh)?.readSnapshotMtime, undefined);
+});
+
+describe("HandleMap", () => {
+  describe("instance members", () => {
+    describe("authorizeCfcOperation()", () => {
+      it("returns `true` and records the operation for an open handle", () => {
+        const handles = new HandleMap();
+        const fh = handles.open(1n, O_RDWR, encoder.encode("hello"));
+
+        expect(handles.authorizeCfcOperation(fh, "write")).toBe(true);
+        expect(handles.hasCfcAuthorization(fh, "write")).toBe(true);
+      });
+
+      it("returns `false` for a closed handle, leaving it unauthorized", () => {
+        const handles = new HandleMap();
+        const fh = handles.open(1n, O_RDWR, encoder.encode("hello"));
+        handles.close(fh);
+
+        expect(handles.authorizeCfcOperation(fh, "write")).toBe(false);
+        expect(handles.hasCfcAuthorization(fh, "write")).toBe(false);
+        expect(handles.get(fh)).toBeUndefined();
+      });
+    });
+
+    describe("write()", () => {
+      it("throws for a closed handle without reopening it", () => {
+        const handles = new HandleMap();
+        const fh = handles.open(1n, O_RDWR, encoder.encode("hello"));
+        handles.close(fh);
+
+        expect(() => handles.write(fh, encoder.encode("x"), 0)).toThrow(
+          `No open file handle ${fh}`,
+        );
+        expect(handles.get(fh)).toBeUndefined();
+      });
+    });
+
+    describe("truncateByIno()", () => {
+      it("throws for a pending handle that holds no buffer, leaving every buffer as it was", () => {
+        const handles = new HandleMap();
+        const writer = handles.open(1n, O_RDWR, encoder.encode("hello"));
+        const reader = handles.open(1n, O_RDONLY, encoder.encode("hello"));
+
+        expect(() => handles.truncateByIno(1n, 0, reader)).toThrow(
+          `File handle ${reader} holds no buffer to truncate`,
+        );
+        expect(decoder.decode(handles.get(writer)?.buffer)).toBe("hello");
+        expect(handles.get(writer)?.version).toBe(0);
+      });
+
+      it("throws for a size past the limit, leaving every buffer as it was", () => {
+        const handles = new HandleMap();
+        const fh = handles.open(1n, O_RDWR, encoder.encode("hello"));
+
+        expect(() => handles.truncateByIno(1n, MAX_VIRTUAL_FILE_SIZE + 1, fh))
+          .toThrow(RangeError);
+        expect(() => handles.truncateByIno(1n, -1, fh)).toThrow(RangeError);
+        const handle = handles.get(fh);
+        expect(decoder.decode(handle?.buffer)).toBe("hello");
+        expect(handle?.version).toBe(0);
+        expect(handleHasPendingChanges(handle)).toBe(false);
+      });
+
+      it("cuts every buffer of the inode to a shorter size, leaving other inodes alone", () => {
+        const handles = new HandleMap();
+        const first = handles.open(1n, O_RDWR, encoder.encode("hello"));
+        const second = handles.open(1n, O_RDWR, encoder.encode("howdy"));
+        const other = handles.open(2n, O_RDWR, encoder.encode("other"));
+
+        handles.truncateByIno(1n, 2, first);
+
+        expect(decoder.decode(handles.get(first)?.buffer)).toBe("he");
+        expect(decoder.decode(handles.get(second)?.buffer)).toBe("ho");
+        expect(handles.get(first)?.dirty).toBe(true);
+        expect(handles.get(second)?.dirty).toBe(false);
+        expect(decoder.decode(handles.get(other)?.buffer)).toBe("other");
+        expect(handles.get(other)?.dirty).toBe(false);
+        expect(handles.get(other)?.version).toBe(0);
+      });
+
+      it("zero-fills buffers extended to a longer size", () => {
+        const handles = new HandleMap();
+        const fh = handles.open(1n, O_RDWR, encoder.encode("hi"));
+
+        handles.truncateByIno(1n, 4, fh);
+
+        expect(handles.get(fh)?.buffer).toEqual(
+          new Uint8Array([0x68, 0x69, 0, 0]),
+        );
+      });
+
+      it("leaves a buffer already at the size with its bytes and marks it dirty", () => {
+        const handles = new HandleMap();
+        const fh = handles.open(1n, O_RDWR, encoder.encode("hello"));
+
+        handles.truncateByIno(1n, 5, fh);
+
+        const handle = handles.get(fh);
+        expect(decoder.decode(handle?.buffer)).toBe("hello");
+        expect(handle?.dirty).toBe(true);
+        expect(handle?.version).toBe(1);
+      });
+
+      it("marks only the pending handle dirty for a nonzero size", () => {
+        const handles = new HandleMap();
+        const truncating = handles.open(1n, O_RDWR, encoder.encode("hello"));
+        const bystander = handles.open(1n, O_RDWR, encoder.encode("hello"));
+
+        handles.truncateByIno(1n, 3, truncating);
+
+        const truncatingHandle = handles.get(truncating);
+        expect(decoder.decode(truncatingHandle?.buffer)).toBe("hel");
+        expect(truncatingHandle?.dirty).toBe(true);
+        expect(handleHasPendingChanges(truncatingHandle)).toBe(true);
+
+        const bystanderHandle = handles.get(bystander);
+        expect(decoder.decode(bystanderHandle?.buffer)).toBe("hel");
+        expect(bystanderHandle?.dirty).toBe(false);
+        expect(handleHasPendingChanges(bystanderHandle)).toBe(false);
+        expect(handleHasBufferedContent(bystanderHandle)).toBe(true);
+      });
+
+      it("gives a handle holding no buffer an empty one at size zero, and leaves it reading the inode at another size", () => {
+        const handles = new HandleMap();
+        const writer = handles.open(1n, O_RDWR, encoder.encode("hello"));
+        const reader = handles.open(1n, O_RDONLY, encoder.encode("hello"));
+
+        handles.truncateByIno(1n, 2, writer);
+        expect(handleHasBufferedContent(handles.get(reader))).toBe(false);
+
+        handles.truncateByIno(1n, 0, writer);
+        const readerHandle = handles.get(reader);
+        expect(handleHasBufferedContent(readerHandle)).toBe(true);
+        expect(readerHandle?.buffer.length).toBe(0);
+        expect(handleHasPendingChanges(readerHandle)).toBe(false);
+      });
+    });
+
+    describe("truncate()", () => {
+      it("throws for a handle that holds no buffer", () => {
+        const handles = new HandleMap();
+        const reader = handles.open(1n, O_RDONLY, encoder.encode("hello"));
+
+        expect(() => handles.truncate(reader, 0)).toThrow(
+          `File handle ${reader} holds no buffer to truncate`,
+        );
+        expect(handleHasPendingChanges(handles.get(reader))).toBe(false);
+      });
+
+      it("throws for a closed handle", () => {
+        const handles = new HandleMap();
+        const fh = handles.open(1n, O_RDWR, encoder.encode("hello"));
+        handles.close(fh);
+
+        expect(() => handles.truncate(fh, 0)).toThrow(
+          `No open file handle ${fh}`,
+        );
+        expect(handles.get(fh)).toBeUndefined();
+      });
+
+      it("empties the buffer as a pending truncate for size zero", () => {
+        const handles = new HandleMap();
+        const fh = handles.open(1n, O_RDWR, encoder.encode("hello"));
+        handles.write(fh, encoder.encode("J"), 0);
+
+        handles.truncate(fh, 0);
+
+        const handle = handles.get(fh);
+        expect(handle?.buffer.length).toBe(0);
+        expect(handle?.dirty).toBe(false);
+        expect(handle?.truncatePending).toBe(true);
+        expect(handle?.version).toBe(2);
+      });
+
+      it("cuts the buffer to a shorter size as dirty content", () => {
+        const handles = new HandleMap();
+        const fh = handles.open(1n, O_RDWR, encoder.encode("hello"));
+        handles.truncate(fh, 0);
+        handles.write(fh, encoder.encode("hello"), 0);
+
+        handles.truncate(fh, 2);
+
+        const handle = handles.get(fh);
+        expect(decoder.decode(handle?.buffer)).toBe("he");
+        expect(handle?.dirty).toBe(true);
+        expect(handle?.truncatePending).toBe(false);
+      });
+
+      it("zero-fills the buffer extended to a longer size as dirty content", () => {
+        const handles = new HandleMap();
+        const fh = handles.open(1n, O_RDWR, encoder.encode("hi"));
+
+        handles.truncate(fh, 4);
+
+        const handle = handles.get(fh);
+        expect(handle?.buffer).toEqual(new Uint8Array([0x68, 0x69, 0, 0]));
+        expect(handle?.dirty).toBe(true);
+      });
+
+      it("leaves the buffers of other handles on the inode alone", () => {
+        const handles = new HandleMap();
+        const fh = handles.open(1n, O_RDWR, encoder.encode("hello"));
+        const sibling = handles.open(1n, O_RDWR, encoder.encode("hello"));
+
+        handles.truncate(fh, 1);
+
+        expect(decoder.decode(handles.get(sibling)?.buffer)).toBe("hello");
+        expect(handles.get(sibling)?.dirty).toBe(false);
+      });
+    });
+  });
 });
