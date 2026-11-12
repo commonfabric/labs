@@ -26,6 +26,7 @@ const wishResult = wish<{ content: string }>({ query: "#note" });
 | `candidates` | `T[]`   | All matching pieces                                                                                                                                     |
 | `[UI]?`      | `VNode` | Built-in UI: the picker when several match; else a link to the found piece's `[UI]`, a view or a sub-pattern's result, or a `cf-cell-link` to the piece |
 | `error`      | `any`   | Error message if resolution failed                                                                                                                      |
+| `errorCode`  | `"no-match" \| "failed"` | Set with `error`: `"no-match"` when the wish confirmed nothing matches (a reader may offer to make one), `"failed"` when it could not look or read what it found. Treat an unknown code as `"failed"` |
 
 Access the resolved piece via `wishResult.result`:
 
@@ -56,8 +57,14 @@ profile rules below). If no readable match remains and a candidate load failed,
 Wish reports the load error. The legacy
 `#favorites/<term>` search selects the first readable match. UI loading
 affordances must not depend on an empty `candidates` array. A confirmed empty
-collection produces a no-match error. A failed discovery-collection load, or a
-candidate load failure with no readable match, produces a load error.
+collection produces a no-match error (`errorCode: "no-match"`). A failed
+discovery-collection load, or a candidate load failure with no readable match,
+produces a load error (`errorCode: "failed"`). So does a search that could not
+look: favorites, which live in the home space, cannot be searched without the
+requesting user's identity (a serving runtime whose run names none), and a
+search that finds nothing elsewhere then reports `"failed"`. A reader that acts
+on "nothing there", such as offering to create the missing thing, checks
+`errorCode`, not the message.
 
 This document readiness check is internal to the runtime. It does not expose
 an existence-query API to patterns or replace schema validation of loaded
@@ -233,7 +240,15 @@ for `wish({ query: "#profile" })`:
 - **0 profiles:** the trusted profile-create surface (same input as the home
   Profile tab). Submitting a name creates the viewer's first profile and leaves
   the current view in place; the wish reacts once the link exists. `.result` is
-  `undefined` and `error` is set until the first profile exists. When the
+  `undefined` and `error` is set, with `errorCode: "no-match"`, until the first
+  profile exists. The roster counts as empty when the home lists none of the
+  user's own profiles, or only retired ones (a retired entry whose document is
+  absent included).
+  Otherwise it reports `errorCode: "failed"` and offers no creation: when the
+  selected profile fails to load, and when every profile the home lists and has
+  not retired is confirmed absent ("Profile data is unavailable"). The home
+  says such a profile exists, so its absence is missing data, not "no profile
+  yet", and creating one would add a second profile beside it. When the
   viewer's host has suggested a profile, the surface starts its name field
   with the suggested name and shows the suggested picture with a control that
   removes it (see "A host's profile suggestion" below). The viewer may also
