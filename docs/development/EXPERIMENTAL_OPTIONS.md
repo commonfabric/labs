@@ -2782,7 +2782,8 @@ For the enforcement mode in the interactive tools, use `CF_CFC_MODE`.
 ## Verifying flags are working
 
 When any experimental flag is explicitly overridden, the `Runtime` constructor
-logs it on startup, for example:
+logs it on startup (`serverExecution` only where it differs from the
+first-party default), for example:
 
 ```
 Experimental flag overrides: modernCellRep=true

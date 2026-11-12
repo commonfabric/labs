@@ -35,9 +35,12 @@
  * Deliberately a leaf module: the shell's main thread imports it without
  * pulling the wire-shape module (`../v2.ts`, which re-exports it).
  *
- * Single-process harnesses — a bare `new Runtime`, the `unitTest` /
- * `patternTest` / `localDev` presets — do NOT read this value: they have no
- * serving host, so they resolve the ambient baseline (OFF) by construction
- * (see the ambient flag in `../v2.ts`).
+ * A bare `new Runtime` and the `unitTest` / `patternTest` / `localDev`
+ * presets do NOT read this value: they have no serving host, so they resolve
+ * the ambient baseline (OFF) by construction (see the ambient flag in
+ * `../v2.ts`). A single-process harness that hosts a serving loop does read
+ * it: `cf test` builds its runtimes with `patternTest` but resolves the
+ * posture as a deployed entry point does, and hosts a serving loop beside its
+ * memory server when that resolves ON.
  */
 export const SERVER_EXECUTION_DEFAULT_ENABLED = true;
