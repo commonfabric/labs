@@ -28,7 +28,6 @@ TOOLSHED_PORT=${TOOLSHED_PORT:-}
 INSPECT=false
 INSPECT_BRK=false
 INSPECT_PORT=${INSPECT_PORT:-}
-LOCAL_DEV_STARTUP_TIMEOUT=${LOCAL_DEV_STARTUP_TIMEOUT:-120}
 
 # Source-run build metadata: default COMMIT_SHA to this checkout's HEAD so
 # toolshed's /api/meta reports the commit it is running — cf compares its own
@@ -175,6 +174,12 @@ CONSOLE_LOG="$SCRIPT_DIR/../runtime/cf-harness/local-dev-console.log"
 SHELL_PID=""
 TOOLSHED_PID=""
 CONSOLE_PID=""
+# The pids of the reader of the servers' logs and of the command the script is
+# waiting for, and a directory for the pipe that reader writes to and for that
+# command's output.
+TAIL_PID=""
+WAITED_PID=""
+WORK_DIR=""
 
 # With --force, kill anything already listening on the port so the server can
 # bind it. Without --force the port is left untouched: each server reports a
@@ -234,10 +239,14 @@ kill_tree() {
     kill "$pid" 2>/dev/null
 }
 
-cleanup_started_processes() {
+# Stops what the script is waiting for and every server it has not handed
+# over, and removes its working directory.
+cleanup() {
+    stop_waiting
     kill_tree "$CONSOLE_PID"
     kill_tree "$TOOLSHED_PID"
     kill_tree "$SHELL_PID"
+    rm -rf "$WORK_DIR"
 }
 
 fail_startup() {
@@ -249,94 +258,186 @@ fail_startup() {
     exit 1
 }
 
-ensure_process_running() {
-    local name=$1
-    local pid=$2
-    local log_file=$3
-    local process_state
+# The line start_server appends to a server's log when the server exits, so
+# that the log reports an exit the same way it reports a bind.
+EXIT_LINE="start-local-dev.sh: server exited with status"
 
-    if kill -0 "$pid" 2>/dev/null; then
-        process_state=$(ps -p "$pid" -o stat= 2>/dev/null)
-        if [[ "$process_state" != *Z* ]]; then
+# Runs a command in the background with its output in a log, and appends
+# EXIT_LINE and the command's exit status to the log when the command ends.
+# $! is the pid of a process that waits for the command and exits with its
+# status, so `wait` on it reports that status.
+start_server() {
+    local log_file=$1
+    shift
+
+    : > "$log_file"
+    {
+        "$@"
+        exit_status=$?
+        echo "$EXIT_LINE $exit_status"
+        exit "$exit_status"
+    } < /dev/null >> "$log_file" 2>&1 &
+}
+
+# Runs a command in the background, with its standard input from the file the
+# first argument names and its output in $WORK_DIR/output, and waits for it.
+# The `wait` builtin returns when a signal arrives, where a command run in the
+# foreground holds the signal until it ends, so a signal ends the script
+# promptly however long the command would take.
+run_and_wait() {
+    local input=$1
+    shift
+
+    "$@" < "$input" > "$WORK_DIR/output" &
+    WAITED_PID=$!
+    wait "$WAITED_PID"
+    local exit_code=$?
+    WAITED_PID=""
+    return "$exit_code"
+}
+
+stop_waiting() {
+    local pid
+    for pid in "$WAITED_PID" "$TAIL_PID"; do
+        [[ -n "$pid" ]] || continue
+        kill "$pid" 2>/dev/null
+        wait "$pid" 2>/dev/null
+    done
+    WAITED_PID=""
+    TAIL_PID=""
+}
+
+# Reads `tail -f` output of the logs in wait_for_binds's `logs`, and prints
+# "bound" once each log has a line containing its entry in `markers`, or
+# "exited N" once the log at index N has a line containing EXIT_LINE,
+# whichever comes first. With more than one log, tail names the log the lines
+# after each of its headers come from.
+read_log_events() {
+    local current=0
+    local bound=()
+    local bound_count=0
+    local line
+    local name
+    local i
+
+    while IFS= read -r line; do
+        if [[ "$line" == "==> "*" <==" ]]; then
+            name=${line#==> }
+            name=${name% <==}
+            for (( i = 0; i < ${#logs[@]}; i++ )); do
+                [[ "${logs[i]}" != "$name" ]] || current=$i
+            done
+        elif [[ "$line" == *"$EXIT_LINE"* ]]; then
+            echo "exited $current"
             return
+        elif [[ -z "${bound[current]}" && "$line" == *"${markers[current]}"* ]]; then
+            bound[current]=1
+            if (( ++bound_count == ${#logs[@]} )); then
+                echo "bound"
+                return
+            fi
         fi
-    fi
+    done
+}
 
-    wait "$pid" 2>/dev/null
-    local exit_status=$?
-    echo "Error: $name exited before it became ready (exit $exit_status)." >&2
-    show_recent_log "$name" "$log_file"
-    if [[ "$exit_status" -eq "$PORT_IN_USE_EXIT" ]]; then
-        echo "($name could not bind its port; it is already in use.)" >&2
+# Reads the logs of the servers the arguments name, four for each server (its
+# name, the text of the line it prints once it has bound its port, its pid,
+# and its log), as the servers write them, until every one has bound its port
+# or one of them exits. Returns 0 once all have bound. When one exits first,
+# returns 1 with its name, log, and exit status in EXITED_SERVER, EXITED_LOG,
+# and SERVER_EXIT_STATUS. Returns 2 when the logs end, which happens only when
+# something stops the reader of the logs. There is no time limit: a server that neither binds
+# nor exits holds this wait until something stops the script. The bind is what
+# the wait is for, rather than an HTTP answer, so that a server already on the
+# port is never mistaken for this one.
+wait_for_binds() {
+    local names=()
+    local markers=()
+    local pids=()
+    local logs=()
+    while (( $# > 0 )); do
+        names+=("$1")
+        markers+=("$2")
+        pids+=("$3")
+        logs+=("$4")
+        shift 4
+    done
+
+    mkfifo "$WORK_DIR/logs"
+    tail -n +1 -f "${logs[@]}" > "$WORK_DIR/logs" &
+    TAIL_PID=$!
+    run_and_wait "$WORK_DIR/logs" read_log_events
+    stop_waiting
+    rm -f "$WORK_DIR/logs"
+
+    local outcome
+    local index
+    read -r outcome index < "$WORK_DIR/output"
+    case "$outcome" in
+        bound)
+            return 0
+            ;;
+        exited)
+            EXITED_SERVER=${names[index]}
+            EXITED_LOG=${logs[index]}
+            wait "${pids[index]}"
+            SERVER_EXIT_STATUS=$?
+            return 1
+            ;;
+    esac
+    return 2
+}
+
+# Waits for the servers the arguments name, as wait_for_binds takes them, to
+# bind their ports. A server that exits first fails the script, with
+# PORT_IN_USE_EXIT when its port was already in use.
+require_binds() {
+    wait_for_binds "$@"
+    case $? in
+        0)
+            return
+            ;;
+        2)
+            fail_startup "the servers' logs ended before they bound their ports."
+            ;;
+    esac
+
+    echo "Error: $EXITED_SERVER exited before it became ready" \
+        "(exit $SERVER_EXIT_STATUS)." >&2
+    show_recent_log "$EXITED_SERVER" "$EXITED_LOG"
+    if [[ "$SERVER_EXIT_STATUS" -eq "$PORT_IN_USE_EXIT" ]]; then
+        echo "($EXITED_SERVER could not bind its port; it is already in use.)" >&2
         exit "$PORT_IN_USE_EXIT"
     fi
     exit 1
 }
 
-wait_for_http() {
-    local name=$1
-    local url=$2
-    local pid=$3
-    local log_file=$4
-    local deadline=$((SECONDS + LOCAL_DEV_STARTUP_TIMEOUT))
-    local remaining
-    local status
-
-    echo "Waiting for $name at $url..."
-    while (( SECONDS < deadline )); do
-        ensure_process_running "$name" "$pid" "$log_file"
-
-        remaining=$((deadline - SECONDS))
-        if (( remaining > 2 )); then
-            remaining=2
-        fi
-
-        status=$(
-            curl -s -o /dev/null -w "%{http_code}" --max-time "$remaining" \
-                "$url" 2>/dev/null
-        )
-        if [[ "$status" == "200" ]]; then
-            echo "  $name is ready."
-            return
-        fi
-
-        if (( SECONDS < deadline )); then
-            sleep 1
-        fi
-    done
-
-    fail_startup \
-        "$name did not become ready at $url within ${LOCAL_DEV_STARTUP_TIMEOUT}s."
+# Sets HTTP_STATUS to the status a single GET of the URL answers with, or 000
+# when the request fails. There is no time limit on the answer.
+get_http_status() {
+    run_and_wait /dev/null curl -s -o /dev/null -w "%{http_code}" "$1"
+    HTTP_STATUS=$(< "$WORK_DIR/output")
 }
 
-# Wait until the server reports a successful bind (its listen marker) or its
-# process exits. ensure_process_running classifies an early exit, surfacing
-# PORT_IN_USE_EXIT when the bind failed because the port was already in use.
-# Waiting on the marker rather than an HTTP probe avoids mistaking another
-# server already on the port for this one.
-wait_for_listen() {
+require_http() {
     local name=$1
-    local marker=$2
-    local pid=$3
-    local log_file=$4
-    local deadline=$((SECONDS + LOCAL_DEV_STARTUP_TIMEOUT))
+    local url=$2
 
-    echo "Waiting for $name to bind its port..."
-    while (( SECONDS < deadline )); do
-        ensure_process_running "$name" "$pid" "$log_file"
-        if grep -q "$marker" "$log_file" 2>/dev/null; then
-            echo "  $name has bound its port."
-            return
-        fi
-        sleep 1
-    done
-
-    fail_startup "$name did not bind its port within ${LOCAL_DEV_STARTUP_TIMEOUT}s."
+    get_http_status "$url"
+    if [[ "$HTTP_STATUS" != "200" ]]; then
+        fail_startup "$name answered $url with HTTP $HTTP_STATUS, not 200."
+    fi
+    echo "  $name is ready."
 }
 
 # Until the servers are handed over, they end when this script does, whether
 # it fails or a signal ends it.
-trap cleanup_started_processes EXIT
+trap cleanup EXIT
+# Ctrl-C ends the script by SIGINT, so that whatever ran it knows it was
+# interrupted. Bash ends that way on its own only when a command it waits for
+# in the foreground ends by SIGINT, and this script waits in the background.
+trap 'cleanup; trap - INT EXIT; kill -INT $$' INT
+WORK_DIR=$(mktemp -d) || exit 1
 
 # Each server runs in a process group of its own, so that it keeps running
 # when whatever ran this script ends the script's process group after the
@@ -353,8 +454,8 @@ server_job_control() {
 # Start shell dev server in background
 cd "$SCRIPT_DIR/../runtime/shell"
 server_job_control
-TOOLSHED_PORT="$TOOLSHED_PORT" deno task dev-local \
-    < /dev/null > "$SHELL_LOG" 2>&1 &
+start_server "$SHELL_LOG" \
+    env TOOLSHED_PORT="$TOOLSHED_PORT" deno task dev-local
 SHELL_PID=$!
 
 # Start toolshed dev server in background
@@ -374,31 +475,36 @@ if [[ "$INSPECT" == "true" ]]; then
 fi
 # EXPOSE_GC lets a leak test read the server's memory after a full collection
 # (/api/health/collected-memory).
-SHELL_URL="http://localhost:$SHELL_PORT" \
+start_server "$TOOLSHED_LOG" \
+    env SHELL_URL="http://localhost:$SHELL_PORT" \
     EXPOSE_GC=true \
     API_URL="$TOOLSHED_API_URL" \
     MEMORY_URL="$TOOLSHED_MEMORY_URL" \
     deno run --unstable-otel -A --v8-flags=--max-old-space-size=16384 \
         $INSPECT_FLAG $WATCH_FLAG \
-        --env-file=.env index.ts --port="$TOOLSHED_PORT" \
-        < /dev/null > "$TOOLSHED_LOG" 2>&1 &
+        --env-file=.env index.ts --port="$TOOLSHED_PORT"
 TOOLSHED_PID=$!
 set +m
 
-wait_for_listen "shell" "Dev server listening on" "$SHELL_PID" "$SHELL_LOG"
-wait_for_http "shell" "http://localhost:$SHELL_PORT" "$SHELL_PID" "$SHELL_LOG"
-
-wait_for_listen "toolshed" "Server running on" "$TOOLSHED_PID" "$TOOLSHED_LOG"
-wait_for_http \
-    "toolshed" "http://localhost:$TOOLSHED_PORT/_health" \
-    "$TOOLSHED_PID" "$TOOLSHED_LOG"
+echo "Waiting for the shell and toolshed to bind their ports..."
+require_binds \
+    "shell" "Dev server listening on" "$SHELL_PID" "$SHELL_LOG" \
+    "toolshed" "Server running on" "$TOOLSHED_PID" "$TOOLSHED_LOG"
+require_http "shell" "http://localhost:$SHELL_PORT"
+require_http "toolshed" "http://localhost:$TOOLSHED_PORT/_health"
 
 # The page a browser loads: the toolshed serving the shell it proxies. The two
 # checks above cover each server on its own port, and this one covers the hop
 # between them, which the toolshed makes with fetch() rather than with curl.
-wait_for_http \
-    "shell through toolshed" "http://localhost:$TOOLSHED_PORT/" \
-    "$TOOLSHED_PID" "$TOOLSHED_LOG"
+require_http "shell through toolshed" "http://localhost:$TOOLSHED_PORT/"
+
+if [[ "$KEEP_ALIVE" != "true" ]]; then
+    # The shell and toolshed are the caller's from here on, to stop with
+    # stop-local-dev.sh, so that a console that does not come up, or a signal
+    # that ends the wait for one, stops only the console.
+    SHELL_PID=""
+    TOOLSHED_PID=""
+fi
 
 # The cf-harness console, on the fabric the toolshed above is now serving.
 #
@@ -461,60 +567,54 @@ if [[ "$CF_HARNESS" == "true" ]]; then
         CONSOLE_ARGS+=("$console_arg")
     done < <(console_launch_args)
 
-    echo ""
-    echo "Starting cf-harness console on port $CONSOLE_PORT..."
-    [[ ! -f "$CONSOLE_LOG" ]] || mv -- "$CONSOLE_LOG" "$CONSOLE_LOG.previous"
-    server_job_control
-    (
+    launch_console() {
         cd "$SCRIPT_DIR/.."
         # The console resolves its own store from `--store` above; an inherited
         # `MEMORY_DIR` would be the toolshed's `file://` spelling of it.
         unset MEMORY_DIR
-        exec deno task --cwd runtime/cf-harness console:launch "${CONSOLE_ARGS[@]}"
-    ) < /dev/null > "$CONSOLE_LOG" 2>&1 &
+        deno task --cwd runtime/cf-harness console:launch "${CONSOLE_ARGS[@]}"
+    }
+
+    echo ""
+    echo "Starting cf-harness console on port $CONSOLE_PORT..."
+    [[ ! -f "$CONSOLE_LOG" ]] || mv -- "$CONSOLE_LOG" "$CONSOLE_LOG.previous"
+    server_job_control
+    start_server "$CONSOLE_LOG" launch_console
     CONSOLE_PID=$!
     set +m
 
-    console_deadline=$((SECONDS + LOCAL_DEV_STARTUP_TIMEOUT))
-    while (( SECONDS < console_deadline )); do
-        if ! kill -0 "$CONSOLE_PID" 2>/dev/null; then
-            wait "$CONSOLE_PID" 2>/dev/null
-            console_unavailable "it exited before answering (exit $?)"
-            break
-        fi
-        if [[ "$(
-            curl -s -o /dev/null -w "%{http_code}" --max-time 2 \
-                "http://127.0.0.1:$CONSOLE_PORT/api/health" 2>/dev/null
-        )" == "200" ]]; then
-            # A console left over from an earlier launch answers this health
-            # check too, out of its own code and its own store. What makes the
-            # 200 this launch's is the pid listening on the port being the
-            # child started above, or one of its descendants.
-            console_holder=$(foreign_port_holder "$CONSOLE_PORT" "$CONSOLE_PID")
-            if [[ -n "$console_holder" ]]; then
-                console_unavailable "port $CONSOLE_PORT is held by pid \
-$console_holder, not the console this launch started"
-            else
+    # The console's banner is written once it has bound its port, so a console
+    # left over from an earlier launch, which writes to the log it was given,
+    # cannot be taken for this one.
+    echo "Waiting for the cf-harness console to bind its port..."
+    wait_for_binds "cf-harness console" "cf-harness console: http://" \
+        "$CONSOLE_PID" "$CONSOLE_LOG"
+    case $? in
+        0)
+            get_http_status "http://127.0.0.1:$CONSOLE_PORT/api/health"
+            if [[ "$HTTP_STATUS" == "200" ]]; then
                 echo "  cf-harness console is ready."
+            else
+                console_unavailable \
+                    "it answered /api/health with HTTP $HTTP_STATUS"
             fi
-            break
-        fi
-        sleep 1
-    done
-    if [[ "$CF_HARNESS" == "true" && -n "$CONSOLE_PID" ]] \
-        && (( SECONDS >= console_deadline )); then
-        console_unavailable \
-            "it did not answer /api/health within ${LOCAL_DEV_STARTUP_TIMEOUT}s"
-    fi
+            ;;
+        1)
+            console_unavailable \
+                "it exited before answering (exit $SERVER_EXIT_STATUS)"
+            ;;
+        *)
+            console_unavailable "its log ended before it bound its port"
+            ;;
+    esac
     if [[ -n "$CONSOLE_STATUS" ]]; then
         show_recent_log "cf-harness console" "$CONSOLE_LOG"
     fi
 fi
 
 if [[ "$KEEP_ALIVE" != "true" ]]; then
-    # The servers are the caller's from here on, to stop with
-    # stop-local-dev.sh.
-    trap - EXIT
+    # The console is the caller's from here on too.
+    CONSOLE_PID=""
 fi
 
 # Print the server URLs on success

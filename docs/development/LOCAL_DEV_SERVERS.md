@@ -138,20 +138,30 @@ waits for both servers to bind their ports and return HTTP 200 before reporting
 success. It then waits on the toolshed's `/`, the page a browser loads, which
 the toolshed answers by fetching the shell dev server and passing the result
 back; that is the one probe covering the hop between the two servers, which
-can be broken while each of them answers on its own port. Set
-`LOCAL_DEV_STARTUP_TIMEOUT` to adjust the readiness timeout in seconds.
+can be broken while each of them answers on its own port.
+
+The script has no time limit. It waits for both servers at once, reading their
+logs as they write them, until each has printed the line that says it has bound
+its port. It then requests the shell's page, the toolshed's `/_health`, and the
+toolshed's `/`, once each, and waits for each answer however long it takes. A
+server that exits before it binds fails the script when it exits, whether or not
+the other server has bound yet. A server that neither binds nor exits keeps the
+script waiting until something stops it, such as Ctrl-C or the time limit of the
+job that runs it. `check-local-dev.sh` likewise waits for each server's answer
+however long it takes.
 
 Each server runs in a process group of its own, so the servers keep running
 after the script returns, even under a tool that ends whatever a command leaves
-in its process group once the command exits. They run until
-`stop-local-dev.sh` stops them, which finds them by the ports they listen on.
-Until the script reports success, the servers end with it: a failed startup,
-Ctrl-C, or a hangup or termination signal sent to the script stops every
-server it started. A SIGKILL sent to the script's process group during
-startup cannot be caught, so it leaves the servers it started running, and
-`stop-local-dev.sh` stops them. When `CODEX_SANDBOX` is set, the script stays
-attached after startup, the servers stay in its process group, and stopping
-the script stops them.
+in its process group once the command exits. They run until `stop-local-dev.sh`
+stops them, which finds them by the ports they listen on. Until both servers are
+ready, they end with the script: a failed startup, Ctrl-C, or a hangup or
+termination signal sent to the script stops every server it started. While the
+script then waits for a cf-harness console, the same events stop only the
+console. A SIGKILL sent to the script's process group during startup cannot be
+caught, so it leaves the servers it started running, and `stop-local-dev.sh`
+stops them. When `CODEX_SANDBOX` is set, the script stays attached after
+startup, the servers stay in its process group, and stopping the script stops
+them.
 
 **Exit codes (`start-local-dev.sh`):**
 | Code | Meaning |
