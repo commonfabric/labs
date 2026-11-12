@@ -25,6 +25,12 @@ import { createCellRef } from "./utils.ts";
 /** What the host is told when the slot holds what the seal did not verify. */
 const UNVERIFIED_SLOT = "Custody answer refuses a slot the seal did not write";
 
+/** The address of the cell holding an answer. */
+const answerAddress = (answer: Cell<unknown>): string => {
+  const { space, id, path } = answer.getAsNormalizedFullLink();
+  return JSON.stringify([space, id, path]);
+};
+
 /**
  * Watches `room`'s answer for a host, calling `send` with each change in what
  * the host is to show: nothing published yet, with the reason an attempt
@@ -48,9 +54,11 @@ export function watchCustodyAnswerForHost(
     sent = state;
     send(state);
   };
-  // The instance whose answer is shown, and the gate's subscription that
-  // decides it again.
-  let shown: { instance: string; cancel: Cancel } | undefined;
+  // The answer shown, by the address of the cell holding it, and the gate's
+  // subscription that decides it again. The address names the instance and
+  // the policy, which the room's policy cell can change while the terms,
+  // and so the instance, stay as they were.
+  let shown: { answer: string; cancel: Cancel } | undefined;
   const stopShowing = (): void => {
     shown?.cancel();
     shown = undefined;
@@ -61,19 +69,21 @@ export function watchCustodyAnswerForHost(
       deliver(update);
       return;
     }
-    // The answer published for an instance never changes, so an instance
-    // already shown is decided by the subscription already standing.
-    if (shown?.instance === update.instance) return;
+    // The answer published into a slot never changes, so one already shown
+    // is decided by the subscription already standing.
+    const address = answerAddress(update.answer);
+    if (shown?.answer === address) return;
     stopShowing();
     const { instance, publishedHere, answer, value } = update;
     const showing = { ended: false, cancel: (() => {}) as Cancel };
-    shown = {
-      instance,
+    const current = {
+      answer: address,
       cancel: () => {
         showing.ended = true;
         showing.cancel();
       },
     };
+    shown = current;
     // The access lists and policy manifests the decision consults are
     // loaded first, so that the first decision the host is sent is made on
     // them rather than refusing on one not yet synced. The subscription then
@@ -105,6 +115,8 @@ export function watchCustodyAnswerForHost(
       );
     }).catch((failed: unknown) => {
       if (showing.ended) return;
+      // Nothing decides this answer, so the next report tries again.
+      if (shown === current) shown = undefined;
       deliver({ status: "pending", error: describeFailure(failed) });
     });
   });

@@ -175,6 +175,8 @@ export class CFCustodyAnswer extends BaseElement {
       else unwatch();
     }, (failed: unknown) => {
       if (generation !== this.#generation) return;
+      // No watch stands, so the next connection or update starts one.
+      this.#watched = undefined;
       this.#error = describeFailure(failed);
       this.requestUpdate();
     });

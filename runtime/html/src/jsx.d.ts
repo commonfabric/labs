@@ -4450,7 +4450,10 @@ interface CFCustodyAnswerAttributes<T> extends CFHTMLAttributes<T> {
   "$terms"?: CellLike<unknown>;
   /** A cell holding, or whose label declares, the room's custody policy. */
   "$policy"?: CellLike<unknown>;
-  /** The room's projected answer, which the host publishes once and shows. */
+  /**
+   * The room's projected answer, which the worker reads and hands the seal to
+   * publish once; the element shows only what the seal published.
+   */
   "$output"?: CellLike<unknown>;
   /**
    * Fires once per instance when its published answer is shown; `instance`

@@ -313,6 +313,26 @@ describe("cf-custody-answer", () => {
     );
   });
 
+  it("watches afresh on the next connection after a watch that could not start", async () => {
+    let failures = 1;
+    const state = setup({
+      start: () =>
+        failures-- > 0
+          ? Promise.reject(new Error("worker refused the watch"))
+          : Promise.resolve(),
+    });
+    await state.connect();
+    expect(state.element.accessForTestingOnly.error).toBe(
+      "worker refused the watch",
+    );
+
+    state.element.connectedCallback();
+    await settle();
+
+    expect(state.watches).toHaveLength(2);
+    expect(state.element.accessForTestingOnly.error).toBe("");
+  });
+
   it("asks nothing until every binding and the runtime are present", async () => {
     const element = new HeadlessAnswer();
     const asked: unknown[] = [];

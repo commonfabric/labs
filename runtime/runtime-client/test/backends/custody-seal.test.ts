@@ -831,7 +831,10 @@ describe("custody answer watch", () => {
      * Watches for a host whose gate holds `alice`'s reads to her display
      * ceiling, with a seal's watch that reports what the test sends it.
      */
-    const watchFor = (runtime: Runtime) => {
+    const watchFor = (
+      runtime: Runtime,
+      gateFor: (gate: HostReadGate) => HostReadGate = (gate) => gate,
+    ) => {
       const ceiling = defaultDisplayCeiling(alice.did());
       const membership = renderMembershipProviderFor(runtime, alice, ceiling);
       const modulePolicies = renderModulePolicySourceFor(runtime, ceiling);
@@ -851,7 +854,7 @@ describe("custody answer watch", () => {
       const sent: CustodyAnswerState[] = [];
       let waiting: ((state: CustodyAnswerState) => void) | undefined;
       const cancel = watchCustodyAnswerForHost(
-        gate,
+        gateFor(gate),
         { terms: runtime.getCell(S, "unused-terms"), policy: P },
         runtime.getCell(S, "unused-output"),
         (state) => {
@@ -946,6 +949,64 @@ describe("custody answer watch", () => {
             status: "pending",
             error: "Custody answer refuses a slot the seal did not write",
           });
+        } finally {
+          host.cancel();
+        }
+      });
+    });
+
+    it("sends the answer of another policy's slot for the same instance", async () => {
+      // The room's policy cell can name another policy over the same terms:
+      // the instance digest is the same, and the slot is another.
+
+      await withFixture(async ({ runtime }) => {
+        const first = await labeled(runtime, "first-policy-answer", {
+          answer: "sushi",
+        }, [cfcAtom.space(S)]);
+        const second = await labeled(runtime, "second-policy-answer", {
+          answer: "tacos",
+        }, [cfcAtom.space(S)]);
+        const host = watchFor(runtime);
+        try {
+          let state = host.next();
+          host.report(published(first.key("answer"), "sushi"));
+          await state;
+          state = host.next();
+          host.report(published(second.key("answer"), "tacos"));
+
+          expect(await state).toMatchObject({ answer: { value: "tacos" } });
+        } finally {
+          host.cancel();
+        }
+      });
+    });
+
+    it("tries a failed decision again on the next report of the same answer", async () => {
+      await withFixture(async ({ runtime }) => {
+        const slot = await labeled(runtime, "answer-after-failure", {
+          answer: "sushi",
+        }, [cfcAtom.space(S)]);
+        let failures = 1;
+        const host = watchFor(runtime, (gate) =>
+          ({
+            settle: (cell: Cell<unknown>) =>
+              failures-- > 0
+                ? Promise.reject(new Error("access list unreachable"))
+                : gate.settle(cell),
+            subscribe: gate.subscribe.bind(gate),
+            read: gate.read.bind(gate),
+          }) as unknown as HostReadGate);
+        try {
+          let state = host.next();
+          host.report(published(slot.key("answer"), "sushi"));
+          expect(await state).toEqual({
+            status: "pending",
+            error: "access list unreachable",
+          });
+          state = host.next();
+          host.report(published(slot.key("answer"), "sushi"));
+
+          expect(await state).toMatchObject({ answer: { value: "sushi" } });
         } finally {
           host.cancel();
         }

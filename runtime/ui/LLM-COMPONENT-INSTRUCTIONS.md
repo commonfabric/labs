@@ -1041,7 +1041,8 @@ yet shows nothing. **Tag**: `<cf-custody-answer>`
 
 - `$terms` - the room's terms document
 - `$policy` - a cell holding, or whose label declares, the room's custody policy
-- `$output` - the room's projected answer, which the host hands the seal
+- `$output` - the room's projected answer; the component passes only its
+  reference, and the worker's watch reads it and hands it to the seal
 
 **Events**:
 

@@ -2544,21 +2544,25 @@ export function watchCustodyAnswer(
   let cancelled = false;
   let running = false;
   let again = false;
-  // The instance whose box and slot are followed, and how to stop.
-  let followed: { instance: string; cancel: Cancel } | undefined;
-  // The instances this watch published, which it says so of for as long as
+  // The slot whose box and slot are followed, by its address, and how to
+  // stop. A slot is the instance's under one policy: the room's policy cell
+  // can name another policy over the same terms, whose instance digest is
+  // the same and whose box and slot are not.
+  let followed: { slot: string; cancel: Cancel } | undefined;
+  // The slots this watch published into, which it says so of for as long as
   // it reports them.
   const publishedHere = new Set<string>();
 
   const follow = (location: CustodyAnswerLocation | undefined): void => {
-    if (followed?.instance === location?.instance) return;
+    const slot = location && slotAddress(location.slot);
+    if (followed?.slot === slot) return;
     followed?.cancel();
     followed = undefined;
     if (location === undefined) return;
     const cancelBox = location.box.sink(look);
     const cancelSlot = location.slot.sink(look);
     followed = {
-      instance: location.instance,
+      slot: slot!,
       cancel: () => {
         cancelBox();
         cancelSlot();
@@ -2574,7 +2578,7 @@ export function watchCustodyAnswer(
       if (location !== undefined && !location.published && !cancelled) {
         try {
           publishedHere.add(
-            (await publishCustodyAnswer(room, output)).instance,
+            slotAddress((await publishCustodyAnswer(room, output)).answer),
           );
         } catch (refused) {
           if (!isCustodyAnswerPending(refused)) {
@@ -2598,7 +2602,7 @@ export function watchCustodyAnswer(
         : {
           status: "published",
           instance: location!.instance,
-          publishedHere: publishedHere.has(location!.instance),
+          publishedHere: publishedHere.has(slotAddress(location!.slot)),
           answer: published.answer,
           value: published.value,
         },
@@ -2641,3 +2645,9 @@ export function watchCustodyAnswer(
 }
 
 const noop: Cancel = () => {};
+
+/** A slot's address, which names its policy and its instance. */
+const slotAddress = (slot: Cell<unknown>): string => {
+  const { space, id } = slot.getAsNormalizedFullLink();
+  return `${space}/${id}`;
+};
