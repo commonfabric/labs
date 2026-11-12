@@ -56,5 +56,3 @@ questions:
    something; a picked picture is a value the component derived from the user's
    file. Whether a TCB component's output counts as the user's value is a policy
    question.
-
-Tracked on the laundry as top/2823.
