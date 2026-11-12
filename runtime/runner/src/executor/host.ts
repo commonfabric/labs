@@ -350,7 +350,9 @@ export class ExecutorHost {
     // The memory server calls these from whichever session's request it is
     // handling, so the two that start work enter the serving context: what
     // the host starts from here is the serving loop's work. A demand change
-    // only wakes a loop already running in it.
+    // only wakes a loop already running in it. `close()` detaches the
+    // observer in the same step that closes the host, so none of these runs
+    // on a closed host.
     options.server.setServerExecutionObserver({
       // Each is a trigger the host may decline, which changes nothing it
       // holds, so each reports a host left idle whether or not that is news.
@@ -374,7 +376,6 @@ export class ExecutorHost {
       // the loop spins an extra cycle and demand pass that finds no
       // client delta (W1 review MINOR-4).
       demandChanged: (space, reason, principal) => {
-        if (this.#closed) return;
         if (principal === this.#options.serviceIdentity) return;
         const existing = this.#spaces.get(space);
         if (existing?.active) existing.noteDemandChanged(reason);
@@ -551,7 +552,6 @@ export class ExecutorHost {
   }
 
   #onCommitAdmitted(notice: AdmittedCommitNotice): void {
-    if (this.#closed) return;
     // THE SESSION REMOUNT's trigger (storage/v2.ts
     // `consumeOwedSessionRemount`): this commit touched the ACL document
     // (`of:<space>` — the memory server's aclDocId), which is the ONLY
@@ -688,7 +688,6 @@ export class ExecutorHost {
   }
 
   #onSessionOpened(space: string): void {
-    if (this.#closed) return;
     const existing = this.#spaces.get(space);
     if (existing?.active) {
       existing.noteDemandChanged();
@@ -763,8 +762,6 @@ export class ExecutorHost {
             error,
           ]);
         }
-        // The engine read awaited: re-check the activation preconditions.
-        if (this.#closed || this.#spaces.get(space)?.active) return;
       }
       void this.#activate(space);
     })().finally(() => {

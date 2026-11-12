@@ -98,11 +98,11 @@ export class CFDropZone extends BaseElement {
    */
   private _handleDragStateChange(state: DragState | null): void {
     if (!state) {
-      // Drag ended - if we were in drag-over state, emit drop event
+      // The drag has ended. A drop over this zone was already handled by
+      // `_handleDragEnd()`, which clears the drag-over state. It is still set
+      // here only when the zone stopped accepting the drag while over it, and
+      // clearing it dispatches `cf-drag-leave`.
       if (this._isDragOver) {
-        // We need to get the cell from the previous state, but it's gone now
-        // The drag-source will have already cleaned up, so we can't emit drop here
-        // Instead, we need to track the last known drag state
         this._setDragOver(false);
       }
       return;
@@ -151,8 +151,6 @@ export class CFDropZone extends BaseElement {
    * Update drag-over state and emit appropriate events
    */
   private _setDragOver(isOver: boolean, dragState?: DragState): void {
-    if (isOver === this._isDragOver) return;
-
     this._isDragOver = isOver;
     this.toggleAttribute("drag-over", isOver);
 

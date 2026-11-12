@@ -9,52 +9,17 @@ import {
 } from "../../utils/image-compression.ts";
 
 /**
- * Image-specific metadata (EXIF data)
- */
-export interface ExifData {
-  // Core metadata
-  dateTime?: string;
-  make?: string;
-  model?: string;
-
-  // Orientation
-  orientation?: number;
-
-  // Location (if available)
-  gpsLatitude?: number;
-  gpsLongitude?: number;
-  gpsAltitude?: number;
-
-  // Camera settings
-  fNumber?: number;
-  exposureTime?: string;
-  iso?: number;
-  focalLength?: number;
-
-  // Dimensions
-  pixelXDimension?: number;
-  pixelYDimension?: number;
-
-  // Software
-  software?: string;
-
-  // Raw EXIF tags for advanced use
-  raw?: Record<string, any>;
-}
-
-/**
  * Image data structure (extends FileData with image-specific fields)
  */
 export interface ImageData extends StoredFile {
   width?: number;
   height?: number;
-  exif?: ExifData;
 }
 
 /**
  * CFImageInput - Image capture and upload component with camera support
  *
- * Extends CFFileInput with image-specific features like compression, EXIF extraction,
+ * Extends CFFileInput with image-specific features like compression
  * and camera capture support.
  *
  * @element cf-image-input
@@ -95,9 +60,6 @@ export class CFImageInput extends CFFileInput {
   @property({ type: String })
   accessor capture: "user" | "environment" | false | undefined = undefined;
 
-  @property({ type: Boolean })
-  accessor extractExif = false;
-
   /** Alias of `maxFiles`, for backward compatibility. */
   get maxImages(): number | undefined {
     return this.maxFiles;
@@ -108,19 +70,11 @@ export class CFImageInput extends CFFileInput {
   }
 
   /**
-   * Returns whether `file` should be compressed: an image is, when
-   * `maxSizeBytes` is set and exceeded.
-   */
-  protected override shouldCompressFile(file: File): boolean {
-    return !!(this.maxSizeBytes && file.size > this.maxSizeBytes);
-  }
-
-  /**
    * Compresses `file` with the image compression utility when `maxSizeBytes`
-   * is set, and returns it as is otherwise.
+   * is set and exceeded, and returns it as is otherwise.
    */
   protected override async compressFile(file: File): Promise<Blob> {
-    if (!this.maxSizeBytes) return file;
+    if (!this.maxSizeBytes || file.size <= this.maxSizeBytes) return file;
 
     const result = await compressImage(file, {
       maxSizeBytes: this.maxSizeBytes,
@@ -172,7 +126,7 @@ export class CFImageInput extends CFFileInput {
         ?multiple="${this.multiple}"
         ?disabled="${this.disabled}"
         capture="${ifDefined(captureAttr)}"
-        @change="${this._handleFileChangeInternal}"
+        @change="${this._handleFileChange}"
       />
     `;
   }
@@ -192,12 +146,6 @@ export class CFImageInput extends CFFileInput {
       </div>
     `;
   }
-
-  /** Internal handler which calls the parent's protected handler. */
-  private _handleFileChangeInternal = (event: Event) => {
-    // Call parent's protected _handleFileChange method
-    super._handleFileChange(event);
-  };
 
   /** Emits an event, adding image-specific event details. */
   protected override emit<T = any>(

@@ -155,7 +155,7 @@ cell means none confirmed — check the component source before assuming.
 | `cf-hstack` | Horizontal stack layout (flexbox) (see [stacks](#cf-vstack--cf-hstack)) | |
 | `cf-iframe` | Sandboxed guest with explicit cell, stream, SQLite, service, or presence-room capabilities, bound as one record of cells (see [iframe-first patterns](../ai/iframe-pattern-guide.md)) | `$context` |
 | `cf-image` | Image from raw `bytes` and a `media-type`, or from a blob reference `{ space, id }` (see [files](../capabilities/files.md)) | |
-| `cf-image-input` | Image capture/upload with compression, EXIF, camera support | |
+| `cf-image-input` | Image capture/upload with compression and camera support | |
 | `cf-input` | Text input with validation and reactive binding | `$value` |
 | `cf-input-otp` | One-time-password input with individual digit fields | |
 | `cf-kbd` | Inline keyboard hint element | |

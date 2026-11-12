@@ -120,12 +120,10 @@ function normalizeSandboxNativeLeaf(value: unknown): unknown {
 }
 
 function typeNameForActionResult(value: unknown): string {
-  if (typeof value === "function") return "function";
-  if (typeof value === "symbol") return "Symbol";
   if (isObjectOrArray(value)) {
     return value.constructor?.name ?? "unknown type";
   }
-  return typeof value;
+  return typeof value === "symbol" ? "Symbol" : typeof value;
 }
 
 function hintForActionResult(value: unknown): string | undefined {

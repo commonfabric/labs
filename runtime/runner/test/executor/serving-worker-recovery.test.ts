@@ -377,6 +377,34 @@ describe("serving-worker-recovery", () => {
       await clock.settle();
       expect(workers()).toHaveLength(3);
     });
+
+    it("widens while spares fail in the turn their hosts answer `worker.init`", async () => {
+      // Deno dispatches a worker's messages and its errors from promise
+      // continuations, so an answer and an error that arrive together run
+      // both handlers before the continuation the answer resolves. Each
+      // stand-in plays that: once its answer has been read, its failure is
+      // queued ahead of the pool's continuation for it.
+      fakes[Symbol.dispose]();
+      fakes = fakeServingWorkers((worker) => {
+        worker.serve();
+        worker.addEventListener("message", (event) => {
+          if (event.data.t === "ok") queueMicrotask(() => worker.fail());
+        });
+      });
+      start({ spareWorkers: 1 });
+      await clock.settle();
+      expect(workers()).toHaveLength(1);
+      expect(workers()[0].terminated).toBe(true);
+      await clock.tick(10);
+      await clock.settle();
+      expect(workers()).toHaveLength(2);
+      await clock.tick(19);
+      await clock.settle();
+      expect(workers()).toHaveLength(2);
+      await clock.tick(1);
+      await clock.settle();
+      expect(workers()).toHaveLength(3);
+    });
   });
 
   describe("the watchdog", () => {

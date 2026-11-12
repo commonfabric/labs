@@ -129,6 +129,7 @@
     "npm:@xyflow/react@^12.11.5": "12.11.5_@types+react@19.2.18_@types+react-dom@19.2.5_react@19.2.8_react-dom@19.2.8",
     "npm:ai@^7.0.31": "7.0.31_zod@4.4.3",
     "npm:ajv@^8.20.0": "8.20.0",
+    "npm:core-js@^3.46.0": "3.46.0",
     "npm:d3-array@^3.2.4": "3.2.4",
     "npm:d3-scale@^4.0.2": "4.0.2",
     "npm:d3-shape@^3.2.0": "3.2.0",
@@ -1564,6 +1565,10 @@
     "cookie@0.7.2": {
       "integrity": "sha512-yki5XnKuf750l50uGTllt6kKILY4nQ1eNIQatoXEByZ5dWgnKqbnqmTrBE5B4N7lrMJKQ2ytWMiTO2o0v6Ew/w=="
     },
+    "core-js@3.46.0": {
+      "integrity": "sha512-vDMm9B0xnqqZ8uSBpZ8sNtRtOdmfShrvT6h2TuQGLs0Is+cR0DYbj/KWP6ALVNbWPpqA/qPLoOuppJN07humpA==",
+      "scripts": true
+    },
     "cors@2.8.6": {
       "integrity": "sha512-tJtZBBHA6vjIAaF6EnIaq6laBBP9aq/Y3ouVJjEfoHbRBcHBAHYcMh/w8LDrk2PvIMMq8gmopa5D4V8RmbrxGw==",
       "dependencies": [
@@ -2841,9 +2846,6 @@
       ]
     }
   },
-  "redirects": {
-    "https://esm.sh/@types/dagre@~0.7.53/index.d.ts": "https://esm.sh/@types/dagre@0.7.53/index.d.ts"
-  },
   "remote": {
     "https://deno.land/std@0.224.0/assert/assert.ts": "09d30564c09de846855b7b071e62b5974b001bb72a4b797958fe0660e7849834",
     "https://deno.land/std@0.224.0/assert/assertion_error.ts": "ba8752bd27ebc51f723702fac2f54d3e94447598f54264a6653d6413738a8917",
@@ -2871,12 +2873,7 @@
     "https://deno.land/std@0.224.0/path/windows/basename.ts": "6bbc57bac9df2cec43288c8c5334919418d784243a00bc10de67d392ab36d660",
     "https://deno.land/std@0.224.0/path/windows/from_file_url.ts": "ced2d587b6dff18f963f269d745c4a599cf82b0c4007356bd957cb4cb52efc01",
     "https://deno.land/std@0.224.0/path/windows/join.ts": "8d03530ab89195185103b7da9dfc6327af13eabdcd44c7c63e42e27808f50ecf",
-    "https://deno.land/std@0.224.0/path/windows/normalize.ts": "78126170ab917f0ca355a9af9e65ad6bfa5be14d574c5fb09bb1920f52577780",
-    "https://esm.sh/core-js@3.46.0/denonext/proposals/async-explicit-resource-management.mjs": "d75be20fbac6aec6a9c3f5f920641d135a9ece80b474fd17ff282e1288043d76",
-    "https://esm.sh/core-js@3.46.0/denonext/proposals/explicit-resource-management.mjs": "1936f377fc4661bb73186bb84ac36b5738292ce47a0d95d0c3319c76c14ac83a",
-    "https://esm.sh/core-js@3.46.0/proposals/async-explicit-resource-management": "d19beff9fe2de3d50ee7b1ca3bd3a6310a624bf5e9da1dbd1f33f35f3fd2d9e0",
-    "https://esm.sh/core-js@3.46.0/proposals/explicit-resource-management": "11d87cba9ddb54b26ccee520857be53bff360633550e74045896e4da1c6c9e61",
-    "https://esm.sh/dagre@0.8.5": "85f2ad51e8e89bc8b57f6e165e8ff46abec365bdcacdded5ebb7496cb744354e"
+    "https://deno.land/std@0.224.0/path/windows/normalize.ts": "78126170ab917f0ca355a9af9e65ad6bfa5be14d574c5fb09bb1920f52577780"
   },
   "workspace": {
     "dependencies": [
@@ -3044,6 +3041,11 @@
           "npm:ws@^8.21.3"
         ]
       },
+      "runtime/runtime-client": {
+        "dependencies": [
+          "npm:core-js@^3.46.0"
+        ]
+      },
       "runtime/shell": {
         "dependencies": [
           "npm:@lit/context@^1.1.6",
@@ -3051,7 +3053,8 @@
           "npm:@opentelemetry/api@^1.9.1",
           "npm:@opentelemetry/exporter-trace-otlp-http@0.220",
           "npm:@opentelemetry/resources@^2.9.0",
-          "npm:@opentelemetry/sdk-trace-web@^2.9.0"
+          "npm:@opentelemetry/sdk-trace-web@^2.9.0",
+          "npm:core-js@^3.46.0"
         ]
       },
       "runtime/state-inspector": {
