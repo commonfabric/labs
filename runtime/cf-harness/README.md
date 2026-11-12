@@ -327,8 +327,10 @@ What works today:
 - GPT-6.1 Sol, GPT-6 Luna, and GPT-5.6 gateway cost estimates with complete
   cache usage detail; estimates use the public OpenAI token schedule and are
   kept distinct from provider-reported cost
-- stable prompt-cache affinity across an interactive session, plus opt-in
-  reasoning effort and GPT-5.6/GPT-6.1 Sol gateway cache-mode controls
+- stable prompt-cache affinity across an interactive session, and across the
+  jobs of an agent-runner profile that names a `cacheAffinityKey` (sent as the
+  provider prompt-cache key in place of each run's id), plus opt-in reasoning
+  effort and GPT-5.6/GPT-6.1 Sol gateway cache-mode controls
 - transcript-based resumability
 - package-local operator CLI
 - an Agent Skills registry over `--skills-root`, defaulting to the checkout's
