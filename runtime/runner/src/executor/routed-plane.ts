@@ -23,6 +23,10 @@ import {
 } from "@commonfabric/memory/v2";
 import * as MemoryClient from "@commonfabric/memory/v2/client";
 import {
+  ResendingSession,
+  untilSent,
+} from "@commonfabric/memory/v2/resending-session";
+import {
   type ClientBuild,
   type ClientInfo,
   createClientInfo,
@@ -162,8 +166,12 @@ type RoutedSession = {
   /** The connection the session is open on, closed with the session. */
   client: MemoryClient.Client;
 
-  /** The session, open as the service identity bound to the space's owner. */
-  session: MemoryClient.SpaceSession;
+  /**
+   * The session, open as the service identity bound to the space's owner. A
+   * request made of it while its connection is down is made once the
+   * connection is back.
+   */
+  session: ResendingSession;
 
   /** The position of the last crossing sent on the session, from zero. */
   localSeq: number;
@@ -533,12 +541,19 @@ export class RoutedPlane {
       firstHandshakeAttempts: MEMORY_FIRST_HANDSHAKE_ATTEMPTS,
     });
     try {
-      const session = await client.mount(
-        space,
-        { actingAs: "space-owner" },
-        this.#options.sessionOpenAuth,
+      const session = await untilSent(() =>
+        client.mount(
+          space,
+          { actingAs: "space-owner" },
+          this.#options.sessionOpenAuth,
+        )
       );
-      return { client, session, localSeq: 0, watchers: new Map() };
+      return {
+        client,
+        session: new ResendingSession(session),
+        localSeq: 0,
+        watchers: new Map(),
+      };
     } catch (error) {
       await client.close().catch(() => {});
       throw error;

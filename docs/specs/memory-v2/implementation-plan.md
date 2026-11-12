@@ -160,7 +160,8 @@ memory route.
   - one-shot `queryGraph(query)`
 - On reconnect:
   - reopen the session with `seenSeq`
-  - replay outstanding commits in `localSeq` order
+  - fail outstanding commits, for the caller to send again in `localSeq`
+    order
   - apply inline catch-up sync if the session resumes
   - reinstall the watch set only if the session reopened fresh
 - Remove subscription-id handling and seq/hash-based duplicate-confirm logic.
@@ -228,7 +229,8 @@ Deferred:
   definitions
 - `session/effect` emits correct `upserts` and `removes`
 - `session.ack` advances server-side `seenSeq`
-- reconnect restores watch set and replays outstanding commits
+- reconnect restores the watch set, and a commit sent again after it is
+  applied once
 - old live `graph.query subscribe` is rejected
 - one-shot `graph.query` honors `branch` and `atSeq`
 
@@ -238,7 +240,7 @@ Deferred:
 - revert-before-promise-resolution on conflict remains unchanged
 - integrate notifications stay suppressed while newer pending state shadows the
   same path
-- reconnect still deduplicates replayed outstanding local work
+- reconnect still deduplicates outstanding local work sent again
 - retry-after-revert succeeds after subscribed state refresh
 - overlapping watched graphs dedupe correctly
 

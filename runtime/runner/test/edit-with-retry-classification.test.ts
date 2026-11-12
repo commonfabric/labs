@@ -196,8 +196,8 @@ describe("editWithRetry rejection classification", () => {
     }],
     // Liveness the client heals by itself: a transport close schedules
     // `reconnect()` (memory/v2/client.ts), so a retry runs over a
-    // re-established link; a replica sends a commit its connection lost again
-    // itself (storage/until-answered.ts). `SessionError` looks like this one
+    // re-established link; a replica's session sends a commit its connection
+    // lost again itself (`ResendingSession`). `SessionError` looks like this one
     // but is in the terminal list above — nothing remounts a session.
     ["ConnectionError", { name: "ConnectionError", message: "socket closed" }],
     // Liveness by collateral damage: an undecodable frame makes the client's

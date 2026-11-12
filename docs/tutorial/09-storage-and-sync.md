@@ -120,12 +120,15 @@ pushes fresh state for the contested documents to that session — so the
 client-side story from Chapter 8 (revert, re-run, retry) starts from
 current data, not after another round trip.
 
-Client-side resilience details worth knowing
-(`runtime/memory/v2/client.ts`): unacknowledged commits are kept and
-**replayed on reconnect** (safe by idempotence), and a connection drop
-leaves commits queued rather than failed. On the way back the client also
-declares what its replica holds, so the server re-delivers exactly what it
-lacks — never the whole watch union again, never less than the gap.
+Client-side resilience details worth knowing: the memory client
+(`runtime/memory/v2/client.ts`) keeps nothing for a later connection, so a
+commit a connection drop catches fails there, saying whether it was sent.
+The session the replica commits through
+(`runtime/memory/v2/resending-session.ts`) **sends it again on reconnect**,
+unchanged (safe by idempotence), so the commit's caller sees only the
+server's answer. On the way back the client also declares what its replica
+holds, so the server re-delivers exactly what it lacks — never the whole
+watch union again, never less than the gap.
 Offline-tolerant by construction, within a session's lifetime.
 
 ## Subscriptions: watches over schema-shaped graphs

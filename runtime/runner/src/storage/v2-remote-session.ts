@@ -10,6 +10,7 @@ import {
   type SessionDescriptor,
 } from "@commonfabric/memory/v2";
 import * as MemoryClient from "@commonfabric/memory/v2/client";
+import { untilSent } from "@commonfabric/memory/v2/resending-session";
 import {
   type ClientBuild,
   type ClientInfo,
@@ -1594,11 +1595,10 @@ export class RemoteSessionFactory implements SessionFactory {
       signal,
     );
     try {
-      const session = await client.mount(
-        space,
-        mountOptions,
-        principal,
-        signal,
+      // The shared connection may be one that is connecting again, and a
+      // mount made then is not sent: it is made once the connection is back.
+      const session = await untilSent(() =>
+        client.mount(space, mountOptions, principal, signal)
       );
       return {
         client: new SharedSessionConnection(client, session),
@@ -1715,11 +1715,15 @@ export class RemoteSessionFactory implements SessionFactory {
         address: transport.address.href,
         firstHandshakeAttempts: MEMORY_FIRST_HANDSHAKE_ATTEMPTS,
       });
-      const { session, redemption } = await client.mountRedeeming(
-        space,
-        invite,
-        this.#sessionPrincipal(signer ?? this.#defaultSigner),
-        signal,
+      // A redemption that may have been sent is not sent a second time.
+      const mounting = client;
+      const { session, redemption } = await untilSent(() =>
+        mounting.mountRedeeming(
+          space,
+          invite,
+          this.#sessionPrincipal(signer ?? this.#defaultSigner),
+          signal,
+        )
       );
       await session.close();
       return redemption;
@@ -1795,11 +1799,9 @@ export class RemoteSessionFactory implements SessionFactory {
       };
       signal?.addEventListener("abort", closeForAbort, { once: true });
       try {
-        const session = await client.mount(
-          space,
-          mountOptions,
-          principal,
-          signal,
+        const mounting = client;
+        const session = await untilSent(() =>
+          mounting.mount(space, mountOptions, principal, signal)
         );
         if (signal?.aborted) throw abortError();
         return { client, session };

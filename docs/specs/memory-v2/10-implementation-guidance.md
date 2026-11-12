@@ -97,14 +97,16 @@ Use a logical session per space. The session owns:
 
 - `sessionId`
 - `seenSeq`
-- retained outstanding commits keyed by `localSeq`
+- the commits sent and not yet answered, keyed by `localSeq`
 - the current watch set
 - the current watch-union result known to the server
 
 Reconnect behavior:
 
 1. re-open the session with `sessionId` and `seenSeq`
-2. replay outstanding commits in `localSeq` order
+2. fail the commits the drop caught, saying whether each was sent; the
+   session's caller sends them again, unchanged and in `localSeq` order,
+   before any newer commit
 3. if `session.open` resumes an existing session, integrate its inline
    catch-up sync and keep the existing watch set
 4. if `session.open` opens a fresh session, reinstall the watch set

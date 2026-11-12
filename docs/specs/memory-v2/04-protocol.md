@@ -2639,19 +2639,21 @@ On disconnect:
    `ConnectionError` saying how far it got: one handed to the connection is
    unacknowledged (it may have landed), and one still waiting to be sent, or
    made while the client reconnects or while the session is held, is never
-   sent. The client keeps nothing for a later connection. Each failed commit
-   or watch mutation carries `readyToRetry()`, which resolves once the session
-   can take it again: on a later connection, for an unacknowledged one
+   sent. The client keeps nothing for a later connection. Each failed request
+   carries `readyToRetry()`, which resolves once the session can take it
+   again: on a later connection, for an unacknowledged one
 2. the logical session may still be resumable
 3. the client reconnects, restores the watch set, and resumes integrating sync
    from `seenSeq` — declaring what its replica holds (section 4.1.2) so the
    server re-delivers exactly what it lacks
 4. the caller sends a failed commit again unchanged, under the same
    `localSeq`, so the server answers one that landed from its record and
-   judges one that did not afresh; when the session was replaced by one with
-   another ID, `readyToRetry()` rejects instead, since the server would judge
-   the commit as a new one. Commits sent again keep increasing `localSeq`
-   order (section 4.11.1)
+   judges one that did not afresh; when an unacknowledged commit's session was
+   replaced by one with another ID, its `readyToRetry()` rejects instead,
+   since the server would judge the commit as a new one. The caller sends
+   failed commits again in `localSeq` order and holds a newer commit back
+   until it has, so commits keep increasing `localSeq` order across a
+   reconnect (section 4.11.1). `ResendingSession` does both for a caller
 
 ## 4.9 Blob Transfer
 

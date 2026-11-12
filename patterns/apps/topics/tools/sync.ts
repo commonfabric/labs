@@ -27,6 +27,7 @@ import type {
   WatchSpec,
 } from "@commonfabric/memory/v2";
 import type { SpaceSession } from "@commonfabric/memory/v2/client";
+import { ResendingSession } from "@commonfabric/memory/v2/resending-session";
 import { ROUTED_HOLDINGS_LIMIT } from "@commonfabric/memory/v2/routed-limits";
 import { settingsForDeployedClient } from "@commonfabric/runner/deployment-meta";
 import { namesInstancesByDefault } from "@commonfabric/runner/instance-naming";
@@ -437,12 +438,26 @@ export function copySource(space: string): DocSource {
   return { space, fetch: nothing, lookup: nothing };
 }
 
+/**
+ * What these tools ask of a memory session: a `SpaceSession`, or a
+ * `ResendingSession` around one, which makes a request its connection lost
+ * again.
+ */
+export type BoardSession = Pick<
+  SpaceSession,
+  "closeError" | "queryGraph" | "watchAddSync" | "watchSetSync"
+>;
+
 /** A memory session of its own on a board's space. */
 export interface OpenedSession {
   /** The space's DID. */
   space: string;
 
-  session: SpaceSession;
+  /**
+   * The session. A request made of it while its connection is down is made
+   * once the connection is back.
+   */
+  session: BoardSession;
   close(): Promise<void>;
 }
 
@@ -480,7 +495,7 @@ export async function openSession(
   const opened = await factory.create(space);
   return {
     space,
-    session: opened.session,
+    session: new ResendingSession(opened.session),
     async close() {
       await opened.client.close();
       await factory.close?.();
@@ -538,7 +553,7 @@ export function ridingHoldings(
  * hold go in smaller watches, since the server sends each one whole.
  */
 export function sessionDocSource(
-  session: SpaceSession,
+  session: BoardSession,
   space: string,
 ): DocSource {
   return {
@@ -591,7 +606,7 @@ export function sessionDocSource(
  * one with no content is left out.
  */
 export async function queryDocs(
-  session: SpaceSession,
+  session: BoardSession,
   ids: readonly string[],
 ): Promise<FetchedDoc[]> {
   const { entities } = await session.queryGraph(graphOf(ids));

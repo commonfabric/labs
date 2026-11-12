@@ -19,6 +19,7 @@ import {
   RouterAssembler,
 } from "@commonfabric/memory/v2/router-protocol";
 import { routedFrameOf } from "../../memory/test/support/routed-slots.ts";
+import { untilAnswered } from "@commonfabric/memory/v2/resending-session";
 import type { Server as MemoryServer } from "@commonfabric/memory/v2/server";
 import {
   decodeCompressedMemoryMessage,
@@ -29,7 +30,6 @@ import {
   parseMemoryCompressionControlMessage,
 } from "@commonfabric/memory/v2/message-compression";
 import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
-import { untilAnswered } from "../src/storage/until-answered.ts";
 import {
   createStorageAddressResolver,
   MEMORY_STORAGE_PATH,

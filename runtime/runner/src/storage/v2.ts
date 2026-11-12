@@ -86,7 +86,7 @@ import {
   type ViewPlan,
 } from "@commonfabric/memory/v2";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
-import { untilAnswered } from "./until-answered.ts";
+import { ResendingSession } from "@commonfabric/memory/v2/resending-session";
 import type { ClientBuild } from "@commonfabric/memory/v2/client-info";
 import { validatePresencePublication } from "@commonfabric/memory/v2/presence";
 import type { AppliedCommit } from "@commonfabric/memory/v2/engine";
@@ -2207,7 +2207,12 @@ export class StorageManager implements IStorageManager {
     return { accepted: true };
   }
 
-  /** Opens through admission unless this manager already requires an update. */
+  /**
+   * Opens through admission unless this manager already requires an update.
+   * This is the one place a session the storage layer uses is made, so it is
+   * where each is made a `ResendingSession`: every request made of one waits
+   * out a lost connection there, and no caller does.
+   */
   async #createSession(
     ...args: Parameters<SessionFactory["create"]>
   ): Promise<OpenedSpaceSession> {
@@ -2219,7 +2224,10 @@ export class StorageManager implements IStorageManager {
     try {
       const opened = await this.#sessionFactory.create(...args);
       opened.session.subscribeTermination(noteFailure);
-      return opened;
+      return {
+        client: opened.client,
+        session: new ResendingSession(opened.session),
+      };
     } catch (error) {
       if (error instanceof Error) noteFailure(error);
       throw error;
@@ -2368,7 +2376,7 @@ export class StorageManager implements IStorageManager {
           value: { value: { ...acl(space) } },
         }],
       };
-      const commit = untilAnswered(() => session.transact(genesis));
+      const commit = session.transact(genesis);
       this.trackPendingCommit(commit);
       await commit;
       if (afterGenesis !== undefined) delegation = await afterGenesis();
@@ -2988,12 +2996,10 @@ export class StorageManager implements IStorageManager {
                 value: { value: { [space]: "OWNER" } },
               }],
             };
-            const commit = untilAnswered(() =>
-              bootstrap.session.transact(genesis, () => {
-                assertCurrentRoute();
-                routeState.writeIssuedGeneration = routeGeneration;
-              })
-            );
+            const commit = bootstrap.session.transact(genesis, () => {
+              assertCurrentRoute();
+              routeState.writeIssuedGeneration = routeGeneration;
+            });
             this.trackPendingCommit(commit);
             await commit;
           } catch (error) {
@@ -4613,7 +4619,7 @@ type ProviderRouteState = {
 
 type OpenedSpaceSession = {
   client: SessionConnection;
-  session: MemoryV2Client.SpaceSession;
+  session: ResendingSession;
 };
 
 type ProviderOptions = {
@@ -5638,11 +5644,11 @@ export class SpaceReplica
 
   readonly #createSession: () => Promise<{
     client: SessionConnection;
-    session: MemoryV2Client.SpaceSession;
+    session: ResendingSession;
   }>;
   #sessionHandle?: Promise<{
     client: SessionConnection;
-    session: MemoryV2Client.SpaceSession;
+    session: ResendingSession;
   }>;
 
   /** The client of the last RESOLVED session handle — for synchronous
@@ -5653,7 +5659,7 @@ export class SpaceReplica
    *  `authorizationError()` can observe a denial that terminated the session
    *  during reconnect, which closes its watch view without a fresh watch result
    *  to record. */
-  #sessionSession?: MemoryV2Client.SpaceSession;
+  #sessionSession?: ResendingSession;
 
   /**
    * The loads the memory server refused this replica for want of access, and
@@ -6109,7 +6115,7 @@ export class SpaceReplica
     | undefined;
 
   #viewPlans: readonly ViewPlan[] = [];
-  #viewCapabilitySession: MemoryV2Client.SpaceSession | undefined;
+  #viewCapabilitySession: ResendingSession | undefined;
   #cancelViewCapabilityLost: Cancel | undefined;
   #viewOwnerVersion = 0;
   #viewOwnerRetired: (() => void) | undefined;
@@ -7094,7 +7100,7 @@ export class SpaceReplica
       throw new Error("memory server does not support apply-op");
     }
     const localSeq = this.#nextLocalSeq++;
-    const request = this.#transactUntilAnswered(session, {
+    const request = session.transact({
       localSeq,
       reads: { confirmed: [], pending: [] },
       operations: [operation],
@@ -7125,7 +7131,7 @@ export class SpaceReplica
       throw new Error("memory server does not support release-op-field");
     }
     const localSeq = this.#nextLocalSeq++;
-    const request = this.#transactUntilAnswered(session, {
+    const request = session.transact({
       localSeq,
       reads: { confirmed: [], pending: [] },
       operations: [operation],
@@ -7153,13 +7159,11 @@ export class SpaceReplica
     try {
       await this.#operationWatchRemovals.get(watchId);
       const { session } = await this.#activeSessionHandle();
-      const { view, precedingSyncs, sync } = await untilAnswered(() =>
-        session.watchAddSync([{
-          id: watchId,
-          kind: "operation",
-          query,
-        }])
-      );
+      const { view, precedingSyncs, sync } = await session.watchAddSync([{
+        id: watchId,
+        kind: "operation",
+        query,
+      }]);
       if (this.#closed) {
         view.close();
         throw new Error("memory replica closed");
@@ -7206,11 +7210,9 @@ export class SpaceReplica
   async #removeOperationWatch(watchId: string): Promise<void> {
     try {
       const { session } = await this.#activeSessionHandle();
-      const { view, precedingSyncs, sync } = await untilAnswered(() =>
-        session.watchRemoveSync([
-          watchId,
-        ])
-      );
+      const { view, precedingSyncs, sync } = await session.watchRemoveSync([
+        watchId,
+      ]);
       if (this.#closed) {
         view.close();
         return;
@@ -7822,7 +7824,10 @@ export class SpaceReplica
           // one has issued, canReplaceProvisionalReplica() must answer
           // false — a late host hint may no longer swap the replica out
           // underneath the queue and strand its traffic on a closed
-          // route.
+          // route. An append a connection loses is sent again by the
+          // session, unchanged and under the same `localSeq`, once the
+          // session can take it, so the queue's own retry never polls a
+          // host that is down.
           return await session.transact(
             commit,
             () => this.#markRouteWriteIssued(),
@@ -7923,7 +7928,7 @@ export class SpaceReplica
       let resolved:
         | {
           client: SessionConnection;
-          session: MemoryV2Client.SpaceSession;
+          session: ResendingSession;
         }
         | undefined;
       try {
@@ -8425,7 +8430,7 @@ export class SpaceReplica
       else anyReleasable = true;
     }
     if (!anyReleasable) return { released: [], deferred };
-    let session: MemoryV2Client.SpaceSession;
+    let session: ResendingSession;
     try {
       const { client } = await this.#activeSessionHandle();
       if (client.serverFlags?.watchRemoveV1 !== true) {
@@ -8489,10 +8494,8 @@ export class SpaceReplica
     const roots = released.map((root) => root.address);
     this.#onWatchesReleased?.(roots);
     try {
-      const { view, precedingSyncs, sync } = await untilAnswered(() =>
-        session.watchRemoveSync(
-          watchIds,
-        )
+      const { view, precedingSyncs, sync } = await session.watchRemoveSync(
+        watchIds,
       );
       if (this.#closed) {
         view.close();
@@ -9248,7 +9251,7 @@ export class SpaceReplica
       const watchAddStart = performance.now();
       let mutation: MemoryV2Client.WatchMutationResult;
       try {
-        mutation = await untilAnswered(() => session.watchAddSync(watches));
+        mutation = await session.watchAddSync(watches);
       } catch (error) {
         // An ACL verdict can terminate the session while this request is in
         // flight, and the request may be the only load the space sees, so its
@@ -9260,7 +9263,7 @@ export class SpaceReplica
         session.setConcurrentWatchRefresh?.(
           this.#settings.experimentalConcurrentWatchRefresh === true,
         );
-        mutation = await untilAnswered(() => session.watchAddSync(watches));
+        mutation = await session.watchAddSync(watches);
       } finally {
         logger.time(watchAddStart, "watchRefresh", "watchAddSync");
       }
@@ -9303,7 +9306,7 @@ export class SpaceReplica
    * Helper for `#refreshWatchSet()`, which consumes any session remount owed
    * and returns whether `session` has been replaced as this replica's session.
    */
-  #remountedSince(session: MemoryV2Client.SpaceSession): boolean {
+  #remountedSince(session: ResendingSession): boolean {
     this.#consumeOwedSessionRemount();
     return this.#sessionSession !== session;
   }
@@ -10103,8 +10106,7 @@ export class SpaceReplica
         if (inFlight === undefined) {
           // No pending reads → no dependency that can be dropped from under
           // this commit; keep the direct await.
-          const applied = await this.#transactUntilAnswered(
-            session,
+          const applied = await session.transact(
             coarsenCommitForWire(wireCommit),
             () => this.#markRouteWriteIssued(routeSources),
           );
@@ -10137,8 +10139,7 @@ export class SpaceReplica
         // Race the server verdict against a locally-fabricated rejection (a
         // dependency dropped mid-flight, or a replica reset). A server
         // rejection wins the race by REJECTING it, landing in the catch below.
-        const verdict = this.#transactUntilAnswered(
-          session,
+        const verdict = session.transact(
           coarsenCommitForWire(wireCommit),
           () => this.#markRouteWriteIssued(routeSources),
         );
@@ -10263,27 +10264,6 @@ export class SpaceReplica
     } finally {
       this.#settleInFlightCommit(localSeq);
     }
-  }
-
-  /**
-   * Helper for `#pushCommit()`, which sends `commit` on `session` until the
-   * server answers it. The memory client keeps nothing for a later
-   * connection: a commit its connection lost, before it was handed over or
-   * after, fails, and this sends the same commit again, under the same
-   * `localSeq` and with the same bytes, once its `readyToRetry()` says the
-   * session can take it. The server answers one that landed from its record
-   * and judges one that did not afresh, so a commit is applied once, and the
-   * optimistic write stays up until the answer. A commit whose own payload
-   * failed the write `MAX_OWN_WRITE_FAILURES` times fails with that error; one
-   * whose session closed, or was replaced by one the server cannot answer it
-   * on, fails as `readyToRetry()` does.
-   */
-  async #transactUntilAnswered(
-    session: MemoryV2Client.SpaceSession,
-    commit: ClientCommit,
-    beforeIssue: () => void,
-  ): Promise<AppliedCommit> {
-    return await untilAnswered(() => session.transact(commit, beforeIssue));
   }
 
   #markRouteWriteIssued(
@@ -11446,11 +11426,9 @@ export class SpaceReplica
           }
           // Read when the request goes out, since an earlier mutation can hold
           // it back while a frame changes what this replica holds.
-          const { view, precedingSyncs, sync } = await untilAnswered(() =>
-            session.watchSetSync(
-              undefined,
-              () => this.holdings(),
-            )
+          const { view, precedingSyncs, sync } = await session.watchSetSync(
+            undefined,
+            () => this.holdings(),
           );
           if (this.#closed) {
             view.close();
@@ -13169,7 +13147,7 @@ export class SpaceReplica
 
   #memoizedSessionHandle(): Promise<{
     client: SessionConnection;
-    session: MemoryV2Client.SpaceSession;
+    session: ResendingSession;
   }> {
     if (this.#closed) {
       return Promise.reject(new Error("memory replica closed"));
