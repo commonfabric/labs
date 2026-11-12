@@ -79,9 +79,8 @@ next.
 
 ## Decided
 
-Each ruling is written into the documents. One marked *pending* is in
-`plan-and-label-templates.md` and in the specification and not yet in the
-other documents; their passes write it in. This list exists so that none is
+Each ruling is written into the documents. One marked *pending* is not yet
+in every document it touches; the passes write it in. This list exists so that none is
 relitigated.
 
 **Architecture**
@@ -109,6 +108,24 @@ relitigated.
   stale cones it reads are evaluated, the ones an earlier event of the batch
   made stale included. Every other derivation the batch made stale settles
   once behind the batch, not once per event. *(Pending.)*
+- A change of demand is a cause of its own, the fourth kind. It has a
+  transaction of its own, which runs as the demanding principal.
+  *(Pending.)*
+- A conflict on a derived write withdraws that write alone, and the rest
+  of the cause's transaction commits. *(Pending.)*
+- A handling is identified by the receipt, which leaves the acting
+  principal out. *(Pending.)*
+- A cone is evaluated at most ten times in one transaction. The number is
+  a placeholder, fixed with the plan version. A cone that failed at the
+  bound is not evaluated again until one of its inputs changes.
+  *(Pending.)*
+- The identifier of a space that an `inSpace` request creates is obtained
+  and not derived from the request. The allocation is recorded in a step
+  that commits before the step in the foreign space, so that a retry
+  names the same space. *(Pending.)*
+- A client cannot read the element-key salt. It cannot name value-keyed
+  per-element state, or a binding with copied captures, before the server
+  stores a link. *(Pending.)*
 
 **Language**
 
@@ -224,16 +241,6 @@ answer goes to the specification with the document.
 
 **Transactions, identity, and spaces.**
 
-12. **A change of demand as a fourth kind of cause** (SS question 2,
-    finding 17), with its own transaction, run as the demanding principal.
-    ES assumes it is a cause of the second kind.
-13. **A conflict on a derived write** (SS question 4, finding 5).
-    *Assumed by SS:* the write is withdrawn alone. ES assumes the cause
-    fails whole, and one prepared digest covers the cause.
-14. **The identifier of a space an `inSpace` request creates** (K14,
-    finding 16). The plan document derives it from the request; the
-    implemented space identities are not derived from anything. The ruling
-    on `inSpace` names the instantiation's identifiers and not the space's.
 15. **Commits across spaces** (SS question 6). *Assumed:* one ordered,
     non-atomic sequence: access changes, then foreign batches, then home.
 16. **Demand across spaces** (SS question 5). *Assumed:* a serving
@@ -242,25 +249,20 @@ answer goes to the specification with the document.
     (A9). Such a callee is compiled into the surrounding instance and
     cannot be in another space. It either always makes a child instance or
     is refused.
-18. **What identifies a handling** (K15, finding 15): the event key, which
-    includes the acting principal, or the receipt, which does not. ES
-    follows the receipt and SS the key.
+<!-- The list restarts so that the numbers below stay as cited. -->
+
 19. **`.for(tag)` in a handler** (K13). The plan document and the inventory
     have it name the same thing across events; today every identifier
     minted in a handler derives from the event.
-20. **Bounds** (SS question 9, findings 11 and 12). *Assumed:* ten
-    evaluations of a cone per transaction, fixed with the plan version. Open
-    beside the number: whether the next cause evaluates a failed cone again,
-    and whether an effect whose completion changes its own request, or a
-    cycle across two spaces, is bounded at all.
+20. **Bounds beyond one transaction** (SS question 9, findings 11 and
+    12). The bound on a cone within a transaction is ruled. Open: whether
+    an effect whose completion changes its own request, or a cycle across
+    two spaces, is bounded at all.
 21. **Event order per space** (SS question 10). *Assumed:* the proposal of
     Scheduler v2 §7.5.
 
 **Clients.**
 
-22. **The element-key salt** (finding 14). *Assumed by ES:* a client cannot
-    read it, so it cannot name value-keyed per-element state or a binding
-    with copied captures before the server stores a link.
 23. **A predicted refusal** (SS question 7). *Assumed:* no speculative
     result, a mark on the control, and the event is still sent.
 
