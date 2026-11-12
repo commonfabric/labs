@@ -4770,8 +4770,11 @@ export class Runner {
         new Set(droppedArgumentFields),
       );
     } else {
+      // Read under no schema: what is wanted is the stored bytes, and a load
+      // under the link's schema, the outgoing pattern's, would deliver all it
+      // reaches, in other spaces too, which nothing here reads.
       const previousArgumentCell = this.#runtime.getCellFromLink(
-        argumentLink,
+        { ...argumentLink, schema: undefined },
         undefined,
         tx,
       );
@@ -10867,30 +10870,40 @@ export class Runner {
   }
 
   /**
-   * Names, root-only, each document the stored argument at `argumentCell`
-   * links to directly, and the result document of the piece that owns each,
-   * reached through the `result` backlink the linked document carries once
-   * it is local. Setup's proof that a supplied link stays compatible reads
-   * both, a setup re-staging the argument under another pattern's schema
-   * reads each linked document to judge the slot holding the link, and the
-   * gate that decides whether a run over a stored piece must name its family
-   * first probes them. `argumentCell` is local already. The argument and each
-   * linked document are read, and named, as `identity`, so a scoped argument
-   * is read in the instance that identity's setup reads.
+   * Names, root-only, each document in the space and scope of the stored
+   * argument at `argumentCell` that the argument links to directly, and the
+   * result document of the piece that owns each, reached through the `result`
+   * backlink the linked document carries once it is local. Setup's proof that
+   * a supplied link stays compatible reads both, a setup re-staging the
+   * argument under another pattern's schema reads each linked document to
+   * judge the slot holding the link, and the gate that decides whether a run
+   * over a stored piece must name its family first probes them. A link into
+   * another space or scope is left unnamed: setup judges it as a link without
+   * reading what it reaches, which is another piece's or another audience's
+   * data, and the reads that follow it load it. `argumentCell` is local
+   * already. The argument and each linked document are read, and named, as
+   * `identity`, so a scoped argument is read in the instance that identity's
+   * setup reads.
    */
   async #syncStoredArgumentLinkTargets(
     argumentCell: Cell<unknown>,
     identity?: ScopeKeyIdentity,
   ): Promise<void> {
+    const home = argumentCell.getAsNormalizedFullLink();
     const targets: Cell<unknown>[] = [];
     const seen = new Set<unknown>();
     const collect = (value: unknown): void => {
       if (seen.has(value)) return;
       const link = parseLink(value, argumentCell);
       if (link !== undefined) {
-        targets.push(
-          this.#runtime.getCellFromLink({ ...link, schema: undefined }),
-        );
+        if (
+          link.space === home.space &&
+          (link.scope ?? "space") === (home.scope ?? "space")
+        ) {
+          targets.push(
+            this.#runtime.getCellFromLink({ ...link, schema: undefined }),
+          );
+        }
         return;
       }
       // TODO(danfuzz): the walk stops at a `FabricSpecialObject`, so a link

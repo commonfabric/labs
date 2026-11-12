@@ -76,8 +76,8 @@ plans' reads reach in other spaces (`#syncCrossSpaceReads`), the list
 coordinators' children and the cells those children own
 (`#syncResumeListChildren`), and what the nested instances' nodes read
 (`#syncResumeInstanceNodes`). Last, it names root-only the documents the
-stored argument links to directly and the result document owning each
-(`#syncStoredArgumentLinkTargets`).
+stored argument links to directly in its own space and scope, and the result
+document owning each (`#syncStoredArgumentLinkTargets`).
 
 `#syncResumeInstanceNodes` works level by level. Each round plans every
 nested instance whose `argument` meta link has become readable and syncs
@@ -212,7 +212,11 @@ are named root-only (`#syncStoredArgumentLinkTargets`), because setup's
 supplied-link proof reads them and that read is no node's. A nested instance
 that its parent's start sets up again under another pattern has the same
 walk over its own stored argument, because that setup reads each stored slot
-through the link it holds, and that read is no node's either. The root's walk
+through the link it holds, and that read is no node's either. Neither walk
+names a target in another space or scope than the argument document's own:
+setup judges a link there as a link without reading what it reaches, so
+naming it would load a document no read of the setup's asks for, such as
+each room a Home's chat manager links. The root's walk
 runs last in the pre-sync, after every plan sync and coordinator sync has
 been issued, so
 a document a plan reads is asked for under that plan's schema before the

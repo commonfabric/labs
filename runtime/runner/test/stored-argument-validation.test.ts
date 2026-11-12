@@ -449,6 +449,58 @@ describe("stored-argument-validation", () => {
     }
   });
 
+  it("judges a link under a union's branch without reading what it reaches in another space", async () => {
+    // Only one branch of the union declares `entry`, so the schema at that
+    // path, taken without choosing a branch, admits anything. The link held
+    // below it is still one into another space.
+
+    const elsewhere = runtime.getCell(otherSpace, "room", undefined);
+    const write = runtime.edit();
+    elsewhere.withTx(write).set({ count: 1 });
+    expect((await write.commit().settled).error).toBeUndefined();
+    const tx = runtime.edit();
+    try {
+      const argument = runtime.getCell(space, "argument", undefined, tx);
+      const schema: JSONSchema = {
+        type: "object",
+        properties: {
+          outcome: {
+            anyOf: [
+              {
+                type: "object",
+                properties: { status: { enum: ["pending"] } },
+                required: ["status"],
+              },
+              {
+                type: "object",
+                properties: {
+                  status: { enum: ["done"] },
+                  entry: {
+                    type: "object",
+                    properties: { room: { type: "unknown" } },
+                  },
+                },
+                required: ["status"],
+              },
+            ],
+          },
+        },
+      };
+
+      argument.set({ outcome: { status: "done", entry: { room: elsewhere } } });
+      using reads = spy(tx, "read");
+      expect(storedArgumentValidationIssue(argument, schema, undefined, tx))
+        .toBeUndefined();
+      expect(
+        reads.calls.filter((call) =>
+          call.args[0].id === elsewhere.getAsNormalizedFullLink().id
+        ),
+      ).toStrictEqual([]);
+    } finally {
+      tx.abort();
+    }
+  });
+
   it("refuses literal absences beside an unreadable linked value", () => {
     const tx = runtime.edit();
     try {
