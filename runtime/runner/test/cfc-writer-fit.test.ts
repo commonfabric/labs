@@ -5,6 +5,7 @@ import { Identity } from "@commonfabric/identity";
 import { cfcAtom } from "@commonfabric/api/cfc";
 import { streamEntriesDocId } from "@commonfabric/memory/v2";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
+import { getLogger } from "@commonfabric/logger";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
   seedStoredEnvelope,
@@ -143,26 +144,33 @@ const declaring = (
 } as JSONSchema);
 
 // Seed a source doc whose `secret` field carries `confidentiality`, so a
-// transaction reading it takes those clauses into the per-tx flow join.
+// transaction reading it takes those clauses into the per-tx flow join. The
+// doc is in `space`, at `scope`, by default this file's space, unbound.
 const seedSecretSource = async (
   runtime: Runtime,
   name: string,
   confidentiality: readonly FabricValue[] = ["secret"],
+  { space = signer.did(), scope = "space" }: {
+    space?: `did:${string}:${string}`;
+    scope?: "space" | "user";
+  } = {},
 ) => {
   const seed = runtime.edit();
   const sourceCell = runtime.getCell(
-    signer.did(),
+    space,
     name,
     {
       type: "object",
       properties: { secret: { type: "string" } },
     },
+    undefined,
+    scope,
   );
   const sourceId = parseLink(sourceCell.getAsLink()).id!;
-  writeSeedEnvelopeDoc(seed, signer.did());
+  writeSeedEnvelopeDoc(seed, space);
   seedStoredEnvelope(seed, {
-    space: signer.did(),
-    scope: "space",
+    space,
+    scope,
     id: sourceId,
     path: [],
   }, {
@@ -1464,6 +1472,461 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
           await runtime.dispose();
           await storageManager.close();
         }
+      });
+    });
+  });
+
+  describe("a served run's cross-holder clauses (§8.12.5.1)", () => {
+    // A served run's write admits a clause read from a store whose holders
+    // don't include every holder of the target only by the target's
+    // residency: no declaration, upgrade or derived admission. Each case
+    // reads one or more seeded sources, writes `{ copied }` into a target of
+    // this file's space, and stops at prepare. A served run is stamped as
+    // the serving loop stamps an event handler, unless the case says
+    // otherwise, acting for the signer, whose `user` instance the seeds land
+    // in.
+
+    // The owner of the private data a stranger's served handler copies.
+    const OWNER = OTHER_PRINCIPAL;
+
+    /** The stores a case reads, by name, with the confidentiality each holds. */
+    type Source = {
+      name: string;
+      confidentiality: readonly FabricValue[];
+      space?: `did:${string}:${string}`;
+      scope?: "space" | "user";
+    };
+
+    /**
+     * Seeds `sources`, then prepares one run that reads them and writes into
+     * `targetName`, declared by `targetSchema`, at `targetScope`, and, given
+     * `owned`, a store the runtime owns: `"enrolled"` keeps a misfit in its
+     * derived stamps, `"marked"` re-mints its declaration from the misfit.
+     * `computed` writes the `computed:` document over the target's hash
+     * instead. `served` stamps the run as the serving loop stamps a run of
+     * that kind, acting for the signer; `"storage-only"` sets that identity
+     * on its storage transaction alone, and stamps the run with none.
+     * Returns the writer-fit reasons the preparation recorded, the clauses
+     * the target's staged declaration holds, and the target's id.
+     */
+    const preparedCopy = async (
+      runtime: Runtime,
+      {
+        sources,
+        targetName,
+        targetSchema,
+        targetScope = "space",
+        owned,
+        computed = false,
+        served,
+        kind = "event-handler",
+        identity = "stamped",
+      }: {
+        sources: readonly Source[];
+        targetName: string;
+        targetSchema?: JSONSchema;
+        targetScope?: "space" | "user";
+        owned?: "enrolled" | "marked";
+        computed?: boolean;
+        served: boolean;
+        kind?: "event-handler" | "derivation" | "bookkeeping";
+        identity?: "stamped" | "storage-only";
+      },
+    ) => {
+      for (const source of sources) {
+        await seedSecretSource(runtime, source.name, source.confidentiality, {
+          space: source.space,
+          scope: source.scope,
+        });
+      }
+      const tx = runtime.edit();
+      tx.setCfcEnforcementMode("enforce-strict");
+      if (served) {
+        const scopeKeyIdentity = {
+          principal: signer.did(),
+          sessionId: "served-session",
+        };
+        if (identity === "storage-only") {
+          tx.tx.scopeKeyIdentity = scopeKeyIdentity;
+        }
+        stampWaveRunContext(tx, {
+          actionId: `test:${targetName}`,
+          kind,
+          ...(identity === "stamped" ? { scopeKeyIdentity } : {}),
+        });
+      }
+      const read = sources.map((source) =>
+        (runtime.getCell(
+          source.space ?? signer.did(),
+          source.name,
+          undefined,
+          tx,
+          source.scope ?? "space",
+        ).getRaw() as { secret?: string } | undefined)?.secret
+      );
+      expect(read).toEqual(sources.map(() => "s3cr3t"));
+      const target = runtime.getCell<{ copied?: string }>(
+        signer.did(),
+        targetName,
+        targetSchema,
+        tx,
+        targetScope,
+      );
+      if (owned !== undefined) {
+        const result = runtime.getCell(
+          signer.did(),
+          `${targetName}-result`,
+          undefined,
+          tx,
+        );
+        recordRuntimeOwnedStore(
+          runtime,
+          tx,
+          result,
+          target,
+          true,
+          owned === "enrolled",
+        );
+      }
+      const plainId = target.getAsNormalizedFullLink().id;
+      const targetId = computed
+        ? `computed:${plainId.slice("of:".length)}`
+        : plainId;
+      if (computed) {
+        tx.writeOrThrow({
+          space: signer.did(),
+          scope: targetScope,
+          id: targetId as `${string}:${string}`,
+          path: ["value", "copied"],
+        }, read.join("+"));
+      } else {
+        target.set({ copied: read.join("+") });
+      }
+      tx.prepareCfc();
+      const staged = tx.readOrThrow({
+        space: signer.did(),
+        scope: targetScope,
+        id: targetId as `${string}:${string}`,
+        path: [],
+      }) as { cfc?: { labelMap?: { entries: StoredEntry[] } } } | undefined;
+      const declared = (staged?.cfc?.labelMap?.entries ?? [])
+        .filter((entry) => entry.origin === "declared")
+        .flatMap((entry) => entry.label.confidentiality ?? []);
+      const reasons = writerFitDiagnostics(tx);
+      tx.abort();
+      return { reasons, declared, targetId };
+    };
+
+    /** The count of cross-holder misfits the CFC logger has recorded. */
+    const crossHolderMisfits = (): number => {
+      const counts = getLogger("cfc").countsByKey["writer-fit-cross-holder"];
+      return counts === undefined
+        ? 0
+        : counts.debug + counts.info + counts.warn + counts.error;
+    };
+
+    /** The owner's private offers, in a space of the owner's own. */
+    const ownersOffers = (name: string): Source => ({
+      name,
+      confidentiality: [userPrincipal(OWNER)],
+      space: OTHER_SPACE,
+    });
+
+    /**
+     * Runs `body` against a serving runtime, or else a client runtime, and
+     * disposes of it.
+     */
+    const withRuntime = async (
+      serving: boolean,
+      body: (runtime: Runtime) => Promise<void>,
+    ) => {
+      const storageManager = StorageManager.emulate({ as: signer });
+      const runtime = serving
+        ? new Runtime({
+          apiUrl: new URL("https://example.com"),
+          storageManager,
+          servingPosture: true,
+          experimental: { serverExecution: true },
+          cfcEnforcementMode: "enforce-strict",
+          cfcFlowLabels: "persist",
+        })
+        : strictRuntime(storageManager);
+      try {
+        await body(runtime);
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    };
+
+    /**
+     * Expects `reasons` to be exactly one cross-holder misfit for `targetId`
+     * naming the owner's clause.
+     */
+    const expectCrossHolderMisfit = (
+      reasons: readonly string[],
+      targetId: string,
+    ) => {
+      expect(reasons).toHaveLength(1);
+      expect(reasons[0]).toContain("writer-fit confidentiality misfit");
+      expect(reasons[0]).toContain("§8.12.5.1");
+      expect(reasons[0]).toContain(`for ${targetId} at /`);
+      expect(reasons[0]).toContain(OWNER);
+    };
+
+    describe("served", () => {
+      it("refuses a copy of another space's private data into a runtime-owned store that keeps the misfit derived", async () => {
+        await withRuntime(true, async (runtime) => {
+          const before = crossHolderMisfits();
+          const { reasons, declared, targetId } = await preparedCopy(
+            runtime,
+            {
+              sources: [ownersOffers("wf-served-x-enrolled-source")],
+              targetName: "wf-served-x-enrolled",
+              owned: "enrolled",
+              served: true,
+            },
+          );
+          expectCrossHolderMisfit(reasons, targetId);
+          expect(declared).toEqual([]);
+          expect(crossHolderMisfits()).toBe(before + 1);
+        });
+      });
+
+      it("refuses a copy of another space's private data into a runtime-owned store whose declaration the misfit would re-mint", async () => {
+        await withRuntime(true, async (runtime) => {
+          const { reasons, declared, targetId } = await preparedCopy(
+            runtime,
+            {
+              sources: [ownersOffers("wf-served-x-marked-source")],
+              targetName: "wf-served-x-marked",
+              owned: "marked",
+              served: true,
+            },
+          );
+          expectCrossHolderMisfit(reasons, targetId);
+          expect(declared).toEqual([]);
+        });
+      });
+
+      it("refuses a copy of another space's private data into a store whose author declared the owner's clause", async () => {
+        await withRuntime(true, async (runtime) => {
+          const { reasons, targetId } = await preparedCopy(runtime, {
+            sources: [ownersOffers("wf-served-x-authored-source")],
+            targetName: "wf-served-x-authored",
+            targetSchema: declaring(userPrincipal(OWNER)),
+            served: true,
+          });
+          expectCrossHolderMisfit(reasons, targetId);
+        });
+      });
+
+      it("refuses a copy from a store bound to one principal into a store of the same space bound to no one that declares that principal", async () => {
+        await withRuntime(true, async (runtime) => {
+          const { reasons, targetId } = await preparedCopy(runtime, {
+            sources: [{
+              name: "wf-served-x-bound-source",
+              confidentiality: [userPrincipal(signer.did())],
+              scope: "user",
+            }],
+            targetName: "wf-served-x-bound",
+            targetSchema: declaring(userPrincipal(signer.did())),
+            served: true,
+          });
+          expect(reasons).toHaveLength(1);
+          expect(reasons[0]).toContain("§8.12.5.1");
+          expect(reasons[0]).toContain(`for ${targetId} at /`);
+        });
+      });
+
+      it("admits a write of a store's own space's private data that its declaration admits, as an inbox's `receive` appends to its own offers", async () => {
+        await withRuntime(true, async (runtime) => {
+          const before = crossHolderMisfits();
+          const { reasons } = await preparedCopy(runtime, {
+            sources: [{
+              name: "wf-served-same-offers",
+              confidentiality: [userPrincipal(OWNER)],
+            }],
+            targetName: "wf-served-same-receive",
+            targetSchema: declaring(userPrincipal(OWNER)),
+            served: true,
+          });
+          expect(reasons).toEqual([]);
+          expect(crossHolderMisfits()).toBe(before);
+        });
+      });
+
+      it("upgrades a runtime-owned store by a same-holder clause alone, beside a cross-holder clause its residency admits", async () => {
+        await withRuntime(true, async (runtime) => {
+          const { reasons, declared, targetId } = await preparedCopy(
+            runtime,
+            {
+              sources: [
+                { name: "wf-served-upgrade-own", confidentiality: ["secret"] },
+                {
+                  name: "wf-served-upgrade-foreign",
+                  confidentiality: [personalSpacePrincipal(signer.did())],
+                  space: OTHER_SPACE,
+                },
+              ],
+              targetName: "wf-served-upgrade",
+              owned: "marked",
+              served: true,
+            },
+          );
+          expect(reasons).toHaveLength(1);
+          expect(reasons[0]).toContain(
+            "writer-fit(runtime-owned-store-declared)",
+          );
+          expect(reasons[0]).toContain(`${targetId} at /`);
+          expect(declared).toEqual(["secret"]);
+        });
+      });
+
+      it("refuses a served derivation's copy of another space's private data into a runtime-owned store", async () => {
+        await withRuntime(true, async (runtime) => {
+          const { reasons, declared, targetId } = await preparedCopy(
+            runtime,
+            {
+              sources: [ownersOffers("wf-served-x-derived-source")],
+              targetName: "wf-served-x-derived",
+              owned: "enrolled",
+              served: true,
+              kind: "derivation",
+            },
+          );
+          expectCrossHolderMisfit(reasons, targetId);
+          expect(declared).toEqual([]);
+        });
+      });
+
+      it("keeps a served bookkeeping run's copy into a runtime-owned store in its derived stamps", async () => {
+        await withRuntime(true, async (runtime) => {
+          const { reasons } = await preparedCopy(runtime, {
+            sources: [ownersOffers("wf-served-x-bookkeeping-source")],
+            targetName: "wf-served-x-bookkeeping",
+            owned: "enrolled",
+            served: true,
+            kind: "bookkeeping",
+          });
+          expect(reasons).toHaveLength(1);
+          expect(reasons[0]).toContain(
+            "writer-fit(runtime-owned-store-derived)",
+          );
+        });
+      });
+
+      it("refuses a copy from a store bound to one principal into a computed document of the same space, which no writer-fit measurement otherwise reaches", async () => {
+        await withRuntime(true, async (runtime) => {
+          const { reasons, targetId } = await preparedCopy(runtime, {
+            sources: [{
+              name: "wf-served-x-computed-source",
+              confidentiality: [userPrincipal(signer.did())],
+              scope: "user",
+            }],
+            targetName: "wf-served-x-computed",
+            computed: true,
+            served: true,
+          });
+          expect(targetId.startsWith("computed:")).toBe(true);
+          expect(reasons).toHaveLength(1);
+          expect(reasons[0]).toContain("§8.12.5.1");
+          expect(reasons[0]).toContain(`for ${targetId} at /`);
+        });
+      });
+
+      it("admits a copy between two user documents of one principal that the target's declaration admits", async () => {
+        await withRuntime(true, async (runtime) => {
+          const { reasons } = await preparedCopy(runtime, {
+            sources: [{
+              name: "wf-served-bound-pair-source",
+              confidentiality: ["secret"],
+              scope: "user",
+            }],
+            targetName: "wf-served-bound-pair",
+            targetSchema: declaring("secret"),
+            targetScope: "user",
+            served: true,
+          });
+          expect(reasons).toEqual([]);
+        });
+      });
+
+      it("refuses the same copy when the run's storage transaction resolves its instances under a principal its wave context does not name", async () => {
+        // The read resolves the signer's instance, and the run's stamp names
+        // no instance for its writes, so the two documents are not known to
+        // be held by one principal.
+
+        await withRuntime(true, async (runtime) => {
+          const { reasons, targetId } = await preparedCopy(runtime, {
+            sources: [{
+              name: "wf-served-bound-split-source",
+              confidentiality: ["secret"],
+              scope: "user",
+            }],
+            targetName: "wf-served-bound-split",
+            targetSchema: declaring("secret"),
+            targetScope: "user",
+            served: true,
+            identity: "storage-only",
+          });
+          expect(reasons).toHaveLength(1);
+          expect(reasons[0]).toContain("§8.12.5.1");
+          expect(reasons[0]).toContain(`for ${targetId} at /`);
+          expect(reasons[0]).toContain('"secret"');
+        });
+      });
+    });
+
+    describe("in the acting principal's own runtime", () => {
+      it("keeps a copy of another space's private data into a runtime-owned store in its derived stamps", async () => {
+        await withRuntime(false, async (runtime) => {
+          const { reasons, declared } = await preparedCopy(runtime, {
+            sources: [ownersOffers("wf-own-x-enrolled-source")],
+            targetName: "wf-own-x-enrolled",
+            owned: "enrolled",
+            served: false,
+          });
+          expect(reasons).toHaveLength(1);
+          expect(reasons[0]).toContain(
+            "writer-fit(runtime-owned-store-derived)",
+          );
+          expect(declared).toEqual([]);
+        });
+      });
+
+      it("re-mints a runtime-owned store's declaration from a copy of another space's private data", async () => {
+        await withRuntime(false, async (runtime) => {
+          const { reasons, declared } = await preparedCopy(runtime, {
+            sources: [ownersOffers("wf-own-x-marked-source")],
+            targetName: "wf-own-x-marked",
+            owned: "marked",
+            served: false,
+          });
+          expect(reasons).toHaveLength(1);
+          expect(reasons[0]).toContain(
+            "writer-fit(runtime-owned-store-declared)",
+          );
+          // The owner's subject crosses the space boundary as its
+          // `{digestOf}` commitment (§4.6.4.1).
+          expect(declared).toHaveLength(1);
+          expect(declared[0]).toMatchObject({
+            type: "https://commonfabric.org/cfc/atom/User",
+            subject: { digestOf: expect.any(String) },
+          });
+        });
+      });
+
+      it("admits a copy of another space's private data into a store whose author declared the owner's clause", async () => {
+        await withRuntime(false, async (runtime) => {
+          const { reasons } = await preparedCopy(runtime, {
+            sources: [ownersOffers("wf-own-x-authored-source")],
+            targetName: "wf-own-x-authored",
+            targetSchema: declaring(userPrincipal(OWNER)),
+            served: false,
+          });
+          expect(reasons).toEqual([]);
+        });
       });
     });
   });
