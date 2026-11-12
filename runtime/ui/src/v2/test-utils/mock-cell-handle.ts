@@ -305,8 +305,8 @@ export function writesSent<T>(
  * Leaves every read (`cell:get`, `cell:pull`) the network `handle` was made
  * on is asked for unanswered, as a worker that has not answered yet does,
  * until the function it returns answers them, as the worker would, or fails
- * them with an error, and lets later reads through. A read the mock answers otherwise finds the cell
- * holding nothing.
+ * them with an error, and lets later reads through. A read the mock answers
+ * otherwise finds the cell holding nothing.
  */
 export function holdReads<T>(
   handle: CellHandle<T>,
@@ -362,9 +362,9 @@ export function failResolutions<T>(
 
 /**
  * Counts what is asked of `handle` from now on: each `subscribe()` adds one
- * to `live`, and each cancel it returned takes one away, so `live` is the
- * number of subscriptions held; each `pull()` adds one to `reads`. It works
- * on any handle, made by the mock or not.
+ * to `live`, and the first call of each cancel it returned takes one away,
+ * so `live` is the number of subscriptions held; each `pull()` adds one to
+ * `reads`. It works on any handle, made by the mock or not.
  */
 export function countSubscriptions<T>(
   handle: CellHandle<T>,
@@ -375,8 +375,12 @@ export function countSubscriptions<T>(
   handle.subscribe = (callback, options) => {
     count.live++;
     const cancel = subscribe(callback, options);
+    let cancelled = false;
     return () => {
-      count.live--;
+      if (!cancelled) {
+        cancelled = true;
+        count.live--;
+      }
       cancel();
     };
   };

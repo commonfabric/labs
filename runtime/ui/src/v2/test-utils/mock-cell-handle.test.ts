@@ -192,6 +192,16 @@ describe("mock-cell-handle", () => {
       expect(count).toEqual({ live: 1, reads: 1 });
     });
 
+    it("takes a subscription away once however many times its cancel is called", () => {
+      const handle = createMockCellHandle(0);
+      const count = countSubscriptions(handle);
+      const cancel = handle.subscribe(() => {}, { onRefused: () => {} });
+      handle.subscribe(() => {}, { onRefused: () => {} });
+      cancel();
+      cancel();
+      expect(count.live).toBe(1);
+    });
+
     it("leaves the subscriptions working as before", () => {
       const handle = createMockCellHandle(0);
       countSubscriptions(handle);

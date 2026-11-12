@@ -3,6 +3,7 @@ import { mount } from "../../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
 import { afterEach, describe, it } from "@std/testing/bdd";
+import { Window } from "happy-dom";
 
 import { CFTable } from "./index.ts";
 
@@ -197,6 +198,28 @@ describe("CFTable", () => {
         "8px 12px",
       );
       expect(document.adoptedStyleSheets).toEqual([]);
+    });
+
+    it("adds row styles made in another window's document to that document", async () => {
+      // happy-dom calls the lifecycle callbacks of its main document's
+      // elements alone, so the test calls `connectedCallback()` as a browser
+      // does when the table moves to the other document.
+      const table = await mount(tableWithRows("Ada"));
+      const other = new Window();
+      try {
+        // @ts-expect-error happy-dom declares its nodes apart from the DOM
+        // library, though a table is one of its nodes.
+        other.document.body.append(table);
+        table.connectedCallback();
+        const [sheet] = other.document.adoptedStyleSheets;
+        expect(sheet).toBeInstanceOf(other.CSSStyleSheet);
+        expect(sheet.cssRules.length).toBe(
+          document.adoptedStyleSheets[0].cssRules.length,
+        );
+        expect(sheet.cssRules.length).toBeGreaterThan(0);
+      } finally {
+        await other.happyDOM.close();
+      }
     });
   });
 

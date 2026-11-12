@@ -7,7 +7,9 @@ import type { CellHandle } from "@commonfabric/runtime-client";
 
 import {
   createMockCellHandle,
+  pushRefusal,
   pushUpdate,
+  writesSent,
 } from "../../test-utils/mock-cell-handle.ts";
 import { CFTabBar, CFTabBarItem } from "./index.ts";
 
@@ -175,6 +177,17 @@ describe("CFTabBar", () => {
       await items[1].updateComplete;
       await click(bar, items[1]);
       expect(cell.get()).toBe("home");
+      expect(changes).toEqual([]);
+    });
+
+    it("selects nothing and announces nothing while the bound cell's read is refused", async () => {
+      const cell = createMockCellHandle("home");
+      const { bar, items, changes } = await barWith(cell);
+      pushRefusal(cell);
+      await bar.updateComplete;
+      await click(bar, items[2]);
+      expect(writesSent(cell)).toEqual([]);
+      expect(selected(bar)).toEqual([]);
       expect(changes).toEqual([]);
     });
 

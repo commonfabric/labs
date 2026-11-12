@@ -9,6 +9,13 @@ import { BaseElement } from "../../core/base-element.ts";
 import { applyThemeToElement, type CFTheme } from "../theme-context.ts";
 
 /**
+ * The AI SDK's tool output types whose `{ type, value }` wrapper holds the
+ * result in `value`. The runner wraps a result as `json`, and a failure as
+ * `error-text`.
+ */
+const OUTPUT_TYPES = new Set(["text", "json", "error-text", "error-json"]);
+
+/**
  * CFToolCall - Expandable tool call display component
  *
  * @element cf-tool-call
@@ -215,19 +222,34 @@ export class CFToolCall extends BaseElement {
     this.expanded = !this.expanded;
   }
 
-  private _formatOutput(output: BuiltInLLMToolResultPart["output"]): string {
-    return output.type === "text"
+  /**
+   * The text of a tool's output: the value inside a `{ type, value }` wrapper
+   * of one of the AI SDK's output types, or else the output itself, as is when
+   * it is a string and as indented JSON otherwise.
+   */
+  private _formatOutput(output: unknown): string {
+    const value = typeof output === "object" && output !== null &&
+        "type" in output && "value" in output &&
+        typeof output.type === "string" && OUTPUT_TYPES.has(output.type)
       ? output.value
-      : this._formatJSON(output.value);
+      : output;
+    return typeof value === "string" ? value : this._formatJSON(value);
   }
 
-  /** Indented JSON of `data`, writing a `bigint` as a string such as "2n". */
+  /**
+   * Indented JSON of `data`, writing a `bigint` as a string such as "2n", or
+   * `data`'s string form when JSON cannot represent it (a cycle, for one).
+   */
   private _formatJSON(data: unknown): string {
-    return JSON.stringify(
-      data,
-      (_key, value) => typeof value === "bigint" ? `${value}n` : value,
-      2,
-    );
+    try {
+      return JSON.stringify(
+        data,
+        (_key, value) => typeof value === "bigint" ? `${value}n` : value,
+        2,
+      );
+    } catch {
+      return String(data);
+    }
   }
 
   private _renderContent() {

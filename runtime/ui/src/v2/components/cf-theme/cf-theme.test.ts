@@ -21,7 +21,7 @@ import {
 } from "../theme-context.ts";
 import {
   CFThemeProvider,
-  subscribeToThemeCellValues,
+  themeCellHandles,
   unwrapThemeCellValues,
 } from "./index.ts";
 
@@ -150,39 +150,37 @@ describe("cf-theme reactive theme values", () => {
     expect(unwrapped).toEqual({ fontFamily: "Georgia", self: cyclic });
   });
 
-  it("subscribes to every CellHandle once, through arrays and cycles", () => {
+  it("returns every CellHandle once, through arrays, cycles, and the values cells hold", () => {
     const primary = createMockCellHandle("#121826");
-    const cyclic: Record<string, unknown> = { list: [primary, "x", 1] };
+    const accent = createMockCellHandle("teal");
+    const colors = createMockCellHandle<Record<string, unknown>>({
+      accent,
+      primary,
+    });
+    const cyclic: Record<string, unknown> = { list: [primary, "x", 1], colors };
     cyclic.self = cyclic;
-    let changeCount = 0;
 
-    const unsubs = subscribeToThemeCellValues(cyclic, () => changeCount++);
-
-    expect(unsubs).toHaveLength(1);
-    pushUpdate(primary, "#334155");
-    expect(changeCount).toBe(1);
-    expect(subscribeToThemeCellValues("dark", () => changeCount++)).toEqual(
-      [],
+    expect(themeCellHandles(cyclic)).toEqual(
+      new Set([primary, colors, accent]),
     );
+    expect(themeCellHandles("dark")).toEqual(new Set());
   });
 
-  it("subscribes to nested CellHandle values without firing for initial values", () => {
-    const primary = createMockCellHandle("#121826");
-    const theme = { colors: { primary } };
-    let changeCount = 0;
-
-    const [off] = subscribeToThemeCellValues(theme, () => {
-      changeCount++;
+  it("unwraps a cell each place it appears, and leaves out one inside its own value", () => {
+    const accent = createMockCellHandle("teal");
+    const colors = createMockCellHandle<Record<string, unknown>>({});
+    pushUpdate(colors, { accent, primary: accent, self: colors });
+    expect(unwrapThemeCellValues({ colors })).toEqual({
+      colors: { accent: "teal", primary: "teal" },
     });
+  });
 
-    expect(changeCount).toBe(0);
-
-    pushUpdate(primary, "#334155");
-    expect(changeCount).toBe(1);
-
-    off();
-    pushUpdate(primary, "#475569");
-    expect(changeCount).toBe(1);
+  it("unwraps the CellHandle values a cell's value holds", () => {
+    const accent = createMockCellHandle("teal");
+    const colors = createMockCellHandle<Record<string, unknown>>({ accent });
+    expect(unwrapThemeCellValues({ colors })).toEqual({
+      colors: { accent: "teal" },
+    });
   });
 
   describe("CFThemeProvider", () => {
@@ -248,6 +246,33 @@ describe("cf-theme reactive theme values", () => {
         pushUpdate(accent, "plum");
         expect(style(provider, "--cf-theme-color-primary")).toBe("plum");
         expect(reader.theme?.colors.accent).toBe("plum");
+      });
+
+      it("takes up, and follows, a cell that a followed cell's new value holds", async () => {
+        const accent = createMockCellHandle("plum");
+        const colors = createMockCellHandle<Record<string, unknown>>({
+          accent: "teal",
+        });
+        const { reader } = await providing({ colors });
+        pushUpdate(colors, { accent });
+        expect(reader.theme?.colors.accent).toBe("plum");
+
+        pushUpdate(accent, "olive");
+        expect(reader.theme?.colors.accent).toBe("olive");
+      });
+
+      it("stops following a cell that a followed cell's new value no longer holds", async () => {
+        const accent = createMockCellHandle("plum");
+        const subscriptions = countSubscriptions(accent);
+        const colors = createMockCellHandle<Record<string, unknown>>({
+          accent,
+        });
+        const { reader } = await providing({ colors });
+        expect(subscriptions.live).toBe(1);
+
+        pushUpdate(colors, { accent: "teal" });
+        expect(subscriptions.live).toBe(0);
+        expect(reader.theme?.colors.accent).toBe("teal");
       });
 
       it("stops following a cell its new theme no longer holds", async () => {

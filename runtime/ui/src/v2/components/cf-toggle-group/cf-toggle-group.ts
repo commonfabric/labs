@@ -34,7 +34,7 @@ export class CFToggleGroup extends BaseElement {
   };
 
   declare type: ToggleGroupType;
-  declare value: string | string[];
+  declare value: string | string[] | null;
   declare disabled: boolean;
 
   /** The toggles this group disabled, which it enables again. */
@@ -69,6 +69,17 @@ export class CFToggleGroup extends BaseElement {
     if (changedProperties.has("type") || changedProperties.has("value")) {
       this.updateToggleSelection();
 
+      // Reflect the value, comma-separated for a multiple group, and none
+      // once the page removes the attribute
+      if (this.value === null) {
+        this.removeAttribute("value");
+      } else {
+        this.setAttribute(
+          "value",
+          Array.isArray(this.value) ? this.value.join(",") : this.value,
+        );
+      }
+
       // Emit change if value changed
       if (changedProperties.has("value")) {
         const oldValue = changedProperties.get("value");
@@ -80,12 +91,6 @@ export class CFToggleGroup extends BaseElement {
           this.emit("cf-change", { value: this.value });
         }
       }
-
-      // Reflect the value, comma-separated for a multiple group
-      this.setAttribute(
-        "value",
-        Array.isArray(this.value) ? this.value.join(",") : this.value,
-      );
     }
 
     if (changedProperties.has("disabled")) {
@@ -149,8 +154,9 @@ export class CFToggleGroup extends BaseElement {
         const isPressed = toggleValue === this.value;
         toggle.setAttribute("pressed", isPressed ? "" : "false");
         (toggle as any).pressed = isPressed;
-      } else if (this.type === "multiple" && Array.isArray(this.value)) {
-        const isPressed = this.value.includes(toggleValue);
+      } else if (this.type === "multiple") {
+        const isPressed = Array.isArray(this.value) &&
+          this.value.includes(toggleValue);
         toggle.setAttribute("pressed", isPressed ? "" : "false");
         (toggle as any).pressed = isPressed;
       }
@@ -208,9 +214,10 @@ export class CFToggleGroup extends BaseElement {
   };
 
   /**
-   * Get the currently selected value(s)
+   * Get the currently selected value(s), or `null` once the page removes the
+   * value attribute
    */
-  getValue(): string | string[] {
+  getValue(): string | string[] | null {
     return this.value;
   }
 

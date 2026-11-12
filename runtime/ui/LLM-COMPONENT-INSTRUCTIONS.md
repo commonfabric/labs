@@ -553,16 +553,19 @@ Default slot for cf-tab elements
 **Purpose**: Form wrapper with validation **Tag**: `<cf-form>` **Attributes**:
 
 - `action` - string
-- `method` - string
-- `novalidate` - boolean **Events**:
-- `cf-submit` - Fired on valid submission with detail: `{ formData }`
+- `method` - string **Events**:
+- `cf-submit` - Fired on valid submission, once fields have written their
+  buffered values to their bound cells, with no detail; read the cells.
+  Cancelable: `preventDefault()` keeps a form with an `action` from submitting
+  natively
 - `cf-form-invalid` - Fired on validation failure with detail: `{ errors }`
+- `cf-submit-error` - Fired instead of `cf-submit` when a field fails to write
+  its value, with detail: `{ error, message }`
 
 **Slots**: Default slot for form elements **Methods**:
 
 - `submit()` - Programmatically submit
 - `reset()` - Reset form
-- `validate()` - Validate and return boolean
 
 ### 28. cf-input-otp
 
@@ -857,8 +860,8 @@ document.querySelector("cf-input").addEventListener("cf-change", (e) => {
 });
 
 document.querySelector("cf-form").addEventListener("cf-submit", (e) => {
-  e.preventDefault();
-  console.log("Form data:", e.detail.formData);
+  e.preventDefault(); // stays on the page rather than posting to `action`
+  console.log("Form submitted; its fields' cells hold the values");
 });
 ```
 

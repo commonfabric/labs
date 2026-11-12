@@ -24,8 +24,12 @@ import {
  * @attr {string} method - HTTP method for form submission (GET or POST)
  * @attr {string} action - URL for form submission
  *
- * @event cf-submit - Fired when the form is submitted and all fields are valid (includes form data in detail)
+ * @event cf-submit - Fired, with no detail, once every field is valid and has
+ *   written its buffered value; handlers read the bound cells. Cancelable:
+ *   `preventDefault()` keeps a form with an `action` from submitting natively.
  * @event cf-form-invalid - Fired when submit is attempted but validation fails (includes errors in detail)
+ * @event cf-submit-error - Fired instead of `cf-submit` when a field fails to
+ *   write its buffered value, with detail `{ error, message }`
  *
  * @slot - Form content (inputs, labels, buttons, etc.)
  *

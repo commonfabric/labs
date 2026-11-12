@@ -92,12 +92,12 @@ const ROW_STYLES = `
 `;
 
 /**
- * The sheet holding {@link ROW_STYLES}, adopted by every root a table is
- * connected in. It is made when a table first connects: this module also
- * loads where there are no stylesheets, as when the package is imported
- * outside a browser.
+ * The sheet holding {@link ROW_STYLES} for each document, adopted by every
+ * root in that document a table is connected in. A root adopts only a sheet
+ * its own document's window made, so a sheet is made for a document when a
+ * table first connects in it.
  */
-let rowStyleSheet: CSSStyleSheet | undefined;
+const rowStyleSheets = new WeakMap<Document, CSSStyleSheet>();
 
 /**
  * CFTable - Semantic table component with styling
@@ -203,14 +203,17 @@ export class CFTable extends BaseElement {
 
   override connectedCallback() {
     super.connectedCallback();
+    const document = this.ownerDocument;
     const root = this.getRootNode();
-    const styled = root instanceof ShadowRoot ? root : this.ownerDocument;
-    if (!rowStyleSheet) {
-      rowStyleSheet = new CSSStyleSheet();
-      rowStyleSheet.replaceSync(ROW_STYLES);
+    const styled = root instanceof ShadowRoot ? root : document;
+    let sheet = rowStyleSheets.get(document);
+    if (!sheet) {
+      sheet = new (document.defaultView ?? globalThis).CSSStyleSheet();
+      sheet.replaceSync(ROW_STYLES);
+      rowStyleSheets.set(document, sheet);
     }
-    if (!styled.adoptedStyleSheets.includes(rowStyleSheet)) {
-      styled.adoptedStyleSheets = [...styled.adoptedStyleSheets, rowStyleSheet];
+    if (!styled.adoptedStyleSheets.includes(sheet)) {
+      styled.adoptedStyleSheets = [...styled.adoptedStyleSheets, sheet];
     }
   }
 

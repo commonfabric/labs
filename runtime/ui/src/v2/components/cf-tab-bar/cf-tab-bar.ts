@@ -341,7 +341,11 @@ export class CFTabBar extends BaseElement {
     const oldValue = this._lastKnownValue;
     if (item?.value && !item.disabled && item.value !== oldValue) {
       this._cellController.setValue(item.value);
-      this.emit("cf-change", { value: item.value, oldValue });
+      // The controller writes at once, and its `onChange` takes up a value it
+      // accepted, so the last known value has moved unless it refused it.
+      if (this._lastKnownValue === item.value) {
+        this.emit("cf-change", { value: item.value, oldValue });
+      }
     }
   };
 

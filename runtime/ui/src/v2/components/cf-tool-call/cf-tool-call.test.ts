@@ -117,6 +117,42 @@ describe("CFToolCall", () => {
       );
     });
 
+    it("shows an `error-text` output as the text itself", async () => {
+      const element = await toolCallWith({
+        expanded: true,
+        // @ts-expect-error The runner reports a failed tool as `error-text`,
+        // which the declared output type omits.
+        result: resultWith({ type: "error-text", value: "City not found" }),
+      });
+      expect(text(element, ".tool-section-content")[1]).toBe(
+        "City not found",
+      );
+    });
+
+    it("shows an output that is not a `{ type, value }` wrapper as indented JSON of itself", async () => {
+      const output = { type: "forecast", temperature: 21 };
+      const element = await toolCallWith({
+        expanded: true,
+        // @ts-expect-error A pattern can write a tool's raw result as output.
+        result: resultWith(output),
+      });
+      expect(text(element, ".tool-section-content")[1]).toBe(
+        JSON.stringify(output, null, 2),
+      );
+    });
+
+    it("shows an input that JSON cannot represent as its string form", async () => {
+      const input: Record<string, unknown> = {};
+      input.self = input;
+      const element = await toolCallWith({
+        call: { ...call, input },
+        expanded: true,
+      });
+      expect(text(element, ".tool-section-content")).toEqual([
+        "[object Object]",
+      ]);
+    });
+
     it("shows each `bigint` in the input and a JSON output as a string of its digits and `n`", async () => {
       const element = await toolCallWith({
         call: { ...call, input: { count: 1n } },

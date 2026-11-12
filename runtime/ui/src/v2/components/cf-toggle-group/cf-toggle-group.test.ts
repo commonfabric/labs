@@ -76,6 +76,28 @@ describe("CFToggleGroup", () => {
       expect(changes).toEqual(["italic"]);
     });
 
+    it("reflects its new value before it announces it", async () => {
+      const { group, toggles } = await groupOf(
+        `<cf-toggle-group value="bold">${formatting}</cf-toggle-group>`,
+      );
+      const reflected: (string | null)[] = [];
+      group.addEventListener("cf-change", () => {
+        reflected.push(group.getAttribute("value"));
+      });
+      await click(group, toggles[1]);
+      expect(reflected).toEqual(["italic"]);
+    });
+
+    it("leaves its value attribute off, and presses nothing, once the page removes it", async () => {
+      const { group, toggles } = await groupOf(
+        `<cf-toggle-group value="bold">${formatting}</cf-toggle-group>`,
+      );
+      group.removeAttribute("value");
+      await group.updateComplete;
+      expect(group.hasAttribute("value")).toBe(false);
+      expect(pressed(toggles)).toEqual([false, false, false]);
+    });
+
     it("lets listeners on it hear only its own `cf-change`, not its toggles'", async () => {
       const { group, toggles } = await groupOf(
         `<cf-toggle-group>${formatting}</cf-toggle-group>`,
@@ -160,6 +182,14 @@ describe("CFToggleGroup", () => {
       expect(group.value).toEqual(["italic"]);
       expect(pressed(toggles)).toEqual([false, true, false]);
       expect(group.getAttribute("value")).toBe("italic");
+    });
+
+    it("leaves its value attribute off, and presses nothing, once the page removes it", async () => {
+      const { group, toggles } = await groupOf(multiple);
+      group.removeAttribute("value");
+      await group.updateComplete;
+      expect(group.hasAttribute("value")).toBe(false);
+      expect(pressed(toggles)).toEqual([false, false, false]);
     });
 
     it("selects every toggle with a value on selectAll()", async () => {
