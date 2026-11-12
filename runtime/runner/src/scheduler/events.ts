@@ -2932,8 +2932,9 @@ export async function dispatchQueuedEvent(state: {
       // dependency the preflight parked on names it. A read the commit holds
       // to the store's head needs nothing here: the wave holds a served run
       // to its reads in the home space when it seals a write there, as a
-      // copy with a stream entry always does with its consequence mark, and
-      // a client commit holds each space it wrote to the reads it made there.
+      // drained copy does with the consequence mark its stamper writes into
+      // this transaction, and a client commit holds each space it wrote to
+      // the reads it made there.
       // A run that threw makes no commit, so nothing holds any of its reads. Any other such read withdraws
       // the run, which runs again once those loads settle, and a load the
       // event already waited for does not withdraw it twice
@@ -2950,12 +2951,9 @@ export async function dispatchQueuedEvent(state: {
             tx,
             (space) =>
               error === undefined &&
-              (served === undefined
-                ? tx.tx.getWriteTargetSpaces?.().includes(space) ?? false
-                : space === queuedEvent.eventLink.space &&
-                  (served.streamEntry !== undefined ||
-                    (tx.tx.getWriteTargetSpaces?.().includes(space) ??
-                      false))),
+              (served === undefined ||
+                space === queuedEvent.eventLink.space) &&
+              (tx.tx.getWriteTargetSpaces?.().includes(space) ?? false),
           ),
         )
         : [];
