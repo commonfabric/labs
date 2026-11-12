@@ -141,6 +141,13 @@ relitigated.
   which it instantiates, and a handler factory, which it binds. Both are
   resolved at run time from their own compiled records. A `lift` result is
   not a factory value.
+- A handler binding made in a function body copies a scalar and a value
+  the body computed. It binds a container that has a stored address by
+  reference, as it is today: the handler reads the container when an event
+  arrives, and a record the handler passes on links to the original. A
+  binding made in the reactive tier copies nothing, the body of a
+  per-element callback included: every path of the handler's state is a
+  slot of the instance. *(Pending.)*
 
 **Identity and storage**
 
@@ -315,16 +322,6 @@ answer goes to the specification with the document.
     are withdrawn, which leaves it visible that the write did not happen,
     as it is today; a child's argument and an effect's request take the
     error state.
-38. **What a handler binding copies** (`footprint-analysis.md`, owner
-    question 3 and §8.5). The language subset copies a captured data value
-    into the binding. Today an inline handler's lowering copies the scalar
-    paths the handler reads, which is equal, but a handler applied to its
-    state is bound by reference, and a container the handler uses whole
-    stays a link. With the copy, the binding body reads those paths and
-    their label joins everything else it returns and writes. This is wider
-    than today and is not one of the two exceptions. *Assumed:* the copy
-    stands. Binding a container by reference is equal to today, and makes
-    two bindings to equal records stored in two places two streams.
 
 ## Open, and not needing the owner
 
@@ -372,6 +369,26 @@ that the record cannot express.
   `handles` to name.
 - The captures of an inline pattern instantiated in a body (K12).
 - `equalLinks`, which has no row among the context reads.
+
+And from the ruling on what a handler binding copies:
+
+- §3.14, "Binding a handler": a captured container that has a stored
+  address is a reference, and the stream's identity takes that address in
+  place of the container's content.
+- `Binding.state`: what `capture` records for such a container, and that a
+  binding of the reactive tier has no copied path.
+- §4.1: the list of places a template is instantiated names "a state path
+  of a binding that is copied".
+
+**`footprint-analysis.md`**, from the same ruling:
+
+- §8.5: the rows of the table for a container. A container read from an
+  input or a cell records `identity` in the body that makes the binding,
+  and the binding holds a link. The rows that copy remain for a scalar and
+  for a container the body computed.
+- §8.5 "Against today" and the row for a handler binding in §12.4: equal.
+- §3.8: the destination "into a handler binding".
+- Owner question 3 is ruled, and request 15 is answered.
 
 **`execution-and-storage.md`**
 
@@ -445,6 +462,8 @@ that the record cannot express.
 - Open questions 10 and 11, which the plan document answers.
 - "An instantiation request from a handler": "whether the value is copied
   or is a cell handle" against the reference rule.
+- "A handler binding made in a body": the ruling on what a binding copies,
+  in the static record, the identity, and the label.
 
 **`language-subset.md`**
 
@@ -453,8 +472,11 @@ that the record cannot express.
 - §5.4, §10.3: a widening covers the entries it replaced.
 - §4.4.1, §4.6: the naming rule of §1.3 of the plan document.
 - Open questions 9 and 10.
-- §5.2: whether a binding copies the whole value or the paths the handler
-  reads (see question 38). §7.8: what a kind test or a string conversion
+- §5.2: a binding made in a function body copies a scalar and a computed
+  value and binds a stored container by reference (ruled). The identity of
+  a binding takes the address of a container bound by reference, so two
+  bindings to equal records stored in two places are two streams. A
+  binding of the reactive tier copies nothing. §7.8: what a kind test or a string conversion
   sees at an `unknown` data position. §10.3: `footprint:widened` names one
   input path where a widening covers several entries or a handle.
 
