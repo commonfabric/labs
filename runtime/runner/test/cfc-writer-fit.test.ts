@@ -6,6 +6,7 @@ import { cfcAtom } from "@commonfabric/api/cfc";
 import { streamEntriesDocId } from "@commonfabric/memory/v2";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 import { getLogger } from "@commonfabric/logger";
+import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
   seedStoredEnvelope,
@@ -1506,6 +1507,8 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
      * instead. `served` stamps the run as the serving loop stamps a run of
      * that kind, acting for the signer; `"storage-only"` sets that identity
      * on its storage transaction alone, and stamps the run with none.
+     * `labelMetadata` has the run observe a label-metadata record carrying
+     * those clauses, on a document of this file's space.
      * Returns the writer-fit reasons the preparation recorded, the clauses
      * the target's staged declaration holds, and the target's id.
      */
@@ -1521,6 +1524,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         served,
         kind = "event-handler",
         identity = "stamped",
+        labelMetadata,
       }: {
         sources: readonly Source[];
         targetName: string;
@@ -1531,6 +1535,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         served: boolean;
         kind?: "event-handler" | "derivation" | "bookkeeping";
         identity?: "stamped" | "storage-only";
+        labelMetadata?: readonly CfcConfClause[];
       },
     ) => {
       for (const source of sources) {
@@ -1589,6 +1594,18 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         );
       }
       const plainId = target.getAsNormalizedFullLink().id;
+      if (labelMetadata !== undefined) {
+        tx.recordCfcLabelMetadataObservation({
+          target: {
+            space: signer.did(),
+            id: plainId,
+            scope: "space",
+            path: ["cfc", "labels", "value"],
+          },
+          observes: "labelMetadata",
+          confidentiality: [...labelMetadata],
+        });
+      }
       const targetId = computed
         ? `computed:${plainId.slice("of:".length)}`
         : plainId;
@@ -1832,6 +1849,22 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
           expect(reasons).toHaveLength(1);
           expect(reasons[0]).toContain("§8.12.5.1");
           expect(reasons[0]).toContain(`for ${targetId} at /`);
+        });
+      });
+
+      it("refuses a write of a clause only label metadata carried, which reads no store, into a store of the same space that declares it", async () => {
+        await withRuntime(true, async (runtime) => {
+          const { reasons, targetId } = await preparedCopy(runtime, {
+            sources: [],
+            targetName: "wf-served-x-metadata",
+            targetSchema: declaring("secret"),
+            served: true,
+            labelMetadata: ["secret"],
+          });
+          expect(reasons).toHaveLength(1);
+          expect(reasons[0]).toContain("§8.12.5.1");
+          expect(reasons[0]).toContain(`for ${targetId} at /`);
+          expect(reasons[0]).toContain('"secret"');
         });
       });
 

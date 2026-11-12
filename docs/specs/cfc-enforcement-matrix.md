@@ -309,9 +309,11 @@ The strict-only delta is:
   that principal's own runtime could not, and code that principal controls
   chooses where it writes. For such a run (`isServedRunUnderHolderRule` in
   `prepare.ts`: a wave run context of kind `event-handler` or `derivation`),
-  the flow join records which store each clause was read from
-  (`ClauseCarriers`), and a clause read from a store whose holders don't
-  include every holder of the target is cross-holder (`crossHolderClauses`).
+  the flow join names the reads that carried each clause (its `sources`, the
+  provenance a writer-fit refusal names its inputs from) and the clauses an
+  observation of no store carried in (`withoutStore`), and a clause read from
+  a store whose holders don't include every holder of the target is
+  cross-holder (`crossHolderClausesOf`).
   Same holders means one space, and a source bound to no one, or source and
   target both `user` or `session` documents of the one principal the run's
   scoped reads and writes resolve under; where the storage transaction's
