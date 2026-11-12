@@ -27,15 +27,15 @@
  *
  * A new room is offered to each other member whose profile the request names,
  * through each share inbox their profiles point at, once per inbox, in the
- * envelope a share inbox takes, and each member it is offered to is added to
- * the room's participants. A notice is queued for each other member offered
- * nothing: one the request names only by principal, or whose profiles point at
- * no inbox. A member someone adds to a room later, from the room, is offered
- * it the same way, through `offerRoom`. A direct room's counterpart who got a
- * notice instead is offered the room the same way once a later start with
- * them names a profile of theirs pointing at an inbox, until they join it. The
- * notice stays, and is no longer listed once the offer puts them on the room's
- * roster.
+ * envelope a share inbox takes, and each of those members is added to the
+ * room's participants, wherever their profiles point. A member whose profiles
+ * point at no inbox is added all the same, sent nothing, and gets no notice. A
+ * notice is queued for each other member the request names only by principal.
+ * A member someone adds to a room later, from the room, is offered it the same
+ * way, through `offerRoom`. A direct room's counterpart who got a notice
+ * instead is offered the room the same way once a later start with them names
+ * a profile of theirs, until they join it. The notice stays, and is no longer
+ * listed once the offer puts them on the room's roster.
  *
  * The people the user's rooms list, each by the principal their profile
  * attests, are what the manager's rendering offers to name a new group's
