@@ -128,6 +128,30 @@ describe("mutable-path-write", () => {
         );
       }
 
+      it("returns a `TypeMismatchError` at the first key for a write beneath a root no key addresses", () => {
+        const roots: [FabricValue, string][] = [
+          [5, "number"],
+          ["text", "string"],
+          [null, "null"],
+          [FabricError.fromNativeError(new Error("e")), "object"],
+        ];
+        for (const [root, actualType] of roots) {
+          const result = applyWrite(root, at(["a", "b"]), 5);
+          expect(
+            result.error?.name === "TypeMismatchError" && {
+              path: result.error.address.path,
+              actualType: result.error.actualType,
+            },
+          ).toEqual({ path: ["a"], actualType });
+        }
+      });
+
+      it("returns no change for a delete beneath a root no key addresses", () => {
+        const result = applyWrite(5, at(["a"]), undefined, { delete: true });
+        expect(result.ok?.root).toBe(5);
+        expect(result.ok?.changed).toBe(false);
+      });
+
       it("returns a `TypeMismatchError` for a write through a null-prototype record", () => {
         // A null-prototype record is outside what a stored value may hold, and
         // the clone that would descend through one throws on it.

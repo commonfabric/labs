@@ -103,8 +103,10 @@ const fabricCodecs = createDefaultJsonRegistry();
  * `extraEntries()` returns, so a budget runs out inside a large extras bag
  * without the bag being copied; a `FabricMap` or `FabricSet` hands over its
  * contents, their codecs having no encoding yet; a `FabricKeyPair` hands
- * over its algorithm alone, so its material stays where it is. An object
- * that is no Fabric class, or whose codec refuses it, is left to the walk.
+ * over its algorithm alone, so its material stays where it is, and so does
+ * a pair of `CryptoKey` handles, which its codec cannot encode. An object
+ * that is no Fabric class, whose class no codec is registered for, or whose
+ * codec refuses it, is left to the walk.
  */
 function fabricInstanceMeasure(instance: object): InstanceMeasure | undefined {
   if (instance instanceof FabricBytes) return { bytes: instance.length };

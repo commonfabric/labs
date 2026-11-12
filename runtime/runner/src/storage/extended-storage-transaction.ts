@@ -1,12 +1,9 @@
 import type { TextChange } from "@commonfabric/api";
 import {
   deepFreeze,
-  type FabricPlainObject,
   type FabricValue,
   hashOf,
   hashStringOf,
-  type MutableFabricPlainObjectLayer,
-  shallowMutableClone,
   taggedHashStringOf,
 } from "@commonfabric/data-model";
 import { internSchema } from "@commonfabric/data-model-schema";
@@ -32,7 +29,6 @@ import {
   parseSignedOwnerReleaseByIntentRequest,
   verifyOwnerReleaseByIntentSignature,
 } from "@commonfabric/memory/v2/cfc-owner-release-by-intent";
-import { isArrayIndexPropertyName } from "@commonfabric/js-values/arrays";
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { toUnpaddedBase64url } from "@commonfabric/bytes/base64url";
@@ -190,7 +186,6 @@ import {
   type IExtendedStorageTransaction,
   type IMemorySpaceAddress,
   type InactiveTransactionError,
-  type INotFoundError,
   type IReadActivity,
   type IReadOptions,
   type IStorageTransaction,
@@ -2920,10 +2915,8 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       schema: storedSchema,
       releasedClauseDigests: request.releasedClauseDigests,
     });
-    if (plan.schema === undefined) {
-      refuse("the document stores no schema");
-    }
-    const lowered = plan.schema;
+    // A plan over a stored schema always returns one.
+    const lowered = plan.schema ?? storedSchema;
     // Deliberately NOT marked CFC-relevant, like an owner release: the checks
     // above are the whole of the verification, and a throw leaves nothing
     // written.
@@ -3071,15 +3064,15 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    */
   #preparedActivityStands(): boolean {
     const prepared = this.#preparedSnapshot;
-    // A prepared state always has its snapshot; without one there is nothing
-    // the commit could be shown to match.
-    if (prepared === undefined) return false;
     const current = this.#activitySnapshot();
     if (current === prepared) {
       this.#cfcInstrumentation.onPreparedDigest?.("memo");
       return true;
     }
-    return this.#digestOf(current) === this.#digestOf(prepared);
+    // A prepared state always has its snapshot; without one there is nothing
+    // the commit could be shown to match.
+    return prepared !== undefined &&
+      this.#digestOf(current) === this.#digestOf(prepared);
   }
 
   #buildPreparedDigestInput(): PreparedDigestInput {
@@ -4199,78 +4192,9 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       value,
       writeChokepointMark(options),
     );
-    if (
-      writeResult.error &&
-      (writeResult.error.name === "NotFoundError")
-    ) {
-      if (options?.delete) {
-        // Deleting a slot whose path doesn't exist is a no-op; don't
-        // materialize intermediates just to remove nothing.
-        return;
-      }
-      // Create parent entries if needed.
-      // errorPath includes the missing key (consistent with read errors).
-      // lastExistingPath is one level up - the actual last existing parent.
-      const errorPath = (writeResult.error as INotFoundError).path;
-      const lastExistingPath = errorPath.slice(0, -1);
-      // When document doesn't exist (errorPath is []), we don't need to read -
-      // just start with {}. But if errorPath has content (e.g., ["foo"]), the
-      // document exists and we need to read from lastExistingPath to preserve
-      // existing fields.
-      let valueObj: MutableFabricPlainObjectLayer;
-      if (errorPath.length === 0) {
-        valueObj = {};
-      } else {
-        const currentValue = this.readOrThrow({
-          ...address,
-          path: lastExistingPath,
-        }, { meta: ignoreReadForScheduling });
-        if (!isObjectOrArray(currentValue)) {
-          // This should have already been caught as type mismatch error
-          throw new Error(
-            `Value at path ${address.path.join("/")} is not an object`,
-          );
-        }
-        // Stored objects are deep-frozen by `fabricFromConvertibleJsValue()`.
-        // Clone before mutation to avoid `TypeError` on frozen objects: this
-        // always copies (the value may be the transaction's working copy, which
-        // must not be mutated in place), and it deep-freezes the bound children
-        // as inexpensive defense-in-depth against accidental deeper mutation of
-        // the shared input.
-        valueObj = shallowMutableClone(
-          currentValue,
-        ) as MutableFabricPlainObjectLayer;
-      }
-      const remainingPath = address.path.slice(lastExistingPath.length);
-      if (remainingPath.length === 0) {
-        throw new Error(
-          `Invalid error path: ${errorPath.join("/")}`,
-        );
-      }
-      const lastKey = remainingPath.pop()!;
-      let nextValue: MutableFabricPlainObjectLayer = valueObj;
-      // Create intermediate containers. The container type depends on whether
-      // the NEXT key (the one that will access this container) is a valid array
-      // index.
-      for (let i = 0; i < remainingPath.length; i++) {
-        const key = remainingPath[i];
-        const nextKey = remainingPath[i + 1] ?? lastKey;
-        const isNextKeyArrayIndex = isArrayIndexPropertyName(nextKey);
-        nextValue =
-          nextValue[key] =
-            (isNextKeyArrayIndex ? [] : {}) as FabricPlainObject;
-      }
-      nextValue[lastKey] = value;
-      const parentAddress = { ...address, path: lastExistingPath };
-      const writeResultRetry = this.tx.write(
-        parentAddress,
-        valueObj,
-        writeChokepointMark(),
-      );
-      if (writeResultRetry.error) {
-        throw toThrowable(writeResultRetry.error);
-      }
-    } else if (writeResult.error) {
+    // The storage transaction creates whatever containers the path needs,
+    // so an error here is a refusal of the write itself.
+    if (writeResult.error) {
       throw toThrowable(writeResult.error);
     }
     this.#noteWrite();
