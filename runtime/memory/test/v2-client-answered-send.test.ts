@@ -1,8 +1,9 @@
 /**
  * A transport's send can settle after the server's response to it has
- * arrived. When that send then fails, the response still answers the request:
+ * arrived. The response then answers the request, whatever the send reports:
  * the server has acted on it, and a `session.open` it accepted opened a
- * session the caller must be given.
+ * session the caller must be given, restored first when the connection that
+ * answered has since been replaced.
  */
 
 import { expect } from "@std/expect";
@@ -10,6 +11,7 @@ import { describe, it } from "@std/testing/bdd";
 
 import { decodeMemoryBoundary } from "../v2.ts";
 import {
+  type Client,
   connect,
   connectionError,
   loopback,
@@ -21,320 +23,303 @@ import {
   testSessionOpenServerOptions,
 } from "./v2-auth-test-helpers.ts";
 
+/** A server with a store of its own for the case named `name`. */
+const serverFor = (
+  name: string,
+  options: Partial<ConstructorParameters<typeof Server>[0]> = {},
+) =>
+  new Server({
+    ...testSessionOpenServerOptions,
+    ...options,
+    store: new URL(`memory://client-answered-send-${name}`),
+  });
+
+/** The space the case named `name` mounts. */
+const spaceFor = (name: string) => `did:key:z6Mk-client-answered-send-${name}`;
+
+/** A commit that sets `of:doc` to `"A"`. */
+const commit = () => ({
+  localSeq: 1,
+  reads: { confirmed: [], pending: [] },
+  operations: [{ op: "set" as const, id: "of:doc", value: { value: "A" } }],
+});
+
 /**
- * A loopback transport to `server` whose send of the next `session.open`, once
- * the server's response to it has reached the client, rejects with `fail()`.
+ * A transport to `server` over a loopback connection, opened anew after each
+ * loss. Its send of the first `type` request waits until the server's answer
+ * to it has reached the client, and then settles as `settle` does. `lose`,
+ * which `settle` is also given, closes the connection, reports the loss to
+ * the client, and returns the error a send lost with that connection rejects
+ * with.
  */
-function failingOpenSendTransport(server: Server, fail: () => Error) {
-  const inner = loopback(server);
-  let failing = false;
-  let answered: PromiseWithResolvers<void> | undefined;
-  let openRequestId: unknown;
+function answeredBeforeSendSettles(
+  server: Server,
+  type: "session.open" | "transact",
+  settle: (lose: () => Error) => Promise<void>,
+): { transport: Transport; lose(): Error } {
+  let inner: Transport | undefined;
+  let receiver = (_payload: string) => {};
+  let closeReceiver = (_error?: Error) => {};
+  let first = true;
+  let awaited: unknown;
+  const answered = Promise.withResolvers<void>();
+  const lose = () => {
+    const error = connectionError("test connection lost");
+    void inner?.close();
+    inner = undefined;
+    closeReceiver(error);
+    return error;
+  };
   const transport: Transport = {
-    ...inner,
     setReceiver(next) {
-      inner.setReceiver((payload) => {
-        next(payload);
-        const message = decodeMemoryBoundary(payload);
-        if (
-          answered !== undefined &&
-          (message as { requestId?: unknown }).requestId === openRequestId
-        ) answered.resolve();
-      });
+      receiver = next;
+    },
+    setCloseReceiver(next) {
+      closeReceiver = next;
+    },
+    async close() {
+      await inner?.close();
+      inner = undefined;
+    },
+    reset() {
+      void inner?.close();
+      inner = undefined;
     },
     async send(payload) {
+      if (inner === undefined) {
+        inner = loopback(server);
+        inner.setReceiver((frame) => {
+          receiver(frame);
+          const { requestId } = decodeMemoryBoundary(frame) as {
+            requestId?: unknown;
+          };
+          if (awaited !== undefined && requestId === awaited) {
+            answered.resolve();
+          }
+        });
+      }
       const message = decodeMemoryBoundary(payload) as {
         type?: string;
         requestId?: unknown;
       };
-      if (!failing || message.type !== "session.open") {
-        return await inner.send(payload);
-      }
-      failing = false;
-      answered = Promise.withResolvers<void>();
-      openRequestId = message.requestId;
+      if (message.type !== type || !first) return await inner.send(payload);
+      first = false;
+      awaited = message.requestId;
       await inner.send(payload);
       await answered.promise;
-      throw fail();
+      await settle(lose);
     },
   };
-  return {
-    transport,
-    failNextOpenSend() {
-      failing = true;
+  return { transport, lose };
+}
+
+/**
+ * A client of `server` whose first `session.open` is answered on a connection
+ * that is then lost and replaced, the client's sessions restored, before the
+ * open's send settles: rejecting as lost with that connection, or, with
+ * `resolves`, resolving. `lose` loses the client's connection again.
+ */
+async function clientReplacingConnectionUnderOpen(
+  server: Server,
+  options: { resolves?: boolean } = {},
+): Promise<{ client: Client; lose(): Error }> {
+  const reconnected = Promise.withResolvers<void>();
+  const { transport, lose } = answeredBeforeSendSettles(
+    server,
+    "session.open",
+    async (lose) => {
+      const lost = lose();
+      await reconnected.promise;
+      if (options.resolves !== true) throw lost;
     },
-  };
+  );
+  const client = await connect({ transport });
+  client.subscribeReconnected(() => reconnected.resolve());
+  return { client, lose };
 }
 
 describe("client", () => {
-  for (
-    const [kind, fail] of [
-      ["with its connection", () => connectionError("test write failed")],
-      ["outright", () => new Error("test write refused")],
-    ] as const
-  ) {
-    it(`resolves a mount whose \`session.open\` was answered before its send failed ${kind}, with a session that works`, async () => {
-      const server = new Server({
-        ...testSessionOpenServerOptions,
-        store: new URL(
-          `memory://client-answered-send-${kind.replaceAll(" ", "-")}`,
-        ),
-      });
-      const host = failingOpenSendTransport(server, fail);
-      const client = await connect({ transport: host.transport });
-      try {
-        host.failNextOpenSend();
-        const session = await client.mount(
-          "did:key:z6Mk-client-answered-send",
-          {},
-          testSessionOpenAuthFactory,
-        );
-        const applied = await session.transact({
-          localSeq: 1,
-          reads: { confirmed: [], pending: [] },
-          operations: [{ op: "set", id: "of:doc", value: { value: "A" } }],
-        });
-        expect(applied.seq).toBeGreaterThan(0);
-      } finally {
-        await client.close();
-        await server.close();
-      }
-    });
-  }
+  it("resolves a mount whose `session.open` was answered before its send failed outright, with a session that works", async () => {
+    const server = serverFor("outright");
+    const { transport } = answeredBeforeSendSettles(
+      server,
+      "session.open",
+      () => Promise.reject(new Error("test write refused")),
+    );
+    const client = await connect({ transport });
+    try {
+      const session = await client.mount(
+        spaceFor("outright"),
+        {},
+        testSessionOpenAuthFactory,
+      );
+
+      expect((await session.transact(commit())).seq).toBe(1);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("resolves a commit whose `transact` was answered before its send failed outright, with the server's acceptance of it", async () => {
+    // An in-process transport rejects a send this way when the server's
+    // handling of the request throws after it has answered. The server holds
+    // the write by then, so a caller told the commit failed would be wrong.
+
+    const server = serverFor("transact");
+    const { transport } = answeredBeforeSendSettles(
+      server,
+      "transact",
+      () => Promise.reject(new Error("test write refused")),
+    );
+    const client = await connect({ transport });
+    try {
+      const session = await client.mount(
+        spaceFor("transact"),
+        {},
+        testSessionOpenAuthFactory,
+      );
+
+      expect((await session.transact(commit())).seq).toBe(1);
+      expect((await server.readDocument(spaceFor("transact"), "of:doc"))?.value)
+        .toBe("A");
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
   it("restores a mount whose `session.open` was answered on a connection that dropped and was replaced before its send failed, with a session that works", async () => {
     // The answer arrives, the connection closes and the client reconnects,
     // restoring its sessions, and only then does the open's send fail: the
     // session the server opened is open only on the connection that is gone.
-    const server = new Server({
-      ...testSessionOpenServerOptions,
-      store: new URL("memory://client-answered-send-replaced"),
-    });
-    let inner: Transport | undefined;
-    let receiver = (_payload: string) => {};
-    let closeReceiver = (_error?: Error) => {};
-    let failOpen = true;
-    let openRequestId: unknown;
-    const answered = Promise.withResolvers<void>();
-    const reconnected = Promise.withResolvers<void>();
-    const transport: Transport = {
-      setReceiver(next) {
-        receiver = next;
-      },
-      setCloseReceiver(next) {
-        closeReceiver = next;
-      },
-      async close() {
-        await inner?.close();
-        inner = undefined;
-      },
-      reset() {
-        void inner?.close();
-        inner = undefined;
-      },
-      async send(payload) {
-        if (inner === undefined) {
-          inner = loopback(server);
-          inner.setReceiver((frame) => {
-            receiver(frame);
-            const message = decodeMemoryBoundary(frame) as {
-              requestId?: unknown;
-            };
-            if (
-              openRequestId !== undefined &&
-              message.requestId === openRequestId
-            ) answered.resolve();
-          });
-        }
-        const message = decodeMemoryBoundary(payload) as {
-          type?: string;
-          requestId?: unknown;
-        };
-        if (message.type !== "session.open" || !failOpen) {
-          return await inner.send(payload);
-        }
-        failOpen = false;
-        openRequestId = message.requestId;
-        await inner.send(payload);
-        await answered.promise;
-        await inner.close();
-        inner = undefined;
-        const error = connectionError(
-          "connection lost after the open's answer",
-        );
-        closeReceiver(error);
-        await reconnected.promise;
-        throw error;
-      },
-    };
-    const client = await connect({ transport });
-    client.subscribeReconnected(() => reconnected.resolve());
+
+    const server = serverFor("replaced");
+    const { client } = await clientReplacingConnectionUnderOpen(server);
     try {
       const session = await client.mount(
-        "did:key:z6Mk-client-answered-send-replaced",
+        spaceFor("replaced"),
         {},
         testSessionOpenAuthFactory,
       );
+
       expect(client.isConnected()).toBe(true);
-      const applied = await session.transact({
-        localSeq: 1,
-        reads: { confirmed: [], pending: [] },
-        operations: [{ op: "set", id: "of:doc", value: { value: "A" } }],
-      });
-      expect(applied.seq).toBeGreaterThan(0);
-    } finally {
-      await client.close();
-      await server.close();
-    }
-  });
-  /**
-   * A transport whose send of the first `session.open` waits for its answer,
-   * then runs `after`, then rejects as a lost connection.
-   */
-  function answeredThenFailingOpen(
-    server: Server,
-    after: (closeReceiver: (error?: Error) => void) => Promise<void>,
-  ): Transport {
-    let inner: Transport | undefined;
-    let receiver = (_payload: string) => {};
-    let closeReceiver = (_error?: Error) => {};
-    let failOpen = true;
-    let openRequestId: unknown;
-    const answered = Promise.withResolvers<void>();
-    return {
-      setReceiver(next) {
-        receiver = next;
-      },
-      setCloseReceiver(next) {
-        closeReceiver = next;
-      },
-      async close() {
-        await inner?.close();
-        inner = undefined;
-      },
-      reset() {
-        void inner?.close();
-        inner = undefined;
-      },
-      async send(payload) {
-        if (inner === undefined) {
-          inner = loopback(server);
-          inner.setReceiver((frame) => {
-            receiver(frame);
-            const message = decodeMemoryBoundary(frame) as {
-              requestId?: unknown;
-            };
-            if (
-              openRequestId !== undefined &&
-              message.requestId === openRequestId
-            ) answered.resolve();
-          });
-        }
-        const message = decodeMemoryBoundary(payload) as {
-          type?: string;
-          requestId?: unknown;
-        };
-        if (message.type !== "session.open" || !failOpen) {
-          return await inner.send(payload);
-        }
-        failOpen = false;
-        openRequestId = message.requestId;
-        await inner.send(payload);
-        await answered.promise;
-        await after((error) => {
-          void inner?.close();
-          inner = undefined;
-          closeReceiver(error);
-        });
-        throw connectionError("connection lost after the open's answer");
-      },
-    };
-  }
-
-  it("rejects a mount whose `session.open` was answered when the client closed before the send failed", async () => {
-    const server = new Server({
-      ...testSessionOpenServerOptions,
-      store: new URL("memory://client-answered-send-closed"),
-    });
-    let closing: () => Promise<void> = () => Promise.resolve();
-    const client = await connect({
-      transport: answeredThenFailingOpen(server, () => closing()),
-    });
-    closing = () => client.close();
-    try {
-      await expect(
-        client.mount(
-          "did:key:z6Mk-client-answered-send-closed",
-          {},
-          testSessionOpenAuthFactory,
-        ),
-      ).rejects.toThrow();
+      expect((await session.transact(commit())).seq).toBe(1);
     } finally {
       await client.close();
       await server.close();
     }
   });
 
-  it("rejects a mount whose `session.open` was answered on a replaced connection when restoring it there is denied for good", async () => {
-    let opens = 0;
-    const server = new Server({
-      ...testSessionOpenServerOptions,
-      authorizeSessionOpen: () =>
-        ++opens === 1
-          ? testSessionOpenServerOptions.authorizeSessionOpen()
-          : undefined,
-      store: new URL("memory://client-answered-send-denied"),
+  it("restores a mount whose `session.open` was answered on a connection that dropped and was replaced before its send resolved, with a session that works", async () => {
+    // A send that resolves reports nothing to the request, so nothing but
+    // the connection the answer arrived on says the session needs restoring.
+
+    const server = serverFor("replaced-resolved");
+    const { client } = await clientReplacingConnectionUnderOpen(server, {
+      resolves: true,
     });
-    const reconnected = Promise.withResolvers<void>();
-    const client = await connect({
-      transport: answeredThenFailingOpen(server, async (drop) => {
-        drop(connectionError("connection lost after the open's answer"));
-        await reconnected.promise;
-      }),
-    });
-    client.subscribeReconnected(() => reconnected.resolve());
     try {
-      await expect(
-        client.mount(
-          "did:key:z6Mk-client-answered-send-denied",
-          {},
-          testSessionOpenAuthFactory,
-        ),
-      ).rejects.toThrow();
+      const session = await client.mount(
+        spaceFor("replaced-resolved"),
+        {},
+        testSessionOpenAuthFactory,
+      );
+
+      expect(client.isConnected()).toBe(true);
+      expect((await session.transact(commit())).seq).toBe(1);
     } finally {
       await client.close();
       await server.close();
     }
   });
+
   it("restores a mount answered on a connection that dropped only once when its send fails before the reconnect finishes", async () => {
     let opens = 0;
-    const server = new Server({
-      ...testSessionOpenServerOptions,
+    const server = serverFor("once", {
       authorizeSessionOpen: () => {
         opens++;
         return testSessionOpenServerOptions.authorizeSessionOpen();
       },
-      store: new URL("memory://client-answered-send-once"),
     });
-    const client = await connect({
-      transport: answeredThenFailingOpen(server, (drop) => {
-        drop(connectionError("connection lost after the open's answer"));
-        return Promise.resolve();
-      }),
-    });
+    const { transport } = answeredBeforeSendSettles(
+      server,
+      "session.open",
+      (lose) => Promise.reject(lose()),
+    );
+    const client = await connect({ transport });
     try {
       const session = await client.mount(
-        "did:key:z6Mk-client-answered-send-once",
+        spaceFor("once"),
         {},
         testSessionOpenAuthFactory,
       );
-      const applied = await session.transact({
-        localSeq: 1,
-        reads: { confirmed: [], pending: [] },
-        operations: [{ op: "set", id: "of:doc", value: { value: "A" } }],
-      });
-      expect(applied.seq).toBeGreaterThan(0);
+
+      expect((await session.transact(commit())).seq).toBe(1);
       // The open the server answered, and one restore.
       expect(opens).toBe(2);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("rejects a mount whose `session.open` was answered before the client closed, as made on a closed client", async () => {
+    // The transport's own rejection of the send says only that a connection
+    // was lost. The answer stands, and the mount fails on what it finds when
+    // it goes to restore the session: a client that is closed.
+
+    const server = serverFor("closed");
+    let closing: () => Promise<void> = () => Promise.resolve();
+    const { transport } = answeredBeforeSendSettles(
+      server,
+      "session.open",
+      async () => {
+        await closing();
+        throw connectionError("test connection closed");
+      },
+    );
+    const client = await connect({ transport });
+    closing = () => client.close();
+    try {
+      await expect(
+        client.mount(spaceFor("closed"), {}, testSessionOpenAuthFactory),
+      ).rejects.toThrow("memory client is closed");
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("rejects a mount whose `session.open` was answered on a replaced connection with the denial that ended its restore there, and mounts the space again on the next connection", async () => {
+    // The server admits the mount's open, refuses the restore's for good, and
+    // admits every open after that. A refused open uses up its connection's
+    // challenge, so the second mount is made on a new connection, which has
+    // nothing of the refused session to restore.
+
+    let opens = 0;
+    const server = serverFor("denied", {
+      authorizeSessionOpen: () =>
+        ++opens === 2
+          ? undefined
+          : testSessionOpenServerOptions.authorizeSessionOpen(),
+    });
+    const { client, lose } = await clientReplacingConnectionUnderOpen(server);
+    try {
+      await expect(
+        client.mount(spaceFor("denied"), {}, testSessionOpenAuthFactory),
+      ).rejects.toMatchObject({ name: "AuthorizationError" });
+
+      lose();
+      const session = await client.mount(
+        spaceFor("denied"),
+        {},
+        testSessionOpenAuthFactory,
+      );
+
+      expect((await session.transact(commit())).seq).toBe(1);
+      // The first mount's open, its restore's, and the second mount's.
+      expect(opens).toBe(3);
     } finally {
       await client.close();
       await server.close();

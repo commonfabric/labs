@@ -1098,18 +1098,17 @@ export class Client {
       resumeKey: crypto.randomUUID(),
       resumeAttempt: 1,
     };
-    let opening: Promise<SessionOpenResult> | undefined;
+    let opening: Promise<{ result: SessionOpenResult }> | undefined;
     let result: SessionOpenResult;
-    const answeredOn: { epoch?: number } = {};
+    let answeredOnEpoch: number | undefined;
     try {
-      result = await runWithAbortSignal(
+      ({ result, answeredOnEpoch } = await runWithAbortSignal(
         signal,
         "memory session mount cancelled",
-        () => (opening = this.openSession(space, options, auth, undefined, {
+        () => (opening = this.#openSession(space, options, auth, undefined, {
           signal,
-          answeredOn,
         })),
-      );
+      ));
       if (signal?.aborted) {
         throw signal.reason instanceof Error
           ? signal.reason
@@ -1119,7 +1118,7 @@ export class Client {
       // A cancelled mount hands out no session, so one the server opened for
       // it has no holder to close it.
       if (signal?.aborted) {
-        void opening?.then(({ sessionId }) =>
+        void opening?.then(({ result: { sessionId } }) =>
           this.#closeUnheldSession(space, sessionId)
         ).catch(() => undefined);
       }
@@ -1150,15 +1149,16 @@ export class Client {
     // replaced: the reconnect restored the client's sessions without this
     // one, which is open only on the connection that is gone. It is restored
     // on the connection that is up before it is handed out.
-    if (
-      answeredOn.epoch !== undefined && this.#staleSince(answeredOn.epoch)
-    ) {
+    if (answeredOnEpoch !== undefined && this.#staleSince(answeredOnEpoch)) {
       try {
         session.handleDisconnect();
         await this.restoreConnection();
         // A reconnect that had not yet taken stock of the client's sessions
-        // when this one was registered restored it already.
-        if (session.restorePending) await session.restore();
+        // when this one was registered has restored it already, or holds it
+        // after a refusal for now. A held session is left to the retry its
+        // hold has scheduled: a restore made here would send its open again
+        // at once, ahead of the backoff the hold keeps.
+        if (session.restorePending && !session.held) await session.restore();
         // A restore that a permanent denial ended terminated the session
         // rather than failing; one a refusal for now holds is still pending.
         await session.whenRestored();
@@ -1471,22 +1471,35 @@ export class Client {
     mount: MountOptions,
     auth?: SessionAuth,
     holdings?: SessionHolding[],
-    options: {
-      restoring?: boolean;
-      signal?: AbortSignal;
-      /**
-       * Set to the epoch of the connection that answered the
-       * `session.open`, as its answer arrives.
-       */
-      answeredOn?: { epoch?: number };
-    } = {},
+    options: { restoring?: boolean; signal?: AbortSignal } = {},
   ): Promise<SessionOpenResult> {
+    const { result } = await this.#openSession(
+      space,
+      mount,
+      auth,
+      holdings,
+      options,
+    );
+    return result;
+  }
+
+  /**
+   * Helper for `openSession()` and `#mount()`, which also returns the epoch
+   * of the connection that answered the `session.open`.
+   */
+  async #openSession(
+    space: string,
+    mount: MountOptions,
+    auth: SessionAuth | undefined,
+    holdings: SessionHolding[] | undefined,
+    options: { restoring?: boolean; signal?: AbortSignal },
+  ): Promise<{ result: SessionOpenResult; answeredOnEpoch?: number }> {
     if (this.#clientUpdateError !== undefined) throw this.#clientUpdateError;
+    // Set as the answer to the open arrives.
+    let answeredOnEpoch: number | undefined;
     const noteAnswer = {
       onResponse: () => {
-        if (options.answeredOn !== undefined) {
-          options.answeredOn.epoch = this.#connectionEpoch;
-        }
+        answeredOnEpoch = this.#connectionEpoch;
       },
     };
     const session: SessionDescriptor = {
@@ -1595,7 +1608,7 @@ export class Client {
             requireUncancelled();
             // The chain rides outside any signature here: the connection
             // authenticated the key, and each proof carries its own.
-            return await this.request<SessionOpenResult>({
+            const result = await this.request<SessionOpenResult>({
               type: "session.open",
               requestId: this.#nextRequestId(),
               space,
@@ -1612,6 +1625,7 @@ export class Client {
                 ? { holdings: this.declarableHoldings(holdings) }
                 : {}),
             }, { whileConnected, ...noteAnswer });
+            return { result, answeredOnEpoch };
           }
         } catch (error) {
           // A router's refusal for now passes without a new connection,
@@ -1676,7 +1690,7 @@ export class Client {
         await this.#ensureConnected();
         continue;
       }
-      return result;
+      return { result, answeredOnEpoch };
     }
   }
 
@@ -4331,8 +4345,7 @@ export class SpaceSession {
     const background = [...this.#background];
     this.#background.clear();
     await Promise.allSettled(background);
-    // A commit whose send failed after its acceptance arrived is outstanding
-    // still, and settles with its verdict.
+    // No send is still in flight, so a commit still outstanding has no answer.
     this.#settleOutstandingCommits(new Error("memory session closed"));
     this.#replaceWatchSpecs([]);
     this.#viewInterests = [];
