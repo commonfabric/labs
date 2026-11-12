@@ -5,6 +5,7 @@ import { hasExecutableCode } from "./executable-source.ts";
 import { type LcovFileCoverage, parseLcovReports } from "./lcov.ts";
 import { normalizeLcovInstancePaths } from "./write-coverage-lcov.ts";
 import { PACKAGE_ROOTS, packageDirOf } from "./package-layout.ts";
+import { isIframeGuestBundle, PATTERNS_DIR } from "./pattern-files.ts";
 
 export const COVERAGE_PROFILE_ARTIFACT_PREFIX = "coverage-profile-";
 export const COVERAGE_METRIC_PREFIX = "coverage-debt:";
@@ -520,6 +521,15 @@ export function shouldTrackSourceFile(relativePath: string): boolean {
 
   if (
     EXCLUDED_RELATIVE_PREFIXES.some((prefix) => normalized.startsWith(prefix))
+  ) {
+    return false;
+  }
+
+  // An iframe pattern's guest bundle is generated from the guest's source,
+  // which is what the metric counts.
+  if (
+    normalized.startsWith(`${PATTERNS_DIR}/`) &&
+    isIframeGuestBundle(normalized, PATTERNS_DIR)
   ) {
     return false;
   }

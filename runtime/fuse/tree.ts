@@ -102,10 +102,7 @@ export class FsTree {
   /** Parent inode by child inode. */
   #parents: Map<bigint, bigint> = new Map();
 
-  /** Inode by absolute path. */
-  #paths: Map<string, bigint> = new Map();
-
-  /** Absolute path by inode; the inverse of `#paths`. */
+  /** Absolute path by inode. */
   #inoPaths: Map<bigint, string> = new Map();
 
   /** Name of each inode's entry in its parent. */
@@ -144,7 +141,6 @@ export class FsTree {
       children: new Map(),
       mtime: this.#now(),
     });
-    this.#paths.set("/", ROOT_INO);
     this.#inoPaths.set(ROOT_INO, "/");
   }
 
@@ -172,11 +168,6 @@ export class FsTree {
   /** Parent inode by child inode. */
   get parents(): Map<bigint, bigint> {
     return this.#parents;
-  }
-
-  /** Inode by absolute path. */
-  get paths(): Map<string, bigint> {
-    return this.#paths;
   }
 
   /** Inode of the root directory. */
@@ -656,25 +647,14 @@ export class FsTree {
    * indexes.
    */
   #trackPath(ino: bigint, parentIno: bigint, name: string): void {
-    const path = this.childPath(parentIno, name);
-    this.#paths.set(path, ino);
-    this.#inoPaths.set(ino, path);
+    this.#inoPaths.set(ino, this.childPath(parentIno, name));
     this.#inoNames.set(ino, name);
   }
 
-  /**
-   * Removes `ino` from the path and name indexes, leaving a path that has come
-   * to name another inode alone.
-   */
+  /** Removes `ino` from the path and name indexes. */
   #untrackPath(ino: bigint): void {
-    const path = this.#inoPaths.get(ino);
-    if (path !== undefined) {
-      if (this.#paths.get(path) === ino) {
-        this.#paths.delete(path);
-      }
-      this.#inoPaths.delete(ino);
-      this.#inoNames.delete(ino);
-    }
+    this.#inoPaths.delete(ino);
+    this.#inoNames.delete(ino);
   }
 
   /**
@@ -937,10 +917,6 @@ export class FsTree {
    * false — its listing changes are reported through `entryChanges` instead.
    */
   #adoptContent(oldNode: FsNode, newNode: FsNode): boolean {
-    if (oldNode.kind === "dir" && newNode.kind === "dir") {
-      oldNode.jsonType = newNode.jsonType;
-      return false;
-    }
     if (oldNode.kind === "file" && newNode.kind === "file") {
       const changed = oldNode.jsonType !== newNode.jsonType ||
         !bytesEqual(oldNode.content, newNode.content);
@@ -963,6 +939,9 @@ export class FsTree {
       oldNode.cellProp = newNode.cellProp;
       oldNode.script = newNode.script;
       return changed;
+    }
+    if (oldNode.kind === "dir" && newNode.kind === "dir") {
+      oldNode.jsonType = newNode.jsonType;
     }
     return false;
   }

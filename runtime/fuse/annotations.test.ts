@@ -5,8 +5,11 @@ import {
   assertNotEquals,
   assertThrows,
 } from "@std/assert";
+import { expect } from "@std/expect";
+import { describe, it } from "@std/testing/bdd";
 import { buildCallableScript } from "./callables.ts";
 import {
+  canonicalCfcJsonStringify,
   CFC_COMPAT_XATTR_PREFIX,
   CFC_FAIL_CLOSED_ATOM_CLASS,
   CFC_TRUSTED_XATTR_PREFIX,
@@ -727,4 +730,264 @@ Deno.test("an empty container takes the label of its own path", () => {
     annotator.subtreeLabel({ items: [], meta: {} }, []).confidentiality,
     [...TITLE_LABEL.confidentiality, ...BODY_LABEL.confidentiality],
   );
+});
+
+describe("annotations", () => {
+  describe("canonicalCfcJsonStringify()", () => {
+    it("returns `null` for `undefined`, alone and as an array element", () => {
+      expect(canonicalCfcJsonStringify(undefined)).toBe("null");
+      expect(canonicalCfcJsonStringify([undefined, 1])).toBe("[null,1]");
+    });
+
+    it("returns an object without its `undefined` properties", () => {
+      expect(canonicalCfcJsonStringify({ b: 1, a: undefined })).toBe(
+        '{"b":1}',
+      );
+    });
+  });
+
+  describe("deriveCfcProjectionGeneration()", () => {
+    // Every case varies the value alone, so a generation that differs differs
+    // because of how the value is digested.
+
+    const generationOf = (value: unknown) =>
+      deriveCfcProjectionGeneration({ space: "did:key:zSpace", value });
+
+    it("returns distinct generations for `undefined`, `null`, and a missing property", () => {
+      expect(generationOf(undefined)).not.toBe(generationOf(null));
+      expect(generationOf({ a: undefined })).not.toBe(generationOf({}));
+      expect(generationOf({ a: undefined })).not.toBe(
+        generationOf({ a: null }),
+      );
+      expect(generationOf({ a: undefined })).toBe(
+        generationOf({ a: undefined }),
+      );
+    });
+
+    it("returns generations for bigints that follow their values and differ from numbers and strings", () => {
+      expect(generationOf(1n)).toBe(generationOf(1n));
+      expect(generationOf(1n)).not.toBe(generationOf(2n));
+      expect(generationOf(1n)).not.toBe(generationOf(1));
+      expect(generationOf(1n)).not.toBe(generationOf("1"));
+    });
+
+    it("returns generations for symbols that follow their descriptions", () => {
+      expect(generationOf(Symbol("a"))).toBe(generationOf(Symbol("a")));
+      expect(generationOf(Symbol("a"))).not.toBe(generationOf(Symbol("b")));
+      expect(generationOf(Symbol())).not.toBe(generationOf(Symbol("")));
+    });
+
+    it("returns one generation for every function, distinct from `undefined`", () => {
+      expect(generationOf(() => 1)).toBe(generationOf(() => 2));
+      expect(generationOf({ f: () => 1 })).not.toBe(
+        generationOf({ f: undefined }),
+      );
+    });
+
+    it("returns generations for cycles that follow where each cycle closes", () => {
+      const closingAt = (target: "root" | "child") => {
+        const child: Record<string, unknown> = {};
+        const root = { name: "x", child };
+        child.back = target === "root" ? root : child;
+        return root;
+      };
+
+      expect(generationOf(closingAt("root"))).toBe(
+        generationOf(closingAt("root")),
+      );
+      expect(generationOf(closingAt("root"))).not.toBe(
+        generationOf(closingAt("child")),
+      );
+      expect(generationOf(closingAt("root"))).not.toBe(
+        generationOf({ name: "x", child: { back: {} } }),
+      );
+    });
+
+    it("returns the same generation for an object reached twice as for two copies of it", () => {
+      const shared = { v: 1 };
+
+      expect(generationOf({ a: shared, b: shared })).toBe(
+        generationOf({ a: { v: 1 }, b: { v: 1 } }),
+      );
+    });
+  });
+
+  describe("CfcProjectionAnnotator", () => {
+    describe("instance members", () => {
+      describe("namespaceLabel()", () => {
+        it("returns the label of its own path for an empty array, and the join of its elements' labels otherwise", () => {
+          const annotator = makeAnnotator(new FsTree(), [
+            { path: ["items"], label: TITLE_LABEL },
+            { path: ["items", "0"], label: BODY_LABEL },
+          ]);
+
+          expect(annotator.namespaceLabel([], ["items"])).toEqual(TITLE_LABEL);
+          expect(annotator.namespaceLabel(["only"], ["items"])).toEqual(
+            BODY_LABEL,
+          );
+        });
+
+        it("returns the label of its own path for a scalar", () => {
+          const annotator = makeAnnotator(new FsTree(), [
+            { path: ["title"], label: TITLE_LABEL },
+            { path: ["title", "0"], label: BODY_LABEL },
+          ]);
+
+          expect(annotator.namespaceLabel("hello", ["title"])).toEqual(
+            TITLE_LABEL,
+          );
+        });
+      });
+
+      describe("annotateEntry()", () => {
+        it("records an entry for an annotated child and none for an unannotated one", () => {
+          const tree = new FsTree();
+          const annotator = makeAnnotator(tree, [
+            { path: ["kept"], label: TITLE_LABEL },
+          ]);
+          const parentIno = tree.addDir(tree.rootIno, "values", "object");
+          annotator.annotateJsonDirectory(parentIno, [], { kept: "value" });
+          const keptIno = tree.addFile(parentIno, "kept", "value", "string");
+          annotator.annotateJsonScalar(keptIno, ["kept"], "value");
+          const plainIno = tree.addFile(parentIno, "plain", "x", "string");
+
+          annotator.annotateEntry(parentIno, "kept", keptIno);
+          annotator.annotateEntry(parentIno, "plain", plainIno);
+
+          expect(
+            tree.getCfcAnnotation(parentIno)?.entries?.entries.map((entry) =>
+              entry.name
+            ),
+          ).toEqual(["kept"]);
+        });
+      });
+    });
+  });
+
+  describe("xattr access", () => {
+    // `result/title` carries an annotation, and the root directory, which no
+    // annotator has visited, carries none.
+
+    const buildTree = () => {
+      const tree = new FsTree();
+      const annotator = makeAnnotator(tree, [
+        { path: ["title"], label: TITLE_LABEL },
+      ]);
+      buildJsonTree(
+        tree,
+        tree.rootIno,
+        "result",
+        { title: "hello" },
+        undefined,
+        0,
+        undefined,
+        undefined,
+        annotator.jsonContext([]),
+      );
+      return { tree, titleIno: inoAt(tree, ["result", "title"]) };
+    };
+
+    describe("listCfcXattrNames()", () => {
+      it("returns the names of an annotated inode and none for an unannotated one", () => {
+        const { tree, titleIno } = buildTree();
+        const options = { enabled: true, namespace: "trusted" } as const;
+
+        expect(listCfcXattrNames(tree, titleIno, options)).toContain(
+          `${CFC_TRUSTED_XATTR_PREFIX}ref`,
+        );
+        expect(listCfcXattrNames(tree, tree.rootIno, options)).toEqual([]);
+      });
+    });
+
+    describe("getCfcXattrValue()", () => {
+      it("returns `null` when xattrs are disabled", () => {
+        const { tree, titleIno } = buildTree();
+        const name = `${CFC_TRUSTED_XATTR_PREFIX}ref`;
+
+        expect(
+          getCfcXattrValue(tree, titleIno, name, {
+            enabled: false,
+            namespace: "trusted",
+          }),
+        ).toBeNull();
+        expect(
+          getCfcXattrValue(tree, titleIno, name, {
+            enabled: true,
+            namespace: "trusted",
+          }),
+        ).not.toBeNull();
+      });
+
+      it("returns `null` for a name outside the selected namespace, and the value once the namespace includes it", () => {
+        const { tree, titleIno } = buildTree();
+        const name = `${CFC_COMPAT_XATTR_PREFIX}generation`;
+
+        expect(
+          getCfcXattrValue(tree, titleIno, name, {
+            enabled: true,
+            namespace: "trusted",
+          }),
+        ).toBeNull();
+        expect(annotationText(tree, titleIno, name, "both")).toBe(
+          "generation-1",
+        );
+
+        // A foreign prefix as long as the trusted one does not pass for it.
+        expect(CFC_TRUSTED_XATTR_PREFIX.length).toBe("user.cfc.xyz".length);
+        expect(
+          getCfcXattrValue(tree, titleIno, "user.cfc.xyzgeneration", {
+            enabled: true,
+            namespace: "trusted",
+          }),
+        ).toBeNull();
+      });
+
+      it("returns `null` for a field outside the xattr vocabulary, even one the annotation holds", () => {
+        // An unlabeled value fails closed, which records `incomplete`.
+
+        const tree = new FsTree();
+        const ino = tree.addFile(tree.rootIno, "unlabeled", "x", "string");
+        makeAnnotator(tree).annotateJsonScalar(ino, ["unlabeled"], "x");
+
+        expect(tree.getCfcAnnotation(ino)?.incomplete).toBeDefined();
+        expect(
+          getCfcXattrValue(
+            tree,
+            ino,
+            `${CFC_TRUSTED_XATTR_PREFIX}incomplete`,
+            { enabled: true, namespace: "trusted" },
+          ),
+        ).toBeNull();
+      });
+
+      it("returns `null` for an inode with no annotation", () => {
+        const { tree } = buildTree();
+
+        expect(
+          getCfcXattrValue(
+            tree,
+            tree.rootIno,
+            `${CFC_TRUSTED_XATTR_PREFIX}ref`,
+            {
+              enabled: true,
+              namespace: "trusted",
+            },
+          ),
+        ).toBeNull();
+      });
+
+      it("returns `null` for an optional field the annotation lacks", () => {
+        const { tree, titleIno } = buildTree();
+
+        expect(
+          getCfcXattrValue(
+            tree,
+            titleIno,
+            `${CFC_TRUSTED_XATTR_PREFIX}symlink`,
+            { enabled: true, namespace: "trusted" },
+          ),
+        ).toBeNull();
+      });
+    });
+  });
 });
