@@ -42,9 +42,9 @@ describe("derived-internal-cell-ids", () => {
   } {
     const ids = new DerivedInternalCellIds(capacity);
     let mints = 0;
-    ids.accessForTestingOnly.mintRecorder = () => {
+    ids.accessForTestingOnly.observeMints(() => {
       mints += 1;
-    };
+    });
     return { ids, mints: () => mints };
   }
 
@@ -253,9 +253,9 @@ describe("derived-internal-cell-ids", () => {
     it("supplies the id of a derived internal cell's link", () => {
       const partialCause = Object.freeze({ $generated: 4 });
       let mints = 0;
-      runtime.derivedInternalCellIds.accessForTestingOnly.mintRecorder = () => {
+      runtime.derivedInternalCellIds.accessForTestingOnly.observeMints(() => {
         mints += 1;
-      };
+      });
       const link = getDerivedInternalCellLink(first, { partialCause });
       const computed = getDerivedInternalCellLink(first, {
         partialCause,

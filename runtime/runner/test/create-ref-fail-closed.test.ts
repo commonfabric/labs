@@ -39,6 +39,35 @@ describe("createRef fail-closed", () => {
     }
   });
 
+  it("derives the id of a stream with no link yet from the stream sentinel", async () => {
+    const signer = await Identity.fromPassphrase("create ref fail closed");
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL("http://toolshed.test"),
+      storageManager,
+    });
+    try {
+      const stream = new CellImpl(
+        runtime,
+        undefined,
+        undefined,
+        false,
+        undefined,
+        "stream",
+      ).getAsReactiveProxy();
+
+      expect(createRef({ ref: stream }, "cause").toString()).toBe(
+        createRef({ ref: { $stream: true } }, "cause").toString(),
+      );
+      expect(createRef({ ref: stream }, "cause").toString()).not.toBe(
+        createRef({ ref: { $stream: false } }, "cause").toString(),
+      );
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
   it("derives a stable id from concrete inputs (unchanged)", () => {
     const a = createRef({ x: 1, y: "z" }, "cause");
     const b = createRef({ x: 1, y: "z" }, "cause");

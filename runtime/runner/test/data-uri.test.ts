@@ -33,7 +33,10 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { fromBase64url } from "@commonfabric/bytes/base64url";
 
 import { createCell } from "../src/cell.ts";
-import { dataUriFromValueWithResolvedLinks } from "../src/data-uri.ts";
+import {
+  dataUriFromValueWithResolvedLinks,
+  dataUriSnapshotWithResolvedLinks,
+} from "../src/data-uri.ts";
 import { isSigilLink, type NormalizedLink } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
 import { LINK_V1_TAG } from "../src/sigil-types.ts";
@@ -398,6 +401,52 @@ describe("data-uri", () => {
       } finally {
         resetModernCellRepConfig();
       }
+    });
+  });
+
+  describe("dataUriSnapshotWithResolvedLinks", () => {
+    const base: NormalizedLink = {
+      id: "of:snapshot-base",
+      space,
+      scope: "space",
+      path: ["rows", "0"],
+    };
+
+    it("returns the id the plain mint returns for the same value and base", () => {
+      const data = { link: linkRefFrom({ path: ["title"] }), n: 1 };
+
+      expect(dataUriSnapshotWithResolvedLinks(data, base).id).toBe(
+        dataUriFromValueWithResolvedLinks(data, base),
+      );
+    });
+
+    it("gives a link that names no document the id of the base", () => {
+      const absolute = linkRefFrom({ id: "of:elsewhere", path: ["x"] });
+      const data = { relative: linkRefFrom({ path: ["title"] }), absolute };
+
+      const { value } = dataUriSnapshotWithResolvedLinks(data, base);
+      const result = value as typeof data;
+
+      expect(linkRefPayload(result.relative)).toEqual({
+        id: "of:snapshot-base",
+        path: ["title"],
+      });
+      expect(result.absolute).toBe(absolute);
+    });
+
+    it("returns the value itself where every link names a document", () => {
+      const data = { link: linkRefFrom({ id: "of:elsewhere", path: [] }) };
+
+      expect(dataUriSnapshotWithResolvedLinks(data, base).value).toBe(data);
+    });
+
+    it("returns the value itself where the base has no id", () => {
+      const data = { link: linkRefFrom({ path: ["title"] }) };
+
+      expect(dataUriSnapshotWithResolvedLinks(data).value).toBe(data);
+      expect(
+        dataUriSnapshotWithResolvedLinks(data, { path: [], space }).value,
+      ).toBe(data);
     });
   });
 });

@@ -73,11 +73,9 @@ export class AsyncSemaphoreQueue {
   }
 
   #drain(): void {
-    while (this.#active < this.#maxConcurrency && this.#queue.length > 0) {
+    while (this.#active < this.#maxConcurrency) {
       const item = this.#queue.shift();
-      if (!item) {
-        break;
-      }
+      if (item === undefined) break;
 
       this.#active++;
       const { fn, resolvers } = item;

@@ -2,6 +2,7 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
+  hasSessionReportStorageCapability,
   type ReplicaLoadFailure,
   ReplicaLoadFailureError,
 } from "../../src/storage/interface.ts";
@@ -40,6 +41,23 @@ describe("interface", () => {
         .toBe("refused");
       expect(new ReplicaLoadFailureError(failure, undefined).message)
         .toBe("undefined");
+    });
+  });
+
+  describe("hasSessionReportStorageCapability()", () => {
+    it("returns `true` for a provider with a `sendReport()` method", () => {
+      expect(hasSessionReportStorageCapability({ sendReport() {} })).toBe(true);
+    });
+
+    it("returns `false` for a provider without a `sendReport()` method", () => {
+      expect(hasSessionReportStorageCapability({})).toBe(false);
+      expect(hasSessionReportStorageCapability({ sendReport: "report" }))
+        .toBe(false);
+    });
+
+    it("returns `false` for `null` and `undefined`", () => {
+      expect(hasSessionReportStorageCapability(null)).toBe(false);
+      expect(hasSessionReportStorageCapability(undefined)).toBe(false);
     });
   });
 });

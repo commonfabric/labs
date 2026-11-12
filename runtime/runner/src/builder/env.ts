@@ -20,10 +20,21 @@ function clonePatternEnvironment(env: PatternEnvironment): PatternEnvironment {
   });
 }
 
-let globalEnv = clonePatternEnvironment({
-  apiUrl: isDeno()
+/**
+ * Returns the `apiUrl` patterns see until a host sets one: the local
+ * toolshed under Deno, and otherwise the origin of the page `scope` runs in.
+ */
+export function defaultApiUrl(
+  deno: boolean,
+  scope: { readonly location: { readonly href: string } },
+): URL {
+  return deno
     ? new URL(`http://localhost:${ports.toolshed}`)
-    : new URL(new URL(globalThis.location.href).origin),
+    : new URL(new URL(scope.location.href).origin);
+}
+
+let globalEnv = clonePatternEnvironment({
+  apiUrl: defaultApiUrl(isDeno(), globalThis),
 });
 
 // Sets the `PatternEnvironment` for all patterns executed

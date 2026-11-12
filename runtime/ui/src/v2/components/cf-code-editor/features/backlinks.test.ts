@@ -1,10 +1,18 @@
-import { describe, it } from "@std/testing/bdd";
+// First, so that the document it installs is there when CodeMirror loads.
+import { window } from "../../../test-utils/dom.ts";
+
+import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { FakeTime } from "@std/testing/time";
 import { EditorState } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
+import { cursorCharRight } from "@codemirror/commands";
 import {
+  atomicBacklinkRanges,
   backlinkEditFilter,
   backlinkField,
   type BacklinkInfo,
+  createBacklinkDecorationPlugin,
   parseBacklinks,
 } from "./backlinks.ts";
 
@@ -18,6 +26,55 @@ function createState(doc: string): EditorState {
     doc,
     extensions: [backlinkField, backlinkEditFilter],
   });
+}
+
+/** Every view `openView()` has opened and `closeViews()` not yet destroyed. */
+const openViews: EditorView[] = [];
+
+/**
+ * An editor showing `doc` in the test document, with the selection running
+ * from `anchor` to `head` and every backlink extension installed.
+ */
+function openView(doc: string, anchor = 0, head = anchor): EditorView {
+  const view = new EditorView({
+    state: EditorState.create({
+      doc,
+      selection: { anchor, head },
+      extensions: [
+        backlinkField,
+        backlinkEditFilter,
+        atomicBacklinkRanges,
+        createBacklinkDecorationPlugin(),
+      ],
+    }),
+    parent: document.body,
+  });
+  openViews.push(view);
+  return view;
+}
+
+/** Destroys every view `openView()` opened, and empties the document. */
+function closeViews(): void {
+  for (const view of openViews.splice(0)) view.destroy();
+  window.document.body.replaceChildren();
+}
+
+/** The text of every element in `view`'s content matching `selector`. */
+function textsOf(view: EditorView, selector: string): string[] {
+  return Array.from(
+    view.contentDOM.querySelectorAll(selector),
+    (element) => element.textContent,
+  );
+}
+
+/** The positions `cursorCharRight` visits, starting from the selection. */
+function stepsRight(view: EditorView, count: number): number[] {
+  const steps: number[] = [];
+  for (let step = 0; step < count; step++) {
+    cursorCharRight(view);
+    steps.push(view.state.selection.main.head);
+  }
+  return steps;
 }
 
 /** Shorthand to read backlinkField from a state. */
@@ -276,6 +333,19 @@ describe("backlinkEditFilter", () => {
     expect(tr.state.doc.toString()).toBe("[[pXending]]");
   });
 
+  it("blocks an ID edit while applying an edit between an incomplete backlink's closing brackets", () => {
+    // An incomplete backlink has no ID, so even an edit inside its `]]` is
+    // its user's to make.
+    const state = createState("[[todo]] [[A (a1)]]");
+    const tr = state.update({
+      changes: [
+        { from: 7, insert: "X" },
+        { from: 14, to: 15, insert: "Y" },
+      ],
+    });
+    expect(tr.state.doc.toString()).toBe("[[todo]X] [[A (a1)]]");
+  });
+
   it("multi-change transaction: blocks ID edit while allowing other changes", () => {
     // Backlink [[A (a1)]]: from=7, to=17, nameFrom=9, nameTo=10, id="a1"
     const state = createState("prefix [[A (a1)]] suffix");
@@ -311,5 +381,119 @@ describe("Enter keymap conditions", () => {
 
     // bl.to is the dispatch target — the character after ]] in the doc
     expect(state.doc.sliceString(bl.to, bl.to + 1)).toBe(" ");
+  });
+});
+
+//
+// atomicBacklinkRanges - Cursor motion over hidden syntax
+//
+
+describe("atomicBacklinkRanges", () => {
+  afterEach(closeViews);
+
+  it("moves the cursor over the brackets and the ID of a complete backlink in one step", () => {
+    // "a [[Foo (id1)]] b": the name runs from 4 to 7, and the backlink ends
+    // at 15.
+    const view = openView("a [[Foo (id1)]] b", 2);
+    expect(stepsRight(view, 5)).toEqual([4, 5, 6, 7, 15]);
+  });
+
+  it("moves the cursor one character at a time through an incomplete backlink", () => {
+    const view = openView("[[ab]]");
+    expect(stepsRight(view, 6)).toEqual([1, 2, 3, 4, 5, 6]);
+  });
+
+  it("moves the cursor one character at a time through a backlink spanning lines", () => {
+    // The whitespace before the ID may be a line break.
+    const view = openView("[[a\n(id1)]]");
+    expect(getBacklinks(view.state)[0].id).toBe("id1");
+    expect(stepsRight(view, 4)).toEqual([1, 2, 3, 4]);
+  });
+});
+
+//
+// createBacklinkDecorationPlugin() - Rendering
+//
+
+describe("createBacklinkDecorationPlugin()", () => {
+  afterEach(closeViews);
+
+  it("renders a complete backlink as a pill showing only its name", () => {
+    const view = openView("a [[Foo (id1)]] b", 5);
+    expect(view.contentDOM.textContent).toBe("a Foo b");
+    expect(textsOf(view, ".cm-backlink-pill")).toEqual(["Foo"]);
+  });
+
+  it("renders `[[Name]]` with the ID hidden while the focused cursor is inside", () => {
+    const view = openView("a [[Foo (id1)]] b");
+    view.focus();
+    view.dispatch({ selection: { anchor: 5 } });
+    expect(view.contentDOM.textContent).toBe("a [[Foo]] b");
+    expect(textsOf(view, ".cm-backlink-pill")).toEqual([]);
+  });
+
+  it("renders `[[Name]]` while a focused selection overlaps the backlink", () => {
+    // The selection's head is at 0, outside the backlink.
+    const view = openView("a [[Foo (id1)]] b", 16, 0);
+    view.focus();
+    view.dispatch({ selection: { anchor: 16, head: 0 } });
+    expect(view.contentDOM.textContent).toBe("a [[Foo]] b");
+  });
+
+  it("renders a pill again once the editor loses focus", () => {
+    const time = new FakeTime();
+    try {
+      const view = openView("a [[Foo (id1)]] b");
+      view.focus();
+      view.dispatch({ selection: { anchor: 5 } });
+      expect(view.contentDOM.textContent).toBe("a [[Foo]] b");
+
+      // CodeMirror reports a focus change a few milliseconds after the
+      // event, with no transaction of its own.
+      view.contentDOM.blur();
+      time.tick(50);
+      expect(view.contentDOM.textContent).toBe("a Foo b");
+      expect(textsOf(view, ".cm-backlink-pill")).toEqual(["Foo"]);
+    } finally {
+      time.restore();
+    }
+  });
+
+  it("renders an incomplete backlink as a pending pill when the cursor is elsewhere", () => {
+    const view = openView("a [[todo]] b");
+    view.focus();
+    view.dispatch({ selection: { anchor: 12 } });
+    expect(view.contentDOM.textContent).toBe("a todo b");
+    expect(textsOf(view, ".cm-backlink-pending")).toEqual(["todo"]);
+    expect(textsOf(view, ".cm-backlink-editing")).toEqual([]);
+  });
+
+  it("renders an incomplete backlink in full while the focused cursor is inside", () => {
+    const view = openView("a [[todo]] b");
+    view.focus();
+    view.dispatch({ selection: { anchor: 5 } });
+    expect(view.contentDOM.textContent).toBe("a [[todo]] b");
+    expect(textsOf(view, ".cm-backlink-editing")).toEqual(["[[todo]]"]);
+    expect(textsOf(view, ".cm-backlink-pending")).toEqual([]);
+  });
+
+  it("renders a backlink spanning lines as plain text", () => {
+    const view = openView("[[a\n(id1)]]");
+    expect(view.contentDOM.textContent).toBe("[[a(id1)]]");
+    expect(textsOf(view, ".cm-backlink-pill")).toEqual([]);
+  });
+
+  it("renders a backlink added by an edit", () => {
+    const view = openView("a b", 3);
+    view.dispatch({ changes: { from: 1, insert: " [[Foo (id1)]]" } });
+    expect(view.contentDOM.textContent).toBe("a Foo b");
+  });
+
+  it("renders a backlink an edit breaks as plain text", () => {
+    // The edit keeps the document's length, so the viewport stays as it was.
+    const view = openView("a [[Foo (id1)]] b", 17);
+    view.dispatch({ changes: { from: 2, to: 3, insert: "x" } });
+    expect(view.contentDOM.textContent).toBe("a x[Foo (id1)]] b");
+    expect(textsOf(view, ".cm-backlink-pill")).toEqual([]);
   });
 });

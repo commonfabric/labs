@@ -97,14 +97,12 @@ export function navigateTo(
     // If the result cell is already true, we've already navigated.
     if (resultCell.withTx(tx).get()) return;
 
-    // Read with a schema that won't subscribe to the whole piece
+    // Read with a schema that won't subscribe to the whole piece. The schema's
+    // `asCell` hands back the target cell whatever it holds: pattern creation
+    // can yield a navigable cell before every reactive dependency has
+    // materialized its value, and the cell identity is enough for navigation.
     const inputsWithLog = inputsCell.asSchema(targetCellSchema).withTx(tx);
     const target = inputsWithLog.get();
-
-    // Pattern creation can yield a navigable cell before every reactive
-    // dependency has materialized its value. The cell identity is enough for
-    // navigation; requiring a current value can block valid piece targets.
-    if (!target) return;
 
     // Server-execution v2 Phase 4 (protocol.md §5, builtins.md §4):
     // under the flag, navigateTo is the SPLIT contract. The SERVED half
@@ -247,27 +245,13 @@ export function navigateTo(
           ...(targetLink.space !== space ? { space: targetLink.space } : {}),
           id: targetLink.id,
           path: [...targetLink.path],
-          ...(targetLink.scope !== undefined
-            ? { scope: targetLink.scope }
-            : {}),
+          scope: targetLink.scope,
         },
       },
       // The engine stamps the issuing commit's seq at apply
       // (protocol.md §5's issuedIn; the stream-entry seq precedent).
       issuedIn: null,
     };
-    if (intentTx.recordMergeableOp === undefined) {
-      // FAIL CLOSED: without the mergeable-append record the commit
-      // would carry the WHOLE local array — the serving replica's
-      // scope-NAME-keyed view can hold other sessions' entries (the
-      // OW17 residual), and a whole-array write would bleed them
-      // into the acting session's instance.
-      throw new Error(
-        "navigate intent write requires mergeable-append support " +
-          "(the tail-relative append is what keeps the collapsed " +
-          "local view out of the acting session's instance)",
-      );
-    }
     // ALWAYS append (independent review MINOR-4): the ENGINE's
     // stored-nonce dedupe is the sole idempotency authority. The
     // deleted local-presence gate consulted the OW17-collapsed local

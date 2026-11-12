@@ -475,18 +475,17 @@ export class CFFab extends BaseElement {
   @state()
   private accessor showPreview = false;
 
-  private collapseTimeout: number | null = null;
-  private _previewUnsubscribe: (() => void) | null = null;
-  private _previewTimeout: number | null = null;
-
-  constructor() {
-    super();
-  }
+  #collapseTimeout: ReturnType<typeof setTimeout> | null = null;
+  #previewUnsubscribe: (() => void) | null = null;
+  #previewTimeout: ReturnType<typeof setTimeout> | null = null;
 
   override connectedCallback() {
     super.connectedCallback();
     document.addEventListener("keydown", this._handleKeydown);
     globalThis.addEventListener("click", this._handleWindowClick, true);
+    // Removal stopped following the preview cell, so an element added back
+    // follows it again. Before the first update, `updated()` starts it.
+    if (this.hasUpdated) this.#followPreviewMessage();
   }
 
   override disconnectedCallback() {
@@ -497,54 +496,22 @@ export class CFFab extends BaseElement {
       this._handleWindowClick,
       true,
     );
-    if (this.collapseTimeout !== null) {
-      clearTimeout(this.collapseTimeout);
-    }
-    if (this._previewUnsubscribe) {
-      this._previewUnsubscribe();
-      this._previewUnsubscribe = null;
-    }
-    if (this._previewTimeout !== null) {
-      clearTimeout(this._previewTimeout);
-    }
+    this.#stopFollowingPreviewMessage();
+    // The timers stop with the element, so it finishes now what they would
+    // have finished, and an element added back is as one never removed.
+    this.#endCollapse();
+    this.#hidePreview();
   }
 
   override updated(changedProperties: Map<string, unknown>) {
     super.updated(changedProperties);
 
-    // Handle preview message Cell subscription
     if (changedProperties.has("previewMessage")) {
       this._resolvedPreviewMessage = undefined;
-      if (this._previewUnsubscribe) {
-        this._previewUnsubscribe();
-        this._previewUnsubscribe = null;
-      }
-
-      if (
-        this.previewMessage && isCellHandle<string>(this.previewMessage)
-      ) {
-        this._previewUnsubscribe = this.previewMessage
-          .asSchema<string>(stringSchema)
-          .subscribe((value) => {
-            this._resolvedPreviewMessage = value;
-            if (this._resolvedPreviewMessage && !this.expanded) {
-              this._showPreviewNotification();
-            }
-          }, {
-            // A message the worker will not show is not previewed, and the
-            // last one is not left in its place.
-            onRefused: () => {
-              this._resolvedPreviewMessage = undefined;
-            },
-          });
-      } else if (
-        this.previewMessage &&
-        typeof this.previewMessage === "string"
-      ) {
+      this.#followPreviewMessage();
+      if (typeof this.previewMessage === "string" && this.previewMessage) {
         this._resolvedPreviewMessage = this.previewMessage;
-        if (this.previewMessage && !this.expanded) {
-          this._showPreviewNotification();
-        }
+        if (!this.expanded) this._showPreviewNotification();
       }
     }
 
@@ -554,25 +521,11 @@ export class CFFab extends BaseElement {
         this.collapsing = true;
         this.toggleAttribute("collapsing", true);
 
-        // Clear any existing timeout
-        if (this.collapseTimeout !== null) {
-          clearTimeout(this.collapseTimeout);
-        }
-
         // Reset collapsing state after animation completes
-        this.collapseTimeout = setTimeout(() => {
-          this.collapsing = false;
-          this.toggleAttribute("collapsing", false);
-          this.collapseTimeout = null;
-        }, 400) as unknown as number;
+        this.#collapseTimeout = setTimeout(() => this.#endCollapse(), 400);
       } else if (this.expanded) {
         // Expanding - clear collapsing state immediately
-        this.collapsing = false;
-        this.toggleAttribute("collapsing", false);
-        if (this.collapseTimeout !== null) {
-          clearTimeout(this.collapseTimeout);
-          this.collapseTimeout = null;
-        }
+        this.#endCollapse();
       }
     }
   }
@@ -611,18 +564,58 @@ export class CFFab extends BaseElement {
   };
 
   private _showPreviewNotification() {
+    this.#hidePreview();
     this.showPreview = true;
+    this.#previewTimeout = setTimeout(() => this.#hidePreview(), 5000);
+  }
 
-    // Clear any existing timeout
-    if (this._previewTimeout !== null) {
-      clearTimeout(this._previewTimeout);
+  /**
+   * Follows the cell `previewMessage` names, in place of any followed before,
+   * while the element is in the document. Each message it newly holds is
+   * previewed.
+   */
+  #followPreviewMessage(): void {
+    this.#stopFollowingPreviewMessage();
+    if (!this.isConnected || !isCellHandle<string>(this.previewMessage)) {
+      return;
     }
+    this.#previewUnsubscribe = this.previewMessage
+      .asSchema<string>(stringSchema)
+      .subscribe((value) => {
+        // Following again after removal hands back the message already
+        // shown, which is not previewed a second time.
+        const isNew = value !== this._resolvedPreviewMessage;
+        this._resolvedPreviewMessage = value;
+        if (isNew && value && !this.expanded) {
+          this._showPreviewNotification();
+        }
+      }, {
+        // A message the worker will not show is not previewed, and the
+        // last one is not left in its place.
+        onRefused: () => {
+          this._resolvedPreviewMessage = undefined;
+        },
+      });
+  }
 
-    // Hide after 5 seconds
-    this._previewTimeout = setTimeout(() => {
-      this.showPreview = false;
-      this._previewTimeout = null;
-    }, 5000) as unknown as number;
+  #stopFollowingPreviewMessage(): void {
+    this.#previewUnsubscribe?.();
+    this.#previewUnsubscribe = null;
+  }
+
+  /** Ends the collapse animation, if one is running. */
+  #endCollapse(): void {
+    if (this.#collapseTimeout !== null) clearTimeout(this.#collapseTimeout);
+    this.#collapseTimeout = null;
+    this.collapsing = false;
+    this.toggleAttribute("collapsing", false);
+  }
+
+  /** Hides the preview notification, if shown. */
+  #hidePreview(): void {
+    if (this.#previewTimeout !== null) clearTimeout(this.#previewTimeout);
+    this.#previewTimeout = null;
+    this.showPreview = false;
   }
 
   override render() {

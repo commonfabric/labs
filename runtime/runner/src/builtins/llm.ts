@@ -345,9 +345,6 @@ async function executeWithToolsLoop(params: {
       ...llmParams,
       messages: currentMessages,
     };
-    if (toolCatalog && requestParams.tools === undefined) {
-      requestParams.tools = toolCatalog.llmTools;
-    }
 
     // Route the call to the executing space's host when the space is
     // host-mapped (one runtime spans hosts; an LLM call belongs to the

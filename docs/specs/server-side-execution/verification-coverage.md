@@ -1890,11 +1890,9 @@ blockquote; this PR):
   the sandbox globalThis is isolated); pre-fix the backoff loop
   re-ran the handler throughout the observation window (17 runs / 5s
   observed; production shape ~43 attempts / 30.5s to
-  CommitConvergenceError). The push-boundary belt (a ConflictError
-  naming a known-speculative layer upgrades to the terminal refusal)
-  is unreachable-by-construction behind the build-time refusal and
-  carries no separate pin — `speculative-basis-exported` in the log
-  names any future reach.
+  CommitConvergenceError). The build-time refusal is the only check:
+  a layer is speculative from its seal on, so a commit that passes it
+  names no speculative layer when its verdict comes back.
 - The origin-ack retirement wake (speculation.md §6's closing
   paragraph; the verdict-lifetime sub-defect): → COVERED, impl-gate,
   red-first. The same file's "an entry whose origin's accept verdict
@@ -5413,10 +5411,8 @@ supply; OW29/OW32/OW34 closed):
     non-zero count coexists with every fire resolved by its mark — the chat
     witness below reads 2 beside 25/25), `intent-listener-installed` /
     `-released`, `intent-watch-failed` / `intent-listener-failed` /
-    `intent-check-read-failed` / `intent-apply-failed` (the loud
-    fail-soft arms; the last is the fix pass's per-entry guard, N-2 —
-    nothing in the arms throws today); the effects channel's
-    `effects-reconcile`; the overlay's diagnostic getters
+    `intent-check-read-failed` (the loud fail-soft arms); the effects
+    channel's `effects-reconcile`; the overlay's diagnostic getters
     `pendingIntentCount`, `intentListenerInstalled`, `intentCheckCount`,
     `intentCheckVisits` (the `sidecarEntriesRead` witness),
     `intentCheckMaxVisits`; the browser churn line

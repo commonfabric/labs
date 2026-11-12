@@ -1,6 +1,11 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { createSafeConsoleGlobal } from "../src/sandbox/compartment-globals.ts";
+import {
+  createModuleCompartmentGlobals,
+  createSafeConsoleGlobal,
+} from "../src/sandbox/compartment-globals.ts";
+import { ensureSESLockdown } from "../src/sandbox/ses-runtime.ts";
+import { popFrame, pushFrame } from "../src/builder/pattern.ts";
 
 describe("createSafeConsoleGlobal()", () => {
   it("keeps standard console methods callable when the host console is partial", () => {
@@ -20,5 +25,20 @@ describe("createSafeConsoleGlobal()", () => {
       .not.toThrow();
 
     expect(calls).toEqual([["hello", 42]]);
+  });
+});
+
+describe("createModuleCompartmentGlobals()", () => {
+  it("returns the handler event's coarsened time when Date is called as a function", () => {
+    ensureSESLockdown();
+    const GatedDate = createModuleCompartmentGlobals().Date as () => string;
+
+    const frame = pushFrame({ inHandler: true, eventTime: 1_700_000_123_456 });
+    try {
+      expect(GatedDate()).toBe(new Date(1_700_000_123_000).toString());
+    } finally {
+      popFrame(frame);
+    }
+    expect(() => GatedDate()).toThrow("not available in this context");
   });
 });

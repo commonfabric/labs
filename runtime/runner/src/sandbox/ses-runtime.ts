@@ -128,12 +128,9 @@ export class SESRuntime extends EventTarget {
 
   /**
    * Register a source map under `filename` so {@link mapPosition} (and stack
-   * parsing) can translate bundle coordinates back to original sources.
-   * `provider` runs (once) on the first lookup that needs `filename`. The ESM
-   * boot path registers its composed bundle/per-module maps this way —
-   * composition is a per-segment VLQ transcode over every module, and error
-   * mapping is on-demand, so boots that never look up a frame never pay it
-   * (CT-1819).
+   * parsing) can translate coordinates in `filename` back to original sources.
+   * `provider` runs (once) on the first lookup that needs `filename`, so a map
+   * that no stack ever asks for is never built.
    */
   loadSourceMapLazy(
     filename: string,
@@ -185,13 +182,6 @@ export function ensureSESLockdown(): void {
   ensureSESInitialized(true);
 }
 
-export function evaluateCallbackSourceInSES(
-  source: string,
-  options: SESRuntimeOptions = {},
-): unknown {
-  return new SESCallbackEvaluator(options).evaluate(source);
-}
-
 let sesInitialized = false;
 const SES_RUNTIME_STATE = Symbol.for("@commonfabric/runner/ses-runtime-state");
 
@@ -209,25 +199,23 @@ function ensureSESInitialized(lockdownEnabled: boolean): void {
   // them — the error constructors exist only after the first and freeze during
   // the second. `hardenIntrinsics` is revealed by the repair call, so it can
   // only be read afterwards.
-  const repairFn = (globalThis as {
+  //
+  // Both are asserted, not guarded: the `ses` import above installs
+  // `repairIntrinsics`, and the repair call reveals `hardenIntrinsics`, so the
+  // absence of either would mean ses broke its own contract. Were that ever to
+  // happen the call throws, which is the outcome that matters; the one thing
+  // lockdown must never do is quietly skip the harden.
+  const globalWithPhases = globalThis as {
     repairIntrinsics?: (options?: SESLockdownOptions) => void;
-  }).repairIntrinsics;
-  if (typeof repairFn !== "function") {
-    throw new Error("SES repairIntrinsics() is unavailable");
-  }
+    hardenIntrinsics?: () => void;
+  };
   // Vetted shim — must precede the repair, which is where SES's locale taming
   // would otherwise clobber these methods (and after which they freeze).
   // Pairs with `localeTaming: "unsafe"` below; see locale-taming.ts.
   sanitizeLocaleMethods();
-  repairFn(DEFAULT_LOCKDOWN_OPTIONS);
+  globalWithPhases.repairIntrinsics!(DEFAULT_LOCKDOWN_OPTIONS);
   // Vetted shim — must sit between the two phases; see error-taming.ts.
   restoreErrorIsError();
-  // Asserted, not guarded: the repair call above is what reveals
-  // `hardenIntrinsics`, so its absence is not an environment question the way
-  // `repairIntrinsics` itself is — it would mean ses broke its own contract.
-  // Were that ever to happen this throws, which is the outcome that matters;
-  // the one thing lockdown must never do is quietly skip the harden.
-  const globalWithPhases = globalThis as { hardenIntrinsics?: () => void };
   globalWithPhases.hardenIntrinsics!();
   // `lockdown()` never reveals `hardenIntrinsics`, so drop it again: the host
   // realm's global surface should differ from the one-call form only by the
@@ -278,14 +266,12 @@ const DEFAULT_LOCKDOWN_OPTIONS: SESLockdownOptions = {
 };
 
 function createCompartment(globals: Record<string, unknown>) {
+  // The `ses` import above installs `Compartment`.
   const CompartmentCtor = (globalThis as {
     Compartment?: new (
       globals?: Record<string, unknown>,
     ) => SESCompartmentLike;
-  }).Compartment;
-  if (!CompartmentCtor) {
-    throw new Error("SES Compartment is unavailable");
-  }
+  }).Compartment!;
   const compartment = new CompartmentCtor(globals);
   // SES freezes intrinsics, but compartment global bindings remain writable
   // unless we explicitly lock them down.
@@ -293,10 +279,16 @@ function createCompartment(globals: Record<string, unknown>) {
   return compartment;
 }
 
+/**
+ * Evaluates a callback's source on each call, and throws unless the source
+ * produced a function.
+ */
+type CallbackCreator = () => (...args: unknown[]) => unknown;
+
 class SESCallbackEvaluator {
   #callbackCompartment: SESCompartmentLike | undefined;
 
-  readonly #callbackCreatorCache = new Map<string, () => unknown>();
+  readonly #callbackCreatorCache = new Map<string, CallbackCreator>();
 
   #options: SESRuntimeOptions;
 
@@ -306,7 +298,7 @@ class SESCallbackEvaluator {
 
   /** The callback-creator cache, which a test reads directly. */
   get accessForTestingOnly(): {
-    readonly callbackCreatorCache: Map<string, () => unknown>;
+    readonly callbackCreatorCache: Map<string, CallbackCreator>;
   } {
     return { callbackCreatorCache: this.#callbackCreatorCache };
   }
@@ -315,17 +307,9 @@ class SESCallbackEvaluator {
     const normalizedSource = normalizeDirectFunctionSource(source);
     const createCallback = this.#getCachedCallbackCreator(normalizedSource);
 
-    return hardenVerifiedFunction((...args: unknown[]) => {
-      const fn = createCallback();
-      if (typeof fn !== "function") {
-        throw new Error("Callback source did not produce a function");
-      }
-      return Reflect.apply(
-        hardenVerifiedFunction(fn as (...args: unknown[]) => unknown),
-        undefined,
-        args,
-      );
-    });
+    return hardenVerifiedFunction((...args: unknown[]) =>
+      Reflect.apply(hardenVerifiedFunction(createCallback()), undefined, args)
+    );
   }
 
   clear(): void {
@@ -333,20 +317,20 @@ class SESCallbackEvaluator {
     this.#callbackCompartment = undefined;
   }
 
-  #getCachedCallbackCreator(source: string): () => unknown {
+  #getCachedCallbackCreator(source: string): CallbackCreator {
     const cached = this.#callbackCreatorCache.get(source);
     if (cached) {
       return cached;
     }
 
     const compartment = this.#getSharedCallbackCompartment();
-    const creator = compartment.evaluate(createCallbackCreatorSource(source));
-    if (typeof creator !== "function") {
-      throw new Error("Callback source must evaluate to a function creator");
-    }
-
-    this.#callbackCreatorCache.set(source, creator as () => unknown);
-    return creator as () => unknown;
+    // The creator source is a fixed template around the JSON-quoted callback
+    // source, so it always evaluates to the function it declares.
+    const creator = compartment.evaluate(
+      createCallbackCreatorSource(source),
+    ) as CallbackCreator;
+    this.#callbackCreatorCache.set(source, creator);
+    return creator;
   }
 
   #getSharedCallbackCompartment(): SESCompartmentLike {

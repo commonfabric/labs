@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { stub } from "@std/testing/mock";
 
 import type { JSONValue } from "@commonfabric/api";
 import { isExternalSchemaRef } from "@commonfabric/data-model-schema/schema-refs";
@@ -11,8 +12,9 @@ import {
   isRendererTrustedEvent,
   markRendererTrustedEvent,
 } from "../src/cfc/ui-contract.ts";
-import { Runtime } from "../src/runtime.ts";
+import { Runtime, type RuntimeOptions } from "../src/runtime.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
+import type { Action } from "../src/scheduler/types.ts";
 import { parseLink } from "../src/link-utils.ts";
 import { SESRuntime } from "../src/sandbox/mod.ts";
 import { getRuntimeModuleExports } from "../src/sandbox/runtime-modules.ts";
@@ -20,7 +22,10 @@ import {
   resetContentAddressedSchemasConfig,
   setContentAddressedSchemasConfig,
 } from "../src/schema-doc-config.ts";
-import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
+import type {
+  IExtendedStorageTransaction,
+  TransactionSealDestination,
+} from "../src/storage/interface.ts";
 import { portableSnapshotLinks } from "../src/data-uri.ts";
 import { immutableSnapshot } from "../src/immutable-cell.ts";
 
@@ -366,6 +371,127 @@ describe("runtime", () => {
       tx = runtime.edit();
       expect(holder.withTx(tx).key("item").key("ref").get()).toEqual({
         name: "x",
+      });
+    });
+  });
+  describe("Runtime", () => {
+    let storageManager: ReturnType<typeof StorageManager.emulate>;
+    const runtimes: Runtime[] = [];
+
+    const newRuntime = (
+      options: Partial<RuntimeOptions> = {},
+    ): Runtime => {
+      const runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager,
+        ...options,
+      });
+      runtimes.push(runtime);
+      return runtime;
+    };
+
+    beforeEach(() => {
+      storageManager = StorageManager.emulate({ as: signer });
+    });
+
+    afterEach(async () => {
+      for (const runtime of runtimes.splice(0)) await runtime.dispose();
+      await storageManager.close();
+    });
+
+    describe("constructor()", () => {
+      it("logs the services it initialized under `debug`, and logs nothing without it", () => {
+        using log = stub(console, "log");
+
+        newRuntime();
+        expect(log.calls).toHaveLength(0);
+
+        newRuntime({ debug: true });
+        expect(log.calls.map(({ args }) => args)).toEqual([[
+          "Runtime initialized with services:",
+          {
+            scheduler: true,
+            storageManager: true,
+            patternManager: true,
+            moduleRegistry: true,
+            harness: true,
+            runner: true,
+            telemetry: true,
+          },
+        ]]);
+      });
+    });
+
+    describe("instance members", () => {
+      describe("installSealDestination()", () => {
+        const destination: TransactionSealDestination = {
+          seal: (tx) => tx.tx.commit().settled,
+        };
+
+        it("throws for a runtime off server execution", () => {
+          expect(() => newRuntime().installSealDestination(destination))
+            .toThrow("requires EXPERIMENTAL_SERVER_EXECUTION");
+        });
+
+        it("throws while a destination is installed, and installs one again once it is cleared", () => {
+          const runtime = newRuntime({
+            servingPosture: true,
+            experimental: { serverExecution: true },
+          });
+          runtime.installSealDestination(destination);
+          try {
+            expect(() => runtime.installSealDestination(destination))
+              .toThrow("A transaction seal destination is already installed");
+          } finally {
+            runtime.clearSealDestination();
+          }
+
+          runtime.installSealDestination(destination);
+          runtime.clearSealDestination();
+        });
+      });
+
+      describe("runIdempotencyCheck()", () => {
+        it("reports an action whose rerun writes something else, and not one whose rerun writes the same", async () => {
+          const runtime = newRuntime();
+          const space = signer.did();
+          const setup = runtime.edit();
+          const log = runtime.getCell<string[]>(
+            space,
+            "runtime-idempotency-log",
+            undefined,
+            setup,
+          );
+          log.set([]);
+          const output = runtime.getCell<number>(
+            space,
+            "runtime-idempotency-output",
+            undefined,
+            setup,
+          );
+          output.set(0);
+          await setup.commit().settled;
+
+          const accumulator: Action = (tx) => {
+            log.withTx(tx).send([...(log.withTx(tx).get() ?? []), "entry"]);
+          };
+          const constant: Action = (tx) => {
+            output.withTx(tx).send(10);
+          };
+          for (const action of [accumulator, constant]) {
+            runtime.scheduler.subscribe(
+              action,
+              { reads: [], shallowReads: [], writes: [] },
+              {},
+            );
+          }
+          await runtime.scheduler.idle();
+
+          const reported = (await runtime.runIdempotencyCheck()).nonIdempotent
+            .map((report) => report.actionId);
+          expect(reported).toContain(accumulator.name);
+          expect(reported).not.toContain(constant.name);
+        });
       });
     });
   });

@@ -119,6 +119,21 @@ describe("buildReactivityPathsForChanges()", () => {
     expect(paths).toEqual([["value"], ["value", "b"]]);
   });
 
+  it("returns an array parent whose length changed while its keys held", () => {
+    // Three long with a hole at the end, the array holds the same indices as
+    // `[1, 9]`, so only its length tells the two apart.
+
+    const holed: FabricValue[] = [1, 2];
+    holed.length = 3;
+    const paths = buildReactivityPathsForChanges(
+      { value: { list: holed } },
+      { value: { list: [1, 9] } },
+      [["value", "list", "1"]],
+    );
+
+    expect(paths).toEqual([["value", "list"], ["value", "list", "1"]]);
+  });
+
   it("returns a changed path without a parent whose key set held", () => {
     const paths = buildReactivityPathsForChanges(
       { value: { a: { name: "old" }, b: 2 } },

@@ -31,6 +31,7 @@ import {
   createTraversalContext,
   getAtPath,
   IMemorySpaceValueAttestation,
+  isOpaquePosition,
   ManagedStorageTransaction,
   MapSet,
   MapSetStringToPathSelectors,
@@ -4691,4 +4692,70 @@ describe("schemaAcceptsType()", () => {
       anyOf: [{ $ref: "#/$defs/Name", $defs: { Name: { type: "string" } } }],
     }, "string")).toBe(true);
   });
+});
+
+describe("isOpaquePosition()", () => {
+  // A position is opaque when `unknown` decides it: nothing in the
+  // declaration asks for the value.
+
+  it("returns `true` for an `allOf` whose only branch is `unknown`", () => {
+    expect(isOpaquePosition({ allOf: [{ type: "unknown" }] }, "object")).toBe(
+      true,
+    );
+  });
+
+  it("returns `false` for an `allOf` where a concrete type sits beside `unknown`", () => {
+    expect(
+      isOpaquePosition(
+        { allOf: [{ type: "unknown" }, { type: "object" }] },
+        "object",
+      ),
+    ).toBe(false);
+  });
+
+  it("returns `true` for an `anyOf` whose only branch is `unknown`", () => {
+    expect(isOpaquePosition({ anyOf: [{ type: "unknown" }] }, "object")).toBe(
+      true,
+    );
+  });
+
+  it("returns `false` for an `anyOf` where a `true` branch sits beside `unknown`", () => {
+    expect(isOpaquePosition({ anyOf: [{ type: "unknown" }, true] }, "object"))
+      .toBe(false);
+  });
+
+  it("throws for a `type` that is neither a string nor a list", () => {
+    // A schema read out of stored data is not held to the type.
+    const schema = JSON.parse('{ "type": 5 }');
+    expect(() => isOpaquePosition(schema, "number")).toThrow(
+      "Invalid schema type",
+    );
+  });
+});
+
+describe("MapSet keys() and deleteValue()", () => {
+  for (
+    const [mode, newMapSet] of [
+      ["reference-equality", () => new MapSet<string, string>()],
+      ["hash-dedup", () => new MapSet<string, string>((value) => value)],
+    ] as const
+  ) {
+    describe(`in the ${mode} mode`, () => {
+      it("iterates each key once", () => {
+        const mapSet = newMapSet();
+        mapSet.add("a", "one");
+        mapSet.add("a", "two");
+        mapSet.add("b", "three");
+        expect([...mapSet.keys()]).toEqual(["a", "b"]);
+      });
+
+      it("returns `false` from `deleteValue()` for a key it does not hold", () => {
+        const mapSet = newMapSet();
+        mapSet.add("a", "one");
+        expect(mapSet.deleteValue("absent", "one")).toBe(false);
+        expect(mapSet.deleteValue("a", "one")).toBe(true);
+        expect([...mapSet.keys()]).toEqual([]);
+      });
+    });
+  }
 });

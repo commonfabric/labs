@@ -11,6 +11,7 @@ import {
 } from "@commonfabric/runtime-client";
 import type { FabricBridge } from "@commonfabric/iframe-sandbox";
 
+import { runtimeContext } from "../../runtime-context.ts";
 import { CFIframe } from "./index.ts";
 
 type CFIframeInternals = {
@@ -265,62 +266,69 @@ describe("CFIframe", () => {
     expect(element._errorDetails).toBeNull();
   });
 
-  it("retries context resolution when its error is dismissed", async () => {
-    const ref: CellRef = {
-      id: "of:context" as CellRef["id"],
-      space: "did:key:test" as CellRef["space"],
-      scope: "space",
-      path: [],
-      schema: { type: "object" },
-    };
-    let requestCount = 0;
-    const runtime = {
-      [$conn]: () => ({
-        request: (request: { type: RequestType }) => {
-          requestCount++;
-          if (requestCount === 1) {
-            return Promise.reject(new Error("context refused"));
-          }
-          return request.type === RequestType.CellResolveAsCell
-            ? Promise.resolve({
-              cell: { ...ref, id: "of:resolved" as CellRef["id"] },
-            })
-            : Promise.resolve({ value: {} });
-        },
-        subscribe: () => Promise.resolve(),
-        unsubscribe: () => Promise.resolve(),
-        peersOf: () => [],
-        signal: { aborted: false },
-      }),
-    } as unknown as RuntimeClient;
-    const element = new CFIframe();
-    element.src = "<p>recovered</p>";
-    element.context = new CellHandle(runtime, ref);
-    const failed = Promise.withResolvers<void>();
-    element.requestUpdate = () => failed.resolve();
+  for (
+    const [outcome, act] of [
+      ["dismissed", "dismissError"],
+      ["fixed", "fixError"],
+    ] as const
+  ) {
+    it(`retries context resolution when its error is ${outcome}`, async () => {
+      const ref: CellRef = {
+        id: "of:context" as CellRef["id"],
+        space: "did:key:test" as CellRef["space"],
+        scope: "space",
+        path: [],
+        schema: { type: "object" },
+      };
+      let requestCount = 0;
+      const runtime = {
+        [$conn]: () => ({
+          request: (request: { type: RequestType }) => {
+            requestCount++;
+            if (requestCount === 1) {
+              return Promise.reject(new Error("context refused"));
+            }
+            return request.type === RequestType.CellResolveAsCell
+              ? Promise.resolve({
+                cell: { ...ref, id: "of:resolved" as CellRef["id"] },
+              })
+              : Promise.resolve({ value: {} });
+          },
+          subscribe: () => Promise.resolve(),
+          unsubscribe: () => Promise.resolve(),
+          peersOf: () => [],
+          signal: { aborted: false },
+        }),
+      } as unknown as RuntimeClient;
+      const element = new CFIframe();
+      element.src = "<p>recovered</p>";
+      element.context = new CellHandle(runtime, ref);
+      const failed = Promise.withResolvers<void>();
+      element.requestUpdate = () => failed.resolve();
 
-    internals(element).willUpdate(contextChange());
-    await failed.promise;
+      internals(element).willUpdate(contextChange());
+      await failed.promise;
 
-    expect(element._errorDetails).toEqual({
-      description: "context refused",
-      source: "cf-iframe context",
-      lineno: 0,
-      colno: 0,
-      stacktrace: expect.stringContaining("context refused"),
+      expect(element._errorDetails).toEqual({
+        description: "context refused",
+        source: "cf-iframe context",
+        lineno: 0,
+        colno: 0,
+        stacktrace: expect.stringContaining("context refused"),
+      });
+      expect(templateValues(element).at(-1)).not.toBe("");
+
+      const recovered = Promise.withResolvers<void>();
+      element.requestUpdate = () => {
+        if (templateValues(element)[1] === element.src) recovered.resolve();
+      };
+      internals(element)[act]();
+      await recovered.promise;
+
+      expect(element._errorDetails).toBeNull();
+      expect(templateValues(element)[1]).toBe(element.src);
     });
-    expect(templateValues(element).at(-1)).not.toBe("");
-
-    const recovered = Promise.withResolvers<void>();
-    element.requestUpdate = () => {
-      if (templateValues(element)[1] === element.src) recovered.resolve();
-    };
-    internals(element).dismissError();
-    await recovered.promise;
-
-    expect(element._errorDetails).toBeNull();
-    expect(templateValues(element)[1]).toBe(element.src);
-  });
+  }
 
   describe("a context setup waiting for a SQLite database", () => {
     // The database's producer never writes here, so the setup waits until
@@ -467,6 +475,36 @@ describe("CFIframe", () => {
     internals(element).onRuntime(serving);
     internals(element).onRuntime(undefined);
     expect(templateValues(element)[2]).toBeUndefined();
+  });
+
+  it("takes the outer frame from the runtime a provider hands it once connected", () => {
+    const element = new HeadlessIframe();
+    const runtime = {
+      iframeOuterFrameUrl: () => "/outer-frame",
+    } as unknown as RuntimeClient;
+    element.addEventListener("context-request", (event) => {
+      if (event.context === runtimeContext) event.callback(runtime);
+    });
+
+    expect(templateValues(element)[2]).toBeUndefined();
+    element.connectedCallback();
+
+    expect(templateValues(element)[2]).toBe("/outer-frame");
+    element.disconnectedCallback();
+  });
+
+  it("requests no update for a runtime naming the outer frame it already has", () => {
+    const element = new CFIframe();
+    const runtime = {
+      iframeOuterFrameUrl: () => "/outer-frame",
+    } as unknown as RuntimeClient;
+    let updates = 0;
+    element.requestUpdate = () => updates++;
+
+    internals(element).onRuntime(runtime);
+    internals(element).onRuntime(runtime);
+
+    expect(updates).toBe(1);
   });
 
   it("takes the outer frame from the runtime alone, never from a property", () => {

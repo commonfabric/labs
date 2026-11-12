@@ -6,6 +6,7 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { DID } from "@commonfabric/identity";
 import { defer } from "@commonfabric/async/defer";
+import { stub } from "@std/testing/mock";
 
 import { installBrowserGlobals } from "./browser-globals.ts";
 
@@ -163,6 +164,45 @@ describe("XAppView Home bring-up", () => {
       expect(first.ensures).toBe(1);
       expect(second.ensures).toBe(1);
     } finally {
+      restore();
+    }
+  });
+
+  it("reports a bring-up its worker fails, and says nothing of one failing once its runtime is torn down", async () => {
+    const restore = installBrowserGlobals(PAGE_HREF);
+    const error = stub(console, "error", () => {});
+    try {
+      const { XAppView } = await import("../src/views/AppView.ts");
+      const reported = [];
+      for (const tornDown of [false, true]) {
+        const controller = new AbortController();
+        const runtime = stubRuntime([], "rt");
+        runtime.rt.signal = controller.signal;
+        runtime.rt.runtime().ensureHomePatternRunning = () => {
+          if (tornDown) controller.abort();
+          return Promise.reject(new Error("the worker went away"));
+        };
+        const view = new XAppView();
+        view.app = {
+          view: { spaceDid: "did:key:z6Mk-shell-home-bring-up-fails" as DID },
+        } as never;
+        view.space = "did:key:z6Mk-shell-home-bring-up-fails" as DID;
+        view.rt = runtime.rt as never;
+        view._spaceRootPattern.run();
+        await view._spaceRootPattern.taskComplete;
+        view._patterns.run();
+        await view._patterns.taskComplete;
+        view.updated(new Map());
+        const before = error.calls.length;
+        await view.homeBringUp;
+        reported.push(
+          error.calls.slice(before).map((call) => String(call.args[0])),
+        );
+      }
+
+      expect(reported).toEqual([["[AppView] Failed to bring up Home:"], []]);
+    } finally {
+      error.restore();
       restore();
     }
   });

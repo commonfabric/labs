@@ -666,6 +666,10 @@ describe("whole-object read over a session-scoped link", () => {
     try {
       const cell = rt.getCell(space, "cycle-holder", requiredResultSchema);
       await cell.pull();
+      // The chain's documents are loaded too, so that resolving it meets the
+      // cycle rather than stopping at a document this replica lacks.
+      await rt.getCell(space, "cycle-a").sync();
+      await rt.getCell(space, "cycle-b").sync();
       // Chain resolution hits the resolver's cycle detection; the catch keeps
       // the schema strict (identity-preserved) instead of hanging or relaxing.
       expect(

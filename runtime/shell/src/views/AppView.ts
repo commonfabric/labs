@@ -1,5 +1,6 @@
 import { type DID, KeyStore } from "@commonfabric/identity";
 import {
+  type AppView,
   isAppViewEqual,
   isEmbeddedView,
   isViewingDefaultPatternView,
@@ -244,10 +245,11 @@ function titleOf(read: CellHandleRead<string | undefined>): string | undefined {
 const PAGE_ORIGIN = "http://page.invalid";
 
 /**
- * Whether both readers of `reference` read it as member `member` of the
- * collection `slug` in `space`: the cell reference grammar, which `cf` reads
- * it through, and `urlToAppView`, which opens it as a page under this shell's
- * origin.
+ * The reference `//<space>/<slug>/<member>`, where both of its readers read it
+ * as member `member` of the collection `slug` in `space`, and otherwise
+ * `undefined`, as it is for no `space` at all. The readers are the cell
+ * reference grammar, which `cf` reads it through, and `urlToAppView`, which
+ * opens it as a page under this shell's origin.
  *
  * Each reader rewrites spellings the other keeps. The grammar refuses a space
  * name holding a character it reserves. A page URL resolves dot segments, and
@@ -255,12 +257,14 @@ const PAGE_ORIGIN = "http://page.invalid";
  * its head for the space's mark. A name rewritten on the way in comes back out
  * naming another space.
  */
-function readsBackAs(
-  reference: string,
-  space: string,
+function citationOf(
+  space: string | undefined,
   slug: string,
   member: string,
-): boolean {
+): string | undefined {
+  const named = spaceViewRef(space, undefined);
+  if (!named) return undefined;
+  const reference = `//${space}/${slug}/${member}`;
   // Each reader is asked rather than restated, so neither has a copy of its
   // rules here to fall out of step with.
   try {
@@ -269,16 +273,13 @@ function readsBackAs(
       cited.member === undefined && cited.scope === undefined &&
       cited.pin === undefined && cited.path.length === 1 &&
       cited.path[0] === member;
-    if (!citesMember) return false;
+    if (!citesMember) return undefined;
   } catch {
-    return false;
+    return undefined;
   }
-  const named = spaceViewRef(space, undefined);
-  if (!named) return false;
-  return isAppViewEqual(
-    urlToAppView(new URL(`${PAGE_ORIGIN}${reference}`)),
-    { ...named, pieceSlug: slug, pieceMember: member },
-  );
+  const read = urlToAppView(new URL(`${PAGE_ORIGIN}${reference}`));
+  const opened = { ...named, pieceSlug: slug, pieceMember: member };
+  return isAppViewEqual(read, opened) ? reference : undefined;
 }
 
 export class XAppView extends BaseView {
@@ -334,9 +335,11 @@ export class XAppView extends BaseView {
   @state()
   accessor pieceTitle: string | undefined = undefined;
 
-  @property({ attribute: false })
-  private accessor titleSubscription: CellEventTarget<string> | undefined =
-    undefined;
+  /**
+   * The name of the piece on screen, whose changes `pieceTitle` follows, while
+   * a piece is on screen.
+   */
+  #titleSubscription: CellEventTarget<string> | undefined = undefined;
 
   @state()
   private accessor _slugRevision = 0;
@@ -380,14 +383,6 @@ export class XAppView extends BaseView {
   #shownResolution: ShownResolution | undefined = undefined;
 
   #selectedPatternTargetId: string | undefined = undefined;
-
-  /**
-   * Whether the member the view carries named a member of a collection, as
-   * the last resolution answered. A citation is offered on this rather than
-   * on the view alone, so a segment that named nothing is never cited as
-   * though it named the piece on screen.
-   */
-  #namedAMember = false;
 
   /**
    * The runtime this view has asked to bring the user's Home up, which it asks
@@ -534,11 +529,6 @@ export class XAppView extends BaseView {
     > => {
       if (!rt || !space) return;
       this.#selectedPatternTargetId = undefined;
-      // Cleared before the resolution rather than after it: what the last
-      // reference turned out to be says nothing about this one, and a
-      // citation offered in between would be the previous answer standing
-      // under the current address.
-      this.#namedAMember = false;
       try {
         if ("pieceSlug" in app.view && app.view.pieceSlug) {
           // The reference is resolved before the piece is asked for, because
@@ -598,9 +588,6 @@ export class XAppView extends BaseView {
             throw new Error(landed.refusal.message);
           }
           const { pieceId, scope } = landed;
-          // `answerFor()` refuses a landing that leaves the member unspent, so
-          // a member carried this far named one.
-          this.#namedAMember = member !== undefined;
           this.#selectedPatternTargetId = pieceId;
           let pattern: PieceHandle<NameSchema>;
           try {
@@ -941,26 +928,21 @@ export class XAppView extends BaseView {
     this._slugRevision++;
   }
 
+  /**
+   * Follows the name of `activePiece`, the piece on screen, into
+   * `pieceTitle`, or shows "Untitled" while no piece is on screen.
+   */
   #setTitleSubscription(activePiece?: PieceHandle<NameSchema>) {
-    if (!activePiece) {
-      if (this.titleSubscription) {
-        this.titleSubscription.removeEventListener(
-          "update",
-          this.#onPieceTitleChange,
-        );
-      }
-      this.titleSubscription = undefined;
-      this.pieceTitle = "Untitled";
-    } else {
-      const cell = activePiece.cell().key(NAME).asSchema<string>(stringSchema);
-      if (
-        this.titleSubscription && cell.equals(this.titleSubscription.cell())
-      ) {
-        return;
-      }
-      this.titleSubscription = new CellEventTarget(cell);
-      this.pieceTitle = titleOf(cell.lastRead());
-    }
+    const cell = activePiece?.cell().key(NAME).asSchema<string>(stringSchema);
+    const following = this.#titleSubscription;
+    if (cell && following && cell.equals(following.cell())) return;
+    following?.removeEventListener("update", this.#onPieceTitleChange);
+    this.#titleSubscription = cell && new CellEventTarget(cell);
+    this.#titleSubscription?.addEventListener(
+      "update",
+      this.#onPieceTitleChange,
+    );
+    this.pieceTitle = cell ? titleOf(cell.lastRead()) : "Untitled";
   }
 
   #onPieceTitleChange = (e: Event) => {
@@ -1020,7 +1002,6 @@ export class XAppView extends BaseView {
    */
   #listenForRecoveries(rt: RuntimeInternals | undefined): void {
     const previous = this.#recoveryListenerRt;
-    if (rt === previous) return;
     previous?.removeEventListener(
       "connectionrestored",
       this.#onConnectionRestored,
@@ -1034,13 +1015,15 @@ export class XAppView extends BaseView {
     rt?.addEventListener("spaceaccessrestored", this.#onSpaceAccessRestored);
   }
 
-  #replacePieceUrlWithSlug(view: typeof this.app.view, slug: string) {
+  #replacePieceUrlWithSlug(
+    view: Exclude<AppView, { builtin: unknown }>,
+    slug: string,
+  ) {
     try {
       validateSlug(slug);
     } catch {
       return;
     }
-    if (!("pieceId" in view)) return;
     this.preserveRuntimeErrorsForNextViewChange?.();
     const { pieceId: _replaced, pieceMember: _dropped, ...rest } = view;
     this.#replaceView({ ...rest, pieceSlug: slug });
@@ -1075,19 +1058,6 @@ export class XAppView extends BaseView {
 
     if (changedProperties.has("pieceTitle")) {
       updatePageTitle(this.pieceTitle ?? "");
-    }
-
-    if (changedProperties.has("titleSubscription")) {
-      const current = this.titleSubscription;
-      const prev = changedProperties.get(
-        "titleSubscription",
-      ) as CellEventTarget<string | undefined> | undefined;
-      if (prev) {
-        prev.removeEventListener("update", this.#onPieceTitleChange);
-      }
-      if (current) {
-        current.addEventListener("update", this.#onPieceTitleChange);
-      }
     }
 
     // Update debugger controller with runtime
@@ -1239,8 +1209,12 @@ export class XAppView extends BaseView {
    * The space is written as the view names it: a space name derives its DID
    * for everyone, so a name travels as far as the DID does and reads better
    * where it lands. Where either reader would take the reference for another
-   * address, as {@link readsBackAs} decides, the space is written as the DID
-   * the view's space resolved to instead.
+   * address, as {@link citationOf} decides, and where the view names its space
+   * by DID, the space is written as the DID the view's space resolved to.
+   *
+   * Offered only while the view shows the piece that member reached, as the
+   * last resolution of this same address answered, so a segment that named
+   * nothing is never cited as though it named the piece on screen.
    *
    * A member is written as the address the page was opened at carries it, and
    * a member the two readers read differently is cited by nothing. The
@@ -1252,24 +1226,16 @@ export class XAppView extends BaseView {
    * address that names a different member of the same collection.
    */
   #getPieceReference(): string | undefined {
-    if (!this.#namedAMember) return;
+    const addressed = this.#addressedReference;
+    if (!addressed?.member || this.#shownPieceId === undefined) return;
     const view = this.app.view;
-    if (!("pieceSlug" in view) || !view.pieceSlug) return;
-    const member = "pieceMember" in view ? view.pieceMember : undefined;
-    if (!member) return;
-    const named = "spaceName" in view
-      ? view.spaceName
-      : "spaceDid" in view
-      ? view.spaceDid
-      : undefined;
-    for (const space of [named, this.space]) {
-      if (!space) continue;
-      const reference = `//${space}/${view.pieceSlug}/${member}`;
-      if (readsBackAs(reference, space, view.pieceSlug, member)) {
-        return reference;
-      }
-    }
-    return undefined;
+    const { slug, member } = addressed;
+    return citationOf(
+      "spaceName" in view ? view.spaceName : undefined,
+      slug,
+      member,
+    ) ??
+      citationOf(addressed.space, slug, member);
   }
 
   #getRuntimeLoadError(): LoadError | undefined {
@@ -1292,34 +1258,19 @@ export class XAppView extends BaseView {
     const isDefaultView = isViewingDefaultPatternView(this.app.view);
     const reportedPieceId = event.pieceId?.replace(/^of:/, "");
     if (reportedPieceId) {
+      const selectedId = this._selectedPattern.status === TaskStatus.COMPLETE
+        ? this._selectedPattern.value?.id()
+        : undefined;
+      const view = this.app.view;
       const addressedPieceIds = isDefaultView
         ? [this._spaceRootPattern.value?.id()]
-        : "pieceSlug" in this.app.view
-        ? [
-          this.#shownPieceId ?? this.#selectedPatternTargetId ??
-            (this._selectedPattern.status === TaskStatus.COMPLETE
-              ? this._selectedPattern.value?.id()
-              : undefined),
-        ]
-        : [
-          this._selectedPattern.status === TaskStatus.COMPLETE
-            ? this._selectedPattern.value?.id()
-            : undefined,
-          this.#selectedPatternTargetId,
-          "pieceId" in this.app.view ? this.app.view.pieceId : undefined,
-        ];
-      const knownPieceIds = addressedPieceIds.filter((id) => id !== undefined);
-      if (
-        knownPieceIds.length > 0 &&
-        !knownPieceIds.some((id) => id?.replace(/^of:/, "") === reportedPieceId)
-      ) {
-        return false;
-      }
-      if (
-        knownPieceIds.length === 0
-      ) {
-        return false;
-      }
+        : "pieceId" in view && !("pieceSlug" in view)
+        ? [selectedId, this.#selectedPatternTargetId, view.pieceId]
+        : [this.#shownPieceId ?? this.#selectedPatternTargetId ?? selectedId];
+      const addressed = addressedPieceIds.some((id) =>
+        id?.replace(/^of:/, "") === reportedPieceId
+      );
+      if (!addressed) return false;
     }
 
     return true;

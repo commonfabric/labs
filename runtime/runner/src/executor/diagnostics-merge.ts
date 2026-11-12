@@ -29,7 +29,6 @@ const summed = (values: readonly unknown[]): unknown => {
     return values.filter((value) => typeof value === "number")
       .reduce((sum, value) => sum + value, 0);
   }
-  if (!isPlainObject(first)) return first;
   const records = values.filter((value) => isPlainObject(value));
   const merged: Record<string, unknown> = {};
   for (const record of records) {
@@ -62,7 +61,6 @@ const mixtureOf = (
   const weighted = parts.filter((part) =>
     part.weight > 0 && part.cdf.length > 0
   );
-  if (weighted.length === 0) return [];
   const total = weighted.reduce((sum, part) => sum + part.weight, 0);
   const steps = weighted.flatMap((part, index) =>
     part.cdf.map((point) => ({ ...point, index }))

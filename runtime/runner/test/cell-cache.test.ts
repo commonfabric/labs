@@ -1452,6 +1452,129 @@ describe("cell-cache", () => {
 
       await replace({ builderSourceSites: sidecar });
       expect(await load()).toBeUndefined();
+
+      await replace({ builderSourceSitesJson: "{not json" });
+      expect(await load()).toBeUndefined();
+    });
+
+    it("drops a document whose source map cannot be read, and keeps one whose map can", async () => {
+      // A source map that links into a redirect cycle throws when it is
+      // read, which is how an unreadable legacy link behaves too.
+      const { modules, entryIdentity } = toModules(PROGRAM);
+      const wtx = runtime.edit();
+      writeCompiledDocs(runtime, spaceA, modules, entryIdentity, opts(), wtx);
+      wtx.prepareCfc();
+      expect((await wtx.commit().settled).error).toBeUndefined();
+
+      const storeAndLoad = async (
+        sourceMap: (tx: IExtendedStorageTransaction) => unknown,
+      ) => {
+        const tx = runtime.edit();
+        const previousIdentity = tx.getCfcState().implementationIdentity;
+        setCfcImplementationIdentity(tx, {
+          kind: "builtin",
+          builtinId: "compile-cache",
+        });
+        try {
+          const cell = runtime.getCell(
+            spaceA,
+            compiledDocKey(RTVER, entryIdentity),
+            compiledDocWriteSchema(),
+            tx,
+          );
+          cell.set({
+            ...(cell.get() as Record<string, unknown>),
+            sourceMap: sourceMap(tx),
+          });
+        } finally {
+          setCfcImplementationIdentity(tx, previousIdentity);
+        }
+        tx.prepareCfc();
+        expect((await tx.commit().settled).error).toBeUndefined();
+
+        const rtx = runtime.edit();
+        const loaded = await loadCompiledClosure(
+          runtime,
+          spaceA,
+          entryIdentity,
+          opts(),
+          rtx,
+        );
+        rtx.abort?.();
+        return loaded;
+      };
+
+      const readable = await storeAndLoad(() => ({ mappings: "AAAA" }));
+      expect(readable.get(entryIdentity)?.sourceMap).toEqual({
+        mappings: "AAAA",
+      });
+
+      const unreadable = await storeAndLoad((tx) => {
+        const first = runtime.getCell(
+          spaceA,
+          "source-map-cycle-1",
+          undefined,
+          tx,
+        );
+        const second = runtime.getCell(
+          spaceA,
+          "source-map-cycle-2",
+          undefined,
+          tx,
+        );
+        first.setRaw(second.getAsWriteRedirectLink());
+        second.setRaw(first.getAsWriteRedirectLink());
+        return { mappings: first.getAsLink() };
+      });
+      expect(unreadable.has(entryIdentity)).toBe(false);
+    });
+
+    it("returns a stored source-import list only when every entry is a string", async () => {
+      const { modules, entryIdentity } = toModules(PROGRAM);
+      const wtx = runtime.edit();
+      writeCompiledDocs(runtime, spaceA, modules, entryIdentity, opts(), wtx);
+      wtx.prepareCfc();
+      expect((await wtx.commit().settled).error).toBeUndefined();
+
+      const storeAndLoad = async (sourceImports: unknown) => {
+        const tx = runtime.edit();
+        const previousIdentity = tx.getCfcState().implementationIdentity;
+        setCfcImplementationIdentity(tx, {
+          kind: "builtin",
+          builtinId: "compile-cache",
+        });
+        try {
+          const cell = runtime.getCell(
+            spaceA,
+            compiledDocKey(RTVER, entryIdentity),
+            compiledDocWriteSchema(),
+            tx,
+          );
+          cell.set({
+            ...(cell.get() as Record<string, unknown>),
+            sourceImports,
+          });
+        } finally {
+          setCfcImplementationIdentity(tx, previousIdentity);
+        }
+        tx.prepareCfc();
+        expect((await tx.commit().settled).error).toBeUndefined();
+
+        const rtx = runtime.edit();
+        const loaded = await loadCompiledClosure(
+          runtime,
+          spaceA,
+          entryIdentity,
+          opts(),
+          rtx,
+        );
+        rtx.abort?.();
+        expect(loaded.has(entryIdentity)).toBe(true);
+        return loaded.get(entryIdentity)?.sourceImports;
+      };
+
+      expect(await storeAndLoad(["./util.ts"])).toEqual(["./util.ts"]);
+      expect(await storeAndLoad(["./util.ts", 7])).toBeUndefined();
     });
 
     it("persists and cold-loads verified policy manifests without module evaluation", async () => {
@@ -1727,15 +1850,18 @@ describe("cell-cache", () => {
       expect((await rewireTx.commit().settled).error).toBeUndefined();
 
       const loadTx = runtime.edit();
+      const found: ClosureLoadTally = { entry: "absent", dropped: 0 };
       const loaded = await loadCompiledClosure(
         runtime,
         spaceA,
         entryIdentity,
         opts(),
         loadTx,
+        found,
       );
       loadTx.abort?.("mixed-space compiled closure rejected");
       expect(loaded.size).toBe(0);
+      expect(found).toEqual({ entry: "refused", dropped: 0 });
 
       const snapshotTx = runtime.edit();
       expect(snapshotTx.getCfcState().moduleDelegations.get(spaceA))

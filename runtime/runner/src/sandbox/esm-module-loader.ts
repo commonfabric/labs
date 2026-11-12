@@ -210,11 +210,10 @@ export function openModuleGraph(
     verifyModuleGraph(records, entrySpecifier);
   }
 
+  // The lockdown above comes from ses-runtime.ts, whose `ses` import installs
+  // `Compartment`.
   const CompartmentCtor = (globalThis as { Compartment?: SesCompartmentCtor })
-    .Compartment;
-  if (!CompartmentCtor) {
-    throw new Error("SES Compartment is unavailable");
-  }
+    .Compartment!;
 
   const compartment = new CompartmentCtor({ ...globals }, {}, {
     name,

@@ -85,9 +85,9 @@ const SIMPLE_IDENTIFIER = /^[A-Za-z_$][\w$]*$/;
  * the shared comma/equals parsers — a leading-anchored regex would only see the
  * first declarator and miss the rest.
  *
- * Malformed or destructuring declarators throw out of the parsers; those are
- * rejected by `classifyModuleItems` regardless, so returning no names here stays
- * fail-closed.
+ * A destructuring declarator binds no simple name and contributes none; the
+ * classifier rejects it. A declarator list the parsers cannot read throws
+ * here, which rejects the module as reading it again in the classifier would.
  */
 function shadowNamesInStatement(
   source: string,
@@ -100,23 +100,18 @@ function shadowNamesInStatement(
   if (cls) return [cls[1]];
   const kind = /^(?:const|let|var)\b/.exec(text)?.[0];
   if (!kind) return [];
-  try {
-    const trimmed = trimRange(source, statement.start, statement.end);
-    const listStart = trimmed.start + kind.length;
-    let listEnd = trimmed.end;
-    while (listEnd > listStart && /\s/.test(source[listEnd - 1])) listEnd--;
-    if (listEnd > listStart && source[listEnd - 1] === ";") listEnd--;
-    const names: string[] = [];
-    for (const range of splitTopLevelCommaList(source, listStart, listEnd)) {
-      const equals = findTopLevelEquals(source, range.start, range.end);
-      const nameRange = trimRange(source, range.start, equals ?? range.end);
-      const name = source.slice(nameRange.start, nameRange.end);
-      if (SIMPLE_IDENTIFIER.test(name)) names.push(name);
-    }
-    return names;
-  } catch {
-    return [];
+  const trimmed = trimRange(source, statement.start, statement.end);
+  const listStart = trimmed.start + kind.length;
+  let listEnd = trimmed.end;
+  if (listEnd > listStart && source[listEnd - 1] === ";") listEnd--;
+  const names: string[] = [];
+  for (const range of splitTopLevelCommaList(source, listStart, listEnd)) {
+    const equals = findTopLevelEquals(source, range.start, range.end);
+    const nameRange = trimRange(source, range.start, equals ?? range.end);
+    const name = source.slice(nameRange.start, nameRange.end);
+    if (SIMPLE_IDENTIFIER.test(name)) names.push(name);
   }
+  return names;
 }
 
 /**

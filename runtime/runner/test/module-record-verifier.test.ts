@@ -162,4 +162,21 @@ describe("verifyModuleGraph", () => {
     ]]);
     expect(() => verifyModuleGraph(g, "cf:module/main")).toThrow(/execute/i);
   });
+
+  it("rejects a record whose imports or exports are not arrays", () => {
+    const withList = (list: "imports" | "exports") =>
+      graph([[
+        "cf:module/main",
+        {
+          imports: [],
+          exports: [],
+          execute: () => {},
+          [list]: "x" as unknown as string[],
+        },
+      ]]);
+    expect(() => verifyModuleGraph(withList("imports"), "cf:module/main"))
+      .toThrow("Record cf:module/main has a non-array imports list");
+    expect(() => verifyModuleGraph(withList("exports"), "cf:module/main"))
+      .toThrow("Record cf:module/main has a non-array exports list");
+  });
 });

@@ -12,6 +12,7 @@ import type {
   ReactivityLog,
   SpaceScopeAndURI,
 } from "../../src/scheduler/types.ts";
+import type { NormalizedFullLink } from "../../src/link-utils.ts";
 import type { IMemorySpaceAddress } from "../../src/storage/interface.ts";
 
 const SPACE = "did:key:materializer-writers";
@@ -27,6 +28,11 @@ function address(
   ...path: string[]
 ): IMemorySpaceAddress {
   return { space: SPACE, scope: "space", id: `of:${id}`, path };
+}
+
+/** The link to a document's root, whose address is its `value` path. */
+function link(id: string): NormalizedFullLink {
+  return { space: SPACE, scope: "space", id: `of:${id}`, path: [] };
 }
 
 function action(name: string): Action {
@@ -357,6 +363,44 @@ describe("materializers", () => {
         expect(names(collectMaterializerWritersForLog(index, manyReads())))
           .toEqual(["first"]);
         expect(comparisons()).toBe(1);
+      });
+    });
+  });
+
+  describe("SchedulerMaterializers", () => {
+    describe("instance members", () => {
+      describe("register()", () => {
+        it("indexes a materializer under the entities its envelopes name", () => {
+          const index = new SchedulerMaterializers(new Set(), identityThunk);
+          const materializer = action("materializer");
+
+          index.register(materializer, [link("output")]);
+
+          expect(index.isMaterializer(materializer)).toBe(true);
+          expect(index.getMaterializerWriteEnvelopes(materializer)).toEqual([
+            address("output", "value"),
+          ]);
+          expect(
+            names(
+              index.materializersByEntity.get(
+                entityNameKey(address("output")),
+              ) ?? [],
+            ),
+          ).toEqual(["materializer"]);
+        });
+
+        it("clears a materializer registered again with no envelopes", () => {
+          const index = new SchedulerMaterializers(new Set(), identityThunk);
+          const materializer = action("materializer");
+          index.register(materializer, [link("output")]);
+
+          index.register(materializer, []);
+
+          expect(index.isMaterializer(materializer)).toBe(false);
+          expect(index.getMaterializerWriteEnvelopes(materializer))
+            .toBeUndefined();
+          expect(index.materializersByEntity.size).toBe(0);
+        });
       });
     });
   });

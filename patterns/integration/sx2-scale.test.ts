@@ -47,6 +47,7 @@ import {
   waitForSettled,
   watermarkCell,
 } from "@commonfabric/runner/executor/watermark";
+import { withStuckNet } from "@commonfabric/test-support/stuck-net";
 import type { MemorySpace } from "@commonfabric/runner";
 import {
   initializePiecesController,
@@ -186,7 +187,10 @@ describe("sx2 scale (Phase 6 gates)", () => {
       .space as MemorySpace;
     if (FLAG_ON) {
       await runtime.storageManager.synced();
-      await waitForSettled(runtime, space, 1, { timeoutMs: 30_000 });
+      await withStuckNet(
+        waitForSettled(runtime, space, 1),
+        "the watermark to cover seq 1",
+      );
     } else {
       await runtime.storageManager.synced();
     }
@@ -211,9 +215,10 @@ describe("sx2 scale (Phase 6 gates)", () => {
       }
       await runtime.storageManager.synced();
       if (FLAG_ON) {
-        await waitForSettled(runtime, space, watermarkBefore + 1, {
-          timeoutMs: 30_000,
-        });
+        await withStuckNet(
+          waitForSettled(runtime, space, watermarkBefore + 1),
+          "the watermark to cover the timed write",
+        );
       }
       return Date.now() - startedAt;
     };

@@ -83,7 +83,6 @@ import {
   runSchedulerIdempotencyCheck,
   type SchedulerDiagnosisControlState,
   startSchedulerDiagnosis,
-  stopSchedulerDiagnosis,
 } from "./diagnosis.ts";
 import {
   getPieceMetadataFromFrame,
@@ -1651,30 +1650,6 @@ export class Scheduler {
     return rearmed;
   }
 
-  /** DIAGNOSTIC (tests): a node's fan-out record — the known-scope
-   * ratchet and per-instance state — or undefined off the fan-out path.
-   * Takes the action or its id (the trace's `actionId`). */
-  fanOutStateOf(action: Action | string): {
-    narrowed: boolean;
-    sessionPrincipals: string[];
-    instanceKeys: string[];
-    cleanKeys: string[];
-  } | undefined {
-    const record = typeof action === "string"
-      ? [...this.#nodes.nodes()].find((candidate) =>
-        this.#getActionId(candidate.action) === action
-      )
-      : this.#nodes.get(action);
-    const state = record?.fanOut;
-    if (state === undefined) return undefined;
-    return {
-      narrowed: state.narrowed,
-      sessionPrincipals: [...state.sessionPrincipals],
-      instanceKeys: [...state.instances.keys()],
-      cleanKeys: [...state.clean],
-    };
-  }
-
   /** The bound yield hook handed to the settle loop (stage C tuning T3):
    * a promise to await when the slice is spent, else undefined. Defined
    * only when `#cooperativeYield` exists. */
@@ -1949,10 +1924,6 @@ export class Scheduler {
 
   setEventPreflightTelemetryEnabled(enabled: boolean): void {
     this.#eventPreflightTelemetryEnabled = enabled;
-  }
-
-  isEventPreflightTelemetryEnabled(): boolean {
-    return this.#eventPreflightTelemetryEnabled;
   }
 
   //
@@ -3090,13 +3061,6 @@ export class Scheduler {
   }
 
   /**
-   * Stops diagnosis mode and finalizes results.
-   */
-  #stopDiagnosis(): void {
-    stopSchedulerDiagnosis(this.#diagnosisControlState);
-  }
-
-  /**
    * Updates the reverse dependency graph (dependents map).
    * For each action that writes to paths this action reads, add this action as a dependent.
    */
@@ -3263,7 +3227,6 @@ export class Scheduler {
         }),
       recordTriggerTrace: (entry) =>
         recordTriggerTraceState({ triggerTrace: this.#triggerTrace }, entry),
-      scheduleWithDebounce: (target) => this.#scheduleWithDebounce(target),
       markInvalid: (target, cause) =>
         this.#markAndScheduleInvalidAction(target, cause),
       isInvalid: (target) => this.#isInvalidAction(target),

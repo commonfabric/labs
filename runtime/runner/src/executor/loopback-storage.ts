@@ -204,14 +204,9 @@ class LoopbackSessionFactory implements SessionFactory {
 
   async create(
     space: MemorySpace,
-    signer?: Signer,
+    signer: Signer,
     mountOptions: MemoryClient.MountOptions = {},
   ) {
-    if (signer === undefined) {
-      throw new Error(
-        "loopback serving sessions require the service identity signer",
-      );
-    }
     // A routed session dials the owner over the network, with the handshake
     // attempts the routed plane gives its own sessions.
     const client = await MemoryClient.connect({

@@ -258,9 +258,11 @@ export function helperInjectionLineOffset(file: Source): number {
 
 /**
  * Normalizes transformer source sites from helper-injected compiler inputs to
- * authored coordinates before the sidecar leaves the compile boundary.
+ * authored coordinates before the sidecar leaves the compile boundary. A site
+ * in a file with no authored source, or on a line the author did not write,
+ * maps to nothing.
  */
-function builderSourceSiteOptionsForCompile(params: {
+export function builderSourceSiteOptionsForCompile(params: {
   id: string | undefined;
   mounts: readonly FabricMount[];
   sourceFiles: readonly Source[];

@@ -298,13 +298,7 @@ const matchesConcreteValue = (
   schema: JSONSchema,
   value: unknown,
 ): boolean => {
-  if (schema === false) {
-    return false;
-  }
-  const resolved = resolveSchema(schema);
-  if (resolved === undefined) {
-    return true;
-  }
+  const resolved = resolveSchema(schema) ?? true;
   if (typeof resolved === "boolean") {
     return resolved;
   }
@@ -490,14 +484,10 @@ export function resolveSchema(
 
 const selectMatchingCompoundBranch = (
   schema: JSONSchemaObj,
-  value: unknown,
   kind: "anyOf" | "oneOf",
+  branches: readonly JSONSchema[],
+  value: unknown,
 ): JSONSchema | undefined => {
-  const branches = schema[kind];
-  if (!Array.isArray(branches) || branches.length === 0) {
-    return undefined;
-  }
-
   const { [kind]: _compound, ...rest } = schema;
   const baseSchema = rest as JSONSchemaObj;
   const matches = branches.flatMap((branch) => {
@@ -565,11 +555,19 @@ export function resolveSchemaForValue(
 
   let narrowed: JSONSchema = resolved;
   if (Array.isArray(resolved.anyOf)) {
-    narrowed = selectMatchingCompoundBranch(resolved, value, "anyOf") ??
-      resolved;
+    narrowed = selectMatchingCompoundBranch(
+      resolved,
+      "anyOf",
+      resolved.anyOf,
+      value,
+    ) ?? resolved;
   } else if (Array.isArray(resolved.oneOf)) {
-    narrowed = selectMatchingCompoundBranch(resolved, value, "oneOf") ??
-      resolved;
+    narrowed = selectMatchingCompoundBranch(
+      resolved,
+      "oneOf",
+      resolved.oneOf,
+      value,
+    ) ?? resolved;
   }
 
   if (!isObjectOrArray(narrowed)) {

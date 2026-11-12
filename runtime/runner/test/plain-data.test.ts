@@ -201,6 +201,28 @@ describe("plain-data sandbox helper", () => {
     );
   });
 
+  it("rejects a RegExp whose own property descriptors disappear when freezing", () => {
+    // The proxy reads as a plain RegExp until its own keys are copied.
+
+    const regexpReporting = (keys: string[]) =>
+      new Proxy(/a/, {
+        get: (target, key) =>
+          key === "global" || key === "sticky"
+            ? false
+            : Reflect.get(target, key),
+        ownKeys: () => keys,
+        getOwnPropertyDescriptor: (target, key) =>
+          Reflect.getOwnPropertyDescriptor(target, key),
+      });
+
+    expect(() =>
+      freezeVerifiedPlainData(regexpReporting(["lastIndex", "ghost"]))
+    ).toThrow("<root>.ghost: Own property descriptor is missing");
+    const frozen = freezeVerifiedPlainData(regexpReporting(["lastIndex"]));
+    expect(frozen).toBeInstanceOf(RegExp);
+    expect(frozen.source).toBe("a");
+  });
+
   it("rejects Map and Set values when prototype iteration is unavailable", () => {
     const originalEntriesDescriptor = Object.getOwnPropertyDescriptor(
       Map.prototype,

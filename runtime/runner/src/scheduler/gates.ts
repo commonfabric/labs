@@ -180,13 +180,10 @@ export class SchedulerGates {
     now = performance.now(),
     context?: DebouncedComputationContext,
   ): void {
-    if (
-      node.gate.retryOwed || !context ||
-      !this.#shouldDebouncePullComputation(node.action, context)
-    ) {
-      return;
-    }
-    this.#armComputationDebounce(node.action, context, now);
+    if (node.gate.retryOwed || !context) return;
+    const debounceMs = this.#pullComputationDebounceMs(node.action, context);
+    if (debounceMs === undefined) return;
+    this.#armComputationDebounce(node.action, debounceMs, context, now);
   }
 
   onRunCompleted(
@@ -231,7 +228,7 @@ export class SchedulerGates {
       readonly isInvalid: (action: Action) => boolean;
     },
   ): number | undefined {
-    if (!this.#shouldDebouncePullComputation(action, context)) {
+    if (this.#pullComputationDebounceMs(action, context) === undefined) {
       return undefined;
     }
     if (!context.isInvalid(action)) return undefined;
@@ -472,12 +469,10 @@ export class SchedulerGates {
 
   #armComputationDebounce(
     action: Action,
+    debounceMs: number,
     context: DebouncedComputationContext,
     now: number,
   ): void {
-    const debounceMs = this.#gate(action)?.debounceMs;
-    if (!debounceMs || debounceMs <= 0) return;
-
     this.cancelDebounceTimer(action);
 
     const gate = this.#mutableGate(action);
@@ -491,22 +486,27 @@ export class SchedulerGates {
     );
   }
 
-  #shouldDebouncePullComputation(
+  /**
+   * The trailing debounce `action` runs under as a pull computation, or
+   * `undefined` when it is not debounced.
+   */
+  #pullComputationDebounceMs(
     action: Action,
     context: {
       readonly computations: ReadonlySet<Action>;
       readonly effects: ReadonlySet<Action>;
       readonly shouldDebounceFirstRun?: (action: Action) => boolean;
     },
-  ): boolean {
-    const gate = this.#gate(action);
-    const debounceMs = gate?.debounceMs;
+  ): number | undefined {
+    const debounceMs = this.#gate(action)?.debounceMs;
     const hasRun = this.#state.nodes.get(action)?.status !== "never-ran";
     return context.computations.has(action) &&
-      !context.effects.has(action) &&
-      (hasRun || context.shouldDebounceFirstRun?.(action) === true) &&
-      debounceMs !== undefined &&
-      debounceMs > 0;
+        !context.effects.has(action) &&
+        (hasRun || context.shouldDebounceFirstRun?.(action) === true) &&
+        debounceMs !== undefined &&
+        debounceMs > 0
+      ? debounceMs
+      : undefined;
   }
 
   #armThrottleFromStats(action: Action): void {
