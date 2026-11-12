@@ -2534,9 +2534,11 @@ export type ServedRequest = {
 
 /**
  * A request to administer the session space's invitations, as the session's
- * principal (04-protocol.md §4.3.11). Redemption and preview are not among
- * them: the one redeeming or previewing holds no grant on the space yet, so it
- * has no session to send on.
+ * principal (04-protocol.md §4.3.11). Redemption is not among them: the one
+ * redeeming holds no grant on the space yet, so it has no session to send on.
+ * Nor is preview: whoever sends it, including a principal that has a session
+ * or has already redeemed, a preview always goes as the signed HTTP request,
+ * so a client that is deciding whether to redeem needs no session to ask.
  */
 export type SpaceInviteRequest = {
   type: "space.invite";

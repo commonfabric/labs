@@ -258,12 +258,13 @@ the session's other requests are. A refusal is an error named
 cannot open a session on it; instead a `session.open` carries the invitation in
 its descriptor, bound to the open's principal as the rest of the descriptor is,
 and the server redeems it as the open's principal before checking the open's
-grant (§4.1.2). A preview has no memory-session form, for the same reason, and
-goes only over HTTP. The toolshed gives its memory server
-`inviteHost: normalizeInviteHost(API_URL)`, so codes are checked against the
-same host on both transports, and the server advertises the `spaceInvites` hello
-flag. A memory server given no invitation host refuses every `space.invite` with
-`invite-service-unsupported`.
+grant (§4.1.2). A preview has no memory-session form: it always goes over signed
+HTTP, whoever sends it, even a principal that holds a session or has already
+redeemed, so a client deciding whether to redeem needs no session. The toolshed
+gives its memory server `inviteHost: normalizeInviteHost(API_URL)`, so codes are
+checked against the same host on both transports, and the server advertises the
+`spaceInvites` hello flag. A memory server given no invitation host refuses
+every `space.invite` with `invite-service-unsupported`.
 
 Configure `API_URL` as the canonical public HTTPS origin, or loopback HTTP in
 local development. It is the audience authority and verifier origin for this
