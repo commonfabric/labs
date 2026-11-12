@@ -59,6 +59,7 @@ import {
 } from "../src/executor/wave.ts";
 import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import { parseLink } from "../src/link-utils.ts";
+import { hostTransport } from "../../memory/test/support/host-transport.ts";
 import { ArrivalLog, awaitAdmitted } from "./support/serving-waits.ts";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import {
@@ -525,6 +526,58 @@ describe("executor owner routing", () => {
     expect(plane.accessForTestingOnly.sessionSpaces).toEqual([targetSpace]);
     second.dispose();
     expect(plane.accessForTestingOnly.sessionSpaces).toEqual([]);
+  });
+
+  it("closes while a session's mount waits for an owner that stays unreachable", async () => {
+    // The connection drops while the mount's open is being signed, so the
+    // mount is never sent and waits for the owner to come back. Closing the
+    // plane ends that wait rather than joining it.
+
+    const host = hostTransport(servers.B);
+    const signing = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const sign = testPrincipalSessionOpenAuthFactory(serviceSigner);
+    const plane = new RoutedPlane({
+      ...route(),
+      createTransport: () => host.transport,
+      sessionOpenAuth: async (space, session, context) => {
+        signing.resolve();
+        await release.promise;
+        return await sign(space, session, context);
+      },
+    });
+    planes.push(plane);
+    const macrotask = () =>
+      new Promise<void>((resolve) => setTimeout(resolve, 0));
+    try {
+      const appended = plane.scope().append(targetSpace, {
+        targetStream: sidecar,
+        targetStreamLink: stream,
+        eventId: "evt-routed-unreachable-close",
+        payload: {},
+        actingPrincipal: aliceSigner.did(),
+        actingSession: "sess-1",
+        capabilityRef: "cap-routed",
+      }).then(() => "appended", (error) => error);
+      await signing.promise;
+      host.hostDown();
+      release.resolve();
+      // One macrotask, in which the mount fails as never sent and begins to
+      // wait for the owner.
+      await macrotask();
+      let closed = false;
+      void plane.close().then(() => {
+        closed = true;
+      });
+      // One more, which a close that ends the wait settles well inside.
+      await macrotask();
+
+      expect(closed).toBe(true);
+      expect(await appended).toBeInstanceOf(Error);
+    } finally {
+      // A close left waiting for the owner ends once the owner is back.
+      host.hostUp();
+    }
   });
 
   it("wakes a routed document watch when the owner admits a commit to the document", async () => {

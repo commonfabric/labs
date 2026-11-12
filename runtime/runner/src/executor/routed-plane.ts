@@ -198,6 +198,13 @@ export class RoutedPlane {
   /** The session per target space, from the moment its open starts. */
   readonly #sessions = new Map<string, Promise<RoutedSession>>();
 
+  /**
+   * What ends each session of `#sessions` at once, open or still opening:
+   * aborting it closes the session's connection, and with that whatever its
+   * open was waiting for.
+   */
+  readonly #ends = new WeakMap<Promise<RoutedSession>, AbortController>();
+
   /** The scopes that have used each target space's session. */
   readonly #users = new Map<string, Set<RoutedScope>>();
 
@@ -350,7 +357,12 @@ export class RoutedPlane {
   #replace(space: MemorySpace, routed: RoutedSession): void {
     this.#closeSession(space);
     if (routed.watchers.size === 0) return;
-    this.#hold(space, this.#openWatching(space, routed.watchers));
+    const end = new AbortController();
+    this.#hold(
+      space,
+      this.#openWatching(space, routed.watchers, end.signal),
+      end,
+    );
   }
 
   /**
@@ -361,10 +373,11 @@ export class RoutedPlane {
   async #openWatching(
     space: MemorySpace,
     watchers: Map<string, Set<() => void>>,
+    ended: AbortSignal,
   ): Promise<RoutedSession> {
     if (this.#unplaced.get(space) === watchers) this.#unplaced.delete(space);
     try {
-      const session = await this.#open(space);
+      const session = await this.#open(space, ended);
       try {
         for (const [id, set] of watchers) {
           session.watchers.set(id, set);
@@ -495,10 +508,11 @@ export class RoutedPlane {
     let session = this.#sessions.get(space);
     if (session === undefined) {
       const unplaced = this.#unplaced.get(space);
+      const end = new AbortController();
       session = unplaced === undefined
-        ? this.#open(space)
-        : this.#openWatching(space, unplaced);
-      this.#hold(space, session);
+        ? this.#open(space, end.signal)
+        : this.#openWatching(space, unplaced, end.signal);
+      this.#hold(space, session, end);
     }
     return session;
   }
@@ -508,10 +522,16 @@ export class RoutedPlane {
    * open is forgotten, so the next use dials again, and the use that failed
    * reports the failure to its caller. A session that ends once open, which
    * no crossing works on again, is replaced (`#replace()`): its owner
-   * revoked it, or its client gave up reconnecting.
+   * revoked it, or its client gave up reconnecting. Aborting `end` ends the
+   * session, as `#open()` describes.
    */
-  #hold(space: MemorySpace, session: Promise<RoutedSession>): void {
+  #hold(
+    space: MemorySpace,
+    session: Promise<RoutedSession>,
+    end: AbortController,
+  ): void {
     this.#sessions.set(space, session);
+    this.#ends.set(session, end);
     session.then((routed) => {
       routed.session.subscribeTermination((error) => {
         if (this.#sessions.get(space) !== session) return;
@@ -526,11 +546,19 @@ export class RoutedPlane {
     });
   }
 
-  /** Dials `space`'s owner and opens the session, or closes what it dialed. */
-  async #open(space: MemorySpace): Promise<RoutedSession> {
+  /**
+   * Dials `space`'s owner and opens the session, or closes what it dialed.
+   * `ended` aborts once the plane has no more use for the session, whether
+   * it is open by then or not: the dial stops, and the connection closes.
+   * A request made of the session while its owner is unreachable waits for
+   * the owner, the mount among them, and closing the connection is what
+   * ends such a wait.
+   */
+  async #open(space: MemorySpace, ended: AbortSignal): Promise<RoutedSession> {
     const transport = this.#options.createTransport(space);
     const client = await MemoryClient.connect({
       transport,
+      signal: ended,
       client: this.#clientInfo,
       // The session commits the serving runtimes' writes to the space, so it
       // declares their naming mode (INV-16), which is this build's default
@@ -540,7 +568,12 @@ export class RoutedPlane {
       instanceNames: namesInstancesByDefault(),
       firstHandshakeAttempts: MEMORY_FIRST_HANDSHAKE_ATTEMPTS,
     });
+    const close = (): void => {
+      void client.close().catch(() => {});
+    };
+    ended.addEventListener("abort", close, { once: true });
     try {
+      if (ended.aborted) throw new Error("the routed session is closed");
       const session = await untilSent(() =>
         client.mount(
           space,
@@ -555,6 +588,7 @@ export class RoutedPlane {
         watchers: new Map(),
       };
     } catch (error) {
+      ended.removeEventListener("abort", close);
       await client.close().catch(() => {});
       throw error;
     }
@@ -570,11 +604,16 @@ export class RoutedPlane {
     }
   }
 
-  /** Closes `space`'s session once open, and tracks the close for `close()`. */
+  /**
+   * Closes `space`'s session, and tracks the close for `close()`. A session
+   * still opening is ended where it stands, so the close does not wait for
+   * an owner that cannot be reached.
+   */
   #closeSession(space: string): void {
     const session = this.#sessions.get(space);
     if (session === undefined) return;
     this.#sessions.delete(space);
+    this.#ends.get(session)?.abort();
     const closing = session.then(({ client }) => client.close()).catch(
       () => {},
     ).finally(() => {
