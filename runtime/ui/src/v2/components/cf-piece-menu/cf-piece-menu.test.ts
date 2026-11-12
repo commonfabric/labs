@@ -18,6 +18,7 @@ import type {
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 import {
   CFPieceMenu,
+  closePieceMenuFor,
   formatPieceValue,
   isStreamHandle,
   openPieceMenu,
@@ -1175,6 +1176,519 @@ describe("the menu a right-click opens", () => {
     expect(shows(menu)).toContain(
       "The clone was canceled because the runtime stopped.",
     );
+  });
+});
+
+describe("highlighting a nested piece", () => {
+  // A piece rendered inside another piece's view is highlighted by a fixed
+  // overlay the menu draws over it, clipped to what of it is on screen. The
+  // menu measures it, watches the shadow roots it is drawn through, and
+  // checks it on every animation frame, so the overlay follows it and the
+  // menu closes once it is gone. These stand in for the browser's
+  // measurements and observers, which Deno does not have.
+
+  type Rect = {
+    left: number;
+    top: number;
+    right: number;
+    bottom: number;
+    width: number;
+    height: number;
+  };
+
+  function rect(left: number, top: number, right: number, bottom: number) {
+    return {
+      left,
+      top,
+      right,
+      bottom,
+      width: right - left,
+      height: bottom - top,
+    };
+  }
+
+  /**
+   * A stand-in for an element the menu measures. `state` holds what it
+   * reports, so a test moves it or takes it off the page.
+   */
+  function measured(
+    box: Rect,
+    {
+      parentElement = null,
+      root = {},
+      clientRects,
+      client,
+    }: {
+      parentElement?: Element | null;
+      root?: object;
+      clientRects?: Rect[];
+      client?: {
+        offsetWidth: number;
+        offsetHeight: number;
+        clientLeft: number;
+        clientTop: number;
+        clientWidth: number;
+        clientHeight: number;
+      };
+    } = {},
+  ): { element: Element; state: { box: Rect; connected: boolean } } {
+    const state = { box, connected: true };
+    const element = Object.assign(new EventTarget(), {
+      getBoundingClientRect: () => state.box,
+      getClientRects: () => clientRects ?? [state.box],
+      getRootNode: () => root,
+      parentElement,
+      assignedSlot: null,
+      setAttribute: () => {},
+      removeAttribute: () => {},
+      ...client,
+    });
+    Object.defineProperty(element, "isConnected", {
+      get: () => state.connected,
+    });
+    return { element: element as unknown as Element, state };
+  }
+
+  /** Runs `run` with `values` installed as globals, restoring them after. */
+  function withGlobals<T>(values: Record<string, unknown>, run: () => T): T {
+    const saved = Object.keys(values).map((name) =>
+      [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const
+    );
+    for (const [name, value] of Object.entries(values)) {
+      Object.defineProperty(globalThis, name, {
+        value,
+        configurable: true,
+        writable: true,
+      });
+    }
+    try {
+      return run();
+    } finally {
+      for (const [name, descriptor] of saved) {
+        if (descriptor) Object.defineProperty(globalThis, name, descriptor);
+        else Reflect.deleteProperty(globalThis, name);
+      }
+    }
+  }
+
+  /** Animation frames the menu asks for, run when the test says. */
+  function animationFrames() {
+    const pending = new Map<number, (time: number) => void>();
+    let next = 1;
+    return {
+      pending,
+      globals: {
+        requestAnimationFrame: (callback: (time: number) => void) => {
+          pending.set(next, callback);
+          return next++;
+        },
+        cancelAnimationFrame: (id: number) => {
+          pending.delete(id);
+        },
+      },
+      /** Runs the one frame asked for. */
+      run() {
+        expect(pending.size).toBe(1);
+        const [[id, callback]] = pending;
+        pending.delete(id);
+        callback(0);
+      },
+    };
+  }
+
+  /** Mutation observers the menu makes, whose callbacks the test fires. */
+  function mutationObservers() {
+    const made: Array<
+      { observed: unknown[]; disconnected: boolean; fire: () => void }
+    > = [];
+    return {
+      made,
+      MutationObserver: class {
+        #record: (typeof made)[number];
+        constructor(callback: () => void) {
+          this.#record = { observed: [], disconnected: false, fire: callback };
+          made.push(this.#record);
+        }
+        observe(root: unknown) {
+          this.#record.observed.push(root);
+        }
+        disconnect() {
+          this.#record.disconnected = true;
+        }
+      },
+    };
+  }
+
+  /**
+   * A piece whose `equals()` answer the test can change, standing for a
+   * nested root that comes to hold another piece.
+   */
+  function representedPiece(): { cell: CellHandle; represented: boolean } {
+    const piece = { cell: pieceCell(), represented: true };
+    Object.assign(piece.cell, { equals: () => piece.represented });
+    return piece;
+  }
+
+  /** A menu opened over `target`, a nested root inside `owner`. */
+  function openNested(owner: Element, target: Element, cell: CellHandle) {
+    providePieceBoundary(target, cell);
+    const menu = newMenu();
+    menu.open({
+      cell,
+      x: 0,
+      y: 0,
+      highlightedPiece: owner,
+      highlightTarget: target,
+    });
+    return menu;
+  }
+
+  it("stays down over a nested root that does not hold the piece", () => {
+    const owner = measured(rect(0, 0, 200, 200));
+    const target = measured(rect(10, 10, 100, 100));
+    const menu = newMenu();
+
+    menu.open({
+      cell: pieceCell(),
+      x: 0,
+      y: 0,
+      highlightedPiece: owner.element,
+      highlightTarget: target.element,
+    });
+
+    expect(shows(menu)).toBe("");
+    expect(menu.hidden).toBe(true);
+  });
+
+  it("draws no overlay for a nested root opened without its owner's element", () => {
+    const target = measured(rect(10, 10, 100, 100));
+    const cell = pieceCell();
+    providePieceBoundary(target.element, cell);
+    const menu = newMenu();
+
+    menu.open({ cell, x: 0, y: 0, highlightTarget: target.element });
+
+    expect(shows(menu)).toContain("View source");
+    expect(shows(menu)).not.toContain("nested-piece-highlight");
+  });
+
+  describe("on each animation frame", () => {
+    it("moves the overlay with the nested root", () => {
+      const frames = animationFrames();
+      withGlobals(frames.globals, () => {
+        const owner = measured(rect(0, 0, 400, 400));
+        const target = measured(rect(10, 20, 110, 70));
+        const menu = openNested(owner.element, target.element, pieceCell());
+        expect(shows(menu)).toContain(
+          "left: 10px; top: 20px; width: 100px; height: 50px",
+        );
+
+        target.state.box = rect(30, 40, 130, 90);
+        frames.run();
+
+        expect(shows(menu)).toContain(
+          "left: 30px; top: 40px; width: 100px; height: 50px",
+        );
+        expect(shows(menu)).not.toContain("left: 10px");
+      });
+    });
+
+    it("asks for no render on a frame in which nothing moved, and asks for the next frame", () => {
+      const frames = animationFrames();
+      withGlobals(frames.globals, () => {
+        const owner = measured(rect(0, 0, 400, 400));
+        const target = measured(rect(10, 20, 110, 70));
+        const menu = openNested(owner.element, target.element, pieceCell());
+        let updates = 0;
+        menu.requestUpdate = () => {
+          updates++;
+        };
+
+        frames.run();
+
+        expect(updates).toBe(0);
+        expect(frames.pending.size).toBe(1);
+      });
+    });
+
+    it("closes once the nested root has left the page", () => {
+      const frames = animationFrames();
+      withGlobals(frames.globals, () => {
+        const owner = measured(rect(0, 0, 400, 400));
+        const target = measured(rect(10, 20, 110, 70));
+        const menu = openNested(owner.element, target.element, pieceCell());
+
+        target.state.connected = false;
+        frames.run();
+
+        expect(shows(menu)).toBe("");
+        expect(frames.pending.size).toBe(0);
+      });
+    });
+
+    it("closes once the nested root no longer holds the piece", () => {
+      const frames = animationFrames();
+      withGlobals(frames.globals, () => {
+        const owner = measured(rect(0, 0, 400, 400));
+        const target = measured(rect(10, 20, 110, 70));
+        const piece = representedPiece();
+        const menu = openNested(owner.element, target.element, piece.cell);
+
+        frames.run();
+        expect(shows(menu)).toContain("View source");
+
+        piece.represented = false;
+        frames.run();
+
+        expect(shows(menu)).toBe("");
+        expect(frames.pending.size).toBe(0);
+      });
+    });
+
+    it("keeps the overlay over a nested root of a space with no piece", () => {
+      const frames = animationFrames();
+      withGlobals(frames.globals, () => {
+        const owner = measured(rect(0, 0, 400, 400));
+        const target = measured(rect(10, 20, 110, 70));
+        const menu = newMenu();
+        menu.open({
+          space: SPACE,
+          runtime: spaceRuntime(),
+          x: 0,
+          y: 0,
+          highlightedPiece: owner.element,
+          highlightTarget: target.element,
+        });
+
+        target.state.box = rect(30, 40, 130, 90);
+        frames.run();
+
+        expect(shows(menu)).toContain("Piece unavailable");
+        expect(shows(menu)).toContain(
+          "left: 30px; top: 40px; width: 100px; height: 50px",
+        );
+      });
+    });
+
+    it("cancels the frame it asked for when it closes", () => {
+      const frames = animationFrames();
+      withGlobals(frames.globals, () => {
+        const owner = measured(rect(0, 0, 400, 400));
+        const target = measured(rect(10, 20, 110, 70));
+        const menu = openNested(owner.element, target.element, pieceCell());
+        expect(frames.pending.size).toBe(1);
+
+        menu.closeFor(owner.element);
+
+        expect(frames.pending.size).toBe(0);
+      });
+    });
+
+    it("stops asking for frames once it no longer highlights a nested root", () => {
+      const frames = animationFrames();
+      withGlobals(frames.globals, () => {
+        const owner = measured(rect(0, 0, 400, 400));
+        const target = measured(rect(10, 20, 110, 70));
+        const menu = openNested(owner.element, target.element, pieceCell());
+        const [[, frame]] = frames.pending;
+
+        // A frame already handed to the browser runs after the menu has
+        // moved on to a piece that is its own root.
+        menu.open({
+          cell: pieceCell(),
+          x: 0,
+          y: 0,
+          highlightedPiece: owner.element,
+        });
+        frame(0);
+
+        expect(shows(menu)).toContain("View source");
+        expect(frames.pending.size).toBe(0);
+      });
+    });
+  });
+
+  describe("on a change to the tree it is drawn through", () => {
+    /** A nested root drawn inside the shadow root of `host`. */
+    function shadowed() {
+      const host = measured(rect(0, 0, 400, 400));
+      const shadowRoot = { host: host.element };
+      const owner = measured(rect(0, 0, 400, 400));
+      const target = measured(rect(10, 20, 110, 70), { root: shadowRoot });
+      return { owner, target, shadowRoot };
+    }
+
+    it("watches each shadow root the nested root is drawn through", () => {
+      const observers = mutationObservers();
+      withGlobals({ MutationObserver: observers.MutationObserver }, () => {
+        const { owner, target, shadowRoot } = shadowed();
+        const menu = openNested(owner.element, target.element, pieceCell());
+
+        expect(observers.made).toHaveLength(1);
+        expect(observers.made[0].observed).toEqual([shadowRoot]);
+
+        menu.closeFor(owner.element);
+        expect(observers.made[0].disconnected).toBe(true);
+      });
+    });
+
+    it("moves the overlay with the nested root", () => {
+      const observers = mutationObservers();
+      withGlobals({ MutationObserver: observers.MutationObserver }, () => {
+        const { owner, target } = shadowed();
+        const menu = openNested(owner.element, target.element, pieceCell());
+
+        target.state.box = rect(30, 40, 130, 90);
+        observers.made[0].fire();
+
+        expect(shows(menu)).toContain(
+          "left: 30px; top: 40px; width: 100px; height: 50px",
+        );
+      });
+    });
+
+    it("closes once the nested root has left the page", () => {
+      const observers = mutationObservers();
+      withGlobals({ MutationObserver: observers.MutationObserver }, () => {
+        const { owner, target } = shadowed();
+        const menu = openNested(owner.element, target.element, pieceCell());
+
+        target.state.connected = false;
+        observers.made[0].fire();
+
+        expect(shows(menu)).toBe("");
+      });
+    });
+
+    it("closes once the nested root no longer holds the piece", () => {
+      const observers = mutationObservers();
+      withGlobals({ MutationObserver: observers.MutationObserver }, () => {
+        const { owner, target } = shadowed();
+        const piece = representedPiece();
+        const menu = openNested(owner.element, target.element, piece.cell);
+
+        observers.made[0].fire();
+        expect(shows(menu)).toContain("View source");
+
+        piece.represented = false;
+        observers.made[0].fire();
+
+        expect(shows(menu)).toBe("");
+      });
+    });
+  });
+
+  describe("measuring the nested root", () => {
+    it("draws one overlay over each line box of a nested root with no box of its own", () => {
+      const lines = [rect(10, 20, 110, 40), rect(10, 40, 60, 60)];
+      let selected: unknown;
+      let detached = false;
+      const range = {
+        selectNodeContents: (node: unknown) => {
+          selected = node;
+        },
+        getClientRects: () => lines,
+        detach: () => {
+          detached = true;
+        },
+      };
+      withGlobals({ document: { createRange: () => range } }, () => {
+        const owner = measured(rect(0, 0, 400, 400));
+        const target = measured(rect(0, 0, 0, 0), {
+          clientRects: [rect(10, 20, 10, 20)],
+        });
+        const menu = openNested(owner.element, target.element, pieceCell());
+
+        const rendered = shows(menu);
+        expect(rendered).toContain(
+          "left: 10px; top: 20px; width: 100px; height: 20px",
+        );
+        expect(rendered).toContain(
+          "left: 10px; top: 40px; width: 50px; height: 20px",
+        );
+        expect(selected).toBe(target.element);
+        expect(detached).toBe(true);
+      });
+    });
+
+    it("clips the overlay to each ancestor that clips its overflow, in the axis it clips", () => {
+      // The outer ancestor is drawn at twice its layout height, so its client
+      // area is scaled to match; the inner one scrolls sideways only, past a
+      // scrollbar 10 pixels wide.
+      const clipsY = measured(rect(0, 100, 200, 300), {
+        client: {
+          offsetWidth: 200,
+          offsetHeight: 100,
+          clientLeft: 0,
+          clientTop: 5,
+          clientWidth: 200,
+          clientHeight: 80,
+        },
+      });
+      const clipsX = measured(rect(100, 0, 300, 200), {
+        parentElement: clipsY.element,
+        client: {
+          offsetWidth: 200,
+          offsetHeight: 200,
+          clientLeft: 0,
+          clientTop: 0,
+          clientWidth: 190,
+          clientHeight: 200,
+        },
+      });
+      const visible = measured(rect(0, 0, 50, 50), {
+        parentElement: clipsX.element,
+      });
+      const overflow = new Map<
+        Element,
+        { overflowX: string; overflowY: string }
+      >([
+        [clipsY.element, { overflowX: "visible", overflowY: "hidden" }],
+        [clipsX.element, { overflowX: "auto", overflowY: "visible" }],
+      ]);
+      const getComputedStyle = (element: Element) =>
+        overflow.get(element) ?? { overflowX: "visible", overflowY: "visible" };
+      withGlobals({ getComputedStyle }, () => {
+        const owner = measured(rect(0, 0, 400, 400));
+        const target = measured(rect(50, 50, 350, 350), {
+          parentElement: visible.element,
+        });
+        const menu = openNested(owner.element, target.element, pieceCell());
+
+        const rendered = shows(menu);
+        expect(rendered).toContain(
+          "left: 100px; top: 110px; width: 190px; height: 160px",
+        );
+        expect(rendered.match(/nested-piece-highlight/g)).toHaveLength(1);
+      });
+    });
+
+    it("draws no overlay for a nested root clipped out of sight", () => {
+      const clips = measured(rect(0, 0, 100, 100), {
+        client: {
+          offsetWidth: 100,
+          offsetHeight: 100,
+          clientLeft: 0,
+          clientTop: 0,
+          clientWidth: 100,
+          clientHeight: 100,
+        },
+      });
+      const getComputedStyle = (element: Element) =>
+        element === clips.element
+          ? { overflowX: "clip", overflowY: "scroll" }
+          : { overflowX: "visible", overflowY: "visible" };
+      withGlobals({ getComputedStyle }, () => {
+        const owner = measured(rect(0, 0, 400, 400));
+        const target = measured(rect(150, 150, 250, 250), {
+          parentElement: clips.element,
+        });
+        const menu = openNested(owner.element, target.element, pieceCell());
+
+        expect(shows(menu)).toContain("View source");
+        expect(shows(menu)).not.toContain("nested-piece-highlight");
+      });
+    });
   });
 });
 
@@ -2832,6 +3346,28 @@ describe("the origin and history panel", () => {
     expect(shows(menu)).toContain("Stopped following source · Current");
   });
 
+  it("reports a failed change, keeping the source it showed, when reading the piece again fails too", async () => {
+    let reads = 0;
+    const menu = openMenu(pieceCell(
+      () =>
+        ++reads === 1
+          ? Promise.resolve(SOURCE)
+          : Promise.reject(new Error("source unreadable")),
+      {
+        update: () => Promise.reject(new Error("origin unreachable")),
+      },
+    ));
+    await menu.showPanel("origin");
+
+    await menu.changeSource({ kind: "detach" });
+
+    const rendered = shows(menu);
+    expect(reads).toBe(2);
+    expect(rendered).toContain("origin unreachable");
+    expect(rendered).not.toContain("source unreadable");
+    expect(rendered).toContain("recipe.tsx");
+  });
+
   it("re-enables source actions after a disconnected action settles", async () => {
     const entered = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
@@ -3528,6 +4064,63 @@ describe("source history actions", () => {
     expect(liveRegionText(menu)).not.toContain("the main file");
   });
 
+  it("leaves focus alone when a source change moved to the origin panel before the revision drew", async () => {
+    let focusCalls = 0;
+    const drawn = Promise.withResolvers<boolean>();
+    const menu = openMenu(pieceCell(() => Promise.resolve(historySource)));
+    Object.defineProperty(menu, "updateComplete", {
+      value: drawn.promise,
+      configurable: true,
+    });
+    Object.defineProperty(menu, "shadowRoot", {
+      value: {
+        querySelector: () => ({ focus: () => focusCalls++ }),
+      },
+      configurable: true,
+    });
+    await menu.showPanel("origin");
+    const reading = clickTestId(menu, "piece-source-view-older");
+    await menu.changeSource({ kind: "detach" });
+    expect(shows(menu)).toContain("Origin and history");
+
+    drawn.resolve(true);
+    await drawn.promise;
+    await reading;
+
+    expect(focusCalls).toBe(0);
+  });
+
+  it("does not report a failed revision read a newer one replaced", async () => {
+    const reads: Array<PromiseWithResolvers<PieceSourceRevisionSourceView>> =
+      [];
+    const menu = openMenu(pieceCell(
+      () => Promise.resolve(historySource),
+      {
+        readRevision: () => {
+          const read = Promise.withResolvers<PieceSourceRevisionSourceView>();
+          reads.push(read);
+          return read.promise;
+        },
+      },
+    ));
+    await menu.showPanel("origin");
+    const first = clickTestId(menu, "piece-source-view-older");
+    await menu.showPanel("origin");
+    const second = clickTestId(menu, "piece-source-view-older");
+
+    reads[0].reject(new Error("stale revision failed"));
+    await first;
+
+    expect(shows(menu)).not.toContain("stale revision failed");
+    expect(liveRegionText(menu)).toContain("Reading source revision");
+    reads[1].resolve({
+      pattern: SOURCE.pattern!,
+      files: [{ name: "/main.tsx", contents: "new revision" }],
+    });
+    await second;
+    expect(shows(menu)).toContain("new revision");
+  });
+
   it("does not substitute current source for an unavailable revision", async () => {
     const menu = openMenu(pieceCell(
       () => Promise.resolve(historySource),
@@ -3599,6 +4192,8 @@ function statefulPiece(
     getPieceFails = false,
     deferGetPiece = false,
     sendFails = false,
+    holdSends = false,
+    aborted = false,
     scope = "space",
     pieceSchema = { type: "object" } as Record<string, unknown>,
     fields = {},
@@ -3618,10 +4213,19 @@ function statefulPiece(
 
     getPieceFails?: boolean;
 
-    /** When true, getPiece stays pending until `resolveGetPiece()` is called. */
+    /**
+     * When true, getPiece stays pending until `resolveGetPiece()` or
+     * `failGetPiece()` is called.
+     */
     deferGetPiece?: boolean;
 
     sendFails?: boolean;
+
+    /** When true, each send stays pending until `answerSend()` is called. */
+    holdSends?: boolean;
+
+    /** Whether the runtime has been disposed. */
+    aborted?: boolean;
     pieceSchema?: Record<string, unknown>;
 
     /**
@@ -3696,6 +4300,11 @@ function statefulPiece(
         });
       }
       if (request.type === RequestType.CellSend) {
+        if (holdSends) {
+          return new Promise((resolve, reject) =>
+            heldSends.push((error) => error ? reject(error) : resolve({}))
+          );
+        }
         return sendFails
           ? Promise.reject(new Error("handler refused the event"))
           : Promise.resolve({});
@@ -3704,11 +4313,14 @@ function statefulPiece(
     },
     signal: { aborted: false },
   };
-  const pendingPieces: Array<() => void> = [];
+  const heldSends: Array<(error?: Error) => void> = [];
+  const pendingPieces: Array<
+    { resolve: () => void; reject: (error: Error) => void }
+  > = [];
   const getPieceCalls: unknown[][] = [];
   const rt = {
     [$conn]: () => conn,
-    signal: { aborted: false },
+    signal: { aborted },
     getPieceSource: () => Promise.resolve(SOURCE),
     getPiece: (...args: unknown[]) => {
       getPieceCalls.push(args);
@@ -3716,8 +4328,8 @@ function statefulPiece(
         return Promise.reject(new Error("no piece handle for this piece"));
       }
       if (deferGetPiece) {
-        return new Promise((resolve) => {
-          pendingPieces.push(() => resolve(pieceHandle));
+        return new Promise((resolve, reject) => {
+          pendingPieces.push({ resolve: () => resolve(pieceHandle), reject });
         });
       }
       return Promise.resolve(pieceHandle);
@@ -3735,13 +4347,20 @@ function statefulPiece(
   const pieceHandle = { cell: () => cell };
 
   /** Resolve the oldest still-pending deferred getPiece call. */
-  const resolveGetPiece = () => pendingPieces.shift()?.();
+  const resolveGetPiece = () => pendingPieces.shift()?.resolve();
+
+  /** Fail the oldest still-pending deferred getPiece call with `error`. */
+  const failGetPiece = (error: Error) => pendingPieces.shift()?.reject(error);
+
+  /** Answer the oldest held send, failing it with `error` when one is given. */
+  const answerSend = (error?: Error) => heldSends.shift()?.(error);
 
   /** A nested handler stream whose own ref schema carries the stream tag. */
   const streamHandle = (name: string): CellHandle =>
     new CellHandle(rt, {
       id: "of:fid1:piece",
       space: SPACE,
+      scope: "space",
       path: [name],
       schema: { asCell: ["stream"] },
     } as unknown as CellRef);
@@ -3783,6 +4402,8 @@ function statefulPiece(
     streamHandle,
     handlerHandle,
     resolveGetPiece,
+    failGetPiece,
+    answerSend,
     subscribedAt,
     rt,
   };
@@ -4127,6 +4748,37 @@ describe("the data panel", () => {
 
     expect(shows(menu)).toContain("no piece handle for this piece");
   });
+
+  it("does not report a data read that failed after a refresh replaced it", async () => {
+    const piece = statefulPiece({ deferGetPiece: true });
+    const menu = openMenu(piece.cell);
+    const first = menu.showPanel("data");
+    menu.refreshData();
+
+    piece.failGetPiece(new Error("stale read failed"));
+    await first;
+
+    expect(shows(menu)).not.toContain("stale read failed");
+  });
+
+  it("does not report a data read cancelled by runtime disposal", async () => {
+    const piece = statefulPiece({ getPieceFails: true, aborted: true });
+    const menu = openMenu(piece.cell);
+    await menu.showPanel("data");
+
+    expect(shows(menu)).not.toContain("no piece handle for this piece");
+  });
+
+  it("reads no piece state over a space with no piece", async () => {
+    const piece = statefulPiece();
+    const menu = newMenu();
+    menu.open({ space: SPACE, runtime: piece.rt, x: 40, y: 60 });
+
+    await menu.showPanel("data");
+    menu.refreshData();
+
+    expect(piece.getPieceCalls).toEqual([]);
+  });
 });
 
 describe("the actions panel", () => {
@@ -4344,6 +4996,102 @@ describe("the actions panel", () => {
     expect(
       piece.requests.filter((r) => r.type === RequestType.CellSend).length,
     ).toBe(1);
+  });
+
+  it("lists a stream the argument and the result both reach once", async () => {
+    const piece = statefulPiece({
+      argument: {
+        addItem: {
+          "/": {
+            "link@1": {
+              id: "of:fid1:piece",
+              space: SPACE,
+              path: ["addItem"],
+              schema: { asCell: ["stream"] },
+            },
+          },
+        },
+      },
+    });
+    await piece.cell.set({ addItem: piece.streamHandle("addItem") });
+    const menu = openMenu(piece.cell);
+    await menu.showPanel("actions");
+
+    expect(menu.collectActions().map((action) => action.name)).toEqual([
+      "addItem",
+    ]);
+    expect(shows(menu).match(/piece-action-addItem/g)).toHaveLength(1);
+  });
+
+  it("dispatches the payload typed into the payload box", async () => {
+    const piece = statefulPiece();
+    await piece.cell.set({ addItem: piece.streamHandle("addItem") });
+    const menu = openMenu(piece.cell);
+    await menu.showPanel("actions");
+
+    eventHandler(menu, 'class="payload"', "input")(
+      { target: { value: '{ "typed": true }' } } as unknown as Event,
+    );
+    const [action] = menu.collectActions();
+    await menu.dispatchAction(action);
+
+    const sends = piece.requests.filter(
+      (request) => request.type === RequestType.CellSend,
+    );
+    expect(sends.map((send) => send.event)).toEqual([{ typed: true }]);
+  });
+
+  it("says it is reading handlers until the piece state arrives", async () => {
+    const piece = statefulPiece({ deferGetPiece: true });
+    const menu = openMenu(piece.cell);
+    const reading = menu.showPanel("actions");
+
+    expect(shows(menu)).toContain("Reading handlers…");
+
+    piece.resolveGetPiece();
+    await reading;
+    expect(shows(menu)).not.toContain("Reading handlers…");
+  });
+
+  it("reports a failed read of the handlers", async () => {
+    const piece = statefulPiece({ getPieceFails: true });
+    const menu = openMenu(piece.cell);
+    await menu.showPanel("actions");
+
+    expect(shows(menu)).toContain(
+      "Could not read this piece's handlers: no piece handle for this piece",
+    );
+  });
+
+  it("reports nothing of a dispatch that settled after a refresh", async () => {
+    for (const failure of [undefined, new Error("late dispatch failure")]) {
+      const piece = statefulPiece({ holdSends: true });
+      await piece.cell.set({ addItem: piece.streamHandle("addItem") });
+      const menu = openMenu(piece.cell);
+      await menu.showPanel("actions");
+      const [action] = menu.collectActions();
+      const dispatching = menu.dispatchAction(action);
+      menu.refreshData();
+
+      piece.answerSend(failure);
+      await dispatching;
+
+      const rendered = shows(menu);
+      expect(rendered).not.toContain("Event accepted for addItem");
+      expect(rendered).not.toContain("late dispatch failure");
+    }
+  });
+
+  it("does not report a dispatch cancelled by runtime disposal", async () => {
+    const piece = statefulPiece({ sendFails: true, aborted: true });
+    await piece.cell.set({ addItem: piece.streamHandle("addItem") });
+    const menu = openMenu(piece.cell);
+    await menu.showPanel("actions");
+
+    const [action] = menu.collectActions();
+    await menu.dispatchAction(action);
+
+    expect(shows(menu)).not.toContain("handler refused the event");
   });
 });
 
@@ -4603,6 +5351,29 @@ describe("openPieceMenu", () => {
       openPieceMenu({ cell: pieceCell(), x: 0, y: 0, themeFrom });
 
       expect(applied).toContainEqual(["--cf-theme-color-surface", "#101010"]);
+    } finally {
+      restore();
+    }
+  });
+
+  it("closes the shared menu only for the element that opened it", () => {
+    const { restore } = installDocument();
+    try {
+      const piece = highlightProbe();
+      const other = highlightProbe();
+      const menu = openPieceMenu({
+        cell: pieceCell(),
+        x: 0,
+        y: 0,
+        highlightedPiece: piece.element,
+      });
+
+      closePieceMenuFor(other.element);
+      expect(shows(menu)).toContain("View source");
+
+      closePieceMenuFor(piece.element);
+      expect(shows(menu)).toBe("");
+      expect(piece.has("data-cf-piece-menu-open")).toBe(false);
     } finally {
       restore();
     }
