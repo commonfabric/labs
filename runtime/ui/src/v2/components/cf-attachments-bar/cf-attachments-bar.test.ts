@@ -82,6 +82,22 @@ describe("CFAttachmentsBar", () => {
     expect(emptyStateOf(element)).toBe("No pinned cells");
   });
 
+  it("renders a chip for each entry, even entries pinning the same path", async () => {
+    const element = await mountBar([
+      { path: "space/notes", name: "Notes" },
+      { path: "space/notes", name: "Notes again" },
+    ]);
+    expect(namesOf(element)).toEqual(["Notes", "Notes again"]);
+
+    element.pinnedCells = [
+      { path: "space/notes", name: "Third" },
+      { path: "space/todo", name: "Todo list" },
+      { path: "space/notes", name: "Fourth" },
+    ];
+    await element.updateComplete;
+    expect(namesOf(element)).toEqual(["Third", "Todo list", "Fourth"]);
+  });
+
   it("makes chips removable only when it is removable", async () => {
     expect(chipsOf(await mountBar(PINNED)).map((chip) => chip.removable))
       .toEqual([false, false]);

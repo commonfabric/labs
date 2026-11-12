@@ -1,6 +1,5 @@
 import { css, html, type PropertyValues } from "lit";
 import { property } from "lit/decorators.js";
-import { repeat } from "lit/directives/repeat.js";
 import type { CellHandle } from "@commonfabric/runtime-client";
 
 import { BaseElement } from "../../core/base-element.ts";
@@ -78,9 +77,7 @@ export class CFAttachmentsBar extends BaseElement {
 
     return html`
       <div class="attachments-list">
-        ${repeat(
-          pinned,
-          (cell) => cell.path,
+        ${pinned.map(
           (cell) =>
             html`
               <cf-chip

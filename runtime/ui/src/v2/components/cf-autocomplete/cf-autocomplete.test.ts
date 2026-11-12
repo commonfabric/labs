@@ -665,6 +665,22 @@ describe("CFAutocomplete", () => {
       });
     }
 
+    it("stays closed when text typed just before closing settles", async () => {
+      const element = await autocomplete({ items: fruit });
+      const opens = eventsFrom(element, "cf-open");
+      await focus(element);
+      const input = inputOf(element);
+      input.value = "ban";
+      input.dispatchEvent(new InputEvent("input"));
+
+      await press(element, "Tab");
+      time.tick(0);
+      await element.updateComplete;
+
+      expect(isOpen(element)).toBe(false);
+      expect(opens).toHaveLength(1);
+    });
+
     it("leaves Escape alone while closed", async () => {
       const element = await autocomplete({ items: fruit });
       const closes = eventsFrom(element, "cf-close");

@@ -798,6 +798,9 @@ export class CFAutocomplete extends BaseElement {
    * selected label in a single-select and nothing in a multi-select.
    */
   #close() {
+    // Text typed just before closing must not reopen the dropdown.
+    clearTimeout(this.#inputTimer);
+    this.#inputTimer = undefined;
     this.#isOpen = false;
     this.#query = "";
     this.emit("cf-close", {});
