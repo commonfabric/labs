@@ -123,11 +123,8 @@ export class FabricAwareResolver implements ProgramResolver {
       throw new Error(this.#notFoundMessage(identity, sourceSpace));
     }
     this.#assertNoRootAbsoluteImports(identity, docs);
-
-    const entryDoc = docs.get(identity);
-    if (entryDoc === undefined) {
-      throw new Error(this.#notFoundMessage(identity, sourceSpace));
-    }
+    // A verified closure always holds its entry.
+    const entryDoc = docs.get(identity)!;
     const entryPath = this.#mountPath(identity, entryDoc.filename);
     const mount: FabricMount = {
       entryIdentity: identity,

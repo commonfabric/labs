@@ -52,15 +52,20 @@ const RULES: Readonly<Record<string, Rule>> = {
 };
 
 /**
- * Helper for `mergeServingLoopStats()`, which combines the values several
- * hosts hold at `path`: numbers by the path's rule, records key by key over
- * the union of their keys, and arrays end to end.
+ * Helper for `mergedStats()`, which combines the values several hosts hold
+ * at `path`: numbers by the path's rule, records key by key over the union of
+ * their keys, and arrays end to end. With `closing` set, a level is zero.
  */
-const mergedAt = (path: string, values: readonly unknown[]): unknown => {
+const mergedAt = (
+  path: string,
+  values: readonly unknown[],
+  closing: boolean,
+): unknown => {
   const [first] = values;
   if (typeof first === "number") {
     const numbers = values.filter((value) => typeof value === "number");
     const rule = RULES[path];
+    if (closing && (rule === "level" || rule === "level-max")) return 0;
     return rule === "peak" || rule === "level-max"
       ? maxOf(numbers)
       : numbers.reduce((sum, value) => sum + value, 0);
@@ -68,24 +73,22 @@ const mergedAt = (path: string, values: readonly unknown[]): unknown => {
   if (Array.isArray(first)) {
     return values.flatMap((value) => Array.isArray(value) ? value : []);
   }
-  if (isPlainObject(first)) {
-    const records = values.filter((value) => isPlainObject(value));
-    const merged: Record<string, unknown> = {};
-    for (const record of records) {
-      for (const key of Object.keys(record)) {
-        if (key in merged) continue;
-        merged[key] = mergedAt(
-          path === "" ? key : `${path}.${key}`,
-          records.flatMap((each) => key in each ? [each[key]] : []),
-        );
-      }
+  const records = values.filter((value) => isPlainObject(value));
+  const merged: Record<string, unknown> = {};
+  for (const record of records) {
+    for (const key of Object.keys(record)) {
+      if (key in merged) continue;
+      merged[key] = mergedAt(
+        path === "" ? key : `${path}.${key}`,
+        records.flatMap((each) => key in each ? [each[key]] : []),
+        closing,
+      );
     }
-    return merged;
   }
-  return values.at(-1);
+  return merged;
 };
 
-/** Helper for `mergeServingLoopStats()`, which keeps a series within bounds. */
+/** Helper for `mergedStats()`, which keeps a series within bounds. */
 const bounded = <Row>(
   block: { series: Row[]; dropped: number },
 ): void => {
@@ -96,24 +99,19 @@ const bounded = <Row>(
 };
 
 /**
- * Returns the counters of the hosts whose counters `parts` holds, taken
- * together: the counters of no host for an empty list. Rows of a bounded
- * series keep the order of `parts`, and the rows a bound drops are the
- * earliest of them, counted where the series counts its own.
- * `settleAdvances.lastDelta` is that of the last part that advanced.
- *
- * The parts are left as they are, and the result shares nothing with them
- * that the counters' holders write to.
+ * Helper for `mergeServingLoopStats()` and `closedHostServingLoopStats()`,
+ * which combines `parts`, with every level at zero when `closing` is set.
  */
-export function mergeServingLoopStats(
+const mergedStats = (
   parts: readonly ServingLoopStats[],
-): ServingLoopStats {
+  closing: boolean,
+): ServingLoopStats => {
   // The walk rebuilds the shape every part has, so what it returns has that
   // shape too, which the compiler cannot see through a walk over `unknown`.
   const merged = mergedAt("", [
     emptyServingLoopStats(),
     ...parts,
-  ]) as ServingLoopStats;
+  ], closing) as ServingLoopStats;
   merged.settle.series = merged.settle.series.map((row) => ({ ...row }));
   merged.settleAdvances.series = merged.settleAdvances.series.map((row) => ({
     ...row,
@@ -134,6 +132,22 @@ export function mergeServingLoopStats(
     delete merged.derivedCommitsBySpace[space];
   }
   return merged;
+};
+
+/**
+ * Returns the counters of the hosts whose counters `parts` holds, taken
+ * together: the counters of no host for an empty list. Rows of a bounded
+ * series keep the order of `parts`, and the rows a bound drops are the
+ * earliest of them, counted where the series counts its own.
+ * `settleAdvances.lastDelta` is that of the last part that advanced.
+ *
+ * The parts are left as they are, and the result shares nothing with them
+ * that the counters' holders write to.
+ */
+export function mergeServingLoopStats(
+  parts: readonly ServingLoopStats[],
+): ServingLoopStats {
+  return mergedStats(parts, false);
 }
 
 /**
@@ -144,23 +158,5 @@ export function mergeServingLoopStats(
 export function closedHostServingLoopStats(
   stats: ServingLoopStats,
 ): ServingLoopStats {
-  const closed = mergeServingLoopStats([stats]);
-  for (const [path, rule] of Object.entries(RULES)) {
-    if (rule === "peak") continue;
-    const keys = path.split(".");
-    const field = keys.pop()!;
-    let holder: Record<string, unknown> = closed;
-    for (const key of keys) {
-      const next = holder[key];
-      if (!isPlainObject(next)) {
-        throw new Error(`the serving-loop stats hold no record at \`${path}\``);
-      }
-      holder = next as Record<string, unknown>;
-    }
-    if (typeof holder[field] !== "number") {
-      throw new Error(`the serving-loop stats hold no number at \`${path}\``);
-    }
-    holder[field] = 0;
-  }
-  return closed;
+  return mergedStats([stats], true);
 }
