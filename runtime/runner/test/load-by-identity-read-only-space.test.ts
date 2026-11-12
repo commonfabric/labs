@@ -94,7 +94,7 @@ const PROGRAM: RuntimeProgram = {
 const logger = getLogger("pattern-manager");
 
 /** How often `logger` has logged `key` at `level` since `counter` was called. */
-const counter = (key: string, level: "debug" | "error") => {
+const counter = (key: string, level: "debug" | "info" | "error") => {
   const read = () => logger.countsByKey[key]?.[level] ?? 0;
   const base = read();
   return () => read() - base;
@@ -181,7 +181,7 @@ describe("pattern-manager", () => {
     it("copies nothing into a space the session may only read, and logs the refusal quietly, once", async () => {
       const reader = await readerWithCompiledProgram("READ");
       const errors = errorCounter();
-      const refused = counter("closure-copy-refused", "debug");
+      const refused = counter("closure-copy-refused", "info");
       using logs = captureLogs("pattern-manager");
 
       expect(await reader.load()).toBe(reader.compiled);
@@ -194,13 +194,17 @@ describe("pattern-manager", () => {
       const entry = reader.runtime.patternManager.getArtifactEntryRef(
         reader.compiled,
       )!;
-      expect(logs.textsOf("closure-replication-issued")).toEqual([
+      const issued = logs.textsOf("closure-replication-issued");
+      expect(issued).toHaveLength(1);
+      const ticket = issued[0]!.match(/ ticket=(\d+) /)?.[1];
+      expect(issued[0]).toBe(
         `entry=${entry.identity} from=${reader.home} to=${reader.shared} ` +
-        "trigger=load-from-memory",
-      ]);
+          `ticket=${ticket} trigger=load-from-memory`,
+      );
       const [refusal] = logs.textsOf("closure-copy-refused");
       expect(refusal).toContain(
-        `entry=${entry.identity} from=${reader.home} to=${reader.shared}`,
+        `entry=${entry.identity} from=${reader.home} to=${reader.shared} ` +
+          `ticket=${ticket}`,
       );
     });
 
@@ -215,7 +219,7 @@ describe("pattern-manager", () => {
         "compile-cache-writeback-failed",
         "error",
       );
-      const refused = counter("closure-copy-refused", "debug");
+      const refused = counter("closure-copy-refused", "info");
 
       expect(await reader.load()).toBe(reader.compiled);
       await reader.runtime.patternManager.flushCompileCacheWrites();
@@ -232,7 +236,7 @@ describe("pattern-manager", () => {
       const reader = await readerWithCompiledProgram("READ");
       const errors = errorCounter();
       const failed = counter("closure-replication-failed", "error");
-      const refused = counter("closure-copy-refused", "debug");
+      const refused = counter("closure-copy-refused", "info");
 
       reader.runtime.patternManager.replicatePatternToSpace(
         reader.compiled,
