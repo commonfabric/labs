@@ -91,7 +91,7 @@ than guessing at unsupported internals.
 
 | Violation | Fix |
 |-----------|-----|
-| a hyphenated prop other than `data-*`, `aria-*` or an `on…` event (the compiler warns of it) | Write the property's camel-case name, for example `allowCustom` |
+| a hyphenated prop on an element (`cf-*` or native, not a pattern component) other than `data-*`, `aria-*` or an `on…` event (the compiler warns of it) | Write the property's camel-case name, for example `allowCustom` |
 | styling through guessed shadow-internal selectors | Prefer documented custom properties, parts, or theme hooks |
 | arbitrary one-off visual overrides where theme/custom properties would work | Prefer public styling affordances with fallbacks |
 
