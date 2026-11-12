@@ -251,6 +251,7 @@ import { createTrustResolver } from "./trust.ts";
 import {
   CFC_ENFORCING_STRICTNESS,
   CFC_STRUCTURAL_PROVENANCE_PIECE_SETUP_STORE,
+  CFC_STRUCTURAL_PROVENANCE_PROCESSED_CLAIM,
   CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE,
   CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION,
   type CfcAddress,
@@ -1531,6 +1532,28 @@ const structuralProvenanceForPath = (
     arraysEqual(canonicalizeLogicalPath(input.target.path), logicalPath)
   );
 };
+
+/**
+ * Whether `path` of `target` is a served event's processed claim, as an
+ * authorized `CFC_STRUCTURAL_PROVENANCE_PROCESSED_CLAIM` marker on `tx` names
+ * it. Only a stream's entries document holds one.
+ */
+const isProcessedClaimPath = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  path: readonly string[],
+): boolean =>
+  target.id.startsWith(STREAM_ENTRIES_DOC_PREFIX) &&
+  structuralProvenanceForPath(
+      tx,
+      target,
+      path,
+      CFC_STRUCTURAL_PROVENANCE_PROCESSED_CLAIM,
+    ) !== undefined;
 
 const setupProjectionSourceMatchesValue = (
   tx: IExtendedStorageTransaction,
@@ -12901,7 +12924,12 @@ export function* prepareBoundaryCommitSteps(
       ]),
     );
     const flowTarget = flowPersist ? flowTargets?.get(key) : undefined;
-    const flowWrittenPaths = flowTarget?.paths ?? [];
+    // A served event's processed claim takes nothing of the attempt's reads
+    // (§6.2.2; `CFC_STRUCTURAL_PROVENANCE_PROCESSED_CLAIM`), so its path is
+    // neither stamped with the join nor measured against the store.
+    const flowWrittenPaths = (flowTarget?.paths ?? []).filter((path) =>
+      !isProcessedClaimPath(tx, target, path)
+    );
     const flowWrittenPrefixes = new PathPrefixIndex();
     for (const path of flowWrittenPaths) flowWrittenPrefixes.add(path);
     const flowWrittenValues = flowTarget?.valuesByPath;

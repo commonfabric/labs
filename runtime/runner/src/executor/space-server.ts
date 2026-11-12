@@ -195,6 +195,7 @@ import {
   updateDeliveryCheckpointStats,
 } from "./stats.ts";
 import { type SealedEffectBatch, SpaceOutbox } from "./outbox.ts";
+import { writeProcessedClaim } from "./processed-claim.ts";
 import { abandonRunnerAcceptanceEffects } from "./runner-acceptance.ts";
 import { effectCompletionKeyOf } from "./effect-completion.ts";
 import { markRendererTrustedEvent } from "../cfc/ui-contract.ts";
@@ -2960,32 +2961,13 @@ export class SpaceServer implements TransactionSealDestination {
       // inside the wave commit's own transaction (applyCommitTransaction
       // — a requeued entry holds it back, matching the model).
       try {
-        this.#runtime!.getCellFromLink<boolean>({
-          space: this.space,
-          id: info.streamEntry.sidecarId as never,
-          scope: "space",
-          path: [
-            "entries",
-            String(info.streamEntry.index),
-            "consequenced",
-          ],
-        }).withTx(tx).set(true);
-        if (
-          info.eventId !== undefined &&
-          (this.#deliveryCheckpoints.has(info.eventId) ||
-            this.#pendingDeliveryCheckpointWrites.has(info.eventId))
-        ) {
-          this.#runtime!.getCellFromLink<DeliveryDeferral | undefined>({
-            space: this.space,
-            id: info.streamEntry.sidecarId as never,
-            scope: "space",
-            path: [
-              "entries",
-              String(info.streamEntry.index),
-              "deliveryDeferral",
-            ],
-          }).withTx(tx).set(undefined);
-        }
+        // The mark, and the cleared deferral beside it, are the event's
+        // processed claim, which takes nothing of what the handler reads.
+        writeProcessedClaim(this.#runtime!, tx, this.space, info.streamEntry, {
+          clearDeferral: info.eventId !== undefined &&
+            (this.#deliveryCheckpoints.has(info.eventId) ||
+              this.#pendingDeliveryCheckpointWrites.has(info.eventId)),
+        });
       } catch (error) {
         // The mark IS the exactly-once record (events.md §4: no window
         // where an event is both consumed and replayable). Letting the
