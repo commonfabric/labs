@@ -45,6 +45,7 @@ import {
   type CfcModulePolicySource,
   redactCaveatSourcesForDisplay,
   reportCfcDenial,
+  type SpaceMembershipProvider,
 } from "@commonfabric/runner/cfc";
 
 import {
@@ -113,12 +114,13 @@ function displayLabel(
 
 /**
  * What a host read gate's decisions consult beyond the labels, as a render's
- * do (`DisplayFitSources`), with module policy manifests it can also load,
- * as a decision made once loads what it consults first.
+ * do (`DisplayFitSources`), with access lists and module policy manifests it
+ * can also load, as a decision made once loads what it consults first.
  */
 export type HostReadSources =
-  & Omit<DisplayFitSources, "modulePolicies">
+  & Omit<DisplayFitSources, "membership" | "modulePolicies">
   & {
+    readonly membership?: SpaceMembershipProvider;
     readonly modulePolicies?: Pick<
       CfcModulePolicySource,
       "resolve" | "subscribe" | "load"
@@ -217,7 +219,6 @@ export class HostReadGate {
             }
             return () => {};
           },
-          load: (space) => membership.load(space),
         },
         modulePolicies: modulePolicies && {
           subscribe: (reference, space) => {
@@ -228,10 +229,13 @@ export class HostReadGate {
           },
         },
       };
+      // A settled read is decided once, so nothing is kept to cancel and no
+      // change decides it again.
+      const ignore = () => {};
       const watch: FitWatch = {
         watched: new Set(loaded),
-        addCancel: () => {},
-        reeval: () => {},
+        addCancel: ignore,
+        reeval: ignore,
       };
       decide(policy, loading, watch);
       for (const key of watch.watched) loaded.add(key);

@@ -70,7 +70,10 @@ const logger = getLogger("display-fit", { enabled: false, level: "debug" });
  */
 export type DisplayFitSources = {
   readonly resolveConfidentiality?: RenderConfidentialityResolver;
-  readonly membership?: SpaceMembershipProvider;
+  readonly membership?: Pick<
+    SpaceMembershipProvider,
+    "readerRole" | "subscribe"
+  >;
   readonly modulePolicies?: WorkerReconcilerOptions["modulePolicySource"];
 };
 
