@@ -877,6 +877,25 @@ describe("invites", () => {
       await f.close();
     }
   });
+  it("shows its redeemer an exhausted invitation's preview whatever code they send, as a receipt-first redemption does", async () => {
+    const f = await fixture();
+    try {
+      const invite = f.create({ spaceName: "Garden plans" });
+      f.run({ operation: "redeem", body: invite }, f.guest);
+      const wrong = {
+        inviteId: invite.inviteId,
+        code: createInviteCredentials().code,
+      };
+      expect(f.run({ operation: "preview", body: wrong }, f.guest)).toEqual({
+        access: "READ",
+        spaceName: "Garden plans",
+      });
+      // The code check still holds for anyone without a receipt.
+      unavailable(() => f.run({ operation: "preview", body: wrong }, f.second));
+    } finally {
+      await f.close();
+    }
+  });
   it("names any invitation, and previews one that carries no names with its access alone", async () => {
     const f = await fixture();
     try {

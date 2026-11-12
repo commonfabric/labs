@@ -223,13 +223,17 @@ which refuses a create carrying either with `invalid-request` and has no
 and returns what the invitation shows before it is redeemed: `access`, the
 access it grants, and its `spaceName`, `issuerName` and `suggestedProfile` while
 the service holds them. A preview consumes no use, grants nothing, and records
-no receipt, so it may be repeated. Every reason the invitation cannot be read —
-unknown, wrong code, expired, revoked, exhausted, or an issuer who no longer
-owns the space — is the one refusal `invite-unavailable`, so only the code tells
-a caller whether the invitation exists. As on redemption, an identity holding a
-receipt for the invitation needs no active row: its preview reads the access,
-the names and the suggestion the service keeps beside the invitation after it is
-used up, with the suggestion's lifetime.
+no receipt, so it may be repeated. For an identity without a receipt for the
+invitation, every reason it cannot be read — unknown, wrong code, expired,
+revoked, exhausted, or an issuer who no longer owns the space — is the one
+refusal `invite-unavailable`, so only the code tells such a caller whether the
+invitation exists. The receipt comes first, as on redemption: an identity
+holding one for the invitation is not checked against the code and needs no
+active row, so it previews with any well-formed code, including once the
+invitation is used up. Its preview reads the access, the names and the
+suggestion the service keeps beside the invitation, with the suggestion's
+lifetime; revocation, expiry and an issuer who no longer owns the space still
+refuse it.
 
 Over HTTP, every invitation operation is a signed JSON POST under
 `/api/spaces/:space/invites/`: `create`, `redeem`, `preview`, `list`, `revoke`,
