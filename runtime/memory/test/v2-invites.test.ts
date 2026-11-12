@@ -946,6 +946,38 @@ describe("invites", () => {
       await f.close();
     }
   });
+  it("retires an invitation whose preview finds its issuer no longer owns the space, so restoring them does not revive it", async () => {
+    const f = await fixture();
+    try {
+      const look = (
+        invite: { inviteId: string; code: string },
+        principal = f.guest,
+      ) =>
+        f.run({
+          operation: "preview",
+          body: { inviteId: invite.inviteId, code: invite.code },
+        }, principal);
+      const named = {
+        suggestedProfile: sam,
+        spaceName: "Garden plans",
+        issuerName: "Pat Example",
+      };
+      const fresh = f.create(named);
+      const redeemed = f.create(named);
+      f.run({ operation: "redeem", body: redeemed }, f.second);
+      f.acl({ [f.guest]: "OWNER" });
+      unavailable(() => look(fresh));
+      unavailable(() => look(redeemed, f.second));
+      expect(previewRows(f)).toEqual([]);
+      expect(suggestionRows(f)).toEqual([]);
+      f.acl({ [f.owner]: "OWNER" });
+      unavailable(() => look(fresh));
+      unavailable(() => look(redeemed, f.second));
+      expect(f.run({ operation: "list", body: {} })).toEqual([]);
+    } finally {
+      await f.close();
+    }
+  });
   it("refuses a malformed or oversized space or issuer name", async () => {
     const f = await fixture();
     try {

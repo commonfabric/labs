@@ -358,10 +358,17 @@ export function executeInvite(
       const names = previewNames(inviteId);
       const issuedBy = row?.issuedBy ?? names?.issuedBy;
       const access = row?.access ?? names?.access;
-      if (
-        issuedBy === undefined || access === undefined ||
-        acl?.[issuedBy as keyof ACL] !== "OWNER"
-      ) return failure("invite-unavailable");
+      if (issuedBy === undefined || access === undefined) {
+        return failure("invite-unavailable");
+      }
+      if (acl?.[issuedBy as keyof ACL] !== "OWNER") {
+        // As redemption does, an issuer who no longer owns the space retires
+        // the invitation and what it shows, so restoring their ownership
+        // later does not bring back an invitation they could not honour.
+        if (row !== undefined) remove(inviteId);
+        forgetSuggestion(inviteId);
+        return failure("invite-unavailable");
+      }
       const held = suggestion(inviteId)?.profile;
       const result: InvitePreview = {
         access,
