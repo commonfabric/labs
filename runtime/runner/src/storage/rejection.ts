@@ -292,11 +292,13 @@ export function isStorageTransactionInconsistent(
  * one WITHOUT being asked: a transport close schedules `reconnect()`. A
  * replica's session sends a commit its connection lost again itself,
  * unchanged, once the client's `readyToRetry()` says the session can take it
- * (`ResendingSession`, memory/v2/resending-session.ts), and makes again any
- * other request that was never sent. So a `ConnectionError` reaches a caller
- * only from a request that was sent, was not answered, and may not be made
- * twice. `ConnectionError` is the runner's normalization of a transport
- * failure (storage/v2.ts `toConnectionError`).
+ * (`ResendingSession`, memory/v2/resending-session.ts). It does the same for
+ * a watch change, and makes again any other request it carries that was
+ * never sent. So a `ConnectionError` reaches a caller from a request that was
+ * sent, was not answered, and may not be made twice, or from one still
+ * waiting to be made again when its client gave up connecting for good.
+ * `ConnectionError` is the runner's normalization of a transport failure
+ * (storage/v2.ts `toConnectionError`).
  *
  * `InvalidMessageError` is the other liveness class, and the less obvious one.
  * The client raises it when a frame off the wire will not decode

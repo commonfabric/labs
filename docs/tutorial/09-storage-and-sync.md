@@ -125,10 +125,13 @@ Client-side resilience details worth knowing: the memory client
 commit a connection drop catches fails there, saying whether it was sent.
 The session the replica commits through
 (`runtime/memory/v2/resending-session.ts`) **sends it again on reconnect**,
-unchanged (safe by idempotence), so the commit's caller sees only the
-server's answer. On the way back the client also declares what its replica
-holds, so the server re-delivers exactly what it lacks — never the whole
-watch union again, never less than the gap.
+unchanged (safe by idempotence), so the commit's caller sees the server's
+answer rather than the drop. Three things still end a commit without one:
+the session closes, the server opens a new session in place of the one the
+commit was sent on, or the commit's own payload keeps failing the write. On
+the way back the client also declares what its replica holds, so the server
+re-delivers exactly what it lacks — never the whole watch union again, never
+less than the gap.
 Offline-tolerant by construction, within a session's lifetime.
 
 ## Subscriptions: watches over schema-shaped graphs

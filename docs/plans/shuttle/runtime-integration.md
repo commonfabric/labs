@@ -64,7 +64,9 @@ An established connection heals below shuttle, in the memory client
   when it did not. Both paths reuse the same `WatchView` instance, which is
   what keeps `SpaceReplica.#consumeWatchView`'s standing loop delivering.
   A commit the drop caught fails, and the replica's `ResendingSession`
-  sends it again once the session is restored.
+  sends it again once the session is restored. A commit that was sent
+  fails instead when the server opened a new session in place of the one
+  it was sent on, which would judge it as a new commit.
 - `SpaceReplica` deliberately does nothing on a drop, and says so:
   `#consumeOwedSessionRemount` records that a transport drop is already
   healed by the client's own `reconnect()`/`restore()` and must be left
