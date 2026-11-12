@@ -498,6 +498,18 @@ Deno.test("collectUncoveredLinesForFiles resolves lines only for requested files
   }
 });
 
+Deno.test("collectUncoveredLinesForFiles reads a record with no line as none at all", async () => {
+  await withMembers(["runtime/bakery"], async (rootDir) => {
+    const bakery = path.join(rootDir, "runtime/bakery/src/main.ts");
+    const uncovered = await collectUncoveredLinesForFiles({
+      rootDir,
+      lcov: `SF:${bakery}\nend_of_record\n`,
+      files: ["runtime/bakery/src/main.ts"],
+    });
+    expect(uncovered.get("runtime/bakery/src/main.ts")).toEqual([1, 2, 3, 4]);
+  });
+});
+
 Deno.test("collectUncoveredLinesForFiles reports no lines for a file that compiles to nothing", async () => {
   const rootDir = await Deno.makeTempDir({ prefix: "coverage-lines-test-" });
   try {

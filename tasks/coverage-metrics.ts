@@ -161,11 +161,7 @@ export async function collectFileCoverageDebt(options: {
 }): Promise<FileCoverageDebt[]> {
   const files: FileCoverageDebt[] = [];
   for (const source of options.sourceFiles) {
-    const record = options.coverage.get(source.absolutePath);
-    // A record naming a file and carrying no line says nothing about it,
-    // so it is read as the absence of a record rather than as a file
-    // every line of which ran.
-    const coverage = record?.lineHits.size ? record : undefined;
+    const coverage = lineRecord(options.coverage, source.absolutePath);
     files.push({
       relativePath: source.relativePath,
       metricGroup: source.metricGroup,
@@ -360,7 +356,7 @@ export async function collectUncoveredLinesForFiles(
     const absolutePath = path.normalize(
       path.join(options.rootDir, relativePath),
     );
-    const coverage = lcovCoverage.get(absolutePath);
+    const coverage = lineRecord(lcovCoverage, absolutePath);
 
     let uncoveredLines: number[];
     if (coverage) {
@@ -616,6 +612,20 @@ export function parseLcov(
   });
 }
 
+/**
+ * The record `coverage` holds for `absolutePath`, when it names at least
+ * one line. A record naming a file and carrying no line says nothing
+ * about it, so it is read as the absence of a record rather than as a
+ * file every line of which ran.
+ */
+function lineRecord(
+  coverage: ReadonlyMap<string, LcovFileCoverage>,
+  absolutePath: string,
+): LcovFileCoverage | undefined {
+  const record = coverage.get(absolutePath);
+  return record?.lineHits.size ? record : undefined;
+}
+
 export function countUncoveredProfileLines(coverage: LcovFileCoverage): number {
   return uncoveredProfileLineNumbers(coverage).length;
 }
@@ -730,9 +740,7 @@ export async function main(args: string[]): Promise<string> {
   const coverage = parseLcov(lcov, rootDir);
   const sourceFiles = await collectSourceFiles(rootDir);
   if (
-    !sourceFiles.some((source) =>
-      coverage.get(source.absolutePath)?.lineHits.size
-    )
+    !sourceFiles.some((source) => lineRecord(coverage, source.absolutePath))
   ) {
     throw new Error(
       `the report has no line of a tracked source file under ${rootDir}`,
