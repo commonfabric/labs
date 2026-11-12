@@ -607,8 +607,11 @@ type OutstandingCommit = {
  * only the response to its latest send counts.
  */
 type WatchRequest<R> = {
-  /** Sends the request, as it stands at the time of the call. */
-  readonly send: () => Promise<R>;
+  /**
+   * Sends the request, as it stands at the time of the call. `onResponse`
+   * runs as the response arrives, before anything that arrives after it.
+   */
+  readonly send: (onResponse: () => void) => Promise<R>;
 
   /** The response to the latest send. */
   response: Promise<R>;
@@ -1401,7 +1404,7 @@ export class Client {
    */
   async requestWatchSet(
     message: WatchSetRequest,
-    options: { whileConnected?: boolean } = {},
+    options: { whileConnected?: boolean; onResponse?: () => void } = {},
   ): Promise<WatchSetResult> {
     // The split reads the connection's bounds, so it waits for the
     // connection. A connected client issues the parts without an await, in
@@ -1427,8 +1430,15 @@ export class Client {
         encoded,
       });
     }
-    const answers = parts.map((part) =>
-      this.request<WatchSetResult>(part, { ...options, epoch })
+    // The last part's response is the set's.
+    const answers = parts.map((part, index) =>
+      this.request<WatchSetResult>(part, {
+        whileConnected: options.whileConnected,
+        epoch,
+        ...(index === parts.length - 1
+          ? { onResponse: options.onResponse }
+          : {}),
+      })
     );
     for (const answer of answers) answer.catch(() => {});
     const results = await Promise.allSettled(answers);
@@ -3339,6 +3349,26 @@ export class SpaceSession {
   #watchSpecPositions = new Map<string, number[]>();
   #watchView: WatchView | null = null;
   #precedingWatchSyncs: SessionSync[] = [];
+
+  /**
+   * The sends of watch requests, and of the watch set a restore
+   * re-establishes, whose responses this session may yet apply, each named by
+   * the promise of its response.
+   */
+  #awaitedWatchResponses = new Set<Promise<unknown>>();
+
+  /**
+   * What has arrived since the earliest awaited watch response that arrived,
+   * in the order it arrived: each such response, and each effect that followed
+   * one. An effect here is handled once every response ahead of it has been
+   * applied or will not be, so it reaches the watch view and the mutation's
+   * consumer after them, as the server sent it.
+   */
+  #arrivalsBehindWatchResponses: (
+    | { kind: "response"; response: Promise<unknown> }
+    | { kind: "effect"; effect: SessionSync }
+  )[] = [];
+
   #sessionId: string;
   #sessionToken: string | undefined;
   #serverBuild: string | undefined;
@@ -4055,23 +4085,30 @@ export class SpaceSession {
   async watchSet(watches: WatchSpec[]): Promise<WatchView> {
     this.#assertOpen();
     const hadView = this.#watchView !== null;
-    const result = await this.watchSetSync(watches);
-    if (hadView && !isEmptySync(result.sync)) {
-      result.view.emit(result.sync);
-    }
-    return result.view;
+    const { view } = await this.watchSetSync(
+      watches,
+      undefined,
+      undefined,
+      undefined,
+      ({ view, sync }) => {
+        if (hadView && !isEmptySync(sync)) view.emit(sync);
+      },
+    );
+    return view;
   }
 
   /**
    * Replaces watches, or replays the owned set after queued changes apply.
    * `restore` is passed by `restore()` alone, for the watch set it
-   * re-establishes.
+   * re-establishes. `consume` integrates the result synchronously, before the
+   * view emits any effect that arrived after the response.
    */
   async watchSetSync(
     watches: WatchSpec[] | undefined,
     holdings?: SessionHolding[] | (() => SessionHolding[]),
     views?: ViewInterest[],
     restore?: typeof RESTORE_WATCH_SET,
+    consume?: (result: WatchMutationResult) => void,
   ): Promise<WatchMutationResult> {
     this.#assertOpen();
     if (
@@ -4089,7 +4126,7 @@ export class SpaceSession {
     }
     let requestedWatches: WatchSpec[];
     return await this.#runWatchMutation(
-      () => {
+      (onResponse) => {
         requestedWatches = watches ?? this.#watchSpecs;
         const held = typeof holdings === "function" ? holdings() : holdings;
         return this.#client.requestWatchSet({
@@ -4102,7 +4139,7 @@ export class SpaceSession {
           ...(held !== undefined
             ? { holdings: this.#client.declarableHoldings(held) }
             : {}),
-        });
+        }, { onResponse });
       },
       (result) => {
         this.#noteResult(result.serverSeq);
@@ -4121,11 +4158,13 @@ export class SpaceSession {
           this.#watchView.applySync(result.sync, false);
         }
         this.#scheduleAck(result.serverSeq);
-        return {
+        const mutation = {
           view: this.#watchView,
           precedingSyncs: this.#takePrecedingWatchSyncs(),
           sync: result.sync,
         };
+        consume?.(mutation);
+        return mutation;
       },
       watches === undefined ? "apply" : "issue",
       { restoring: restore === RESTORE_WATCH_SET },
@@ -4164,7 +4203,8 @@ export class SpaceSession {
   /**
    * Replaces renderer interests independently from ordinary explicit watches.
    * `consume` integrates the result synchronously in watch-mutation order,
-   * before a later mutation can read holdings or apply its response.
+   * before a later mutation can read holdings or apply its response, and
+   * before the view emits any effect that arrived after the response.
    */
   async viewSetSync(
     views: ViewInterest[],
@@ -4183,7 +4223,7 @@ export class SpaceSession {
     this.#viewsDirty = true;
     const viewIntentVersion = ++this.#viewIntentVersion;
     return await this.#runWatchMutation(
-      () => {
+      (onResponse) => {
         const holdings = this.#client.serverFlags?.sessionHoldings === true
           ? this.#client.declarableHoldings(this.#declaredHoldings())
           : undefined;
@@ -4195,7 +4235,7 @@ export class SpaceSession {
           watches: this.#watchSpecs,
           views,
           ...(holdings === undefined ? {} : { holdings }),
-        });
+        }, { onResponse });
       },
       (result) => {
         if (viewIntentVersion === this.#viewIntentVersion) {
@@ -4222,17 +4262,23 @@ export class SpaceSession {
   async watchAdd(watches: WatchSpec[]): Promise<WatchView> {
     this.#assertOpen();
     const hadView = this.#watchView !== null;
-    const result = await this.watchAddSync(watches);
-    if (hadView && !isEmptySync(result.sync)) {
-      result.view.emit(result.sync);
-    }
-    return result.view;
+    const { view } = await this.watchAddSync(watches, ({ view, sync }) => {
+      if (hadView && !isEmptySync(sync)) view.emit(sync);
+    });
+    return view;
   }
 
-  async watchAddSync(watches: WatchSpec[]): Promise<WatchMutationResult> {
+  /**
+   * Adds watches. `consume` integrates the result synchronously, before the
+   * view emits any effect that arrived after the response.
+   */
+  async watchAddSync(
+    watches: WatchSpec[],
+    consume?: (result: WatchMutationResult) => void,
+  ): Promise<WatchMutationResult> {
     this.#assertOpen();
     return await this.#runWatchMutation(
-      async () => {
+      async (onResponse) => {
         const requestStart = performance.now();
         const result = await this.#client.request<WatchAddResult>({
           type: "session.watch.add",
@@ -4240,7 +4286,7 @@ export class SpaceSession {
           space: this.space,
           sessionId: this.#sessionId,
           watches,
-        });
+        }, { onResponse });
         logger.time(requestStart, "watchAdd", "request");
         return result;
       },
@@ -4274,6 +4320,7 @@ export class SpaceSession {
           sync: result.sync,
         };
         logger.time(applyStart, "watchAdd", "apply");
+        consume?.(mutation);
         return mutation;
       },
     );
@@ -4283,15 +4330,18 @@ export class SpaceSession {
    * Removes watches from both the live session and reconnect intent, retaining
    * unrelated watches acquired by preceding mutations during concurrent refresh.
    * A server advertising `watchRemoveV1` is sent the ids alone, and answers
-   * with what changed; any other is sent the whole remaining set.
+   * with what changed; any other is sent the whole remaining set. `consume`
+   * integrates the result synchronously, before the view emits any effect
+   * that arrived after the response.
    */
   async watchRemoveSync(
     watchIds: readonly string[],
+    consume?: (result: WatchMutationResult) => void,
   ): Promise<WatchMutationResult> {
     const removed = new Set(watchIds);
     let watches: WatchSpec[] = [];
     return await this.#runWatchMutation(
-      () =>
+      (onResponse) =>
         this.#client.request<WatchSetResult>(
           this.#client.serverFlags?.watchRemoveV1 === true
             ? {
@@ -4308,6 +4358,7 @@ export class SpaceSession {
               sessionId: this.#sessionId,
               watches,
             },
+          { onResponse },
         ),
       (result) => {
         this.#noteResult(result.serverSeq);
@@ -4318,11 +4369,13 @@ export class SpaceSession {
           this.#watchView.applySync(result.sync, false);
         }
         this.#scheduleAck(result.serverSeq);
-        return {
+        const mutation = {
           view: this.#watchView,
           precedingSyncs: this.#takePrecedingWatchSyncs(),
           sync: result.sync,
         };
+        consume?.(mutation);
+        return mutation;
       },
       "apply",
       {
@@ -4357,6 +4410,18 @@ export class SpaceSession {
   }
 
   handleEffect(effect: SessionSync): void {
+    if (this.#closed) {
+      return;
+    }
+    if (this.#arrivalsBehindWatchResponses.length > 0) {
+      this.#arrivalsBehindWatchResponses.push({ kind: "effect", effect });
+      return;
+    }
+    this.#receiveEffect(effect);
+  }
+
+  /** Helper for `handleEffect()`, which handles an effect in its turn. */
+  #receiveEffect(effect: SessionSync): void {
     if (this.#closed) {
       return;
     }
@@ -4469,6 +4534,14 @@ export class SpaceSession {
           throwOnConnectionError: true,
         })
       );
+      // A watch response that arrived on the lost connection and has not been
+      // applied waits on a request the restore sends again, so it never will
+      // be: the effects that followed it come ahead of what the restore brings.
+      for (const arrival of [...this.#arrivalsBehindWatchResponses]) {
+        if (arrival.kind === "response") {
+          this.#endWatchResponse(arrival.response);
+        }
+      }
       if (restored.sync) {
         this.#noteCaughtUpLocalSeq(restored.sync.caughtUpLocalSeq);
         this.#noteOperationWatchCursors(restored.sync);
@@ -4508,18 +4581,18 @@ export class SpaceSession {
         // The server forgot this session (or never had it): re-establish
         // the watch set, declaring what the replica still holds so the
         // response carries the difference rather than the whole union.
-        const { view, sync } = await this.watchSetSync(
+        await this.watchSetSync(
           undefined,
           this.#declaredHoldings(),
           this.#viewsDirty || this.#viewInterests.length > 0
             ? this.#viewInterests
             : undefined,
           RESTORE_WATCH_SET,
+          ({ view, sync }) => {
+            if (!isEmptySync(sync)) view.emit(sync);
+          },
         );
         this.#watchSetOwed = false;
-        if (!isEmptySync(sync)) {
-          view.emit(sync);
-        }
       } else {
         this.#throwIfDisconnectedDuringRestore();
         this.#resendWatchRequests(restored.resumed !== true);
@@ -5044,7 +5117,7 @@ export class SpaceSession {
    * watch set `restore()` re-establishes, which does not queue here at all.
    */
   async #runWatchMutation<R, T>(
-    send: () => Promise<R>,
+    send: (onResponse: () => void) => Promise<R>,
     apply: (result: R) => T,
     sendAfter: "issue" | "apply" = "issue",
     options: { restoring?: boolean; onTurn?: () => void } = {},
@@ -5057,11 +5130,10 @@ export class SpaceSession {
     if (!this.#concurrentWatchRefresh) {
       // Single-flight (default): send + apply run together, chained on the
       // prior mutation's completion. Nothing is issued until the previous
-      // mutation fully resolves. `apply` runs in the microtask cascade
-      // rooted at the response frame's delivery, and one-frame-per-turn
-      // transports (loopback included) cannot deliver a later effect frame
-      // until that cascade completes — so no handleEffect can mutate the
-      // watch view between the response resolving and `apply` running.
+      // mutation fully resolves. `apply` runs some microtasks after the
+      // response arrives, and a transport can hand over a later effect in
+      // between; `handleEffect()` holds such an effect until `apply` has run
+      // (`#arrivalsBehindWatchResponses`).
       const previous = this.#watchApply;
       const current: Promise<T> = previous.catch(() => undefined).then(
         async () => {
@@ -5150,10 +5222,12 @@ export class SpaceSession {
    * Helper for `#runWatchMutation()`, which sends a mutation's request and
    * tracks it until the mutation has applied the response or failed.
    */
-  #sendWatchRequest<R>(send: () => Promise<R>): WatchRequest<R> {
+  #sendWatchRequest<R>(
+    send: (onResponse: () => void) => Promise<R>,
+  ): WatchRequest<R> {
     const request: WatchRequest<R> = {
       send,
-      response: send(),
+      response: this.#sendAwaitedWatchRequest(send),
       verdict: undefined,
       resent: awaitResend(),
       writeFailures: 0,
@@ -5161,6 +5235,48 @@ export class SpaceSession {
     this.#noteWatchVerdict(request);
     this.#unappliedWatchRequests.add(request);
     return request;
+  }
+
+  /**
+   * Sends a watch request with `send`, and returns the promise of its
+   * response, which effects arriving after the response then wait for, until
+   * `#endWatchResponse()` is called with it.
+   */
+  #sendAwaitedWatchRequest<R>(
+    send: (onResponse: () => void) => Promise<R>,
+  ): Promise<R> {
+    // The response arrives after `send` returns, since a request is sent
+    // only after an await.
+    const response: Promise<R> = send(() => {
+      if (!this.#awaitedWatchResponses.has(response)) return;
+      this.#arrivalsBehindWatchResponses.push({ kind: "response", response });
+    });
+    this.#awaitedWatchResponses.add(response);
+    return response;
+  }
+
+  /**
+   * Records that the response `response` promises has been applied or will
+   * not be, and handles the effects that no longer wait behind a response.
+   */
+  #endWatchResponse(response: Promise<unknown>): void {
+    this.#awaitedWatchResponses.delete(response);
+    this.#arrivalsBehindWatchResponses = this.#arrivalsBehindWatchResponses
+      .filter((arrival) =>
+        arrival.kind === "effect" || arrival.response !== response
+      );
+    for (;;) {
+      const [arrival] = this.#arrivalsBehindWatchResponses;
+      if (arrival?.kind !== "effect") return;
+      this.#arrivalsBehindWatchResponses.shift();
+      try {
+        this.#receiveEffect(arrival.effect);
+        // deno-coverage-ignore-start -- only a bug in effect handling lands here
+      } catch (cause) {
+        console.error("session effect handling threw:", cause);
+      }
+      // deno-coverage-ignore-stop
+    }
   }
 
   /**
@@ -5229,6 +5345,7 @@ export class SpaceSession {
       }
     } finally {
       this.#unappliedWatchRequests.delete(request);
+      this.#endWatchResponse(request.response);
     }
   }
 
@@ -5261,7 +5378,9 @@ export class SpaceSession {
       resending ||= request.verdict === undefined;
       if (resending && request.verdict !== "error") {
         const { resent } = request;
-        request.response = request.send();
+        // Only the response to the latest send is applied.
+        this.#endWatchResponse(request.response);
+        request.response = this.#sendAwaitedWatchRequest(request.send);
         request.verdict = undefined;
         request.resent = awaitResend();
         this.#noteWatchVerdict(request);
@@ -5279,13 +5398,17 @@ export class SpaceSession {
    * instead, in call order.
    */
   async #sendRestoreWatchMutation<R, T>(
-    send: () => Promise<R>,
+    send: (onResponse: () => void) => Promise<R>,
     apply: (result: R) => T,
   ): Promise<T> {
     this.#throwIfDisconnectedDuringRestore();
-    const response = send();
-    this.#resendWatchRequests(true);
-    return apply(await response);
+    const response = this.#sendAwaitedWatchRequest(send);
+    try {
+      this.#resendWatchRequests(true);
+      return apply(await response);
+    } finally {
+      this.#endWatchResponse(response);
+    }
   }
 
   /**
@@ -5492,8 +5615,10 @@ export class SpaceSession {
       this.#forwardedCaughtUpLocalSeq = 0;
       // An unforwarded effect belongs to the retired session's delivery
       // epoch. A replacement establishes its own watch state and must not
-      // apply that effect as though the new session delivered it.
+      // apply that effect as though the new session delivered it. Nor is any
+      // response the retired session sent applied, so nothing waits on one.
       this.#precedingWatchSyncs = [];
+      this.#arrivalsBehindWatchResponses = [];
       this.#rejectCaughtUpLocalSeqWaiters(sessionChangedError);
       // The marker epoch died with the old session: obligations it staged
       // are gone, and the fresh session's markers know nothing of the old
