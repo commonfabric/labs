@@ -2078,7 +2078,8 @@ export class V2StorageTransaction implements IStorageTransaction {
 
     const branch = this.#branch(address.space);
     const { doc } = this.#document(branch, address);
-    if (readStatsActive && !hasInlineCellScheme(address.id)) {
+    const inline = hasInlineCellScheme(address.id);
+    if (readStatsActive && !inline) {
       recordDocumentRead(this, doc);
     }
     // The one place a read chooses which root it is reading. A materialized
@@ -2100,7 +2101,7 @@ export class V2StorageTransaction implements IStorageTransaction {
     // and keep their preconditions.
     const skipCommitPrecondition = isUiInputBlindWriteTx(this);
 
-    if (!hasInlineCellScheme(address.id)) {
+    if (!inline) {
       const space = address.space;
       const scope = normalizeCellScope(address.scope);
       const id = address.id;
@@ -2130,14 +2131,14 @@ export class V2StorageTransaction implements IStorageTransaction {
       if (!sealed) this.#invalidateReactivityLog();
     }
     if (options?.trackReadWithoutLoad === true) {
-      if (!hasInlineCellScheme(address.id) && !skipCommitPrecondition) {
+      if (!inline && !skipCommitPrecondition) {
         doc.validated = true;
       }
       return { ok: { address, value: undefined } };
     }
 
     const { space: _, ...memoryAddress } = address;
-    if (usesLocalReads(this) && !hasInlineCellScheme(address.id)) {
+    if (usesLocalReads(this) && !inline) {
       // `patchDetails` is keyed by each write's pointer.
       const patchDetails = doc.patchDetails;
       const written = this.#readEpoch === undefined &&
@@ -2161,7 +2162,7 @@ export class V2StorageTransaction implements IStorageTransaction {
 
     if (isMutableTransactionReadAllowed(readMeta)) {
       if (
-        !hasInlineCellScheme(address.id) &&
+        !inline &&
         !doc.validated &&
         !skipCommitPrecondition
       ) {
@@ -2202,7 +2203,7 @@ export class V2StorageTransaction implements IStorageTransaction {
     if (
       !skipCommitPrecondition &&
       isInternalVerifierRead(readMeta) &&
-      !hasInlineCellScheme(address.id) &&
+      !inline &&
       // Content-addressed documents are EXEMPT from durable serving:
       // their content is identical on every layer (the replica refuses
       // a cid: doc whose content does not hash to its id), so the
@@ -2273,7 +2274,7 @@ export class V2StorageTransaction implements IStorageTransaction {
 
     const result = readAttestation(current, memoryAddress);
     if (
-      !hasInlineCellScheme(address.id) &&
+      !inline &&
       !doc.validated &&
       !skipCommitPrecondition
     ) {

@@ -120,6 +120,7 @@ import { collectConsumedLabel } from "./cfc/prepare.ts";
 import {
   readStoredCfcMetadata,
   storedCfcMetadataAppliesToPath,
+  storesCfcEnvelope,
 } from "./cfc/metadata.ts";
 import { cfcConfidentialityForObservationNode } from "./cfc/observation.ts";
 import { cfcSchemaWithInheritedDefs } from "./cfc/schema-refs.ts";
@@ -626,6 +627,14 @@ export const recordWriteDestinationPolicyInput = (
   schema: JSONSchema | undefined,
   schemaRole?: "output",
 ): void => {
+  // A write whose schema declares no policy, into a document that stores no
+  // envelope, has no policy input at the destination or at any array above
+  // it, so it reads no parent and builds no array schema.
+  if (
+    !schemaHasIfc(resolveSchema(schema)) && !storesCfcEnvelope(tx, destination)
+  ) {
+    return;
+  }
   const policyInput = arrayItemPolicyInput(tx, destination, schema);
   recordRelevantSchemaWritePolicyInput(
     tx,
@@ -1512,7 +1521,8 @@ export class CellImpl<T extends FabricValue>
 
   /**
    * Keeps this cell's document loaded for as long as this cell can read it
-   * (`IStorageManager.holdDocument()`), once the cell has loaded it.
+   * (`IStorageManager.holdDocument()`), once the cell has loaded it or was
+   * taken by `key()` from a cell holding it.
    */
   #documentHold: object | undefined;
 
@@ -3926,7 +3936,7 @@ export class CellImpl<T extends FabricValue>
       }
     }
 
-    return new CellImpl(
+    const child = new CellImpl(
       this.#runtime,
       this.#tx,
       currentLink,
@@ -3934,7 +3944,11 @@ export class CellImpl<T extends FabricValue>
       this.#causeContainer,
       kind,
       rebaseCfcLabelView(this.#cfcLabelView, childPath),
-    ) as unknown as Cell<any>;
+    );
+    // A key addresses the same document, in the same transaction, so the
+    // child shares this cell's hold on it.
+    child.#documentHold = this.#documentHold;
+    return child as unknown as Cell<any>;
   }
 
   asSchema<S extends JSONSchema = JSONSchema>(
