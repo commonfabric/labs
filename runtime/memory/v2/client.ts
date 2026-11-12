@@ -5273,7 +5273,12 @@ export class SpaceSession {
         this.#receiveEffect(arrival.effect);
         // deno-coverage-ignore-start -- only a bug in effect handling lands here
       } catch (cause) {
-        console.error("session effect handling threw:", cause);
+        // The effect never reached the replica, which is now behind the
+        // server: restore against what it holds, as for a frame the client
+        // could not read.
+        const error = cause instanceof Error ? cause : new Error(String(cause));
+        this.invalidateDelivery(error);
+        this.#client.restartConnection(error);
       }
       // deno-coverage-ignore-stop
     }
