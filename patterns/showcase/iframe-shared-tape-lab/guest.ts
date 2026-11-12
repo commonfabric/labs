@@ -685,7 +685,6 @@ async function startPlayback(): Promise<void> {
   activeSource = source;
   playbackStartedAt = audioContext.currentTime;
   source.onended = () => {
-    if (activeSource !== source) return;
     activeSource = undefined;
     playbackStartedAt = undefined;
     playbackOffsetSeconds = audioBuffer!.duration;
@@ -796,7 +795,6 @@ async function synchronizeRequestedDurations(): Promise<void> {
 }
 
 function requestDurationSync(): void {
-  if (disposed) return;
   const duration = currentRequestedDuration();
   const target = durationRequestTarget(
     duration,
@@ -836,9 +834,6 @@ function requestDurationSync(): void {
 }
 
 function waitForMediaReady(): Promise<void> {
-  if (audio.readyState >= HTMLMediaElement.HAVE_METADATA) {
-    return Promise.resolve();
-  }
   return new Promise((resolve, reject) => {
     const cleanup = () => {
       audio.removeEventListener("loadedmetadata", loaded);
@@ -858,7 +853,6 @@ function waitForMediaReady(): Promise<void> {
 }
 
 function teardown(): void {
-  if (disposed) return;
   disposed = true;
   abort.abort();
   stops.forEach((stop) => stop());
