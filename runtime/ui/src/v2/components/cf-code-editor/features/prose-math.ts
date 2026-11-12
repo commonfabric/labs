@@ -147,8 +147,21 @@ function findFormulas(state: EditorState): Formula[] {
       if (node.name !== INLINE_MATH && node.name !== DISPLAY_MATH) return;
       const display = node.name === DISPLAY_MATH;
       const delimiter = display ? 2 : 1;
-      const tex = doc.sliceString(node.from + delimiter, node.to - delimiter)
-        .trim();
+      // A formula running over a container's lines holds that container's
+      // markup at the start of each line after its first, such as a
+      // blockquote's `>`. The parser makes each one a child of the formula,
+      // and it is Markdown, not TeX, so the TeX is the text around them.
+      let tex = "";
+      let start = node.from + delimiter;
+      const child = node.node.cursor();
+      if (child.firstChild()) {
+        do {
+          if (child.name === "MathMark") continue;
+          tex += doc.sliceString(start, child.from);
+          start = child.to;
+        } while (child.nextSibling());
+      }
+      tex = (tex + doc.sliceString(start, node.to - delimiter)).trim();
       if (tex === "") return false;
       const first = doc.lineAt(node.from);
       const last = doc.lineAt(node.to);

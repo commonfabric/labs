@@ -85,6 +85,20 @@ Deno.test("a prose editor with math keeps a $$ formula inside a sentence in its 
   }
 });
 
+Deno.test("a prose editor with math sets a quoted formula without the quote's markers", async () => {
+  const editor = new CFCodeEditor();
+  editor.mode = "prose";
+  editor.math = true;
+  editor.value = "> $$\n> x^2\n> $$\n\nAfter.\n\n> - $$\n>   a > b\n>   $$";
+  document.body.append(editor);
+  try {
+    await editor.updateComplete;
+    assertEquals(inlineFormulas(editor.shadowRoot!), ["x^2", "a > b"]);
+  } finally {
+    editor.remove();
+  }
+});
+
 Deno.test("a prose editor without math leaves formulas as text", async () => {
   await withEditor(false, (root, editor) => {
     assertEquals(root.querySelectorAll(".katex").length, 0);
