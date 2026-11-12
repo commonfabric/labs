@@ -139,7 +139,7 @@ export const insertExecutionOutboxRows = (
   },
 ): void => {
   if (options.rows.length === 0) return;
-  const insert = engine.database.prepare(INSERT_ROW);
+  const insert = engine.prepare(INSERT_ROW);
   for (const row of options.rows) {
     insert.run({
       branch: options.branch,
@@ -172,7 +172,7 @@ export const selectPendingExecutionOutboxRows = (
   engine: Engine,
   options: { branch: string },
 ): PendingOutboxRow[] => {
-  const rows = engine.database.prepare(`
+  const rows = engine.prepare(`
 SELECT id AS row_id, target_space, target_stream, target_stream_link,
        event_id, payload, acting_principal, acting_session,
        sessionless_space_scope, capability_ref, source_event, created_seq
@@ -230,6 +230,6 @@ export const deleteExecutionOutboxRow = (
   engine: Engine,
   rowId: number,
 ): void => {
-  engine.database.prepare(`DELETE FROM execution_outbox WHERE id = :id`)
+  engine.prepare(`DELETE FROM execution_outbox WHERE id = :id`)
     .run({ id: rowId });
 };
