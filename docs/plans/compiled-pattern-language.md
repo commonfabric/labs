@@ -114,8 +114,11 @@ is relitigated.
   principal out.
 - An event is routed to an instance that is not loaded through a stream
   index: one row per stream, from the stream identifier to its instance
-  and binding. The index is aligned with what server-primary execution
-  does for a queued event today.
+  and binding. It stands in for the result back-links that
+  server-primary execution follows today, and is read only when no
+  loaded instance has registered the stream. How pending entries are
+  found, the order of the queue, and what happens to an event that cannot
+  be routed stay as they are today.
 - A read of a cell whose writer is in an instance that is not loaded
   consults the scheduler's stored record of what is stale. Where the
   stored value is current the read returns it and the instance is not
@@ -430,6 +433,25 @@ assumption.
 54. **Logs** (the overview). Whether a body can pass labeled data to
     `console`. Nothing is assumed; the footprint counts the arguments as
     read.
+55. **A cone that reads a stale stored value of an instance that is not
+    loaded** (ES §2.4, SS §4.4). *Assumed:* the read does not wait. It
+    returns what is stored, the instance is loaded and the writer
+    evaluated, and the reading cone is evaluated again. An output
+    computed from the stale value can be stored in between. The
+    alternative withdraws the derivation.
+56. **Standing demand still loads an instance** (SS §4.4). The ruling on
+    reading a current stored value is applied to an event's reads and to
+    a one-shot pull. *Assumed:* a session, a render sink, an effect, or a
+    materializer that depends on the instance loads it, because the
+    scheduler learns of later input changes only through a loaded
+    instance's entries.
+57. **A write through a handle by an instance that is not loaded** (SS
+    §4.4, §5.3). Nothing stored names the writer, so the check cannot
+    tell that the value is stale. *Assumed:* the read returns what is
+    stored.
+58. **Stream index rows across a source update** (SS §5.1). *Assumed:*
+    a row is kept, and an event for a binding the new plan lacks cannot
+    be run.
 
 ## Open, and not needing the owner
 
@@ -441,13 +463,11 @@ are marked met where they are. What is left:
   closures, and a closure called through `inSpace`.
 - **Corpus counts** differ among `language-subset.md`,
   `builtin-inventory.md`, and `footprint-analysis.md` (K4, K5, A16, F20).
-- **`execution-and-storage.md` leaves three things unspecified:** how the
+- **`execution-and-storage.md` leaves two things unspecified:** how the
   arrangement of part documents is computed again when a conflict
-  withdraws writes at the commit, after the size rule ran; how the
+  withdraws writes at the commit, after the size rule ran; and how the
   instances that belong to a torn-down instance are found when it is not
-  loaded; and what a cone's journaled read does when its writer is in an
-  instance that is not loaded and the stored value is stale, which
-  `scheduler-and-serving-loop.md` §5.3 decides for a handler only.
+  loaded.
 - **`footprint-analysis.md`, owner question 2** says the current treatment
   of a value passed on unchanged "is what keeps such a body from reading
   the record". A probe showed that a `lift` that returns an input record
@@ -494,6 +514,13 @@ The open questions each document ends with stay where they are.
   reading by search; and the citations `scheduler-and-serving-loop.md`
   carried over, which were checked to exist and not for what they are
   cited for.
+- **The server-primary execution specification differs from source in
+  one place this work relies on.** `events.md` says an event needs no
+  piece-start step. In source a queued event for a piece that is not
+  running starts it (`ensurePieceRunningVerdict` in
+  `runtime/runner/src/ensure-piece-running.ts`), and
+  `scheduler-and-serving-loop.md` §5.1 describes the source. That
+  specification is outside this work and is not corrected here.
 - **No one has read the seven documents against each other since the
   passes.** The overview's author read the six detailed documents and
   the differences found were corrected, but that was not a full
