@@ -584,6 +584,12 @@ export type StreamEventEntry = {
    * (events.md §5). */
   error?: string;
 
+  /** Processing-side: the handling read data this space doesn't admit, so
+   * the entry records the outcome withheld, the same whether it committed,
+   * errored or was refused, and records none of `error`, `status` or `reason`
+   * (events.md §5). */
+  withheld?: true;
+
   /** Processing-side: how the entry ended, where it did not simply run.
    * `"dropped"` is the dropped-event notice (events.md §5 T7);
    * `"needs-attention"` has its detail in `attention` below. */
@@ -1356,6 +1362,17 @@ export type MemoryProtocolFlags = {
   syncPartsV1: boolean;
 
   /**
+   * A session sync may name a `cid:` schema document by id, without its
+   * body (04-protocol.md section 4.2.3), enabled only when both peers
+   * advertise it: the server references a schema its realm registry holds,
+   * and the client takes the body from its own registry or fetches it.
+   * Experimental: a server advertises it unless its `syncCidReferences`
+   * option turns it off, and a client only when its
+   * `ConnectOptions.syncCidReferences` turns it on.
+   */
+  syncCidReferencesV1: boolean;
+
+  /**
    * Server capability: a `session.watch.set` may come as staged parts that
    * the server applies as one set (04-protocol.md section 4.3.5). Inherent
    * to the build, so a server of this version always advertises it. Absent
@@ -1618,6 +1635,7 @@ export type WireMemoryProtocolFlags = {
   syncCrossingsV1?: boolean;
   watchRemoveV1?: boolean;
   syncPartsV1?: boolean;
+  syncCidReferencesV1?: boolean;
   watchSetPartsV1?: boolean;
   messageCompressionV1?: boolean;
   sqliteCommitRowLabelEval?: boolean;
@@ -1951,6 +1969,15 @@ export type SessionSyncUpsert = {
   seq: number;
   doc?: EntityDocument;
   deleted?: true;
+
+  /**
+   * Marks a `cid:` schema document named without its `doc`, on a
+   * connection that negotiated `syncCidReferencesV1`: the space's store
+   * holds it at `seq`, and the client takes its content from its own
+   * registry, fetching any it lacks. The client resolves every reference
+   * before the sync reaches a session, so nothing past it sees one.
+   */
+  byReference?: true;
 
   /**
    * The commit CLASS of the covering commit — the commit whose write
@@ -2562,6 +2589,9 @@ export type ServedRequest = {
  * A request to administer the session space's invitations, as the session's
  * principal (04-protocol.md §4.3.11). Redemption is not among them: the one
  * redeeming holds no grant on the space yet, so it has no session to send on.
+ * Nor is preview: whoever sends it, including a principal that has a session
+ * or has already redeemed, a preview always goes as the signed HTTP request,
+ * so a client that is deciding whether to redeem needs no session to ask.
  */
 export type SpaceInviteRequest = {
   type: "space.invite";
@@ -2570,7 +2600,7 @@ export type SpaceInviteRequest = {
   sessionId: SessionId;
 
   /** The operation and its arguments. */
-  invite: Exclude<InviteOperation, { operation: "redeem" }>;
+  invite: Exclude<InviteOperation, { operation: "redeem" | "preview" }>;
 };
 
 /**
@@ -3123,6 +3153,9 @@ export const getMemoryProtocolFlags = (): MemoryProtocolFlags => ({
   // Build-inherent: this build's client handles a sync split across
   // messages, and its routed host splits one for a client that does.
   syncPartsV1: true,
+  // Experimental, and each peer advertises its own choice: a `Server` by its
+  // `syncCidReferences` option, a client by `ConnectOptions.syncCidReferences`.
+  syncCidReferencesV1: false,
   // Build-inherent: this build's server applies a watch set staged in parts.
   watchSetPartsV1: true,
 });
@@ -3410,6 +3443,14 @@ export const parseMemoryProtocolFlags = (
     return null;
   }
 
+  const syncCidReferencesV1 = value.syncCidReferencesV1;
+  if (
+    syncCidReferencesV1 !== undefined &&
+    typeof syncCidReferencesV1 !== "boolean"
+  ) {
+    return null;
+  }
+
   const watchSetPartsV1 = value.watchSetPartsV1;
   if (watchSetPartsV1 !== undefined && typeof watchSetPartsV1 !== "boolean") {
     return null;
@@ -3497,6 +3538,9 @@ export const parseMemoryProtocolFlags = (
     // Absent (an older peer) parses to false: a server then sends that
     // client every sync whole.
     syncPartsV1: syncPartsV1 === true,
+    // Absent (an older peer) parses to false: a server then sends that
+    // client every schema document with its body.
+    syncCidReferencesV1: syncCidReferencesV1 === true,
     // Absent (an older server) parses to false: a client then sends every
     // watch set whole.
     watchSetPartsV1: watchSetPartsV1 === true,
@@ -3555,6 +3599,7 @@ export const wireMemoryProtocolFlags = (
   syncCrossingsV1: flags.syncCrossingsV1,
   watchRemoveV1: flags.watchRemoveV1,
   syncPartsV1: flags.syncPartsV1,
+  syncCidReferencesV1: flags.syncCidReferencesV1,
   watchSetPartsV1: flags.watchSetPartsV1,
 });
 

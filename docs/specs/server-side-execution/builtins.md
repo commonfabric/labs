@@ -12,6 +12,11 @@ serving loop from its row plus the referenced sections.
   `(inputsCell, sendResult, addCancel, cause, parentCell, runtime) =>
   RawBuiltinResult` whose `action(tx)` runs under the scheduler. Served
   built-ins keep this shape — the serving loop hosts the same runtime.
+  `parentCell` is the piece's result cell under its pattern's result
+  schema, whichever schema the piece was started with, so its link,
+  schema included, is the same on every runtime, and so are the `result`
+  back-links a builtin copies from it into the cells it mints. Pinned in
+  `runtime/runner/test/raw-builtin-back-link.test.ts`.
 
 The negotiated
 [view-scoped client mode](../../features/view-scoped-client-replication.md) uses

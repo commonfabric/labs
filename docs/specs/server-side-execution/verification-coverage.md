@@ -12,10 +12,10 @@ mapping pass is due.
 
 ## Current status
 
-The first-party default is OFF and the ON soak is paused. The
+The first-party default is ON (re-flipped 2026-11-11) and the ON soak runs
+on main. The
 [`serverExecution` registry](../../development/EXPERIMENTAL_OPTIONS.md#serverexecution)
-owns the current default and flip records. A renewed ON rollout must satisfy
-the plan's ordered gates. OW28 tracks served compilation and its scoped child
+owns the current default and flip records. OW28 tracks served compilation and its scoped child
 execution coverage; implementing that path does not discharge the other gates.
 
 The status corrections in this register are bounded to the rows below:
@@ -3679,9 +3679,9 @@ findings; the OWNER RULING — the flip lands DARK):
 
 The current rollout posture is the
 [`serverExecution` registry](../../development/EXPERIMENTAL_OPTIONS.md#serverexecution):
-first-party default OFF, ON soak paused. The following flip record describes
-#6535's changes, not a current gate verdict. OW28's direct acceptance coverage
-is recorded above; the plan's gate dispositions govern a renewed ON rollout.
+first-party default ON since the 2026-11-11 re-flip, with the ON soak running
+on main. The following flip record describes #6535's changes, not a current
+gate verdict. OW28's direct acceptance coverage is recorded above.
 
 **Flip record — PR #6535.** Its ON-skip registry and topology checks do not
 exercise fresh served `compileAndRun` completion. Its merge therefore does not

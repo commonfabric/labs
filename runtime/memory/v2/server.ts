@@ -26,6 +26,7 @@ import {
   isCapable,
   isDeletionTombstone,
 } from "../acl.ts";
+import { lookupSchemaDocument } from "../../runner/src/schema-registry.ts";
 import {
   canResolveScopeKey,
   type CellScope,
@@ -250,6 +251,7 @@ import {
   expandClientMessageLabels,
   hasClientMessageLabelMetadata,
 } from "./commit-label-table.ts";
+import { referenceServerMessageSchemaDocuments } from "./sync-cid-references.ts";
 import { compressServerMessageSchemas } from "./sync-schema-table.ts";
 import {
   appendWatchSetPart,
@@ -1411,6 +1413,9 @@ class Connection {
   #syncLabelTable = false;
   #commitLabelTable = false;
 
+  /** Whether both peers advertised `syncCidReferencesV1`. */
+  #syncCidReferences = false;
+
   /**
    * The bounds a sync is split to fit, when the transport bounds its
    * messages and both peers advertised `syncPartsV1`.
@@ -1420,6 +1425,10 @@ class Connection {
   #admissionNotice = false;
   #elidedVerdicts = false;
   #sessions = new Map<string, SessionHandle>();
+  /** The keys of this connection's sessions that their space's deletion
+   *  revoked. A deleted space opens no session again, so a key enters once
+   *  and the set holds no more than the sessions the connection opened. */
+  #deletedSessions = new Set<string>();
   #sessionOpenChallenge: SessionOpenChallengeState | null = null;
   #routedOwns: ((space: string) => boolean) | undefined;
   #routedExpiries = new Map<string, ReturnType<typeof setTimeout>>();
@@ -1581,6 +1590,15 @@ class Connection {
   /** Helper for `#send()`, which applies the negotiated table encodings. */
   #prepare(message: ServerMessage): ServerMessage {
     let prepared = message;
+    // First, so the tables below never walk a body the frame leaves out.
+    if (this.#syncCidReferences) {
+      const referenceStart = performance.now();
+      prepared = referenceServerMessageSchemaDocuments(
+        prepared,
+        lookupSchemaDocument,
+      );
+      timing.time(referenceStart, "memory", "response", "prepareReferences");
+    }
     if (this.#syncLabelTable) {
       const labelStart = performance.now();
       prepared = compressServerMessageLabels(prepared);
@@ -1668,7 +1686,7 @@ class Connection {
       this.#send({
         type: "response",
         requestId,
-        error: toError(
+        error: this.#deletedSessionRefusal(space, sessionId) ?? toError(
           "SessionRevokedError",
           "Session was revoked while the request was in flight",
         ),
@@ -1676,6 +1694,20 @@ class Connection {
       return;
     }
     this.#send(response, { space, sessionId });
+  }
+
+  /**
+   * The refusal of a command on the session `sessionId` on `space` when the
+   * space's deletion revoked that session on this connection and the
+   * connection is still routed to the space, and otherwise `null`. Every
+   * command on such a session is refused as the space is, whether it was in
+   * flight at the revocation or arrived after it (INV-15).
+   */
+  #deletedSessionRefusal(space: string, sessionId: string): V2Error | null {
+    return this.#deletedSessions.has(sessionKey(space, sessionId)) &&
+        (this.#routedOwns?.(space) ?? true)
+      ? this.#server.deletedSpaceRefusalNow(space)
+      : null;
   }
 
   addSession(
@@ -1720,6 +1752,7 @@ class Connection {
     if (!this.#sessions.delete(key) || this.#closed) {
       return;
     }
+    if (reason === "deleted") this.#deletedSessions.add(key);
     this.#server.reapAdmissionWaits();
     // A membership is admitted by the session it joined through, so losing
     // the session ends it.
@@ -2255,7 +2288,7 @@ class Connection {
       this.#send({
         type: "response",
         requestId,
-        error: toError(
+        error: this.#deletedSessionRefusal(space, sessionId) ?? toError(
           "SessionError",
           "Session is not open on this connection",
         ),
@@ -2500,6 +2533,8 @@ class Connection {
           serverFlags?.syncPartsV1 === true
         ? this.#syncPartLimits
         : undefined;
+      this.#syncCidReferences = clientFlags?.syncCidReferencesV1 === true &&
+        serverFlags?.syncCidReferencesV1 === true;
       this.#ready = true;
       return;
     }
@@ -3733,6 +3768,16 @@ export class Server {
       inviteHost?: string;
 
       /**
+       * Whether this server advertises `syncCidReferencesV1`, delivering
+       * `cid:` schema documents by reference to a client that advertises it
+       * too (`docs/specs/content-addressed-schemas.md`, "Delivery by
+       * reference"). On unless `false`: a client takes references only when
+       * it opts in, so a server that offers them changes nothing for one
+       * that does not, and `false` is how a deployment turns them off.
+       */
+      syncCidReferences?: boolean;
+
+      /**
        * Whether this server's posture names instances (INV-16): the
        * deployment's value of the `instanceNames` experimental flag. Asked at
        * every `session.open` that declares `instanceNames: true` of a space
@@ -3978,6 +4023,7 @@ export class Server {
       spaceInvites: this.options.inviteHost !== undefined,
       routedAuthV1: false,
       routedCompressionV1: false,
+      syncCidReferencesV1: this.options.syncCidReferences !== false,
     };
   }
 
@@ -4163,7 +4209,8 @@ export class Server {
    * Like {@link deletedSpaceRefusal}, from the engine already open for
    * `space`, without waiting, for a request answered as it is handed over.
    * A session open on `space` has that engine open, since its open opened
-   * it; with none open, `null`.
+   * it, and the engine stays open once the space's deletion has revoked its
+   * sessions; with none open, `null`.
    */
   deletedSpaceRefusalNow(space: string): V2Error | null {
     const engine = this.#resolvedEngines.get(space);
@@ -5295,7 +5342,9 @@ export class Server {
     return await this.#withSpacePublicationLock(request.space, async () => {
       if (!(await this.#spaceStoreExists(request.space))) {
         throw new SpaceInviteError(
-          request.operation === "redeem" ? "invite-unavailable" : "not-owner",
+          request.operation === "redeem" || request.operation === "preview"
+            ? "invite-unavailable"
+            : "not-owner",
         );
       }
       const engine = await this.#openEngine(request.space);
@@ -13334,12 +13383,16 @@ const parseDecodedClientMessage = (
     typeof parsed.sessionId === "string" &&
     isFabricPlainObject(parsed.invite)
   ) {
-    // Redemption is refused here: it has no session to arrive on.
+    // Redemption and preview are refused here: neither has a session to
+    // arrive on.
     const invite = parseInviteOperation(
       parsed.invite.operation,
       parsed.invite.body,
     );
-    if (invite === null || invite.operation === "redeem") return null;
+    if (
+      invite === null || invite.operation === "redeem" ||
+      invite.operation === "preview"
+    ) return null;
     return {
       type: "space.invite",
       requestId: parsed.requestId,

@@ -56,6 +56,7 @@ import {
   emptyServingLoopStats,
   refreshDeliveryCheckpointStats,
   registerServingLoopStatsProvider,
+  type ServingLoopCounters,
   type ServingLoopStats,
 } from "./stats.ts";
 
@@ -402,22 +403,11 @@ export class ExecutorHost {
     return this.#parkedRuntimes.size > 0 ? "parked" : "vacant";
   }
 
-  /** The `events` block of {@link stats}, alone and in its own copy. */
-  eventStats(): ServingLoopStats["events"] {
+  /** {@link stats} without the settle blocks, in its own deep copy: static
+   * counts merged with per-space state (activeSpaces and watermarkLag read
+   * the current SpaceServers). */
+  counters(): ServingLoopCounters {
     refreshDeliveryCheckpointStats(this.#stats);
-    return {
-      ...this.#stats.events,
-      needsAttention: {
-        ...this.#stats.events.needsAttention,
-        byPhase: { ...this.#stats.events.needsAttention.byPhase },
-      },
-    };
-  }
-
-  /** The §7 counters, live: static counts merged with per-space state
-   * (activeSpaces and watermarkLag read the current SpaceServers). */
-  stats(): ServingLoopStats {
-    const events = this.eventStats();
     let watermarkLag = 0;
     let activeSpaces = 0;
     for (const server of this.#spaces.values()) {
@@ -425,40 +415,22 @@ export class ExecutorHost {
       activeSpaces += 1;
       watermarkLag = Math.max(watermarkLag, server.watermarkLag);
     }
+    const { settle: _settle, settleAdvances: _settleAdvances, ...live } =
+      this.#stats;
+    const counters = structuredClone(live);
+    counters.parkedRuntimes.held = this.#parkedRuntimes.size;
+    return { ...counters, activeSpaces, watermarkLag };
+  }
+
+  /** The §7 counters, live, in their own deep copy. A settle-series row
+   * stays live after it is pushed (`#recordGrowthLanding` promotes a
+   * value-only row to structural-growth in place), so a shallow copy would
+   * let a snapshot's rows change after it was taken. */
+  stats(): ServingLoopStats {
     return {
-      ...this.#stats,
-      // Own copy: the live Record mutates under bumpDerivedCommits and
-      // the top-level spread shares its reference (the same reason as
-      // NIT-1's settle-series copy below).
-      derivedCommitsBySpace: { ...this.#stats.derivedCommitsBySpace },
-      events,
-      demand: { ...this.#stats.demand },
-      settle: {
-        // NIT-1: deep-copy the entries — a series row stays live after it
-        // is pushed (`#recordGrowthLanding` promotes a value-only row to
-        // structural-growth in place), so a shallow array copy would let a
-        // snapshot's entries mutate after the snapshot was taken.
-        series: this.#stats.settle.series.map((entry) => ({ ...entry })),
-        dropped: this.#stats.settle.dropped,
-      },
-      settleAdvances: {
-        ...this.#stats.settleAdvances,
-        series: this.#stats.settleAdvances.series.map((entry) => ({
-          ...entry,
-        })),
-      },
-      memo: { ...this.#stats.memo },
-      routed: { ...this.#stats.routed },
-      outbox: { ...this.#stats.outbox },
-      lease: { ...this.#stats.lease },
-      lifecycleVerbs: { ...this.#stats.lifecycleVerbs },
-      parkedRuntimes: {
-        ...this.#stats.parkedRuntimes,
-        held: this.#parkedRuntimes.size,
-      },
-      workers: { ...this.#stats.workers },
-      activeSpaces,
-      watermarkLag,
+      ...this.counters(),
+      settle: structuredClone(this.#stats.settle),
+      settleAdvances: structuredClone(this.#stats.settleAdvances),
     };
   }
 

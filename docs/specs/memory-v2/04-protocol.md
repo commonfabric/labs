@@ -54,9 +54,9 @@ rewrite. In particular:
   document a write left no watch reaching, and a client shrinks its watch set
   explicitly
 - delivering schema documents by reference (`syncCidReferencesV1`, sections
-  4.1.1 and 4.2.3) is specified and not yet implemented. It is to ship as an
-  experimental option that servers offer and clients take only when they opt
-  in, so a client that has not receives each schema document with its body
+  4.1.1 and 4.2.3) is implemented as an experimental option that servers offer
+  by default and clients take only when they opt in, so a client that has not
+  receives each schema document with its body
 
 ## 4.1 Transport
 
@@ -294,7 +294,7 @@ with a switch on each side: a server advertises it unless its deployment turns
 it off, and a client advertises it only when its runtime, or the host
 embedding it, opts in. Since both must advertise it, a client that does not
 opt in sees no change, and a deployment that turns it off delivers bodies to
-every client. It is not yet implemented.
+every client.
 
 `commitLabelTableV1` independently advertises label and label-path tables for
 client `transact` requests and server transaction acknowledgments. This build
@@ -1943,12 +1943,15 @@ interface SpaceInviteRequest {
 
 Semantics:
 
-- `redeem` is not among the operations: the identity redeeming holds no grant
-  on the space yet, and opening a session needs READ, so redemption travels
-  as the `invite` of a `session.open` (section 4.1.2). A `space.invite` naming
-  `redeem`, an unknown operation, or a body that is not exactly the
-  operation's fields gets the refusal any unreadable message gets (section
-  4.2.1)
+- `redeem` and `preview` are not among the operations. The identity redeeming
+  holds no grant on the space yet, and opening a session needs READ, so
+  redemption travels as the `invite` of a `session.open` (section 4.1.2). A
+  preview always travels as its signed HTTP route, whoever sends it, including
+  a principal that has a session or has already redeemed, so one transport
+  serves the client deciding whether to redeem. A `space.invite` naming
+  `redeem` or `preview`, an unknown operation, or a body that is not exactly
+  the operation's fields gets the refusal any unreadable message gets
+  (section 4.2.1)
 - a request naming a session the connection does not hold gets a
   `SessionError`
 - the service runs the operation as the DID the session was opened as, with
@@ -2304,8 +2307,13 @@ server checks for deletion once it has routed the command and, for a command
 that names a session, found that session open, and before every other check, so
 a command to a deleted space reports the deletion and never a shape, capability
 or genesis failure. The server revokes the sessions open on the space with the
-`session/revoked` reason `deleted`. The session that committed the deletion
-receives its transact response first and its revocation after, as a member's
+`session/revoked` reason `deleted`. Every command on one of those sessions, on
+the connection that held it and while that connection is routed to the space,
+reports the deletion too, whether it was in flight at the revocation or arrived
+after it, as a command its client sent before the revocation reached it does.
+Any other connection naming the session is told only that it holds no such
+session. The session that committed the deletion receives its transact response
+first and its revocation after, as a member's
 session does when it removes its own entry. The server admits no further commit
 to the space on any write path, engine-direct writes from the serving plane
 included, so no principal can undo the deletion. These checks run before a

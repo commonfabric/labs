@@ -944,6 +944,24 @@ describe("piece source reconciliation", () => {
         );
       });
 
+      it("adopts a later release without loading the source it replaces", async () => {
+        // Whether this runtime can load the running source decides only an
+        // earlier offer, and loading a pattern this runtime has not loaded
+        // compiles its whole closure.
+
+        const { identities, offer } = await followingPiece();
+        await offer({ marker: "v2", releasedAt: EARLIER });
+        using loads = spy(runtime.patternManager, "loadPatternByIdentity");
+
+        expect(await offer({ marker: "v3", releasedAt: LATER })).toEqual({
+          outcome: "updated",
+          running: "v3",
+        });
+        expect(
+          loads.calls.filter((call) => call.args[0] === identities.v2),
+        ).toStrictEqual([]);
+      });
+
       it("keeps a later release when its host offers an earlier one", async () => {
         const { piece, identities, offer } = await followingPiece();
         await offer({ marker: "v2", releasedAt: LATER });
@@ -1242,6 +1260,50 @@ describe("piece source reconciliation", () => {
             identity: identities.v2,
             releasedAt: Date.parse(LATER),
           });
+        });
+
+        it("loads the source it runs once to decide an offer that confirmation makes earlier only at its commit", async () => {
+          // The confirmation lands after the pass has read the history and
+          // before its commit, so the pass has not asked whether this runtime
+          // can load the running source. The commit that finds the offer
+          // earlier declines, and is made again with the answer.
+
+          const { piece, identities, offer } = await followingPiece();
+          await offer({ marker: "v2", releasedAt: EARLIER });
+          let prepared = false;
+          let confirmed = false;
+          const sync = runtime.runner.syncStoredPieceCells.bind(runtime.runner);
+          using _prepared = stub(
+            runtime.runner,
+            "syncStoredPieceCells",
+            async (...args: Parameters<typeof sync>) => {
+              await sync(...args);
+              prepared = true;
+            },
+          );
+          const edit = runtime.editWithRetry.bind(runtime);
+          using _overtaken = stub(
+            runtime,
+            "editWithRetry",
+            async (...args: Parameters<typeof edit>) => {
+              if (prepared && !confirmed) {
+                confirmed = true;
+                await confirmElsewhere(piece, identities.v2, LATER);
+              }
+              return edit(...args);
+            },
+          );
+          using loads = spy(runtime.patternManager, "loadPatternByIdentity");
+
+          expect(await offer({ marker: "v1", releasedAt: BETWEEN })).toEqual({
+            outcome: "ahead",
+            running: "v2",
+          });
+          expect(confirmed).toBe(true);
+          expect(
+            loads.calls.filter((call) => call.args[0] === identities.v2),
+          ).toHaveLength(1);
+          expect(originUpdates(piece)).toHaveLength(1);
         });
 
         it("keeps that later time when this one confirms the same source earlier", async () => {

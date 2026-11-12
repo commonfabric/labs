@@ -16,6 +16,12 @@ describe("test-cfc-label-store", {
   sanitizeResources: false,
 }, () => {
   it("labels SQLite columns with flow off and persists copied labels only in persist mode", async () => {
+    // On the OFF arm. What this compares is the test runtime's
+    // `cfcFlowLabels` deciding the labels its own handlers commit. On the ON
+    // arm the seed and the copy are served handlers, which run under the
+    // serving runtime's CFC posture rather than the test's (`docs/development/
+    // TESTING.md`, "The ON topology in one process"), and a run that resolves
+    // ON refuses the caller-supplied store this reads afterwards.
     for (const cfcFlowLabels of ["off", "persist"] as const) {
       const identity = await Identity.fromPassphrase(
         `test-cfc-store-${cfcFlowLabels}`,
@@ -37,7 +43,12 @@ describe("test-cfc-label-store", {
             cfcEnforcementMode: "enforce-explicit",
             cfcFlowLabels,
             noIdempotencyCheck: true,
-            storageHost: { identity, storageManager, resultCause },
+            storageHost: {
+              identity,
+              storageManager,
+              resultCause,
+              serverExecution: false,
+            },
           },
         );
         expect(result.error).toBeUndefined();

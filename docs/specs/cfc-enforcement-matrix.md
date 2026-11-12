@@ -476,6 +476,24 @@ The strict-only delta is:
   reaches no reader it had not reached already, and what follows it is the
   stamp.
 
+  One write to an entries document is outside both the measurement and the
+  stamp whatever space the join came from: a served event's processed claim,
+  the `consequenced` mark (and the cleared delivery deferral beside it) the
+  serving loop writes on the event's own entry in the transaction that runs
+  the handler. §6.2.2 claims an event's processed cell apart from its
+  handler, so the claim reads nothing the handler reads and carries none of
+  its labels; writing it in the handler's transaction, so that it commits with
+  the consequences, leaves it that way
+  ([specs#94](https://github.com/commonfabric/specs/pull/94) states this).
+  The serving loop names each such path as it writes it
+  (`writeProcessedClaim()` in `runtime/runner/src/executor/processed-claim.ts`)
+  under the runtime-authorized `CFC_STRUCTURAL_PROVENANCE_PROCESSED_CLAIM`
+  marker, which the gate takes only on a stream's entries document. Every
+  other write the transaction makes, an entry it appends or a field it writes
+  beside the mark included, is measured and stamped as above, so a handler
+  over another space's labeled value still cannot carry it into the stream's
+  space.
+
   A declared entry can still reach one of these documents, from a
   schema-carrying write to it, and the skip is unconditional over that route.
   Honoring it would make a derivation admit its own inputs' taint or refuse it

@@ -241,6 +241,10 @@ describe("space-invites", () => {
             inviteId: credentials.inviteId,
             code: credentials.code,
           }],
+          ["preview", {
+            inviteId: credentials.inviteId,
+            code: credentials.code,
+          }],
           ["create", {
             inviteId: credentials.inviteId,
             codeVerifier: inviteCodeVerifier({
@@ -679,15 +683,17 @@ describe("space-invites", () => {
         headers: { Origin: "https://shell.example" },
       });
       expect(capability.headers.get("access-control-allow-origin")).toBe("*");
-      // `access` names what this service can issue, and `suggestedProfile`
-      // bounds the profile an invitation may suggest. A service without either
-      // field predates it and refuses a create that uses it.
+      // `access` names what this service can issue, `suggestedProfile`
+      // bounds the profile an invitation may suggest, and `preview` the names
+      // a holder reads before redeeming. A service without one of these
+      // fields predates it and refuses a create that uses it.
       expect(await capability.json()).toEqual({
         version: 1,
         maxUses: 1000,
         maxTtlSeconds: 2592000,
         access: ["READ", "WRITE", "OWNER"],
         suggestedProfile: { maxNameLength: 128, maxPictureBytes: 65536 },
+        preview: { maxNameLength: 128 },
       });
       const preflight = await fetch(
         `${f.host}/api/spaces/${f.space}/invites/redeem`,
@@ -762,6 +768,44 @@ describe("space-invites", () => {
       expect(oversized.status).toBe(413);
       expect(await oversized.json()).toEqual({ code: "invalid-request" });
       expect(await f.client(f.owner).list()).toEqual([]);
+    } finally {
+      await f.close();
+    }
+  });
+  it("previews an invitation's names and suggestion over HTTP without consuming it, and refuses a wrong code as unavailable", async () => {
+    const f = await fixture();
+    try {
+      const suggestedProfile = { name: "Sam Lee" };
+      const invite = await f.client(f.owner).create({
+        access: "WRITE",
+        ttlSeconds: 60,
+        suggestedProfile,
+        spaceName: "Garden plans",
+        issuerName: "Pat Example",
+      });
+      const request = { inviteId: invite.inviteId, code: invite.code };
+      expect(await f.client(f.guest).preview(request)).toEqual({
+        access: "WRITE",
+        spaceName: "Garden plans",
+        issuerName: "Pat Example",
+        suggestedProfile,
+      });
+      expect(await f.client(f.owner).list()).toEqual([
+        expect.objectContaining({ usedCount: 0, remainingUses: 1 }),
+      ]);
+      const wrong = await f.raw("preview", {
+        inviteId: invite.inviteId,
+        code: createInviteCredentials().code,
+      });
+      expect(wrong.status).toBe(409);
+      expect(await wrong.json()).toEqual({ code: "invite-unavailable" });
+      const unknown = await f.raw("preview", createInviteCredentials());
+      expect(unknown.status).toBe(409);
+      expect(await unknown.json()).toEqual({ code: "invite-unavailable" });
+      expect(await f.client(f.guest).redeem(request)).toMatchObject({
+        outcome: "redeemed",
+        suggestedProfile,
+      });
     } finally {
       await f.close();
     }

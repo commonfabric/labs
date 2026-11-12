@@ -79,6 +79,7 @@ import {
   isCellResult,
   isLoopbackHostname,
   isPieceRoot,
+  isWithheldDelivery,
   loadDocument,
   markDurableReadTx,
   type NormalizedFullLink,
@@ -196,6 +197,7 @@ import {
   type CellResolveAsCellResponse,
   CellResponse,
   type CellSendRequest,
+  type CellSendResponse,
   type CellSendReviewedRequest,
   type CellSetRequest,
   type CellSubscribeRequest,
@@ -2372,7 +2374,9 @@ export class RuntimeProcessor {
     });
   }
 
-  handleCellSend(request: CellSendRequest): void | Promise<void> {
+  handleCellSend(
+    request: CellSendRequest,
+  ): undefined | Promise<CellSendResponse> {
     const event = mapCellRefsToSigilLinks(request.event);
     return this.#sendCellEvent(
       request.cell,
@@ -2391,15 +2395,17 @@ export class RuntimeProcessor {
    * the event with `native` provenance for them, replacing any `provenance`
    * the payload carries, and marks it renderer-trusted, and waits for the
    * event's handling. Reached only through a client of this worker, which a
-   * pattern the worker runs is not.
+   * pattern the worker runs is not. Returns `{ handling: "withheld" }` for a
+   * handling whose outcome is withheld, which reports the same thing whether
+   * it committed or not, and nothing otherwise.
    *
    * @throws If the payload is not a record, or the surface or action is
    *   blank, and when the event, or the run of the stream's handler, is
-   *   refused.
+   *   refused, except for a run whose outcome is withheld.
    */
   async handleCellSendReviewed(
     request: CellSendReviewedRequest,
-  ): Promise<void> {
+  ): Promise<CellSendResponse> {
     const payload = mapCellRefsToSigilLinks(request.event);
     if (!isPlainObject(payload)) {
       throw new Error("A reviewed action's event must be a record.");
@@ -2410,7 +2416,7 @@ export class RuntimeProcessor {
       throw new Error("A reviewed action requires a surface and an action.");
     }
     const control = { surface: request.surface, action: request.action };
-    await this.#sendCellEvent(
+    return await this.#sendCellEvent(
       request.cell,
       (send) => bindNativeUiControl({ send }, control)(payload),
       "handling",
@@ -2423,7 +2429,9 @@ export class RuntimeProcessor {
    * through the function it is given. With `wait` undefined the outcome is
    * logged; `commit` waits for the transaction's commit, and `handling` for
    * the commit of the handler's run as well, and either rejects with the
-   * refusal.
+   * refusal. `handling` resolves with `{ handling: "withheld" }` for a run
+   * whose outcome is withheld, which may have committed or not and never
+   * rejects.
    *
    * The event goes to the address `ref`'s stored links lead to, so each
    * document they pass through is loaded first, and events reach their
@@ -2435,7 +2443,7 @@ export class RuntimeProcessor {
     ref: CellRef,
     deliver: (send: (event: unknown) => void) => void,
     wait: "commit" | "handling" | undefined,
-  ): void | Promise<void> {
+  ): undefined | Promise<CellSendResponse> {
     const target = getCell(this.#runtime, ref);
     const earlier = this.#loadingSends;
     const loading = earlier === undefined
@@ -2467,6 +2475,7 @@ export class RuntimeProcessor {
     void outcome.catch((error) => {
       console.error("[RuntimeProcessor] Cell send failed:", error);
     });
+    return undefined;
   }
 
   /**
@@ -2521,7 +2530,7 @@ export class RuntimeProcessor {
     target: Cell<unknown>,
     deliver: (send: (event: unknown) => void) => void,
     wait: "commit" | "handling" | undefined,
-  ): void | Promise<void> {
+  ): undefined | Promise<CellSendResponse> {
     const tx = this.#runtime.edit();
     const cell = target.withTx(tx);
     const handled = wait === "handling"
@@ -2535,15 +2544,26 @@ export class RuntimeProcessor {
     this.#runtime.prepareTxForCommit(tx);
     const commit = tx.commit().settled;
     if (handled !== undefined) {
-      return this.#requireCellCommit(commit).then(async () => {
-        const handling = (await handled.promise).status();
-        if (handling.status === "error") {
-          throw new Error(transactionFailureMessage(handling.error));
-        }
-      });
+      return this.#requireCellCommit(commit).then(
+        async (): Promise<CellSendResponse> => {
+          const handledTx = await handled.promise;
+          const handling = handledTx.status();
+          if (handling.status === "error") {
+            throw new Error(transactionFailureMessage(handling.error));
+          }
+          // A handling whose outcome is withheld may have committed or not
+          // (events.md §5), so it resolves, saying so.
+          return isWithheldDelivery(handledTx)
+            ? { handling: "withheld" }
+            : undefined;
+        },
+      );
     }
-    if (wait === "commit") return this.#requireCellCommit(commit);
+    if (wait === "commit") {
+      return this.#requireCellCommit(commit).then(() => undefined);
+    }
     this.#observeCellCommit(commit, "send");
+    return undefined;
   }
 
   #observeCellCommit(
@@ -3572,6 +3592,18 @@ export class RuntimeProcessor {
   }
 
   /**
+   * Returns `answer`, built from reads of `spaces`, once each of them is still
+   * readable, and throws as {@link #throwIfUnreadable} does otherwise. A
+   * refusal can be recorded while any read that built the answer waits, so a
+   * handler that checks a space before reading asks this again before it
+   * answers.
+   */
+  #answerIfReadable<T>(answer: T, ...spaces: MemorySpace[]): T {
+    for (const space of spaces) this.#throwIfUnreadable(space);
+    return answer;
+  }
+
+  /**
    * Returns the server's refusal of `space` when the refusal says the space is
    * deleted, and `undefined` when it does not. A read of a deleted space ends
    * with no data rather than failing, so a caller that would report what it
@@ -3602,8 +3634,31 @@ export class RuntimeProcessor {
    * sigil-shaped payload with broken internals throws into a typed refusal.
    * These are one walk with two implementations, and this is the copy to
    * retire.
+   *
+   * @throws The server's refusal when this runtime's identity may not read
+   *   the piece's space, or the space a redirect lands in, deleted or not: a
+   *   load it refused resolves as one that found nothing, and a piece held
+   *   from before the refusal is no piece anyone here can open.
+   * @throws The failure to reach either space when its first connection
+   *   never completed a handshake, for the same reason.
    */
   async handlePieceGet(
+    request: PieceGetRequest,
+  ): Promise<PieceResponse> {
+    const response = await this.#pieceGet(request);
+    return this.#answerIfReadable(
+      response,
+      request.space,
+      response.piece.cell.space,
+    );
+  }
+
+  /**
+   * Helper for {@link handlePieceGet}, which decides the address. It checks
+   * each space as soon as it has read from it, so that nothing is started
+   * in a space that refused this runtime.
+   */
+  async #pieceGet(
     request: PieceGetRequest,
   ): Promise<PieceResponse> {
     // TODO(danfuzz): Refuse a cell that is not a piece cell in the surviving
@@ -3624,8 +3679,7 @@ export class RuntimeProcessor {
     // arrives, plus what the server resolves at the address itself when the
     // value stored there is a link.
     await requestedCell.sync();
-    const deletion = this.#spaceDeletion(request.space);
-    if (deletion !== undefined) throw deletion;
+    this.#throwIfUnreadable(request.space);
     // A piece's root is the piece, even when its value is a redirect, as it is
     // for a pattern that returns a sub-pattern's result whole. Only a
     // document that is no piece names one.
@@ -3656,8 +3710,7 @@ export class RuntimeProcessor {
           path: [],
         });
       await landing.sync();
-      const landingDeletion = this.#spaceDeletion(targetLink.space);
-      if (landingDeletion !== undefined) throw landingDeletion;
+      this.#throwIfUnreadable(targetLink.space);
       const hasPattern = getPatternIdentityRef(landing) !== undefined;
       const viewScoped = this.#runtime.viewScopedReplicationRequested &&
         await this.#runtime.viewReplication.enable(target.space);
@@ -3743,41 +3796,47 @@ export class RuntimeProcessor {
    * Fails as the runner's resolution fails — `missing-member` for a member
    * the collection does not hold, naming both, and `not-piece` for a target
    * that is neither a piece nor a member of one.
+   *
+   * @throws The server's refusal when this runtime's identity may not read
+   *   the space, deleted or not, rather than any answer about the name:
+   *   nothing can be read from the space, which says nothing about the name.
+   * @throws The failure to reach the space when its first connection never
+   *   completed a handshake, for the same reason.
    */
   async handleSlugResolve(
     request: SlugResolveRequest,
   ): Promise<SlugReferenceResponse> {
     const cc = this.#getSpaceCtx(request.space);
     const space = cc.getSpace();
-    // A slug a runtime read before the deletion is still in its replica, and
-    // names nothing anyone can open.
-    const held = this.#spaceDeletion(space);
-    if (held !== undefined) throw held;
+    // A slug a runtime read before the refusal is still in its replica, and
+    // names nothing this runtime can open.
+    this.#throwIfUnreadable(space);
+    let landed: { piece: Cell<unknown>; pathAfter: string[] };
     try {
-      if (request.member === undefined) {
-        const { piece } = await resolveSlugTargetInPiece(
+      landed = request.member === undefined
+        ? {
+          piece: (await resolveSlugTargetInPiece(
+            this.#runtime,
+            space,
+            request.slug,
+          )).piece,
+          pathAfter: [],
+        }
+        : await resolveSlugReference(
           this.#runtime,
           space,
           request.slug,
+          [request.member],
         );
-        return { piece: createPieceRef(piece), pathAfter: [] };
-      }
-      const { piece, pathAfter } = await resolveSlugReference(
-        this.#runtime,
-        space,
-        request.slug,
-        [request.member],
-      );
-      return { piece: createPieceRef(piece), pathAfter };
     } catch (error) {
       // A reference reaching nothing is what the caller asked about, so it
       // comes back as an answer. Everything else — a transport fault, a
       // document that will not decode — stays an error, which is the only
       // way a caller can tell "this name is not bound" from "ask again". A
-      // deleted space binds no name because nothing can be read from it, which
-      // says nothing about the name.
-      const deletion = this.#spaceDeletion(space);
-      if (deletion !== undefined) throw deletion;
+      // space that refuses this runtime, or was never reached, binds no name
+      // only because nothing can be read from it, which says nothing about
+      // the name.
+      this.#throwIfUnreadable(space);
       if (error instanceof SlugResolutionError) {
         return {
           refusal: { code: error.code ?? "unresolved", message: error.message },
@@ -3785,6 +3844,10 @@ export class RuntimeProcessor {
       }
       throw error;
     }
+    return this.#answerIfReadable(
+      { piece: createPieceRef(landed.piece), pathAfter: landed.pathAfter },
+      space,
+    );
   }
 
   async handlePieceRemove(

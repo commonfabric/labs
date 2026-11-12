@@ -1819,7 +1819,10 @@ derived commit after success — per protocol.md §2b (today's
 `v2-transaction.ts`: sequential, stop at first failure). The wave does
 not close until the
 split completes or fails as a unit (same-host store sequencing, not a
-network await).
+network await). Each space after the first is checked again once the
+earlier ones are sealed, and an event appended meanwhile to the stream
+whose entry the run marks passes that check, as it commutes with the mark
+at the wave commit (memory-v2 03-commit-model.md §3.3.4).
 
 Phase 5 SANCTIONED the crossing, and the accumulation gate (RULED
 2026-08-14 (c)) survives as its AUTHORIZATION seat: a serving wave

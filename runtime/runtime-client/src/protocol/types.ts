@@ -177,7 +177,9 @@ export enum RequestType {
    * with `native` provenance for the request's surface and action and marks
    * it renderer-trusted, so that it satisfies a write's UI contract for that
    * surface and action. Waits for the event's handling, and rejects with the
-   * reason when the event, or the run of the stream's handler, is refused.
+   * reason when the event, or the run of the stream's handler, is refused,
+   * except for a handling whose outcome is withheld, which resolves with
+   * `{ handling: "withheld" }` (see {@link CellSendResponse}).
    */
   CellSendReviewed = "cell:send-reviewed",
 
@@ -761,6 +763,20 @@ export enum RuntimeErrorCode {
   SpaceDeleted = "space-deleted",
 
   /**
+   * The request needed a space that refused this runtime's session for good,
+   * as when the space's access list does not admit its principal or stopped
+   * admitting it, and that is not deleted, which is `SpaceDeleted` instead.
+   * The runtime has already posted `SpaceAccessLost` for the space, once; a
+   * client that missed that notice learns of the loss from this code. A
+   * refusal of one operation in a space the session may still read, such as a
+   * write the principal has no grant for, carries no code. Only a change to
+   * the access list admits the principal again, so the client's remedy is to
+   * tell the reader the space is gone to them rather than to wait; an
+   * admission is announced as `SpaceAccessRestored`.
+   */
+  SpaceAccessRefused = "space-access-refused",
+
+  /**
    * The request needed a space whose first connection to its memory host
    * never completed a handshake, as when the host is down or out of the
    * network's reach. The runtime does not dial it again on its own, so the
@@ -973,6 +989,14 @@ export type InitializationData = {
      * Default on; an explicit `false` is the rollback override.
      */
     readerSchemaPrecedence?: boolean;
+
+    /**
+     * Whether the worker's memory connections take `cid:` schema documents
+     * by reference from a server that offers them (`syncCidReferencesV1`).
+     * Client-authoritative: the host's own opt-in, which the shell takes
+     * from its per-profile host toggle. Defaults to off.
+     */
+    syncCidReferences?: boolean;
   };
 
   /**
@@ -1342,7 +1366,8 @@ export type CellSendRequest = BaseRequest & {
   /**
    * Wait for the event's handling as well as its commit, and return its
    * refusal, such as a write the handler made that the runtime refused, to
-   * the caller.
+   * the caller, or, for a handling whose outcome is withheld,
+   * `{ handling: "withheld" }` (see {@link CellSendResponse}).
    */
   awaitHandling?: boolean;
 };
@@ -3702,6 +3727,18 @@ export type NullResponse = null;
  */
 export type EmptyResponse = undefined;
 
+/**
+ * The response to a {@link RequestType.CellSend} that waits for the event's
+ * handling, and to a {@link RequestType.CellSendReviewed}: absent for a
+ * handling that committed, and `{ handling: "withheld" }` for one whose outcome
+ * is withheld. A handling under server execution that read data its stream's
+ * space doesn't admit reports the same thing whether it committed or not, so
+ * that its outcome tells no one outside that data's audience what it read; the
+ * caller can say the event was sent, and that its outcome is private. A client
+ * that ignores the field reads it as the success it may have been.
+ */
+export type CellSendResponse = EmptyResponse | { handling: "withheld" };
+
 /** A single boolean verdict. */
 export type BooleanResponse = {
   /**
@@ -4513,6 +4550,7 @@ export type PresenceUpdateNotification = {
  */
 export type RemoteResponse =
   | EmptyResponse
+  | CellSendResponse
   | NullResponse
   | BooleanResponse
   | SpaceHostRegistrationResponse
@@ -4747,11 +4785,11 @@ export type Commands = {
   };
   [RequestType.CellSend]: {
     request: CellSendRequest;
-    response: EmptyResponse;
+    response: CellSendResponse;
   };
   [RequestType.CellSendReviewed]: {
     request: CellSendReviewedRequest;
-    response: EmptyResponse;
+    response: CellSendResponse;
   };
   [RequestType.CellSubscribe]: {
     request: CellSubscribeRequest;

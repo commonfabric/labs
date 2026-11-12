@@ -316,10 +316,15 @@ const withOpaqueLinkAt = (
   return rewritten as JSONSchema;
 };
 
-export const callVerbTool: HarnessToolDefinition<
-  CallVerbToolInput,
-  CallVerbToolOutput
-> = {
+/**
+ * The `call_verb` tool, calling a verb through `call`, which is `callVerb()`
+ * itself for the tool the registry holds. A test hands in a `call` that
+ * returns an outcome a stand-in runtime cannot produce, such as a served
+ * handling whose outcome is withheld.
+ */
+export const createCallVerbTool = (
+  call: typeof callVerb = callVerb,
+): HarnessToolDefinition<CallVerbToolInput, CallVerbToolOutput> => ({
   descriptor: callVerbToolDescriptor,
   async invoke(context, input) {
     const outputId = context.nextOutputId("call_verb");
@@ -379,7 +384,7 @@ export const callVerbTool: HarnessToolDefinition<
     // handler that commits after the tool had answered "cancelled" would be
     // a write the run reported as not made.
     const { runtime } = pieces;
-    const called = await callVerb(
+    const called = await call(
       runtime,
       piece.cell.getAsNormalizedFullLink(),
       name,
@@ -391,6 +396,11 @@ export const callVerbTool: HarnessToolDefinition<
     // author can write instructions there. To harden, measure the failure
     // against the release ceiling as the result below is, and withhold it
     // where the ceiling refuses it.
+    // A withheld handling ran, and whether it committed is not told; its
+    // message is fixed text, carrying nothing the handler read.
+    if (called.status === "withheld") {
+      return { outputId, status: "ok", verb: name, message: called.message };
+    }
     if (called.status !== "settled") return fail(called.message);
 
     const receipt = called.receipt;
@@ -489,4 +499,10 @@ export const callVerbTool: HarnessToolDefinition<
       return unreadable(describeFailure(error));
     }
   },
-};
+});
+
+/** The `call_verb` tool. */
+export const callVerbTool: HarnessToolDefinition<
+  CallVerbToolInput,
+  CallVerbToolOutput
+> = createCallVerbTool();
