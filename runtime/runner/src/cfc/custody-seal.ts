@@ -55,6 +55,7 @@ import { profileNameWrittenAt } from "../builder/principal-of.ts";
 import type { Cancel } from "../cancel.ts";
 import { type Cell, cellRuntime, isCell } from "../cell.ts";
 import { resolveLink } from "../link-resolution.ts";
+import { areNormalizedLinksSame } from "../link-types.ts";
 import {
   isPrimitiveCellLink,
   isWriteRedirectLink,
@@ -2544,18 +2545,26 @@ export function watchCustodyAnswer(
   let cancelled = false;
   let running = false;
   let again = false;
-  // The slot whose box and slot are followed, by its address, and how to
-  // stop. A slot is the instance's under one policy: the room's policy cell
-  // can name another policy over the same terms, whose instance digest is
-  // the same and whose box and slot are not.
-  let followed: { slot: string; cancel: Cancel } | undefined;
+  // The slot whose box and slot are followed, and how to stop. A slot is
+  // the instance's under one policy: the room's policy cell can name another
+  // policy over the same terms, whose instance digest is the same and whose
+  // box and slot are not.
+  let followed: { slot: NormalizedFullLink; cancel: Cancel } | undefined;
   // The slots this watch published into, which it says so of for as long as
   // it reports them.
-  const publishedHere = new Set<string>();
+  const publishedHere: NormalizedFullLink[] = [];
+  const isPublishedHere = (slot: Cell<unknown>) => {
+    const link = slot.getAsNormalizedFullLink();
+    return publishedHere.some((here) => areNormalizedLinksSame(here, link));
+  };
 
   const follow = (location: CustodyAnswerLocation | undefined): void => {
-    const slot = location && slotAddress(location.slot);
-    if (followed?.slot === slot) return;
+    const slot = location?.slot.getAsNormalizedFullLink();
+    if (
+      followed === undefined
+        ? slot === undefined
+        : slot !== undefined && areNormalizedLinksSame(followed.slot, slot)
+    ) return;
     followed?.cancel();
     followed = undefined;
     if (location === undefined) return;
@@ -2577,8 +2586,9 @@ export function watchCustodyAnswer(
       location = await locateCustodyAnswer(room);
       if (location !== undefined && !location.published && !cancelled) {
         try {
-          publishedHere.add(
-            slotAddress((await publishCustodyAnswer(room, output)).answer),
+          publishedHere.push(
+            (await publishCustodyAnswer(room, output)).answer
+              .getAsNormalizedFullLink(),
           );
         } catch (refused) {
           if (!isCustodyAnswerPending(refused)) {
@@ -2602,7 +2612,7 @@ export function watchCustodyAnswer(
         : {
           status: "published",
           instance: location!.instance,
-          publishedHere: publishedHere.has(slotAddress(location!.slot)),
+          publishedHere: isPublishedHere(location!.slot),
           answer: published.answer,
           value: published.value,
         },
@@ -2645,9 +2655,3 @@ export function watchCustodyAnswer(
 }
 
 const noop: Cancel = () => {};
-
-/** A slot's address, which names its policy and its instance. */
-const slotAddress = (slot: Cell<unknown>): string => {
-  const { space, id } = slot.getAsNormalizedFullLink();
-  return `${space}/${id}`;
-};

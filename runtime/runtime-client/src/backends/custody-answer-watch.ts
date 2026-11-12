@@ -20,16 +20,11 @@ import {
 
 import type { CustodyAnswerState } from "@/protocol/mod.ts";
 import type { HostReadGate } from "./host-read-gate.ts";
+import { cellRefToKey } from "@/shared/utils.ts";
 import { createCellRef } from "./utils.ts";
 
 /** What the host is told when the slot holds what the seal did not verify. */
 const UNVERIFIED_SLOT = "Custody answer refuses a slot the seal did not write";
-
-/** The address of the cell holding an answer. */
-const answerAddress = (answer: Cell<unknown>): string => {
-  const { space, id, path } = answer.getAsNormalizedFullLink();
-  return JSON.stringify([space, id, path]);
-};
 
 /**
  * Watches `room`'s answer for a host, calling `send` with each change in what
@@ -71,7 +66,7 @@ export function watchCustodyAnswerForHost(
     }
     // The answer published into a slot never changes, so one already shown
     // is decided by the subscription already standing.
-    const address = answerAddress(update.answer);
+    const address = cellRefToKey(createCellRef(update.answer));
     if (shown?.answer === address) return;
     stopShowing();
     const { instance, publishedHere, answer, value } = update;
