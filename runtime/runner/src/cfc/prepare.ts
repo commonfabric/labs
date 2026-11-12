@@ -4929,8 +4929,12 @@ const deriveFlowJoinImpl = (
   // The followed slots whose own label is confidential, by document and
   // path: references that count as followed whatever their target carries.
   const confidentialFollowedSlots = new Set<string>();
-  // The paths this transaction wrote, by document; built on first use.
+  // The paths this transaction wrote, by document, indexed and listed; built
+  // on first use.
   let writtenPaths: Map<string, PathPrefixIndex> | undefined;
+  let writtenPathLists:
+    | Map<string, readonly (readonly string[])[]>
+    | undefined;
   const valuesAsRead = new Map<string, { value: unknown } | undefined>();
   /**
    * Returns the value at `path` of the document `target` names as this
@@ -4960,10 +4964,12 @@ const deriveFlowJoinImpl = (
     if (valuesAsRead.has(key)) return valuesAsRead.get(key);
     if (writtenPaths === undefined) {
       writtenPaths = new Map();
+      writtenPathLists = new Map();
       for (const [document, written] of valueWriteTargets(tx)) {
         const index = new PathPrefixIndex();
         for (const writtenPath of written.paths) index.add(writtenPath);
         writtenPaths.set(document, index);
+        writtenPathLists.set(document, written.paths);
       }
     }
     const read = isRuntimeSecretId(target.id) ||
@@ -4977,6 +4983,43 @@ const deriveFlowJoinImpl = (
       };
     valuesAsRead.set(key, read);
     return read;
+  };
+  // What each written document held before this transaction, by document;
+  // built on first use.
+  const valuesBefore = new Map<string, ReturnType<typeof storedValuesAt>>();
+  /**
+   * Returns whether the slot at `path` of the document `target` names held a
+   * reference in the state its stored label metadata describes, which is the
+   * state before this transaction. Where the transaction left the slot alone,
+   * that is the value as read. Where it wrote at or above the slot, what the
+   * slot held before is recovered from the transaction's writes
+   * (`storedValuesAt`). A slot the transaction wrote only beneath, whose
+   * earlier state can't be told, or of a runtime secret, is taken to hold
+   * none, so everything stored beneath it stays consumed.
+   */
+  const heldReferenceBefore = (
+    target: {
+      space: MemorySpace;
+      id: URI;
+      scope: ReturnType<typeof normalizeCellScope>;
+    },
+    path: readonly string[],
+  ): boolean => {
+    const read = valueAsRead(target, path);
+    if (read !== undefined) return isPrimitiveCellLink(read.value);
+    if (isRuntimeSecretId(target.id)) return false;
+    const key = targetKey(target);
+    const coveredByWrite = writtenPathLists?.get(key)?.some((written) =>
+      concretePathHasPrefix(path, written)
+    );
+    if (coveredByWrite !== true) return false;
+    let before = valuesBefore.get(key);
+    if (before === undefined) {
+      before = storedValuesAt(tx, target);
+      valuesBefore.set(key, before);
+    }
+    const held = before(path);
+    return held?.length === 1 && isPrimitiveCellLink(held[0]);
   };
   forEachFlowObservation(
     tx,
@@ -5088,14 +5131,17 @@ const deriveFlowJoinImpl = (
       // copies of the target's labels. The link entry at the slot, which
       // carries such an envelope's restrictions on the reference itself,
       // stays consumed (§18.7).
+      //
+      // Whether the slot holds a reference is asked of the state the stored
+      // envelope describes, the one before this transaction, so a
+      // transaction that takes the reference and then writes the slot, as a
+      // conditional re-pointing does, drops them too.
       const probedSlot = observation.shape === "followRef"
         ? probedSlotPath(logicalPath)
         : undefined;
       let holdsReferenceMemo: boolean | undefined;
       const holdsReference = (slot: readonly string[]): boolean =>
-        holdsReferenceMemo ??= isPrimitiveCellLink(
-          valueAsRead({ space, id, scope }, slot)?.value,
-        );
+        holdsReferenceMemo ??= heldReferenceBefore({ space, id, scope }, slot);
       const excludesTemplates = observation.coveredByTrace ||
         observation.machinery ||
         ownedContainers !== undefined || probedSlot !== undefined;
