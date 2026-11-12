@@ -347,4 +347,52 @@ describe("FabricAwareResolver", () => {
     });
     expect(await resolver.resolveSource(source.name)).toEqual(source);
   });
+
+  it("returns the wrapped resolver's data file, or its source where it reads no data files apart", async () => {
+    const data: Source = { name: "/data.json", contents: "[1]" };
+    const sourceOnly = new FabricAwareResolver(
+      new InMemoryProgram("/main.tsx", { "/data.json": data.contents }),
+      { runtime, space },
+    );
+    const apart = new FabricAwareResolver({
+      main: () => Promise.resolve({ name: "/main.tsx", contents: "" }),
+      resolveSource: () => Promise.resolve(undefined),
+      resolveDataFile: (name) =>
+        Promise.resolve(name === data.name ? data : undefined),
+    }, { runtime, space });
+
+    expect(await sourceOnly.resolveDataFile(data.name)).toEqual(data);
+    expect(await sourceOnly.resolveDataFile("/other.json")).toBeUndefined();
+    expect(await apart.resolveDataFile(data.name)).toBe(data);
+    expect(await apart.resolveSource(data.name)).toBeUndefined();
+  });
+
+  it("refuses to mount a 33rd distinct pattern, and still returns those already mounted", async () => {
+    const resolver = new FabricAwareResolver(innerProgram(), {
+      runtime,
+      space,
+    });
+    const specifiers: string[] = [];
+    for (let index = 0; index <= 32; index++) {
+      const entryIdentity = await publish({
+        main: "/main.ts",
+        files: [{
+          name: "/main.ts",
+          contents: `export const value = ${index};`,
+        }],
+      });
+      specifiers.push(`cf:pattern:${entryIdentity}`);
+    }
+
+    for (const specifier of specifiers.slice(0, 32)) {
+      expect(await resolver.resolveSource(specifier)).toBeDefined();
+    }
+    await expect(resolver.resolveSource(specifiers[32]!)).rejects.toThrow(
+      "fabric import graph too deep/large",
+    );
+    expect(resolver.mounts().length).toBe(32);
+    expect((await resolver.resolveSource(specifiers[0]!))?.contents).toBe(
+      "export const value = 0;",
+    );
+  });
 });

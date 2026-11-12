@@ -4,6 +4,7 @@ import {
   createBindingIdentityHelperSource,
   createFunctionHardeningHelperSource,
   RESERVED_FACTORY_BINDINGS,
+  type TrustedBuilderName,
 } from "@commonfabric/pattern-contract/sandbox-contract";
 
 import {
@@ -110,6 +111,8 @@ export const RESERVED_FACTORY_BINDING_SET: ReadonlySet<string> = new Set<
 const DEFAULT_EXPORT_ALLOWED_BINDING_ERROR =
   "Default exports must be trusted builders, direct functions, verified data, or import re-exports";
 
+type VariableStatementKind = "const" | "let" | "var";
+
 interface ParsedNormalizedCallReference {
   kind: "identifier" | "member" | "commaMember";
   root: string;
@@ -148,8 +151,6 @@ export function classifyModuleItems(
     const missingRequiredGuards = new Set(options.requiredGuards);
     for (const statement of statements) {
       const trimmed = trimRange(source, statement.start, statement.end);
-      if (trimmed.start >= trimmed.end) continue;
-
       if (isStringDirectiveRange(source, trimmed.start, trimmed.end)) {
         continue;
       }
@@ -160,9 +161,6 @@ export function classifyModuleItems(
         statement.end,
       );
       if (isCompiledEsModuleMarkerNormalized(normalized)) continue;
-      if (isCompiledImportNormalizationRebindingNormalized(normalized, env)) {
-        continue;
-      }
       if (
         missingRequiredGuards.has(normalized)
       ) {
@@ -219,15 +217,9 @@ export function classifyModuleItems(
         verifyCompiledExportAssignment(source, filename, statement, env);
         continue;
       }
-      if (isCompiledImportNormalizationRebindingNormalized(normalized, env)) {
-        continue;
-      }
 
       const reexport = tryParseCompiledReexportNormalized(normalized);
       if (reexport) {
-        if (reexport.exportedName === "__esModule") {
-          continue;
-        }
         if (reexport.exportedName !== "default") {
           const binding = classifyNormalizedReferenceText(
             source,
@@ -244,12 +236,10 @@ export function classifyModuleItems(
               "Compiled reexport getters must return imported bindings",
             );
           }
-          env.set(reexport.exportedName, cloneBindingInfo(binding));
+          env.set(exportKey(reexport.exportedName), cloneBindingInfo(binding));
         }
         continue;
       }
-
-      if (isCompiledExportStarStatementNormalized(normalized)) continue;
 
       if (
         isAllowedFunctionHardeningStatementNormalized(normalized, env) ||
@@ -312,13 +302,11 @@ function predeclareTopLevelBindings(
   try {
     for (const statement of statements) {
       const trimmed = trimRange(source, statement.start, statement.end);
-      if (trimmed.start >= trimmed.end) continue;
       const normalized = stripJsTrivia(source, statement.start, statement.end);
       if (
         options.requiredGuards.has(normalized) ||
         isStringDirectiveRange(source, trimmed.start, trimmed.end) ||
-        isCompiledEsModuleMarkerNormalized(normalized) ||
-        isCompiledImportNormalizationRebindingNormalized(normalized, env)
+        isCompiledEsModuleMarkerNormalized(normalized)
       ) {
         continue;
       }
@@ -336,12 +324,21 @@ function predeclareTopLevelBindings(
         continue;
       }
 
-      if (
-        !getVariableStatementKindFromRange(source, trimmed.start, trimmed.end)
-      ) {
+      const variableKind = getVariableStatementKindFromRange(
+        source,
+        trimmed.start,
+        trimmed.end,
+      );
+      if (!variableKind) {
         continue;
       }
-      for (const declarator of parseVariableDeclarators(source, statement)) {
+      for (
+        const declarator of parseVariableDeclarators(
+          source,
+          statement,
+          variableKind,
+        )
+      ) {
         if (options.reservedBindings.has(declarator.name)) {
           continue;
         }
@@ -369,7 +366,7 @@ function verifyVariableStatement(
   filename: string,
   statement: StatementChunk,
   env: Map<string, BindingInfo>,
-  kind: ReturnType<typeof getVariableStatementKindFromRange>,
+  kind: VariableStatementKind,
   reserved: ReadonlySet<string>,
 ): void {
   const start = performance.now();
@@ -383,7 +380,9 @@ function verifyVariableStatement(
       );
     }
 
-    for (const declarator of parseVariableDeclarators(source, statement)) {
+    for (
+      const declarator of parseVariableDeclarators(source, statement, kind)
+    ) {
       assertFactoryBindingIsNotReserved(
         source,
         filename,
@@ -490,7 +489,7 @@ function verifyCompiledExportAssignment(
   const chain = parseExportAssignmentChain(source, statement);
   if (chain.valueIsVoidZero) {
     for (const name of chain.exportedNames) {
-      env.set(name, { kind: "unknown" });
+      env.set(exportKey(name), { kind: "unknown" });
     }
     return;
   }
@@ -506,7 +505,7 @@ function verifyCompiledExportAssignment(
     verifyDefaultExportBinding(source, filename, chain.value.start, binding);
   }
   for (const name of chain.exportedNames) {
-    env.set(name, cloneBindingInfo(binding));
+    env.set(exportKey(name), cloneBindingInfo(binding));
   }
 }
 
@@ -650,22 +649,13 @@ function classifyExpressionText(
               "Verified binding annotation helpers accept exactly two arguments",
             );
           }
-          const argBinding = classifyExpressionText(
+          return classifyExpressionText(
             source,
             filename,
             call.args[0].start,
             call.args[0].end,
             env,
           );
-          if (argBinding.kind === "unknown") {
-            throw verificationErrorAt(
-              source,
-              filename,
-              call.args[0].start,
-              "Verified binding annotation must target trusted top-level bindings",
-            );
-          }
-          return cloneBindingInfo(argBinding);
         }
 
         if (isLocalCallableExpression(normalizedCallee, env)) {
@@ -749,53 +739,6 @@ function classifyExpressionText(
         };
       }
 
-      const hardeningBinding = env.get(normalizedCallee);
-      if (hardeningBinding?.hardeningHelper) {
-        if (call.args.length !== 1) {
-          throw verificationErrorAt(
-            source,
-            filename,
-            call.start,
-            "Function hardening helpers accept exactly one argument",
-          );
-        }
-        const argBinding = classifyExpressionText(
-          source,
-          filename,
-          call.args[0].start,
-          call.args[0].end,
-          env,
-        );
-        if (argBinding.kind !== "function") {
-          throw verificationErrorAt(
-            source,
-            filename,
-            call.args[0].start,
-            "Function hardening must target direct function values",
-          );
-        }
-        return cloneBindingInfo(argBinding);
-      }
-
-      const bindingIdentityHelper = env.get(normalizedCallee);
-      if (bindingIdentityHelper?.bindingIdentityHelper) {
-        if (call.args.length !== 2) {
-          throw verificationErrorAt(
-            source,
-            filename,
-            call.start,
-            "Verified binding annotation helpers accept exactly two arguments",
-          );
-        }
-        return classifyExpressionText(
-          source,
-          filename,
-          call.args[0].start,
-          call.args[0].end,
-          env,
-        );
-      }
-
       if (isLocalCallableExpression(normalizedCallee, env)) {
         throw verificationErrorAt(
           source,
@@ -864,7 +807,7 @@ function classifyNormalizedReferenceText(
     }
 
     if (ref.root === "exports" && ref.property) {
-      const binding = env.get(ref.property);
+      const binding = env.get(exportKey(ref.property));
       if (!binding || binding.kind === "unknown") {
         throw verificationErrorAt(
           source,
@@ -917,7 +860,7 @@ function verifyTrustedDataCall(
 function verifyTrustedBuilderCall(
   source: string,
   filename: string,
-  builderName: string,
+  builderName: TrustedBuilderName,
   args: Array<{ start: number; end: number }>,
   env: Map<string, BindingInfo>,
 ): void {
@@ -982,7 +925,7 @@ function verifyTrustedBuilderCall(
 
 function callbackIndexesForBuilder(
   source: string,
-  builderName: string,
+  builderName: Exclude<TrustedBuilderName, "multiUserTest">,
   args: Array<{ start: number; end: number }>,
   env: Map<string, BindingInfo>,
 ): number[] {
@@ -1023,8 +966,6 @@ function callbackIndexesForBuilder(
       return args.length >= 3 ? [2] : [];
     case "derive":
       return args.length >= 4 ? [3] : args.length >= 2 ? [1] : [];
-    default:
-      return [];
   }
 }
 
@@ -1168,14 +1109,6 @@ function resolveTrustedCallName(
   }
 
   if (ref.kind === "identifier") {
-    const binding = env.get(ref.root);
-    if (
-      binding?.trustedRuntimeName &&
-      (isTrustedBuilder(binding.trustedRuntimeName) ||
-        isTrustedDataHelper(binding.trustedRuntimeName))
-    ) {
-      return binding.trustedRuntimeName;
-    }
     return undefined;
   }
 
@@ -1204,18 +1137,11 @@ function resolveTrustedCallName(
 function parseVariableDeclarators(
   source: string,
   statement: StatementChunk,
+  keyword: VariableStatementKind,
 ): Array<{ name: string; initializer: { start: number; end: number } }> {
   const measureStart = performance.now();
   try {
     const trimmed = trimRange(source, statement.start, statement.end);
-    const keyword = getVariableStatementKindFromRange(
-      source,
-      trimmed.start,
-      trimmed.end,
-    );
-    if (!keyword) {
-      throw new Error("Expected a variable statement");
-    }
     const listStart = trimmed.start + keyword.length;
     const listEnd =
       stripTrailingSemicolonRange(source, trimmed.start, trimmed.end)
@@ -1317,10 +1243,6 @@ function tryParseCompiledReexportNormalized(
   };
 }
 
-function isCompiledExportStarStatementNormalized(normalized: string): boolean {
-  return /^__exportStar\([A-Za-z_$][\w$]*,exports\);?$/.test(normalized);
-}
-
 /**
  * Recognize the transformer's hoist-registration statement:
  * `__cfReg({ __cfPattern_1, __cfLift_1, … })` — a call to `__cfReg` with a single
@@ -1351,17 +1273,6 @@ function isHoistRegistrationCallNormalized(
 function isCompiledEsModuleMarkerNormalized(normalized: string): boolean {
   return normalized ===
     `Object.defineProperty(exports,"__esModule",{value:true});`;
-}
-
-function isCompiledImportNormalizationRebindingNormalized(
-  normalized: string,
-  env: Map<string, BindingInfo>,
-): boolean {
-  const match = normalized.match(
-    /^([A-Za-z_$][\w$]*)=__importDefault\(\1\);?$/,
-  );
-  if (!match) return false;
-  return env.get(match[1])?.kind === "import";
 }
 
 function isAllowedFunctionHardeningStatementNormalized(
@@ -1408,13 +1319,8 @@ function registerFunctionStatement(
   source: string,
   statement: StatementChunk,
   env: Map<string, BindingInfo>,
-  name = getFunctionDeclarationNameFromRange(
-    source,
-    trimRange(source, statement.start, statement.end).start,
-    trimRange(source, statement.start, statement.end).end,
-  ),
+  name: string,
 ): void {
-  if (!name) return;
   const statementText = source.slice(statement.start, statement.end);
   env.set(name, {
     kind: "function",
@@ -1537,7 +1443,7 @@ function getVariableStatementKindFromRange(
   source: string,
   start: number,
   end: number,
-): "const" | "let" | "var" | undefined {
+): VariableStatementKind | undefined {
   if (startsWithStatementWord(source, start, end, "const")) return "const";
   if (startsWithStatementWord(source, start, end, "let")) return "let";
   if (startsWithStatementWord(source, start, end, "var")) return "var";
@@ -1770,6 +1676,15 @@ function stripTrailingSemicolonRange(
     return trimRange(source, trimmed.start, trimmed.end - 1);
   }
   return trimmed;
+}
+
+/**
+ * The `env` key for the value a module exports as `name`. It reads as the
+ * member expression `exports.<name>`, so it never collides with a top-level
+ * binding: a module's own `h` and its `exports.h` are different values.
+ */
+function exportKey(name: string): string {
+  return `exports.${name}`;
 }
 
 function cloneBindingInfo(binding: BindingInfo): BindingInfo {

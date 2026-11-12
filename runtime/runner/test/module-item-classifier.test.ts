@@ -8,7 +8,10 @@ import {
   classifyModuleItems,
   RESERVED_FACTORY_BINDING_SET,
 } from "../src/sandbox/compiled-bundle-verifier.ts";
-import { parseFunctionText } from "../src/sandbox/compiled-js-parser.ts";
+import {
+  parseFunctionText,
+  stripJsTrivia,
+} from "../src/sandbox/compiled-js-parser.ts";
 
 // The security classifier is format-agnostic: it classifies a module's top-level
 // items (compiled-CJS form) against a pre-seeded binding env, independent of how
@@ -88,6 +91,44 @@ describe("classifyModuleItems (format-agnostic security core)", () => {
         },
       )
     ).toThrow(/Reserved wrapper binding/);
+  });
+
+  it("throws for a reserved function declaration name", () => {
+    const body = `function () { function define(n) { return n; } }`;
+    const { source, statements } = bodyStatements(body);
+    const classify = (reservedBindings: ReadonlySet<string>) => () =>
+      classifyModuleItems(
+        source,
+        "<m>",
+        statements,
+        new Map<string, BindingInfo>(),
+        { ...EMPTY_GUARD_OPTIONS, reservedBindings },
+      );
+    expect(classify(new Set())).not.toThrow();
+    expect(classify(new Set(["define"]))).toThrow(
+      "Reserved wrapper binding 'define' is not allowed in SES mode",
+    );
+  });
+
+  it("consumes required shadow guards and throws when one is missing", () => {
+    const guard = `const define = undefined;`;
+    const classify = (body: string) => () => {
+      const { source, statements } = bodyStatements(body);
+      return classifyModuleItems(
+        source,
+        "<m>",
+        statements,
+        new Map<string, BindingInfo>(),
+        {
+          ...EMPTY_GUARD_OPTIONS,
+          requiredGuards: new Set([stripJsTrivia(guard)]),
+        },
+      );
+    };
+    expect(classify(`function () { ${guard} exports.v = 1; }`)).not.toThrow();
+    expect(classify(`function () { exports.v = 1; }`)).toThrow(
+      "Compiled module is missing required wrapper shadow guards",
+    );
   });
 
   it("still rejects top-level mutable bindings (let/var)", () => {

@@ -143,9 +143,10 @@ export interface SessionFactory {
    *  only the messages under test. */
   readonly supportsAclBootstrap?: boolean;
 
+  /** Opens a session on `space`, authenticated as `signer`. */
   create(
     space: MemorySpace,
-    signer?: Signer,
+    signer: Signer,
     mountOptions?: MemoryClient.MountOptions,
     signal?: AbortSignal,
   ): Promise<{

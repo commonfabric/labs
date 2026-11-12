@@ -55,6 +55,17 @@ describe("authored-debug-source", () => {
         })?.kind,
       ).not.toBe("verified");
     });
+
+    it("records nothing, and throws nothing, for a value that is not a function", () => {
+      const notAFunction = { src: "cf:module/hash/main.tsx:2:4" };
+
+      expect(() =>
+        recordAuthoredDebugSource("main.tsx", { bindingName: "string" })
+      ).not.toThrow();
+      recordAuthoredDebugSource(notAFunction, { bindingName: "object" });
+
+      expect(getAuthoredDebugSource(notAFunction)).toBeUndefined();
+    });
   });
 
   describe("getAuthoredDebugSource()", () => {

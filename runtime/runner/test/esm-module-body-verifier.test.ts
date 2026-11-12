@@ -177,4 +177,12 @@ describe("verifyCompiledModuleBody", () => {
     }, "/division.ts");
     expect(() => verifyCompiledModuleBody(body, "/division.ts")).not.toThrow();
   });
+
+  it("throws for a declaration list that only parses as a whole statement", () => {
+    // Read from the start of its declaration list, `/ 1;` opens a regular
+    // expression that never closes, so the list has no declarators to read.
+    expect(() => verifyCompiledModuleBody(`const / 1;`, "/main.ts")).toThrow(
+      "Unterminated regular expression",
+    );
+  });
 });

@@ -442,9 +442,9 @@ export interface CompileSourcesOptions {
   precompiledBodies?: Map<string, string>;
 
   /**
-   * Per-source source map (from `compileToModules`), keyed by source name. Used
-   * to compose per-load maps so error stacks resolve back to the original
-   * authored files.
+   * Per-source source map (from `compileToModules`), keyed by source name.
+   * Carried into the graph's `moduleSourceMaps`, so error stacks resolve back
+   * to the original authored files.
    */
   precompiledSourceMaps?: Map<string, SourceMap>;
 
@@ -844,10 +844,7 @@ export function compileSourcesToRecords(
   for (const source of sources) {
     rawExports.set(source.name, collectModuleExports(source));
   }
-  const fullExportsMemo = new Map<string, string[]>();
   const resolveFullExports = (name: string): string[] => {
-    const memo = fullExportsMemo.get(name);
-    if (memo) return memo;
     // Walk the transitive closure of `export *` edges first (worklist with a
     // visited set, so cycles of any length terminate and contribute fully),
     // then union the reachable modules' direct export names. Computing the full
@@ -861,9 +858,10 @@ export function compileSourcesToRecords(
       const current = stack.pop()!;
       if (walked.has(current)) continue;
       walked.add(current);
-      const raw = rawExports.get(current);
-      const source = sourceByName.get(current);
-      if (!raw || !source) continue;
+      // `current` is the entry or a target checked against `fileNames`, so
+      // both lookups find it.
+      const raw = rawExports.get(current)!;
+      const source = sourceByName.get(current)!;
       for (const targetSpec of raw.starTargets) {
         const aliased = options.specifierAliases?.get(targetSpec);
         const internal = aliased ??
@@ -894,9 +892,7 @@ export function compileSourcesToRecords(
     for (const n of runtimeNames) {
       if (n !== "default") names.add(n);
     }
-    const result = [...names];
-    fullExportsMemo.set(name, result);
-    return result;
+    return [...names];
   };
 
   const records = new Map<string, VirtualModuleRecord>();
@@ -1237,10 +1233,7 @@ export function buildRecordsFromCompiled(
   }
 
   // Full export set: own names ∪ transitively re-exported names (minus default).
-  const fullExportsMemo = new Map<string, string[]>();
   const resolveFullExports = (identity: string): string[] => {
-    const memo = fullExportsMemo.get(identity);
-    if (memo) return memo;
     const names = new Set<string>(direct.get(identity)?.names ?? []);
     const walked = new Set<string>();
     const stack = [...(direct.get(identity)?.starTargets ?? [])];
@@ -1255,9 +1248,7 @@ export function buildRecordsFromCompiled(
         stack.push(target);
       }
     }
-    const result = [...names];
-    fullExportsMemo.set(identity, result);
-    return result;
+    return [...names];
   };
 
   const records = new Map<string, VirtualModuleRecord>();

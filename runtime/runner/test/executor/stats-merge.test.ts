@@ -177,6 +177,21 @@ describe("stats-merge", () => {
     it("returns counters that share nothing a part's holder writes to", () => {
       const part = statsWith({
         derivedCommitsBySpace: { a: 1 },
+        settle: {
+          series: [{
+            space: "a",
+            seq: 1,
+            admittedAt: 0,
+            coveredAt: 2,
+            ms: 2,
+            waves: 1,
+            cycles: 1,
+            growthWakes: 0,
+            class: "value-only",
+            eventAppend: false,
+          }],
+          dropped: 0,
+        },
         settleAdvances: {
           count: 1,
           lastDelta: 1,
@@ -187,9 +202,11 @@ describe("stats-merge", () => {
       const merged = mergeServingLoopStats([part]);
       part.derivedCommitsBySpace.a = 99;
       part.settleAdvances.series[0].to = 99;
+      part.settle.series[0].ms = 99;
       part.lease.held = 99;
       expect(merged.derivedCommitsBySpace.a).toBe(1);
       expect(merged.settleAdvances.series[0].to).toBe(1);
+      expect(merged.settle.series[0].ms).toBe(2);
       expect(merged.lease.held).toBe(0);
     });
   });
@@ -220,6 +237,29 @@ describe("stats-merge", () => {
       expect(closed.parkedRuntimes.held).toBe(0);
       expect(closed.demand.demandedInstances).toBe(0);
       expect(closed.events.deliveryDeferralsActive).toBe(0);
+    });
+
+    it("puts every level at zero and leaves the shape as it was", () => {
+      const open = emptyServingLoopStats();
+      open.activeSpaces = 1;
+      open.watermarkLag = 2;
+      open.demand.demandedRows = 3;
+      open.demand.demandedInstances = 4;
+      open.demand.demandedPairs = 5;
+      open.demand.demandedWriters = 6;
+      open.events.deliveryDeferralsActive = 7;
+      open.events.deliveryFailuresActive = 8;
+      open.events.maxAccumulatedDeliveryFailureMs = 9;
+      open.memo.inflight = 10;
+      open.parkedRuntimes.held = 11;
+      open.workers.serving = 12;
+      open.workers.spare = 13;
+      open.workers.parked = 14;
+      open.workers.heapUsed = 15;
+
+      expect(closedHostServingLoopStats(open)).toEqual(
+        emptyServingLoopStats(),
+      );
     });
 
     it("leaves the counters it was given as they were", () => {

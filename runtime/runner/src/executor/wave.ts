@@ -31,6 +31,7 @@ import type { CellScope } from "@commonfabric/api";
 import { type DID, isDID } from "@commonfabric/identity/did";
 import { aclDocId } from "@commonfabric/memory/acl";
 import {
+  type ClientCommit,
   type CommitPrecondition,
   type ConfirmedRead,
   type DerivedWriteAnnotation,
@@ -901,14 +902,11 @@ interface WaveContribution {
 
   /**
    * The access-list changes this run staged (`stageSpaceAccessChanges()`),
-   * by space, which the seal admitted. They commit ahead of every batch
-   * carrying the run's writes or appends, iff the contribution survives the
-   * wave's conflict resolution.
+   * one per space, in the memory server's form, which the seal admitted.
+   * They commit ahead of every batch carrying the run's writes or appends,
+   * iff the contribution survives the wave's conflict resolution.
    */
-  spaceAccessChanges: ReadonlyArray<{
-    space: MemorySpace;
-    changes: readonly SpaceAccessChange[];
-  }>;
+  spaceAccessChanges: readonly ListedServedAclChange[];
 
   /** The run's DISCOVERED scope at seal (scopes.md §2 S1 — the
    * transaction's read-scope ratchet, learned by running): the narrowest
@@ -1040,6 +1038,12 @@ export interface WaveCommitOutcome {
   }>;
 }
 
+/** The home commit of a contribution that sealed nothing in the home space. */
+const NOTHING_SEALED: Pick<ClientCommit, "operations" | "reads"> = {
+  operations: [],
+  reads: { confirmed: [], pending: [] },
+};
+
 const docInstanceKey = (id: string, scopeKey: string): string =>
   `${id} ${scopeKey}`;
 
@@ -1127,10 +1131,9 @@ function seqLessStreamEntryEventIds(operation: Operation): string[] {
         lists.push(patch.values as unknown[]);
       } else if (
         (patch.op === "add" || patch.op === "replace") &&
-        patch.path === "/value/entries" &&
-        Array.isArray((patch as unknown as { value?: unknown }).value)
+        patch.path === "/value/entries" && Array.isArray(patch.value)
       ) {
-        lists.push((patch as unknown as { value: unknown[] }).value);
+        lists.push(patch.value);
       }
     }
   }
@@ -1655,24 +1658,26 @@ export class WaveAccumulator
       // the overlay. A refusal is deterministic, as the refusal of a write to
       // the list is, so it fails this run alone, and the entry the run
       // delivers carries the error (`noteSealFailure()`).
+      let servedAclChanges: readonly ListedServedAclChange[] = [];
       if (spaceAccessChanges.length > 0) {
-        const refusal = await this.#refuseSpaceAccessChanges(
+        const decided = await this.#admitSpaceAccessChanges(
           context,
           spaceAccessChanges,
         );
-        if (refusal !== undefined) {
+        if ("refused" in decided) {
           logger.warn("access-list-change-refused", () => [
             `access-list change refused at wave accumulation: action ` +
-            `${context?.actionId ?? "<unstamped>"}: ${refusal}`,
+            `${context?.actionId ?? "<unstamped>"}: ${decided.refused}`,
           ]);
           return {
             error: {
               name: "StorageTransactionAborted",
-              message: refusal,
+              message: decided.refused,
               reason: new Error(ACL_DOCUMENT_WRITE_REFUSED),
             },
           };
         }
+        servedAclChanges = decided.served;
       }
       // Closing releases the transaction's activity; write-free publication
       // obligations need its read identities after the storage no-op has closed.
@@ -1768,7 +1773,7 @@ export class WaveAccumulator
         // Copied: a (refused) post-seal enqueue must not be able to
         // mutate the sealed contribution through the shared array.
         outboundAppends: [...pendingAppends],
-        spaceAccessChanges,
+        spaceAccessChanges: servedAclChanges,
         discoveredScope: assembly.discoveredScope,
         viewSeqs: this.#viewSeqsAtSeal(assembly.spaces, context),
       };
@@ -1980,7 +1985,6 @@ export class WaveAccumulator
    * started in it runs.
    */
   #releaseSealedState(): void {
-    if (this.#released !== undefined) return;
     this.#released = {
       contributionCount: this.#contributions.length,
       contentContributionCount: this.contentContributionCount,
@@ -2345,22 +2349,20 @@ export class WaveAccumulator
       this.#homeDocInstances(contribution)
     );
 
-    /** Per SPACE: sealed localSeq → contribution index. LocalSeqs are
-     * per-space replica counters, so the mapping must be per-space too —
+    /** `${space}\0${localSeq}` of each sealed commit → contribution index.
+     * LocalSeqs are per-space replica counters, so the key names the space —
      * a pending read in a FOREIGN sealed commit resolves its layers
      * against that space's seals, which is what folds a reader of a
      * withdrawn foreign write into the withdrawal (the cross-space half
      * of the closure below). */
-    const byLocalSeq = new Map<MemorySpace, Map<number, number>>();
+    const byLocalSeq = new Map<string, number>();
 
     for (const contribution of this.#contributions) {
       for (const sealed of contribution.spaces) {
-        let perSpace = byLocalSeq.get(sealed.space);
-        if (perSpace === undefined) {
-          perSpace = new Map();
-          byLocalSeq.set(sealed.space, perSpace);
-        }
-        perSpace.set(sealed.sealed.localSeq, contribution.index);
+        byLocalSeq.set(
+          `${sealed.space}\0${sealed.sealed.localSeq}`,
+          contribution.index,
+        );
       }
     }
     const allDocs = new Map<
@@ -2511,9 +2513,7 @@ export class WaveAccumulator
         contribution.index >= candidate.sealedBefore
       );
       if (own === undefined) return undefined;
-      const home = this.#homeSealed(contribution);
-      if (home === undefined) return undefined;
-      const { confirmed, pending } = home.sealed.commit.reads;
+      const { confirmed, pending } = this.#homeCommit(contribution).reads;
       let observed = false;
       for (
         const { read, seq } of [
@@ -2567,8 +2567,6 @@ export class WaveAccumulator
       ) {
         return undefined;
       }
-      const home = this.#homeSealed(contribution);
-      if (home === undefined) return undefined;
       const overwritten = await sink.sessionOverwritePathsSince(
         this.#space,
         doc,
@@ -2582,10 +2580,9 @@ export class WaveAccumulator
       };
       const patches = new Set<PatchOp>();
       let whole = true;
-      for (const operation of home.sealed.commit.operations) {
-        if (operation.op === "sqlite") continue;
+      for (const operation of this.#homeCommit(contribution).operations) {
         if (
-          operation.id !== doc.id ||
+          operation.op === "sqlite" || operation.id !== doc.id ||
           this.#scopeKeyFor(operation.scope, context) !== doc.scopeKey
         ) {
           continue;
@@ -2954,12 +2951,6 @@ export class WaveAccumulator
     // reaches the sink's engine lookup.
     if (this.#failedForeignSpaces.size > 0) {
       for (const contribution of this.#contributions) {
-        if (
-          requeued.has(contribution.index) ||
-          droppedWhole.has(contribution.index)
-        ) {
-          continue;
-        }
         const failed = contribution.spaces.some((sealed) =>
           sealed.space !== this.#space &&
           this.#failedForeignSpaces.has(sealed.space)
@@ -3024,14 +3015,10 @@ export class WaveAccumulator
       ) {
         continue;
       }
-      for (const { space, changes } of contribution.spaceAccessChanges) {
+      for (const served of contribution.spaceAccessChanges) {
+        const { space } = served;
         if (this.#tenureEnded) return this.#abortForLostLease(outcome);
-        const result = await this.#commitSpaceAccessChange(
-          sink,
-          contribution,
-          space,
-          changes,
-        );
+        const result = await this.#commitSpaceAccessChange(sink, served);
         if (result.error === undefined) continue;
         // A change to this tenure's own list refused for its deletion ends
         // the tenure, as the home commit's refusal would; one to another
@@ -3340,34 +3327,43 @@ export class WaveAccumulator
   //
 
   /**
-   * Helper for `seal()`, which returns why the wave refuses `changes`, the
-   * access-list changes a transaction staged under the run context `context`,
-   * or `undefined` when the memory server would admit each space's changes
-   * against the store as it stands.
+   * Helper for `seal()`, which decides `changes`, the access-list changes a
+   * transaction staged under the run context `context`. Returns their memory
+   * server form when it would admit each space's changes against the store
+   * as it stands, and otherwise why the wave refuses them.
    */
-  async #refuseSpaceAccessChanges(
+  async #admitSpaceAccessChanges(
     context: WaveRunContext | undefined,
-    changes: WaveContribution["spaceAccessChanges"],
-  ): Promise<string | undefined> {
+    changes: ReadonlyArray<{
+      space: MemorySpace;
+      changes: readonly SpaceAccessChange[];
+    }>,
+  ): Promise<{ refused: string } | { served: ListedServedAclChange[] }> {
     const authority = this.#spaceAccessAuthority;
     if (authority === undefined) {
-      return "This wave admits no change to an access list.";
+      return { refused: "This wave admits no change to an access list." };
     }
+    const admitted: ListedServedAclChange[] = [];
     for (const { space, changes: list } of changes) {
       const served = context === undefined
         ? undefined
         : this.#servedAclChangeFor(context, space, list);
       if (served === undefined) {
-        return "Only a handler run delivering a durable stream entry may " +
-          "change an access list, and only as the actor it acts for.";
+        return {
+          refused: "Only a handler run delivering a durable stream entry " +
+            "may change an access list, and only as the actor it acts for.",
+        };
       }
       const verdict = await authority(served);
       if ("refused" in verdict) {
-        return `The change to the access list of ${space} was refused: ` +
-          verdict.refused;
+        return {
+          refused: `The change to the access list of ${space} was refused: ` +
+            verdict.refused,
+        };
       }
+      admitted.push(served);
     }
-    return undefined;
+    return { served: admitted };
   }
 
   /**
@@ -3410,37 +3406,21 @@ export class WaveAccumulator
   }
 
   /**
-   * Helper for `commitWave()`, which commits `contribution`'s `changes` to the
-   * access list of `space` through `sink`.
+   * Helper for `commitWave()`, which commits `served`, an access-list change
+   * the seal admitted, through `sink`.
    *
    * @throws Error when `sink` cannot commit an access-list change, which
    *   only a wave host that wired the seal's check and not the commit makes.
    */
   #commitSpaceAccessChange(
     sink: WaveCommitSink,
-    contribution: WaveContribution,
-    space: MemorySpace,
-    changes: readonly SpaceAccessChange[],
+    served: ListedServedAclChange,
   ): Promise<Result<{ seq?: number }, WaveCommitRejection>> {
     if (sink.commitSpaceAccessChange === undefined) {
       throw new Error(
         "a contribution carries an access-list change, and the wave's " +
           "commit sink has no `commitSpaceAccessChange()` to commit it with",
       );
-    }
-    const served = this.#servedAclChangeFor(
-      contribution.context,
-      space,
-      changes,
-    );
-    if (served === undefined) {
-      return Promise.resolve({
-        error: {
-          name: "AclDocumentWriteRefused",
-          message: `the run that changed the access list of ${space} may ` +
-            "not change one",
-        },
-      });
     }
     return sink.commitSpaceAccessChange(served);
   }
@@ -3451,6 +3431,14 @@ export class WaveAccumulator
     return contribution.spaces.find((s) => s.space === this.#space);
   }
 
+  /** The operations and reads of a contribution's home seal; none for a
+   * contribution that sealed nothing in the home space. */
+  #homeCommit(
+    contribution: WaveContribution,
+  ): Pick<ClientCommit, "operations" | "reads"> {
+    return this.#homeSealed(contribution)?.sealed.commit ?? NOTHING_SEALED;
+  }
+
   /**
    * The confirmed reads of a contribution's home transaction, as the wave
    * hands them to the sink's stale-read check and carries them in the home
@@ -3458,9 +3446,9 @@ export class WaveAccumulator
    * that sealed nothing in the home space.
    */
   #handlerReadsOf(contribution: WaveContribution): WaveReadQuery[] {
-    const home = this.#homeSealed(contribution);
-    if (home === undefined) return [];
-    return home.sealed.commit.reads.confirmed.map((read): WaveReadQuery => ({
+    return this.#homeCommit(contribution).reads.confirmed.map((
+      read,
+    ): WaveReadQuery => ({
       id: read.id,
       ...(read.scope === undefined ? {} : { scope: read.scope }),
       scopeKey: this.#scopeKeyFor(read.scope, contribution.context),
@@ -3519,9 +3507,7 @@ export class WaveAccumulator
       string,
       { id: string; scope?: CellScope; scopeKey: string }
     >();
-    const home = this.#homeSealed(contribution);
-    if (home === undefined) return docs;
-    for (const operation of home.sealed.commit.operations) {
+    for (const operation of this.#homeCommit(contribution).operations) {
       if (operation.op === "sqlite") continue;
       const scopeKey = this.#scopeKeyFor(operation.scope, contribution.context);
       docs.set(docInstanceKey(operation.id, scopeKey), {
@@ -3589,19 +3575,16 @@ export class WaveAccumulator
   }
 
   #homeOpCount(contribution: WaveContribution): number {
-    const home = this.#homeSealed(contribution);
-    if (home === undefined) return 0;
-    return home.sealed.commit.operations.filter((op) => op.op !== "sqlite")
-      .length;
+    return this.#homeCommit(contribution).operations.filter((op) =>
+      op.op !== "sqlite"
+    ).length;
   }
 
   #homeOpCountFor(
     contribution: WaveContribution,
     doc: { id: string; scope?: CellScope; scopeKey: string },
   ): number {
-    const home = this.#homeSealed(contribution);
-    if (home === undefined) return 0;
-    return home.sealed.commit.operations.filter((op) =>
+    return this.#homeCommit(contribution).operations.filter((op) =>
       op.op !== "sqlite" && op.id === doc.id &&
       this.#scopeKeyFor(op.scope, contribution.context) === doc.scopeKey
     ).length;
@@ -3618,12 +3601,9 @@ export class WaveAccumulator
     concurrentPaths: ReadonlyArray<readonly string[]>,
     dropped?: ReadonlySet<PatchOp>,
   ): boolean {
-    const home = this.#homeSealed(contribution);
-    if (home === undefined) return true;
-    for (const operation of home.sealed.commit.operations) {
-      if (operation.op === "sqlite") continue;
+    for (const operation of this.#homeCommit(contribution).operations) {
       if (
-        operation.id !== doc.id ||
+        operation.op === "sqlite" || operation.id !== doc.id ||
         this.#scopeKeyFor(operation.scope, contribution.context) !==
           doc.scopeKey
       ) {
@@ -3674,9 +3654,7 @@ export class WaveAccumulator
   #lt1EmittersByEventId(): Map<string, { index: number; docKey: string }> {
     const emitters = new Map<string, { index: number; docKey: string }>();
     for (const contribution of this.#contributions) {
-      const home = this.#homeSealed(contribution);
-      if (home === undefined) continue;
-      for (const operation of home.sealed.commit.operations) {
+      for (const operation of this.#homeCommit(contribution).operations) {
         if (operation.op === "sqlite" || operation.op === "delete") continue;
         if (!operation.id.startsWith(STREAM_ENTRIES_DOC_PREFIX)) continue;
         const docKey = docInstanceKey(
@@ -3705,7 +3683,7 @@ export class WaveAccumulator
    * (engine-wave-sink.ts). */
   #readsWithdrawnContribution(
     contribution: WaveContribution,
-    byLocalSeq: ReadonlyMap<MemorySpace, ReadonlyMap<number, number>>,
+    byLocalSeq: ReadonlyMap<string, number>,
     sawWithdrawnWrite: (
       ownerIndex: number,
       readDocKey: string,
@@ -3713,8 +3691,6 @@ export class WaveAccumulator
     ) => boolean,
   ): WithdrawnRead | undefined {
     for (const spaceContribution of contribution.spaces) {
-      const perSpace = byLocalSeq.get(spaceContribution.space);
-      if (perSpace === undefined) continue;
       for (const read of spaceContribution.sealed.commit.reads.pending) {
         const layers = Array.isArray(read.localSeq)
           ? read.localSeq
@@ -3724,7 +3700,7 @@ export class WaveAccumulator
           this.#scopeKeyFor(read.scope, contribution.context),
         );
         for (const layer of layers) {
-          const owner = perSpace.get(layer);
+          const owner = byLocalSeq.get(`${spaceContribution.space}\0${layer}`);
           if (
             owner !== undefined &&
             sawWithdrawnWrite(owner, readDocKey, spaceContribution.space)
@@ -3999,12 +3975,9 @@ export class WaveAccumulator
           }
           if (
             (patch.op === "add" || patch.op === "replace") &&
-            patch.path === "/value/entries" &&
-            Array.isArray((patch as unknown as { value?: unknown }).value)
+            patch.path === "/value/entries" && Array.isArray(patch.value)
           ) {
-            const values = spineCloneEntryList(
-              (patch as unknown as { value: unknown[] }).value,
-            );
+            const values = spineCloneEntryList(patch.value);
             entryLists.push(values);
             return { ...patch, value: values as never };
           }

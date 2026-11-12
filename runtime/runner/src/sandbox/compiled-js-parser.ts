@@ -100,7 +100,7 @@ export function parseFunctionText(
   if (functionKeyword?.text === "function") {
     const paramsStart = skipTrivia(source, functionKeyword.end, inner.end);
     const openParen = expectChar(source, paramsStart, inner.end, "(");
-    const closeParen = findMatchingDelimiter(source, openParen, "(", ")");
+    const closeParen = findMatchingParen(source, openParen);
     const bodyStart = skipTrivia(source, closeParen + 1, inner.end);
     const openBrace = expectChar(source, bodyStart, inner.end, "{");
     const parsedBody = parseBraceDelimitedBlock(source, openBrace, inner.end);
@@ -343,13 +343,6 @@ function parseBraceDelimitedBlock(
       blockTerminated = blockKeyword !== undefined;
       continue;
     }
-
-    if (cursor === before) {
-      throw new CompiledJsParseError(
-        cursor,
-        "Parser did not make progress",
-      );
-    }
   }
 
   throw new CompiledJsParseError(openBrace, "Unterminated '{}' pair");
@@ -397,17 +390,28 @@ function readLeadingBlockTerminatedKeyword(
   }
 }
 
+/**
+ * The words that continue a block-terminated statement past the end of one of
+ * its blocks, by the keyword that starts the statement.
+ */
+const BLOCK_CONTINUATIONS: Readonly<Record<string, readonly string[]>> = {
+  do: ["while"],
+  if: ["else"],
+  try: ["catch", "finally"],
+};
+
 function shouldTerminateAfterBlock(
   source: string,
   cursor: number,
   end: number,
   keyword: string,
 ): boolean {
-  if (keyword !== "if") {
+  const continuations = BLOCK_CONTINUATIONS[keyword];
+  if (continuations === undefined) {
     return true;
   }
   const next = tryReadIdentifier(source, skipTrivia(source, cursor, end), end);
-  return next?.text !== "else";
+  return next === undefined || !continuations.includes(next.text);
 }
 
 function parseArrowParameterNames(
@@ -517,7 +521,7 @@ export function tryParseCallExpression(
       state.braceDepth === 0 &&
       state.bracketDepth === 0
     ) {
-      const matchedCloseParen = findMatchingDelimiter(source, cursor, "(", ")");
+      const matchedCloseParen = findMatchingParen(source, cursor);
       if (
         skipTrivia(source, matchedCloseParen + 1, trimmed.end) === trimmed.end
       ) {
@@ -559,13 +563,7 @@ function expectChar(
   return cursor;
 }
 
-function findMatchingDelimiter(
-  source: string,
-  openIndex: number,
-  openChar: "(" | "[" | "{",
-  closeChar: ")" | "]" | "}",
-): number {
-  let depth = 0;
+function findMatchingParen(source: string, openIndex: number): number {
   const state: ScanState = {
     parenDepth: 0,
     braceDepth: 0,
@@ -574,44 +572,13 @@ function findMatchingDelimiter(
   };
 
   for (let cursor = openIndex; cursor < source.length;) {
-    const char = source[cursor];
-    if (char === openChar) {
-      depth++;
-      if (char === "(") {
-        state.parenDepth++;
-      } else if (char === "[") {
-        state.bracketDepth++;
-      } else {
-        state.braceDepth++;
-      }
-      state.regexAllowed = true;
-    } else if (char === closeChar) {
-      depth--;
-      if (char === ")") {
-        state.parenDepth = Math.max(0, state.parenDepth - 1);
-      } else if (char === "]") {
-        state.bracketDepth = Math.max(0, state.bracketDepth - 1);
-      } else {
-        state.braceDepth = Math.max(0, state.braceDepth - 1);
-      }
-      state.regexAllowed = false;
-      if (depth === 0) {
-        return cursor;
-      }
-    }
-
-    if (char === openChar || char === closeChar) {
-      cursor++;
-      continue;
-    }
-
     cursor = advanceScanner(source, cursor, source.length, state);
+    if (state.parenDepth === 0) {
+      return cursor - 1;
+    }
   }
 
-  throw new CompiledJsParseError(
-    openIndex,
-    `Unterminated '${openChar}${closeChar}' pair`,
-  );
+  throw new CompiledJsParseError(openIndex, "Unterminated '()' pair");
 }
 
 export function stripWholeParentheses(
@@ -621,7 +588,7 @@ export function stripWholeParentheses(
 ): SourceRange {
   let range = trimRange(source, start, end);
   while (source[range.start] === "(") {
-    const close = findMatchingDelimiter(source, range.start, "(", ")");
+    const close = findMatchingParen(source, range.start);
     if (skipTrivia(source, close + 1, range.end) !== range.end) {
       break;
     }
@@ -766,8 +733,6 @@ function advanceScanner(
   state: ScanState,
 ): number {
   const cursor = start;
-  if (cursor >= end) return cursor;
-
   const charCode = source.charCodeAt(cursor);
 
   // Trivia is transparent to regex-vs-division classification: the previous
@@ -795,7 +760,7 @@ function advanceScanner(
     if (nextCode === 47 || nextCode === 42) {
       return skipTrivia(source, cursor, end);
     }
-    if (state.regexAllowed || looksLikeRegexStart(source, cursor)) {
+    if (state.regexAllowed) {
       state.regexAllowed = false;
       return scanRegexLiteral(source, cursor, end);
     }
@@ -886,19 +851,6 @@ function advanceScanner(
       state.regexAllowed = false;
       return cursor + 1;
   }
-}
-
-function looksLikeRegexStart(source: string, cursor: number): boolean {
-  let index = cursor - 1;
-  while (index >= 0 && isWhitespaceCode(source.charCodeAt(index))) {
-    index--;
-  }
-
-  if (index < 0) {
-    return true;
-  }
-
-  return isRegexPrefixPunctuation(source.charCodeAt(index));
 }
 
 function scanStringLiteral(
@@ -1134,30 +1086,6 @@ function isWhitespaceCode(charCode: number): boolean {
     charCode === 8287 ||
     charCode === 12288 ||
     charCode === 65279;
-}
-
-function isRegexPrefixPunctuation(charCode: number): boolean {
-  switch (charCode) {
-    case 61: // =
-    case 40: // (
-    case 91: // [
-    case 123: // {
-    case 44: // ,
-    case 58: // :
-    case 59: // ;
-    case 33: // !
-    case 63: // ?
-    case 42: // *
-    case 37: // %
-    case 94: // ^
-    case 38: // &
-    case 124: // |
-    case 60: // <
-    case 62: // >
-      return true;
-    default:
-      return false;
-  }
 }
 
 function isNumberLiteralCode(charCode: number): boolean {

@@ -1956,7 +1956,10 @@ installs) before it commits; a cycle awaiting the follow would wait on its
 own commit. A follow that completes counts from the next cycle's head, so
 every start a cycle asks about gets the same answer, and that cycle starts
 the piece on the adopted source: a first start is deferred by at least one
-cycle, and by the compile when the origin moved. A served event deferred for
+cycle, and by the compile when the origin moved. A terminal root a commit
+re-armed, whose retry is declined for the follow, holds W below that commit
+until then, and a settle does not wait to retry it meanwhile, since every such
+retry would be declined the same way. A served event deferred for
 the follow spends none of the drain's deferral budget and arms no backstop;
 the follow's completion owes the re-scan. A follow that fails, or an origin
 that cannot be reached, leaves the piece to start on its stored source, as a
