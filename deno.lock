@@ -149,6 +149,7 @@
     "npm:hono@^4.12.31": "4.12.31",
     "npm:htmlparser2@12": "12.0.0",
     "npm:htmlparser2@12.0.0": "12.0.0",
+    "npm:katex@0.19.1": "0.19.1",
     "npm:leaflet@^1.9.4": "1.9.4",
     "npm:lit@^3.3.3": "3.3.3",
     "npm:marked@^18.0.6": "18.0.6",
@@ -1547,6 +1548,9 @@
         "delayed-stream"
       ]
     },
+    "commander@15.1.0": {
+      "integrity": "sha512-cgnQ88TRrWcC7pVq46RzJVRMktu3W2RcbnoidnfBsl1bmDCBwJS/udcIZpKoCrbAYYaCqsz1yZCVIgbIaU3ddQ=="
+    },
     "commander@7.2.0": {
       "integrity": "sha512-QrWXB+ZQSVPmIWIhtEO9H+gwHaMGYiF5ChvoJ+K9ZGHG/sVsa6yiesAD1GC/x46sET00Xlwo1u49RVVVzvcSkw=="
     },
@@ -1643,7 +1647,7 @@
     "d3-dsv@3.0.1": {
       "integrity": "sha512-UG6OvdI5afDIFP9w4G0mNq50dSOsXHJaRE8arAS5o9ApWnIElp8GZw1Dun8vP8OyHOZ/QJUKUJwxiiCCnUwm+Q==",
       "dependencies": [
-        "commander",
+        "commander@7.2.0",
         "iconv-lite@0.6.3",
         "rw"
       ],
@@ -2308,6 +2312,13 @@
         "jwa",
         "safe-buffer"
       ]
+    },
+    "katex@0.19.1": {
+      "integrity": "sha512-jG8uKntjSEcm2EpQOh0XturpPuuC9r3Sq5HLHdsFdWZT27E672SF19QEi+of0/YeOy15lDgRhKvr5614uRrEfA==",
+      "dependencies": [
+        "commander@15.1.0"
+      ],
+      "bin": true
     },
     "leaflet@1.9.4": {
       "integrity": "sha512-nxS1ynzJOmOlHp+iL3FyWqK89GtNL8U8rvlMOsQdTTssxZwCXh8N2NB3GDQOL+YR3XnWyZAxwQixURb+FA74PA=="
@@ -3122,6 +3133,7 @@
           "npm:d3-scale@^4.0.2",
           "npm:d3-shape@^3.2.0",
           "npm:happy-dom@^20.14.6",
+          "npm:katex@0.19.1",
           "npm:leaflet@^1.9.4",
           "npm:marked@^18.0.6"
         ]

@@ -34,10 +34,13 @@ posture, documents, all through `Engine.*` on an engine object. The wave commit
 sink's reads run there too: the heads a rebase decides on, the paths written
 since a sequence, an intrusion, and the paths the session that fired an event
 overwrote. Every one of those is a SQLite query; the engine's decoded-document
-cache is keyed by revision identity, and its branch-head cache is dropped
-whenever the connection's data version shows another connection's commit, so a
-second connection to the same WAL-mode file reads every committed revision and
-serves nothing stale. The worker opens one engine per space it serves,
+cache is keyed by revision identity, and its branch cache holds a branch's fork
+point, which never changes, and a head the branch has reached, which only moves
+forward. A read at a branch's head finds its row through the `head` table, and a
+read at a given sequence asks SQLite for the branch's head only when that
+sequence is past the head the cache holds, so a second connection to the same
+WAL-mode file reads every committed revision and serves nothing stale. The
+worker opens one engine per space it serves,
 read-through included, at the file the main thread names once it has opened the
 space itself. A store that is not a file cannot be shared this way, so the
 worker needs a file store. The lease is the memory server's map, which the

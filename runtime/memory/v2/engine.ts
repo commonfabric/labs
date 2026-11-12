@@ -54,6 +54,7 @@ import {
 import { replaceSchedulerBasisRows } from "./scheduler-basis.ts";
 import { TouchedPathIndex } from "./touched-path-index.ts";
 import { ExecutionLeases } from "./execution-lease.ts";
+import { prepare, type PreparedStatement } from "./prepared-statement.ts";
 import {
   insertExecutionOutboxRows,
   type OutboxAppendRow,
@@ -641,6 +642,8 @@ WHERE branch = :branch
   )
 `;
 
+// A branch's head only moves forward, which {@link Engine.branchLineages}
+// relies on.
 const UPDATE_BRANCH_HEAD = `
 UPDATE branch
 SET head_seq = CASE
@@ -969,6 +972,8 @@ VALUES (
 )
 `;
 
+// A deleted branch keeps its row, and with it its name, parent and fork point,
+// which {@link Engine.branchLineages} relies on.
 const DELETE_BRANCH = `
 UPDATE branch
 SET status = 'deleted',
@@ -997,8 +1002,6 @@ const SELECT_INSTANCE_NAME_MARK = `
 SELECT 1 AS marked
 FROM instance_name_mark
 `;
-
-type PreparedStatement = ReturnType<Database["prepare"]>;
 
 interface PreparedStatements {
   insertAuthorization: PreparedStatement;
@@ -1209,30 +1212,31 @@ export type Engine = {
   stagedDocumentCache?: Map<string, DocumentCacheEntry>;
 
   /**
-   * Rows of the `branch` table, by branch name, as read outside a
-   * transaction.
+   * What is known of each branch whose row was read outside a transaction,
+   * by branch name.
    *
-   * Every read resolves its branch's existence, head and fork point, and the
-   * table changes far less often than it is read. {@link runBranchWrite} is
-   * the one way the engine writes it, and clears this map when it does. An
-   * entry is recorded only outside a transaction, so a miss inside one reads
-   * SQLite, and nothing a transaction wrote is remembered before it commits
-   * or left behind when it rolls back.
-   *
-   * An entry is served from the map, after one data-version check and no
-   * read of the branch row, while the connection's data version
-   * ({@link dataVersion}) is the one it was recorded under: a commit
-   * through another connection to the store, the serving loop's worker
-   * beside the memory server's connection or the other way round, moves
-   * that version, and the next read then asks SQLite again. A name with no
-   * row is never recorded, so the map is bounded by the branches that exist
-   * rather than by the names readers ask for.
+   * Every read resolves its branch's existence and fork point, which a row
+   * keeps for as long as it exists, so an entry is served without asking
+   * SQLite, whichever connection to the store wrote since: the serving
+   * loop's worker beside the memory server's connection, or the other way
+   * round. An entry is recorded only outside a transaction, so nothing a
+   * transaction wrote is remembered before it commits or left behind when it
+   * rolls back. A name with no row is never recorded, so the map is bounded
+   * by the branches that exist rather than by the names readers ask for.
    */
-  branchStates: Map<BranchName, Readonly<BranchState>>;
-
-  /** The data version {@link Engine.branchStates}' entries were read under. */
-  branchStatesDataVersion: number;
+  branchLineages: Map<BranchName, BranchLineage>;
 };
+
+/** What {@link Engine.branchLineages} records of one branch. */
+type BranchLineage = Readonly<
+  Pick<BranchState, "parentBranch" | "forkSeq" | "createdSeq"> & {
+    /**
+     * A head the branch had reached when its row was read. A branch's head
+     * only moves forward, so every seq up to this one is in its history.
+     */
+    reachedSeq: number;
+  }
+>;
 
 /** The first stale confirmed read of an entity on a branch in a declared scope. */
 export type ConfirmedReadConflict = {
@@ -1822,59 +1826,64 @@ export class DocumentCacheCoordinator {
 }
 
 const prepareStatements = (database: Database): PreparedStatements => ({
-  insertAuthorization: database.prepare(INSERT_AUTHORIZATION),
-  insertBlob: database.prepare(INSERT_BLOB),
-  insertBranch: database.prepare(INSERT_BRANCH),
-  insertCommit: database.prepare(INSERT_COMMIT),
-  insertInstanceNameMark: database.prepare(INSERT_INSTANCE_NAME_MARK),
-  insertInvocation: database.prepare(INSERT_INVOCATION),
-  insertRevision: database.prepare(INSERT_REVISION),
-  insertSnapshot: database.prepare(INSERT_SNAPSHOT),
-  selectActiveOperationFields: database.prepare(
+  insertAuthorization: prepare(database, INSERT_AUTHORIZATION),
+  insertBlob: prepare(database, INSERT_BLOB),
+  insertBranch: prepare(database, INSERT_BRANCH),
+  insertCommit: prepare(database, INSERT_COMMIT),
+  insertInstanceNameMark: prepare(database, INSERT_INSTANCE_NAME_MARK),
+  insertInvocation: prepare(database, INSERT_INVOCATION),
+  insertRevision: prepare(database, INSERT_REVISION),
+  insertSnapshot: prepare(database, INSERT_SNAPSHOT),
+  selectActiveOperationFields: prepare(
+    database,
     SELECT_ACTIVE_OPERATION_FIELDS,
   ),
-  selectAtSeqLocal: database.prepare(SELECT_AT_SEQ_LOCAL),
-  selectAuthoredSeqThrough: database.prepare(SELECT_AUTHORED_SEQ_THROUGH),
-  selectBlob: database.prepare(SELECT_BLOB),
-  selectBranch: database.prepare(SELECT_BRANCH),
-  selectBranches: database.prepare(SELECT_BRANCHES),
-  selectCommitRevisions: database.prepare(SELECT_COMMIT_REVISIONS),
-  selectCurrentLocal: database.prepare(SELECT_CURRENT_LOCAL),
-  selectDataVersion: database.prepare(SELECT_DATA_VERSION),
-  selectCurrentEntityId: database.prepare(SELECT_CURRENT_ENTITY_ID),
-  selectCurrentEntityIds: database.prepare(SELECT_CURRENT_ENTITY_IDS),
-  selectCurrentEntityIdPage: database.prepare(SELECT_CURRENT_ENTITY_ID_PAGE),
-  selectCurrentEntityIdPageAfter: database.prepare(
+  selectAtSeqLocal: prepare(database, SELECT_AT_SEQ_LOCAL),
+  selectAuthoredSeqThrough: prepare(database, SELECT_AUTHORED_SEQ_THROUGH),
+  selectBlob: prepare(database, SELECT_BLOB),
+  selectBranch: prepare(database, SELECT_BRANCH),
+  selectBranches: prepare(database, SELECT_BRANCHES),
+  selectCommitRevisions: prepare(database, SELECT_COMMIT_REVISIONS),
+  selectCurrentLocal: prepare(database, SELECT_CURRENT_LOCAL),
+  selectDataVersion: prepare(database, SELECT_DATA_VERSION),
+  selectCurrentEntityId: prepare(database, SELECT_CURRENT_ENTITY_ID),
+  selectCurrentEntityIds: prepare(database, SELECT_CURRENT_ENTITY_IDS),
+  selectCurrentEntityIdPage: prepare(database, SELECT_CURRENT_ENTITY_ID_PAGE),
+  selectCurrentEntityIdPageAfter: prepare(
+    database,
     SELECT_CURRENT_ENTITY_ID_PAGE_AFTER,
   ),
-  selectExistingCommit: database.prepare(SELECT_EXISTING_COMMIT),
-  selectOldestRevisionAttribution: database.prepare(
+  selectExistingCommit: prepare(database, SELECT_EXISTING_COMMIT),
+  selectOldestRevisionAttribution: prepare(
+    database,
     SELECT_OLDEST_REVISION_ATTRIBUTION,
   ),
-  selectHead: database.prepare(SELECT_HEAD),
-  selectInstanceNameMark: database.prepare(SELECT_INSTANCE_NAME_MARK),
-  selectLatestBase: database.prepare(SELECT_LATEST_BASE),
-  selectLatestSnapshot: database.prepare(SELECT_LATEST_SNAPSHOT),
-  selectLatestSnapshotBelow: database.prepare(SELECT_LATEST_SNAPSHOT_BELOW),
-  selectRevisionRow: database.prepare(SELECT_REVISION_ROW),
-  selectNextSeq: database.prepare(SELECT_NEXT_SEQ),
-  selectPatchConflicts: database.prepare(SELECT_PATCH_CONFLICTS),
-  selectPatchConflictsExcludingSession: database.prepare(
+  selectHead: prepare(database, SELECT_HEAD),
+  selectInstanceNameMark: prepare(database, SELECT_INSTANCE_NAME_MARK),
+  selectLatestBase: prepare(database, SELECT_LATEST_BASE),
+  selectLatestSnapshot: prepare(database, SELECT_LATEST_SNAPSHOT),
+  selectLatestSnapshotBelow: prepare(database, SELECT_LATEST_SNAPSHOT_BELOW),
+  selectRevisionRow: prepare(database, SELECT_REVISION_ROW),
+  selectNextSeq: prepare(database, SELECT_NEXT_SEQ),
+  selectPatchConflicts: prepare(database, SELECT_PATCH_CONFLICTS),
+  selectPatchConflictsExcludingSession: prepare(
+    database,
     SELECT_PATCH_CONFLICTS_EXCLUDING_SESSION,
   ),
-  selectPatchCount: database.prepare(SELECT_PATCH_COUNT),
-  selectPatches: database.prepare(SELECT_PATCHES),
-  selectPendingResolution: database.prepare(SELECT_PENDING_RESOLUTION),
-  selectServerSeq: database.prepare(SELECT_SERVER_SEQ),
-  selectSetDeleteConflict: database.prepare(SELECT_SET_DELETE_CONFLICT),
-  selectSetDeleteConflictExcludingSession: database.prepare(
+  selectPatchCount: prepare(database, SELECT_PATCH_COUNT),
+  selectPatches: prepare(database, SELECT_PATCHES),
+  selectPendingResolution: prepare(database, SELECT_PENDING_RESOLUTION),
+  selectServerSeq: prepare(database, SELECT_SERVER_SEQ),
+  selectSetDeleteConflict: prepare(database, SELECT_SET_DELETE_CONFLICT),
+  selectSetDeleteConflictExcludingSession: prepare(
+    database,
     SELECT_SET_DELETE_CONFLICT_EXCLUDING_SESSION,
   ),
-  upsertHead: database.prepare(UPSERT_HEAD),
-  updateCommitResolution: database.prepare(UPDATE_COMMIT_RESOLUTION),
-  updateBranchHead: database.prepare(UPDATE_BRANCH_HEAD),
-  deleteBranch: database.prepare(DELETE_BRANCH),
-  deleteOldSnapshots: database.prepare(DELETE_OLD_SNAPSHOTS),
+  upsertHead: prepare(database, UPSERT_HEAD),
+  updateCommitResolution: prepare(database, UPDATE_COMMIT_RESOLUTION),
+  updateBranchHead: prepare(database, UPDATE_BRANCH_HEAD),
+  deleteBranch: prepare(database, DELETE_BRANCH),
+  deleteOldSnapshots: prepare(database, DELETE_OLD_SNAPSHOTS),
 });
 
 const hasColumn = (
@@ -2360,8 +2369,7 @@ export const open = async (
       ? {}
       : { documentCacheCoordinator }),
     ...(commitObserver === undefined ? {} : { commitObserver }),
-    branchStates: new Map(),
-    branchStatesDataVersion: 0,
+    branchLineages: new Map(),
   };
 };
 
@@ -2431,25 +2439,24 @@ export const createBranch = (
   } = {},
 ): BranchState =>
   engine.database.transaction((txEngine: Engine) => {
-    // A copy, since the engine may be holding the state it read.
     if (name === DEFAULT_BRANCH) {
-      return { ...requireBranch(txEngine, DEFAULT_BRANCH) };
+      return requireBranch(txEngine, DEFAULT_BRANCH);
     }
     const existing = getBranch(txEngine, name);
     if (existing !== null) {
-      return { ...existing };
+      return existing;
     }
     const parentBranch = options.parentBranch ?? DEFAULT_BRANCH;
     const parent = requireBranch(txEngine, parentBranch);
     const forkSeq = options.forkSeq ?? parent.headSeq;
-    runBranchWrite(txEngine, txEngine.statements.insertBranch, {
+    txEngine.statements.insertBranch.run({
       name,
       parent_branch: parentBranch,
       fork_seq: forkSeq,
       created_seq: forkSeq,
       head_seq: forkSeq,
     });
-    return { ...requireBranch(txEngine, name) };
+    return requireBranch(txEngine, name);
   }).immediate(engine);
 
 export const deleteBranch = (
@@ -2457,7 +2464,7 @@ export const deleteBranch = (
   branch: BranchName,
 ): void => {
   requireBranch(engine, branch);
-  runBranchWrite(engine, engine.statements.deleteBranch, { branch });
+  engine.statements.deleteBranch.run({ branch });
 };
 
 export const listBranches = (engine: Engine): BranchState[] => {
@@ -7232,7 +7239,7 @@ const applyCommitTransaction = (
   const REPLAYABLE_LAYER_OPS = new Set(["set", "patch", "delete"]);
   const branchCreatedSeq = branch === DEFAULT_BRANCH
     ? 0
-    : getBranch(engine, branch)?.createdSeq ?? Number.POSITIVE_INFINITY;
+    : getLineage(engine, branch)?.createdSeq ?? Number.POSITIVE_INFINITY;
   const basisOf = (
     first: DocumentOps[number],
     stored: EntityDocument,
@@ -7727,7 +7734,7 @@ const applyCommitTransaction = (
     maintainStreamEventWatermarks(engine, branch, seq, sessionId, revisions);
   }
 
-  runBranchWrite(engine, engine.statements.updateBranchHead, { branch, seq });
+  engine.statements.updateBranchHead.run({ branch, seq });
   materializeSnapshots(engine, branch, revisions);
 
   return {
@@ -8145,7 +8152,7 @@ const validateConfirmedReads = (
   const staleInstances = new Map<BranchName, Map<ScopeKey, Set<EntityId>>>();
   for (const read of commit.reads.confirmed) {
     const readBranch = read.branch ?? branch;
-    requireBranch(engine, readBranch);
+    requireLineage(engine, readBranch);
     const scopeKey = resolveScopeKey(read.scope, scopeContext);
     const scope = read.scope ?? DEFAULT_SCOPE;
     let staleScopes = staleInstances.get(readBranch);
@@ -9616,61 +9623,57 @@ const readRowForBranch = (
     seq?: number;
   },
 ): { row: ReadRow; branch: BranchName } | null => {
-  const state = requireBranch(engine, options.branch);
-  const seq = options.seq ?? state.headSeq;
-  const minSeq = options.branch === DEFAULT_BRANCH ? 0 : state.createdSeq;
-  if (seq < minSeq || seq > state.headSeq) {
-    throw new Error(`seq ${seq} is out of range for branch ${options.branch}`);
+  const { id, scopeKey, branch, seq } = options;
+  const lineage = requireLineage(engine, branch);
+  if (seq !== undefined) {
+    const firstSeq = branch === DEFAULT_BRANCH ? 0 : lineage.createdSeq;
+    // A seq past the head the cache holds asks SQLite for the head now.
+    const inHistory = seq >= firstSeq &&
+      (seq <= lineage.reachedSeq ||
+        seq <= requireBranch(engine, branch).headSeq);
+    if (!inHistory) {
+      throw new Error(`seq ${seq} is out of range for branch ${branch}`);
+    }
   }
 
-  const currentRow =
-    (seq === state.headSeq
-      ? engine.statements.selectCurrentLocal.get({
-        branch: options.branch,
-        id: options.id,
-        scope_key: options.scopeKey,
-      })
-      : engine.statements.selectAtSeqLocal.get({
-        branch: options.branch,
-        id: options.id,
-        scope_key: options.scopeKey,
-        seq,
-      })) as ReadRow | undefined;
-  if (currentRow !== undefined) {
-    return { row: currentRow, branch: options.branch };
+  // The current row needs no head: the `head` table holds it.
+  const row = (seq === undefined
+    ? engine.statements.selectCurrentLocal.get({
+      branch,
+      id,
+      scope_key: scopeKey,
+    })
+    : engine.statements.selectAtSeqLocal.get({
+      branch,
+      id,
+      scope_key: scopeKey,
+      seq,
+    })) as ReadRow | undefined;
+  if (row !== undefined) {
+    return { row, branch };
   }
 
-  if (state.parentBranch === null) {
+  if (lineage.parentBranch === null) {
     return null;
   }
+  // A branch's head is never behind its fork point.
   return readRowForBranch(engine, {
-    id: options.id,
-    scopeKey: options.scopeKey,
-    branch: state.parentBranch,
-    seq: Math.min(seq, state.forkSeq ?? 0),
+    id,
+    scopeKey,
+    branch: lineage.parentBranch,
+    seq: Math.min(seq ?? Number.POSITIVE_INFINITY, lineage.forkSeq ?? 0),
   });
 };
 
 /**
- * Returns the `branch` row for `branch`, or `null` when there is none, from
- * {@link Engine.branchStates} when it holds the row. The state returned may
- * be the one the engine holds, which is why it is read-only.
+ * Returns the `branch` row for `branch` as SQLite holds it now, or `null` when
+ * there is none, and outside a transaction records what
+ * {@link Engine.branchLineages} keeps of it.
  */
 const getBranch = (
   engine: Engine,
   branch: BranchName,
-): Readonly<BranchState> | null => {
-  // Another connection's commit moves the data version and may have moved
-  // a branch's head; the entries are then as good as absent.
-  const version = dataVersion(engine);
-  if (version !== engine.branchStatesDataVersion) {
-    engine.branchStates.clear();
-    engine.branchStatesDataVersion = version;
-  }
-  const known = engine.branchStates.get(branch);
-  if (known !== undefined) {
-    return known;
-  }
+): BranchState | null => {
   const row = engine.statements.selectBranch.get({
     branch,
   }) as BranchRow | undefined;
@@ -9681,7 +9684,7 @@ const getBranch = (
   // Inside a transaction the row may be one the transaction wrote, which a
   // rollback would take back.
   if (!engine.database.inTransaction) {
-    engine.branchStates.set(branch, state);
+    engine.branchLineages.set(branch, lineageOf(state));
   }
   return state;
 };
@@ -9690,7 +9693,7 @@ const getBranch = (
 const requireBranch = (
   engine: Engine,
   branch: BranchName,
-): Readonly<BranchState> => {
+): BranchState => {
   const state = getBranch(engine, branch);
   if (state === null) {
     throw new Error(`unknown branch: ${branch}`);
@@ -9699,17 +9702,39 @@ const requireBranch = (
 };
 
 /**
- * Runs `statement`, which writes the `branch` table, then clears
- * {@link Engine.branchStates}, which may no longer match that table.
+ * Returns what {@link Engine.branchLineages} keeps of `branch`, reading the
+ * row when the map has no entry, or `null` when there is no row.
  */
-const runBranchWrite = (
+const getLineage = (
   engine: Engine,
-  statement: PreparedStatement,
-  ...params: Parameters<PreparedStatement["run"]>
-): void => {
-  statement.run(...params);
-  engine.branchStates.clear();
+  branch: BranchName,
+): BranchLineage | null => {
+  const known = engine.branchLineages.get(branch);
+  if (known !== undefined) {
+    return known;
+  }
+  const state = getBranch(engine, branch);
+  return state === null ? null : lineageOf(state);
 };
+
+/** Like {@link getLineage}, except that a branch with no row throws. */
+const requireLineage = (
+  engine: Engine,
+  branch: BranchName,
+): BranchLineage => {
+  const lineage = getLineage(engine, branch);
+  if (lineage === null) {
+    throw new Error(`unknown branch: ${branch}`);
+  }
+  return lineage;
+};
+
+const lineageOf = (state: BranchState): BranchLineage => ({
+  parentBranch: state.parentBranch,
+  forkSeq: state.forkSeq,
+  createdSeq: state.createdSeq,
+  reachedSeq: state.headSeq,
+});
 
 const toBranchState = (row: BranchRow): BranchState => ({
   name: row.name,
