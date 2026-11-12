@@ -1001,6 +1001,7 @@ export class RuntimeProcessor {
   #privateInboxEnsured: Promise<void> | undefined;
   #profileRootsRepaired: Promise<void> | undefined;
   #shareIntake: Promise<ShareIntake | undefined> | undefined;
+  #catalogRoomsAdopted: Promise<void> | undefined;
   // The release pass the first bring-up of Home asks for once it settles.
   #homeBringUpReleased: Promise<void> | undefined;
   // The marks of deleted spaces on their way to Home's catalog, which
@@ -1245,6 +1246,7 @@ export class RuntimeProcessor {
     privateInboxEnsured: Promise<void> | undefined;
     profileRootsRepaired: Promise<void> | undefined;
     shareIntake: Promise<ShareIntake | undefined> | undefined;
+    catalogRoomsAdopted: Promise<void> | undefined;
     readonly homeBringUpReleased: Promise<void> | undefined;
     getSpaceCtx(space: DID): PiecesController;
   } {
@@ -1286,6 +1288,12 @@ export class RuntimeProcessor {
       },
       set shareIntake(value) {
         outerThis.#shareIntake = value;
+      },
+      get catalogRoomsAdopted() {
+        return outerThis.#catalogRoomsAdopted;
+      },
+      set catalogRoomsAdopted(value) {
+        outerThis.#catalogRoomsAdopted = value;
       },
       get homeBringUpReleased() {
         return outerThis.#homeBringUpReleased;
@@ -3132,9 +3140,11 @@ export class RuntimeProcessor {
    * `PiecesController.adoptLegacySpaces`), and then starts Home's ensure of
    * the user's private inbox (see `PiecesController.ensurePrivateInbox`), the
    * repair that makes each of the user's profiles its space's root (see
-   * `PiecesController.repairProfileRoots`), and the share intake over Home's
-   * inboxes (see `PiecesController.startShareIntake`) without waiting for
-   * any of them. Once all of that and the scheduler have settled, as
+   * `PiecesController.repairProfileRoots`), the share intake over Home's
+   * inboxes (see `PiecesController.startShareIntake`), and the chat
+   * manager's adoption of the rooms Home's catalog lists with no membership
+   * (see `PiecesController.adoptCatalogRooms`) without waiting for any of
+   * them. Once all of that and the scheduler have settled, as
    * `handleIdle()` waits for them, it asks the runtime to release the
    * documents nothing reads (`Runtime.releaseUnreadDocuments()`). A later
    * bring-up shares the run already made, and repeats only a step that
@@ -3187,10 +3197,22 @@ export class RuntimeProcessor {
         return undefined;
       },
     );
+    // The adoption reads the rooms it adopts, a few at a time, releasing what
+    // it read after each few, and reads no room once every room the catalog
+    // lists has a membership. A failure is reported unless the processor has
+    // been disposed, and the next bring-up of Home in this worker starts it
+    // again.
+    this.#catalogRoomsAdopted ??= homeCC.adoptCatalogRooms(
+      this.#disposal.signal,
+    ).catch((error) => {
+      this.#catalogRoomsAdopted = undefined;
+      if (this.#isDisposed) return;
+      console.warn("[RuntimeProcessor] Adopting the catalog's rooms:", error);
+    });
     // Home's pieces load what they read as they resume, and what its stored
-    // result links to, its chat manager's rooms among it, arrives with it,
-    // much of which nothing goes on to read. Its housekeeping goes on loading
-    // after the bring-up has answered, so the pass waits for that too.
+    // result links to arrives with it, much of which nothing goes on to read.
+    // Its housekeeping goes on loading after the bring-up has answered, so
+    // the pass waits for that too.
     this.#homeBringUpReleased ??= this.handleIdle()
       .then(() => this.#runtime.releaseUnreadDocuments())
       .catch((error) => {
@@ -3285,16 +3307,18 @@ export class RuntimeProcessor {
    * Helper for `handleIdle()`, which waits for the housekeeping over Home that
    * `#startHomeHousekeeping()` has started in this worker: the adoption of the
    * Home space list's name-only entries, the private inbox ensure, the profile
-   * root repair, the start of the share intake, and the intake taking up every
-   * change it has been told of, and for the marks of deleted spaces on their
-   * way to Home's catalog. Returns the intake, when one is running. Never
-   * rejects: each step is held as a promise that does not, and a failure of
-   * the intake's own wait is reported rather than passed on.
+   * root repair, the adoption of the catalog's rooms, the start of the share
+   * intake, and the intake taking up every change it has been told of, and
+   * for the marks of deleted spaces on their way to Home's catalog. Returns the
+   * intake, when one is running. Never rejects: each step is held as a promise
+   * that does not, and a failure of the intake's own wait is reported rather
+   * than passed on.
    */
   async #homeHousekeepingIdle(): Promise<ShareIntake | undefined> {
     await this.#legacySpacesAdopted;
     await this.#privateInboxEnsured;
     await this.#profileRootsRepaired;
+    await this.#catalogRoomsAdopted;
     await Promise.all(this.#deletionMarks);
     const intake = await this.#shareIntake;
     await intake?.idle().catch((error) => {

@@ -973,6 +973,14 @@ export type InitializationData = {
      * Default on; an explicit `false` is the rollback override.
      */
     readerSchemaPrecedence?: boolean;
+
+    /**
+     * Whether the worker's memory connections take `cid:` schema documents
+     * by reference from a server that offers them (`syncCidReferencesV1`).
+     * Client-authoritative: the host's own opt-in, which the shell takes
+     * from its per-profile host toggle. Defaults to off.
+     */
+    syncCidReferences?: boolean;
   };
 
   /**

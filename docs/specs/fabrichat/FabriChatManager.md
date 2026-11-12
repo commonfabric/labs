@@ -24,9 +24,16 @@ each, and a row in the built-in targets table of
 
 The manager keeps `direct`, `requests`, `outgoingNotices`, and
 `roomMembership` in the home space. `rooms` is derived per user from those
-membership choices and the user's shared-space catalog, Home's, which Home
+membership records and the user's shared-space catalog, Home's, which Home
 hands the manager
-([`shared-space-catalog.md`](../../features/shared-space-catalog.md)).
+([`shared-space-catalog.md`](../../features/shared-space-catalog.md)), and from
+nothing else: deriving it reads no room. Every link to a room the manager
+stores, in `roomMembership`, `direct`, `requests` and `outgoingNotices`, is
+declared a handle with nothing behind it (`Cell<unknown>`), so a read of any of
+them, Home's own sync among them, keeps the link and loads no room. The
+derivations that read rooms, `people` from the listed rooms' rosters and
+`outgoingNotices` from each notice's room's roster, first re-type the links to
+`ChatRoomLink`, which declares the rosters; nothing else reads them.
 
 The manager wishes for `#profile` twice. The user's wish, stored per user,
 supplies the profile `rooms`, `people` and `outgoingNotices` are derived from,
@@ -38,68 +45,64 @@ writes that into its own instance of the second wish, never over the one
 another session of the user reads (see
 [`ChatManagerOutput`](ChatManagerOutput.md#scopes)).
 
-For each saved catalog entry, the manager resolves the space's root with
-`wish({ query: "#default", scope: [space] })`. A `fabrichat-room` entry names
-a standalone room at that root. Every other kind uses the root's explicit
-`chatRoom` link. An unknown kind uses that same declaration; the absence of a
-kind says nothing about whether the space has a chat. A declaration can appear
-or change after a space is saved, and discovery follows it reactively. Each
-entry is found on its own, and lists its room once the room's records say it
-is one. An entry whose space this replica can't serve, as a space on another
-host is, lists nothing until it can be served, and holds back no other entry.
-
-Each entry links the room itself, so opening it displays the full conversation.
-Resolved room identity, compared with `equals()`, deduplicates a conversation
-reached through several containers or both a container and its standalone
-entry. Membership records keep the resolved room reference, so retargeting an
-alias cannot move a choice to a different conversation. Distinct rooms in one
-space remain distinct entries. For container rooms, explicit
-`roomMembership` choices take precedence over discovery: an archived
-conversation stays forgotten even while a saved container still declares it.
-A saved explicit entry remains listed if the container changes its declaration.
-A saved explicit entry is listed once its room's records say it is a room, as
-a catalog entry's room is: one whose room this replica can't serve lists
-nothing until it can be served, and holds back no other room, nor the `people`
-the listed rooms' rosters hold.
-Forgetting a declared conversation never archives its container.
+Each saved membership lists its room, with what its handler recorded: the
+room's kind, from its `about`, a direct room's counterpart, verified as the
+room's labeled creator, its `since` and opaque `revision`, and its title as the
+handler last read it. A standalone room's catalog membership remains
+authoritative: its current catalog state and revision govern listing and
+forgetting, as `effectiveMemberships()` applies them, even when a container
+declares it. Catalog restoration supersedes an older room tombstone; catalog
+archive or removal supersedes a saved room record. A record's optional
+`catalogRevision` remembers that authority across catalog removal. A
+container's conversation is listed by its membership, whose `container` links
+the root declaring it; forgetting it never archives its container. Rooms are
+compared by their links, which a membership holds as its handler resolved
+them, so a comparison resolves nothing; a standalone room is listed once for
+its space, which holds no other. Clients pass the revision back unchanged to
+`forget`.
 
 Joining a record-backed standalone room registers its own space even when a
 container declares it, and records a membership of it, as creating or
-accepting a standalone room does: the record keeps the room's link where the
-catalog's finding of it, which reads the space, can't, so a deleted room is
-listed under `deletedRooms` by it. A standalone room's catalog membership remains authoritative. Its current
-catalog state and revision govern listing and forgetting even when the room
-also has an explicit membership record or a container declares it. Catalog
-restoration supersedes an older room tombstone; catalog archive or removal
-supersedes a saved room record. A record's optional `catalogRevision` remembers
-that authority across catalog removal.
+accepting a standalone room does, so a deleted room is listed under
+`deletedRooms` by its record.
 
-A room's `kind` comes from its `about`. Its `since` and opaque `revision` come
-from the explicit membership record, or from its discovery source until a
-choice is recorded. A discovered conversation's revision identifies its source
-catalog entry, that entry's revision, and the resolved room identity. Clients pass the revision back
-unchanged to `forget`; they need supply no container. A direct room's
-`counterpart` is the one `direct` holds the resolved room under, or else the
-room's labeled creator. `people` is drawn from listed rooms' rosters per
-user, keyed by the principal each profile attests.
-
-The manager's rendering labels each listed room with its `about.title`, read
-through the room's link, so a retitle shows there once the room records it. A
-direct room with no title is labeled by its counterpart. A standalone room's
+The manager's rendering labels each listed room with its entry's `title`, or,
+for a direct room with no title, by its counterpart. A standalone room's
 catalog entry holds its title too, as a display hint for readers of the
-catalog, which neither the rendering nor `rooms` reads. Registration takes the
-room's title, whatever its kind. Whenever the manager handles `accept` or
-`joinRoom` for a room its catalog lists, it reads the room's `about`, and
-retitles the entry (`retitleSharedSpaceIn()`) where the room's title differs
-from the entry's, moving neither its revision nor its membership. That is all a
-join of an already-listed room reads of the room, and it writes the catalog
-only on a mismatch. The one exception is a `joinRoom` marked `messageAct`,
-which a room sends with every message and reaction: none of those changes the
-title, so the manager reads nothing of the room's `about` for one. The member
-who retitles a room tells their manager at once; another member's entry follows
-on their manager's next event for that room other than a message or a
-reaction: their own retitle, an acceptance, or a client's `joinRoom` when they
-open it.
+catalog. Registration takes the room's title, whatever its kind. Whenever the
+manager handles `accept` or `joinRoom` for a room, it reads the room's `about`,
+and brings the title the room's membership holds, and the catalog entry's
+(`retitleSharedSpaceIn()`), up to the room's where they differ, moving neither
+its revision nor its membership. That is all a join of an already-listed room
+reads of the room, and it writes only on a mismatch. The one exception is a
+`joinRoom` marked `messageAct`, which a room sends with every message and
+reaction: none of those changes the title, so the manager reads nothing of the
+room's `about` for one. The member who retitles a room tells their manager at
+once; another member's entry follows on their manager's next event for that
+room other than a message or a reaction: their own retitle, an acceptance, or a
+client's `joinRoom` when they open it.
+
+### Adopting the catalog's rooms
+
+A room the catalog lists saved with no membership, as a catalog kept before
+memberships were recorded lists one, or a container whose chat nobody has
+joined, is not listed. The host adopts each one, at Home's bring-up, after the
+rest of Home's housekeeping has started (`adoptCatalogRoomsOf()` in
+`runtime/piece/src/ops/adopt-catalog-rooms.ts`): it vets the space as a visit
+does, and sends the manager's `joinRoom` for the room the space declares,
+under a request id naming the entry and its revision, so the manager records
+the outcome, a membership or a refusal, once per revision. A joined room joins
+the user to it, as a visit does: a user who saved a room has joined it. A
+space that declares no room, or that vetting refuses, is sent a `joinRoom`
+naming no room, which the manager refuses without reading anything, and which
+keeps the entry from being tried again until it changes; a visit to the room
+still joins it. An entry whose vetting fails otherwise is tried again at a
+later bring-up, and holds back no other entry. A membership adopted this way
+keeps the catalog entry's admission time as its `since`, so the room keeps its
+place in the list. The host adopts five entries at a time, and releases what
+it read after each five, so a catalog of many unadopted rooms costs a few
+rooms' documents at once rather than all of them. Once every entry is adopted,
+adopting reads only Home's own records.
 
 `direct` holds one entry per counterpart, including forgotten rooms, for direct
 rooms this manager created or accepted. `openDirect` finds a direct room there

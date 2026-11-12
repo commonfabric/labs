@@ -41,6 +41,7 @@ weeks later.
 | 10 | Native reviewed controls | trusted host API | `runner` | available | `runner/test/native-ui.test.ts` |
 | 11 | Native reviewed acts count as trusted gestures | policy record | `runner` | n/a | `runner/test/cfc-ui-contract.test.ts`; `runner/test/builder/space-access-change.test.ts`; `runner/test/executor-space-access-change.test.ts`; `runtime-client/test/send-reviewed.test.ts`. Not yet met for `UiPromptSlot` and `UiDisclosure` contracts |
 | 12 | Bringing up the user's Home | host obligation | `runtime-client`, `piece` | available | `runtime-client/test/backends/runtime-processor.test.ts` — `ensuring an existing Home only`; `runtime-client/test/runtime-client.test.ts` — `ensureHomePatternRunning()` |
+| 13 | Opting a runtime in to a client-side experimental option | host option | `runner`, `shell` | available, not bound | `runner/test/experimental-options.test.ts` — `constructing Runtime declares whether it takes schema documents by reference`; `shell/test/host-toggles.test.ts` — `runtimeExperimentalHostFlags` |
 
 ---
 
@@ -765,6 +766,33 @@ websocket handshake.
 `runtime/runtime-client/test/runtime-client.test.ts`,
 `describe("ensureHomePatternRunning()")`, holds the request the client sends
 and the `undefined` it returns where no Home was brought up.
+
+## 13. Opting a runtime in to a client-side experimental option
+
+A few experimental options are the client's own choice rather than the
+deployment's, so a runtime never adopts them from the server it talks to:
+`syncCidReferences` is one, taking `cid:` schema documents by reference from a
+server that offers them
+([`EXPERIMENTAL_OPTIONS.md`](../development/EXPERIMENTAL_OPTIONS.md#synccidreferencesv1)).
+A host opts in by how it gets its runtime:
+
+- A host that constructs the runtime passes the option in
+  `RuntimeOptions.experimental`, as `experimental: { syncCidReferences: true }`.
+- A process whose runtime reads its experimental options from the environment
+  (`experimentalOptionsFromEnv`), as `cf` and other Deno hosts do, sets
+  `EXPERIMENTAL_SYNC_CID_REFERENCES=true`. The same variable is the labs
+  shell's build define, which bakes the opt-in into a shell built with it.
+- A host that runs the labs shell, as a WebView loading it from a deployment
+  does, sets the shell's per-profile toggle before the shell loads:
+  `localStorage` key `syncCidReferences` to `"true"`, which a user script can
+  write. The shell lays its host toggles over the options the deployment
+  resolved when it creates its runtime (`runtimeExperimentalHostFlags()` in
+  `runtime/shell/src/lib/host-toggles.ts`). From the console,
+  `commonfabric.syncCidReferences(true)` sets the same key. Either takes effect
+  on the next runtime, so a host that sets it late reloads.
+
+No server setting reaches any of these: a toolshed's environment does not reach
+a page, and a deployment's posture does not carry a client-side option.
 
 ---
 

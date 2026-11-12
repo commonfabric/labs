@@ -391,6 +391,13 @@ export const COMMONFABRIC_RUNTIME_EXPORT_REGISTRY = [
     category: "ignored",
     reactiveOrigin: false,
   },
+  // spaceOfLink(target) returns the DID of the space a cell's own link names,
+  // reading nothing. It builds no graph node either.
+  {
+    exportName: "spaceOfLink",
+    category: "ignored",
+    reactiveOrigin: false,
+  },
   // spaceDeleted(target) returns whether a space is deleted, or `undefined`.
   // It builds no graph node either.
   {

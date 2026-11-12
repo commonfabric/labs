@@ -104,6 +104,7 @@ import {
   spaceDeleted,
   spaceMembers,
   spaceOf,
+  spaceOfLink,
 } from "./space-access.ts";
 import { grantSpaceAccess, revokeSpaceAccess } from "./space-access-change.ts";
 import type {
@@ -340,6 +341,7 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
     spaceAccessOf,
     spaceMembers,
     spaceOf,
+    spaceOfLink,
     spaceDeleted,
     grantSpaceAccess,
     revokeSpaceAccess,

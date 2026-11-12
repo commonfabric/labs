@@ -24,6 +24,7 @@ import {
   type ScopeKey,
   type ScopeKeyIdentity,
   type SqliteOperation,
+  STREAM_ENTRIES_DOC_PREFIX,
   toDocumentPath,
   toValuePath,
 } from "@commonfabric/memory/v2";
@@ -133,8 +134,10 @@ import {
   TransactionCompleteError,
   WriteIsolationError,
 } from "./transaction-errors.ts";
+import { commutesWithTailAppends } from "./transaction/sidecar-appends.ts";
 import {
   claim,
+  claimedValue,
   load as loadInline,
   read as readAttestation,
   StateInconsistency,
@@ -4030,7 +4033,9 @@ export class V2StorageTransaction implements IStorageTransaction {
    * The commit-time claim check over every space this transaction touched:
    * each snapshotted document is re-read from its replica, and a value that
    * differs from the snapshot rejects the transaction before its read set
-   * is built (03-commit-model.md §3.3.4).
+   * is built (03-commit-model.md §3.3.4), except a stream sidecar that took
+   * only tail appends this transaction's use of it commutes with
+   * (`#survivesTailAppends()`).
    */
   #validate(): Result<Unit, IStorageTransactionInconsistent> {
     for (const [space, branch] of this.#branches) {
@@ -4066,11 +4071,52 @@ export class V2StorageTransaction implements IStorageTransaction {
         this.#scopeKeyIdentity,
         isDurableReadTx(this),
       );
-      if (result.error) {
+      if (result.error && !this.#survivesTailAppends(space, key, doc, branch)) {
         return { error: result.error };
       }
     }
     return { ok: {} };
+  }
+
+  /**
+   * Helper for `#validateBranch()`, which decides whether `doc`, a document
+   * whose claim failed, is a stream sidecar (`of:stream-events:`) that
+   * changed only by appends this transaction's use of it commutes with
+   * (`commutesWithTailAppends()`). A multi-space transaction meets this most
+   * often: its later spaces are checked again after the earlier ones close,
+   * and a served `.inSpace()` create closes the new space first and its home
+   * space, with the create stream's sidecar, after.
+   */
+  #survivesTailAppends(
+    space: MemorySpace,
+    key: string,
+    doc: ReadDocumentEntry | WritableDocumentEntry,
+    branch: SpaceBranch,
+  ): boolean {
+    const { id, scope } = this.#parseDocKey(key);
+    if (!id.startsWith(STREAM_ENTRIES_DOC_PREFIX)) return false;
+    // A whole-document write carries the log as the transaction held it, so
+    // it would drop the appended entries.
+    if (this.#emitsWholeDocuments) return false;
+    // A mergeable op resolves against whatever the store holds, so it does
+    // not stay inside the entries the transaction held.
+    if ("mergeableOps" in doc && (doc.mergeableOps?.size ?? 0) > 0) {
+      return false;
+    }
+    const { actual } = claimedValue(
+      doc.initial.address,
+      branch.replica,
+      this.#scopeKeyIdentity,
+      isDurableReadTx(this),
+    );
+    const reads = this.#readActivities.filter((read) =>
+      read.space === space && read.id === id &&
+      normalizeCellScope(read.scope) === scope
+    ).map((read) => read.path);
+    const writes = [...doc.writeDetails?.values() ?? []].map((detail) =>
+      detail.address.path
+    );
+    return commutesWithTailAppends(doc.initial.value, actual, reads, writes);
   }
 
   #docKey(

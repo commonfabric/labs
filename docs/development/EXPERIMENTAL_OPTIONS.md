@@ -59,6 +59,7 @@ was last checked against the code.
 | [`conflictAdmissionMode`](#conflictadmissionmode)                           | `CF_CONFLICT_ADMISSION` env, or `setConflictAdmissionMode()`                                                                                    | `off`                                                                                | William Kelly (#4237); `hold` removed CT-1925 (#5110) | keep `preempt` as a tuning dial or remove after re-measurement                                                                                                                                                                    | implemented, off by default, measured net-negative                              |
 | [`syncSchemaTableV2`](#syncschematablev2)                                   | `setSyncSchemaTableConfig()` (negotiated per connection)                                                                                        | on                                                                                   | Ben Follington (#4292)                                | retire the negotiation once every peer speaks v2                                                                                                                                                                                  | implemented, on by default                                                      |
 | [`messageCompressionV1`](#messagecompressionv1)                             | `setMessageCompressionConfig()` (negotiated per connection)                                                                                     | on                                                                                   | PR #6474                                             | retire the rollback switch after the binary WebSocket envelope has field-soaked                                                                                                                                                   | implemented, on by default                                                      |
+| [`syncCidReferencesV1`](#synccidreferencesv1) | server: `MEMORY_SYNC_CID_REFERENCES` env on toolshed (the memory `Server`'s `syncCidReferences` option); client: `EXPERIMENTAL_SYNC_CID_REFERENCES` env, or `RuntimeOptions.experimental` (negotiated per connection) | server on, client off | Dan Bornstein (#9719) | measure the bandwidth saved against the extra round trip, then graduate or remove | implemented; servers on, clients off by default |
 | [`ownWriteEcho`](#ownwriteecho)                                             | `setOwnWriteEchoConfig()` (server-side only, not negotiated)                                                                                    | on                                                                                   | Robin McCollum (CT-1965)                              | remove the switch once the echo has field-soaked                                                                                                                                                                                  | implemented, on by default                                                      |
 | [`experimentalConcurrentWatchRefresh`](#experimentalconcurrentwatchrefresh) | `IRemoteStorageProviderSettings`; in the shell, the `commonfabric.concurrentWatchRefresh()` console command (localStorage, per browser profile) | off                                                                                  | Ben Follington (#4937; shell toggle #4974)            | graduate to always-on after live measurement, or remove if superseded                                                                                                                                                             | off by default; acquisition/removal ordering tested; real-latency measurement pending |
 | [`cfcRenderCeiling`](#cfcrenderceiling)                                     | `commonfabric.cfcRenderCeiling()` in the browser (localStorage)                                                                                 | on                                                                                   | Bernhard Seefeld (#4550)                              | graduate to an unconditional ceiling                                                                                                                                                                                           | implemented, on by default; per-profile opt-out                                 |
@@ -1770,6 +1771,56 @@ the per-epic implementation notes).
 - **Path to removal.** Confirm no peer still needs the expanded payload, then
   delete the negotiation and the expanded-form encoder and always send the
   compact form.
+
+### `syncCidReferencesV1`
+
+- **Toggle via.** One switch on each side, and references flow only on a
+  connection where both are on:
+  - **Server:** the memory `Server`'s `syncCidReferences` option, which
+    toolshed sets from `MEMORY_SYNC_CID_REFERENCES` (on unless `false` or
+    `0`; any other spelling refuses startup). A server advertises the
+    capability unless it is turned off.
+  - **Client:** the runtime's `syncCidReferences` experimental option, from
+    `RuntimeOptions.experimental` (how a host that constructs a runtime sets
+    it), `EXPERIMENTAL_SYNC_CID_REFERENCES` (a process that reads env, and
+    the shell's build define of the same name), or, in the labs shell, the
+    per-profile `localStorage` key `syncCidReferences` set to `"true"` (how a
+    host loading a release shell in a WebView sets it, or
+    `commonfabric.syncCidReferences(true)` from the console; next runtime).
+    The runtime hands it to its memory connections
+    (`ConnectOptions.syncCidReferences`), whose `hello` then advertises the
+    capability. It is client-authoritative, so a client never adopts it from
+    a deployment
+    ([host embedding](../features/host-embedding.md), seam 13).
+- **Purpose.** A schema document's bytes are the same in every space that
+  stores it, so a client reading many spaces built from one pattern receives
+  the same closure from each. On a connection where both sides are on, a server
+  names a `cid:` schema document its registry holds by id and seq alone, unless
+  the schema names a principal (a DID anywhere in its closure), which keeps its
+  body. The client
+  takes the body from its own registry, and fetches what a frame lacks with one
+  `graph.query` for all of it, sharing a fetch already in flight from the same
+  host: any space's on a direct connection, the same space's on a routed one. A
+  schema that names a principal is always fetched from the space that named it
+  ("Delivery by reference" in
+  [`content-addressed-schemas.md`](../specs/content-addressed-schemas.md)).
+  Measured on a FabriChat fixture, a narrow read of 5 rooms' roots received
+  52% fewer bytes, and at 20 rooms the reader's heap grew a third less per room.
+- **The trade it measures.** A frame naming a body its client lacks waits one
+  round trip for it, and the session's later frames wait behind it. The option
+  stays an option until a measurement says whether the bandwidth saved
+  outweighs that.
+- **Current default and planned end state.** Servers advertise it by default;
+  clients do not, so nothing changes for a client until its runtime or host
+  opts in. A deployment turns it off with `MEMORY_SYNC_CID_REFERENCES=false`,
+  which delivers every client every body whatever it advertises. The end state
+  is to graduate it, with clients on by default, or to remove it, on that
+  measurement.
+- **Status on 2026-11-11.** Implemented; servers on, clients off by default.
+- **Path to removal.** Graduating: advertise the capability unconditionally on
+  both sides and delete the server option, the toolshed setting and the client
+  option. Removing: delete the reference rewrite, the client's resolution and
+  fetch, the capability and the three settings.
 
 ### `messageCompressionV1`
 
