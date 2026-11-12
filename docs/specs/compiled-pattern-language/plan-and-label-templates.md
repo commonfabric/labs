@@ -47,6 +47,12 @@ the plan records for them and what label each record yields.
   "each element", as in the stored envelope's entry paths.
 - An **instance** is one running pattern with a result cell. A **cone** is the
   part of an instance one output path depends on.
+- A **cause** is what a transaction is opened for. There are four kinds: an
+  event delivered to a handler, a change arriving from storage, the
+  completion of an effect, and a change of demand. A change of demand has a
+  transaction of its own, which runs as the principal whose demand changed.
+  Section 1.3 uses the word in a second sense, for what an identifier
+  derives from, as in `.for(cause)`.
 
 ## 1. The plan
 
@@ -128,6 +134,12 @@ export interface Slot {
    * (section 2.5).
    */
   readonly resolved?: true;
+  /**
+   * For a `shape` slot: the observation is made in place. It observes
+   * whether the position the path names holds anything, a link included,
+   * and does not continue through a link stored there (section 2.5).
+   */
+  readonly inPlace?: true;
   /**
    * The read is made with `sample()`. It is in the label, and a change at
    * the slot's address does not make a cone stale (section 2.5).
@@ -300,13 +312,22 @@ export interface HandleReads {
   /**
    * The handle: its `identity` slot, an entry of `Body.reads`, or an entry
    * of `Body.computed` of class `identity` for a reference the instance
-   * computed.
+   * computed. A slot whose path has a `*` stands for every handle those
+   * positions hold. In a body that is re-evaluated, `call` names an
+   * `instantiate` site of `Body.calls`, and the entry stands for the links
+   * to the instances that site makes (section 3.14).
    */
-  readonly handle: { readonly slot: Index } | { readonly computed: Index };
+  readonly handle:
+    | { readonly slot: Index }
+    | { readonly computed: Index }
+    | { readonly call: Index };
   /**
    * The read envelope: the schema every read through the handle is made
    * under. It admits the paths below the handle's cell that some read
    * through the handle may observe, each with its class, and nothing else.
+   * Where it admits a position as a handle, the body may read through the
+   * handle it finds there, and what the schema admits below that position
+   * is the envelope of those reads (section 3.9).
    */
   readonly envelope: Hash;
 }
@@ -332,7 +353,13 @@ export interface BodyOutput {
  * (section 1.3).
  */
 export type BodyCall =
-  /** Instantiates a pattern and returns a link to the instance. */
+  /**
+   * Instantiates a pattern and returns a link to the instance. `order`
+   * identifies an occurrence by its order: among the requests of a
+   * handler's invocation, or, in a body that is re-evaluated, among the
+   * instantiations one evaluation makes at this site. `tag` identifies it
+   * by the value given to `.for(...)` (section 1.3).
+   */
   | {
     readonly kind: "instantiate";
     readonly child: Index;
@@ -359,6 +386,12 @@ export interface Widening {
    */
   readonly slots: readonly Index[];
   /**
+   * The entries of `Body.computed` that stand for more than the body reads,
+   * in the same two ways, where the widened input is a value the instance
+   * computed.
+   */
+  readonly computed?: readonly Index[];
+  /**
    * An entry of `Body.handles` the analysis lost track of. Its envelope is
    * then the handle's whole declared type.
    */
@@ -375,9 +408,17 @@ export interface WriteEdge {
     /**
      * The cell a handle links to, at a path below the handle's. `slot` is
      * the handle's `identity` slot: a handle in the event, in the state a
-     * handler was bound to, in the argument, or in an element.
+     * handler was bound to, in the argument, or in an element. With
+     * `resolved`, the write is made through what `resolveAsCell()` returns
+     * for the handle, and it lands in the cell where that resolution ends
+     * (section 3.11).
      */
-    | { readonly kind: "handle"; readonly slot: Index; readonly path: Path }
+    | {
+      readonly kind: "handle";
+      readonly slot: Index;
+      readonly path: Path;
+      readonly resolved?: true;
+    }
     /** The argument document of a child instance. */
     | { readonly kind: "argument"; readonly child: Index; readonly path: Path }
     /** A cell the body creates at a `createCell` site (`Body.calls`). */
@@ -411,9 +452,19 @@ export type WriteEnvelope =
   /**
    * At or below a path of the cell a handle links to. A `*` segment of
    * `path` stands for a child the analysis could not name. A slot whose own
-   * path has a `*` stands for every cell an element links to.
+   * path has a `*` stands for every cell an element links to. For a handle
+   * the body finds by a read through another handle, `slot` is an
+   * `identity` slot at the position where the handle is found, whose path
+   * crosses the first handle's link. That slot is in no `reads`: it names
+   * the place, is not materialized, and joins no template. `resolved` is
+   * as for a `WriteEdge`.
    */
-  | { readonly kind: "handle"; readonly slot: Index; readonly path: Path }
+  | {
+    readonly kind: "handle";
+    readonly slot: Index;
+    readonly path: Path;
+    readonly resolved?: true;
+  }
   /** A cell a `createCell` site creates under a cause computed from data. */
   | { readonly kind: "created"; readonly call: Index };
 
@@ -522,8 +573,14 @@ export interface ConeEdge {
     /**
      * A cell `from` writes through a handle (`WriteEdge` target `handle`),
      * which a slot of `to` with the same root and an overlapping path reads.
+     * `resolved` is as the write edge has it.
      */
-    | { readonly kind: "handle"; readonly slot: Index; readonly path: Path };
+    | {
+      readonly kind: "handle";
+      readonly slot: Index;
+      readonly path: Path;
+      readonly resolved?: true;
+    };
 }
 
 /** A state cell and the cause its identifier derives from. */
@@ -577,10 +634,15 @@ export interface Operation {
  * factory value, or any pattern a function body instantiates (section 3.15).
  */
 export interface Child {
-  /** The pattern: known at compile time, or the factory at a slot. */
+  /**
+   * The pattern: known at compile time; the factory at a slot; or an
+   * inline pattern written as the callee of an instantiation in a body,
+   * with what it captures (`Plan.closures`).
+   */
   readonly callee:
     | { readonly compiled: Hash }
-    | { readonly factory: Index };
+    | { readonly factory: Index }
+    | { readonly closure: Index };
   /** Declared by the callee's type; what the enclosing plan checks against. */
   readonly argumentSchema: Hash;
   readonly resultSchema: Hash;
@@ -622,9 +684,10 @@ export type RequestValue =
   | { readonly body: Index };
 
 /**
- * A pattern closure used as a value: an inline pattern bound to what it
- * captures (section 3.15). It is what a `factory` slot holds when the
- * factory was written in this plan.
+ * A pattern closure: an inline pattern bound to what it captures
+ * (section 3.15). Used as a value, it is what a `factory` slot holds when
+ * the factory was written in this plan. Written as the callee of an
+ * instantiation in a body, it is the callee of a `Child`.
  */
 export interface Closure {
   /** The compiled identity of the inline pattern. */
@@ -633,8 +696,17 @@ export interface Closure {
   readonly params: readonly {
     readonly path: Path;
     readonly template: Template;
-    /** A data value is copied into the factory value; a cell stays a link. */
+    /**
+     * For a closure used as a value: a data value is copied into the
+     * factory value, and a cell stays a link. For the callee of an
+     * instantiation in a body, as `Binding.state` has it for a binding
+     * made in a body.
+     */
     readonly capture: "copy" | "link";
+    /** As `Binding.state` has it. */
+    readonly reference?:
+      | { readonly passes: Index }
+      | { readonly oneOf: readonly Index[] };
   }[];
 }
 
@@ -650,12 +722,31 @@ export interface Binding {
   /** For a factory value, declared by the factory's type. */
   readonly eventSchema: Hash;
   readonly stateSchema: Hash;
-  /** What is bound to each path of the handler's state. */
+  /**
+   * What is bound to each path of the handler's state. A binding of the
+   * reactive tier has no path with `capture: "copy"`.
+   */
   readonly state: readonly {
     readonly path: Path;
     readonly template: Template;
-    /** A data value is copied into the binding; a cell stays a link. */
+    /**
+     * `link`: the path is bound by reference. It holds a cell handle, or a
+     * container that has a stored address. In the reactive tier every path
+     * is bound this way, and resolves to the slot or the output `template`
+     * names. `copy`: a scalar, or a container the body computed, stored in
+     * the binding's state document. A path that holds a reference on some
+     * runs only is `copy`, and the runtime stores a link on the runs on
+     * which the value it is handed carries a stored address.
+     */
     readonly capture: "copy" | "link";
+    /**
+     * For a path bound by reference in a function body: the `identity`
+     * slot whose reference the binding holds, or the slots it is one of,
+     * as `WriteEdge.reference` says of a written path.
+     */
+    readonly reference?:
+      | { readonly passes: Index }
+      | { readonly oneOf: readonly Index[] };
   }[];
   /** For a binding in the reactive tier: the cause of its stream. */
   readonly name?: string;
@@ -795,6 +886,11 @@ enters a document identifier, as the row identifiers of `sqliteQuery` are
 (`builtin-inventory.md`, "Element keys"). Without the salt an identifier
 would reveal a low-entropy value to anyone who can see a link.
 
+A client cannot read the salt. It therefore cannot derive the identifier of
+per-element state whose key holds a value, or of a handler binding with a
+copied path (section 3.14). It names either one only from a link the server
+has stored.
+
 The position is part of the key only when the body uses the index
 (`Collection.bodyUses.index`). A key then is the pair of the element part and
 the index.
@@ -873,9 +969,18 @@ follows.
 
 | Created in | Identified by |
 | --- | --- |
-| A handler, no explicit cause | The event's key and the occurrence's ordinal among the handler's requests in that invocation. A retry of the same event with the same control flow names the same things. A handler binding is the exception: it is identified as in the last row everywhere |
-| A handler, `.for(tag)` | The handler's instance and the tag, so that different events name the same thing |
-| A `lift` or `computed` | An explicit cause (`createCell`), or the enclosing instance, the handler, and the captured values and cells (`bind`). Never an ordinal, because such a body is re-evaluated. Captured values are salted like element keys. Such a body neither instantiates a pattern nor requests an effect |
+| A handler, no explicit cause | The handling and the occurrence's ordinal among the handler's requests in that invocation. A retry of the same event on the same stream with the same control flow names the same things. A handler binding is the exception: it is identified as in the last row everywhere |
+| A handler, `.for(tag)` | The handler's instance and the tag, so that different events name the same thing. *Assumed,* pending the owner: today every identifier a handler's frame mints derives from a cause that holds the event's identifier, the ones with an explicit cause included (`#ensureLink` in `runtime/runner/src/cell.ts`) |
+| A `lift` or `computed` | A cell: an explicit cause (`createCell`). A binding: the enclosing instance, the handler, and what the binding holds (`bind`, section 3.14). An instance: the enclosing instance, the body's `name` and `within`, the site, and the ordinal of the instantiation among those the evaluation makes at that site, or, with `.for(cause)`, that cause in place of the ordinal (`instantiate`, section 3.14). No identifier holds an ordinal among all the requests of an evaluation, because such a body is re-evaluated. Such a body does not request an effect itself |
+
+**A handling** is identified by its receipt: the event's identifier and the
+stream the event was sent to (today `handlingReceiptId` in
+`runtime/runner/src/scheduler/event-identity.ts`). The receipt leaves the
+acting principal out, so one event on one stream is one handling whoever
+sends it. The string `eventKey()` returns is a different thing: it is a
+context read (section 3.16) and it names the acting principal too. An event
+a handler sends on a stream is identified by the handling and the event's
+order among the events that invocation sends.
 
 ### 1.4 Order, the inputs of a cone, scope, and the cache directive
 
@@ -957,6 +1062,7 @@ which entry classes each read shape consumes.
 | --- | --- | --- | --- |
 | `value` | `value` | `value`, `shape`, `enumerate` | At the slot's path, recursively |
 | `shape` | `shape` | `shape`, `enumerate` | At the slot's path |
+| `shape`, with `inPlace` | `followRef` where the position holds a link, `shape` where it does not | `followRef`; or `shape`, `enumerate` | At the slot's path, without continuing through a link stored there (section 2.5) |
 | `enumeration` | `shape` | `shape`, `enumerate` | At the container's path |
 | `identity` | `followRef` | `followRef` | At the slot's path, and for a `resolved` slot at every link resolution follows from there |
 
@@ -986,7 +1092,9 @@ Three consequences of the mapping:
   projection of a value it lost, which stands for the subtree below; slots
   at `*` for a key it could not name, which stand for every child; and for a
   handle it lost, an entry of `Body.handles` whose envelope is the handle's
-  whole declared type. This is the over-approximation the overview allows.
+  whole declared type. On an input the instance computed, the wider entries
+  are entries of `Body.computed`, and `Widening.computed` names them. This
+  is the over-approximation the overview allows.
 - **`identity` never reaches the target.** It observes which reference sits
   at the path. What the reference refers to is read at a path that
   continues past it: by a slot whose path crosses the link, where the plan
@@ -1105,7 +1213,18 @@ the slot is **bound**.
 - **`identity` stops at its last segment.** The chain of an `identity` slot
   holds the links crossed before the last segment, and the slot observes
   the reference stored there. Every other class resolves through a link at
-  the last segment.
+  the last segment, with the one exception that follows.
+- **A `shape` slot in place.** A `shape` slot with `inPlace` stops at its
+  last segment too. It observes whether the position holds anything. A
+  `shape` slot without the flag, at the same path, observes the root of the
+  cell that a link at the position leads to. A body that writes
+  `profile?.get()` on an optional handle makes both observations: the test
+  of whether a handle is present is at the position, and the read is in
+  the cell. Where the position holds a link, the slot in place resolves as
+  a `followRef` read of the position, which is the read that hands a body
+  the handle today. The label of which reference a position holds covers
+  that it holds one. Where the position holds no link, the slot resolves
+  as a `shape` read of the position.
 - **Rebinding.** A change at an address of the chain changes where the slot
   is bound, and the slot's label is resolved again from the new chain. How
   a chain is watched belongs to `scheduler-and-serving-loop.md`.
@@ -1142,8 +1261,9 @@ is **equal**.
 
 Beside outputs and write targets, the runtime stores state of its own: the
 state of a durable operation, the entries of a cache, a provenance record
-per kept output, and the origin facts of a kept derived collection. Each
-is derived from data, so each has a label. No template has a slot for any
+per kept output, the origin facts of a kept derived collection, and the
+record of the instances a computation made. Each is derived from data, so
+each has a label. No template has a slot for any
 of it except an operation's result, so these labels never join the label
 of an output. They govern a reader that reaches the stored state by
 another route, and what the runtime may show of it in a diagnostic or to a
@@ -1157,6 +1277,7 @@ tool.
 | Every other member of a cache entry: selections, the keys a `pick` chose, and what the entry records of the cone's reads | The confidentiality of the cone-level join (section 7.2), and no integrity |
 | The provenance record of a kept output path: its selections, its instantiation key, the addresses of its dynamic reads | The confidentiality of the output's instantiated label, joined with the label of the label-metadata observation at the path, and no integrity |
 | The origin facts of a kept derived collection | The collection's instantiated membership label |
+| The record of which instances the last evaluation of a `lift` or a `computed` made at each site (section 3.14) | The confidentiality of the body's template, instantiated, and no integrity |
 | A path of any of these that holds label identifiers, such as the count per identifier a `fold` keeps (section 4.3) | The label of its row above, joined with the label of the label-metadata observation of each label it names |
 
 Why each label covers what is stored:
@@ -1181,6 +1302,9 @@ Why each label covers what is stored:
 - **Origin facts** say which elements a predicate admitted, or how long
   each segment was, which is what the derived collection's membership
   template joins (section 3.7).
+- **The instances a computation made.** How many instances an evaluation
+  makes at a site, and under which causes, is a function of what the body
+  read, which the body's template joins.
 
 **Stores the runtime owns.** An operation's state document and a cache
 document are written by the runtime alone, and no authored schema declares
@@ -1551,8 +1675,9 @@ the other members' templates.
 **Handles.** The runtime hands a body a cell handle for every position of
 a handle type that its record names: an `identity` slot of `reads`, an
 `identity` entry of `computed`, the handle of a write target or of a write
-envelope, and every entry of `handles`. What the body can do with a handle
-is bounded by the record:
+envelope, and every entry of `handles`. A handle the body finds through one
+of those reaches it by the read that finds it. What the body can do with a
+handle is bounded by the record:
 
 - A read through the handle at a path that slots of `reads` cover returns
   the value the runtime materialized for those slots. `footprint-analysis.md`
@@ -1567,6 +1692,21 @@ is bounded by the record:
   consumes that label a second time, which a join absorbs.
 - A handle that is in neither group cannot be read through. It can be
   passed on, compared, and written through where a write target names it.
+- A handle the body finds by a read through a listed handle has no entry
+  of its own, because no slot names the place where it is. The body may
+  read through it where the envelope of the listed entry admits the
+  position as a handle. Finding it is a journaled read of the reference at
+  that position. Reads through it are journaled with the reads of the entry
+  it was found through, narrowed to what that entry's envelope admits
+  below the position, and they join the same `dynamic` node. The same
+  holds for a handle found through a found handle.
+- A link to an instance that a `lift` or a `computed` made is a handle of
+  this kind when the body reads through it. The instance outlives the
+  evaluation that made it, so a later evaluation finds the child's result
+  behind the link. That result is no input of the body. The entry of
+  `handles` names the `instantiate` site, its envelope admits what the
+  body reads of the results of the instances the site makes, and the reads
+  are journaled and join the entry's `dynamic` node.
 - A write through a handle is refused unless a `WriteEdge` or a
   `WriteEnvelope` of the body covers it (section 3.11).
 
@@ -1705,6 +1845,38 @@ slot, and so a root and a path, which makes it comparable with the slots
 that read the cell: a slot with the same root whose path overlaps the
 written path, in either prefix direction, reads what the edge writes.
 
+**A write through a resolved reference.** A write through a handle `h`
+lands in the cell `h` links to. A link stored there as the value is not
+followed: the write replaces it. A write through `h.resolveAsCell()` lands
+in the cell where the resolution ends. The two differ when the cell `h`
+links to holds a link. A `handle` target with `resolved` is the second
+form. Its `slot` is the `identity` slot the body has at the handle's
+position: the resolved one where the resolution is static, and the plain
+one where the body journals it (section 3.16, "Static and journaled").
+
+- **Where it lands.** The runtime resolves the reference when the write is
+  made, and the write lands at the address where the resolution ends. That
+  is the address a slot through the handle is bound to, since every class
+  but `identity` resolves through the links (section 2.5). So a slot with
+  the same root and an overlapping path reads what a resolved edge writes.
+  Where the cell `h` links to holds a link, a target without `resolved`
+  writes at an address on the chain of those slots, and the write can
+  change where they are bound.
+- **The label.** Which cell is written depends on the reference at the
+  handle and on every link the resolution follows. The edge's template
+  holds both: the body that calls `resolveAsCell()` has the resolved
+  `identity` slot in its footprint, or the plain slot and the `dynamic`
+  node of kind `link` through it. The written value therefore carries the
+  pointer labels of the links followed.
+- **The checks.** The write-side checks are those of the cell where the
+  write lands: its declared confidentiality for writer-fit, its floor, and
+  its writer policy.
+
+Today `resolveAsCell()` follows the links by reads the transaction
+journals, and the write goes to the cell it returns (`resolveWriteTarget`
+in `runtime/runner/src/cell.ts` states the difference between the two
+targets). **Equal.**
+
 For a write a cone performs, the plan lists a `ConeEdge` from the writing
 cone to each cone that has such a slot, with `via` of kind `state` or
 `handle`. The order of evaluation and the compile-time report of cycles
@@ -1744,7 +1916,13 @@ The declared write envelope of a materializer is the `writes` and the
 
 - A `handle` envelope names a cell, or the cells the elements of a list
   link to, and a path prefix. Once the handle's slot is bound it names
-  addresses, so a reader can be found inside it before the body runs.
+  addresses, so a reader can be found inside it before the body runs. For
+  a handle the body finds by a read through another handle (section 3.9),
+  the envelope's slot is at the position where the handle is found: its
+  path crosses the first handle's link and has `*` at each segment the
+  analysis cannot name. That slot is in no `reads`. Nothing is
+  materialized for it and it joins no template. It names the positions
+  the written cells are linked from.
 - A `created` envelope names a creation site and no address: the cells the
   site creates are named by causes the body computes from data. It bounds
   what the body may write, since the runtime refuses a write to a created
@@ -1875,22 +2053,85 @@ In a sandboxed body every computed value has the body's `derive` template,
 written `T_b` here. The rules below say what `T_b` attaches to, and where the
 reference rules of section 3.9 keep it off.
 
-**Instantiating a pattern** (`instantiate`, legal in a handler and an
-action). The call records a request and returns a link. The runtime creates
-the child instance (section 3.15) when the transaction commits.
+**Instantiating a pattern** (`instantiate`, legal in every function body).
+The call records a request and returns a link. The callee is a pattern the
+compiler can see, an inline `pattern(...)` written at the call, or a
+pattern factory value. The runtime creates the child instance (section
+3.15) when the transaction commits.
 
 | Part | Label |
 | --- | --- |
 | The link returned | Its identity carries `T_b`: that this instance exists, and which one it is, depends on what the body read |
 | The argument | Each path is written into the child's argument document with `T_b`, or with the reference rules of section 3.9 for a reference the body was given |
+| The captures of an inline `pattern(...)` written at the call | The private parameters of the child (section 3.15). Each path is bound as a path of a handler's state is bound in a function body (below), and is stored with the instance |
 | A link to an instance requested earlier in the same invocation, passed as an argument | A reference like any other: it carries its own identity label, `T_b`. It is legal before either instance exists, because both are created by the same commit |
 | `.for(tag)` | The tag's value is part of the footprint. The instance's existence label is frozen when it is first created (§8.12.8, `08-12-store-label-monotonicity.md`); a later event that names the same instance creates nothing |
 | `asScope(scope)` | A constant of the site. It sets the scope of the state the child declares |
-| `inSpace(space, options)` | The target is a space identifier, the space of a given cell, a name, or anonymous. `Child.space` records which of the four it is, and the options `grants`, `root`, `spaceKind` and `selfOwned` where the site writes them. The target and each option is a constant of the site, a slot, or a value the body computes at the request (`RequestValue`). A computed one carries `T_b`. The argument is written into another space, so the write-side checks of that space apply to the argument's templates joined with `T_b`. The new instance's and space's identifiers derive from the request and are known before the commit, which spans both spaces |
+| `inSpace(space, options)` | The target is a space identifier, the space of a given cell, a name, or anonymous. `Child.space` records which of the four it is, and the options `grants`, `root`, `spaceKind` and `selfOwned` where the site writes them. The target and each option is a constant of the site, a slot, or a value the body computes at the request (`RequestValue`). A computed one carries `T_b`. The argument is written into another space, so the write-side checks of that space apply to the argument's templates joined with `T_b`. The instance's identifier is known at the request, as for any instantiation. The identifier of a space the request creates is not (below) |
 
 The instance becomes an instantiated pattern, with a result cell, when its
 link is written into state or passed to `navigateTo`. A link the body drops
 creates nothing.
+
+**A space an `inSpace` request creates.** Creating a space returns a new
+identifier ([random space identities](../random-space-identities.md)), so
+the identifier of a space the request creates is obtained and is not
+derived from the request. The runtime records the allocation in the
+calling space: the obtained identifier, under the name the request gives,
+or for an anonymous space under the request's own identifier. That record
+is written in a step that commits before the step in the foreign space, so
+that a retry finds the record and names the same space. The record is one
+of the writes the body stages, and it carries `T_b`: that a space exists
+under a name depends on what the body read.
+
+**In a body that is re-evaluated.** A `lift` or a `computed` may
+instantiate a pattern, and that pattern may request effects. The rows
+above apply, with the following differences.
+
+- **Identity.** The instance is identified by the enclosing instance, the
+  body's `name` and `within`, the site, and the ordinal of the
+  instantiation among those the evaluation makes at that site. With
+  `.for(cause)`, the cause takes the place of the ordinal (section 1.3).
+  *Assumed,* as question 38 of the continuation plan states it. An
+  evaluation that instantiates the same pattern at the same place
+  therefore names the same instance. A site in a loop names its instances
+  by their order in the loop, so when the items change order, an instance
+  and the state it holds go to the item that takes its position. A cause
+  taken from the item keeps the instance with the item.
+- **The argument.** Each evaluation writes the argument of every instance
+  it makes, through the write edges with target `argument`, as an
+  instantiation from a handler does. Each path carries `T_b`, or follows
+  the reference rules of section 3.9. An evaluation that names an instance
+  that exists updates its argument and creates nothing.
+- **The edges are the cone's.** The write edges belong to the cone that
+  runs the body. They are derived writes, so a failed constraint on one
+  drops that write alone (section 4.4). They do not make the body a
+  materializer: the cone is the argument's one writer, and the child reads
+  the argument through its own `argument` slots, in the pull that extends
+  through its result (section 3.15).
+- **Teardown.** The instances a computation makes belong to it: to the
+  cone that runs the body, for the element and the scope it is evaluated
+  for. An instance that an evaluation no longer makes is torn down, as a
+  child is whose factory changed (section 3.15): its cones are not
+  evaluated again and its effects are not requested again. The runtime
+  keeps, with the cone, which instances the last evaluation made at each
+  site. Section 2.6 gives the label of that record.
+- **A callee that differs between evaluations.** Where the callee is a
+  factory value, the factory at an occurrence can differ from the one the
+  evaluation before had there. The instance is then torn down and a new
+  one is started under the same name, by the rule for a changed factory
+  (section 3.15).
+- **A failed evaluation** makes no instance and tears none down. The
+  arguments of the instances the last evaluation made take the error
+  state, by the rule of section 5.2 for a path of a child's argument.
+- **Effects.** The body requests no effect itself (below). An effect in
+  the instance is an `Operation` of the child's plan. A cone of the child
+  computes its request from the child's `argument` slots, which resolve to
+  the labels the computation's write edges stored. The computation's label
+  therefore reaches the request through the argument. The effect is
+  requested again when its request changes, as any effect is whose input
+  changed, and the egress ceiling is checked at the request, in the
+  operation's own request transaction.
 
 **Creating a cell** (`createCell`).
 
@@ -1913,10 +2154,14 @@ request is staged in the event's transaction. Each path of it is a
 `WriteEdge` with target `request`, which carries `T_b`, or the reference
 rules of section 3.9 for a reference the body was given. The call returns
 a link to the effect's result, which is pending in the requesting
-transaction. The occurrence is identified by the event and its ordinal. A
-`lift` or a `computed` does not request an effect, and since it does not
-instantiate a pattern either, it has no indirect way to: effects are
-requested from the reactive tier and from handlers only.
+transaction. The occurrence is identified by the handling and its ordinal
+(section 1.3). A `lift` or a `computed` does not request an effect itself.
+*Assumed,* as question 38 of the continuation plan states it: the ruling
+that lets a computation instantiate a pattern leaves the direct request
+refused. A computation reaches an effect through a pattern it
+instantiates (above), and an effect that depends on computed data can
+also be requested in the reactive tier, with the computed value as its
+input.
 
 In the reactive tier an effect is an `Operation` of kind `effect`. A cone
 computes its request, and the request is written into the operation's
@@ -1964,37 +2209,118 @@ C(the request's templates, instantiated)
 **Binding a handler** (`bind`): an `action(...)`, an inline event handler in
 JSX the body builds, or a handler factory applied to its state. For the
 first two the compiler hoists the arrow to a handler `Body` whose state is
-its captures. The site refers to a `Binding`, which records the handler and
-the template and capture mode of each state path. A handler factory
-received as a value is section 3.21.
+its captures. The site refers to a `Binding`, which records the handler
+and, for each path of the handler's state, the template of what is bound
+to it and whether the path is copied or bound by reference (`capture`). A
+handler factory received as a value is section 3.21. What a binding holds
+depends on where it is made.
+
+**A binding made in the reactive tier copies nothing.** The reactive tier
+is the pattern body and everything compiled in it, the body of a
+per-element callback of `map`, `filter` and the other collection
+constructs included. Every path of the handler's state resolves to a slot
+or an output of the instance, and every entry of `Binding.state` has
+`capture: "link"`. In
+`list.map((el) => … action(() => otherList.push(el)))`, written in a
+pattern body, `el` is bound by reference: the handler's state path is the
+element's slot, and the push stores a link to the original element. The
+stream is named by the binding's `name` and `within` (section 1.3), and
+not by what the binding holds.
+
+**A binding made while a function body runs** is a `bind` site in a
+`lift`, a `computed`, a `handler`, an `action`, or an authored function
+they call. Each path of the handler's state is bound by what the body has
+there.
+
+| What the body binds at a path | What the binding holds | `capture` | Label |
+| --- | --- | --- | --- |
+| A cell handle | A link | `link` | The reference rules of section 3.9 |
+| A scalar | The value, in the binding's state document | `copy` | `T_b` |
+| A container (an object, an array, a tuple) that the body computed | The value, in the binding's state document. A reference inside it stays a reference, by the rule for a value passed on unchanged | `copy` | `T_b`, and the reference rules of section 3.9 for a reference inside it |
+| A container that the body read from an input or a cell and passes on unchanged, or a reference at a position typed `unknown` | A link to the address the container is stored at. For a reference, the reference itself | `link` | The reference rules of section 3.9. The body observes the container for `identity` and does not read its content |
+
+A container the body read and passes on unchanged has a stored address,
+which is why it can be bound by reference. `Binding.state` records the
+`identity` slot of such a path in `reference`, and the runtime verifies it
+by identity, as it verifies a reference a body writes. Which paths of a
+computed container the copy holds is decided by what the bound handler
+reads of it (`footprint-analysis.md` §8.5).
+
+**A path that is a reference on some runs only.** A conditional between a
+container passed on unchanged and a container the body computed gives a
+path that holds a reference on some runs and a computed value on the
+others. `Binding.state` records such a path with `capture: "copy"` and no
+`reference`, and its template is `T_b`. The runtime decides per run from
+the value it is handed: a value that carries a stored address is stored as
+a link, as any write of a value passed on unchanged is, and any other
+value is copied. The identity of the stream takes the address on the first
+kind of run and the salted value on the second.
 
 | Part | Label |
 | --- | --- |
-| Captured data values | Copied into the binding's state document with `T_b` |
-| Captured cell handles | Stay links, with the reference rules of section 3.9 |
-| The stream returned | A reference whose identity is derived from the enclosing instance, the handler and the captures. Its identity label is the join of the captures' labels, which is `T_b` unless every capture is a passed reference. For a handler received as a factory value, the label of the `identity` slot of the factory joins it (section 3.21) |
-| The bound handler's state | Slots with root `binding`. When an event arrives, the handler's own template is over those slots and its event |
+| The stream returned | A reference whose identity derives from the enclosing instance, the handler, the copied values, the identities of the linked cells, and the addresses of the containers bound by reference. A copied value is salted before it enters the identifier, as an element key is (section 1.3). The identity label is the join of the templates of the state paths, which is `T_b` unless every path is a reference the body passes on. For a handler received as a factory value, the label of the `identity` slot of the factory joins it (section 3.21) |
+| The bound handler's state | Slots with root `binding`. A copied path resolves to the binding's state document. A path bound by reference crosses the link the binding holds (section 2.5): the handler reads the cell or the container when an event arrives, in the event's transaction, and the slot's label joins the pointer label with the observation at the target. A path of a binding of the reactive tier resolves to the slot or the output it names. When an event arrives, the handler's own template is over those slots and its event |
 
-Because the identity is derived from content, two bindings of the same
-handler to equal captures are one stream, and a re-evaluation of a
-`computed` that builds the same JSX names the same streams. This is the
-element-key rule of section 1.3 applied to bindings, salt included, and it
-is what makes a binding legal in a body that is re-evaluated. A handler that
-has to act on one occurrence among equal ones needs the index or a cell in
-its captures. In an element body of the reactive tier that is enforced
-(section 1.3); in a function body, where a binding is made in an ordinary
-loop, equal captures give one stream.
+A handler that passes on a container it was bound to by reference passes
+on the reference the binding holds, so the record it writes links to the
+original.
+
+Two bindings of one handler are one stream when their copied values are
+equal and their linked cells and addresses are the same, and a
+re-evaluation of a `computed` that builds the same JSX names the same
+streams. For the copied values this is the element-key rule of section 1.3
+applied to bindings, salt included, and it is what makes a binding legal
+in a body that is re-evaluated. Two bindings to equal records stored in
+two places are two streams, because the addresses differ. A handler that
+has to act on one occurrence among equal copied values needs the index or
+a cell in its state. In an element body of the reactive tier that is
+enforced (section 1.3); in a function body, where a binding is made in an
+ordinary loop, equal state gives one stream.
+
+A client cannot read the salt (section 1.3). It cannot name the stream of
+a binding that has a copied path before the server stores a link to it. A
+binding with no copied path, which every binding of the reactive tier is,
+has an identifier a client derives.
 
 **Today.** A factory called in a running body creates a node in the run's
 frame, and the runner turns the frame into a synthesized pattern after the
 body returns (`patternFromFrame` in `runtime/runner/src/builder/pattern.ts`).
 What the body's transaction writes carries its join, which is `T_b`.
-**Equal**, and **tighter** for references the body passes on. A built-in
-requested in a handler runs as a node of that synthesized pattern, in a
-transaction of its own that reads the request's content, and the ceiling is
-measured on that transaction's consumed label (`verifySinkRequestCeilings`
-in `runtime/runner/src/cfc/prepare.ts`). The ceiling here is checked on the
-request and its content. **Equal or tighter.**
+**Equal**, and **tighter** for references the body passes on.
+
+- **An instance made by a computation.** The frame of a `lift` or a
+  `computed` that called a pattern is such a synthesized pattern
+  (`#writeJavaScriptActionResult` in `runtime/runner/src/runner.ts`). It
+  runs on a result cell whose identifier derives from the node's inputs,
+  outputs and function, which is the same on every evaluation. It is set
+  up again on that cell when its content differs from the content the
+  evaluation before produced, and what it started is released when the
+  node stops. So an instance is named by the computation and by its place
+  in what the evaluation built, and an evaluation that builds the same
+  graph changes nothing. One that builds another graph stops the first
+  and starts the second, where this design updates the argument of an
+  instance that stays (`language-subset.md` §5.2). **Equal** for labels:
+  the argument carries the join of the computation's transaction.
+- **A binding.** A handler applied to its state in a running body binds
+  that state by reference today, and a container a handler uses whole
+  stays a link. A value read through a schema carries the cell it was read
+  from (`annotateWithBackToCellSymbols` in `runtime/runner/src/schema.ts`),
+  and the builder puts that cell in the place of the value when the
+  handler is applied (`connectInputAndOutputs` in
+  `runtime/runner/src/builder/node-utils.ts`). What the binding holds and
+  what the handler observes are **equal**. What the body that makes the
+  binding reads is **equal or tighter**, and `footprint-analysis.md` §8.5
+  compares the cases: the argument schema of a body that applies a handler
+  keeps the container's declared type today, and for an inline handler
+  the transformer rewrites a captured container to the paths the handler
+  reads, which the body then reads and the binding copies. A binding by
+  reference reads none of that content in the body.
+- **An effect.** A built-in requested in a handler runs as a node of that
+  synthesized pattern, in a transaction of its own that reads the
+  request's content, and the ceiling is measured on that transaction's
+  consumed label (`verifySinkRequestCeilings` in
+  `runtime/runner/src/cfc/prepare.ts`). The ceiling here is checked on the
+  request and its content. **Equal or tighter.**
 
 ### 3.15 Child instances
 
@@ -2005,7 +2331,8 @@ instantiates, whose instantiation is a run-time event even when the callee
 is known.
 
 **What the enclosing plan records** (`Child`): the callee, as a compiled
-pattern's identity or as the slot that holds the factory; the argument and
+pattern's identity, as the slot that holds the factory, or as the closure
+of an inline pattern written at an instantiation in a body; the argument and
 result schemas the callee's type declares; the cause its identifier derives
 from; and the modifiers. It also records one `WriteEdge` with target
 `argument` per argument path, holding that path's template, and it refers to
@@ -2041,7 +2368,10 @@ instance and the call site, not from the factory. When the factory at the
 slot changes, the old child is torn down and a new one is started under the
 same name, so the replacement takes the old one's place. The new child's
 state cells are those of its own plan under that name, so stored state is
-found again only where cell names agree.
+found again only where cell names agree. The rule covers an instance a
+`lift` or a `computed` makes with a factory value as the callee: when an
+evaluation has another factory at an occurrence than the evaluation before
+had, the instance is replaced in the same way (section 3.14).
 
 **A pattern closure.** An inline pattern used as a value is a `Closure`:
 the compiled inline pattern, with the values it captures bound as its
@@ -2072,6 +2402,21 @@ parameters.
   it is a statically resolved callee. It is compiled into the surrounding
   instance, its captures are ordinary slots, and no `Closure` or `Child`
   record exists for the call.
+- **Written at an instantiation in a function body.** An inline
+  `pattern(...)` that is the callee of an instantiation in a function body
+  is a `Closure` as well, and the `Child` of the site names it as its
+  callee. It is not a value. Nothing holds a factory, so the rules above
+  for the factory value and for "coming back" do not apply: the link the
+  body gets carries `T_b` (section 3.14). Each parameter path is bound as
+  a path of a handler's state is bound in a function body (section 3.14):
+  a cell handle, and a container the body read and passes on unchanged,
+  stay links with the reference rules; a scalar, and a container the body
+  computed, are copied with `T_b`. The parameters are stored with the
+  instance, beside its argument, and each evaluation that makes the
+  instance writes them as it writes the argument. The child's `params`
+  slots resolve to what is stored there. *Assumed:* the ruling on what a
+  handler binding holds is applied to these captures, on which the owner
+  has not ruled (section 8, question 23).
 
 **One transaction.** A child in the same space is evaluated in the
 transaction that pulls its result, by the pull that extends through that
@@ -2103,6 +2448,7 @@ slot or a dynamic read, so that a body's template accounts for it.
 | `spaceDeleted(x)` | `dynamic`, of kind `space`, through the `identity` slot of a cell operand, resolved, or the `value` slot of an operand that names a space | What the journaled read of that space's access list consumes, joined with the slot. The answer does not depend on who asks (below) |
 | `linksOf(list)` | The `enumeration` slot of the list and the `identity` slot of each element | The join of those. No target is read |
 | `equals(a, b)` | The `identity` slots of both operands, resolved | The join of both |
+| `a.equalLinks(b)`, `X.equalLinks(a, b)` | The `identity` slots of both operands, not resolved | The join of both: the label of the reference each position holds, as stored. No link below either reference is followed, and no target is read |
 | `getPatternEnvironment()` | `const` | None. It is a constant of the deployment |
 
 The access list of a space is state of that space, and which space is meant
@@ -2123,6 +2469,14 @@ label of that node is the join of the labels of the observations the
 runtime recorded while the body ran. A change of the label stored at an
 observed path makes the cone stale, as a change at a `labelMetadata`
 slot's address does.
+
+**`equalLinks`.** The call compares the two references as they are stored
+and follows no link, so it has no journaled part: in a body as in the
+reactive tier, its record is the plain `identity` slot of each operand.
+`equals` resolves both operands first, which is why its slots are
+resolved. Today `equalLinks` compares the links without a transaction
+(`equalLinks` in `runtime/runner/src/cell.ts`), and the label it joins is
+that of the reads that handed the body the two references.
 
 **`resultOwnerOf`.** The call resolves the operand to the document a write
 to it lands in, reads that document's `result` back-link, and with a field
@@ -2327,7 +2681,9 @@ section 3.15.
 **What the enclosing plan records** (`Binding` with `handler.factory`): the
 slot that holds the factory, observed for `identity`; the event and state
 schemas the factory's type declares; and, for each state path, the template
-of what is bound to it and whether it is copied or stays a link.
+of what is bound to it and whether it is copied or bound by reference. The
+rule of section 3.14 decides that from the value the binder has at the
+path and not from the handler, so it needs no knowledge of the handler.
 
 **What the handler's own record supplies.** A handler factory value names a
 compiled handler by content address. The compiled module it comes from
@@ -2348,9 +2704,10 @@ record's `derive` over its event and `binding` slots, joined with the
 `identity` slot of the factory: which handler runs is a function of that
 slot, so its label is on everything the handler writes. The stream's
 identity derives from the enclosing instance, the factory's content address
-and the captures. Which stream exists therefore reveals which handler
-arrived, so the stream's identity label is the join of the captures' labels
-(section 3.14) and the label of the factory's `identity` slot.
+and what the binding holds (section 3.14). Which stream exists therefore
+reveals which handler arrived, so the stream's identity label is the join
+of the templates of the state paths and the label of the factory's
+`identity` slot.
 
 **Checks that move from compile time to run time.**
 
@@ -2408,9 +2765,12 @@ nothing to compare.
 | Sandboxed call | `derive` over slots, computed inputs and handles; references passed through | Equal or tighter; **looser**, the second exception, for a static read through a handle on a run that throws before it |
 | Link following | A slot whose path crosses the link; `identity` slot plus `dynamic` where the path is not named | Equal |
 | Static side-write | Template of the written expression | Equal or tighter |
+| Write through a resolved reference | Template of the written expression, which holds the links the resolution follows; lands where the resolution ends | Equal |
 | Materializer | Today's join on every path it writes, its result included | Equal |
 | Handler | `derive` over event and state footprint | Equal or tighter (an authored event type is read whole today); the second exception applies |
 | Calls in a body | The body's template on what it creates; the egress ceiling on a request and the content it holds by reference | Equal; tighter for passed references |
+| Instance made by a `lift` or a `computed` | The body's template on the argument, written by each evaluation; the instance named by the site and an ordinal, or by an explicit cause | Equal |
+| Handler binding | Nothing copied in the reactive tier; in a body, a scalar and a computed container copied with the body's template, a handle and a stored container bound by reference | Equal or tighter: the body that makes the binding does not read a container it binds by reference |
 | Child instance | Argument templates in; `child` slots out | Equal |
 | Pattern closure | Join of the capture templates on the factory value; `params` slots inside | Equal |
 | Handler factory value | The handler's own record, plus the factory's `identity` | New |
@@ -2427,7 +2787,10 @@ on some runs only, or at a path it computes, stays journaled. A widening
 that covers data slots affects only what the runtime materializes into the
 argument, which the body's argument schema materializes today as well. A
 widening on a handle turns its reads into journaled ones under the handle's
-declared type, which is what the runtime records for them today.
+declared type, which is what the runtime records for them today. A handler
+binding is not a third either: a binding made in a function body copies a
+scalar and a container the body computed, and binds a stored container by
+reference, as the runtime does today (section 3.14).
 
 ## 4. Instantiation
 
@@ -2444,10 +2807,13 @@ checks:
 - the request of an effect, where the transaction checks the egress
   ceiling: the join of the request's templates and of what its references
   lead to (section 3.14);
-- a state path of a binding that is copied (`Binding.state`), which is
-  stored in the binding's state document (section 3.14);
+- a state path that a binding made in a function body copies
+  (`Binding.state`): a scalar, or a container the body computed, which is
+  stored in the binding's state document (section 3.14). A binding of the
+  reactive tier copies nothing, so nothing is instantiated for it;
 - a parameter of a pattern closure that is copied (`Closure.params`), which
-  is stored with the factory value (section 3.15);
+  is stored with the factory value, or with the instance where the closure
+  is the callee of an instantiation in a function body (section 3.15);
 - an output a cache stores (section 2.6).
 
 For each one:
@@ -2702,8 +3068,9 @@ pattern does settle it, because integrity is not unioned across components.
 - **A constraint on what a handler itself writes rejects the event's whole
   transaction.** What a handler itself writes is everything its body
   stages: its write edges, the arguments of the instances it requests, the
-  requests of the effects it asks for with their egress ceilings, and the
-  copied state of the bindings it makes. No part of what the handler asked
+  requests of the effects it asks for with their egress ceilings, the
+  copied state of the bindings it makes, and the copied parameters of the
+  inline patterns it instantiates. No part of what the handler asked
   for commits when any part of it is not allowed. The refusal is the
   event's outcome and is reported to the party that delivered the event,
   under the handler's template (section 5.4).
@@ -2729,6 +3096,13 @@ permits.
 
 A cause that is not an event has derived writes only, so a failed
 constraint never rejects its transaction whole.
+
+**A conflict.** A commit can conflict with a concurrent commit. A conflict
+on a derived write withdraws that write alone, as a failed constraint on
+it does: the target keeps what the concurrent commit stored, the cone that
+computed the write stays stale, and the rest of the cause's transaction
+commits. What a conflict on a handler's own write does to the event is in
+`scheduler-and-serving-loop.md` §5.5.
 
 **Two deliberate changes.**
 
@@ -2828,6 +3202,14 @@ normally.
   cannot be resolved to an address and a label; stored data does not match
   the slot's schema (below); a child's plan does not have the schemas its
   factory type declares (section 3.15).
+- **The bound.** A cone is evaluated at most ten times in one transaction.
+  The number is a placeholder. It is fixed with the plan version
+  (`Plan.version`), so that a client and the server fail the same cones. A
+  cone that failed at the bound keeps its error state and is not evaluated
+  again until one of its inputs changes: with the same inputs a later
+  cause would reach the bound again. Which cones of a cycle fail when the
+  bound is reached belongs to `execution-and-storage.md` (§2.7) and
+  `scheduler-and-serving-loop.md` (§8.1).
 - **Data that does not match its declared type.** The runtime validates what
   it reads for a slot against the slot's schema before any emitted code sees
   it, as it validates a read against a schema today. Where the schema admits
@@ -2977,6 +3359,14 @@ deployment documents:
   label while the values around it change, which is visible to the
   target's readers. What that reveals is bounded as for a rejection: the
   verdict is a function of slot labels and selections.
+- **A derived write withdrawn on a conflict.** A conflict on a derived
+  write withdraws that write (section 4.4), and its target keeps what the
+  concurrent commit stored. Whether a commit conflicts depends on when
+  other commits arrive, and on no label.
+- **An instance torn down.** An instance that a computation no longer
+  makes is torn down (section 3.14), which a holder of a link to it can
+  see. Whether an evaluation makes an instance is a function of what the
+  body read, which the label of the link covers.
 - **A withdrawn side-write.** The side-writes of a failed cone are
   withdrawn (section 5.2), so a reader of the target can see that the
   write did not happen. Whether the cone failed is a function of what the
@@ -3102,9 +3492,10 @@ sendMessage  handler B0
              joined       the stream of another binding   link
 ```
 
-Every capture is a cell, so nothing is copied, and the handler's `binding`
-slots resolve to the labels of the slots the binding names: `b0` and `b1`
-through `s1`, `b2` through `s0`, `b3` through `s2`.
+The binding is made in the reactive tier, so nothing is copied (section
+3.14). Every path of the handler's state is a slot of the instance, and the
+handler's `binding` slots resolve to the labels of the slots the binding
+names: `b0` and `b1` through `s1`, `b2` through `s0`, `b3` through `s2`.
 
 Bodies:
 
@@ -3284,7 +3675,7 @@ the exported `sendMessage` stream, whose events come from other patterns, so
 for it the check is per event only.
 
 `sendInto` creates the reactions list with a cell constructor. That is the
-`createCell` site `n0` of `B0`, identified by the event and its ordinal
+`createCell` site `n0` of `B0`, identified by the handling and its ordinal
 (section 1.3). The list's initial value is the write edge `w3`, with target
 `created`. The list's existence and the handle carry `T_send`, and the
 message's `reactions` field is a reference write of that handle.
@@ -3450,9 +3841,10 @@ bracketed dereferences, fail-closed on unresolved references".
   entry starves the body. Data outside a body's footprint stays
   confidential from the body however wrong the analysis is.
 - **Handles.** A body is handed a handle only for a position its record
-  names. A read through a handle returns the slots the record lists for it,
-  or is journaled under the handle's envelope, and a handle with neither
-  cannot be read through. A write through a handle is refused unless an
+  names, or one the envelope of a listed handle admits as a handle. A read
+  through a handle returns the slots the record lists for it, or is
+  journaled under the handle's envelope, and a handle with neither cannot
+  be read through. A write through a handle is refused unless an
   edge or an envelope of the body covers it (sections 3.9 and 3.11).
 - **Element locality of collection operations.** The runtime evaluates an
   element body once per key with that element's slots, and performs the
@@ -3461,7 +3853,9 @@ bracketed dereferences, fail-closed on unresolved references".
   at once, unless the body captures the collection by name, and then the
   collection is a slot of its own in the body's template (section 3.6).
 - **References a body passes on.** That a returned reference is one the body
-  was given is checked by identity (section 3.9).
+  was given is checked by identity (section 3.9). The same check covers a
+  container that a binding made in a body holds by reference (section
+  3.14).
 - **Dynamic reads.** Reads through handles and links, of access lists, and
   of label metadata at targets no slot names, are journaled by the runtime,
   as they are today.
@@ -3549,8 +3943,8 @@ clause any of its slots carries.
 
 ## 8. Open questions
 
-The project owner has decided the questions earlier drafts listed, and the
-sections above state the outcomes: equal plain values share a cone and never
+The project owner has decided the following, and the sections above state
+the outcomes: equal plain values share a cone and never
 state or handlers (1.3); the prefix rule (3.13); `some`, `every` and `find`
 as operations (3.13); the wider collection-index label (3.17); a failed
 constraint on a handler's own write rejects the event's transaction, and
@@ -3558,14 +3952,21 @@ one on a derived write drops that write (4.4); several events are handled
 in one batch (5.4); the keep set is stored in several documents (2.3); a
 static read through a handle carries its label on a run that throws before
 it (3.1); a child replaced under the same name
-(3.15); identifiers of a cross-space request known before its commit (3.14);
-salted value-derived identifiers (1.3); no effect request from a `lift` or
-`computed` (3.14); handler factories bindable as values (3.21); the
+(3.15); the identifier of an `inSpace` instance known at the request, and
+the identifier of a space the request creates obtained and recorded in a
+step that commits before the step in the foreign space (3.14); salted
+value-derived identifiers, which a client cannot derive (1.3); a handling
+identified by its receipt (1.3); a `lift` or a `computed` may instantiate
+a pattern, which may request effects (3.14); what a handler binding holds
+(3.14); a conflict on a derived write withdraws that write (4.4); the bound
+of ten evaluations of a cone in one transaction (5.2); a change of demand
+is a cause (Notation); handler factories bindable as values (3.21); the
 accumulator of `reduce` is a data type, which `language-subset.md` §4.4.1
 requires (3.13).
 
-What remains is for the sibling documents, the specification change, or the
-prototype. Each entry states the assumption this document made.
+What remains is for the project owner, the sibling documents, the
+specification change, or the prototype. Each entry states the assumption
+this document made.
 
 1. **How fine footprint analysis is for computed values.** Section 3.9
    gives a body's computed result paths one template and refines only
@@ -3698,8 +4099,54 @@ prototype. Each entry states the assumption this document made.
     deep the others are serialized. The entry of `navigateTo` already
     reads its target by identity only.
 22. **To `footprint-analysis.md`.** It decides when an observation of a
-    resolved reference is a slot (section 2.5), fills `Widening.slots` and
-    `Widening.handle`, and emits a `WriteEdge` with `reference` for a path
-    of a written value that holds a reference the body was given.
-    *Assumed:* the conditions of its §7.2 apply to a resolution as they do
-    to a read.
+    resolved reference is a slot (section 2.5), which its §7.1 does under
+    the conditions of its §7.2. It fills `Widening.slots`,
+    `Widening.computed` and `Widening.handle`, and emits a `WriteEdge` with
+    `reference` for a path of a written value that holds a reference the
+    body was given. This document gives a form to each thing its request
+    16 lists, and the analysis has to emit them:
+    - a `shape` slot with `inPlace` for a test of whether a handle is
+      present (section 2.5);
+    - `Widening.computed` for a widening on a computed input;
+    - a `handle` target with `resolved` for a write through
+      `resolveAsCell()`, naming the `identity` slot the body has at the
+      handle's position (section 3.11);
+    - for a handle found by a dynamic read, no entry of `handles`, an
+      envelope of the first handle that admits the position as a handle,
+      and a write envelope whose slot is in no `reads` (sections 3.9 and
+      3.11);
+    - a `Child` whose callee is a `Closure` for an inline pattern
+      instantiated in a body (section 3.15);
+    - plain `identity` slots for `equalLinks` (section 3.16);
+    - an entry of `handles` that names an `instantiate` site, for a read
+      through the link of an instance a computation made (section 3.9).
+
+    For a binding made in a body it records `capture` and `reference` per
+    state path, and `copy` for a path that is a reference on some runs
+    only (section 3.14).
+23. **The captures of an inline pattern instantiated in a function body.**
+    Section 3.15 binds them per path as the ruling binds the state of a
+    handler in a function body: a cell handle and a stored container stay
+    links, a scalar and a computed container are copied. The owner ruled
+    on bindings and not on these captures. *Assumed:* the same rule. A
+    copy of a stored container would read the container in the
+    instantiating body, which the reference rule avoids for the argument
+    of the same call.
+24. **What a pattern closure of the reactive tier copies.** Section 3.15
+    copies a captured data value into the factory value, where a handler
+    binding of the reactive tier copies nothing (section 3.14). *Assumed:*
+    the closure rule stands. A factory value can be stored and called in
+    another instance, which has no slot of the instance that wrote it.
+25. **`.for(tag)` in a handler.** Section 1.3 has the tag name the same
+    thing across events, where today every identifier a handler's frame
+    mints holds the event's identifier. *Assumed:* as section 1.3 states
+    it. It is question 19 of the continuation plan.
+26. **An instance made in a `lift` or a `computed`.** Section 3.14 names it
+    by the site and an ordinal among the instantiations one evaluation
+    makes there, or by an explicit cause, and leaves a direct effect
+    request refused. *Assumed:* both, as question 38 of the continuation
+    plan states them. With the ordinal, a reorder of the items a loop
+    instantiates for moves each instance's state to another item. The
+    modifiers `asScope` and `inSpace` are taken to apply as in a handler,
+    and the allocation of a space such an instance creates is recorded
+    under the instance's identifier.
