@@ -9,7 +9,7 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
-import { type CfcAtom, cfcAtom } from "@commonfabric/api/cfc";
+import { CFC_ATOM_TYPE, type CfcAtom, cfcAtom } from "@commonfabric/api/cfc";
 import type { FabricValue } from "@commonfabric/data-model";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { rootRenderPolicyFor } from "@commonfabric/html/worker";
@@ -492,6 +492,88 @@ describe("HostReadGate", () => {
 
       await gate.settle(credential);
       expect("refused" in gate.read(credential)).toBe(true);
+    });
+
+    it("loads the access list a metadata read's decision consults, so that a metadata read made once returns what the list admits", async () => {
+      await using docs = await shelf();
+      const gate = gateWithAccessListToLoad(docs.runtime);
+      const note = await docs.write("team-note-metadata", TEAM_NOTE, [[
+        [],
+        [cfcAtom.space(team)],
+      ]]);
+
+      expect("refused" in gate.readMetadata(note, "internal")).toBe(true);
+      await gate.settleMetadata(note);
+      expect("refused" in gate.readMetadata(note, "internal")).toBe(false);
+    });
+
+    describe("a label that selects a module policy", () => {
+      // A module policy is read from the manifest the label's own space
+      // stores, so a read made once loads that manifest when it has not
+      // arrived, and only then.
+      const policy = {
+        type: CFC_ATOM_TYPE.Policy,
+        policyRefKind: "module",
+        moduleIdentity: "module-of-the-team-policy",
+        symbol: "teamPolicy",
+        policyDigest: "digest-of-the-team-policy",
+        subject: owner.did(),
+      } as unknown as CfcAtom;
+
+      /**
+       * The gate a worker builds for the owner, with a module policy source
+       * whose manifests resolve as `resolves` says and whose loads are
+       * recorded in `loads`.
+       */
+      function gateWithManifests(runtime: Runtime, resolves: boolean) {
+        const ceiling = defaultRenderConfidentialityCeiling(owner.did());
+        const loads: [string, string][] = [];
+        const source = renderModulePolicySourceFor(runtime, ceiling);
+        const gate = new HostReadGate(rootRenderPolicyFor(ceiling), {
+          resolveConfidentiality: renderConfidentialityResolverFor(
+            runtime,
+            owner,
+            ceiling,
+            owner.did(),
+            undefined,
+            source,
+          ),
+          modulePolicies: {
+            // The gate asks only whether a manifest resolves.
+            resolve: () => resolves ? {} as never : undefined,
+            subscribe: () => () => {},
+            load: (reference, space) => {
+              loads.push([reference.policyDigest, space]);
+              return Promise.resolve();
+            },
+          },
+        });
+        return { gate, loads };
+      }
+
+      it("loads the manifest from the space that holds the document, when it does not resolve", async () => {
+        await using docs = await shelf();
+        const { gate, loads } = gateWithManifests(docs.runtime, false);
+        const note = await docs.write("policy-note", TEAM_NOTE, [[
+          [],
+          [policy],
+        ]]);
+
+        await gate.settle(note);
+        expect(loads).toEqual([["digest-of-the-team-policy", owner.did()]]);
+      });
+
+      it("loads nothing when the manifest already resolves", async () => {
+        await using docs = await shelf();
+        const { gate, loads } = gateWithManifests(docs.runtime, true);
+        const note = await docs.write("resolved-policy-note", TEAM_NOTE, [[
+          [],
+          [policy],
+        ]]);
+
+        await gate.settle(note);
+        expect(loads).toEqual([]);
+      });
     });
   });
 

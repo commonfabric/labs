@@ -10150,6 +10150,48 @@ describe("runtime-processor", () => {
       }
     });
 
+    it("decides a host's read of a document's metadata under the ceiling, on the document's labels", async () => {
+      // A metadata field sits beside the document's value, where no label
+      // covers it, so its read is decided on the labels the document holds.
+
+      const { runtime } = createRuntime();
+      try {
+        const tx = runtime.edit();
+        const cell = runtime.getCell<string>(
+          cfcSigner.did(),
+          "host-metadata-read-under-ceiling",
+          undefined,
+          tx,
+        );
+        cell.set("credential-behind-the-ceiling");
+        expect((await tx.commit().settled).ok).toBeDefined();
+        const ref = {
+          ...cell.getAsNormalizedFullLink(),
+          schema: {
+            type: "string",
+            ifc: { confidentiality: [cfcAtom.resource("CredentialSecret")] },
+          },
+        } as unknown as CellRef;
+        const state = buildProcessor({ runtime });
+        const read = () =>
+          state.handleCellGet({
+            type: RequestType.CellGet,
+            cell: ref,
+            meta: "internal",
+          });
+
+        expect("refused" in await read()).toBe(false);
+        state.accessForTestingOnly.renderConfidentialityCeiling = {
+          atoms: [],
+        } as never;
+        expect(await read()).toEqual({
+          refused: { refusedBy: "display-ceiling" },
+        });
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
     it("decides a host's read under the ceiling `initialize()` configures, with the resolver a mount gets", async () => {
       // The ceiling admits what the acting user may see. A value labeled with
       // the session's own space is admitted through the exchange rules alone,
