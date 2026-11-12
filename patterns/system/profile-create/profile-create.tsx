@@ -142,7 +142,9 @@ export const seedProfileName = handler<
   SeedProfileNameEvent,
   {
     privateInbox?: ProfileInbox;
-    profileSuggestion?: Writable<ProfileSuggestion | null | undefined>;
+    // The suggestion as the surface shows it (`shownSuggestion`), whose
+    // declared default ends the wait for a suggestion nobody wrote.
+    profileSuggestion?: ProfileSuggestion | null;
     pictureChoice?: Writable<PictureChoice | undefined>;
   }
 >((event, { privateInbox, profileSuggestion, pictureChoice }) => {
@@ -164,10 +166,7 @@ export const seedProfileName = handler<
   // otherwise wait for the next worker.
   pointAtInboxIfUnset(target, privateInbox);
   target.setName.send({ name });
-  const picture = pictureToApply(
-    pictureChoice?.get(),
-    profileSuggestion?.get(),
-  );
+  const picture = pictureToApply(pictureChoice?.get(), profileSuggestion);
   if (picture) target.setPicture?.send({ picture });
 });
 
@@ -719,11 +718,12 @@ export type ProfileCreateInput = {
   profileSuggestion?: Writable<ProfileSuggestion | undefined>;
 };
 
-// The suggestion as the surface shows it: `null` when there is none. For a
-// user no host made a suggestion for, the link the wish passes reaches a
-// document nobody wrote, and a read whose schema declares no default waits for
-// that document forever (speculation.md), stalling everything here that reads
-// the suggestion. This read's declared default ends the wait. It sits here
+// The suggestion as the surface shows it and the create applies it: `null`
+// when there is none. For a user no host made a suggestion for, the link the
+// wish passes reaches a document nobody wrote, and a read whose schema
+// declares no default waits for that document forever (speculation.md),
+// stalling everything here that reads the suggestion, the create's seed step
+// included. This read's declared default ends the wait. It sits here
 // rather than on `profileSuggestion` itself because a default added to that
 // input could not be proved compatible with the pieces already running this
 // pattern (`deno task pattern-compat`).
@@ -755,16 +755,16 @@ export default pattern<ProfileCreateInput, ProfileCreateOutput>(
     const pictureChoice = Writable.perSession.of<PictureChoice | undefined>(
       undefined,
     );
+    const suggestion = shownSuggestion({ suggestion: profileSuggestion });
     const seedName = seedProfileName({
       privateInbox,
-      profileSuggestion,
+      profileSuggestion: suggestion,
       pictureChoice,
     });
     const createProfile = submitProfileCreation({
       profiles,
       seedName,
     });
-    const suggestion = shownSuggestion({ suggestion: profileSuggestion });
     const startingName = computed(() => suggestion?.name ?? defaultName ?? "");
     const shownPicture = computed(() =>
       pictureToApply(pictureChoice.get(), suggestion)

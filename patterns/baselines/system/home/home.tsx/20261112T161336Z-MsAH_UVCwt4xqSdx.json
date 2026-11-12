@@ -744,19 +744,23 @@
           },
           "kind": {
             "$ref": "#/$defs/ChatRoomKind",
-            "description": "The room's kind, as its `about.kind` says."
+            "description": "The room's kind, as its `about.kind` said when the entry was recorded."
           },
           "revision": {
             "description": "The opaque revision supplied by `rooms` for its membership or discovery\nsource. A request to forget uses that view's revision; direct mappings\nand act outcomes may omit it.",
             "type": "string"
           },
           "room": {
-            "$ref": "#/$defs/ChatRoomLink",
-            "description": "The room."
+            "description": "The room, as a handle that declares nothing of the room: a read of an\nentry, or of anything holding one, keeps the link without loading the\nroom. Whoever reads the room reads it through a link that declares what\nit reads, as a `ChatRoomLink` does.",
+            "type": "unknown"
           },
           "since": {
-            "description": "When first listed for this user, using catalog admission for discovery.",
+            "description": "When first listed for this user.",
             "type": "FabricEpochNsec"
+          },
+          "title": {
+            "description": "The room's title as the manager last read it, when the room has one:\nabsent for a room with no title, and otherwise exactly the room's own,\nempty or not.",
+            "type": "string"
           }
         },
         "required": [
@@ -777,8 +781,8 @@
             "type": "string"
           },
           "room": {
-            "$ref": "#/$defs/ChatRoomLink",
-            "description": "The room the recipient was admitted to."
+            "description": "The room the recipient was admitted to, as a handle that declares nothing\nof the room, as `ChatIndexEntry.room` is.",
+            "type": "unknown"
           }
         },
         "required": [
@@ -1259,7 +1263,7 @@
             "type": "array"
           },
           "rooms": {
-            "description": "Every room this user belongs to and hasn't forgotten, newest first, other\nthan one whose space is deleted.",
+            "description": "Every room this user belongs to and hasn't forgotten, newest first, other\nthan one the catalog marks deleted: a deletion is marked once a runtime of\nthis user hears of it, as opening the room does.",
             "items": {
               "$ref": "#/$defs/ChatIndexEntry"
             },
@@ -1396,7 +1400,7 @@
             "type": "array"
           },
           "rooms": {
-            "description": "Every room this user belongs to and hasn't forgotten, newest first, other\nthan one whose space is deleted.",
+            "description": "Every room this user belongs to and hasn't forgotten, newest first, other\nthan one the catalog marks deleted: a deletion is marked once a runtime of\nthis user hears of it, as opening the room does.",
             "items": {
               "$ref": "#/$defs/ChatIndexEntry"
             },
@@ -2114,8 +2118,8 @@
             "type": "string"
           },
           "container": {
-            "$ref": "#/$defs/ChatContainer",
-            "description": "The root declaring a conversation joined through a container."
+            "description": "The root declaring a conversation joined through a container, as a handle\nthat declares nothing of the root, as `ChatIndexEntry.room` is.",
+            "type": "unknown"
           },
           "counterpart": {
             "description": "A direct room's other member, by principal.",
@@ -2123,18 +2127,18 @@
           },
           "kind": {
             "$ref": "#/$defs/ChatRoomKind",
-            "description": "The room's kind, as its `about.kind` says."
+            "description": "The room's kind, as its `about.kind` said when the entry was recorded."
           },
           "revision": {
             "description": "The event that last changed membership.",
             "type": "string"
           },
           "room": {
-            "$ref": "#/$defs/ChatRoomLink",
-            "description": "The room."
+            "description": "The room, as a handle that declares nothing of the room: a read of an\nentry, or of anything holding one, keeps the link without loading the\nroom. Whoever reads the room reads it through a link that declares what\nit reads, as a `ChatRoomLink` does.",
+            "type": "unknown"
           },
           "since": {
-            "description": "When first listed for this user, using catalog admission for discovery.",
+            "description": "When first listed for this user.",
             "type": "FabricEpochNsec"
           },
           "state": {
@@ -2143,6 +2147,10 @@
               "saved",
               "archived"
             ]
+          },
+          "title": {
+            "description": "The room's title as the manager last read it, when the room has one:\nabsent for a room with no title, and otherwise exactly the room's own,\nempty or not.",
+            "type": "string"
           }
         },
         "required": [
@@ -2902,7 +2910,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/system/profile-create/profile-create.tsx",
-                  "moduleIdentity": "iUdMll5w4uY64-fhKGLAd4ZZLD3EBf1-nw2D-t0kRxU",
+                  "moduleIdentity": "xVD8a2Iaf8utRkAYMFTekxuykHnqi-_er7MP9iBziSU",
                   "path": [
                     "setDefaultProfile"
                   ]
@@ -2930,7 +2938,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/system/profile-create/profile-create.tsx",
-              "moduleIdentity": "iUdMll5w4uY64-fhKGLAd4ZZLD3EBf1-nw2D-t0kRxU",
+              "moduleIdentity": "xVD8a2Iaf8utRkAYMFTekxuykHnqi-_er7MP9iBziSU",
               "path": [
                 "submitProfileCreation"
               ]
@@ -2946,7 +2954,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/system/profile-create/profile-create.tsx",
-              "moduleIdentity": "iUdMll5w4uY64-fhKGLAd4ZZLD3EBf1-nw2D-t0kRxU",
+              "moduleIdentity": "xVD8a2Iaf8utRkAYMFTekxuykHnqi-_er7MP9iBziSU",
               "path": [
                 "submitProfileCreation"
               ]
@@ -2966,7 +2974,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/system/profile-create/profile-create.tsx",
-              "moduleIdentity": "iUdMll5w4uY64-fhKGLAd4ZZLD3EBf1-nw2D-t0kRxU",
+              "moduleIdentity": "xVD8a2Iaf8utRkAYMFTekxuykHnqi-_er7MP9iBziSU",
               "path": [
                 "setMruProfile"
               ]
@@ -2990,7 +2998,7 @@
             "writeAuthorizedBy": {
               "__ctWriterIdentityOf": {
                 "file": "/patterns/system/profile-create/profile-create.tsx",
-                "moduleIdentity": "iUdMll5w4uY64-fhKGLAd4ZZLD3EBf1-nw2D-t0kRxU",
+                "moduleIdentity": "xVD8a2Iaf8utRkAYMFTekxuykHnqi-_er7MP9iBziSU",
                 "path": [
                   "setMruProfile"
                 ]
@@ -3008,7 +3016,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/system/profile-create/profile-create.tsx",
-              "moduleIdentity": "iUdMll5w4uY64-fhKGLAd4ZZLD3EBf1-nw2D-t0kRxU",
+              "moduleIdentity": "xVD8a2Iaf8utRkAYMFTekxuykHnqi-_er7MP9iBziSU",
               "path": [
                 "setProfileRetired"
               ]
@@ -3024,7 +3032,7 @@
             "writeAuthorizedBy": {
               "__ctWriterIdentityOf": {
                 "file": "/patterns/system/profile-create/profile-create.tsx",
-                "moduleIdentity": "iUdMll5w4uY64-fhKGLAd4ZZLD3EBf1-nw2D-t0kRxU",
+                "moduleIdentity": "xVD8a2Iaf8utRkAYMFTekxuykHnqi-_er7MP9iBziSU",
                 "path": [
                   "setProfileRetired"
                 ]
