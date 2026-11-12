@@ -30,19 +30,19 @@ next.
   each other, with the side that governs and the smallest correction for
   each. This plan cites its findings by number: K1 to K19, the numbers 1
   to 26 of its section 3, F1 to F21, and the A, B, C, and D numbers of its
-  section 5. Applied so far are the corrections to the overview,
-  `language-subset.md`, `plan-and-label-templates.md`, and
-  `builtin-inventory.md` that need no ruling: section 5 of the record, K1,
-  K2, K6, K8 to K11, and K16 to K19. Not applied from those are the ones
-  that wait on the owner (A2, A9, the first item of A14, the two senses of
-  "cause" in A17, K3, and K12 to K15), the corpus counts (K4, K5, A16), and
-  the numbering gap after §3.19 of the plan document (K7), which stays
-  because other documents cite the numbers after it. Sections 3 and 4 of
-  the record, on the three newer documents, are not applied.
+  section 5. Its corrections are applied in every document, in two rounds
+  of passes. Not applied are the ones that wait on the owner (A2, A9, the
+  first item of A14, the two senses of "cause" in A17, K3, K13, and what
+  remains of K12), the corpus counts (K4, K5, A16, F20), and the numbering
+  gap after §3.19 of the plan document (K7), which stays because other
+  documents cite the numbers after it.
 - **Specification change:** draft pull request #91 in `commonfabric/specs`
   (branch `claude/compiled-pattern-label-templates`) carries the label
   semantics as prose, pseudocode, and Lean statements. It includes the
-  pattern closure, as prose. That repository is private; cite it from this
+  pattern closure, as prose, and it follows
+  `plan-and-label-templates.md` for the rules that document gained in the
+  second round of passes; [Known limits](#known-limits-of-what-exists)
+  lists what it still lacks. That repository is private; cite it from this
   one by section and chapter file only, as
   [`../development/cfc-spec-correspondence.md`](../development/cfc-spec-correspondence.md)
   requires.
@@ -79,9 +79,8 @@ next.
 
 ## Decided
 
-Each ruling is written into the documents. One marked *pending* is not yet
-in every document it touches; the passes write it in. This list exists so that none is
-relitigated.
+Each ruling is written into the documents. This list exists so that none
+is relitigated.
 
 **Architecture**
 
@@ -96,36 +95,42 @@ relitigated.
 - Execution is authoritative on the server. Clients speculate from the same
   compiled artifact, evaluate the same gates, and never request effects,
   with one exception: a client enacts `navigateTo` from its speculative run,
-  reconciled with the server's result as it is today. *(The exception is
-  pending.)*
+  reconciled with the server's result as it is today.
 - One transaction per cause. A failed cone takes a labeled error state and
   the rest commits.
 - A failed constraint on what a handler itself writes rejects the event's
   whole transaction. A failed constraint on a derived output drops that
   output's write alone: the output keeps what is stored, and the rest of
-  the transaction commits. *(The second sentence is pending.)*
+  the transaction commits.
 - Several events are handled in one batch. Before a handler body runs, the
   stale cones it reads are evaluated, the ones an earlier event of the batch
   made stale included. Every other derivation the batch made stale settles
-  once behind the batch, not once per event. *(Pending.)*
+  once behind the batch, not once per event.
 - A change of demand is a cause of its own, the fourth kind. It has a
   transaction of its own, which runs as the demanding principal.
-  *(Pending.)*
 - A conflict on a derived write withdraws that write alone, and the rest
-  of the cause's transaction commits. *(Pending.)*
+  of the cause's transaction commits.
 - A handling is identified by the receipt, which leaves the acting
-  principal out. *(Pending.)*
+  principal out.
+- An event is routed to an instance that is not loaded through a stream
+  index: one row per stream, from the stream identifier to its instance
+  and binding. The index is aligned with what server-primary execution
+  does for a queued event today.
+- A read of a cell whose writer is in an instance that is not loaded
+  consults the scheduler's stored record of what is stale. Where the
+  stored value is current the read returns it and the instance is not
+  loaded. Only where it is stale is the instance loaded and the writer
+  evaluated first.
 - A cone is evaluated at most ten times in one transaction. The number is
   a placeholder, fixed with the plan version. A cone that failed at the
   bound is not evaluated again until one of its inputs changes.
-  *(Pending.)*
 - The identifier of a space that an `inSpace` request creates is obtained
   and not derived from the request. The allocation is recorded in a step
   that commits before the step in the foreign space, so that a retry
-  names the same space. *(Pending.)*
+  names the same space.
 - A client cannot read the element-key salt. It cannot name value-keyed
   per-element state, or a binding with copied captures, before the server
-  stores a link. *(Pending.)*
+  stores a link.
 
 **Language**
 
@@ -144,7 +149,6 @@ relitigated.
   to a reactive form. The diagnostic names two corrections: wrap the
   expression in an inline `pattern(...)`, which keeps it reactive, or read
   first, `aCell.get().map(...)`, which processes the values synchronously.
-  *(Pending.)*
 - `any` is refused. Published label typings are identity aliases, and no
   editor plugin is part of the design.
 - `streamData` and `llm` are removed. `wish` is structural.
@@ -163,7 +167,7 @@ relitigated.
   same place names the same instance and updates its argument, and an
   instance an evaluation no longer makes is torn down. An effect in the
   instance is requested again when its request changes, as for any effect
-  whose input changed. *(Pending.)*
+  whose input changed.
 - A function body may call two kinds of factory value: a pattern factory,
   which it instantiates, and a handler factory, which it binds. Both are
   resolved at run time from their own compiled records. A `lift` result is
@@ -174,7 +178,7 @@ relitigated.
   arrives, and a record the handler passes on links to the original. A
   binding made in the reactive tier copies nothing, the body of a
   per-element callback included: every path of the handler's state is a
-  slot of the instance. *(Pending.)*
+  slot of the instance.
 
 **Identity and storage**
 
@@ -186,7 +190,7 @@ relitigated.
   rendered tree, can have a document of its own, linked from the result, so
   that a reader loads and subscribes to the parts it uses. One evaluation
   writes all the documents it changed in one transaction. The split can be
-  fine, and the runtime decides it by a rule about size. *(Pending.)*
+  fine, and the runtime decides it by a rule about size.
 - A state cell's identifier derives from its cause, with the name taken from
   the assigned variable as the transformer's `.for(...)` does.
 - A `map` element is keyed by its value when it is a plain value and by its
@@ -204,7 +208,6 @@ relitigated.
   join a bucket's membership label. The other is a read through a handle
   that is static because every run that returns normally makes it: a run
   that throws before the read carries the read's label all the same.
-  *(The second is pending.)*
 - `findIndex`, `some`, and `every` use the prefix rule: elements after the
   deciding one do not join the label.
 - A factory value that changes under a child tears the child down and starts
@@ -245,7 +248,12 @@ answer goes to the specification with the document.
 **Transactions, identity, and spaces.**
 
 15. **Commits across spaces** (SS question 6). *Assumed:* one ordered,
-    non-atomic sequence: access changes, then foreign batches, then home.
+    non-atomic sequence: the creation of a space an `inSpace` request
+    creates, the allocation record, access changes, the batches in other
+    spaces, then home. The ruling has the allocation recorded before the
+    step in the other space; the creation of the space comes first here
+    because a record committed before it could name a space that never
+    exists (ES §5.6, SS §9.4).
 16. **Demand across spaces** (SS question 5). *Assumed:* a serving
     runtime's session on another space counts as demand there.
 17. **`inSpace` on a statically resolved callee in the reactive tier**
@@ -271,10 +279,10 @@ answer goes to the specification with the document.
 
 **Migration.**
 
-24. **Compiled and builder-path instances in one space** (finding 20). ES
-    migrates instances one at a time; SS removes the mechanisms a
-    builder-path instance needs. Whether one serving runtime runs both is a
-    question of scope.
+24. **Compiled and builder-path instances in one space** (finding 20,
+    SS §10.8). ES migrates instances one at a time. *Assumed:* one serving
+    runtime hosts Scheduler v2 and this scheduler side by side until the
+    builder form is retired.
 25. **Settled effect results** (ES question 2). *Assumed:* copied forward,
     so that a migrated instance does not request again.
 26. **Retired documents and refused sources** (ES questions 3 and 4).
@@ -336,228 +344,160 @@ answer goes to the specification with the document.
     error state.
 38. **An instance made in a `lift` or a `computed`.** The ruling allows
     the instantiation and leaves two things to assume. *Assumed:* the
-    instance is identified by the enclosing instance, the site, and the
+    instance is identified by the enclosing instance, the body's name
+    and the calls and callbacks it is written in, the site, and the
     ordinal of the instantiation among those the evaluation makes at that
     site, or by an explicit cause where the author writes
     `.for(cause)`; and a `lift` or a `computed` still does not request an
     effect directly, so an effect that depends on computed data is
     written in a pattern, inline or named, that the computation
-    instantiates.
+    instantiates. With the ordinal, a site in a loop names its instances
+    by loop order: removing the first record gives each instance the
+    argument of the next record and tears down the last one, unless the
+    author writes `.for(cause)`.
+
+**From the second round of passes.** "PL" is
+`plan-and-label-templates.md`, "LS" is `language-subset.md`, and "BI" is
+`builtin-inventory.md`. Each is written into the documents as an
+assumption.
+
+39. **What a withdrawn write takes with it** (PL §4.5, §4.6, question
+    28). The ruling withdraws a derived write alone on a conflict. Other
+    writes of the transaction can have been computed from a value or a
+    label it staged. *Assumed:* those are withdrawn with it and the rest
+    commits. The alternative evaluates and checks them again at the
+    commit.
+40. **What is stored once per element key** (PL §2.6, question 27; ES
+    §2.5). Positions that hold equal plain values share one key. An
+    effect's request and result, operation state, a child's argument, a
+    side-write, and a binding's copied state are stored once for the key.
+    *Assumed:* where the positions resolve to different labels, what is
+    stored carries the join. That is looser than today, where each
+    occurrence has its own run, and would be a third exception to "equal
+    to or tighter". The alternative keys these as per-element state is
+    keyed.
+41. **Where a result is split** (ES §4.10, question 32). *Assumed:* the
+    split points are the root of a kept output, a row of a kept
+    collection, and a node of the rendered tree at any depth; a part is
+    split off at 1,024 bytes and merged back at 512, and a document holds
+    at most 65,536; the properties of a rendered node stay with the node.
+    The numbers are placeholders for stage 4 to measure.
+42. **An instance made again under the identity of one torn down** (ES
+    §2.8, question 33). *Assumed:* it finds the stored state where that
+    is not yet deleted, as an element whose key returns does. A link to a
+    torn-down instance held elsewhere reads the last stored values.
+43. **A failed evaluation of a computation that makes instances** (PL
+    §3.14). *Assumed:* the instances of the last evaluation stay, and
+    their arguments take the error state.
+44. **A cone that failed on a time or memory budget** (ES question 34).
+    *Assumed:* as at the bound, it is not evaluated again until an input
+    changes.
+45. **The acting principal of a space-scoped evaluation** (SS §9.3,
+    question 34). *Assumed:* none, as today. So a change of demand runs
+    as the demanding principal only for that principal's own scope, and
+    an `inSpace` instantiation by a space-scoped computation is refused.
+46. **A kept output computed before a handler body** (ES §1.6). *Written
+    in:* the event's transaction stores it; where the body read it by
+    address it is instantiated and checked before the read, commits under
+    that label, and its cone is evaluated again behind the batch.
+47. **A container captured by an inline handler that reads only scalars
+    below it** (`footprint-analysis.md` §8.5). Under the binding ruling
+    the container is one link, where today the scalars are copied when
+    the binding is made. The stream then stays the same when such a
+    scalar changes. *Assumed:* the link.
+48. **Captures of an inline pattern** (PL §3.15, questions 23 and 24).
+    *Assumed:* an inline pattern instantiated in a function body binds
+    its captures by the rule for a handler binding, and a pattern closure
+    of the reactive tier keeps the closure rule, which copies.
+49. **A `computed` that instantiates a pattern is not promoted** (LS
+    §6.1), because promotion would compile the call into the surrounding
+    instance and change which documents exist.
+50. **`inSpace` and `asScope` on an instantiation in a computation** (PL
+    §3.14; BI question 11). *Assumed:* legal, as in a handler.
+51. **What a language-model built-in sends that no checked request held**
+    (BI question 6): tool-loop results, a system prompt rendered again
+    from live context after the commit, and the live transcript of a
+    dialog. The egress ceiling checked at the request covers none of it.
+    *Assumed:* the boundary's own transactions label it.
+52. **Trigger reads lost at a restart** (PL §3.10, question 29). A body
+    with a sampled read can be evaluated because of a change at an
+    address it does not read again, and after a restart that address's
+    label is not joined. *Assumed:* accepted, equal to today. The
+    alternative stores those reads with the basis rows.
+53. **An explicit cause is not salted** (PL §1.3, question 30), so an
+    observer who can list documents can test a guess of a low-entropy
+    cause. *Assumed:* as today.
+54. **Logs** (the overview). Whether a body can pass labeled data to
+    `console`. Nothing is assumed; the footprint counts the arguments as
+    read.
 
 ## Open, and not needing the owner
 
-The cross-read record lists each of these with the side that governs and the
-correction. The ones more depends on:
+Both rounds of passes are done, and each document's requests to the others
+are marked met where they are. What is left:
 
-- **Between `execution-and-storage.md` and `scheduler-and-serving-loop.md`**
-  (section 3 of the record): one transaction or two for an effect's
-  completion; when a kept output's value is staged and in what order labels
-  are instantiated; slots resolved before a cone runs or on first read;
-  what is current after a restart; what a rejection leaves in the memo;
-  labels per position against a memo per key; how an event reaches its
-  binding.
-- **Where a result is split into documents.** The ruling leaves the rule
-  about size to `execution-and-storage.md`: which subtrees get a document
-  of their own, how such a document is identified so that a reorder moves
-  a link and not a subtree, and what a reader of a part demands.
 - **The pattern closure's remaining gaps** (K12): which output or argument
   path holds which entry of `Plan.closures`, a conditional between two
-  closures, a closure called through `inSpace`, and the private parameters
-  of an inline pattern instantiated from a function body.
+  closures, and a closure called through `inSpace`.
 - **Corpus counts** differ among `language-subset.md`,
   `builtin-inventory.md`, and `footprint-analysis.md` (K4, K5, A16, F20).
-
-The open questions each document ends with stay where they are.
-
-### What each document changes to agree with `plan-and-label-templates.md`
-
-The plan document has the records and label rules the three newer
-documents asked for, and five rulings written in. The other six documents
-do not agree with it yet. Each list is the brief for that document's pass,
-beside the findings of the cross-read record that name the document.
-
-**`plan-and-label-templates.md`**, from the footprint pass
-(`footprint-analysis.md`, request 16): six things the analysis produces
-that the record cannot express.
-
-- A `shape` observation at a position that holds a handle: whether a
-  handle is present observes the position, and every class but `identity`
-  resolves through a link at the last segment.
-- A widening on a computed input, which `Widening.slots` cannot name.
-- A write through `h.resolveAsCell()`, which lands where the resolution
-  ends and not in the cell `h` links to.
-- A handle found by a dynamic read, which has no slot for an entry of
-  `handles` to name.
-- The captures of an inline pattern instantiated in a body (K12).
-- `equalLinks`, which has no row among the context reads.
-
-And from the ruling on what a handler binding copies:
-
-- §3.14, "Binding a handler": a captured container that has a stored
-  address is a reference, and the stream's identity takes that address in
-  place of the container's content.
-- `Binding.state`: what `capture` records for such a container, and that a
-  binding of the reactive tier has no copied path.
-- §4.1: the list of places a template is instantiated names "a state path
-  of a binding that is copied".
-
-**`footprint-analysis.md`**, from the same ruling:
-
-- §8.5: the rows of the table for a container. A container read from an
-  input or a cell records `identity` in the body that makes the binding,
-  and the binding holds a link. The rows that copy remain for a scalar and
-  for a container the body computed.
-- §8.5 "Against today" and the row for a handler binding in §12.4: equal.
-- §3.8: the destination "into a handler binding".
-- Owner question 3 is ruled, and request 15 is answered.
-
-**`execution-and-storage.md`**
-
-- §1.1, §1.2, §1.5, §10.1: an event's transaction has no derivation step
-  behind the body; derivations run in one transaction behind the batch.
-- §1.2, §1.7, §3.3: a failed constraint on a derived write drops that
-  write alone; what the memo holds for it.
-- §1.2 step 5, §1.6: the three conditions of §4.1 of the plan document;
-  effect requests and cached outputs are instantiated; values are staged
-  at evaluation; labels resolve against what the transaction staged
-  (§4.5).
-- §1.3, §2.3: a cone edge through a handle beside one through a state
-  cell.
-- §1.4, §2.4: which handles a body is handed, `get()` under the envelope,
-  `sample()`.
-- §1.8, §1.9: the output's scope; what the digest binds (§4.6).
-- §2.1, §2.2: interim outputs; the runtime narrows a computed input;
-  slots resolve through links.
-- §2.5, §3.1, §3.2: label identifiers of element slots are per position.
-- §2.7: withdrawn side-writes, and the error state of an argument or a
-  request.
-- §4.1 to §4.4, §4.9: several documents. The document owns which subtrees
-  get a document, how a part is identified, and what a reader of a part
-  demands. A link to another instance's output is a slot across the link.
-- §4.1, §6: a materializer's state document and an effect's stored
-  request.
-- §5.2, §5.5: names as §1.3 of the plan document has them.
-- §6.5, §7.4, §8.4 to §8.7, §9: the labels of §2.6 of the plan document.
-  The assumption that provenance is protected as label metadata was
-  unsound and is replaced there.
-- Section 3 of the record: findings 1, 2, 3, 5, 6, 7, 10, 11, 12, 13, 18,
-  21, and 26.
-- From the footprint pass: the body is handed every handle its record
-  names, and the resolved reference for a resolved entry; stand-ins for
-  `shape`, `enumeration`, `identity`, and reference positions in an
-  argument and in a binding's copy.
-
-**`scheduler-and-serving-loop.md`**
-
-- §1.4, §5.2, §5.4, §10.2: the batch ruling.
-- §5.5, §5.6: only a handler's own writes reject its event; a failing
-  constraint in another instance drops that write.
-- §2.2: element bindings by slot and position.
-- §2.4, §5.2, §7.2: a materializer's envelope is its body's `writes` and
-  `envelopes`; what a creation-site envelope means for promotion.
-- §2.6, §8.2: the writer map and the cycle report include targets through
-  a handle and stored requests.
-- §3.1 to §3.5: resolved slots, storage links left out of chains, sampled
-  reads, journaled label-metadata reads, the deletion answer reported at
-  the access-list address, labels staged within a transaction and a batch.
-- §4.2: demand per path over several documents.
-- §5.3: a static read through a handle is a slot.
-- §6.2, §6.3: a request is a write edge and not a kept output; the request
-  transaction follows references and runs again when their content
-  changes.
-- §2.5, §6.7: `navigateTo` on a client (ruled).
-- §7: a materializer's result through an `operation` slot.
-- Section 3 of the record: findings 1, 3, 8, 9, 14, 19, 20, 23, and 24.
-- From the footprint pass: open question 24 is answered in
-  `footprint-analysis.md` §8.5; §5.3 does not order by a read envelope.
-
-**`builtin-inventory.md`**
-
-- "Element keys": `within` steps in place of `perElementOf`.
-- Each effectful built-in: which operands of a request are references,
-  and how deep the rest is serialized.
-- "An effect request made from a body": the request is a write edge, and
-  the ceiling covers the content followed.
-- "Context reads": `resultOwnerOf`, the resolved reads, `spaceDeleted`,
-  and journaled label-metadata reads.
-- Open questions 10 and 11, which the plan document answers.
-- "An instantiation request from a handler": "whether the value is copied
-  or is a cell handle" against the reference rule.
-- "A handler binding made in a body": the ruling on what a binding copies,
-  in the static record, the identity, and the label.
-
-**`language-subset.md`**
-
-- §4.7: `resolveAsCell()` observes a resolved reference; `get()`,
-  `key(k)`, and `elementById` in the reactive tier.
-- §5.4, §10.3: a widening covers the entries it replaced.
-- §4.4.1, §4.6: the naming rule of §1.3 of the plan document.
-- Open questions 9 and 10.
-- §4.7, §10.2: `cell:collection-method-in-function` names both
-  corrections, the inline `pattern(...)` and `get()` first (ruled).
-- §5.1, §5.2, §10.3: a `lift` or a `computed` may instantiate a pattern
-  (ruled); `function-body:instantiation-in-computation` goes, and the
-  hint of `function-body:effect-in-computation` names the pattern.
-- §5.2: a binding made in a function body copies a scalar and a computed
-  value and binds a stored container by reference (ruled). The identity of
-  a binding takes the address of a container bound by reference, so two
-  bindings to equal records stored in two places are two streams. A
-  binding of the reactive tier copies nothing. §7.8: what a kind test or a string conversion
-  sees at an `unknown` data position. §10.3: `footprint:widened` names one
-  input path where a widening covers several entries or a handle.
-
-**The overview**
-
-- "One transaction per cause": the batch, and the two outcomes of a failed
-  constraint.
-- Staging and "Label templates": two exceptions to equal or tighter.
-- "Pull and dependency cones": the widening sentence.
-- "What is stored" and the example: several documents.
-- Clients: the `navigateTo` exception.
-- "Where footprint analysis gives up it widens a static slot, and no
-  dynamic tracking is involved" does not hold for a handle the analysis
-  loses.
-
-### Found while correcting the first four documents
-
-These are not in the cross-read record. Each is left as it was found.
-
+- **`execution-and-storage.md` leaves three things unspecified:** how the
+  arrangement of part documents is computed again when a conflict
+  withdraws writes at the commit, after the size rule ran; how the
+  instances that belong to a torn-down instance are found when it is not
+  loaded; and what a cone's journaled read does when its writer is in an
+  instance that is not loaded and the stored value is stale, which
+  `scheduler-and-serving-loop.md` §5.3 decides for a handler only.
+- **`footprint-analysis.md`, owner question 2** says the current treatment
+  of a value passed on unchanged "is what keeps such a body from reading
+  the record". A probe showed that a `lift` that returns an input record
+  whole keeps the record's full declared type in its argument schema, so
+  the sentence may be wrong about the current runtime.
+- **A container bound by reference from an inline plain element that two
+  positions share** has two addresses and one shared evaluation. No
+  document examines it.
 - **`setSchema`** is removed by `language-subset.md` §4.7 and has no
   catalog entry. That document also does not say whether a cell handle
   type is a data type or a code type, which its rule for imported
   signatures depends on.
-- **The overview** still says a `map` element is a cone with a key, where
-  an element body is one or more cones; that the scheduler's rule P7
-  applies to cycles, where the proposal fails the cone at the bound; that
-  a handler's read closure is static, which does not hold for the reads
-  footprint analysis leaves dynamic; and that the compiler checks
-  statelessness in all three tiers, where imported modules keep the
-  load-time verifier.
-- **Wording that the pass left uneven.** `plan-and-label-templates.md` now
-  calls the callback of `minBy`, `maxBy`, and the indexes the key
-  function; `language-subset.md` and `builtin-inventory.md` say selector.
-  `language-subset.md` cites open questions of the newer documents by
-  number.
+- **Uneven wording.** `language-subset.md` says selector where the other
+  documents say key function, and it cites open questions of the newer
+  documents by number.
+
+The open questions each document ends with stay where they are.
 
 ## Known limits of what exists
 
 - **The cross-read did not cover every section.** Each reader states what
   was not read in full at the end of its section of the record. The
   overview was checked against the three new documents only in part.
-- **Claims about the current system in the three new documents are
-  verified unevenly.** Each author cited source by file and function. The
-  author of `scheduler-and-serving-loop.md` read parts of the
-  serving-loop and events specifications by search, and knows the
-  render-boundary document from a summary.
-- **Specs pull request #91 is behind `plan-and-label-templates.md`.**
-  It has the pattern closure, the rulings on batches and on a failed
-  constraint, slot paths through references, and the labels of state the
-  runtime stores. Section 2 of the record lists what it still lacks: among
-  others the changed-factory rule and the `inSpace` rule of the Decided
-  list, most context reads, and the group-mode rules of the collection
-  index. It has not been reviewed. Its Lean development states the two
+- **Specs pull request #91 is behind `plan-and-label-templates.md`** in
+  what section 2 of the record lists and the passes did not reach:
+  stateful element bodies; the run-time schema check of a child instance
+  and that its argument is always stored; `.for(tag)` with its frozen
+  existence label, `asScope`, and a cell cause computed from data; the
+  declared-default exception of error states; most context reads; the
+  array capture of `map`; the group-mode rules, tie rules, and nullish
+  keys of the collection index and the aggregates; and the pull request's
+  description. It does not state the bound of ten evaluations, the
+  handling identified by its receipt, or that a client cannot read the
+  salt. It has not been reviewed. Its Lean development states the two
   target theorems; everything added after the first draft is prose and
-  pseudocode only.
+  pseudocode only, and the calculus models no body calls, references, or
+  bindings.
+- **Claims about the current system are verified unevenly.** Each pass
+  reported what it did not verify. Among them: that running a new pattern
+  on an occupied result cell stops the one running there, which three
+  documents take from a doc comment; how a child inside a synthesized
+  pattern is named across re-runs; most of the per-built-in request
+  operands in `builtin-inventory.md` beyond the schemas, which came from
+  reading by search; and the citations `scheduler-and-serving-loop.md`
+  carried over, which were checked to exist and not for what they are
+  cited for.
+- **No one has read the seven documents against each other since the
+  passes.** The overview's author read the six detailed documents and
+  the differences found were corrected, but that was not a full
+  cross-read.
 - **Corpus numbers are syntactic.** They come from throwaway scripts over
   the parse tree with no type information, and three runs disagree on the
   totals. The share of `computed` calls that promote, the count of
@@ -580,23 +520,14 @@ These are not in the cross-read record. Each is left as it was found.
 
 1. **The owner rules** on the questions above. A ruling is added to
    [Decided](#decided) and the question removed.
-2. **The remaining reconciliation passes,** each document by one author,
-   from the lists under
-   [What each document changes](#what-each-document-changes-to-agree-with-plan-and-label-templatesmd)
-   and the findings of the record: `execution-and-storage.md` and
-   `scheduler-and-serving-loop.md`, by authors who each read the other in
-   full; then `plan-and-label-templates.md` for what the footprint pass
-   found it cannot express, with the specification; then
-   `builtin-inventory.md` and `language-subset.md`; the overview last. A
-   pass keeps the stated assumption wherever a question above is still
-   open.
+2. **Read the documents against each other again,** with readers briefed
+   as below, and record the result beside the first record.
 3. **Bring specs pull request #91 up to `plan-and-label-templates.md`**
-   (section 2 of the record), and add the label rules listed above.
+   for what [Known limits](#known-limits-of-what-exists) lists, and for
+   each ruling.
 4. **One corpus measurement** with one stated method, so that the three
    documents quote the same totals.
-5. **Read the documents against each other again** after the passes, and
-   record the result beside the first record.
-6. **Begin stage 2 of the overview's staging:** prototype the subset type
+5. **Begin stage 2 of the overview's staging:** prototype the subset type
    checker and footprint analysis, and replace the syntactic corpus numbers
    with type-checked ones.
 
