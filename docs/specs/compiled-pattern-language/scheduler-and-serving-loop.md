@@ -912,12 +912,23 @@ addresses. The basis rows name the documents a dynamic node's reads
 touched. The scheduler registers a row entry for each (section 10.4), so a
 change to such a document makes the cone instance stale by document until
 its next evaluation registers the addresses again. The trigger reads that
-were held at the restart are lost. *Assumed:* that is sound, because a
-write whose evaluation consumed them and that did not reach storage left
+were held at the restart are lost. That is sound, with one exception
+(`plan-and-label-templates.md` §3.10, "Trigger reads across a restart").
+A write whose evaluation consumed them and that did not reach storage left
 the basis rows of its cone instance behind (section 3.5), so the cone
 instance is evaluated again and its journal holds the labels of what it
 reads then. The label of an address the evaluation no longer reads is not
-joined (open question 31).
+joined. A change at such an address lies behind a changed read that the
+evaluation makes again, whose label it joins, so the label covers what the
+value depends on.
+
+The exception is a body that makes a sampled read. A change at the address
+of a sampled read makes no cone instance stale (section 3.1), and the
+value read can decide which reads follow. Such a body can then be
+evaluated because of a change at an address that it does not read again,
+and after a restart the label of that address is not joined. That is an
+accepted residual, equal to today, which that document assumes and lists
+for the owner (its open question 29; open question 31 here).
 
 ### 3.5 The open transaction's own writes
 
@@ -1311,7 +1322,10 @@ stream of a compiled instance, in the space's store, beside the basis index
 - **What it is.** Identifiers only, overwritten in place, written inside
   the wave's store transaction, never pushed to a client, and never read at
   admission. Those are the properties of a basis row. Only the scheduler of
-  the space's serving runtime reads it.
+  the space's serving runtime reads it. Where the runtime shows a row in a
+  diagnostic or to a tool, it shows it under the label
+  `plan-and-label-templates.md` §2.6 gives a row of the stream index
+  ("Rows beside the documents"), which is an assumption there.
 - **For a loaded instance** the scheduler holds the same mapping in memory
   and does not read the row.
 
@@ -2298,10 +2312,13 @@ step in that space.
 2. **The allocation record of each such space,** in a commit of the home
    space that holds the allocation records and nothing else. A record
    holds the obtained identifier under the name the request gives, or for
-   an anonymous target under the identifier of the instance requested. The
-   record is one of the writes the body staged and carries the body's
-   template. It commits by itself, ahead of the wave, as a setup
-   transaction does (section 10.8).
+   an anonymous target under the request's own identifier. That is the
+   identifier of the instance requested, except with `root: true`: the
+   instance identifier then derives from the identifier of the space, so
+   it cannot name the record that yields that identifier
+   (`plan-and-label-templates.md` §3.14). The record is one of the writes
+   the body staged and carries the body's template. It commits by itself,
+   ahead of the wave, as a setup transaction does (section 10.8).
 3. **The staged changes to access lists,** in the order the handler staged
    them.
 4. **The batch of writes for each other space:** the documents of the
@@ -2503,7 +2520,9 @@ recorded sequence numbers
 ([serving loop](../server-side-execution/serving-loop.md), §3b). Its shape
 stays: identifiers and sequence numbers, by document, overwritten in place,
 written inside the wave's store transaction, never pushed and never read at
-admission.
+admission. Where the runtime shows a basis row in a diagnostic or to a
+tool, it shows it under the label `plan-and-label-templates.md` §2.6 gives
+a basis row ("Rows beside the documents"), which is an assumption there.
 
 What changes is what a row is keyed by. Today the key is a durable action
 identity and the scope instance that ran. Here it is:
@@ -3178,20 +3197,25 @@ instantiate a pattern (2.7).
     so that none of them is loaded again through a link another document
     holds (section 2.7).
 31. **Trigger reads across a restart** (`plan-and-label-templates.md`, and
-    the specification change). The trigger reads a `dynamic` node held
-    are lost with the process. *Assumed:* the evaluation that the basis
-    rows cause after a restart joins the labels of what it reads then, and
-    not the label of an address that changed before the restart and that
-    it no longer reads (section 3.4). A basis row names a document and no
-    path, so it cannot stand in for the trigger read.
-32. **To `plan-and-label-templates.md`: two wordings.** Its §4.4 says of a
-    dropped and of a withdrawn derived write that "the cone that computed
-    it stays stale". In the terms of this document and of
-    `execution-and-storage.md` §3.3 the cone instance is current and its
-    output is unstored, unless something it read changed (section 3.5).
-    Its §4.4 qualifies the withdrawn case in that sense and leaves the
-    dropped case as it is. And its open question 20 lists what it needs
-    from this document, each of which is met: the chain of a slot and of a
+    the specification change). Met by its §3.10 ("Trigger reads across a
+    restart"). The trigger reads a `dynamic` node held are lost with the
+    process. The evaluation that the basis rows cause after a restart
+    joins the labels of what it reads then, and not the label of an
+    address that changed before the restart and that it no longer reads
+    (section 3.4). That covers what the value depends on, with one
+    exception: a body that makes a sampled read can be evaluated because
+    of a change at an address that it does not read again, and after a
+    restart the label of that address is not joined. The exception is an
+    accepted residual, equal to today, which that document assumes and
+    lists for the owner (its open question 29). A basis row names a
+    document and no path, so it cannot stand in for the trigger read.
+32. **To `plan-and-label-templates.md`: two wordings.** Met. Its §4.4
+    says of a dropped derived write, and of a withdrawn one whose
+    conflict was on the target alone, that the cone instance that
+    computed it is current and its output is unstored. Those are the
+    terms of this document and of `execution-and-storage.md` §3.3
+    (section 3.5). And its open question 20 lists what it needs from this
+    document, each of which is met: the chain of a slot and of a
     `resolved` slot (3.2), sampled reads (3.1), a journaled label-metadata
     observation (3.4), the deletion answer of a space (3.4), the request
     transaction run again when content behind a reference changes (6.2),

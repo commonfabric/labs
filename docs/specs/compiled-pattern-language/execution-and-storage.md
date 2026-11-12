@@ -420,9 +420,10 @@ the label side of each.
 - **A failed constraint on what a handler itself writes rejects the event's
   whole transaction.** What a handler itself writes is everything its body
   staged: its write edges, the arguments of the instances it requested, the
-  requests of the effects it asked for with their egress ceilings, and the
-  copied state of the bindings it made. Nothing the event would have
-  written is committed. The other events of the batch are not affected. The
+  requests of the effects it asked for with their egress ceilings, the
+  copied state of the bindings it made, and the copied parameters of the
+  inline patterns it instantiated. Nothing the event would have written is
+  committed. The other events of the batch are not affected. The
   rejection is reported to whoever delivered the event. What it reveals is
   bounded as `plan-and-label-templates.md` §5.5 says.
 - **A failed constraint on a derived write drops that write alone.** A
@@ -1764,7 +1765,13 @@ the runtime resolves when the binding is made narrows what the handler's
 argument takes from the copy when an event arrives, and does not narrow
 the copy. When an event arrives, the handler's argument is built from its
 `binding` slots, which resolve through this document, as any argument is
-built.
+built. For a factory value bound in a function body, the binding state
+document also holds the factory's content address, under the stored label
+of which factory was bound: the label of the factory's `identity` slot,
+or the template of its entry of `Body.computed`, instantiated by the
+transaction that makes the binding. When an event arrives, the handler's
+template joins the label stored there (`plan-and-label-templates.md`
+§3.21, where it is an assumption).
 
 **The stream document.** Under server execution an event is an entry
 appended to a stream document
@@ -2390,9 +2397,15 @@ request, before the commit that spans both spaces, so the body can read
   identifier ([random space identities](../random-space-identities.md)).
   The runtime records the allocation in the calling space: the obtained
   identifier, under the name the request gives, or for an anonymous target
-  under the identifier of the instance requested. The record is written in
-  a step that commits before the step in the other space, so that a retry
-  finds it and names the same space.
+  under the request's own identifier. The request's own identifier is the
+  one section 5.4 gives the occurrence, or section 5.5 for a request a
+  computation makes. It is the identifier of the instance requested,
+  except with `root: true`: the instance then takes the root the target
+  space reserves, whose identifier derives from the identifier of that
+  space and so cannot name the record that yields that identifier
+  (`plan-and-label-templates.md` §3.14). The record is written in a step
+  that commits before the step in the other space, so that a retry finds
+  it and names the same space.
 
 Today a named target is resolved through an allocation record in the
 calling space. When no record exists, the first run finds the target
@@ -3594,27 +3607,26 @@ label is concerned:
 <!-- The list restarts so that the numbers stay as cited. -->
 
 49. **The key set of a document that holds several element keys**
-    (sections 2.8 and 8.6). Its §2.6 gives the key set of an operation's
-    state document that holds several keys the collection's membership
-    label. This document stores an operation's state per key, and holds
-    several element keys in two other documents: the cache document and
-    the instances document. *Assumed:* the set of keys in each carries the
-    collection's instantiated membership label, and a key derived from a
-    value is the salted one.
-50. **The order of an early instantiation** (section 1.6). Its §4.5
-    instantiates a handler's write edges first, and its §4.6 has a derived
-    write that a handler body reads by address instantiated before that
-    read returns. *Assumed:* such a write is instantiated ahead of the
-    handler's write edges, with the staged writes it uses, and the
-    preparation does not instantiate it again from a label the body
-    staged afterward.
-51. **What is stored once per key** (section 2.5). Its open question 27
-    assumes the join over the positions that hold a key for the state of
-    an operation, the stored request and the result of an effect, and a
-    path of a child's argument. An element cone stores further things
-    once per key: a side-write, a copied path of a binding or of an
-    inline pattern's parameters, an entry of the cache document, and its
-    record in the instances document. *Assumed:* the same join for each.
+    (sections 2.8 and 8.6). Met by its §2.6 ("The state of an operation
+    inside an element body"): the cache document and the instances
+    document hold several element keys, the set of keys under one cone in
+    each carries the collection's instantiated membership label, and a
+    key derived from a value is the salted one.
+50. **The order of an early instantiation** (section 1.6). Met by its
+    §4.5 ("Order" and "A write instantiated early"): a derived write that
+    a handler body reads by address is instantiated before that read
+    returns, after the staged writes it uses and ahead of the handler's
+    write edges. The preparation does not instantiate it again, and a
+    label the body stages afterward does not enter it.
+51. **What is stored once per key** (section 2.5). Met by its §2.6 and
+    its open question 27, which list everything an element cone stores
+    once per key: the state of an operation, the stored request and the
+    result of an effect, a path of the argument of a child or of an
+    instance the cone makes, a side-write, a copied path of a binding or
+    of an inline pattern's parameters, an entry of the cache document,
+    and the record in the instances document. Each carries the join over
+    the positions that hold the key. The join is an assumption there, for
+    the project owner (its open question 27).
 
 To `language-subset.md`:
 

@@ -971,9 +971,20 @@ For a dynamic target and for one that is too broad, the analysis records an
     handle's link and has `*` at each segment the analysis cannot name.
     That slot is in no `Body.reads`: it names the place, nothing is
     materialized for it, and it joins no template
-    (`plan-and-label-templates.md` §3.11). Where the first handle reached
+    (`plan-and-label-templates.md` §3.11).
+  - For a handle the body found by reading through a handle that reached
     the body in a value the instance computed, no slot path leads to the
-    position ([§13](#13-open-questions), request 20).
+    position. The envelope names the first handle's `identity` entry of
+    `Body.computed`, in the `computed` variant, and its `found` member
+    holds the position where the handle was found: a path below the cell
+    the first handle links to, with `*` at each segment the analysis
+    cannot name. The runtime resolves `found` as it resolves the path of
+    an `identity` slot, so it crosses the link of a handle found on the
+    way and stops at its last segment. The envelope's `path` is at or
+    below the cell the found handle links to, and is not a path from the
+    first handle's cell. `found` is no entry of the footprint: nothing is
+    materialized for it, and it joins no template
+    (`plan-and-label-templates.md` §1.1 and §3.11).
   - For a handle the analysis lost track of, there is one envelope for each
     writable handle among the body's inputs, over the handle's whole cell.
 - **`created`**: a cell that a `createCell` site creates under a cause
@@ -1003,7 +1014,8 @@ where the resolution ends, and the runtime resolves the reference when the
 write is made (`plan-and-label-templates.md` §3.11). An envelope for a
 write through a resolved handle has the flag in the same way. For a handle
 from a computed input the resolution is journaled (§7.2), so the target or
-the envelope names the plain entry of `Body.computed`, with the flag.
+the envelope names the plain entry of `Body.computed`, with the flag. On
+an envelope that has `found`, the flag applies to the found handle.
 
 ### 6.3 Computations: static side-write or materializer
 
@@ -1454,14 +1466,18 @@ The target and each option of an `inSpace` request is a `RequestValue` of
 one projection it is; or, for a value the body computes, the body, whose
 template the value then carries.
 
-Three of these records name a slot and have no form for an entry of
-`Body.computed`: the factory of `Child.callee`, the cell of a
-`SpaceRequest` target of kind `spaceOf`, and the slot of a `RequestValue`.
-*Assumed,* where the body is used with the input bound to a value the
-instance computed: a target or an option that is one projection is
-recorded as the body, whose template joins the entry's, and the factory
-and the cell are named by `{ computed }`, as a `GivenReference` names an
-entry ([§13](#13-open-questions), request 20).
+Where the body is used with the input bound to a value the instance
+computed, these records name no slot (`plan-and-label-templates.md` §3.14,
+"The values of an `inSpace` request", and §3.15, "A factory from a
+computed input").
+
+- The factory of `Child.callee`, and the cell of a `SpaceRequest` target
+  of kind `spaceOf`, are named by `{ computed }`: the `identity` entry of
+  `Body.computed`, as a `GivenReference` names an entry.
+- A target or an option that is one projection of such an input is
+  recorded as `body`. It carries the body's template, which joins the
+  template of the projection's entry of `Body.computed`. A `RequestValue`
+  has no form that names the entry alone.
 
 *Assumed,* for an inline pattern: the ruling on what a handler binding
 holds applies to its captures, on which the owner has not ruled
@@ -1687,6 +1703,13 @@ address (`plan-and-label-templates.md` §3.14).
   reference, below the copied path.
 - A `Created` value has `capture: "link"` and no `reference`. Its template
   is the body's.
+
+For a handler received as a factory value, `Binding.handler` names the
+factory as a `GivenReference`: by the index of the `identity` slot the
+body has at the factory's position, or by `{ computed }` for a factory
+that reached the body in a value the instance computed
+(`plan-and-label-templates.md` §3.21, "A factory bound in a function
+body").
 
 The rows for a computed container use the record of the hoisted or named
 handler, which the compiler has. The copy holds the paths that record
@@ -2666,10 +2689,11 @@ asked.
     fixed point. *Assumed:* the second entry, eight alternatives, and eight
     rounds. The prototype measures whether any body in the corpus reaches
     them. No authored function in the corpus is recursive (§11.3).
-11. **Logs** (to the overview). `console` is in the standard-library
-    surface, and a body can pass it labeled data. This analysis counts the
-    arguments as read. Whether the sandbox lets labeled data reach a log is
-    outside it.
+11. **Logs** (to the overview). Met: the overview lists it under its open
+    questions ("Logs"). `console` is in the standard-library surface, and
+    a body can pass it labeled data. This analysis counts the arguments as
+    read (§3.4). Whether the sandbox lets labeled data reach a log is
+    outside it, and is not decided there.
 12. **The measurements** (to the prototype): the items of §11.7.
 13. **The plan's FabriChat example** (to `plan-and-label-templates.md`).
     Met: §6.2 there lists the handles of `commitSend` as this analysis
@@ -2758,22 +2782,26 @@ asked.
       side-write and does not make the body a materializer (§3.11 there;
       §6.2 and §6.3 here).
 20. **Records that name a slot only** (to `plan-and-label-templates.md`).
-    Five places of the record have a form that names a slot and none for
-    a body used with the input bound to a value the instance computed.
-    - `Child.callee` of kind `factory`, for a factory value the body
-      instantiates (§8.1).
-    - `Binding.handler` of kind `factory`, for a handler factory value
-      the body binds (§8.5).
-    - A `SpaceRequest` target of kind `spaceOf`, for the cell (§8.1).
-    - `RequestValue`, for a target or an option of an `inSpace` request
-      that is one projection (§8.1).
-    - A `handle` envelope for a handle the body found by a read through a
-      handle from a computed input. The found handle has no entry of
-      `Body.computed`, and no slot path leads to its position (§6.2).
-
-    *Assumed:* the first three are named by `{ computed }`, as a
-    `GivenReference` names an entry. A `RequestValue` of that kind is
-    recorded as the body, whose template joins the entry's. The envelope
-    names the first handle's entry of `Body.computed`, and its path crosses
-    the link at the position of the found handle, with `*` at each segment
-    the analysis cannot name.
+    Met by §1.1 there, form by form. Each of five places of the record
+    has a form for a body used with the input bound to a value the
+    instance computed.
+    - **`Child.callee` of kind `factory`,** for a factory value the body
+      instantiates: a `GivenReference`, which names the factory's
+      `identity` entry of `Body.computed` as `{ computed }` (§3.15 there,
+      "A factory from a computed input"; §8.1).
+    - **`Binding.handler` of kind `factory`,** for a handler factory value
+      the body binds: a `GivenReference`, in the same way (§3.21 there,
+      "A factory bound in a function body"; §8.5).
+    - **The cell of a `SpaceRequest` target of kind `spaceOf`:** a
+      `GivenReference`, in the same way (§3.14 there, "The values of an
+      `inSpace` request"; §8.1).
+    - **`RequestValue`,** for a target or an option of an `inSpace`
+      request that is one projection: recorded as `body`. It carries the
+      body's template, which joins the entry's, and the record has no
+      form that names the entry alone (§3.14 there; §8.1).
+    - **A `handle` envelope for a handle the body found by a read through
+      a handle from a computed input:** the `computed` variant names the
+      first handle's entry of `Body.computed`, its `found` member holds
+      the position of the found handle, and its `path` is at or below the
+      cell the found handle links to, and not a path from the first
+      handle's cell that crosses the link (§3.11 there; §6.2).

@@ -361,23 +361,27 @@ results depend on the order of the elements, as `map`'s per-element results
 do not. The label rules are defined in `plan-and-label-templates.md`
 (§3.13) and `builtin-inventory.md`.
 
-**Element keys.** Each element of a `map` has a cone, and the cone has a
-key. The key is the element's value when the element is a plain value, and
-the identity of the element's cell when it is not. An element that moves
-keeps its cone, so reordering, inserting into, or removing from a list does
-not recompute the elements that stayed. Stored per-element state from
-earlier versions of a pattern is not preserved by this rule; it is chosen
-for recomputation cost. A key derived from a value is salted with a secret
-of the space before it enters a document identifier, so that an identifier
-does not reveal the value (`plan-and-label-templates.md`, §1.3).
+**Element keys.** Each element of a `map` has a key. The key is the
+element's value when the element is a plain value, and the identity of the
+element's cell when it is not. The body of the callback is one or more
+cones, and each is evaluated once per element key. A cone as it is
+evaluated for one key is a cone instance (`execution-and-storage.md`,
+Terms and §2.1). An element that moves keeps its cone instances, so
+reordering, inserting into, or removing from a list does not recompute the
+elements that stayed. Stored per-element state from earlier versions of a
+pattern is not preserved by this rule; it is chosen for recomputation
+cost. A key derived from a value is salted with a secret of the space
+before it enters a document identifier, so that an identifier does not
+reveal the value (`plan-and-label-templates.md`, §1.3).
 
 **The index parameter costs the author that property.** The index is part
 of an element's key exactly when the callback declares the index parameter
-and its body uses it. Such a cone cannot move: inserting at the front of a
-list of a thousand elements recomputes a thousand cones, where a callback
-without the index recomputes one. The compiler reports the use as a hint
-(`collection:index-keyed`). A callback that declares the index and does not
-use it is keyed without it.
+and its body uses it. The cone instances of such a key cannot move:
+inserting at the front of a list of a thousand elements evaluates the body
+again for a thousand keys, where a callback without the index evaluates it
+for one. The compiler reports the use as a hint (`collection:index-keyed`).
+A callback that declares the index and does not use it is keyed without
+it.
 
 **Names inside a callback.** The identifier of a state cell declared inside
 a collection callback derives from the instance, from each compiled-in call
@@ -391,14 +395,14 @@ instance, a durable operation, and the stream of a handler binding declared
 inside a callback (`plan-and-label-templates.md`, §1.3).
 
 **Equal plain values may not share state.** Two elements with the same
-plain value have the same key, so they share one cone. That is sound for a
-value, which is a function of the element. It is wrong for state: two rows
-that show `"glazed"` would share one "expanded" flag and one click stream.
-So the body of a per-element construct (`map`, `filter`, `flatMap`, the
-predicates, and the selector callbacks of the aggregates and indexes) over a
-collection of plain values is refused when it declares a state cell or
-binds a handler, in any of the spellings of §5.2, without using the index
-parameter (`collection:shared-element-state`).
+plain value have the same key, so they share their cone instances. That is
+sound for a value, which is a function of the element. It is wrong for
+state: two rows that show `"glazed"` would share one "expanded" flag and
+one click stream. So the body of a per-element construct (`map`, `filter`,
+`flatMap`, the predicates, and the selector callbacks of the aggregates
+and indexes) over a collection of plain values is refused when it declares
+a state cell or binds a handler, in any of the spellings of §5.2, without
+using the index parameter (`collection:shared-element-state`).
 
 For this rule the checker decides "plain value" statically, from the
 element type and from where the collection comes from.
@@ -447,8 +451,8 @@ One case is outside what the checker can decide: an input declared with an
 object element type whose stored array holds inline records, because a
 computation elsewhere produced it. The checker treats it as not plain.
 *Assumed:* a body over such a list that declares a state cell or binds a
-handler without the index compiles, and the cone of an element that arrives
-inline fails at run time (`plan-and-label-templates.md`, §1.3;
+handler without the index compiles, and the cone instances of an element
+that arrives inline fail at run time (`plan-and-label-templates.md`, §1.3;
 [§13](#13-open-questions)).
 
 The rule covers a state cell and a handler binding. It does not cover a
@@ -835,7 +839,9 @@ is the function form of the comparison that §4.7 lists as the methods
 
 One difference between the two kinds of body explains the columns. A
 handler invocation is a new frame for each event, so what it creates is new
-and is identified by the event and the order of creation. A `lift` or a
+and is identified by the handling and the order of creation. A handling is
+identified by its receipt: the event's identifier and the stream the event
+was sent to (`plan-and-label-templates.md`, §1.3). A `lift` or a
 `computed` is evaluated again whenever an input changes, so what it creates
 needs an identifier that is the same on every evaluation: an explicit cause
 for a cell, the place of the call for an instance, and the bound state for
@@ -868,14 +874,18 @@ Two points are assumed, and both are in one question for the project
 owner ([§13](#13-open-questions), question 9).
 
 - *Assumed:* the instance is identified by the enclosing instance, the
-  site, and the ordinal of the instantiation among those the evaluation
-  makes at that site, or by an explicit cause where the author writes
-  `.for(cause)` on the instantiation (§4.7). A site that runs once per
-  evaluation needs no cause. A site in a loop names its instances by the
-  order in which the loop makes them, so removing the first record of a
-  list gives each instance the argument of the next record and tears down
-  the last instance. An author who wants each instance to stay with its
-  record writes `.for(cause)` with a cause taken from the record.
+  body's `name` and `within`, the site, and the ordinal of the
+  instantiation among those the evaluation makes at that site. Where the
+  author writes `.for(cause)` on the instantiation (§4.7), that cause
+  takes the place of the ordinal. The body's `name` and `within` are the
+  name the plan gives the `lift` or the `computed` and where it sits in
+  the pattern (`plan-and-label-templates.md`, §1.3 and §3.14). A site that
+  runs once per evaluation needs no cause. A site in a loop names its
+  instances by the order in which the loop makes them, so removing the
+  first record of a list gives each instance the argument of the next
+  record and tears down the last instance. An author who wants each
+  instance to stay with its record writes `.for(cause)` with a cause taken
+  from the record.
 - *Assumed:* a `lift` or a `computed` does not request an effect directly
   (`function-body:effect-in-computation`). An effect that depends on
   computed data is written in a pattern, inline or named, that the
@@ -1184,7 +1194,8 @@ things differ, none of them in the value.
   has an element template and a membership slot.
 - **Cost.** The promoted expression is part of a dependency cone's value
   code and makes no sandboxed call of its own.
-- **Granularity of recomputation.** A promoted `map` is a cone per element.
+- **Granularity of recomputation.** The body of a promoted `map` is one or
+  more cones, and each is evaluated once per element key (§4.4.1).
 
 Promotion never changes whether a program is accepted. A `computed` that
 fails the criterion stays a tier-F body. The compiler reports why on request
@@ -2391,8 +2402,8 @@ addressed to.
    hold inline records, when a computation elsewhere produced it.
    *Assumed,* as that document's §1.3 has it: a body over such a list that
    declares a state cell or binds a handler without the index compiles,
-   and the cone of an element that arrives inline fails at run time, with
-   the error state of its §5.2.
+   and the cone instances of an element that arrives inline fail at run
+   time, with the error state of its §5.2.
 3. **A pattern closure written in a function body** (to the prototype).
    §4.4.2 allows a pattern closure as a value in tier R only. A handler that
    wants to store a closure over its own locals has no form for it. No
@@ -2422,12 +2433,13 @@ addressed to.
 9. **An instance made in a `lift` or a `computed`** (to the project owner;
    the continuation plan's question 38). The ruling allows the
    instantiation and leaves two points, which §5.2 assumes. *Assumed:* the
-   instance is identified by the enclosing instance, the site, and the
-   ordinal of the instantiation among those the evaluation makes at that
-   site, or by an explicit cause where the author writes `.for(cause)`.
-   And *assumed:* a `lift` or a `computed` does not request an effect
-   directly, so an effect that depends on computed data is written in a
-   pattern, inline or named, that the computation instantiates.
+   instance is identified by the enclosing instance, the body's `name`
+   and `within`, the site, and the ordinal of the instantiation among
+   those the evaluation makes at that site, or, where the author writes
+   `.for(cause)`, by that cause in place of the ordinal. And *assumed:* a
+   `lift` or a `computed` does not request an effect directly, so an
+   effect that depends on computed data is written in a pattern, inline
+   or named, that the computation instantiates.
 10. **How an author writes the cache-promotion directive** (from
     `execution-and-storage.md`, §8.5 and open question 26). That document
     assumes the plan records one of three directives for a cone (none,
