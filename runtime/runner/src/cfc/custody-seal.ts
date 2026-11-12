@@ -2524,9 +2524,17 @@ export type CustodyAnswerWatchUpdate =
  * without changing what the projector computes still publishes, since the
  * watch follows the box itself.
  *
+ * These are the cells whose change says the seal may now decide otherwise.
+ * The seal reads more than them, such as the policy's manifest and each
+ * seat's cell, and a refusal that turns on one of those alone is looked at
+ * again only when one of these changes. A look that fails to find the slot
+ * keeps following the instance it last found.
+ *
  * `onUpdate` is called after every look, with the same report again where
- * nothing it reports changed. Nothing is reported or published once the
- * watch is cancelled.
+ * nothing it reports changed. Once the watch is cancelled nothing is
+ * reported, and no publication is asked for, though one asked for already
+ * completes. Each member's host watches the room it shows, so every member
+ * asks the seal to publish, and the seal refuses all but the first.
  */
 export function watchCustodyAnswer(
   room: CustodyRoom,
@@ -2579,7 +2587,10 @@ export function watchCustodyAnswer(
       error = describeFailure(failed);
     }
     if (cancelled) return;
-    follow(location);
+    // A look that could not find the slot says nothing about which instance
+    // the room names, so the one last found is still followed: its box
+    // filling is what a room whose answer does not change waits on.
+    if (error === undefined || location !== undefined) follow(location);
     const published = location?.published;
     onUpdate(
       published === undefined
@@ -2607,6 +2618,9 @@ export function watchCustodyAnswer(
           again = false;
           await once();
         } while (again && !cancelled);
+      } catch (failed) {
+        // Only `onUpdate` can throw here; what it failed on is its own.
+        console.error("Custody answer watch failed to report:", failed);
       } finally {
         running = false;
       }

@@ -1398,7 +1398,7 @@ the projected answer unchanged still publishes. The seal writes the answer
 into the instance's answer slot, labeled for the room's readers, and the
 component shows what that slot holds, verified by the host to be the seal's
 write and decided under the display ceiling as any read a host shows is: a
-viewer the ceiling refuses it is shown nothing. The shown
+viewer the ceiling refuses it is shown no answer. The shown
 answer is the slot of the instance the bound `$terms` digest to, under the
 policy the bound `$policy` cell names. The slot is create-only and the seal's
 alone to write, so the answer published for an instance never changes. Which
@@ -1412,7 +1412,8 @@ seal alone, so no member reads it.
 
 The seal's refusals while an answer is not yet, or is already, published leave
 the component quiet, as does a room that has no terms yet. Any other failure,
-such as a lost worker connection or a slot the seal did not write, shows as an
+such as a watch the worker could not start or a slot the seal did not write,
+shows as an
 alert. It fires `cf-published` once per instance when the published answer is
 shown, with `detail.instance` when this component's watch published it.
 `patterns/examples/cfc-exchange-rules/custody-answer-room.tsx` is a room built

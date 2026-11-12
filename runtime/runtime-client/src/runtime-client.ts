@@ -627,8 +627,9 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
     } catch (error) {
       this.#custodyAnswerWatches.delete(watchId);
       // The connection may have failed with the watch's response alone, so
-      // a watch the worker did start is ended rather than left running.
-      await unwatch();
+      // a watch the worker did start is ended rather than left running. The
+      // failure is not held up waiting on a connection that may be gone.
+      void unwatch();
       throw error;
     }
     return () => {

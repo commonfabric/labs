@@ -11,6 +11,7 @@
  */
 
 import { fabricAwareEqual, type FabricValue } from "@commonfabric/data-model";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import type { Cancel, Cell } from "@commonfabric/runner";
 import {
   type CustodyRoom,
@@ -102,6 +103,9 @@ export function watchCustodyAnswerForHost(
           });
         },
       );
+    }).catch((failed: unknown) => {
+      if (showing.ended) return;
+      deliver({ status: "pending", error: describeFailure(failed) });
     });
   });
   return () => {

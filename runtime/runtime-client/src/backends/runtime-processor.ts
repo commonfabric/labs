@@ -2877,7 +2877,11 @@ export class RuntimeProcessor {
     request: CustodyAnswerWatchRequest,
     client: WorkerClient = ownerClient,
   ): void {
-    if (this.#isDisposed) throw new Error("Custody sealing is unavailable");
+    // A client that has detached takes its watches with it, so one it asks
+    // for after detaching would be left with nothing to end it.
+    if (this.#isDisposed || this.#detachedClients.has(client)) {
+      throw new Error("Custody sealing is unavailable");
+    }
     const key = clientScopedKey(client, request.watchId);
     if (this.#custodyAnswerWatches.has(key)) return;
     this.#custodyAnswerWatches.set(

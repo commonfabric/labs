@@ -279,8 +279,10 @@ export const NOTIFICATION_DISPOSITIONS = {
     kind: "trusted-operation",
     why: "the answer the seal published, which the worker sends only as the " +
       "host-read gate decides a read of it (`state.answer` carries the " +
-      "gate's mark); and the reason an attempt to publish failed, which " +
-      "can quote what the seal read",
+      "gate's mark); beside it, undecided, whether and when the instance " +
+      "published, which instance, whether this watch published it, and " +
+      "the reason an attempt to publish failed, which can quote what the " +
+      "seal read",
   },
   [NotificationType.PresenceUpdate]: {
     kind: "ungated",

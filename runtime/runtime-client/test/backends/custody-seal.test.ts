@@ -795,14 +795,34 @@ describe("custody answer watch", () => {
       processor.disposeClient(host.client);
       const posts = host.posted.length;
       // The room's terms become ones the seal refuses, which a standing
-      // watch would send the client as an error.
+      // watch sends its client as an error: another client's watch, started
+      // before the change, says when that has happened.
+      const other = recordingClient(9);
+      let refused = other.until(answerUpdate("other"));
+      await processor.handleRequest({
+        type: RequestType.CustodyAnswerWatch,
+        watchId: "other",
+        terms: refs.terms,
+        policy: refs.policy,
+        output: createCellRef(runtime.getCell(S, "custody-room-choice")),
+      }, other.client);
+      await refused;
+      refused = other.until((message) =>
+        answerUpdate("other")(message) &&
+        "error" in (message as { state: object }).state
+      );
       const tx = runtime.edit();
       runtime.getCellFromLink(refs.terms, undefined, tx).set(
         "not terms" as never,
       );
       expect((await tx.commit().settled).error).toBeUndefined();
+      await refused;
       await runtime.idle();
       expect(host.posted.length).toBe(posts);
+      // Detached, the client starts no watch it could not end.
+      await expect(watch("late")).rejects.toThrow(
+        "Custody sealing is unavailable",
+      );
     });
   });
 
