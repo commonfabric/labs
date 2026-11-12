@@ -2792,12 +2792,7 @@ export class StorageManager implements IStorageManager {
             : (principal: string) => grant(space, principal);
         },
         storeReadThrough: () => this.#storeReadThroughs.get(space),
-        // Only a serving manager prefetches across spaces: a client loads
-        // what a link into another space reaches when one of its reads
-        // reaches it (`followsCrossings`).
-        ...(this.#servingHomeSpace === undefined
-          ? {}
-          : { loadCrossings: (crossings) => this.#loadCrossings(crossings) }),
+        loadCrossings: (crossings) => this.#loadCrossings(crossings),
         isRead: (address) => {
           if (
             this.#documentHolds.get(
@@ -4047,19 +4042,9 @@ export class StorageManager implements IStorageManager {
     }
   }
 
-  /**
-   * @inheritDoc
-   *
-   * Only a serving manager follows crossings. A client's resume pre-sync
-   * would otherwise load, from every space the piece links to, what each of
-   * its nodes declares it reads there, whether or not a run of the client's
-   * ever reads it: a manager listing a person's rooms would load every room.
-   * A client loads a document in another space when a read of its reaches
-   * the link, as it loads any document it hasn't.
-   */
+  /** @inheritDoc */
   followsCrossings(space: MemorySpace): boolean {
-    return this.#servingHomeSpace !== undefined &&
-      this.open(space).replica.crossingsReported?.() === true;
+    return this.open(space).replica.crossingsReported?.() === true;
   }
 
   /** @inheritDoc */

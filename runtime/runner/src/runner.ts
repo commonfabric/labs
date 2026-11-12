@@ -11516,18 +11516,11 @@ export class Runner {
    * The manager's settled pool is not what is awaited: on a client it
    * holds the runtime's other work, sinks' first loads and coordinators'
    * republishes among it, which a resume must not wait behind.
-   *
-   * Only a serving runtime names them. A client's resume would otherwise
-   * load, from every space the piece links to, what each node declares it
-   * reads there, whether or not a run of the client's reads it: a manager
-   * listing a person's rooms would load every room. A client's run loads a
-   * document in another space when its read reaches the link.
    */
   async #syncCrossSpaceReads(
     plans: readonly NodePlan[],
     identity: ScopeKeyIdentity | undefined,
   ): Promise<void> {
-    if (!this.#runtime.servingPosture) return;
     const manager = this.#runtime.storageManager;
     if (!manager.loadsSettled || !manager.pendingLoadAddresses) return;
     const awaited = new Set<string>();

@@ -33,11 +33,7 @@ declared a handle with nothing behind it (`Cell<unknown>`), so a read of any of
 them, Home's own sync among them, keeps the link and loads no room. The
 derivations that read rooms, `people` from the listed rooms' rosters and
 `outgoingNotices` from each notice's room's roster, first re-type the links to
-`ChatRoomLink`, which declares the rosters; nothing else reads them. `people`
-re-types each link where it reads that room's roster, in an instance of its
-own per room whose argument holds the handle, so no list the manager stores
-types a room as more than a handle; a reader that syncs such a list would walk
-into every room it names.
+`ChatRoomLink`, which declares the rosters; nothing else reads them.
 
 The manager wishes for `#profile` twice. The user's wish, stored per user,
 supplies the profile `rooms`, `people` and `outgoingNotices` are derived from,
