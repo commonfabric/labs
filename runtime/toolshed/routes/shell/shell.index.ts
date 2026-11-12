@@ -1,4 +1,3 @@
-import { exists } from "@std/fs";
 import * as path from "@std/path";
 
 import ports from "@commonfabric/ports" with { type: "json" };
@@ -10,7 +9,7 @@ import {
 } from "@commonfabric/runner/deployment-meta";
 
 import env from "@/env.ts";
-import { buildInfo } from "@/lib/build-info.ts";
+import { buildInfo, compiled, shellBuildId } from "@/lib/build-info.ts";
 import { createRouter } from "@/lib/create-app.ts";
 import { experimentalPosture } from "@/lib/experimental-posture.ts";
 import {
@@ -61,11 +60,7 @@ export async function compiledShellRouter(
   posture: () => Record<string, boolean> | null = experimentalPosture,
 ) {
   return createShellStaticRouter(staticRoot, {
-    // build-binaries uses the mode name when no commit SHA was supplied;
-    // mirror that fallback so locally compiled binaries retain a working
-    // default worker URL too.
-    immutableBuildId: commitSha ??
-      (environment.ENV === "production" ? "production" : "development"),
+    immutableBuildId: shellBuildId(commitSha, environment.ENV),
     index: await loadShellIndex(
       staticRoot,
       () => shellDeploymentPage(environment, posture()),
@@ -121,10 +116,9 @@ const shellStaticRoot = path.join(
   projectRoot,
   env.ENV === "production" ? "shell-frontend" : "shell-frontend-dev",
 );
-const COMPILED = await exists(path.join(projectRoot, "COMPILED"));
 const SHELL_URL = Deno.env.get("SHELL_URL");
 
-if (COMPILED) {
+if (compiled) {
   // Production mode - serve static files
   router.route(
     "/",

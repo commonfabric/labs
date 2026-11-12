@@ -2,8 +2,12 @@
 
 Server deployments run through the bastion using binaries that CI has built
 and published. Rapids releases coordinate Labs, Loom, Weaver, gVisor, and infra
-at verified green `main` revisions. Estuary takes a manually selected Labs
-revision from `main`.
+at verified green revisions, and take Labs at the commit Loom's `main` pins
+rather than at Labs' own `main`, so a Labs change reaches Rapids only once a
+Loom pull request moves that pin. Estuary deploys the Labs revision named when
+its deployment is dispatched. Loom dispatches it with the pin each time the pin
+changes, and a person can dispatch any Labs commit on `main` by hand, which
+reaches Estuary without moving the pin.
 
 Two browser shells reach users, and they are configured in different places.
 The toolshed binary carries one and serves it from its own origin, so it is
@@ -16,7 +20,7 @@ The server deployment entrypoints are:
 | Job | Workflow | Bastion command | Trigger |
 | --- | --- | --- | --- |
 | `deploy` | `.github/workflows/rapids-release.yml` | `/opt/cf/deploy-rapids.sh "$INFRA_SHA"` | infra dispatch on Labs `main`, naming the candidate's infra commit |
-| `deploy-estuary` | `.github/workflows/deploy-production.yml` | `/opt/cf/deploy.sh <environment> <Labs SHA>` | manual dispatch on `main`, naming a full SHA |
+| `deploy-estuary` | `.github/workflows/deploy-production.yml` | `/opt/cf/deploy.sh <environment> <Labs SHA>` | dispatch on `main` naming a full SHA, by Loom when its Labs pin changes or by hand |
 
 The production job reads the environment name from a repository variable rather
 than naming it, because the variable is defined on the GitHub environment the
@@ -29,8 +33,11 @@ a message naming that commit if they are absent.
 
 ## Estuary deployment and verification
 
-**Manual Production Deployment** (`deploy-production.yml`) runs from `main`
-and takes these inputs:
+**Manual Production Deployment** (`deploy-production.yml`) runs from `main`.
+Loom's `deploy-labs-from-vendor-bump.yml` dispatches it with Loom's Labs pin
+whenever a push to Loom's `main` changes `vendor/config/`. It can also be
+dispatched by hand with any Labs commit on `main`, which Loom's pin does not
+constrain. It takes these inputs:
 
 - `ref`: the full lowercase Labs commit SHA to deploy or verify. The SHA must
   be an ancestor of `main`, verified through GitHub before the protected job
@@ -71,9 +78,17 @@ Each notification uses a separate repository-scoped Actions-write token from
 `RAPIDS_APP_ID` and `RAPIDS_APP_PRIVATE_KEY`. Notifications follow successful
 main-push CI runs in this repository. They execute no checked-out code.
 
-The infra coordinator selects the latest green main revisions and verifies
-their immutable artifacts. It lands `releases/rapids-candidate.json` on infra
-`main` and keeps that candidate frozen through deployment and publication. See
+The infra coordinator selects Loom's latest green `main` revision and takes
+Labs and gVisor from what that revision pins: Labs from the `labs` ref in
+Loom's `vendor/config/vendors.json`, never from Labs `main` directly. It refuses
+a candidate whose Labs commit differs from that pin. A Labs commit therefore
+reaches Rapids once a Loom pull request moves the pin, which Loom's
+`docs/development/reference/policies/vendoring.md` describes, and Loom's
+`main` is green with it; the commit needs its own successful main-push
+`deno.yml` build first. Weaver comes from its latest valid main-push
+publication. The coordinator verifies every selected artifact, lands
+`releases/rapids-candidate.json` on infra `main`, and keeps that candidate
+frozen through deployment and publication. See
 [infra's Rapids release documentation](https://github.com/commonfabric/infra/blob/main/releases/rapids.md)
 for selection and reconciliation rules.
 
@@ -172,14 +187,19 @@ it finds, rather than skip it, is a change in that repository.
 The toolshed binary is built with `--v8-flags=--max-old-space-size=8192`
 (`tasks/build-binaries.ts`), and `scripts/start-local-dev.sh` and the package's
 `dev` and `production` tasks run with the same flag. V8 applies the limit to each
-isolate rather than to the process, so the main thread and the serving worker
-can each reach 8 GiB, and a host's memory has to cover both for every instance
-it runs.
+isolate rather than to the process, so the main thread and every serving worker
+can each reach 8 GiB. A toolshed runs a serving worker per served space, up to
+`SERVER_EXECUTION_MAX_WORKERS` of them (default 16) and
+`SERVER_EXECUTION_SPARE_WORKERS` more kept started (default 1), and each holds
+about 110 MB before it serves anything
+([`serving-loop.md`](../specs/server-side-execution/serving-loop.md) §1,
+"Workers"). `SERVER_EXECUTION_WORKER_HEAP_BUDGET_MB` bounds what the workers'
+heaps come to together by closing the workers kept only for a parked space's
+runtime; it closes no worker that serves a space, so it does not bound a space
+that grows.
 
-A serving worker keeps each piece a handler started until its space parks, which
-costs about 3.5 MB per Topic on a Topics board. A worker that reaches the limit
-takes its process down. Events still queued survive that, and the restarted
-process handles them.
+A worker that reaches the limit takes its process down. Events still queued
+survive that, and the restarted process handles them.
 
 ## A deploy states when it happened
 

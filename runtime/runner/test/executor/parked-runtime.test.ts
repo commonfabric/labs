@@ -8,7 +8,7 @@ import * as Engine from "@commonfabric/memory/v2/engine";
 import type { OutboxAppendRow } from "@commonfabric/memory/v2/execution-outbox";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import type { JSONSchema } from "../../src/builder/types.ts";
-import { ExecutorHost } from "../../src/executor/host.ts";
+import { ExecutorHost, type HostOccupancy } from "../../src/executor/host.ts";
 import {
   PARKED_RUNTIME_WRITE_REFUSED,
   type ParkedRuntimeTaint,
@@ -115,6 +115,9 @@ describe("parked-runtime", () => {
   /** Each wave cycle a tenure completes, by space. */
   let cycles: ArrivalLog<MemorySpace>;
 
+  /** What the host has reported it holds, in order. */
+  let occupancies: ArrivalLog<HostOccupancy>;
+
   /** Module-graph evaluations the serving runtimes have run. */
   const evaluations = (): number =>
     evaluationSpies.reduce((total, each) => total + each.calls.length, 0);
@@ -163,6 +166,7 @@ describe("parked-runtime", () => {
       onActivationSettled: (activated, outcome) =>
         activations.record({ space: activated, outcome }),
       onWaveCycle: (cycled) => cycles.record(cycled),
+      onOccupancyChanged: (occupancy) => occupancies.record(occupancy),
     });
 
   /** A client runtime in the ON posture, as `alice`. */
@@ -316,6 +320,7 @@ describe("parked-runtime", () => {
     parks = new ArrivalLog();
     activations = new ArrivalLog();
     cycles = new ArrivalLog();
+    occupancies = new ArrivalLog();
   });
 
   afterEach(async () => {
@@ -804,6 +809,69 @@ describe("parked-runtime", () => {
         request.resolve(new Response("late payload"));
         globalThis.fetch = originalFetch;
       }
+    });
+  });
+
+  describe("the host's occupancy", () => {
+    it("is `vacant` for a host that has served nothing, and reports nothing", () => {
+      host = newHost({});
+      expect(host.occupancy).toBe("vacant");
+      expect(occupancies.entries).toEqual([]);
+    });
+
+    it("is reported `busy` while a tenure serves, `parked` once the tenure has parked with its runtime kept, and `vacant` once that runtime's retention ends", async () => {
+      host = newHost({});
+      await startPieces();
+      const reader = await openReader();
+      await readAll(reader, (index) => (index + 1) * 2);
+      expect(host.occupancy).toBe("busy");
+      expect(occupancies.entries).toEqual(["busy"]);
+
+      await closeClient(reader);
+      await occupancies.matching((occupancy) => occupancy === "parked");
+      expect(host.stats().parkedRuntimes.held).toBe(1);
+
+      await occupancies.matching((occupancy) => occupancy === "vacant");
+      expect(host.stats().parkedRuntimes.held).toBe(0);
+      expect(occupancies.entries).toEqual(["busy", "parked", "vacant"]);
+    });
+
+    it("is reported `vacant`, and never `parked`, once a tenure has parked with retention off", async () => {
+      host = newHost({ parkedRuntimeRetentionMs: 0 });
+      await serveThenPark();
+      await occupancies.matching((occupancy) => occupancy === "vacant");
+      expect(occupancies.entries).toEqual(["busy", "vacant"]);
+    });
+
+    it("is reported `vacant` again when the host turns down a commit that would start no tenure", async () => {
+      // The service identity's own session is no client demand, so an
+      // authored commit under it alone activates nothing. Whoever routes
+      // commits to the host learns from the report that this one left it
+      // idle.
+
+      host = newHost({ parkedRuntimeRetentionMs: 0 });
+      await serveThenPark();
+      await occupancies.matching((occupancy) => occupancy === "vacant");
+      const reports = occupancies.entries.length;
+
+      const service = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: EmulatedStorageManager.connectTo(server, {
+          as: serviceSigner,
+        }),
+        experimental: { serverExecution: true },
+      });
+      try {
+        const tx = service.edit();
+        service.getCell<{ note: string }>(space, "service-note").withTx(tx)
+          .set({ note: "nothing to derive" });
+        expect((await tx.commit().settled).error).toBeUndefined();
+        await occupancies.reached(reports + 1);
+      } finally {
+        await service.dispose();
+      }
+      expect(occupancies.entries.at(-1)).toBe("vacant");
+      expect(activations.count((entry) => entry.outcome === "active")).toBe(1);
     });
   });
 

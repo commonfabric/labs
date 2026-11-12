@@ -319,7 +319,7 @@ Likely files:
 - `base/api/cfc.ts`
 - `base/api/cfc-atoms.ts`
 - `runtime/runner/src/cfc/types.ts`
-- `runtime/runner/src/cfc/label-field-classification.ts`
+- `runtime/memory/v2/cfc-label-fields.ts`
 - `runtime/runner/src/cfc/label-representation.ts`
 
 Focused tests:

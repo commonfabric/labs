@@ -129,7 +129,7 @@ cell means none confirmed — check the component source before assuming.
 | `cf-checkbox` | Binary selection input with indeterminate support | `$checked` |
 | `cf-chevron-button` | Minimal chevron button rotating between up/down | |
 | `cf-chip` | Compact pill/label for status, tags, and filters | |
-| `cf-code-editor` | Code/prose editor with highlighting and `[[`-mention completion | `$value`, `$mentionable`, `$mentioned` |
+| `cf-code-editor` | Code/prose editor with syntax highlighting and `[[`-mention completion. Its `highlights` attribute marks ranges of a collaborative field's text, each from one of the field's anchors to another (see [`anchorsOf`](../concepts/types-and-schemas/writable.md#anchoring-text-anchorsof)); `cf-highlight-click` names the highlight a click lands on, and `cf-selection-change` reports the selection with the editor's whole text, which a handler compares with the field before anchoring the selection | `$value`, `$mentionable`, `$mentioned` |
 | `cf-collapsible` | Single collapsible section with trigger and content | |
 | `cf-copy-button` | Copy-to-clipboard button with visual feedback | |
 | `cf-custody-seal` | Native confirmation that seals the actor's draft into a custody room, showing the runtime-verified room, readers, seats, policy and sources beside what the terms say (see [custody seal](#cf-custody-seal)) | `$draft`, `$terms`, `$policy`, `$sources`, `$box` |
@@ -1162,7 +1162,9 @@ Trusted presentation of **a participant's profile** — the viewer's own, or any
 whose profile cell you stored on join. Bind a profile **cell** (not strings) via
 `$profile`; it renders name + picture (or, without one, the profile's avatar
 text) + a verified seal derived from the owner's
-identity that user-space cannot mint.
+identity that user-space cannot mint. It draws the picture or the avatar text
+only when the label of the cell holding it names the owner the seal shows,
+alone, so a picture a visitor set is not drawn as the owner's face.
 
 ```tsx
 // Shown for illustration only.
@@ -1239,9 +1241,16 @@ own `User` ceiling. This permits the default shell to share the user's private
 draft while refusing a source labeled only for another user.
 
 The host displays the exact snapshot and the audience verified by the runtime in
-a native modal dialog. Its disclosure and preview are fixed host UI. The user
-must confirm with a trusted browser gesture; a scripted click cannot publish.
-The source stays private, and future changes are not included in the copy. JSON
+a native modal dialog. Its sentences and styles are fixed host UI, and take no
+theme from the page. Each field of the snapshot appears on its own line, its
+name exactly as stored and its value as data in a monospace style, so a pattern
+cannot pass a field name off as the dialog's own words. Empty values are named
+rather than dropped, and the exact JSON sits under "Exact data". The button that
+opens the dialog is a themed `cf-button`, and a pattern may set its text with
+`buttonText` (attribute `button-text`, default "Review and share"), since
+opening the review releases nothing. The user must confirm with a trusted
+browser gesture; a scripted click cannot publish. The source stays private, and
+future changes are not included in the copy. JSON
 values containing links are refused.
 
 Changing a binding, dismissing the dialog, or disconnecting the component
@@ -1270,10 +1279,15 @@ Each card is a flat row with a string `id` and these optional fields:
   first;
 - `tags` — a JSON string of the card's tags.
 
-A card is drawn where its `anchor` names the same cell as `$about`: same space,
-entity, scope, and path, without following a cell that holds a link. A card
-with no `anchor` field, which has not been through intake, is anchored at the
-first link of its `about`, else at its `act_target`. A card with a null `anchor`, and
+A card is drawn where its `anchor` names the cell `$about` resolves to: same
+space, entity, scope, and path. `$about` is resolved first because a pattern
+usually binds a cell that holds a link to the thing, as `item` is inside
+`items.map((item) => …)`, and the element follows that link when it moves to
+another thing. It draws nothing until `$about` has resolved. A card's `anchor`
+is compared as the row holds it, so it names the thing itself, as intake writes
+it, not a cell that links to it. A card with no `anchor` field, which has not
+been through intake, is anchored at the first link of its `about`, else at its
+`act_target`. A card with a null `anchor`, and
 a card without a string `id`, is never drawn inline. Cards draw at a fixed size,
 which `--cf-suggestions-card-width` and `--cf-suggestions-card-height` set
 (at least 10rem by 5rem), spaced by `--cf-suggestions-gap`. While it draws no

@@ -20,11 +20,11 @@ import {
   isObjectOrArray,
 } from "@commonfabric/js-values/types";
 import { utf8Compare } from "@commonfabric/text/utf8";
+import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
 
 import type { JSONSchema, JSONSchemaObj } from "../builder/types.ts";
 import { registerSchemaDocument } from "../schema-registry.ts";
 import { schemaTypesAreDisjoint } from "../schema-type-disjointness.ts";
-import type { CfcConfClause } from "./clause.ts";
 import { normalizeClause } from "./clause.ts";
 import {
   bindCurrentPrincipalToStoredClauses,

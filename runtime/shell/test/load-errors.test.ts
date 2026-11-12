@@ -805,6 +805,119 @@ describe("load-errors", () => {
           }
         });
 
+        describe("when the space is deleted", () => {
+          for (const kind of ["space", "piece"] as const) {
+            it(`says so for a ${kind} that failed to load, with nothing to try`, async () => {
+              const restore = installBrowserGlobals();
+              try {
+                const { XBodyView } = await import("../src/views/BodyView.ts");
+                const view = new XBodyView();
+                view.loadError = {
+                  kind,
+                  error: Object.assign(new Error("Space is deleted"), {
+                    code: RuntimeErrorCode.SpaceDeleted,
+                  }),
+                };
+
+                const text = templateText(view.render());
+                expect(text).toContain("This space was deleted");
+                expect(text).not.toContain("We could not load");
+                expect(text).not.toContain("Try reloading");
+              } finally {
+                restore();
+              }
+            });
+          }
+        });
+
+        describe("when the space could not be reached", () => {
+          /** A load error as the worker reports a space it never reached. */
+          const unreachable = (kind: "space" | "piece") => ({
+            kind,
+            error: Object.assign(
+              new Error("Memory connection failed its first handshake"),
+              { code: RuntimeErrorCode.SpaceUnreachable },
+            ),
+          });
+
+          for (const kind of ["space", "piece"] as const) {
+            it(`says so for a ${kind} that failed to load, and offers to try again`, async () => {
+              const restore = installBrowserGlobals();
+              try {
+                const { XBodyView } = await import("../src/views/BodyView.ts");
+                const view = new XBodyView();
+                view.loadError = unreachable(kind);
+
+                const text = templateText(view.render());
+                expect(text).toContain(`We could not reach this ${kind}`);
+                expect(text).toContain("Try again");
+                expect(text).toContain("failed its first handshake");
+                expect(text).not.toContain("Try reloading");
+              } finally {
+                restore();
+              }
+            });
+          }
+
+          it("asks the runtime to retry every space it could not reach, and shows the retry in flight until it settles", async () => {
+            const restore = installBrowserGlobals();
+            const answer = Promise.withResolvers<void>();
+            let retries = 0;
+            try {
+              const { XBodyView } = await import("../src/views/BodyView.ts");
+              const view = new XBodyView();
+              view.loadError = unreachable("piece");
+              view.rt = {
+                runtime: () => ({
+                  retryUnreachableSpaces: () => {
+                    retries++;
+                    return answer.promise;
+                  },
+                }),
+              } as never;
+
+              const retry = findBinding(view.render(), '@click="') as () =>
+                Promise<void>;
+              const settled = retry();
+              expect(retries).toBe(1);
+              expect(boundValue(view.render(), '?disabled="')).toBe(true);
+              expect(templateText(view.render())).toContain("Trying…");
+
+              answer.resolve();
+              await settled;
+              expect(boundValue(view.render(), '?disabled="')).toBe(false);
+              expect(templateText(view.render())).not.toContain("Trying…");
+            } finally {
+              restore();
+            }
+          });
+
+          it("shows why the retry could not be asked for", async () => {
+            const restore = installBrowserGlobals();
+            try {
+              const { XBodyView } = await import("../src/views/BodyView.ts");
+              const view = new XBodyView();
+              view.loadError = unreachable("space");
+              view.rt = {
+                runtime: () => ({
+                  retryUnreachableSpaces: () =>
+                    Promise.reject(new Error("The runtime worker is gone")),
+                }),
+              } as never;
+
+              const retry = findBinding(view.render(), '@click="') as () =>
+                Promise<void>;
+              await retry();
+
+              expect(templateText(view.render())).toContain(
+                "The runtime worker is gone",
+              );
+            } finally {
+              restore();
+            }
+          });
+        });
+
         describe("when no space answers to the address", () => {
           /** A space load error as the worker reports a space with no history. */
           const spaceNotFound = () => ({

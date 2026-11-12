@@ -184,6 +184,13 @@ export interface MultiRuntimeSessionSpec {
    * the session's `#profile` wish fail rather than answer as another profile.
    */
   preferredProfileSpace?: DID;
+
+  /**
+   * A profile this session's runtime suggests for its user's first profile,
+   * stored once the runtime starts (`offerProfileSuggestion`), as a host does
+   * with the profile an invitation suggests. `picture` is the picture's bytes.
+   */
+  profileSuggestion?: { name: string; picture?: number[] };
 }
 
 export interface MultiRuntimeHarnessOptions {
@@ -305,7 +312,7 @@ export function claimPatternEnvironment(apiUrl: URL): () => void {
  * and holds it, and every harness in a run wants the same answers.
  */
 let patternsRoute: PatternsRoute | undefined;
-function systemPatternsRoute(): PatternsRoute {
+export function systemPatternsRoute(): PatternsRoute {
   return patternsRoute ??= new PatternsRoute(
     fromFileUrl(new URL("..", import.meta.url)),
   );
@@ -636,6 +643,18 @@ export class MultiRuntimeSession {
   }
 
   /**
+   * The profile stored as suggested for this session's user, with its
+   * picture's bytes as numbers, or `undefined` when none is stored.
+   */
+  async profileSuggestion(): Promise<
+    { name?: string; picture?: number[] } | undefined
+  > {
+    return await this.#client.call("profileSuggestion", {}) as
+      | { name?: string; picture?: number[] }
+      | undefined;
+  }
+
+  /**
    * Have this session's runtime reconsider `space` after it was refused, as
    * the shell's Retry does. A permanent refusal is retained until the
    * runtime hears the verdict may have changed: an ACL notice on a session it
@@ -649,6 +668,22 @@ export class MultiRuntimeSession {
    */
   async retrySpaceAccess(space: string): Promise<void> {
     await this.#client.call("retrySpaceAccess", { space });
+  }
+
+  /**
+   * Removes `user`, a principal's DID or `*`, from the access list of `space`,
+   * as an OWNER of it, by this session's identity.
+   */
+  async removeFromAccessList(space: string, user: string): Promise<void> {
+    await this.#client.call("removeFromAccessList", { space, user });
+  }
+
+  /**
+   * Deletes `space`, whose sole member this session's identity is. The memory
+   * server refuses the space to everyone from then on.
+   */
+  async deleteSpace(space: string): Promise<void> {
+    await this.#client.call("deleteSpace", { space });
   }
 
   /**
@@ -695,6 +730,17 @@ export class MultiRuntimeSession {
       value?: FabricValue;
       error?: string;
     };
+  }
+
+  /**
+   * Raw write of a whole document at an explicit storage address, in a commit
+   * nothing prepares, for a test to store what no pattern here writes.
+   */
+  async rawWrite(
+    address: { id: string; space: string; scope?: FabricValue },
+    value: FabricValue,
+  ): Promise<void> {
+    await this.#client.call("rawWrite", { ...address, value });
   }
 
   async idle(): Promise<void> {
@@ -1029,6 +1075,9 @@ export class MultiRuntimeHarness {
           ...(cfcWriteFloor !== undefined ? { cfcWriteFloor } : {}),
           ...(started.preferredProfileSpace !== undefined
             ? { preferredProfileSpace: started.preferredProfileSpace }
+            : {}),
+          ...(started.profileSuggestion !== undefined
+            ? { profileSuggestion: started.profileSuggestion }
             : {}),
         }).catch(async (error) => {
           await client.terminate();

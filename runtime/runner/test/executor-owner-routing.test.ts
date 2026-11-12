@@ -36,6 +36,7 @@ import {
   selectDocHead,
 } from "@commonfabric/memory/v2/engine";
 import type { AdmittedCommitNotice } from "@commonfabric/memory/v2/server";
+import { ACLManager } from "../src/acl-manager.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { MemorySpace } from "../src/storage/interface.ts";
@@ -63,6 +64,7 @@ import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value"
 import {
   TEST_SESSION_OPEN_AUDIENCE,
   testPrincipalSessionOpenAuthFactory,
+  writeDeletionTombstone,
 } from "./memory-v2-test-utils.ts";
 
 const serviceSigner = await Identity.fromPassphrase("owner routing service");
@@ -78,6 +80,7 @@ type Label = "A" | "B";
 describe("executor owner routing", () => {
   let directory: string;
   let servers: Record<Label, MemoryV2Server.Server>;
+  let enforcingServers: MemoryV2Server.Server[];
   let owners: Map<string, MemoryV2Server.Server>;
   let hosts: ExecutorHost[];
   let planes: RoutedPlane[];
@@ -103,14 +106,17 @@ describe("executor owner routing", () => {
   });
 
   /** A memory server over the shared store, with the service identity as
-   * its delegating class, as every process of a deployment has. */
-  const newServer = (): MemoryV2Server.Server =>
+   * its delegating class, as every process of a deployment has, which
+   * enforces access lists when `mode` is `enforce`. */
+  const newServer = (
+    mode: "off" | "enforce" = "off",
+  ): MemoryV2Server.Server =>
     new MemoryV2Server.Server({
       authorizeSessionOpen: authorizeLoopbackSessionOpen,
       sessionOpenAuth: { audience: TEST_SESSION_OPEN_AUDIENCE },
       subscriptionRefreshDelayMs: 0,
       store: toFileUrl(`${directory}/`),
-      acl: { mode: "off", delegatingDids: [serviceSigner.did()] },
+      acl: { mode, delegatingDids: [serviceSigner.did()] },
       // A toolshed's posture: the runtime's naming default.
       namesInstances: namesInstancesByDefault,
     });
@@ -163,13 +169,19 @@ describe("executor owner routing", () => {
       entry.outcome === "active"
     );
 
-  /** The entries of `sidecarId` in `space` as `label`'s server reads them. */
+  /** The server `label` names, or `server` itself. */
+  const serverOf = (
+    server: Label | MemoryV2Server.Server,
+  ): MemoryV2Server.Server =>
+    typeof server === "string" ? servers[server] : server;
+
+  /** The entries of `sidecarId` in `space` as `server` reads them. */
   const entriesOn = async (
-    label: Label,
+    server: Label | MemoryV2Server.Server,
     space: MemorySpace,
     sidecarId: string,
   ): Promise<NonNullable<StreamEventsDocValue["entries"]>> => {
-    const engine = await servers[label].engineForSpace(space);
+    const engine = await serverOf(server).engineForSpace(space);
     const value = readDoc(engine, { id: sidecarId })?.value as
       | StreamEventsDocValue
       | undefined;
@@ -179,11 +191,11 @@ describe("executor owner routing", () => {
   /** Creates the target stream's document in `space` engine-direct, so no
    * session and no admission notice reaches either host for it. */
   const createStreamDoc = async (
-    label: Label,
+    server: Label | MemoryV2Server.Server,
     space: MemorySpace,
     id: string,
   ): Promise<void> => {
-    const engine = await servers[label].engineForSpace(space);
+    const engine = await serverOf(server).engineForSpace(space);
     applyCommit(engine, {
       sessionId: "owner-routing-setup",
       space,
@@ -206,6 +218,7 @@ describe("executor owner routing", () => {
     releaseServerExecution = acquireServerExecutionEnabler();
     directory = await Deno.makeTempDir({ prefix: "owner-routing-" });
     servers = { A: newServer(), B: newServer() };
+    enforcingServers = [];
     for (const server of Object.values(servers)) {
       server.setServedRequestHandler(servedRequestHandler({ server }));
     }
@@ -225,6 +238,7 @@ describe("executor owner routing", () => {
     for (const runtime of runtimes) await runtime.dispose();
     for (const manager of managers) await manager.close();
     for (const server of Object.values(servers)) await server.close();
+    for (const server of enforcingServers) await server.close();
     await Deno.remove(directory, { recursive: true });
     releaseServerExecution();
   });
@@ -748,6 +762,337 @@ describe("executor owner routing", () => {
   });
 
   //
+  // Sessions the owner ends
+  //
+  // The owner revokes a routed session when an access-list change
+  // de-authorizes it, which takes an owner that enforces the lists, and every
+  // session on a space it deletes, in any mode.
+  //
+
+  /** Makes a new owner of the target, one that enforces access lists. */
+  const enforcingOwner = (): MemoryV2Server.Server => {
+    const server = newServer("enforce");
+    server.setServedRequestHandler(servedRequestHandler({ server }));
+    enforcingServers.push(server);
+    owners.set(targetSpace, server);
+    return server;
+  };
+
+  /** The route, with each revocation an owner sends recorded in
+   * `revocations` once the session's client has handled it. */
+  const revocationRecordingRoute = (
+    revocations: ArrivalLog<void>,
+  ): RouteOptions => {
+    const base = route();
+    return {
+      ...base,
+      createTransport: (space) => {
+        const transport = base.createTransport(space);
+        const setReceiver = transport.setReceiver.bind(transport);
+        transport.setReceiver = (receiver) =>
+          setReceiver((payload) => {
+            receiver(payload);
+            if (payload.includes('"session/revoked"')) revocations.record();
+          });
+        return transport;
+      },
+    };
+  };
+
+  /** Commits the target's genesis on `owner` engine-direct, with `acl` as
+   * its access list and declaring `spaceKind` when given. */
+  const seedTarget = async (
+    owner: MemoryV2Server.Server,
+    acl: Record<string, "READ" | "WRITE" | "OWNER">,
+    spaceKind?: string,
+  ): Promise<void> => {
+    applyCommit(await owner.engineForSpace(targetSpace), {
+      sessionId: "owner-routing-genesis",
+      space: targetSpace,
+      principal: targetSpace,
+      commit: {
+        localSeq: 1,
+        ...(spaceKind === undefined ? {} : { spaceKind }),
+        reads: { confirmed: [], pending: [] },
+        operations: [{
+          op: "set",
+          id: `of:${targetSpace}`,
+          value: { value: acl },
+        }],
+      },
+    });
+  };
+
+  /** Makes `edit` to the target's access list, as `as` through a client of
+   * `owner`, so the owner sweeps the sessions the change de-authorizes. */
+  const editTargetAcl = async (
+    owner: MemoryV2Server.Server,
+    as: Identity,
+    edit: (acl: ACLManager) => Promise<unknown>,
+  ): Promise<void> => {
+    const manager = EmulatedStorageManager.connectTo(owner, { as });
+    managers.push(manager);
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: manager,
+    });
+    runtimes.push(runtime);
+    await edit(new ACLManager(runtime, targetSpace));
+    await runtime.idle();
+    await runtime.storageManager.synced();
+  };
+
+  /** An append of `eventId` into the target's stream, fired by `actor`. */
+  const appendOf = (eventId: string, actor: Identity) => ({
+    targetStream: sidecar,
+    targetStreamLink: stream,
+    eventId,
+    payload: {},
+    actingPrincipal: actor.did(),
+    actingSession: "sess-1",
+    capabilityRef: "cap-routed",
+  });
+
+  /** Fires the event `eventId` in the home's source stream, which a failure
+   * notice for a row naming it lands on, and returns the row's reference to
+   * it. */
+  const sourceEventOnA = async (eventId: string) => {
+    const sourceStream = { id: `of:${eventId}-stream`, path: [] as string[] };
+    const sidecarId = streamEntriesDocId(sourceStream);
+    await createStreamDoc("A", homeSpace, sourceStream.id);
+    await servers.A.commitDelegatedAppend({
+      targetSpace: homeSpace,
+      targetStream: sidecarId,
+      targetStreamLink: sourceStream,
+      eventId,
+      payload: {},
+      actingPrincipal: aliceSigner.did(),
+      actingSession: "sess-1",
+      capabilityRef: "cap-source",
+      sessionId: "owner-routing-source",
+      localSeq: 1,
+    });
+    return { sidecarId, eventId };
+  };
+
+  /** Alice and Bob, the one whose DID sorts first first: an access list
+   * naming both `OWNER` resolves the first as the target's owner. */
+  const byDid = (): [Identity, Identity] =>
+    aliceSigner.did() < bobSigner.did()
+      ? [aliceSigner, bobSigner]
+      : [bobSigner, aliceSigner];
+
+  it("opens a new session for the crossing after the owner revokes the one open, and the owner admits the crossing on it", async () => {
+    const owner = enforcingOwner();
+    const [first, second] = byDid();
+    await seedTarget(owner, { [second.did()]: "OWNER" });
+    await createStreamDoc(owner, targetSpace, stream.id);
+    const revocations = new ArrivalLog<void>();
+    const plane = new RoutedPlane(revocationRecordingRoute(revocations));
+    planes.push(plane);
+    const scope = plane.scope();
+    await scope.append(targetSpace, appendOf("evt-before-revoke", second));
+
+    // The routed session acts as the target's owner, `second`. Granting
+    // `first` OWNER moves the owner to `first`, so the owner revokes it.
+    await editTargetAcl(
+      owner,
+      second,
+      (acl) => acl.set(first.did() as never, "OWNER"),
+    );
+    await revocations.reached(1);
+
+    await scope.append(targetSpace, appendOf("evt-after-revoke", second));
+    expect(
+      (await entriesOn(owner, targetSpace, sidecar)).map((entry) =>
+        entry.eventId
+      ),
+    ).toEqual(["evt-before-revoke", "evt-after-revoke"]);
+    expect(plane.accessForTestingOnly.sessionSpaces).toEqual([targetSpace]);
+    scope.dispose();
+  });
+
+  it("keeps a document's watch when the owner revokes the session it registered on, and wakes it on the session that replaces it", async () => {
+    const owner = enforcingOwner();
+    const [first, second] = byDid();
+    await seedTarget(owner, { [second.did()]: "OWNER" });
+    await createStreamDoc(owner, targetSpace, stream.id);
+    const revocations = new ArrivalLog<void>();
+    const plane = new RoutedPlane(revocationRecordingRoute(revocations));
+    planes.push(plane);
+    const scope = plane.scope();
+    const woken = new ArrivalLog<string>();
+    const cancel = await scope.watchDocument(targetSpace, sidecar, () => {
+      void entriesOn(owner, targetSpace, sidecar).then((entries) => {
+        for (const entry of entries) woken.record(entry.eventId);
+      });
+    });
+
+    await editTargetAcl(
+      owner,
+      second,
+      (acl) => acl.set(first.did() as never, "OWNER"),
+    );
+    await revocations.reached(1);
+    await scope.append(
+      targetSpace,
+      appendOf("evt-watched-after-revoke", second),
+    );
+
+    // The watch moved to the new session, whose push of the append wakes it.
+    await woken.matching((eventId) => eventId === "evt-watched-after-revoke");
+    cancel();
+    scope.dispose();
+    expect(plane.accessForTestingOnly.sessionSpaces).toEqual([]);
+  });
+
+  it("keeps a document's watch while the owner refuses the session replacing a revoked one, and adds it to the session opened once a later change to the list admits one", async () => {
+    const owner = enforcingOwner();
+    // As in the outbox's case below: the target's becoming its own owner
+    // binds a routed session to no user, and the list grants the service
+    // nothing, so the owner refuses the replacing session's open.
+    await seedTarget(owner, { [aliceSigner.did()]: "OWNER" }, "profile");
+    await createStreamDoc(owner, targetSpace, stream.id);
+    const revocations = new ArrivalLog<void>();
+    const plane = new RoutedPlane(revocationRecordingRoute(revocations));
+    planes.push(plane);
+    const scope = plane.scope();
+    const woken = new ArrivalLog<string>();
+    const cancel = await scope.watchDocument(targetSpace, sidecar, () => {
+      void entriesOn(owner, targetSpace, sidecar).then((entries) => {
+        for (const entry of entries) woken.record(entry.eventId);
+      });
+    });
+    await editTargetAcl(
+      owner,
+      aliceSigner,
+      (acl) => acl.set(targetSpace as never, "OWNER"),
+    );
+    await revocations.reached(1);
+    await expect(
+      scope.append(targetSpace, appendOf("evt-refused-open", aliceSigner)),
+    ).rejects.toThrow("lacks READ");
+
+    await editTargetAcl(owner, aliceSigner, (acl) => acl.remove(targetSpace));
+    await scope.append(targetSpace, appendOf("evt-readmitted", aliceSigner));
+    expect(await plane.accessForTestingOnly.watchedDocuments(targetSpace))
+      .toEqual([sidecar]);
+    await woken.matching((eventId) => eventId === "evt-readmitted");
+    cancel();
+    scope.dispose();
+    expect(plane.accessForTestingOnly.sessionSpaces).toEqual([]);
+  });
+
+  it("retires a row into a target its owner deleted while the row's session was open, as a deterministic refusal with the notice on the source entry", async () => {
+    const revocations = new ArrivalLog<void>();
+    const plane = new RoutedPlane(revocationRecordingRoute(revocations));
+    planes.push(plane);
+    const { engine, lease, stats, outbox } = await newOutbox(plane);
+    await createStreamDoc("B", targetSpace, stream.id);
+    const sourceEvent = await sourceEventOnA("evt-deleted-source");
+    insertExecutionOutboxRows(engine, {
+      branch: "",
+      createdSeq: 2,
+      rows: [{
+        targetSpace,
+        ...appendOf("evt-before-delete", aliceSigner),
+      }],
+    });
+    expect((await outbox.deliverPendingAppends()).remaining).toBe(0);
+
+    // The deletion revokes the session the first row went on.
+    writeDeletionTombstone(
+      await servers.B.engineForSpace(targetSpace),
+      targetSpace,
+      aliceSigner.did(),
+    );
+    servers.B.noticeDeletedSpace(targetSpace);
+    await revocations.reached(1);
+    insertExecutionOutboxRows(engine, {
+      branch: "",
+      createdSeq: 3,
+      rows: [{
+        targetSpace,
+        ...appendOf("evt-after-delete", aliceSigner),
+        sourceEvent,
+      }],
+    });
+
+    expect((await outbox.deliverPendingAppends()).remaining).toBe(0);
+    expect(selectPendingExecutionOutboxRows(engine, { branch: "" }).length)
+      .toBe(0);
+    expect(stats.outbox.failed).toBe(1);
+    const [sourceEntry] = await entriesOn(
+      "A",
+      homeSpace,
+      sourceEvent.sidecarId,
+    );
+    expect(sourceEntry.deliveryFailures?.map((f) => f.eventId)).toEqual([
+      "evt-after-delete",
+    ]);
+    await lease.release();
+  });
+
+  it("keeps a row while the owner refuses the session replacing a revoked one under the target's access list, and delivers it once a later change to the list admits the session again", async () => {
+    const owner = enforcingOwner();
+    // A space of a declared kind that owns itself binds a routed session
+    // to no user, so the service's own grant decides its open, and the
+    // list grants the service nothing.
+    await seedTarget(owner, { [aliceSigner.did()]: "OWNER" }, "profile");
+    await createStreamDoc(owner, targetSpace, stream.id);
+    const revocations = new ArrivalLog<void>();
+    const plane = new RoutedPlane(revocationRecordingRoute(revocations));
+    planes.push(plane);
+    const { engine, lease, stats, outbox } = await newOutbox(plane);
+    const sourceEvent = await sourceEventOnA("evt-unbound-source");
+    insertExecutionOutboxRows(engine, {
+      branch: "",
+      createdSeq: 2,
+      rows: [{
+        targetSpace,
+        ...appendOf("evt-before-unbind", aliceSigner),
+      }],
+    });
+    expect((await outbox.deliverPendingAppends()).remaining).toBe(0);
+
+    await editTargetAcl(
+      owner,
+      aliceSigner,
+      (acl) => acl.set(targetSpace as never, "OWNER"),
+    );
+    await revocations.reached(1);
+    insertExecutionOutboxRows(engine, {
+      branch: "",
+      createdSeq: 3,
+      rows: [{
+        targetSpace,
+        ...appendOf("evt-after-unbind", aliceSigner),
+        sourceEvent,
+      }],
+    });
+    expect((await outbox.deliverPendingAppends()).remaining).toBe(1);
+    expect(stats.outbox.failed).toBe(0);
+
+    // Alice takes the space's own entry off the list, which binds the
+    // service's session to her again.
+    await editTargetAcl(owner, aliceSigner, (acl) => acl.remove(targetSpace));
+    expect((await outbox.deliverPendingAppends()).remaining).toBe(0);
+    expect(
+      (await entriesOn(owner, targetSpace, sidecar)).map((entry) =>
+        entry.eventId
+      ),
+    ).toEqual(["evt-before-unbind", "evt-after-unbind"]);
+    expect(stats.outbox.failed).toBe(0);
+    const [sourceEntry] = await entriesOn(
+      "A",
+      homeSpace,
+      sourceEvent.sidecarId,
+    );
+    expect(sourceEntry.deliveryFailures).toBeUndefined();
+    await lease.release();
+  });
+
+  //
   // Provisioning through the owner (R2)
   //
   // A served run's writes into another space: its genesis, the foreign wave
@@ -797,7 +1142,7 @@ describe("executor owner routing", () => {
 
       // The space's genesis is the first commit its owner admits.
       const pSpace = await serving.createSpace({ owner: aliceSigner.did() });
-      expect(onB.notices.map((n) => [n.space, n.seq])).toEqual([[pSpace, 1]]);
+      expect(onB.notices[0]).toMatchObject({ space: pSpace, seq: 1 });
       const acl = await servers.B.readDocument(pSpace, `of:${pSpace}`);
       expect(acl?.value).toEqual({ [aliceSigner.did()]: "OWNER" });
 
@@ -826,8 +1171,8 @@ describe("executor owner routing", () => {
       homeCell.withTx(tx).set({ value: 32 });
       expect((await tx.commit().settled).error).toBeUndefined();
 
-      // The owner commits the batch under the carried actor and reports it
-      // warm, which activates the space there.
+      // The owner commits the batch under the carried actor, and reports
+      // that commit, and only that one, as warm.
       const pEngine = await servers.B.engineForSpace(pSpace);
       const provisionedId = foreignCell.getAsNormalizedFullLink().id;
       const provisionedSeq = () =>
@@ -839,8 +1184,8 @@ describe("executor owner routing", () => {
       expect(meta.class).toBe("authored");
       expect(meta.acting_principal).toBe(aliceSigner.did());
       expect(
-        onB.notices.find((n) => n.space === pSpace && n.seq > 1)?.warm,
-      ).toBe(true);
+        onB.notices.filter((n) => n.warm).map((n) => [n.space, n.seq]),
+      ).toEqual([[pSpace, provisionedSeq()]]);
       await activated("B", pSpace);
 
       // The home commit followed, on the sender's own server.

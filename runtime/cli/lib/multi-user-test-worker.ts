@@ -56,7 +56,7 @@ import {
   TESTS,
   writePatternCoverageLcov,
 } from "@commonfabric/runner";
-import { defer } from "@commonfabric/async/defer";
+import { defer, type Deferred } from "@commonfabric/async/defer";
 import { holdWorkerLifetimeLock } from "@commonfabric/platform/worker-lifetime";
 
 import { assertionOutcome } from "./assert-record.ts";
@@ -82,8 +82,13 @@ import {
   type RuntimeErrorExpectation,
   runtimeErrorExpectation,
 } from "./runtime-error-expectation.ts";
-import { servedConsequences, settleServed } from "./served-settle.ts";
+import {
+  servedConsequences,
+  type ServedQuiescence,
+  settleServed,
+} from "./served-settle.ts";
 import { pullActionEvent } from "./test-action-event.ts";
+import { pressRenderedControl, pressTargetOf } from "./test-press.ts";
 
 export interface WorkerRequest {
   id: number;
@@ -102,6 +107,19 @@ export type WorkerResponse =
 export interface WorkerLifetimeNotice {
   lifetimeLock: string | undefined;
 }
+
+/**
+ * The message a participant worker posts to wait for the serving loop, which
+ * runs in the orchestrator, to reach quiescence.
+ */
+export interface WorkerQuiescenceRequest {
+  quiescenceRequest: number;
+}
+
+/** The orchestrator's answer to a {@link WorkerQuiescenceRequest}. */
+export type WorkerQuiescenceAnswer =
+  & { quiescenceAnswer: number }
+  & ({ reached: number } | { error: string });
 
 export type StepKind =
   | "action"
@@ -201,6 +219,27 @@ let consoleCaptureActive = false;
 /** Channel 2: logger error/warn count snapshot taken after compile, before run. */
 let loggerCountsBeforeRun: LoggerErrorWarnSnapshot = new Map();
 
+/**
+ * On the server-execution arm, what a settle waits on for the serving loop:
+ * a request to the orchestrator, which holds it.
+ */
+let servedQuiescence: ServedQuiescence | undefined;
+
+/** The orchestrator's answers still awaited, by request id. */
+const quiescenceAnswers = new Map<number, Deferred<number>>();
+let nextQuiescenceRequest = 0;
+
+/** Helper for {@link servedQuiescence}, which makes one request. */
+function requestServedQuiescence(): Promise<number> {
+  const quiescenceRequest = nextQuiescenceRequest++;
+  const answer = defer<number>();
+  quiescenceAnswers.set(quiescenceRequest, answer);
+  (self as unknown as Worker).postMessage(
+    { quiescenceRequest } satisfies WorkerQuiescenceRequest,
+  );
+  return answer.promise;
+}
+
 function rt(): Runtime {
   if (!runtime) throw new Error("worker not initialized");
   return runtime;
@@ -209,7 +248,8 @@ function rt(): Runtime {
 /**
  * Settles the runtime and its storage, until a round finds nothing to do,
  * and on the server-execution arm until every event this runtime fired has
- * its served consequence back here; see `served-settle.ts`.
+ * its served consequence back here and the serving loop has finished what
+ * that set off; see `served-settle.ts`.
  */
 async function settle(maxIterations = 20): Promise<void> {
   await settleServed(rt(), async () => {
@@ -222,7 +262,7 @@ async function settle(maxIterations = 20): Promise<void> {
       await rt().idle();
       if (performance.now() - start < SETTLE_FAST_MS) return;
     }
-  });
+  }, servedQuiescence);
 }
 
 function markersCellFor(participant: string): Cell<Record<string, boolean>> {
@@ -274,6 +314,9 @@ const stepPeekSchema = {
     action: { type: "unknown" },
     assertion: { type: "unknown" },
     render: { type: "unknown" },
+    press: { type: "unknown" },
+    control: { type: "string" },
+    within: { type: "string" },
     settle: { type: "boolean" },
     label: { type: "string" },
     await: { type: "string" },
@@ -315,13 +358,16 @@ function classifyStep(stepCell: Cell<unknown>, index: number): StepMeta {
   if (peek?.settle === true) return { kind: "settle", ...skip };
   // Streams/computeds peek as present-but-opaque; key presence is the signal.
   if (Object.hasOwn(peek ?? {}, "render")) return { kind: "render", ...skip };
-  if (Object.hasOwn(peek ?? {}, "action")) return { kind: "action", ...skip };
+  // A press is an action whose event a rendered control sends.
+  if (
+    Object.hasOwn(peek ?? {}, "action") || Object.hasOwn(peek ?? {}, "press")
+  ) return { kind: "action", ...skip };
   if (Object.hasOwn(peek ?? {}, "assertion")) {
     return { kind: "assertion", ...skip };
   }
   throw new Error(
     `Test step ${index} has none of ` +
-      `action/assertion/render/settle/label/await ` +
+      `action/press/assertion/render/settle/label/await ` +
       // The step's own keys, not the peek's: the peek schema has already
       // dropped every key it does not declare, which is exactly the set an
       // author needs named here.
@@ -433,6 +479,7 @@ const handlers: Record<
     }));
     if (experimental.serverExecution) {
       servedErrors = collectServedErrors(runtime);
+      servedQuiescence = requestServedQuiescence;
     }
     if (args.noIdempotencyCheck !== true) runtime.enableIdempotencyCheck();
     if (args.cfcDenials === true) {
@@ -621,9 +668,22 @@ const handlers: Record<
     return result;
   },
 
-  /** Invoke an action step's stream and settle. */
+  /** Invoke an action step's stream, or press its control, and settle. */
   async action({ index }) {
     const stepCell = stepCells[index as number];
+    const peek = stepCell.asSchema(stepPeekSchema).get() as {
+      control?: unknown;
+      within?: unknown;
+    };
+    if (Object.hasOwn(peek ?? {}, "press")) {
+      await pressRenderedControl(
+        stepCell.key("press" as never) as Cell<unknown>,
+        pressTargetOf(peek, index as number),
+        () => settle(),
+      );
+      await settle();
+      return {};
+    }
     const stream = stepCell.key("action" as never) as unknown as {
       send?: (value: unknown) => void;
     };
@@ -764,7 +824,17 @@ const announced = holdWorkerLifetimeLock().then((lifetimeLock) =>
   )
 );
 
-self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
+self.onmessage = async (
+  event: MessageEvent<WorkerRequest | WorkerQuiescenceAnswer>,
+) => {
+  if ("quiescenceAnswer" in event.data) {
+    const answer = event.data;
+    const waiting = quiescenceAnswers.get(answer.quiescenceAnswer);
+    quiescenceAnswers.delete(answer.quiescenceAnswer);
+    if ("error" in answer) waiting?.reject(new Error(answer.error));
+    else waiting?.resolve(answer.reached);
+    return;
+  }
   await announced;
   const { id, cmd, args } = event.data;
   const handler = handlers[cmd];

@@ -82,7 +82,7 @@ import type {
   HarnessTranscriptEvent,
   HarnessTranscriptMessage,
 } from "./contracts/transcript.ts";
-import { CfHarnessEngine } from "./engine.ts";
+import { CfHarnessEngine, type CreateHarnessEngineOptions } from "./engine.ts";
 import {
   assertContinuationOutputPaths,
   assertHarnessRootSource,
@@ -516,6 +516,9 @@ export interface RunCfHarnessCliDependencies
    */
   sandboxSelectionFlags?: boolean;
 
+  /** Host-owned opt-in progress return channel. */
+  reportProgress?: CreateHarnessEngineOptions["reportProgress"];
+
   writeTextFile?: (path: string, text: string) => Promise<void>;
 
   /** The structured-result validation verdict after a completed prompt loop. */
@@ -867,6 +870,7 @@ const CLI_PARENT_TOOL_IDS = [
   "delegate_task",
   "describe_handle",
   "finish_task",
+  "report_progress",
   "submit_result",
   "loom_compose",
   "loom_inspect",
@@ -1653,6 +1657,7 @@ export const parseCfHarnessCliArgs = async (
     | "sandboxRuntimeNamedBy"
     | "sandboxSelectionFlags"
     | "providerSettingsStore"
+    | "reportProgress"
   > = {},
 ): Promise<CfHarnessCliConfig | { help: true }> => {
   const normalizedArgv = argv[0] === "--" ? argv.slice(1) : argv;
@@ -2205,6 +2210,14 @@ export const parseCfHarnessCliArgs = async (
     );
   }
   if (
+    allowedToolIds?.includes("report_progress") === true &&
+    deps.reportProgress === undefined
+  ) {
+    throw new Error(
+      "--allow-tool report_progress requires a host progress publisher",
+    );
+  }
+  if (
     allowedToolIds?.includes("search_skills") === true &&
     skillsSh === undefined
   ) {
@@ -2674,11 +2687,14 @@ const appendStructuredResultInstructions = (
     lines.push(
       "- Finish by calling submit_result with the whole result as `result`. It validates the value against the configured schema and tells you what to correct; an accepted result ends the run, so make it your last call. Where the result refers to something you hold a handle for, write the handle token, not an address.",
     );
+  } else {
+    lines.push(
+      `- Write a JSON file at ${structuredResult.sandboxPath} when an available tool can write it; the run then still ends on your final response.`,
+      "- The harness validates that file against the configured structured-result schema after the run.",
+      "- If the file is missing, invalid JSON, or schema-invalid, the CLI exits nonzero and records the validation failure in the batch result sidecar when configured.",
+    );
   }
   lines.push(
-    `- Writing a JSON file at ${structuredResult.sandboxPath} yourself is the other way to the same place when an available tool can write it; the run then still ends on your final response.`,
-    "- The harness validates that file against the configured structured-result schema after the run.",
-    "- If the file is missing, invalid JSON, or schema-invalid, the CLI exits nonzero and records the validation failure in the batch result sidecar when configured.",
     "- Object schemas are closed by default: include only properties the schema declares unless it explicitly allows additional properties.",
     "",
     "Result schema (JSON):",
@@ -4051,6 +4067,7 @@ export const runCfHarnessCli = async (
               },
             }
             : {}),
+          reportProgress: deps.reportProgress,
           ...(deps.fabricSessionFactory !== undefined
             ? { fabricSessionFactory: deps.fabricSessionFactory }
             : {}),
@@ -4246,6 +4263,7 @@ export const runCfHarnessCli = async (
       });
       const engine = new CfHarnessEngine({
         ...sessionOptions,
+        reportProgress: deps.reportProgress,
         modelProvider,
         credentialOwnerKey,
         ...(modelProvider === "openai-compatible-gateway"

@@ -113,7 +113,7 @@ export type TextWithMods = {
  * A measure of a value's size by which `3-json-encoding.md` section 12 has an
  * implementation state a guarantee: the longest array, the largest record, the
  * longest string, the longest byte sequence, the longest registered symbol's
- * key, and the depth.
+ * key, the depth, and the largest bigint.
  */
 export type SizeMeasure =
   | "arrayLength"
@@ -121,7 +121,8 @@ export type SizeMeasure =
   | "stringLength"
   | "bytesLength"
   | "symbolKeyLength"
-  | "depth";
+  | "depth"
+  | "bigintBytes";
 
 /**
  * What a reader must support to read a fixture entry, a reader that does not
@@ -255,6 +256,7 @@ const SIZE_MEASURES: readonly SizeMeasure[] = [
   "bytesLength",
   "symbolKeyLength",
   "depth",
+  "bigintBytes",
 ];
 
 /**
@@ -269,21 +271,25 @@ export const SIZE_FLOORS: { readonly [Measure in SizeMeasure]: number } = Object
     stringLength: 2 ** 24,
     bytesLength: 2 ** 24,
     symbolKeyLength: 2 ** 10,
-    depth: 2 ** 10,
+    depth: 2 ** 9,
+    bigintBytes: 2 ** 21,
   });
 
 /**
  * This package's guarantee by each measure, as its README states it, no
  * figure being written `Infinity`.
  */
-const SIZE_GUARANTEES: { readonly [Measure in SizeMeasure]: number } = Object
+export const SIZE_GUARANTEES: {
+  readonly [Measure in SizeMeasure]: number;
+} = Object
   .freeze({
     arrayLength: 2 ** 26,
     propertyCount: Infinity,
     stringLength: 2 ** 26,
     bytesLength: 2 ** 27,
     symbolKeyLength: 2 ** 26,
-    depth: 2 ** 11,
+    depth: 2 ** 9,
+    bigintBytes: 2 ** 26,
   });
 
 /**
@@ -355,8 +361,9 @@ export function meetsRequirements(
  * `3-json-encoding.md` section 12 measures it, read from the text: the longest
  * array, a `/hole` run counting every hole it stands for; the largest record,
  * any object in the JSON body counting; the longest string, byte sequence and
- * registered symbol's key; and the depth. Each is zero for a text that is not
- * `fvj1:` JSON.
+ * registered symbol's key; the depth; and the size of the largest bigint, a
+ * `BigInt@1` value or a temporal quantity's, in bytes. Each is zero for a text
+ * that is not `fvj1:` JSON.
  */
 function sizesOf(
   { text, unclaimed = [] }: TextWithMods,
@@ -368,6 +375,7 @@ function sizesOf(
     bytesLength: 0,
     symbolKeyLength: 0,
     depth: 0,
+    bigintBytes: 0,
   };
   const note = (measure: SizeMeasure, size: number) => {
     largest[measure] = Math.max(largest[measure], size);
@@ -449,8 +457,8 @@ function sizesOf(
 
 /**
  * Notes the sizes of what the state of a primitive under `tag` holds: the
- * bytes a base64url state or field writes, a registered symbol's key, and any
- * other string.
+ * bytes a base64url state or field writes, whether a byte sequence's or a
+ * bigint's, a registered symbol's key, and any other string.
  */
 function measurePrimitiveState(
   tag: string,
@@ -461,12 +469,12 @@ function measurePrimitiveState(
     (typeof state === "object" && state !== null)
       ? Object.getOwnPropertyDescriptor(state, name)?.value
       : undefined;
-  const noteBytes = (written: unknown) => {
+  const noteBytes = (
+    written: unknown,
+    measure: "bytesLength" | "bigintBytes" = "bytesLength",
+  ) => {
     if (typeof written === "string") {
-      note(
-        "bytesLength",
-        Math.floor(written.replace(/=+$/, "").length * 3 / 4),
-      );
+      note(measure, Math.floor(written.replace(/=+$/, "").length * 3 / 4));
     }
   };
   const noteString = (written: unknown) => {
@@ -498,6 +506,8 @@ function measurePrimitiveState(
     case CODEC_TYPE_TAGS.DurationNsec:
     case CODEC_TYPE_TAGS.EpochDay:
     case CODEC_TYPE_TAGS.EpochNsec:
+      noteBytes(state, "bigintBytes");
+      break;
     case CODEC_TYPE_TAGS.SpecialNumber:
     case CODEC_TYPE_TAGS.Undefined:
       // A number, written as a string or not at all.

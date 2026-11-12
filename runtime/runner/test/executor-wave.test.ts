@@ -867,13 +867,13 @@ describe("stage D seal-into-wave", () => {
       // A settlement that needed no wave would have resolved by the end of
       // this turn.
       await flushMicrotasks();
+      expect(settledBeforeCommit).toBe(false);
       const committed: string[] = [];
 
       const outcome = await wave.commitWave(
         accessSink(lease.holder, { admitted: true, seq: 7 }, committed),
       );
 
-      expect(settledBeforeCommit).toBe(false);
       expect(committed).toEqual(["event-consequence:e-change-only"]);
       expect(outcome.dispositions).toEqual([
         { kind: "committed" },
@@ -5495,6 +5495,46 @@ describe("stage D seal-into-wave", () => {
         expect(witness.lastRunInstantiation()).toBe(3);
       });
     });
+
+    // The two refusals this replica makes of a commit that read through
+    // another commit's layer once that commit is refused or dropped.
+    for (
+      const message of [
+        "pending dependency rejected: localSeq=7",
+        "pending dependency dropped locally: localSeq=7",
+      ]
+    ) {
+      it(`reinstantiates a piece once after a ${JSON.stringify(message.split(":")[0])} refusal`, async () => {
+        await withOffRuntime(async (offRuntime) => {
+          const witness = await stoppedWitnessPiece(
+            `off-piece-instantiate-${
+              message.split(":")[0].replaceAll(" ", "-")
+            }`,
+            { on: offRuntime },
+          );
+          const deadDependency = {
+            name: "ConflictError" as const,
+            message,
+            readyToRetry: () => Promise.resolve(),
+          };
+          const counts = interceptInstantiateCommits(
+            offRuntime,
+            (attempt, tx, original) =>
+              attempt === 1 ? refuseCommit(tx, deadDependency) : original(),
+          );
+
+          expect(await offRuntime.start(witness.cell)).toBe(true);
+          await offRuntime.idle();
+          await offRuntime.runner.idlePieceInstantiationSettlements();
+
+          expect(counts.attempts()).toBe(2);
+          expect(counts.readinessCalls()).toBe(1);
+          expect(counts.failures).toEqual([]);
+          expect(witness.instantiations()).toBe(3);
+          expect(witness.lastRunInstantiation()).toBe(3);
+        });
+      });
+    }
 
     it("reinstantiates a piece after successive stale-read refusals while rounds remain", async () => {
       await withOffRuntime(async (offRuntime) => {

@@ -6,6 +6,8 @@
 import { sha1 } from "@noble/hashes/legacy.js";
 import { bytesToHex } from "@noble/hashes/utils.js";
 
+import type { RelayConnection } from "@commonfabric/github-webhooks/relay";
+
 import { parseDocument } from "../lib/view/languages/typescript/parse.ts";
 import { renderFrame, type ViewState } from "../lib/view/render.ts";
 import { type Rgb, stripAnsi, term } from "../lib/view/ansi.ts";
@@ -143,4 +145,76 @@ export function bytes(s: string): Uint8Array {
 /** Raw byte array helper. */
 export function raw(...nums: number[]): Uint8Array {
   return new Uint8Array(nums);
+}
+
+/**
+ * A stand-in for the GitHub webhook relay. `connect` opens a connection to it,
+ * `deliver` writes a delivery to the connection opened last as the relay
+ * frames one, unless its subscriber has stopped reading it, and `end` ends
+ * that connection. `connected` resolves once a
+ * connection has opened, and `closed` once the subscriber has closed the
+ * connection opened last.
+ */
+export function fakeRelay() {
+  const encoder = new TextEncoder();
+  const opened: Array<{
+    writer: WritableStreamDefaultWriter<Uint8Array>;
+    closed: PromiseWithResolvers<void>;
+  }> = [];
+  const connected = Promise.withResolvers<void>();
+  const last = () => {
+    const connection = opened.at(-1);
+    if (connection === undefined) throw new Error("no connection is open");
+    return connection;
+  };
+  const connect = (): Promise<RelayConnection> => {
+    const { readable, writable } = new TransformStream<Uint8Array>();
+    const closed = Promise.withResolvers<void>();
+    opened.push({ writer: writable.getWriter(), closed });
+    connected.resolve();
+    return Promise.resolve({ readable, close: () => closed.resolve() });
+  };
+  const deliver = (event: string, payload: unknown) => {
+    const request = encoder.encode(
+      `POST /webhook HTTP/1.1\r\nX-GitHub-Event: ${event}\r\n\r\n` +
+        JSON.stringify(payload),
+    );
+    const frame = new Uint8Array(4 + request.length);
+    new DataView(frame.buffer).setUint32(0, request.length);
+    frame.set(request, 4);
+    // A subscriber that has stopped reading receives nothing.
+    last().writer.write(frame).catch(() => {});
+  };
+  return {
+    connect,
+    deliver,
+    end: () => void last().writer.close().catch(() => {}),
+    connected: connected.promise,
+    closed: () => last().closed.promise,
+    get connections() {
+      return opened.length;
+    },
+  };
+}
+
+/**
+ * The payload of a `pull_request` delivery reporting `action` on the pull
+ * request numbered 7 in `commonfabric/labs`, whose head is `commit` on
+ * `branch` of the repository whose page is `repository`.
+ */
+export function pullRequestPayload(
+  {
+    action = "opened",
+    repository = "https://github.com/fork/repo",
+    branch = "feature",
+    commit = "c0ffee",
+  } = {},
+) {
+  return {
+    action,
+    pull_request: {
+      html_url: "https://github.com/commonfabric/labs/pull/7",
+      head: { ref: branch, sha: commit, repo: { html_url: repository } },
+    },
+  };
 }

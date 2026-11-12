@@ -1,4 +1,8 @@
 import {
+  isDeletedSpaceError,
+  isFirstHandshakeFailure,
+} from "@commonfabric/memory/v2/client";
+import {
   CompilerStackLoadError,
   SpaceNotFoundError,
 } from "@commonfabric/runner";
@@ -15,11 +19,17 @@ export function runtimeErrorCode(
 ):
   | RuntimeErrorCode.CompilerStackLoadFailed
   | RuntimeErrorCode.SpaceNotFound
+  | RuntimeErrorCode.SpaceDeleted
+  | RuntimeErrorCode.SpaceUnreachable
   | undefined {
   return error instanceof CompilerStackLoadError
     ? RuntimeErrorCode.CompilerStackLoadFailed
     : error instanceof SpaceNotFoundError
     ? RuntimeErrorCode.SpaceNotFound
+    : isDeletedSpaceError(error)
+    ? RuntimeErrorCode.SpaceDeleted
+    : isFirstHandshakeFailure(error)
+    ? RuntimeErrorCode.SpaceUnreachable
     : undefined;
 }
 

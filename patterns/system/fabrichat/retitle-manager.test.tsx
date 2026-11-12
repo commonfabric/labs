@@ -1,11 +1,11 @@
 /**
  * A FabriChat manager's list and catalog following a retitle of a room it
- * created. The room's entry in `rooms` links the room, so it reads the title a
- * member last set through the link, and the rendered list labels the room
- * with it, for a group room and for a direct room, which the list otherwise
- * labels with whom it is with. The catalog lists the room under the new title
- * once the manager next hears of the room, as from a client's `joinRoom` when
- * the person opens it, with the entry's revision as it was.
+ * created. The room's entry in `rooms` holds the title as the manager last
+ * read it, and the rendered list labels the room with it, for a group room and
+ * for a direct room, which the list otherwise labels with whom it is with.
+ * The entry and the catalog hold the new title once the manager next hears of
+ * the room, as from a client's `joinRoom` when the person opens it, with the
+ * entry's revision as it was.
  */
 import {
   action,
@@ -130,7 +130,10 @@ export default pattern(() => {
     );
   });
   // Each entry's revision before the retitles, which they leave as is.
-  const revisions = Writable.of<{ group?: string; direct?: string }>({});
+  const revisions = Writable.of<{
+    group?: string | undefined;
+    direct?: string | undefined;
+  }>({});
   const action_note_revisions = action(() =>
     revisions.set({
       group: catalogEntryOf(catalog, held.key("group").get())?.revision,
@@ -161,8 +164,9 @@ export default pattern(() => {
       {
         assertion: assert(() =>
           manager.rooms.length === 2 &&
-          listed(manager.rooms, held.key("group").get())?.room.key("about")
-              .get()?.title === "Team" &&
+          listed(manager.rooms, held.key("group").get())?.title === "Team" &&
+          listed(manager.rooms, held.key("direct").get())?.title ===
+            undefined &&
           equals(cellLinked(manager[UI], "Team"), held.key("group")) &&
           equals(cellLinked(manager[UI], `With ${BOB}`), held.key("direct")) &&
           catalogEntryOf(catalog, held.key("group").get())?.title === "Team" &&
@@ -181,23 +185,22 @@ export default pattern(() => {
         event: { requestId: "t-direct", title: "Bob and me" },
         trustedUi: retitleGesture,
       },
-      // Each room's entry reads the new title through its link, and the list
-      // labels each room with it.
+      // Opening each room brings the title its entry and its catalog entry
+      // hold up to the room's, and the list labels each room with it, and
+      // leaves the entry's revision and membership as they were.
+      { action: action_open_rooms },
       {
         assertion: assert(() =>
-          listed(manager.rooms, held.key("group").get())?.room.key("about")
-              .get()?.title === "Weekend plans" &&
-          listed(manager.rooms, held.key("direct").get())?.room.key("about")
-              .get()?.title === "Bob and me" &&
+          listed(manager.rooms, held.key("group").get())?.title ===
+            "Weekend plans" &&
+          listed(manager.rooms, held.key("direct").get())?.title ===
+            "Bob and me" &&
           equals(cellLinked(manager[UI], "Weekend plans"), held.key("group")) &&
           equals(cellLinked(manager[UI], "Bob and me"), held.key("direct")) &&
           cellLinked(manager[UI], "Team") === undefined &&
           cellLinked(manager[UI], `With ${BOB}`) === undefined
         ),
       },
-      // Opening each room brings the title its catalog entry holds up to the
-      // room's, and leaves the entry's revision and membership as they were.
-      { action: action_open_rooms },
       {
         assertion: assert(() => {
           const group = catalogEntryOf(catalog, held.key("group").get());

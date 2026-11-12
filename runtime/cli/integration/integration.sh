@@ -75,6 +75,9 @@ fi
 PATTERN_SRC="$SCRIPT_DIR/pattern/main.tsx"
 SCHEMA_COMPATIBLE_PATTERN_SRC="$SCRIPT_DIR/pattern/schema-compatible.tsx"
 SCHEMA_INCOMPATIBLE_PATTERN_SRC="$SCRIPT_DIR/pattern/schema-incompatible.tsx"
+# A first-party pattern the toolshed serves as `system:apps/shared-note/main.tsx`.
+FOLLOWED_PATTERN_SRC="$SCRIPT_DIR/../../../patterns/apps/shared-note/main.tsx"
+FOLLOWED_ORIGIN="system:apps/shared-note/main.tsx"
 CUSTOM_EXPORT="customPatternExport" # for testing this feature
 SECTION="${CF_CLI_INTEGRATION_SECTION:-${1:-all}}"
 
@@ -266,7 +269,7 @@ test_get_only() {
 create_stepped_counter_piece() {
   local value="$1"
 
-  PIECE_ID=$(cf piece new --main-export $CUSTOM_EXPORT $SPACE_ARGS $PATTERN_SRC)
+  PIECE_ID=$(cf piece new --main-export $CUSTOM_EXPORT $SPACE_ARGS "$PATTERN_SRC")
   echo "Created source piece: $PIECE_ID"
 
   printf '{"value":%s}\n' "$value" | cf piece apply $SPACE_ARGS --piece $PIECE_ID
@@ -289,7 +292,7 @@ run_piece_values() {
   local refused
   if refused=$(cf piece new --main-export $CUSTOM_EXPORT \
     --api-url="$API_URL" --identity="$IDENTITY" --space="$fresh_name" \
-    $PATTERN_SRC 2>&1); then
+    "$PATTERN_SRC" 2>&1); then
     error "cf piece new into the fresh name $fresh_name should fail."
   fi
   if ! echo "$refused" | grep -q "No space answers to"; then
@@ -300,12 +303,12 @@ run_piece_values() {
   fi
 
   # Create a new piece using custom default export as input
-  PIECE_ID=$(cf piece new --main-export $CUSTOM_EXPORT $SPACE_ARGS $PATTERN_SRC)
+  PIECE_ID=$(cf piece new --main-export $CUSTOM_EXPORT $SPACE_ARGS "$PATTERN_SRC")
   echo "Created piece: $PIECE_ID"
 
   echo "Fetching piece source to $WORK_DIR"
   # Retrieve the source code for $PIECE_ID to $WORK_DIR
-  cf piece getsrc $SPACE_ARGS --piece $PIECE_ID $WORK_DIR
+  cf piece getsrc $SPACE_ARGS --piece $PIECE_ID "$WORK_DIR"
 
   # Check file was retrieved
   if [ ! -f "$WORK_DIR/main.tsx" ]; then
@@ -319,11 +322,11 @@ run_piece_values() {
 
   # Update the piece's source code
   replace 's/Simple counter:/Simple counter 2:/g' "$WORK_DIR/main.tsx"
-  cf piece setsrc --main-export $CUSTOM_EXPORT $SPACE_ARGS --piece $PIECE_ID $WORK_DIR/main.tsx
+  cf piece setsrc --main-export $CUSTOM_EXPORT $SPACE_ARGS --piece $PIECE_ID "$WORK_DIR/main.tsx"
 
   # (Again) Retrieve the source code for $PIECE_ID to $WORK_DIR
   rm "$WORK_DIR/main.tsx"
-  cf piece getsrc $SPACE_ARGS --piece $PIECE_ID $WORK_DIR
+  cf piece getsrc $SPACE_ARGS --piece $PIECE_ID "$WORK_DIR"
 
   # Check file was retrieved with modifications
   if ! grep -q "Simple counter 2" "$WORK_DIR/main.tsx"; then
@@ -393,6 +396,61 @@ run_piece_values() {
   schema_value=$(cf cell get $SPACE_ARGS --piece "$schema_piece_id" value)
   if [ "$schema_value" != "5" ]; then
     error "Dangerously authorized setsrc did not preserve the valid result."
+  fi
+
+  # Created from the file, a piece records no origin. `cf piece follow` points
+  # it at the one the toolshed serves the same pattern under: the serving
+  # runtime makes the follow where the deployment serves lifecycle verbs, and
+  # this process does elsewhere.
+  echo "Following a system origin."
+  local follow_piece_id follow_state follow_pin follow_revision follow_status
+  follow_piece_id=$(cf piece new --no-start $SPACE_ARGS "$FOLLOWED_PATTERN_SRC")
+  follow_state=$(
+    cf piece inspect --pattern-identity --json $SPACE_ARGS \
+      --piece "$follow_piece_id"
+  )
+  if [ "$(echo "$follow_state" | jq -r '.origin // "none"')" != "none" ]; then
+    error "A piece created from a file should record no origin."
+  fi
+  follow_pin=$(echo "$follow_state" | jq -r '.patternIdentity + "#" + .symbol')
+  follow_revision=$(echo "$follow_state" | jq -r '.revisionId // "none"')
+  # The creation appended a revision, so a pin to an empty log is off.
+  set +e
+  cf piece follow $SPACE_ARGS --piece "$follow_piece_id" \
+    --expect-revision none "$FOLLOWED_ORIGIN" \
+    >"$WORK_DIR/follow-stale.out" 2>"$WORK_DIR/follow-stale.err"
+  follow_status=$?
+  set -e
+  if [ "$follow_status" -ne 3 ]; then
+    error "A follow off its pin should exit 3, not $follow_status: $(cat "$WORK_DIR/follow-stale.err")"
+  fi
+  cf piece follow --quiet $SPACE_ARGS --piece "$follow_piece_id" \
+    --expect "$follow_pin" --expect-revision "$follow_revision" \
+    "$FOLLOWED_ORIGIN"
+  follow_state=$(
+    cf piece inspect --pattern-identity --json $SPACE_ARGS \
+      --piece "$follow_piece_id"
+  )
+  if [ "$(echo "$follow_state" | jq -r '.origin')" != "$FOLLOWED_ORIGIN" ]; then
+    error "The followed piece does not record its origin: $follow_state"
+  fi
+  if [ "$(echo "$follow_state" | jq -r '.revisionId')" = "$follow_revision" ]; then
+    error "The follow appended no revision: $follow_state"
+  fi
+
+  # `setsrc --origin` writes the source it is given and records the origin, so
+  # the piece follows it from then on rather than being detached.
+  echo "Recording an origin with a source update."
+  local claimed_piece_id claimed_origin
+  claimed_piece_id=$(cf piece new --no-start $SPACE_ARGS "$FOLLOWED_PATTERN_SRC")
+  cf piece setsrc --quiet $SPACE_ARGS --piece "$claimed_piece_id" \
+    --origin "$FOLLOWED_ORIGIN" "$FOLLOWED_PATTERN_SRC"
+  claimed_origin=$(
+    cf piece inspect --pattern-identity --json $SPACE_ARGS \
+      --piece "$claimed_piece_id" | jq -r '.origin'
+  )
+  if [ "$claimed_origin" != "$FOLLOWED_ORIGIN" ]; then
+    error "setsrc --origin did not record the origin: $claimed_origin"
   fi
 
   echo "Applying piece input."
@@ -494,7 +552,7 @@ run_piece_links() {
   echo "Successfully listed the slug index."
 
   # Create a second piece from the same pattern
-  PIECE_ID2=$(cf piece new --main-export $CUSTOM_EXPORT $SPACE_ARGS $PATTERN_SRC)
+  PIECE_ID2=$(cf piece new --main-export $CUSTOM_EXPORT $SPACE_ARGS "$PATTERN_SRC")
   echo "Created second piece: $PIECE_ID2"
 
   # Initialize piece2 with value 0 and step so output is computed
@@ -560,7 +618,7 @@ run_piece_links() {
   echo '42' | cf cell set $SPACE_ARGS --piece $INVENTED_ID value
 
   # Create a third piece and link the invented piece's value to its input
-  PIECE_ID3=$(cf piece new --main-export $CUSTOM_EXPORT $SPACE_ARGS $PATTERN_SRC)
+  PIECE_ID3=$(cf piece new --main-export $CUSTOM_EXPORT $SPACE_ARGS "$PATTERN_SRC")
   echo "Created third piece: $PIECE_ID3"
 
   # Linking from invented piece should fail without --allow-non-existing —
@@ -617,7 +675,7 @@ run_piece_call() {
   echo "Testing piece call with schema-derived flags and tools..."
 
   CALLABLE_PATTERN_SRC="$SCRIPT_DIR/pattern/fuse-exec.tsx"
-  CALLABLE_PIECE_ID=$(cf piece new --main-export $CUSTOM_EXPORT $SPACE_ARGS $CALLABLE_PATTERN_SRC)
+  CALLABLE_PIECE_ID=$(cf piece new --main-export $CUSTOM_EXPORT $SPACE_ARGS "$CALLABLE_PATTERN_SRC")
   echo "Created callable piece: $CALLABLE_PIECE_ID"
 
   CALL_HELP=$(cf piece call $SPACE_ARGS --piece $CALLABLE_PIECE_ID search --help)
@@ -670,7 +728,7 @@ run_piece_call() {
   # addressed piece and nothing else: the send starts the root at delivery, and
   # the registry carries the entry when the call returns.
   ROOT_REGISTRAR_PATTERN_SRC="$SCRIPT_DIR/pattern/root-registrar.tsx"
-  ROOT_REGISTRAR_PIECE_ID=$(cf piece new $SPACE_ARGS $ROOT_REGISTRAR_PATTERN_SRC)
+  ROOT_REGISTRAR_PIECE_ID=$(cf piece new $SPACE_ARGS "$ROOT_REGISTRAR_PATTERN_SRC")
   echo "Created root-registrar piece: $ROOT_REGISTRAR_PIECE_ID"
   cf piece call $SPACE_ARGS --piece $ROOT_REGISTRAR_PIECE_ID register --label registered-by-verb
   cf piece ls $SPACE_ARGS | grep -q "Entry registered-by-verb" ||
@@ -1032,7 +1090,7 @@ run_three_topic_fixture() {
   # retry collides on the create-only receipt and says so (`deduplicated`);
   # ON, no receipt precondition exists (events.md §4's subsumption) — the
   # duplicate is skipped at the dedupe horizon, and the retry's readback
-  # resolves the SAME cause-derived receipt the SERVING side wrote for the
+  # resolves the SAME receipt the SERVING side wrote for the
   # original handling (the ruled result carriage, 2026-08-29). The
   # original-result readback below is the witness in both arms.
   if server_execution_on; then

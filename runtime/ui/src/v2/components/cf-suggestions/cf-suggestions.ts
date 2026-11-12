@@ -1,4 +1,3 @@
-import { internSchema } from "@commonfabric/data-model-schema";
 import { type CellHandle, isCellHandle } from "@commonfabric/runtime-client";
 import { css, html, nothing, PropertyValues } from "lit";
 import { property } from "lit/decorators.js";
@@ -6,6 +5,7 @@ import { repeat } from "lit/directives/repeat.js";
 
 import { BaseElement } from "../../core/base-element.ts";
 import { createArrayCellController } from "../../core/cell-controller.ts";
+import { AboutTarget } from "./about-target.ts";
 import {
   type DrawnCard,
   drawnCards,
@@ -13,6 +13,8 @@ import {
   isUnobscuredEntry,
   lookOf,
   type SuggestionCard,
+  suggestionRowLinksSchema,
+  suggestionRowsSchema,
   VISIBLE_RATIO,
 } from "./suggestion-cards.ts";
 
@@ -28,38 +30,6 @@ export type SuggestionEventDetail = {
    */
   card: CellHandle<SuggestionCard> | SuggestionCard;
 };
-
-/** A reference a row holds, read as a cell, or null. */
-const rowReferenceSchema = {
-  anyOf: [{ type: "null" }, { type: "unknown", asCell: ["cell"] }],
-} as const;
-
-/** Reads each row's fields, with its references as cells. */
-const suggestionRowsSchema = internSchema({
-  type: "array",
-  items: {
-    type: "object",
-    properties: {
-      id: { type: "string" },
-      card_revision: { type: "string" },
-      title: { type: "string" },
-      body: { type: "string" },
-      source: { type: "string" },
-      anchor: rowReferenceSchema,
-      act_target: rowReferenceSchema,
-      about: { type: "string" },
-      tags: { type: "string" },
-    },
-  },
-  default: [],
-});
-
-/** Reads each entry of the list as the link to its row. */
-const suggestionRowLinksSchema = internSchema({
-  type: "array",
-  items: { type: "unknown", asCell: ["cell"] },
-  default: [],
-});
 
 /**
  * Minimum interval, in milliseconds, between visibility reports for one card.
@@ -77,14 +47,22 @@ const MINIMUM_SHOWN_MS = 500;
 /**
  * CFSuggestions - Draws the suggestion cards anchored at one thing
  *
- * Of the ranked cards in `items`, draws only those whose anchor is the cell
+ * Of the ranked cards in `items`, draws only those anchored at the thing
  * `about` names, in rank order and at a fixed size. A card's anchor is its
  * `anchor`; a card whose `anchor` is null is drawn on no thing. A card with no
  * `anchor` field, which has not been through intake, is anchored at the first
- * link of its `about`, else at its `act_target`. Anchors compare by the cell
- * each names, without following a cell that holds a link. With `tags` set,
- * only cards carrying at least one of those tags are drawn. A card without a
- * string `id` is not drawn, since neither event could say which card it means.
+ * link of its `about`, else at its `act_target`.
+ *
+ * `about` is compared by the cell it resolves to, since a pattern usually binds
+ * a cell that holds a link to the thing, as the element of a `.map()` over a
+ * list does. Nothing is drawn until `about` has resolved, and the cards follow
+ * its link when it moves to another thing. A card's anchor is compared as the
+ * row holds it, so it must name the thing itself, which is what intake writes,
+ * rather than a cell that links to it.
+ *
+ * With `tags` set, only cards carrying at least one of those tags are drawn. A
+ * card without a string `id` is not drawn, since neither event could say which
+ * card it means.
  *
  * The component performs no act. It announces a take and a showing, and the
  * host binds those events to whatever they should do. Both are custom events
@@ -207,6 +185,12 @@ export class CFSuggestions extends BaseElement {
     timing: { strategy: "immediate" },
   });
 
+  /** The cell `about` resolves to, followed while the element is connected. */
+  #aboutTarget = new AboutTarget({
+    isConnected: () => this.isConnected,
+    onChange: () => this.requestUpdate(),
+  });
+
   #observer: IntersectionObserver | undefined = undefined;
 
   /** The card each observed element draws, and how it drew it, by element. */
@@ -230,12 +214,13 @@ export class CFSuggestions extends BaseElement {
   #seen = new Set<string>();
 
   /**
-   * Hands a test the drawn cards, the take handler, whether a card is takeable
-   * once shown long enough, how long that is, and the browser's next
-   * visibility report.
+   * Hands a test the drawn cards, the resolution of `about` under way, the
+   * take handler, whether a card is takeable once shown long enough, how long
+   * that is, and the browser's next visibility report.
    */
   get accessForTestingOnly(): {
     readonly drawn: readonly SuggestionCard[];
+    readonly aboutResolved: Promise<void>;
     take(event: Event): void;
     isTakeable(id: string): boolean;
     nextReport(): Promise<void>;
@@ -246,6 +231,9 @@ export class CFSuggestions extends BaseElement {
     return {
       get drawn() {
         return component.#drawn().map(({ card }) => card);
+      },
+      get aboutResolved() {
+        return component.#aboutTarget.resolution;
       },
       take: (event) => this.#take(event),
       isTakeable: (id) => this.#takeable.has(id),
@@ -262,12 +250,17 @@ export class CFSuggestions extends BaseElement {
 
   override connectedCallback(): void {
     super.connectedCallback();
-    // A first connect observes the cards once they have rendered.
-    if (this.hasUpdated) this.#observeCards();
+    // A reconnect resolves `about` again and observes the cards; a first
+    // connect does both as it updates.
+    if (this.hasUpdated) {
+      this.#aboutTarget.resolve(this.about);
+      this.#observeCards();
+    }
   }
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
+    this.#aboutTarget.clear();
     this.#observer?.disconnect();
     this.#observer = undefined;
     this.#observed.clear();
@@ -287,6 +280,7 @@ export class CFSuggestions extends BaseElement {
         this.#rowLinks.bind([]);
       }
     }
+    if (changed.has("about")) this.#aboutTarget.resolve(this.about);
   }
 
   override updated(changed: PropertyValues): void {
@@ -329,7 +323,7 @@ export class CFSuggestions extends BaseElement {
   #drawn(): DrawnCard[] {
     return drawnCards(
       this.#rows.getValue() ?? [],
-      this.about,
+      this.#aboutTarget.target,
       this.tags,
       isCellHandle(this.items) ? this.items.space() : undefined,
     );

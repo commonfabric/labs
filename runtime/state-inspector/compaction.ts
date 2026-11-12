@@ -51,13 +51,17 @@ export type CompactionCommitRecord = {
   report?: CompactionReport;
 };
 
-export type CompactionVerification = {
+/** What a verification of a rewritten store found, of any rewrite. */
+export type StoreVerification = {
   ok: boolean;
+  checks: CompactionCheck[];
+  elapsedMs: number;
+};
+
+export type CompactionVerification = StoreVerification & {
   result: string;
   against: string;
   compactionCommits: CompactionCommitRecord[];
-  checks: CompactionCheck[];
-  elapsedMs: number;
 };
 
 export type VerifyCompactionOptions = {
@@ -1146,7 +1150,7 @@ export function verifyCompaction(
 
 /** The verification as an operator reads it. */
 export function formatCompactionVerification(
-  verification: CompactionVerification,
+  verification: StoreVerification,
 ): string {
   const lines = verification.checks.map((check) =>
     `${check.passed ? "ok  " : "FAIL"} ${check.name.padEnd(64)} ${check.detail}`

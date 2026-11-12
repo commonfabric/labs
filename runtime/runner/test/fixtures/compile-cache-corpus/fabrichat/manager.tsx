@@ -150,11 +150,14 @@ const effectiveMemberships = (
     if (
       !standalone && membership.catalogRevision === undefined
     ) return membership;
+    const catalogRevision = standalone
+      ? entry.revision
+      : membership.catalogRevision;
     return {
       ...membership,
       state: standalone && entry.state === "saved" ? "saved" : "archived",
       revision: standalone ? entry.revision : membership.revision,
-      catalogRevision: standalone ? entry.revision : membership.catalogRevision,
+      ...(catalogRevision !== undefined && { catalogRevision }),
     };
   });
 
@@ -454,8 +457,8 @@ const listRoom = (
   catalog: CatalogCell,
   space: DID,
   { title, since, restore = true }: {
-    title?: string;
-    since?: number;
+    title?: string | undefined;
+    since?: number | undefined;
     restore?: boolean;
   } = {},
 ): void => {
@@ -1053,10 +1056,10 @@ const performManagerAct = (
     // one, and is refused rather than left out.
     const named = (event?.profiles ?? draft?.picked ?? []).map((
       profile,
-    ): NamedMember => ({
-      profile,
-      recipient: principalOf(profile, "represents-principal"),
-    }));
+    ): NamedMember => {
+      const recipient = principalOf(profile, "represents-principal");
+      return { profile, ...(recipient !== undefined && { recipient }) };
+    });
     if (named.some(({ recipient }) => !isPrincipalDID(recipient))) {
       recordOutcome(state, requestId, {
         status: "refused",
@@ -1347,16 +1350,18 @@ const performManagerAct = (
           return;
         }
       }
+      const entryContainer = membership?.container ?? container;
+      const catalogRevision = standalone?.kind === CHAT_ROOM_OFFER_KIND
+        ? readSharedSpaceCatalog(catalog).entries[standalone.space]?.revision
+        : membership?.catalogRevision;
       const entry: RoomMembership = {
         room,
-        container: membership?.container ?? container,
+        ...(entryContainer !== undefined && { container: entryContainer }),
         kind,
         since: membership?.since ?? epochNsecFromMsec(source?.since ?? 0),
         state: "archived",
         revision: eventKey(),
-        catalogRevision: standalone?.kind === CHAT_ROOM_OFFER_KIND
-          ? readSharedSpaceCatalog(catalog).entries[standalone.space]?.revision
-          : membership?.catalogRevision,
+        ...(catalogRevision !== undefined && { catalogRevision }),
       };
       state.roomMembership.set([
         ...memberships.filter((known) => !equals(known.room, room)),
@@ -1497,19 +1502,18 @@ const performManagerAct = (
     if (
       membership === undefined || (membership.state === "archived" && restore)
     ) {
+      const entryContainer = container ?? membership?.container;
+      const catalogRevision = catalogManaged
+        ? readSharedSpaceCatalog(catalog).entries[space]?.revision
+        : undefined;
       state.roomMembership.set([
         ...memberships.filter((known) => !equals(known.room, room)),
         {
           ...entry,
-          container: container ?? membership?.container,
+          ...(entryContainer !== undefined && { container: entryContainer }),
           since: membership?.since ?? entry.since,
-          catalogRevision: catalogManaged
-            ? readSharedSpaceCatalog(catalog).entries[space]?.revision
-            : undefined,
-          revision: catalogManaged
-            ? readSharedSpaceCatalog(catalog).entries[space]?.revision ??
-              eventKey()
-            : eventKey(),
+          ...(catalogRevision !== undefined && { catalogRevision }),
+          revision: catalogRevision ?? eventKey(),
           state: "saved",
         },
       ]);
@@ -1912,11 +1916,12 @@ export const FabriChatManagerCore = pattern<
       ];
       return listed.filter((entry, index) =>
         listed.findIndex((known) => equals(known.room, entry.room)) === index
-      ).map((entry) =>
-        entry.kind === "direct"
-          ? { ...entry, counterpart: counterpartOf(stored, entry.room, self) }
-          : entry
-      ).sort((a, b) =>
+      ).map((entry) => {
+        if (entry.kind !== "direct") return entry;
+        const { counterpart: _stale, ...rest } = entry;
+        const counterpart = counterpartOf(stored, entry.room, self);
+        return counterpart === undefined ? rest : { ...rest, counterpart };
+      }).sort((a, b) =>
         nsecOf(b.since) < nsecOf(a.since)
           ? -1
           : nsecOf(b.since) > nsecOf(a.since)

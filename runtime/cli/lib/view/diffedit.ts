@@ -153,6 +153,7 @@ export function diffSource(
       label: null,
       isDiff: true,
       diffCountContexts,
+      declaredTests: ws.declaredTests,
       blameTargets,
       editable: false,
       reason:
@@ -271,6 +272,7 @@ export function diffSource(
       : `${files.length} files`,
     isDiff: true,
     diffCountContexts,
+    declaredTests: ws.declaredTests,
     blameTargets,
     editable: true,
     policy,

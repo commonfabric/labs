@@ -240,11 +240,15 @@ handler fires
   lazy-computed case is literally in the code; CT-1795's staleness park
   is an extra gate on top) — the common case being not rapid-fire but a
   lazy computed nothing has pulled yet, which the handler must and does
-  see fresh. An input the handler's argument schema declares opaque is one it
-  hands on without reading, so its writer owes the handler nothing and the
-  preflight leaves it alone. Handlers never read last-wave state: events drain
-  as part of regular execution — the loop is simply not idle until all events
-  are processed — and the preflight ahead of each dispatch makes the
+  see fresh. An input the handler's argument schema declares opaque, by the
+  outermost entry of its `asCell`, is one it hands on without reading, so its
+  writer owes the handler nothing and the preflight leaves it alone. A
+  `Stream<void>` input (`asCell: ["stream", "opaque"]`) is a stream whose
+  payload is opaque: the handler sends to it through its link, so the
+  preflight brings that link's writers up to date as for a read. Handlers
+  never read last-wave state: events drain as part of regular execution —
+  the loop is simply not idle until all events are processed — and the
+  preflight ahead of each dispatch makes the
   inputs a handler reads current. Within that rule the serving
   scheduler's pass takes every ready event behind the head as well, each
   through its own preflight, and settles the derivations once behind all
@@ -347,9 +351,12 @@ ambient-state one.
   witness stands — in the handler run's own transaction, so the write
   seals into the run's wave with the entry's `consequenced` mark (§4's
   mark/effects atomicity) and rides the same carriage as every other
-  served event-handler write. The cell identity derives from the durable
-  event id alone (`servedReceiptCause`: same event ⇒ same minted cell id),
-  so a sender names the receipt without running the handler. A flag-ON
+  served event-handler write. The cell's id is the `receipt:` scheme over
+  a hash of the durable event id and the stream (`handlingReceiptId()`,
+  RULED 2026-11-03): one event on one stream names one cell, whichever
+  runtime handled it and whoever sent it, so a sender names the receipt
+  without running the handler. A flag-OFF client that handles an event
+  writes the same cell, create-only. A flag-ON
   client's diverted echo publishes that address on its transaction, and
   so does a send with `echo: false`, which queues no echo and starts no
   piece, and the durable-ack coupling settles the sender's callback only
@@ -372,11 +379,20 @@ ambient-state one.
   (even if the value is undefined), and the CAS for that is the
   write-once guarantee" — the owner's model): a lost CAS means a writer
   already landed this handling's receipt (a re-served replay converging
-  on the same cause-derived id, or a pre-created cell) and is a LOUD
+  on the same id, or a pre-created cell) and is a LOUD
   NO-OP — first-writer-wins, the OFF arm's receipt-collision
   semantics — never a second write, never an error that fails the wave.
   No create-only mark rides the wave (the invariant above holds); the
   client's own write stays disabled.
+- **The `receipt:` scheme is reserved for these cells, and nothing
+  enforces that yet (RULED 2026-11-03).** It says what a document is, and
+  it is where a later check can refuse authored writes under the flag. Until
+  then a client holding write authority can author a `receipt:` document,
+  and the served handling that finds it takes the no-op above. What stands in
+  is that an event id cannot be predicted before the send; after the append
+  anyone who can read the stream can see it. The stream in the hash is what
+  keeps an id replayed onto another stream from reaching this receipt, a case
+  a write check alone would not stop, since the server writes both.
 - **The drain's own re-scan (stage C tuning, 2026-08-18):** the drain
   queues a pending entry into the serving scheduler AT MOST ONCE until
   the store has spoken for it — a re-drain skips an entry whose earlier
@@ -592,7 +608,15 @@ loop's duty).
   carries the entry's pre-stamped `consequenced` mark (§4), is
   WITHDRAWN whole. The entry stays pending-unconsequenced, the
   standard re-drain re-delivers it, and the retried handler's
-  cause-derived (idempotent) writes converge. Sealing the skip is the
+  cause-derived (idempotent) writes converge. A handler's write into
+  another space at a link-hop target whose document has not arrived
+  (`pendingHopDoc`) records the same skip while that document's load
+  is in flight: read without a stream schema, the target's stream
+  marker is what tells a send from a write, and there it is
+  unknowable, so the write is neither sent nor attempted (a value
+  write would open a second space's writer, which the transaction
+  refuses, and lose the event); the re-run reads the loaded document
+  and sends. A target the load confirms absent writes as before. Sealing the skip is the
   defect this rule prevents: the mark committed ALONE — a 1-op derived
   commit, the user's event permanently consumed with zero effects and
   no error (the b1-lifts a04 red, seqs 53/56). Consequence atomicity
@@ -704,7 +728,9 @@ loop's duty).
   in the store takes that as the evidence.
 - A current-ACL authorization denial is immediately permanent only when
   its typed verdict carries the durable ACL revision and distinguishes the
-  denial from a revoked or missing session. A required-load denial uses the
+  denial from a revoked or missing session. A load refused because its space
+  is deleted is not a failure of the load at all (the deleted-space rule
+  below). A required-load denial uses the
   `dispatch-load` phase; a proven-no-commit denial while finalizing a handler
   commit uses `commit-finalization`. A `RowLabelCommitError` is a
   proven-no-commit protocol verdict in `commit-finalization` and terminalizes
@@ -741,6 +767,29 @@ loop's duty).
   dependency walk reads beyond the handler's declared schema, following a
   linked piece's own fields (a profile's view and per-user state, for
   example), and what it reads there decides nothing.
+- A load of a document in a deleted space
+  ([INV-15](../memory-v2/09-invariants.md#inv-15--space-deletion)) settles
+  as an absence, not as a failure of the load, however the runtime learns of
+  the deletion: from the memory server's refusal of its open, marked
+  `deleted` and carrying the deletion's ACL revision, or from the `deleted`
+  revocation of a session it held on the space when the deletion committed,
+  which carries no revision. The storage manager settles it so for every
+  reader of the document, an event's preflight park and a withdrawn run's
+  park among them, served or not. Deletion is the same for every principal
+  and is never undone, so from then on the absence is the document's state,
+  which no wait or retry changes. The event dispatches and is decided by what
+  its run reads: the document absent, and `spaceDeleted()` for it `true`. A
+  handler that does something about the deletion therefore does it, as the
+  chat manager's `forget` archives a deleted room's entry and its
+  `openDirect` replaces a deleted direct room. A failure would instead either
+  hold the event, and every later same-space arrival behind it, for the
+  failed-state budget above (the revocation, without a revision, is not
+  permanent evidence), or seal a `needs-attention` notice at once (the
+  refused open), and either way the notice discards an event whose Retry
+  would fail the same way. A run whose argument does not resolve because what
+  it reads is gone takes the handler-not-run arm above, and one that writes
+  into the deleted space has its commit refused as
+  [serving-loop.md](serving-loop.md#a-deleted-space) describes.
 - An event held only behind an earlier failed head preserves arrival
   order but records no checkpoint and spends no budget. A load-park
   observation neither increments nor clears the independent cold-view

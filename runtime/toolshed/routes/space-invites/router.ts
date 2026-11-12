@@ -28,12 +28,23 @@ const schemas = {
     ),
     maxUses: z.number().int().min(1).max(SPACE_INVITE_CAPABILITY.maxUses)
       .optional(),
+    // The service judges the suggestion's values; the schema admits its shape.
+    suggestedProfile: z.object({
+      name: z.string(),
+      picture: z.string().optional(),
+    }).strict().optional(),
   }).strict(),
   redeem: z.object({ inviteId, code: secret }).strict(),
   revoke: z.object({ inviteId }).strict(),
   list: z.object({}).strict(),
   receipts: z.object({ inviteId: inviteId.optional() }).strict(),
 };
+
+// Every body fits in 4 KiB but a `create` carrying a suggested picture, which
+// may add that picture's base64url text.
+const BODY_LIMIT = 4096;
+const CREATE_BODY_LIMIT = BODY_LIMIT +
+  4 * Math.ceil(SPACE_INVITE_CAPABILITY.suggestedProfile.maxPictureBytes / 3);
 
 /** Builds routes around the serving memory instance; tests supply a controlled clock. */
 export function createSpaceInviteRouter(
@@ -75,13 +86,6 @@ export function createSpaceInviteRouter(
       ],
     }),
   );
-  router.use(
-    `${BASE}/*`,
-    bodyLimit({
-      maxSize: 4096,
-      onError: (c) => c.json({ code: "invalid-request" }, 413),
-    }),
-  );
   const mutationLimiter = createRateLimiter({
     capacity: 60,
     refillPerSecond: 1,
@@ -99,6 +103,13 @@ export function createSpaceInviteRouter(
       "receipts",
     ] as const
   ) {
+    router.use(
+      `${BASE}/${operation}`,
+      bodyLimit({
+        maxSize: operation === "create" ? CREATE_BODY_LIMIT : BODY_LIMIT,
+        onError: (c) => c.json({ code: "invalid-request" }, 413),
+      }),
+    );
     router.use(
       `${BASE}/${operation}`,
       rateLimit(operation === "revoke" ? revocationLimiter : mutationLimiter, {

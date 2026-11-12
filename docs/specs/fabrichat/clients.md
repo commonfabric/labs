@@ -18,7 +18,16 @@ a room to anyone its space doesn't admit.
 
 ## Finding conversations
 
-- **All of the person's rooms** are the manager's `rooms`.
+- **All of the person's rooms** are the manager's `rooms`, which the manager
+  draws from its own records and which reads no room. A client that lists them
+  MUST declare each entry's `room` as `{ type: "unknown", asCell: ["cell"] }`,
+  so that reading the list loads nothing in any room's space; any declaration
+  with a shape of its own makes every read of the list load every room's root
+  (see [reading the list](ChatManagerOutput.md#reading-the-list)). A row's
+  `title` is a hint, as of the person's last visit to the room; the room's own
+  `about.title` is current. A client MUST NOT read every listed room to fill in
+  a row: what a row lacks, such as where its conversation stands, it reads for
+  the rows it shows.
 - **The conversation with one person** is `openDirect` with that person's
   principal. A client MUST use it, and MUST NOT create a direct room any other
   way. It is what keeps one person's conversation from splitting. A client
@@ -55,6 +64,23 @@ a room to anyone its space doesn't admit.
   room is in their `direct` unless that already holds a room with its creator.
   Either way their later `openDirect` with the creator finds the room `direct`
   holds (see [`ChatManagerOutput`](ChatManagerOutput.md#offers)).
+
+## Opening a room
+
+A room is checked when it is opened, not when it is listed: the list holds what
+the manager recorded, and a room whose space has since been deleted, or no
+longer admits the person, stays listed until a runtime of theirs hears of it.
+Opening it is how one does. The runtime refuses each read of the room's space,
+and reports it once for the space, as the runtime client's `spaceaccesslost`
+notification, which carries the space and, for a deleted space, `deleted:
+true`. A client MUST show the room as gone, or as no longer open to the
+person, when it receives one for a room it is opening, and MUST NOT wait on the
+room's contents instead. The runtime that hears of a deletion records it in
+Home's catalog, and the room then moves to `deletedRooms`.
+
+A client that opens a room sends `joinRoom` for it (see [`ChatManagerOutput`](ChatManagerOutput.md#joinroomrequestid-string-room-cellchatroomoutput)),
+as a host does for a visit, which brings the row's `title` hint up to the
+room's, and lists a room the catalog holds with no membership.
 
 ## Showing a room
 

@@ -13,6 +13,7 @@ import { clonePaths } from "@commonfabric/state-inspector";
 import { argv, cf, stripAnsi } from "./utils.ts";
 import { join, toFileUrl } from "@std/path";
 import { applyCommit, close, open } from "@commonfabric/memory/v2/engine";
+import { cellDatabaseFilePrefix } from "@commonfabric/memory/v2/storage-path";
 
 /**
  * `CliResult` streams are line arrays; join before substring assertions.
@@ -419,6 +420,126 @@ INSERT INTO head (branch, id, seq, op_index) VALUES ('', 'computed:x', 3, 0);
   });
 });
 
+describe("cf space reap", () => {
+  // Two DIDs, found by search, whose cell-database prefixes are the same.
+  const space = "did:key:z6MkCliReapShared00006pfs";
+  const sharing = "did:key:z6MkCliReapShared0000nvja";
+  const alice = "did:key:z6MkCliReapAlice";
+
+  /** A store the engine wrote for a space alice owns alone, with a document,
+   * and then, with `deleted`, deleted. */
+  async function spaceStore(path: string, deleted: boolean): Promise<void> {
+    const engine = await open({ url: toFileUrl(path) });
+    let local = 1;
+    const apply = (operations: unknown[]) =>
+      applyCommit(engine, {
+        sessionId: "s:alice",
+        space,
+        principal: alice,
+        commit: {
+          localSeq: local++,
+          reads: { confirmed: [], pending: [] },
+          operations,
+        },
+      } as never);
+    const acl = `of:${space}`;
+    apply([{ op: "set", id: acl, value: { value: { [alice]: "OWNER" } } }]);
+    apply([{ op: "set", id: "of:doc", value: { value: { n: 1 } } }]);
+    if (deleted) {
+      apply([{
+        op: "set",
+        id: acl,
+        value: { value: { deleted: { by: alice } } },
+      }]);
+    }
+    close(engine);
+  }
+
+  it("reaps a deleted space's store and reports the checked result, and refuses a space that is not deleted", async () => {
+    const root = await Deno.makeTempDir({ prefix: "cf-space-reap-" });
+    try {
+      const store = `${root}/space.sqlite`;
+      const result = `${root}/space.reaped.sqlite`;
+      await spaceStore(store, true);
+
+      const planned = await cf(argv`space reap ${store} --dry-run --json`);
+      expect(planned.code).toBe(0);
+      expect(JSON.parse(planned.stdout.join("\n")).deletionSeq).toBe(3);
+
+      // The live directory, as the install finds it, with another space's
+      // store there whose cell databases share the prefix.
+      const liveDir = `${root}/live`;
+      await Deno.mkdir(liveDir);
+      await Deno.writeTextFile(`${liveDir}/${space}.sqlite`, "");
+      const cell = `${cellDatabaseFilePrefix(space)}0.sqlite`;
+      await Deno.writeTextFile(`${liveDir}/${cell}`, "");
+      const named = await cf(
+        argv`space reap ${store} --dry-run --live ${liveDir}/${space}.sqlite`,
+      );
+      expect(named.code).toBe(0);
+      expect(text(named.stdout)).toContain(`cell files ${cell}`);
+      await Deno.writeTextFile(`${liveDir}/${sharing}.sqlite`, "");
+      const shared = await cf(
+        argv`space reap ${store} --dry-run --live ${liveDir}/${space}.sqlite --json`,
+      );
+      expect(shared.code).toBe(0);
+      expect(JSON.parse(shared.stdout.join("\n"))).toMatchObject({
+        cellDatabases: [],
+        sharedWith: [sharing],
+      });
+
+      const ran = await cf(argv`space reap ${store} --out ${result}`);
+      expect(ran.code).toBe(0);
+      expect(text(ran.stdout)).toContain(`result     ${result} (`);
+      expect(text(ran.stdout)).not.toContain("FAIL");
+
+      // The JSON names the result where it was put, not the file the run
+      // staged it in, which is gone.
+      const jsonResult = `${root}/space.reaped-json.sqlite`;
+      const ranJson = await cf(
+        argv`space reap ${store} --out ${jsonResult} --json`,
+      );
+      expect(ranJson.code).toBe(0);
+      const report = JSON.parse(ranJson.stdout.join("\n"));
+      expect(report.out).toBe(jsonResult);
+      expect(report.verification).toMatchObject({
+        ok: true,
+        result: jsonResult,
+      });
+      expect(report.staged).toBeUndefined();
+
+      const live = `${root}/live.sqlite`;
+      await spaceStore(live, false);
+      const refused = await cf(argv`space reap ${live} --dry-run`);
+      expect(refused.code).not.toBe(0);
+      expect(text(refused.stderr)).toContain("holds no deletion tombstone");
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+
+  it("refuses, on a dry run, a store from before a migration the server runs, naming it", async () => {
+    // The plan reads a column such a store lacks, so the refusal a run
+    // would give comes first.
+    const root = await Deno.makeTempDir({ prefix: "cf-space-reap-legacy-" });
+    try {
+      const store = `${root}/space.sqlite`;
+      await spaceStore(store, true);
+      const db = new Database(store);
+      db.exec(`CREATE TABLE scheduler_observation (x INTEGER)`);
+      db.close();
+
+      const refused = await cf(argv`space reap ${store} --dry-run`);
+      expect(refused.code).not.toBe(0);
+      expect(text(refused.stderr)).toContain(
+        "predates a migration the server runs on opening it",
+      );
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+});
+
 describe("cf space", () => {
   it("runs the rehearsal loop: clone, attempt, verify, reset", async () => {
     await withFixture(async ({ snapshot, clone }) => {
@@ -468,7 +589,9 @@ describe("cf space", () => {
         lines.find((line) => line.startsWith(prefix))!.slice(prefix.length);
       expect(await shellWords(after("cf space verify "))).toEqual([real]);
       expect(await shellWords(after("cf space reset  "))).toEqual([real]);
-      const memoryDir = after("HOST=127.0.0.1 MEMORY_DIR=").split(" ./")[0];
+      const memoryDir = after("HOST=127.0.0.1 MEMORY_DIR=").split(
+        " TOOLSHED_RELEASED_AT=",
+      )[0];
       expect(await shellWords(memoryDir)).toEqual([
         toFileUrl(`${real}/`).href,
       ]);

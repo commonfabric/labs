@@ -2,10 +2,9 @@
 
 ## Status
 
-The code is implemented in this repository, except for deleting a space. What
-remains is the deployment sequence under "What remains", the order deleting a
-space lands in, and two changes in other repositories. When those are done,
-this plan is archived.
+The code is implemented in this repository. What remains is the deployment
+sequence under "What remains" and two changes in other repositories. When those
+are done, this plan is archived.
 
 The [random space identities specification](../specs/random-space-identities.md)
 is the normative target. The [Common Fabric URL](../specs/fabric-urls.md) and
@@ -151,11 +150,11 @@ in this order, each step a change of its own:
    [recipe for a space not yet down to one member](../specs/random-space-identities.md#deleting-a-space)
    covers each list as it stands, including a store with no access-control
    document.
-5. **The server refuses a deleted space**, which nothing can yet produce. Every
-   Home space has an access-control document first, the first step of
-   "Operational" above: INV-15's Home clause reads the list, so a Home with none
-   is not protected by it, and the recipe's genesis for a space with no list
-   must never land on a Home. The Memory server's part is done: it refuses a
+5. **The server refuses a deleted space.** Every Home space has an
+   access-control document first, the first step of "Operational" above:
+   INV-15's Home clause reads the list, so a Home with none is not protected by
+   it, and the recipe's genesis for a space with no list must never land on a
+   Home. The Memory server's part is done: it refuses a
    space whose access-control document holds a deletion tombstone, in every
    mode. So is the serving loop's: it starts no tenure for a deleted space,
    ends one on the deletion, and starts no further outbox row.
@@ -168,7 +167,10 @@ in this order, each step a change of its own:
    and a repair would write an access list over it and so undo the deletion. Nor
    does an operator repair an access-control document whose value is a deletion
    tombstone.
-7. **`cf space delete` and `cf space reap`.**
+7. **`cf space delete` and `cf space reap`.** Done: the
+   [CLI README](../../runtime/cli/README.md#deleting-a-space) describes both,
+   and [reaping a space's store](../development/space-reaping.md) is the
+   operator's procedure.
 
 ### In other repositories
 

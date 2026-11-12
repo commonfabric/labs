@@ -21,7 +21,6 @@ import {
   type ReadonlyRecord,
 } from "@commonfabric/js-values/types";
 
-import { boundCatalogForModel } from "../client-actions/command-result.ts";
 import {
   HARNESS_COMMAND_ARGS_MAX_BYTES,
   HARNESS_COMMAND_CATALOG_DETAIL_LIMIT,
@@ -124,7 +123,7 @@ const BAD_ARGS_HOST_CODE = "bad-args";
 const notGrantedHint = (command: string): string =>
   `This run may not run \`${command}\`. Do not retry it; if the person should run it, name it in your result as an offer for them.`;
 
-/** What `list_commands` takes: command names to keep whole when bounded. */
+/** What `list_commands` takes: commands whose description and schema to show. */
 export interface ListCommandsInput {
   detail?: string[];
 }
@@ -140,7 +139,7 @@ export type ListCommandsErrorCode =
  * One command as `list_commands` shows it: its signature line, which carries
  * its parameters, output names, effect, and target, its title, and whether
  * the host names it as relevant to this run. A command named in `detail`
- * also carries its full argument schema.
+ * also carries its description and full argument schema.
  */
 export interface LoomCommandListing {
   name: string;
@@ -163,13 +162,7 @@ export type ListCommandsOutput =
     outputId: ToolOutputId;
     status: "ok";
     notice: typeof LOOM_COMMANDS_EFFECT_NOTICE;
-    entries: (
-      | LoomCommandListing
-      | Omit<LoomCommandListing, "inputSchema" | "description">
-    )[];
-
-    /** Entries shown without their schema and description, past the bound. */
-    compacted?: number;
+    entries: LoomCommandListing[];
 
     /** Rows left out because they could not be read. */
     omitted?: number;
@@ -242,13 +235,13 @@ export type RunCommandCallOutput =
     notice: typeof LOOM_COMMAND_UNTRUSTED_NOTICE;
     outcome: LoomCommandOutcome;
 
-    /** The answer, measured; absent when even alone it passed the bound. */
+    /** The answer, measured; absent when the remaining output space is too small. */
     entry?: LoomRetrievalEntry;
 
     /** Whether the answer was cut to a bound or left out. */
     truncated: boolean;
 
-    /** What to do instead, when the run may not run the command. */
+    /** Guidance for a refused command or a body omitted by the output bound. */
     hint?: string;
 
     /** The command's signature, when the host refused its args. */
@@ -313,7 +306,7 @@ const catalogSourceOf = (
 /**
  * Helper for `list_commands`, which shows one entry as a listing: its
  * signature and title always, its `relevant` mark when the host names it,
- * its description unless compacted, and its schema only when `whole`.
+ * its description and schema only when `whole`.
  */
 const listingOf = (
   entry: LoomCommandEntry,
@@ -323,7 +316,7 @@ const listingOf = (
   name: entry.name,
   signature: renderCommandSignature(entry),
   ...(entry.title !== undefined ? { title: entry.title } : {}),
-  ...(entry.description !== undefined
+  ...(whole && entry.description !== undefined
     ? { description: entry.description }
     : {}),
   ...(relevant ? { relevant: true } : {}),
@@ -419,29 +412,20 @@ export const listCommandsTool: HarnessToolDefinition<
         ? input.detail.filter((name) => typeof name === "string")
         : [],
     );
-    // The commands the host names as relevant lead, so a listing past the
-    // model bound keeps them whole.
+    // The commands the host names as relevant lead the listing.
     const relevant = new Set(context.loomCommands?.relevant ?? []);
     const ordered = [
       ...catalog.entries.filter((entry) => relevant.has(entry.name)),
       ...catalog.entries.filter((entry) => !relevant.has(entry.name)),
     ];
-    const bounded = boundCatalogForModel(
-      ordered.map((entry) =>
-        listingOf(entry, detail.has(entry.name), relevant.has(entry.name))
-      ),
-      (entry) => entry.name,
-      [...detail],
-    );
     const omitted = catalog.malformed;
     return {
       outputId,
       status: "ok",
       notice: LOOM_COMMANDS_EFFECT_NOTICE,
-      entries: bounded.entries,
-      ...(bounded.compacted !== undefined
-        ? { compacted: bounded.compacted }
-        : {}),
+      entries: ordered.map((entry) =>
+        listingOf(entry, detail.has(entry.name), relevant.has(entry.name))
+      ),
       ...(omitted > 0 ? { omitted } : {}),
     };
   },
@@ -671,6 +655,14 @@ const sendCall = async (
   };
 };
 
+/** Guidance when the output bound leaves a command's body out. */
+const OMITTED_BODY_HINT =
+  "The result body was omitted to fit the tool output limit. No requested values are shown. Read a smaller date range, fewer results, or a smaller batch.";
+
+/** Space reserved for an omitted body's guidance, including JSON wrapping. */
+const OMITTED_BODY_HINT_SIZE =
+  JSON.stringify({ hint: OMITTED_BODY_HINT }).length;
+
 /**
  * Helper for command tools, which measures an answer against the run's
  * ceiling and the output bound, `reserved` being the size of everything the
@@ -700,7 +692,9 @@ const measureAnswer = async (
   const [entry] = measured.entries;
   return {
     ...answered.skeleton,
-    ...(entry !== undefined ? { entry } : {}),
+    ...(entry !== undefined
+      ? { entry }
+      : { hint: answered.skeleton.hint ?? OMITTED_BODY_HINT }),
     truncated: measured.truncated,
     cfc: {
       version: 1,
@@ -857,7 +851,8 @@ export const runCommandTool: HarnessToolDefinition<
     return await measureAnswer(
       context,
       sent,
-      JSON.stringify(sent.skeleton).length + LABEL_JOIN_ALLOWANCE,
+      JSON.stringify(sent.skeleton).length + LABEL_JOIN_ALLOWANCE +
+        OMITTED_BODY_HINT_SIZE,
     );
   },
 };
@@ -895,8 +890,8 @@ const readCatalog = async (
 /**
  * Helper for batches, which returns the forms an executed call's summary may
  * take: the `larger` ones, largest first, and the `smallest`. The compact
- * form replaces `completed` with the count of its ids and leaves out the
- * hint, keeping the signature a `bad-args` refusal carries; the next leaves
+ * form replaces `completed` with the count of its ids, keeping the refusal
+ * hint and the signature a `bad-args` refusal carries; the next leaves
  * out the signature too; the smallest keeps only the outcome's `ok`, `code`,
  * and size, marked `summaryOmitted`.
  */
@@ -906,7 +901,7 @@ const skeletonForms = (
   larger: AnsweredCall["skeleton"][];
   smallest: AnsweredCall["skeleton"];
 } => {
-  const { hint: _hint, signature, outcome, ...rest } = skeleton;
+  const { signature, outcome, ...rest } = skeleton;
   const { completed, ...kept } = outcome;
   const compact = {
     ...rest,
@@ -932,8 +927,8 @@ const skeletonForms = (
 };
 
 /**
- * Helper for command tools, which measures a batch's answers in the calls'
- * order against one output bound for the whole batch, so a batch shows the
+ * Helper for command tools, which measures a batch's answers smallest-first
+ * against one output bound for the whole batch, so a batch shows the
  * model no more than one call may. Each executed call's summary takes, in
  * the calls' order, the largest of its forms whose serialized size fits
  * beside the smallest forms of the calls after it, so a later call's
@@ -948,8 +943,10 @@ const measureBatch = async (
 ): Promise<RunCommandBatchOutput> => {
   // Each result costs its serialized size, escapes included, the comma
   // that separates it from the next, and an answered one its `truncated`
-  // turning from `true` to `false`.
-  const charge = (result: object) => JSON.stringify(result).length + 2;
+  // turning from `true` to `false`. Only answered calls can need an omission hint.
+  const charge = (result: RunCommandCallOutput | AnsweredCall["skeleton"]) =>
+    JSON.stringify(result).length + 2 +
+    (result.status === "executed" ? OMITTED_BODY_HINT_SIZE : 0);
   const smallest = (call: AnsweredCall | RunCommandCallOutput) =>
     isAnswered(call) ? skeletonForms(call.skeleton).smallest : call;
   let later = sent.reduce((sum, call) => sum + charge(smallest(call)), 0);
@@ -973,14 +970,19 @@ const measureBatch = async (
     return { ...call, skeleton };
   });
   const results: RunCommandCallOutput[] = [];
-  for (const call of compacted) {
+  const allocationOrder = compacted.map((call, index) => ({ call, index }))
+    .sort((a, b) =>
+      (isAnswered(a.call) ? a.call.skeleton.outcome.bodyBytes : 0) -
+      (isAnswered(b.call) ? b.call.skeleton.outcome.bodyBytes : 0)
+    );
+  for (const { call, index } of allocationOrder) {
     if (!isAnswered(call)) {
-      results.push(call);
+      results[index] = call;
       continue;
     }
     const measured = await measureAnswer(context, call, reserved);
     reserved += JSON.stringify({ entry: measured.entry }).length;
-    results.push(measured);
+    results[index] = measured;
   }
   const executed = results.filter((result) => result.status === "executed");
   const observedLabel = mergeConfidentialityOnlyLabels(

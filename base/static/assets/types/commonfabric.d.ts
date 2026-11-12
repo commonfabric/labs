@@ -1177,6 +1177,23 @@ export interface TextChange {
   readonly insert?: string;
 }
 
+/**
+ * The anchors of a collaborative field: the value of its anchors document,
+ * which `anchorsOf()` names. Each anchor is a point in the field's text,
+ * held as its offset under an id its writer chooses. An offset counts UTF-16
+ * code units, as a string index does, from 0 to the text's length.
+ *
+ * Memory carries every anchor through every collaborative edit of the field
+ * as it would a cursor: text inserted at an anchor lands after it, and an anchor inside
+ * deleted text lands where the deletion began. So a highlight from one anchor
+ * to another takes in text inserted at its start and leaves out text inserted
+ * at its end, and a highlight whose text is deleted is empty.
+ *
+ * A type alias, not an interface, because Memory stores and sends the map as
+ * a fabric value, and only an alias of an object type is assignable to one.
+ */
+export type FieldAnchors = { readonly [id: string]: number };
+
 /*
  * IAnyCell is an interface that is used by all calls and to which the runner
  * attaches the internal methods..
@@ -2440,9 +2457,29 @@ type CellWrappedData<T> =
   | AnyBrandedCell<T>
   | (T extends Array<infer U> ? Array<FactoryInput<U>>
     : T extends ReadonlyArray<infer U> ? ReadonlyArray<FactoryInput<U>>
-    : T extends object ? { [K in keyof T]: FactoryInput<T[K]> }
+    : T extends object
+      ? { [K in keyof T]: FactoryInput<T[K]> | OptionalInputUndefined<T, K> }
     : never);
 export declare const CELL_LIKE: unique symbol;
+
+/**
+ * `undefined` where `K` is an optional key of `T`, and nothing elsewhere.
+ *
+ * A pattern body sees an optional field of its own input as `T | undefined`.
+ * Handing that field to another factory's optional input passes a reference to
+ * it, whether the field is there or not, so the input has to admit the
+ * `undefined` in the field's type. A literal `undefined`, or a computation that
+ * returns one, passes too, because its type cannot be told apart from the
+ * field's. Either is a value, not the property left out.
+ */
+// An index signature's key is not an optional property, though `Pick` over it
+// is satisfied by `{}` too; its values keep their declared type.
+type OptionalInputUndefined<T, K extends keyof T> = string extends K ? never
+  : number extends K ? never
+  : symbol extends K ? never
+  // deno-lint-ignore ban-types
+  : {} extends Pick<T, K> ? undefined
+  : never;
 
 /**
  * Helper type to transform Cell<T> to FactoryInput<T> in pattern/lift/handler inputs.
@@ -2509,7 +2546,8 @@ export type FactoryInput<T> =
   | ([NonNullable<T>] extends [VNode | UIRenderable] ? JSXElement : never)
   | (T extends Array<infer U> ? Array<FactoryInput<U>>
     : T extends ReadonlyArray<infer U> ? ReadonlyArray<FactoryInput<U>>
-    : T extends object ? { [K in keyof T]: FactoryInput<T[K]> }
+    : T extends object
+      ? { [K in keyof T]: FactoryInput<T[K]> | OptionalInputUndefined<T, K> }
     : T);
 
 /**
@@ -3311,12 +3349,27 @@ export interface BuiltInGenerateTextState {
   groundingSources?: readonly BuiltInLLMGroundingSource[];
 }
 
+/** Latest user-facing milestone reported by an agent run. */
+export interface AgentProgress {
+  /** Literal user-facing milestone text. */
+  message: string;
+
+  /** One-based report number within this execution attempt. */
+  sequence: number;
+
+  /** ISO timestamp assigned by the host. */
+  updatedAt: string;
+}
+
 /**
  * The request an `agent()` node submits: a task, the cells it may read, and
  * the schema its answer takes. A runner the requester registered executes it
  * as the requester; the builtin's cell follows the run's record.
  */
 export interface BuiltInAgentParams {
+  /** Enables the progress tool and milestone-reporting instructions. */
+  progress?: boolean;
+
   /**
    * What the run is for, as context rather than a command. Labeled data
    * interpolated into this text becomes a value the request carries and the
@@ -3356,6 +3409,9 @@ export interface BuiltInAgentParams {
  * space and not the host that serves it.
  */
 export interface BuiltInAgentState<T> {
+  /** Latest reported milestone, retained when the run finishes. */
+  progress?: AgentProgress;
+
   pending: boolean;
   result?: T;
   error?: string;
@@ -3551,7 +3607,9 @@ export type PatternToolFunction = <
   // `sandboxId`); otherwise validate that E (after stripping cells) is a subset
   // of T.
   extraParams?: [keyof E & FrameworkProvidedKeys<T>] extends [never]
-    ? (StripCell<E> extends Partial<T> ? FactoryInput<E> : never)
+    ? (StripCell<E> extends
+      { [K in keyof T]?: T[K] | OptionalInputUndefined<T, K> } ? FactoryInput<E>
+      : never)
     : never,
 ) => PatternToolResult<E>;
 
@@ -3745,6 +3803,7 @@ export type AssertRenderPartsFunction = (
 type TestStepKey =
   | "assertion"
   | "action"
+  | "press"
   | "render"
   | "settle"
   | "label"
@@ -3775,6 +3834,13 @@ type OnlyTestStep<Own extends TestStepKey, Fields> =
  * - `{ action }` sends an event into a stream. `event` is the payload;
  *   `trustedUi` names a trusted UI surface and the control inside it when the
  *   action must originate from rendered UI under enforcement.
+ * - `{ press, control }` clicks a control rendered in the `press` view, as a
+ *   person clicks it in a browser: the runner renders the view through the
+ *   browser's reconciler and DOM applicator, finds the one element whose text,
+ *   trimmed, is `control`, and dispatches a click on it, so the handler bound
+ *   there receives the event with the provenance its rendered markers give.
+ *   `within` names text an element around the control shows, for a view that
+ *   shows `control` more than once, such as a row of a list.
  * - `{ render }` materializes a VDOM subtree.
  * - `{ settle: true }` waits for full settlement (scheduler, storage, and
  *   in-flight async builtin I/O) before the next step.
@@ -3794,6 +3860,7 @@ export type TestStep =
     event?: unknown;
     trustedUi?: { surface: string; action: string };
   }>
+  | OnlyTestStep<"press", { press: unknown; control: string; within?: string }>
   | OnlyTestStep<"render", { render: unknown }>
   | OnlyTestStep<"settle", { settle: true }>
   | OnlyTestStep<"label", { label: string }>
@@ -4071,32 +4138,39 @@ export type SqliteQueryRow<Row> = string extends keyof Row
 export interface ISqliteQueryable {
   query<Row = Record<string, unknown>>(
     sql: string,
+    // Each option but `scope` admits `undefined`, as the `sqliteQuery`
+    // factory's optional inputs do, so a pattern can forward an optional field
+    // of its own input.
     options?: {
-      params?: ReadonlyArray<unknown> | Record<string, unknown>;
+      params?: ReadonlyArray<unknown> | Record<string, unknown> | undefined;
       reactOn?: unknown;
 
       /** Application key echoed on this request's pending and settled states.
        * Changing it issues a new request even when SQL and params match. */
-      requestKey?: string;
+      requestKey?: string | undefined;
 
       /** CFC Phase 3: declared output ceiling (see SqliteQueryParams). */
-      maxConfidentiality?: ReadonlyArray<unknown>;
+      maxConfidentiality?: ReadonlyArray<unknown> | undefined;
 
       /** `"fail"` (default) | `"skip"` when a row exceeds the ceiling. */
-      onExceed?: "fail" | "skip";
+      onExceed?: "fail" | "skip" | undefined;
 
       /** CFC Phase 3.b: filter rows to those the acting reader may read (a
        *  declared existence release). Requires the table to opt in via
        *  `table(…, { allowReadClearance: true })`; never for aggregates. The
        *  count of withheld rows is reported as `withheld`. */
-      readClearance?: boolean;
+      readClearance?: boolean | undefined;
 
       /** Scope of the result cell. A `session`-scoped result is one each
        *  session reads alone and filters under its runtime read ceiling. Shared
        *  results retain their labels for cell-read enforcement. Absent, the
        *  result takes the narrowest of the db's scope, the pattern's output
        *  scope, and — when `readClearance` is set — `user`, since a cleared
-       *  result is one reader's view. */
+       *  result is one reader's view.
+       *
+       *  It is read when the pattern is built, before any input has a value,
+       *  so it is written in the pattern: a pattern input or a computed value
+       *  cannot supply it. */
       scope?: CellScope;
     },
   ): Reactive<
@@ -4447,6 +4521,33 @@ export declare function principalsOf(
 ): DID[] | undefined;
 
 /**
+ * Returns the principal `target`'s value's own cell represents: the one
+ * principal that the label of the cell a write to `target` lands in names as
+ * the one the value represents, in the form the runtime writes, at that
+ * label's root, and only when no claim anywhere in the label names anyone
+ * else. The value's own cell is that cell when the value is the whole of it
+ * and the cell holds no link to a value elsewhere: a value at a path within a
+ * document reads with that document's label, and a link stored in the cell
+ * leads to a value it does not hold. `undefined` in every other case, for a
+ * value stored without a label, and for a `target` of `undefined`.
+ *
+ * The label says whom the cell's value represents, not who pointed `target`
+ * at that cell: the links on the way, write redirects among them, are
+ * followed. A write declared `RepresentsCurrentUser`, as a profile's
+ * `setPicture` is, labels the value with the principal it acts for, and a
+ * profile's owner-protected fields keep their write redirects from being
+ * repointed. So comparing this with `profileOwnerOf()` says whether a
+ * profile's `picture` is one its owner set. It can be called where
+ * `principalOf()` can: in a reactive computation the result updates when the
+ * label or the links change, and in a handler a document still loading has
+ * the handler run again once it arrives. Calling it in a pattern body throws,
+ * and so does a label stored in a form the runtime cannot interpret.
+ */
+export declare function writtenPrincipalOf<T>(
+  target: AnyCell<T> | undefined,
+): DID | undefined;
+
+/**
  * Returns the person whose own profile `target` is, or `undefined` when it is
  * no one's. A profile is a person's own when its `name`, followed through the
  * links it holds, stays within the profile's own documents, and its label,
@@ -4566,6 +4667,28 @@ export type WishState<T> = {
 };
 
 export type NavigateToFunction = (cell: Reactive<any>) => Reactive<boolean>;
+
+/**
+ * `anchorsOf(field)` — the anchors document of a string field, as a cell: a
+ * read returns the field's anchors, or `undefined` until something writes
+ * them, and a write replaces them. Memory moves every anchor through every
+ * collaborative edit of the field. A `set()` of the field moves none, so a
+ * handler that replaces the text that way writes the anchors too. `field` is
+ * a field stored in a document; a constant, which has no edits, is refused.
+ *
+ * A handler that changes the anchors reads the field and the anchors, then
+ * writes the anchors it wants the field to hold. Its commit lands only while
+ * the field and the anchors are still what it read; where either moved, the
+ * handler runs again against what they hold now. A handler that also edits
+ * the field with `.applyChanges()` writes the anchors before the edit,
+ * against the text it read, and Memory moves them through the edit; a commit
+ * that writes them after the edit is refused. Give a handler the result as a
+ * `Writable<FieldAnchors | undefined>`.
+ */
+export type AnchorsOfFunction = (
+  field: FactoryInput<string>,
+) => Reactive<FieldAnchors | undefined>;
+
 export interface WishFunction {
   <T = unknown>(
     target: FactoryInput<WishParams>,
@@ -4989,6 +5112,7 @@ export declare const table: SqliteTableFunction;
 export declare const cfLink: SqliteCfLinkFunction;
 export declare const cfSqlite: CfSqliteHelpers;
 export declare const navigateTo: NavigateToFunction;
+export declare const anchorsOf: AnchorsOfFunction;
 export declare const inspectConfLabel: InspectConfLabelFunction;
 export declare const wish: WishFunction;
 
@@ -5172,6 +5296,26 @@ export type SpaceOfFunction = <T>(
 ) => DID | undefined;
 
 export declare const spaceOf: SpaceOfFunction;
+
+/**
+ * Returns the DID of the space `target`'s own link names, without following
+ * it or any link it reaches, and without reading anything in that space: so a
+ * pattern can tell which space a cell it holds by link is in, as a list of
+ * entries read as links needs to, at no cost in the space it names. A cell a
+ * value holds at a position typed `Cell<unknown>` is such a link, as is each
+ * cell `linksOf()` returns. Where the link names a document that links
+ * elsewhere in turn, this is the space of that document, not of the value it
+ * leads to, which `spaceOf()` returns.
+ *
+ * `undefined` means the answer is not known yet: `target` is `undefined`, or
+ * the run has named an `inSpace()` target whose space is not resolved yet, as
+ * for `spaceOf()`. Call it where `spaceOf()` can be called.
+ */
+export type SpaceOfLinkFunction = <T>(
+  target: AnyCell<T> | undefined,
+) => DID | undefined;
+
+export declare const spaceOfLink: SpaceOfLinkFunction;
 
 /**
  * Returns whether the space `target` names is deleted, so a pattern that keeps

@@ -1189,7 +1189,10 @@ holds the measurements and the conditions for revisiting.
   server that does not advertise `instanceNameMark`. One storage manager
   serves runtimes of one mode, and refuses a runtime of the other; one no
   runtime has declared a mode to runs this build's default
-  (`namesInstancesByDefault()`), as a serving host's routed plane does. An
+  (`namesInstancesByDefault()`), as a serving host's routed plane does. A
+  client that opens sessions with no runtime, as the Topics client and
+  `cf space invite` do, declares the mode a runtime given the deployment's
+  settings would. An
   emulated storage manager's memory server takes the mode of the runtime it
   serves as its posture, a loopback server (`newLoopbackServer()`) given none
   takes the runtime's default, as a toolshed of the same build does, and the
@@ -2244,29 +2247,42 @@ the per-epic implementation notes).
   ([`serverExecution`](#serverexecution) on).
 - **Added by.** Bernhard Seefeld, in the change that moves the serving loop
   off the request thread.
-- **Purpose.** The serving loop, its host and every serving runtime run in a Web
-  Worker of the toolshed process instead of on the thread that answers the
+- **Purpose.** The serving loop's hosts and serving runtimes run in Web
+  Workers of the toolshed process, one worker per served space, instead of on
+  the thread that answers the
   memory server's frames and the HTTP routes. A wave's settle step is a run of
   synchronous scheduler actions, and on one thread every client round trip waits
-  behind it. The worker reads the store through its own SQLite connections and
+  behind it, as on one worker every other space's wave does. A worker reads the
+  store through its own SQLite connections and
   reaches the memory server over a port: wave commits cross to a sink on the
   main thread, which applies every commit the server fans out; the serving
   runtimes' storage sessions cross as frames; and the server's observer crosses
   as events. The memory server's store has to be a file for the worker to open
   it. The pattern-lifecycle verbs reach the loop as descriptors on both arms.
+  The pool that places spaces on workers takes three more variables from the
+  same bootstrap, each a whole number: `SERVER_EXECUTION_MAX_WORKERS`, how
+  many workers spaces are placed on before a space joins a worker that
+  already serves one (default 16; `1` serves every space from one worker),
+  `SERVER_EXECUTION_SPARE_WORKERS`, how many workers are kept started ahead
+  of a placement (default 1 in the toolshed; `0` keeps none), and
+  `SERVER_EXECUTION_WORKER_HEAP_BUDGET_MB`, how large the workers' heaps may
+  be together before workers kept only for parked runtimes are closed
+  (default none). The serving memory server tests build reads the first.
   [`docs/plans/serving-loop-worker.md`](../plans/serving-loop-worker.md) is the
   design and its stages.
 - **Current default and planned end state.** On by default in the toolshed
   over a file store, off in the test harness's serving memory server. The end
   state is the in-process arm gone, with the knob.
-- **Status on 2026-10-31.** Implemented, on by default in the toolshed over a
-  file store. The worker entry builds its process's compiled-module byte cache,
-  as the main-thread loop does. Run with the variable `true`, the pattern
-  integration suites the `MultiRuntimeHarness` drives pass under the worker;
+- **Status on 2026-11-11.** Implemented, on by default in the toolshed over a
+  file store, with a worker per served space. Each worker's entry builds a
+  compiled-module byte cache for the spaces that worker serves, as the
+  main-thread loop builds one for its process. Run with the variable `true`,
+  the pattern integration suites the `MultiRuntimeHarness` drives pass with a
+  worker per space;
   the private-inbox and FabriChat suites need a serving runtime to run no child
   placed in a space other than the one it serves (#9418). No CI lane runs them
-  that way yet: in CI the worker runs in the toolshed-backed lanes and the
-  worker's own unit tests.
+  that way yet: in CI the workers run in the toolshed-backed lanes and the
+  workers' own unit tests.
 - **Path to removal.** Soak with the default on, then delete the knob and the
   in-process arm.
 
@@ -2721,19 +2737,39 @@ A server that returns 404, 405 or 410, as one without the route does, has said
 it publishes nothing: there is no posture and no memory URL to adopt, and it is
 not asked again. Any other failure leaves the document unread, and the posture
 then falls back to the environment and Memory to the API URL, with a warning
-that names it. A transient failure (the server is unreachable, or it returns
-408, 429, 502, 503 or 504) is asked again first: three attempts in all, a
-quarter of a second and then a second apart. One that would come out the same,
-such as a 401, a 403, a 500 or a body that is not a JSON object, is not, and
-neither is an attempt that takes more than five seconds, since the health check
-a client runs next would wait on that server too. The bound covers the read
-alone: the health check has no timeout. A redirect that leaves the API URL's
+that names it. The posture's fallback is also logged at error level (logger
+`deployment-meta`, key `posture-unread`), naming why the read failed and what
+the client runs on instead, because such a client can sit on the other
+server-execution arm from its server while its real work goes on succeeding.
+`CF_ADOPT_SERVER_FLAGS=false` omits that error, since such a client does not
+take the posture anyway. A transient failure (the server is unreachable, or it
+returns 408, 429, 502, 503 or 504) is asked again first: three attempts in all,
+a quarter of a second and then a second apart. A failure that would come out the
+same, such as a 401, a 403, a 500 or a body that is not a JSON object, is not
+asked again.
+
+A request stays outstanding until the server responds, since a slow server's
+answer is the posture the client needs. At five seconds that is logged at error
+level (key `read-slow`), and the client holds its startup for the answer. When
+a document arrives after that error or after a failed attempt, a warning (key
+`read-late`) says how long it took. A server that says nothing ends the whole
+read, retries included, at 60 seconds (`DEPLOYMENT_RESPONSE_BOUND_MS`), having
+been asked once, and the client then takes
+the fallback above and goes on to its health check. `Runtime.healthCheck` has
+the same bound, and a host with no response by then counts as unreachable, so
+that server fails with `Could not connect to "..."`, 120 seconds after the
+client asked. A server that refuses the connection fails in about 1.25 seconds.
+[A deployed client's wait on its
+server](./waiting-in-tests-rationale.md#a-deployed-clients-wait-on-its-server)
+says what those bounds are measured from.
+
+A redirect that leaves the API URL's
 deployment (anything but its own origin, or the same host on https where the
 API URL names http) still gives the posture, as before, but no memory URL; a
 warning names where the redirect ended.
 
 A caller whose startup can be cancelled passes its `AbortSignal`, and the
-request carries it, joined with each attempt's timeout. An aborted signal is
+request carries it, joined with the read's bound. An aborted signal is
 the one failure that does not resolve to the environment: it throws the abort
 reason, because the caller has stopped wanting settings at all.
 

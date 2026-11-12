@@ -228,6 +228,16 @@ export class BuildConfig {
     return this.#path("runtime", "toolshed", "lib", "serving-worker.ts");
   }
 
+  compileWorkerPath() {
+    return this.#path(
+      "runtime",
+      "runner",
+      "src",
+      "harness",
+      "compile-worker.ts",
+    );
+  }
+
   toolshedEnvPath() {
     return this.#path("runtime", "toolshed", "COMPILED");
   }
@@ -286,6 +296,7 @@ export class BuildConfig {
       this.toolshedProjectPath(),
       this.toolshedEntryPath(),
       this.toolshedServingWorkerPath(),
+      this.compileWorkerPath(),
       this.staticAssetsPath(),
       ...this.patternPaths(),
       this.staticTypesPath(),
@@ -314,6 +325,9 @@ export class BuildConfig {
           // The serving loop's worker entry. The compile does not follow a
           // worker's module, so it is named here.
           this.toolshedServingWorkerPath(),
+          // The compile worker the serving runtimes compile in, which the
+          // compile does not follow either.
+          this.compileWorkerPath(),
           this.toolshedEnvPath(),
           this.staticAssetsPath(),
           ...this.patternPaths(),
@@ -767,9 +781,9 @@ export async function runBuildBinaries(
       // --background re-runs this binary as a detached server child, so the
       // compiled binary needs permission to spawn itself.
       "--allow-run",
-      // A serving worker keeps each piece a handler started until its space
-      // parks, which outgrows V8's default limit of about 4 GB on a busy board.
-      // The limit applies to each isolate, so a worker gets its own.
+      // V8's default limit of about 4 GB is less than a serving worker can need
+      // on a busy board. The limit applies to each isolate, so a worker gets
+      // its own.
       "--v8-flags=--max-old-space-size=8192",
     ],
     binaries: requestedBinaries(args),

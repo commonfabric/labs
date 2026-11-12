@@ -80,9 +80,12 @@ function releaseSnapshots(ids: Set<URI>): void {
 const finalizedStores = new FinalizationRegistry<Set<URI>>(releaseSnapshots);
 
 /**
- * Holds explicitly created snapshots for one runtime. Traversal snapshots are
- * owned by their frozen source values and live cell/link handles, so discarded
- * document versions release their snapshots. Disposal releases both kinds.
+ * Holds explicitly created snapshots for one runtime. Owned snapshots, those of
+ * array elements and of `Runtime.getImmutableCell()` among them, are held
+ * instead by their frozen source values, when those are containers, and by
+ * live cell/link handles, which alone hold a primitive's. So a discarded
+ * document version, or a cell nothing holds any longer, releases its snapshot.
+ * Disposal releases both kinds.
  */
 export class ImmutableCellStore {
   #elementStores = new WeakMap<object, ImmutableCellStore>();
@@ -118,17 +121,31 @@ export class ImmutableCellStore {
   }
 
   /**
-   * Creates an element snapshot owned by its frozen value and escaped handles.
-   * A bare URI string does not retain an element; portable export is required
-   * when the reference must outlive those owners.
+   * Creates an element snapshot owned by its frozen value and escaped handles,
+   * as {@link createOwned} does, for a container value.
    */
   createElement(value: FabricValue, base: NormalizedLink): ImmutableSnapshot {
-    if (this.#disposed) throw new Error("Immutable cell store is disposed");
     const frozen = cloneIfNecessary(value);
     if (typeof frozen !== "object" || frozen === null) {
       throw new TypeError("Element snapshots require a container");
     }
+    return this.createOwned(frozen, base);
+  }
+
+  /**
+   * Creates a snapshot owned by its frozen value, when that is a container, and
+   * by escaped handles: a live cell or link naming it. A bare URI string does
+   * not retain it; portable export is required when the reference must outlive
+   * those owners.
+   */
+  createOwned(value: FabricValue, base?: NormalizedLink): ImmutableSnapshot {
+    if (this.#disposed) throw new Error("Immutable cell store is disposed");
+    const frozen = cloneIfNecessary(value);
     assertAcyclicFabricValue(frozen);
+    // A container also owns its snapshot; a primitive has only its handles.
+    const owner = typeof frozen === "object" && frozen !== null
+      ? frozen
+      : undefined;
     const snapshot = this.#findSnapshot(frozen, base);
     // Equal content shares one weak owner even across distinct source objects.
     let snapshotOwners = elementSnapshotOwners.get(snapshot);
@@ -136,7 +153,8 @@ export class ImmutableCellStore {
       snapshotOwners = new WeakMap();
       elementSnapshotOwners.set(snapshot, snapshotOwners);
     }
-    let store = snapshotOwners.get(this) ?? this.#elementStores.get(frozen);
+    let store = snapshotOwners.get(this) ??
+      (owner === undefined ? undefined : this.#elementStores.get(owner));
     if (store === undefined) {
       store = new ImmutableCellStore();
       const ref = new WeakRef(store);
@@ -146,7 +164,7 @@ export class ImmutableCellStore {
         ref,
       });
     }
-    this.#elementStores.set(frozen, store);
+    if (owner !== undefined) this.#elementStores.set(owner, store);
     store.#retain(snapshot);
     snapshotOwners.set(this, store);
     return snapshot;

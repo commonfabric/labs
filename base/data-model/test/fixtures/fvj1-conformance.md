@@ -126,3 +126,9 @@ mark rather than leaving it to mislead.
 `Map` and `Set` values are not among the cases, their codecs being stubs pending
 general `FabricInstance` support. Nor is a value holding a cycle, which the mods
 can state and which re-encodes to a refusal.
+
+Nor is any value as large as a floor that section 12 of
+[`3-json-encoding.md`](../../../../docs/specs/space-model-formal-spec/3-json-encoding.md#12-implementation-guarantees)
+sets, by any measure. An implementation tests the guarantees it states itself:
+at the figures it states, in whatever way suits its host, and through each path
+it offers, whether decoding, encoding, hashing or comparing.

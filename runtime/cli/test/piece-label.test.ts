@@ -1057,7 +1057,7 @@ describe("cf piece CFC labels", () => {
         .toEqual(stamped);
     });
 
-    it("clears the derived shape and value entries with the flag, and keeps the label-metadata templates", async () => {
+    it("clears the derived shape and value entries with the flag, and the label-metadata templates that described them", async () => {
       const { queue, queueDeps } = await derivedQueue();
       const templates = () => {
         const tx = runtime.edit();
@@ -1080,13 +1080,16 @@ describe("cf piece CFC labels", () => {
           queueDeps as never,
         ),
       ).toBeNull();
+      // The release leaves no payload entry with a source-bearing field, so
+      // the templates derived from what it leaves are none.
+      expect(templates()).toBeUndefined();
       const overwrite = runtime.edit();
       queue.withTx(overwrite).set({ items: ["clean"] });
       runtime.prepareTxForCommit(overwrite);
       expect((await overwrite.commit().settled).error).toBeUndefined();
       expect(await getCellCfcLabel(pieceConfig, [], {}, queueDeps as never))
         .toBeNull();
-      expect(templates()).toEqual(before);
+      expect(templates()).toBeUndefined();
     });
 
     it("lowers the label in the doc a write redirect lands in", async () => {

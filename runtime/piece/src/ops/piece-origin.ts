@@ -30,9 +30,8 @@ import {
   spaceHostFromFabricAuthority,
 } from "@commonfabric/runner";
 import {
-  entityKindOfIdString,
+  entityUriSchemePrefix,
   stripEntityUriScheme,
-  uriSchemeForEntityKind,
 } from "@commonfabric/runner/entity-kind";
 import {
   parseReleaseTime,
@@ -149,9 +148,13 @@ export function reconcilePieceSource(
   return runtime.sourceReconciler.reconcile(piece);
 }
 
+/**
+ * An origin no follow can take, or one whose source could not be read or
+ * compiled; `cause` is the failure underneath, when there is one.
+ */
 export class PieceOriginError extends Error {
-  constructor(message: string) {
-    super(message);
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
     this.name = "PieceOriginError";
   }
 }
@@ -253,36 +256,14 @@ export async function resolvePieceOriginSource(
     };
   }
 
-  const ref = parseFabricRef(origin.url)!;
-  if (ref.subpath !== undefined) {
-    throw new PieceOriginError("piece source subpaths are not supported");
-  }
-  if (ref.ref.kind === "slug") {
-    throw new PieceOriginError(
-      "piece origins require a stable fabric entity or pattern reference",
-    );
-  }
-  const stableRef = ref as StableFabricRef;
-  if (ref.space !== undefined && !isDID(ref.space)) {
-    throw new PieceOriginError(
-      "piece origins require an explicit space DID",
-    );
-  }
-  const sourceSpace = ref.space === undefined
-    ? destinationSpace
-    : ref.space as MemorySpace;
-
   // Before the host below is registered, because registering it changes the
   // route the space resolves through: a reference this call is going to
   // refuse must not leave that behind.
-  const pinned = pinnedPatternIdentity(stableRef);
-  const self = options.self;
-  if (
-    pinned === undefined && self !== undefined &&
-    sourceSpace === self.space && namesEntity(stableRef, self.pieceId)
-  ) {
-    throw new PieceOriginError("a piece cannot follow itself");
-  }
+  const { ref, sourceSpace, pinned } = followableFabricRef(
+    origin.url,
+    destinationSpace,
+    options.self,
+  );
 
   if (ref.host !== undefined) {
     const routedUrl = new URL(
@@ -314,7 +295,7 @@ export async function resolvePieceOriginSource(
   }
 
   const pattern = pinned === undefined
-    ? await mutableFabricOriginPattern(runtime, sourceSpace, stableRef)
+    ? await mutableFabricOriginPattern(runtime, sourceSpace, ref)
     : { identity: pinned, symbol: historicalSymbol };
   if (pattern === undefined) {
     throw new PieceOriginError(
@@ -340,13 +321,56 @@ export async function resolvePieceOriginSource(
 }
 
 /**
+ * The stable fabric reference the fabric origin `url` names, the space its
+ * source lives in, and the identity it pins, refusing with
+ * {@link PieceOriginError} what no follow can take: a source subpath, a slug,
+ * a space named by anything but its DID, and an unpinned reference to the
+ * piece `self` itself. Reads nothing.
+ */
+function followableFabricRef(
+  url: string,
+  destinationSpace: MemorySpace,
+  self: { space: MemorySpace; pieceId: string } | undefined,
+): {
+  ref: StableFabricRef;
+  sourceSpace: MemorySpace;
+  pinned: string | undefined;
+} {
+  const ref = parseFabricRef(url)!;
+  if (ref.subpath !== undefined) {
+    throw new PieceOriginError("piece source subpaths are not supported");
+  }
+  if (ref.ref.kind === "slug") {
+    throw new PieceOriginError(
+      "piece origins require a stable fabric entity or pattern reference",
+    );
+  }
+  const stableRef = ref as StableFabricRef;
+  if (ref.space !== undefined && !isDID(ref.space)) {
+    throw new PieceOriginError(
+      "piece origins require an explicit space DID",
+    );
+  }
+  const sourceSpace = ref.space === undefined
+    ? destinationSpace
+    : ref.space as MemorySpace;
+  const pinned = pinnedPatternIdentity(stableRef);
+  if (
+    pinned === undefined && self !== undefined &&
+    sourceSpace === self.space && namesEntity(stableRef, self.pieceId)
+  ) {
+    throw new PieceOriginError("a piece cannot follow itself");
+  }
+  return { ref: stableRef, sourceSpace, pinned };
+}
+
+/**
  * Whether a stable fabric reference names the entity `pieceId` addresses. The
  * id can arrive as a bare tagged hash or as its schemed URI, so both are
- * reduced to the kind and hash the reference carries.
+ * reduced to the scheme and hash the reference carries.
  */
 function namesEntity(ref: StableFabricRef, pieceId: string): boolean {
-  return uriSchemeForEntityKind(entityKindOfIdString(pieceId)) ===
-      ref.ref.scheme &&
+  return (entityUriSchemePrefix(pieceId) ?? "of:") === `${ref.ref.scheme}:` &&
     stripEntityUriScheme(pieceId) === `fid1:${ref.ref.hash}`;
 }
 
@@ -500,17 +524,24 @@ function systemOrigin(url: URL, recorded: string): PieceOrigin {
  * resolver can follow. On top of that, an origin may not carry credentials: a
  * piece's origin is readable by everyone who can read the piece, and an
  * authenticated fetch supplies its credential through a separately protected
- * capability.
+ * capability. A fabric origin must also have the shape a follow takes: no
+ * source subpath, no slug, a space named by its DID, and, for the piece
+ * `options.self` names, not that piece itself. Nothing is read, so an origin
+ * accepted here can still fail to resolve.
  */
 export function acceptEnteredOrigin(
   runtime: Runtime,
   space: MemorySpace,
   entered: string,
+  options: { self?: { space: MemorySpace; pieceId: string } } = {},
 ): string {
   const recorded = entered.trim();
   const origin = classifyOrigin(runtime, space, recorded);
   if (carriesCredentials(origin.url)) {
     throw new PieceOriginError("a source URL may not carry credentials");
+  }
+  if (origin.kind !== "system") {
+    followableFabricRef(origin.url, space, options.self);
   }
   return recorded;
 }

@@ -576,7 +576,8 @@ describe("continue-run", () => {
         "You are cf-harness, an autonomous agent harness",
       );
       expect(system).toContain("Operator guidance for cf-harness runs");
-      expect(system).toContain("/workspace/new-result.json");
+      expect(system).not.toContain("/workspace/new-result.json");
+      expect(system).toContain("Finish by calling submit_result");
       expect(system).not.toContain("old-result.json");
       expect(system).not.toContain("Unusable recorded string");
       expect(system).toContain(replacement ?? "Recorded components");

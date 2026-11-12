@@ -1,6 +1,7 @@
 // The ExecutorHost (server-execution v2 stage F, serving-loop.md §1):
-// one per process, owning the activation policy and one SpaceServer per
-// ACTIVE space. Wiring, by plane:
+// one per process, or one per serving worker where the loop runs in
+// workers, owning the activation policy and one SpaceServer per ACTIVE
+// space it is given to serve. Wiring, by plane:
 //
 // - plane (b): the memory server's admission observer notifies the host
 //   on any AUTHORED admission (an admission-side hook, never a poll) and
@@ -96,7 +97,13 @@ const DEFAULT_FAILURE_PARK_BACKOFF_MAX_MS = 30_000;
 // tenures. The spec's paragraph states the memory each costs and why these
 // defaults.
 const DEFAULT_PARKED_RUNTIME_RETENTION_MS = 10 * 60_000;
-const DEFAULT_MAX_PARKED_RUNTIMES = 8;
+
+/**
+ * How many idle-parked runtimes a host keeps unless its policy says
+ * otherwise, and how many workers a pool keeps for their parked runtimes
+ * alone.
+ */
+export const DEFAULT_MAX_PARKED_RUNTIMES = 8;
 
 /**
  * How long the host waits before rebuilding a space after its `streak`th
@@ -114,6 +121,39 @@ export const failureParkBackoffDelayMs = (
     DEFAULT_FAILURE_PARK_BACKOFF_MAX_MS;
   return Math.min(max, base * 2 ** Math.min(streak - 1, 30));
 };
+
+/**
+ * Whether an admitted commit into a space nothing serves starts a tenure
+ * there (serving-loop.md §1's ACTIVE criteria): an authored commit that
+ * carries events, or the warm mark of a provisioning wave, or lands while a
+ * client session is live on the space, which `hasLiveSessions` reports.
+ * Every other commit leaves the space parked.
+ */
+export const admissionActivates = (
+  notice: AdmittedCommitNotice,
+  hasLiveSessions: () => boolean,
+): boolean => {
+  if (notice.class !== "authored") return false;
+  if ((notice.eventAppends?.length ?? 0) > 0 || notice.warm === true) {
+    return true;
+  }
+  return hasLiveSessions();
+};
+
+/**
+ * Whether an admitted commit wrote its space's access-list document, the
+ * one input to the verdict that revokes a session.
+ */
+export const writesSpaceAcl = (notice: AdmittedCommitNotice): boolean =>
+  notice.writes.some((write) => write.id === `of:${notice.space}`);
+
+/**
+ * What a host holds: `busy` while it serves, starts, ends or re-evaluates a
+ * tenure, or holds a notice for a tenure to come; `parked` while it holds
+ * nothing but runtimes kept from idle parks; `vacant` while it holds nothing
+ * at all.
+ */
+export type HostOccupancy = "busy" | "parked" | "vacant";
 
 export type ExecutorHostOptions = {
   server: HostMemoryServer;
@@ -203,6 +243,14 @@ export type ExecutorHostOptions = {
     space: MemorySpace,
     outcome: "active" | "refused" | "failed",
   ) => void;
+
+  /**
+   * Called with the host's {@link HostOccupancy} each time it has changed,
+   * once the work that changed it has run to its next suspension, so that
+   * what starts and ends within one stretch of work reports its outcome
+   * alone. Whoever started the host decides by it whether to keep the host.
+   */
+  onOccupancyChanged?: (occupancy: HostOccupancy) => void;
 };
 
 export class ExecutorHost {
@@ -268,6 +316,25 @@ export class ExecutorHost {
   /** The routed plane, while the host has a route. */
   readonly #route: RoutedPlane | undefined;
 
+  /** Re-evaluations of a space chained behind a park and not yet decided. */
+  readonly #reactivations = new Set<Promise<void>>();
+
+  /**
+   * Moves each time a loop suspends on its input wait, and each time a tenure
+   * starts or ends, so that an unmoved count says no loop did anything between
+   * two readings of it.
+   */
+  #quiescenceEpoch = 0;
+
+  /** The occupancy last reported to `onOccupancyChanged`. */
+  #reportedOccupancy: HostOccupancy = "vacant";
+
+  /** Whether a report of the occupancy is queued. */
+  #occupancyReportQueued = false;
+
+  /** Whether the queued report is made even of an unchanged idle host. */
+  #idleOccupancyReportOwed = false;
+
   #releaseServerExecution: () => void = () => {};
   #closed = false;
 
@@ -288,10 +355,18 @@ export class ExecutorHost {
     // the host starts from here is the serving loop's work. A demand change
     // only wakes a loop already running in it.
     options.server.setServerExecutionObserver({
+      // Each is a trigger the host may decline, which changes nothing it
+      // holds, so each reports a host left idle whether or not that is news.
       commitAdmitted: (notice) =>
-        runInServingContext(true, () => this.#onCommitAdmitted(notice)),
+        runInServingContext(true, () => {
+          this.#onCommitAdmitted(notice);
+          this.#noteOccupancy({ evenIfUnchanged: true });
+        }),
       sessionOpened: (space) =>
-        runInServingContext(true, () => this.#onSessionOpened(space)),
+        runInServingContext(true, () => {
+          this.#onSessionOpened(space);
+          this.#noteOccupancy({ evenIfUnchanged: true });
+        }),
       // Fan-out stage B: a watch-set change on an ACTIVE space wakes its
       // demand pass (the arrival re-arm's trigger); an inactive space
       // waits for the session-open / admission activation triggers.
@@ -316,6 +391,19 @@ export class ExecutorHost {
     readonly failureParkStreaks: ReadonlyMap<string, number>;
   } {
     return { failureParkStreaks: this.#failureParkStreaks };
+  }
+
+  /** What this host holds now. A closed host is vacant. */
+  get occupancy(): HostOccupancy {
+    if (this.#closed) return "vacant";
+    if (
+      this.#spaces.size > 0 || this.#activating.size > 0 ||
+      this.#reactivations.size > 0 || this.#pendingNotices.size > 0 ||
+      this.#parkedDisposals.size > 0
+    ) {
+      return "busy";
+    }
+    return this.#parkedRuntimes.size > 0 ? "parked" : "vacant";
   }
 
   /** The `events` block of {@link stats}, alone and in its own copy. */
@@ -372,6 +460,7 @@ export class ExecutorHost {
         ...this.#stats.parkedRuntimes,
         held: this.#parkedRuntimes.size,
       },
+      workers: { ...this.#stats.workers },
       activeSpaces,
       watermarkLag,
     };
@@ -379,6 +468,49 @@ export class ExecutorHost {
 
   spaceServer(space: MemorySpace): SpaceServer | undefined {
     return this.#spaces.get(space);
+  }
+
+  /**
+   * Resolves once nothing this host has been told of has anything left to do:
+   * every activation and re-activation has been decided, every tenure is
+   * {@link SpaceServer.quiescent} at one instant, and no loop did anything
+   * since this call's last pass began. A cascade stays open across its links
+   * this way, whichever spaces they cross: a follow-up event in the same space
+   * keeps its loop from suspending, and a delivery into another space reaches
+   * that space's feed, or starts its activation, before the delivering cycle
+   * ends.
+   *
+   * Reactions to what the wait delivers belong to whoever reads them. The value
+   * is the epoch the wait ended at, so a caller that has since let its own
+   * runtime react waits again and compares: an equal value says the reactions
+   * gave the loops nothing to do. Never resolves while a loop keeps working.
+   *
+   * Comes from the host, so only a caller on the loop's own thread has it.
+   */
+  async whenQuiescent(): Promise<number> {
+    while (!this.#closed) {
+      const epoch = this.#quiescenceEpoch;
+      // A frame still on a connection can be the commit that wakes a loop.
+      await this.#options.server.idle();
+      await Promise.allSettled([
+        ...this.#activating.values(),
+        ...this.#reactivations,
+      ]);
+      await Promise.all(
+        [...this.#spaces.values()].map(async (server) => {
+          if (server.active) await server.whenQuiescent();
+          else await server.whenParked;
+        }),
+      );
+      if (
+        epoch === this.#quiescenceEpoch && this.#activating.size === 0 &&
+        this.#reactivations.size === 0 &&
+        [...this.#spaces.values()].every((server) => server.quiescent)
+      ) {
+        return epoch;
+      }
+    }
+    return this.#quiescenceEpoch;
   }
 
   /**
@@ -437,6 +569,19 @@ export class ExecutorHost {
     }
   }
 
+  /**
+   * Tells every tenure this host runs that an admitted commit wrote
+   * `space`'s access-list document. `#onCommitAdmitted()` calls it for the
+   * commits this host hears of; whoever routes a space's commits to another
+   * host calls it here for those.
+   */
+  noteSpaceAclChanged(space: MemorySpace): void {
+    if (this.#closed) return;
+    for (const server of this.#spaces.values()) {
+      server.noteSpaceAclChanged(space);
+    }
+  }
+
   #onCommitAdmitted(notice: AdmittedCommitNotice): void {
     if (this.#closed) return;
     // THE SESSION REMOUNT's trigger (storage/v2.ts
@@ -452,13 +597,8 @@ export class ExecutorHost {
     // this server's admissions reach here; a list that changes on another
     // process's owner reaches a serving runtime's replica of that space
     // over its routed session, which watches the list itself.
-    if (
-      this.#spaces.size > 0 &&
-      notice.writes.some((write) => write.id === `of:${notice.space}`)
-    ) {
-      for (const server of this.#spaces.values()) {
-        server.noteSpaceAclChanged(notice.space as MemorySpace);
-      }
+    if (writesSpaceAcl(notice)) {
+      this.noteSpaceAclChanged(notice.space as MemorySpace);
     }
     // Phase 5's server-internal foreign wake needs NO host machinery
     // (survival-tested: a fan-out built here was mutation-probed
@@ -513,14 +653,14 @@ export class ExecutorHost {
     // admission ALONE still activates nothing; the warm mark is the
     // provisioning run's own deliberate signal, never a property of
     // ordinary writes.
-    if (notice.class !== "authored") return;
-    const carriesEvents = notice.eventAppends !== undefined &&
-      notice.eventAppends.length > 0;
     if (
-      !carriesEvents && notice.warm !== true &&
-      !this.#options.server.hasLiveSessionsForSpace(notice.space, {
-        excludePrincipal: this.#options.serviceIdentity,
-      })
+      !admissionActivates(
+        notice,
+        () =>
+          this.#options.server.hasLiveSessionsForSpace(notice.space, {
+            excludePrincipal: this.#options.serviceIdentity,
+          }),
+      )
     ) {
       return;
     }
@@ -536,6 +676,47 @@ export class ExecutorHost {
     } else {
       buffered.push(notice);
     }
+    this.#noteOccupancy();
+  }
+
+  /**
+   * Queues a report of the occupancy to `onOccupancyChanged`, made once the
+   * work under way reaches its next suspension: when the occupancy differs
+   * from the one last reported, and, with `evenIfUnchanged`, whenever the
+   * host is left with no tenure work at all.
+   */
+  #noteOccupancy(
+    { evenIfUnchanged }: { evenIfUnchanged: boolean } = {
+      evenIfUnchanged: false,
+    },
+  ): void {
+    const report = this.#options.onOccupancyChanged;
+    if (report === undefined) return;
+    if (evenIfUnchanged) this.#idleOccupancyReportOwed = true;
+    if (this.#occupancyReportQueued) return;
+    this.#occupancyReportQueued = true;
+    queueMicrotask(() => {
+      this.#occupancyReportQueued = false;
+      const owed = this.#idleOccupancyReportOwed;
+      this.#idleOccupancyReportOwed = false;
+      const occupancy = this.occupancy;
+      if (this.#closed) return;
+      if (
+        occupancy === this.#reportedOccupancy &&
+        !(owed && occupancy !== "busy")
+      ) {
+        return;
+      }
+      this.#reportedOccupancy = occupancy;
+      try {
+        report(occupancy);
+      } catch (error) {
+        logger.warn("occupancy-observer-failed", () => [
+          "occupancy observer threw",
+          error,
+        ]);
+      }
+    });
   }
 
   #onSessionOpened(space: string): void {
@@ -591,7 +772,7 @@ export class ExecutorHost {
     // A tenure that ended for its space's deletion leaves nothing to
     // re-evaluate (serving-loop.md, "A deleted space").
     if (parking?.endedForDeletion === true) return;
-    void (async () => {
+    const reactivation = (async () => {
       await parking?.whenParked;
       await this.#activating.get(space);
       if (this.#closed || this.#spaces.get(space)?.active) return;
@@ -618,7 +799,12 @@ export class ExecutorHost {
         if (this.#closed || this.#spaces.get(space)?.active) return;
       }
       void this.#activate(space);
-    })();
+    })().finally(() => {
+      this.#reactivations.delete(reactivation);
+      this.#noteOccupancy();
+    });
+    this.#reactivations.add(reactivation);
+    this.#noteOccupancy();
   }
 
   #activate(space: MemorySpace): Promise<void> {
@@ -631,8 +817,11 @@ export class ExecutorHost {
       if (this.#activating.get(space) === activation) {
         this.#activating.delete(space);
       }
+      this.#noteOccupancy();
     });
     this.#activating.set(space, activation);
+    this.#quiescenceEpoch += 1;
+    this.#noteOccupancy();
     return activation;
   }
 
@@ -775,6 +964,9 @@ export class ExecutorHost {
         ...(this.#options.onEffectRetired !== undefined
           ? { onEffectRetired: this.#options.onEffectRetired }
           : {}),
+        onLoopRest: () => {
+          this.#quiescenceEpoch += 1;
+        },
         onWaveCommitted: () => {
           // Real served progress clears the failure streak — the
           // signal a crash-looping tenure never produces (its first
@@ -871,6 +1063,8 @@ export class ExecutorHost {
     servedWarm: boolean,
   ): void {
     if (this.#spaces.get(space) === server) this.#spaces.delete(space);
+    this.#quiescenceEpoch += 1;
+    this.#noteOccupancy();
     if (servedWarm || server.warmNotices.length === 0) return;
     this.#pendingNotices.set(space, [
       ...server.warmNotices,
@@ -947,6 +1141,7 @@ export class ExecutorHost {
     if (entry === undefined) return undefined;
     this.#parkedRuntimes.delete(space);
     clearTimeout(entry.expiry);
+    this.#noteOccupancy();
     const taken = entry.parked.take(serverSeq(engine));
     if (taken === undefined) {
       this.#disposeParkedRuntime(entry.parked);
@@ -992,7 +1187,10 @@ export class ExecutorHost {
         `space ${space}: disposing a parked runtime failed`,
         error,
       ]);
-    }).finally(() => this.#parkedDisposals.delete(disposal));
+    }).finally(() => {
+      this.#parkedDisposals.delete(disposal);
+      this.#noteOccupancy();
+    });
     this.#parkedDisposals.add(disposal);
   }
 

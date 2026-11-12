@@ -16,6 +16,7 @@ import {
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { FakeTime } from "@std/testing/time";
+import type { GitHubDelivery } from "@commonfabric/github-webhooks/relay";
 import {
   broadcast,
   clients,
@@ -47,7 +48,7 @@ import {
   type TileView,
 } from "./types.ts";
 import { DASHBOARD_MESSAGE_LIFETIME_MS } from "./dashboard-message.ts";
-import { type GitHubDelivery, GitHubWebhooks } from "./github-webhooks.ts";
+import { GitHubWebhooks } from "./github-webhooks.ts";
 import { FakeRelay, workflowRunPayload } from "./test/webhook-relay.ts";
 import { dashboardCacheFile } from "./history-files.ts";
 import { SERVING_VERSION, VERSION_HEADER } from "./version.ts";

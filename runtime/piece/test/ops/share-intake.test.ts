@@ -15,6 +15,7 @@ import {
 } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { getLoggerCountsBreakdown } from "@commonfabric/logger";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import { PiecesController } from "../../src/ops/pieces-controller.ts";
 import {
   type ShareIntake,
@@ -69,11 +70,14 @@ type Acceptance = { room?: Cell<unknown>; keepArchived?: boolean };
 // \`existing\` for one titled \`Existing\`, as it does for a space it lists
 // already, and a conflict over the profile that admitted a new entry for one
 // titled \`Profile refused\`, as it does for a profile it does not list.
+// While \`refusing\` is set it throws, as Home's handler does when it cannot
+// read whether the profile an offer names is the person's.
 const registerSharedSpace = handler<
   Registration,
-  { registered: Writable<Registration[]> },
+  { registered: Writable<Registration[]>; refusing: Writable<boolean> },
   Result
->((event, { registered }) => {
+>((event, { registered, refusing }) => {
+  if (refusing.get()) throw new Error("Home cannot register this now");
   registered.push(event);
   return event.title === "Conflicting"
     ? { status: "conflict", reason: "kind" }
@@ -91,7 +95,7 @@ const registerSharedSpace = handler<
 
 const accept = handler<
   Acceptance,
-  { accepted: Writable<{ space?: string; keepArchived?: boolean }[]> }
+  { accepted: Writable<{ space?: string | undefined; keepArchived?: boolean | undefined }[]> }
 >((event, { accepted }) => {
   accepted.push({
     space: spaceOf(event.room),
@@ -106,7 +110,8 @@ export default pattern(() => {
   const sharedSpaceCatalog = new Writable<Catalog>({ entries: {}, offers: {} })
     .for("sharedSpaceCatalog");
   const registered = new Writable<Registration[]>([]).for("registered");
-  const accepted = new Writable<{ space?: string; keepArchived?: boolean }[]>(
+  const refusing = new Writable<boolean>(false).for("refusing");
+  const accepted = new Writable<{ space?: string | undefined; keepArchived?: boolean | undefined }[]>(
     [],
   ).for("accepted");
   return {
@@ -114,7 +119,8 @@ export default pattern(() => {
     retainedPrivateInboxes,
     sharedSpaceCatalog,
     registered,
-    registerSharedSpace: registerSharedSpace({ registered }),
+    refusing,
+    registerSharedSpace: registerSharedSpace({ registered, refusing }),
     accepted,
     chatManager: { accept: accept({ accepted }) },
   };
@@ -455,6 +461,20 @@ describe("share-intake", () => {
   function conflictsLogged(): number {
     return getLoggerCountsBreakdown()["piece.share-intake"]
       ?.["registration-conflict"]?.warn ?? 0;
+  }
+
+  /** How many failed sends to Home's `registerSharedSpace` the intake has logged. */
+  function sendFailuresLogged(): number {
+    return getLoggerCountsBreakdown()["piece.share-intake"]
+      ?.["send-failed"]?.warn ?? 0;
+  }
+
+  /** Has Home's stand-in throw on each registration while `refusing`. */
+  async function refuseRegistrations(refusing: boolean): Promise<void> {
+    await runtime.editWithRetry((tx) =>
+      home.withTx(tx).key("refusing" as never).set(refusing as never)
+    );
+    await runtime.idle();
   }
 
   /** How many offers the intake has logged as sent to Home. */
@@ -1241,6 +1261,89 @@ describe("share-intake", () => {
       );
     });
 
+    it("is registered when its inbox next changes after Home's handling of it failed", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      await refuseRegistrations(true);
+      const failuresBefore = sendFailuresLogged();
+      const intake = start();
+      await deliver([offerOf(space, "unhandled")]);
+      await runtime.idle();
+      await intake.idle();
+
+      expect(sendFailuresLogged() - failuresBefore).toBe(1);
+      expect(intake.accessForTestingOnly.decisionsFor(sender, "unhandled"))
+        .toEqual([]);
+
+      await refuseRegistrations(false);
+      await deliver([offerOf(space, "after the failed handling")]);
+      await registeredThrough("after the failed handling");
+      await intake.idle();
+      const rows = (await home.key("registered" as never).asSchema(
+        registeredSchema,
+      ).pull() ?? []) as Row[];
+
+      // Each is registered once: the offer Home failed to handle, and the
+      // one whose arrival had it sent again.
+      expect(registeredIds(rows).sort()).toEqual([
+        "after the failed handling",
+        "unhandled",
+      ]);
+      expect(sendFailuresLogged() - failuresBefore).toBe(1);
+    });
+
+    it("is sent again at once when its inbox changed while Home's handling of it, which failed, was being reported", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      await refuseRegistrations(true);
+      // The scheduler, but for the report of Home's handling of `held`, which
+      // waits for `release`, so that the row stays decided as sent while its
+      // inbox changes. `failed` resolves once that handling has failed for
+      // good, the scheduler having run it again while it could.
+      const failed = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const queueEvent = runtime.scheduler.queueEvent.bind(runtime.scheduler);
+      using _held = stub(
+        runtime.scheduler,
+        "queueEvent",
+        (link, event, retries, onCommit, ...rest) => {
+          const offer = isObjectNotArray(event) && isObjectNotArray(event.offer)
+            ? event.offer
+            : undefined;
+          return queueEvent(
+            link,
+            event,
+            retries,
+            onCommit === undefined || offer?.id !== "held"
+              ? onCommit
+              : (tx) => {
+                failed.resolve();
+                void release.promise.then(() => onCommit(tx));
+              },
+            ...rest,
+          );
+        },
+      );
+      const intake = start();
+      await deliver([offerOf(space, "held")]);
+      await failed.promise;
+      await refuseRegistrations(false);
+      await deliver([offerOf(space, "while held")]);
+      await registeredThrough("while held");
+      expect(intake.accessForTestingOnly.decisionsFor(sender, "held"))
+        .toEqual(["sent"]);
+
+      // One wait covers the failure's report, the scan it has made again, and
+      // the send that scan makes.
+      const idle = intake.idle();
+      release.resolve();
+      await idle;
+      expect(intake.isIdle()).toBe(true);
+      const rows = (await home.key("registered" as never).asSchema(
+        registeredSchema,
+      ).pull() ?? []) as Row[];
+
+      expect(registeredIds(rows).sort()).toEqual(["held", "while held"]);
+    });
+
     it("is registered when Home's catalog cannot be read", async () => {
       const space = await offeredSpace({ [sender]: "WRITE" });
       // Home, but for a catalog whose every read fails.
@@ -1428,6 +1531,24 @@ describe("share-intake", () => {
   });
 
   describe("an offer that is refused", () => {
+    it("is refused when its space is deleted, and stays out of the catalog", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      const acl = new ACLManager(runtime, space);
+      await acl.remove(sender);
+      await acl.delete(identity.did());
+      const intake = start();
+
+      const rows = await deliverThenBarrier(
+        offerOf(space, "of a deleted room"),
+      );
+
+      expect(registeredIds(rows)).toEqual(["barrier"]);
+      expect(
+        intake.accessForTestingOnly.decisionsFor(sender, "of a deleted room"),
+      )
+        .toEqual(["recipient-access-refused"]);
+    });
+
     // Each case delivers the refused offer ahead of one that passes, and
     // reads what was registered once the second is: the intake decides an
     // inbox's offers in order, so the first was decided by then.

@@ -111,8 +111,11 @@ async function messageByAProfile() {
     value: unknown,
     schema?: unknown,
   ): Promise<Cell<unknown>> => {
-    const tx = runtime.edit();
+    // The write replaces what the replica holds, which a release pass drops
+    // once nothing reads it: loading it first gives the write its basis.
     const cell = runtime.getCell(space as never, id, schema as never);
+    await cell.sync();
+    const tx = runtime.edit();
     cell.withTx(tx).setRawUntyped(value as never);
     const { error } = await tx.commit().settled;
     if (error) throw new Error(`The commit failed: ${error.name}`);

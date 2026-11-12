@@ -161,8 +161,9 @@ describe("Home interface upgrade", () => {
         );
         expect(entry).toBeDefined();
         // Snapshots of Home at `676e4cae1b` and `181f2464ac`, before the
-        // interface change. Retaining the entry path keeps each production
-        // dependency's identity intact.
+        // interface change, each leaving `spaceName` out where it has no value
+        // so that it compiles on the authoring path. Retaining the entry path
+        // keeps each production dependency's identity intact.
         entry!.contents = oldHome;
         let home: Cell<unknown>;
         if (mode === "explicit") {

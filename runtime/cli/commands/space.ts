@@ -38,6 +38,18 @@ import {
   planCompaction,
   storeSchemaRefusals,
 } from "@commonfabric/memory/v2/compact";
+import {
+  discardReap,
+  formatReapPlan,
+  formatReapRun,
+  liveCellDatabases,
+  planReap,
+  publishReap,
+  ReapRefused,
+  type ReapRun,
+  refuseUnmigratedStore,
+  stageReap,
+} from "@commonfabric/memory/v2/reap";
 import type { CellScope } from "@commonfabric/memory/v2";
 import {
   clonePaths,
@@ -49,13 +61,18 @@ import {
   resolveSpace,
   verifyClone,
   verifyCompaction,
+  verifyReap,
   type VerifyResult,
 } from "@commonfabric/state-inspector";
 
 import { buildSpaceInviteCommand } from "./space-invites.ts";
 import { hasJsonArgument } from "../lib/json-output.ts";
 import { shellQuote } from "../lib/shell-quote.ts";
-import { buildCreateSpaceCommand, buildRecreateRootCommand } from "./piece.ts";
+import {
+  buildCreateSpaceCommand,
+  buildDeleteSpaceCommand,
+  buildRecreateRootCommand,
+} from "./piece.ts";
 
 function out(json: boolean, data: unknown, render: () => void): void {
   if (json) console.log(JSON.stringify(data, null, 2));
@@ -342,7 +359,7 @@ export const space = new Command()
   .name("space")
   .description(
     "Commands that act on a space: its root and home patterns, access " +
-      "invitations, and rehearsal clones of its store.",
+      "invitations, rehearsal clones of its store, and its deletion.",
   )
   .default("help")
   .error((error, command) => {
@@ -427,10 +444,15 @@ export const space = new Command()
           // interface is a second store answering to production's identity on
           // the network. The port offset separates it from a local production
           // server; only the host binding keeps it off the network entirely.
+          // The release time states the checkout as released now: a piece
+          // following a `system:` origin records the release it adopted, and
+          // takes an answer stating no time as an earlier one, which it does
+          // not adopt while its running pattern loads.
           `serve it (NOT the live store — note the host and port):\n` +
           `  HOST=127.0.0.1 MEMORY_DIR=${
             shellQuote(toFileUrl(`${targetDir}/`).href)
           } ` +
+          `TOOLSHED_RELEASED_AT="$(date -u '+%Y-%m-%dT%H:%M:%SZ')" ` +
           `./scripts/start-local-dev.sh --port-offset 10\n\n` +
           `then, per attempt (stop the server before resetting — a reset ` +
           `cannot reach a process that already holds the store open):\n` +
@@ -783,8 +805,136 @@ export const space = new Command()
       throw error;
     }
   })
+  /* space reap */
+  .command(
+    "reap <store:string>",
+    "Reap a deleted space's store: keep the deletion commit and what it " +
+      "needs to stand, remove everything else, and write the result fresh " +
+      "with VACUUM INTO, checked against the store before it is reported. " +
+      "The store, a copy of the space's backup, is only read. --dry-run " +
+      "reports without writing (docs/specs/random-space-identities.md, " +
+      '"Reaping a deleted space").',
+  )
+  .option("--dry-run", "Report what would be kept and removed; write nothing.")
+  .option(
+    "--live <path:string>",
+    "With --dry-run, the space's live store: name the cell databases beside " +
+      "it the install moves, which are none when another store there shares " +
+      "their prefix.",
+    { depends: ["dry-run"] },
+  )
+  .option(
+    "--out <path:string>",
+    "Where the result is written; <store>.reaped.sqlite beside the source " +
+      "by default. Never overwritten.",
+  )
+  .action(async (options, store) => {
+    try {
+      Deno.statSync(store);
+    } catch {
+      throw new ValidationError(`no store at ${store}`);
+    }
+    if (options.dryRun) {
+      const space = openSpace(store);
+      try {
+        let plan;
+        let cells;
+        try {
+          // The plan reads columns a store from before a migration lacks,
+          // so the refusal a run would give comes first.
+          await refuseUnmigratedStore(space.db);
+          plan = planReap(space.db);
+          cells = options.live === undefined
+            ? undefined
+            : liveCellDatabases(plan, options.live);
+        } catch (error) {
+          if (error instanceof ReapRefused) {
+            throw new ValidationError(error.message);
+          }
+          throw error;
+        }
+        // The install moves the cell databases by their prefix, which would
+        // take another space's along with the deleted one's when that space's
+        // prefix is the same, so then it moves none.
+        const moved = cells === undefined || cells.sharedWith.length > 0
+          ? []
+          : cells.files;
+        out(
+          !!options.json,
+          cells === undefined
+            ? plan
+            : { ...plan, cellDatabases: moved, sharedWith: cells.sharedWith },
+          () => {
+            console.log(formatReapPlan(plan));
+            if (cells !== undefined && cells.sharedWith.length > 0) {
+              console.log(
+                `cell files none moved: the prefix ` +
+                  `${plan.cellDatabaseFilePrefix} is shared with the store of ` +
+                  `${cells.sharedWith.join(", ")}, so which files are whose ` +
+                  "cannot be told by name",
+              );
+            } else if (cells !== undefined) {
+              console.log(
+                `cell files ${moved.length === 0 ? "none" : moved.join(" ")}`,
+              );
+            }
+            console.log(
+              "schema     current; a run would read this store as it is",
+            );
+          },
+        );
+      } finally {
+        space.close();
+      }
+      return;
+    }
+    const result = options.out ?? `${store}.reaped.sqlite`;
+    assertNotLiveStore(store, "store");
+    assertNotLiveStore(result, "result");
+    // The result is written to a file of the run's own and put at the
+    // result path only once it has passed its check, so a result that fails
+    // is never at the path, and nothing else there is removed.
+    let staged;
+    try {
+      staged = await stageReap({ store, out: result });
+    } catch (error) {
+      if (error instanceof ReapRefused) {
+        throw new ValidationError(error.message);
+      }
+      throw error;
+    }
+    let verification;
+    let run: ReapRun | undefined;
+    try {
+      verification = verifyReap({ result: staged.staged, against: store });
+      if (verification.ok) run = publishReap(staged);
+    } catch (error) {
+      // `publishReap()` has removed what it staged; a check that threw has
+      // not.
+      discardReap(staged.staged);
+      if (error instanceof ReapRefused) {
+        throw new ValidationError(error.message);
+      }
+      throw error;
+    }
+    if (run === undefined) discardReap(staged.staged);
+    const { staged: _staged, ...planned } = staged;
+    // The check read the staged file, which is gone by now: the result it
+    // speaks for is the one at the result path.
+    const checked = { ...verification, result: staged.out };
+    out(!!options.json, { ...(run ?? planned), verification: checked }, () => {
+      console.log(
+        run === undefined ? formatReapPlan(planned) : formatReapRun(run),
+      );
+      console.log("");
+      console.log(formatCompactionVerification(verification));
+    });
+    if (run === undefined) Deno.exit(1);
+  })
   /* space create */
   .command("create", buildCreateSpaceCommand("space create"))
+  /* space delete */
+  .command("delete", buildDeleteSpaceCommand("space delete"))
   /* space recreate-root */
   .command(
     "recreate-root",

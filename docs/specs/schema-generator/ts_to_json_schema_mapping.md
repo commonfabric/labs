@@ -1353,9 +1353,12 @@ Default paths of §7:
   `context.definitions`. Tested: intersection-formatter.test.ts,
   intersection-provenance.test.ts, the descriptions-intersection-conflict
   fixture.
-- Constituent-level JSDoc joins with `\n\n` plus provenance `$comment`s ("Docs
-  inherited from intersection constituents." / "Sources: …" / "Missing docs
-  for: …") (descriptions-intersection-* fixtures ×7).
+- Constituent-level JSDoc, the first doc of each constituent that has one,
+  becomes the intersection's `description` where it has none of its own: each
+  distinct doc in constituent order, joined with `\n\n`. Nothing records which
+  constituents it came from, since a constituent's name as the checker prints
+  it depends on the compiler's options (descriptions-intersection-* fixtures
+  ×6, intersection-formatter.test.ts).
 
 ## 10. Scope Wrappers
 

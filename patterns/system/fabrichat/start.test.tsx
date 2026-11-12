@@ -109,5 +109,11 @@ export default pattern(() => {
       },
     ],
     allowConsoleWarnings: true,
+    // With server execution on, each refused start is a served run that
+    // failed, which the runner reports as a runtime error
+    // (`docs/development/TESTING.md`, "The ON topology in one process"); with
+    // it off, the refusal is logged as a warning. What says each start was
+    // refused, in either posture, is the assertions above.
+    allowRuntimeErrors: true,
   };
 });

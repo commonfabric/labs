@@ -3,6 +3,7 @@ import { Database } from "@db/sqlite";
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import { toFileUrl } from "@std/path";
+import type { FabricValue } from "@commonfabric/api";
 import {
   applyCommit,
   applyWaveCommit,
@@ -34,8 +35,8 @@ import {
 } from "../v2/operation-codec.ts";
 import {
   type ApplyOpOperation,
+  type ConfirmedRead,
   encodeMemoryBoundary,
-  type FieldAnchorChanges,
   type Operation,
   operationAnchorsDocId,
   resetServerExecutionConfig,
@@ -1418,60 +1419,60 @@ describe("v2-operation-engine", () => {
       url: toFileUrl(path),
       operationCodecs: new OperationCodecRegistry([{
         id: "empty-change@1",
-        mapAnchors: ({ anchors }) => [...anchors],
+        mapAnchors: ({ anchors }) => anchors,
         integrate: () => ({ materialized: "changed", operations: [] }),
       }, {
         id: "too-many@1",
-        mapAnchors: ({ anchors }) => [...anchors],
+        mapAnchors: ({ anchors }) => anchors,
         integrate: ({ materialized }) => ({
           materialized,
           operations: Array.from({ length: 257 }, () => "operation"),
         }),
       }, {
         id: "invalid-materialized@1",
-        mapAnchors: ({ anchors }) => [...anchors],
+        mapAnchors: ({ anchors }) => anchors,
         integrate: () => ({
           materialized: (() => {}) as never,
           operations: ["operation"],
         }),
       }, {
         id: "invalid-operation@1",
-        mapAnchors: ({ anchors }) => [...anchors],
+        mapAnchors: ({ anchors }) => anchors,
         integrate: ({ materialized }) => ({
           materialized,
           operations: [(() => {}) as never],
         }),
       }, {
         id: "large-materialized@1",
-        mapAnchors: ({ anchors }) => [...anchors],
+        mapAnchors: ({ anchors }) => anchors,
         integrate: () => ({
           materialized: "x".repeat(1_000_001),
           operations: ["operation"],
         }),
       }, {
         id: "large-operation@1",
-        mapAnchors: ({ anchors }) => [...anchors],
+        mapAnchors: ({ anchors }) => anchors,
         integrate: ({ materialized }) => ({
           materialized,
           operations: ["x".repeat(1_000_001)],
         }),
       }, {
         id: "multibyte-materialized@1",
-        mapAnchors: ({ anchors }) => [...anchors],
+        mapAnchors: ({ anchors }) => anchors,
         integrate: () => ({
           materialized: "é".repeat(600_000),
           operations: ["operation"],
         }),
       }, {
         id: "multibyte-operation@1",
-        mapAnchors: ({ anchors }) => [...anchors],
+        mapAnchors: ({ anchors }) => anchors,
         integrate: ({ materialized }) => ({
           materialized,
           operations: ["é".repeat(600_000)],
         }),
       }, {
         id: "throw-value@1",
-        mapAnchors: ({ anchors }) => [...anchors],
+        mapAnchors: ({ anchors }) => anchors,
         integrate: () => {
           throw "codec rejection";
         },
@@ -2318,22 +2319,43 @@ describe("v2-operation-engine", () => {
     });
   });
 
-  describe("anchors on apply-op", () => {
+  describe("a field's anchors document", () => {
+    // Each case seeds an entity whose `body` is the collaborative field, and
+    // reads the anchors back from the document or from the field's snapshot.
+
     const body = toValuePath(["body"]);
-    const setup = (engine: Engine, id: string, text: string) =>
+    let seq = 0;
+
+    /** Commits `operations` from `session`, beside the `confirmed` reads. */
+    const commit = (
+      engine: Engine,
+      operations: Operation[],
+      options: { session?: string; confirmed?: ConfirmedRead[] } = {},
+    ) =>
       applyCommit(engine, {
-        sessionId: "session:setup",
+        sessionId: options.session ?? "session:alice",
         commit: {
           localSeq: ++seq,
-          reads: { confirmed: [], pending: [] },
-          operations: [{ op: "set", id, value: { value: { body: text } } }],
+          reads: { confirmed: options.confirmed ?? [], pending: [] },
+          operations,
         },
       });
+    const setup = (engine: Engine, id: string, text: string) =>
+      commit(
+        engine,
+        [{ op: "set", id, value: { value: { body: text } } }],
+        { session: "session:setup" },
+      );
+
+    /**
+     * An `apply-op` on `id`'s `body`, stated at a cursor or, given the text
+     * the field holds, with no base and that text's hash.
+     */
     const applyOp = (
       id: string,
       submissionId: string,
       base: { epoch: number; version: number } | string,
-      changes?: ReturnType<ChangeSet["toJSON"]>,
+      updates: ReturnType<ChangeSet["toJSON"]>[] = [],
       clientId = "alice",
     ): ApplyOpOperation => ({
       op: "apply-op",
@@ -2345,985 +2367,1060 @@ describe("v2-operation-engine", () => {
         ? { base: null, baselineHash: operationBaselineHash(base) }
         : { base }),
       payload: {
-        updates: changes === undefined ? [] : [{ clientId, changes }],
+        updates: updates.map((changes) => ({ clientId, changes })),
       },
-    });
-    const anchorsOp = (
-      id: string,
-      submissionId: string,
-      base: { epoch: number; version: number } | string,
-      anchors: FieldAnchorChanges,
-      changes?: ReturnType<ChangeSet["toJSON"]>,
-      clientId?: string,
-    ): ApplyOpOperation => ({
-      ...applyOp(id, submissionId, base, changes, clientId),
-      anchors,
     });
     const anchorsDoc = (id: string) =>
       operationAnchorsDocId({ id, path: ["body"] });
-    let seq = 0;
-    const commit = (
-      engine: Engine,
-      operations: Operation[],
-      session = "session:alice",
-    ) =>
-      applyCommit(engine, {
-        sessionId: session,
-        commit: {
-          localSeq: ++seq,
-          reads: { confirmed: [], pending: [] },
-          operations,
-        },
-      });
 
-    it("activates an inactive field, stores the anchors, and writes their document", async () => {
-      const { engine, path } = await openTestEngine();
-      try {
-        setup(engine, "of:anchored", "hello world");
-        const applied = commit(engine, [
-          anchorsOp("of:anchored", "alice:1", "hello world", {
-            add: [{ id: "w", from: 6, to: 11 }, { id: "h", from: 0, to: 5 }],
-          }),
-        ]);
-        expect(applied.operationResolutions).toEqual([{
-          operationIndex: 0,
-          address: {
-            branch: "",
-            id: "of:anchored",
-            scopeKey: "space",
-            path: body,
-          },
-          codec: CODEMIRROR_CHANGESET_CODEC,
-          submissionId: "alice:1",
-          from: { epoch: 1, version: 0 },
-          to: { epoch: 1, version: 0 },
-          operations: [],
-          duplicate: false,
-          anchors: {
-            added: [{ id: "w", from: 6, to: 11 }, { id: "h", from: 0, to: 5 }],
-            removed: [],
-          },
-        }]);
-        expect(applied.revisions.map((revision) => revision.id)).toEqual([
-          anchorsDoc("of:anchored"),
-        ]);
-        const field = queryOperationField(engine, {
-          id: "of:anchored",
-          path: body,
-        });
-        expect(field).toMatchObject({
-          active: true,
-          cursor: { epoch: 1, version: 0 },
-          materialized: "hello world",
-          anchors: [{ id: "h", from: 0, to: 5 }, { id: "w", from: 6, to: 11 }],
-        });
-        expect(read(engine, { id: anchorsDoc("of:anchored") })).toEqual({
-          value: {
-            epoch: 1,
-            version: 0,
-            anchors: [{ id: "h", from: 0, to: 5 }, {
-              id: "w",
-              from: 6,
-              to: 11,
-            }],
-          },
-        });
-        expect(
-          engine.database.prepare(
-            `SELECT version, anchors FROM op_checkpoint`,
-          ).all(),
-        ).toEqual([{
-          version: 0,
-          anchors: encodeMemoryBoundary([
-            { id: "h", from: 0, to: 5 },
-            { id: "w", from: 6, to: 11 },
-          ]),
-        }]);
-      } finally {
-        close(engine);
-        await Deno.remove(path);
-      }
+    /** A `set` of the anchors document of `id`'s `body` to `anchors`. */
+    const setAnchors = (id: string, anchors: FabricValue): Operation => ({
+      op: "set",
+      id: anchorsDoc(id),
+      value: { value: anchors },
     });
 
-    it("maps an anchor stated at an older base through the integrated suffix", async () => {
-      const { engine, path } = await openTestEngine();
-      try {
-        setup(engine, "of:stale", "world");
-        commit(engine, [
-          applyOp("of:stale", "alice:1", "world", changes(5, 0, "hello ")),
-        ]);
-        // Stated against "world" at version 0: "world" is 0..5 there.
-        const applied = commit(engine, [
-          anchorsOp("of:stale", "bob:1", { epoch: 1, version: 0 }, {
-            add: [{ id: "w", from: 0, to: 5 }],
-          }),
-        ]);
-        expect(applied.operationResolutions?.[0]).toMatchObject({
-          from: { epoch: 1, version: 1 },
-          to: { epoch: 1, version: 1 },
-          anchors: { added: [{ id: "w", from: 6, to: 11 }], removed: [] },
-        });
-        expect(read(engine, { id: anchorsDoc("of:stale") })).toEqual({
-          value: {
-            epoch: 1,
-            version: 1,
-            anchors: [{ id: "w", from: 6, to: 11 }],
-          },
-        });
-      } finally {
-        close(engine);
-        await Deno.remove(path);
-      }
+    /** A `patch` that puts `offset` under `anchor` in that document. */
+    const addAnchor = (
+      id: string,
+      anchor: string,
+      offset: FabricValue,
+    ): Operation => ({
+      op: "patch",
+      id: anchorsDoc(id),
+      patches: [{ op: "add", path: `/value/${anchor}`, value: offset }],
     });
+    const storedAnchors = (engine: Engine, id: string) =>
+      read(engine, { id: anchorsDoc(id) });
+    const snapshot = (engine: Engine, id: string) =>
+      queryOperationField(engine, { id, path: body });
 
-    it("anchors text the payload inserts, across an edit integrated before it", async () => {
-      const { engine, path } = await openTestEngine();
-      try {
-        setup(engine, "of:typed", "world");
-        // Alice activates the field with an edit and an anchor on the text
-        // the edit inserts, stated against her own document "hello world".
-        const activated = commit(engine, [
-          anchorsOp(
-            "of:typed",
-            "alice:1",
-            "world",
-            { add: [{ id: "greeting", from: 0, to: 6 }] },
-            changes(5, 0, "hello "),
-          ),
-        ]);
-        expect(activated.operationResolutions?.[0]).toMatchObject({
-          to: { epoch: 1, version: 1 },
-          anchors: { added: [{ id: "greeting", from: 0, to: 6 }], removed: [] },
-        });
-        expect(activated.revisions.map((revision) => revision.id)).toEqual([
-          "of:typed",
-          anchorsDoc("of:typed"),
-        ]);
-        // The activation checkpoint records the field before the edit, which
-        // held no anchors; the head holds the one the edit carried.
-        expect(
-          engine.database.prepare(
-            `SELECT version, anchors FROM op_checkpoint`,
-          ).all(),
-        ).toEqual([{ version: 0, anchors: null }]);
-        // Bob, still at version 0, inserts at the start and anchors his own
-        // insertion, stated against his document ">> world".
-        const concurrent = commit(engine, [
-          anchorsOp(
-            "of:typed",
-            "bob:1",
-            { epoch: 1, version: 0 },
-            { add: [{ id: "marker", from: 0, to: 3 }] },
-            ChangeSet.of({ from: 0, insert: ">> " }, 5).toJSON(),
-            "bob",
-          ),
-        ]);
-        expect(concurrent.operationResolutions?.[0]).toMatchObject({
-          to: { epoch: 1, version: 2 },
-        });
-        const field = queryOperationField(engine, {
-          id: "of:typed",
-          path: body,
-        });
-        expect(field?.materialized).toBe("hello >> world");
-        const text = field?.materialized as string;
-        expect(
-          field?.anchors.map(({ id, from, to }) => [id, text.slice(from, to)]),
-        ).toEqual([["greeting", "hello "], ["marker", ">> "]]);
-      } finally {
-        close(engine);
-        await Deno.remove(path);
-      }
-    });
+    /** Each revision's id and op, and whether the engine derived it. */
+    const written = (applied: ReturnType<typeof applyCommit>) =>
+      applied.revisions.map(({ id, op, derived }) => [
+        id,
+        op,
+        derived === true,
+      ]);
 
-    it("moves the stored anchors in the transaction that integrates an edit", async () => {
-      const { engine, path } = await openTestEngine();
-      try {
-        setup(engine, "of:moving", "hello world");
-        commit(engine, [
-          anchorsOp("of:moving", "alice:0", "hello world", {
-            add: [{ id: "w", from: 6, to: 11 }, { id: "h", from: 0, to: 5 }],
-          }),
-        ]);
-        const inserted = commit(engine, [
-          applyOp(
-            "of:moving",
-            "alice:1",
-            { epoch: 1, version: 0 },
-            changes(11, 0, ">> "),
-          ),
-        ]);
-        expect(inserted.revisions.map((revision) => revision.id)).toEqual([
-          "of:moving",
-          anchorsDoc("of:moving"),
-        ]);
-        expect(read(engine, { id: anchorsDoc("of:moving") })).toEqual({
-          value: {
-            epoch: 1,
-            version: 1,
-            anchors: [{ id: "h", from: 3, to: 8 }, {
-              id: "w",
-              from: 9,
-              to: 14,
-            }],
-          },
-        });
-        // An edit after every anchor moves none of them: the document is
-        // left as it was, at the version the set was last restated at.
-        const appended = commit(engine, [
-          applyOp(
-            "of:moving",
-            "alice:2",
-            { epoch: 1, version: 1 },
-            changes(14, 14, "!"),
-          ),
-        ]);
-        expect(appended.revisions.map((revision) => revision.id)).toEqual([
-          "of:moving",
-        ]);
-        expect(queryOperationField(engine, { id: "of:moving", path: body }))
-          .toMatchObject({
-            cursor: { epoch: 1, version: 2 },
-            anchors: [{ id: "h", from: 3, to: 8 }, {
-              id: "w",
-              from: 9,
-              to: 14,
-            }],
-          });
-        // A deletion covering "world" empties its anchor to a point.
-        commit(engine, [
-          applyOp(
-            "of:moving",
-            "alice:3",
-            { epoch: 1, version: 2 },
-            ChangeSet.of({ from: 8, to: 15, insert: "" }, 15).toJSON(),
-          ),
-        ]);
-        expect(read(engine, { id: anchorsDoc("of:moving") })).toEqual({
-          value: {
-            epoch: 1,
-            version: 3,
-            anchors: [{ id: "h", from: 3, to: 8 }, { id: "w", from: 8, to: 8 }],
-          },
-        });
-      } finally {
-        close(engine);
-        await Deno.remove(path);
-      }
-    });
+    describe("a client's write", () => {
+      it("stores the anchors a `set` writes, as a revision that is not derived", async () => {
+        const { engine, path } = await openTestEngine();
+        try {
+          setup(engine, "of:set", "hello");
 
-    it("replaces a held id's range and reports which removed ids it held", async () => {
-      const { engine, path } = await openTestEngine();
-      try {
-        setup(engine, "of:merge", "hello world");
-        commit(engine, [
-          anchorsOp("of:merge", "alice:1", "hello world", {
-            add: [{ id: "w", from: 6, to: 11 }, { id: "h", from: 0, to: 5 }],
-          }),
-        ]);
-        const applied = commit(engine, [
-          anchorsOp("of:merge", "alice:2", { epoch: 1, version: 0 }, {
-            add: [{ id: "w", from: 6, to: 8 }],
-            remove: ["h", "missing"],
-          }),
-        ]);
-        expect(applied.operationResolutions?.[0].anchors).toEqual({
-          added: [{ id: "w", from: 6, to: 8 }],
-          removed: ["h"],
-        });
-        expect(queryOperationField(engine, { id: "of:merge", path: body }))
-          .toMatchObject({ anchors: [{ id: "w", from: 6, to: 8 }] });
-        // Removing the last anchor leaves the document holding an empty set.
-        commit(engine, [
-          anchorsOp("of:merge", "alice:3", { epoch: 1, version: 0 }, {
-            remove: ["w"],
-          }),
-        ]);
-        expect(read(engine, { id: anchorsDoc("of:merge") })).toEqual({
-          value: { epoch: 1, version: 0, anchors: [] },
-        });
-        expect(
-          engine.database.prepare(`SELECT anchors FROM op_field_epoch`).get(),
-        ).toEqual({ anchors: null });
-      } finally {
-        close(engine);
-        await Deno.remove(path);
-      }
-    });
-
-    it("refuses a base below the retained floor and malformed anchors without changing state", async () => {
-      const path = await Deno.makeTempFile({ suffix: ".sqlite" });
-      const engine = await open({
-        url: toFileUrl(path),
-        operationCheckpointInterval: 2,
-      });
-      try {
-        setup(engine, "of:floor", "a");
-        commit(engine, [
-          applyOp("of:floor", "alice:1", "a", changes(1, 1, "b")),
-        ]);
-        commit(engine, [
-          applyOp(
-            "of:floor",
-            "alice:2",
-            { epoch: 1, version: 1 },
-            changes(2, 2, "c"),
-          ),
-        ]);
-        pruneOperationFieldHistory(engine, { id: "of:floor", path: body });
-        const snapshot = () => ({
-          field: engine.database.prepare(
-            `SELECT version, materialized, anchors, anchors_seq
-             FROM op_field_epoch`,
-          ).get(),
-          document: read(engine, { id: anchorsDoc("of:floor") }),
-          submissions: engine.database.prepare(
-            `SELECT submission_id FROM op_submission ORDER BY submission_id`,
-          ).all(),
-        });
-        const before = snapshot();
-        const refused = (
-          operation: Operation,
-          error: new (message: string) => Error,
-          message?: string,
-        ) => {
-          const attempt = () => commit(engine, [operation], "session:refused");
-          expect(attempt).toThrow(error);
-          if (message !== undefined) expect(attempt).toThrow(message);
-        };
-        const at = { epoch: 1, version: 2 };
-        refused(
-          anchorsOp("of:floor", "refused:1", { epoch: 1, version: 1 }, {
-            add: [{ id: "a", from: 0, to: 1 }],
-          }),
-          OpHistoryUnavailableError,
-        );
-        refused(
-          anchorsOp("of:floor", "refused:2", { epoch: 1, version: 3 }, {
-            add: [{ id: "a", from: 0, to: 1 }],
-          }),
-          OpCursorMismatchError,
-          "in the future",
-        );
-        refused(
-          anchorsOp("of:floor", "refused:3", at, {
-            add: [{ id: "a", from: 2, to: 1 }],
-          }),
-          ProtocolError,
-          "anchor is malformed",
-        );
-        refused(
-          anchorsOp("of:floor", "refused:4", at, {
-            add: [{ id: "a", from: 0, to: 1 }, { id: "a", from: 1, to: 2 }],
-          }),
-          ProtocolError,
-          "adds anchor a twice",
-        );
-        refused(
-          anchorsOp("of:floor", "refused:5", at, {
-            add: [{ id: "a", from: 0, to: 1 }],
-            remove: ["a"],
-          }),
-          ProtocolError,
-          "both adds and removes anchor a",
-        );
-        refused(
-          anchorsOp("of:floor", "refused:6", at, {}),
-          ProtocolError,
-          "add and remove nothing",
-        );
-        refused(
-          anchorsOp(
-            "of:floor",
-            "refused:7",
-            at,
-            {
-              add: [{ id: "a", from: 0, to: 1 }],
-              ids: [],
-            } as unknown as FieldAnchorChanges,
-          ),
-          ProtocolError,
-          "anchors are malformed",
-        );
-        refused(
-          anchorsOp("of:floor", "refused:8", at, {
-            add: [{ id: "a", from: 0, to: 4 }],
-          }),
-          OpCodecError,
-          "outside the field's 3 code units",
-        );
-        // The range is checked against the document the payload yields,
-        // which is one code unit longer than the field; the edit is refused
-        // with the anchor.
-        refused(
-          anchorsOp(
-            "of:floor",
-            "refused:9",
-            at,
-            { add: [{ id: "a", from: 0, to: 5 }] },
-            changes(3, 3, "d"),
-          ),
-          OpCodecError,
-          "outside the field's 4 code units",
-        );
-        refused(
-          anchorsOp("of:floor", "refused:10", at, {
-            add: Array.from({ length: 1025 }, (_, index) => ({
-              id: `a${index}`,
-              from: 0,
-              to: 1,
-            })),
-          }),
-          OpCodecError,
-          "anchor-count limit",
-        );
-        refused(
-          anchorsOp(
-            "of:floor",
-            "refused:11",
-            at,
-            { add: ["a"] } as unknown as FieldAnchorChanges,
-          ),
-          ProtocolError,
-          "anchor is malformed",
-        );
-        refused(
-          anchorsOp("of:floor", "refused:12", at, { remove: [""] }),
-          ProtocolError,
-          "removed anchor id is malformed",
-        );
-        expect(snapshot()).toEqual(before);
-      } finally {
-        close(engine);
-        await Deno.remove(path);
-      }
-    });
-
-    it("refuses an operation that would leave the field holding more anchors than the limit", async () => {
-      const { engine, path } = await openTestEngine();
-      try {
-        setup(engine, "of:full", "a");
-        const held = () =>
-          (read(engine, { id: anchorsDoc("of:full") }) as unknown as {
-            value: { anchors: unknown[] };
-          }).value.anchors.length;
-        commit(engine, [
-          anchorsOp("of:full", "alice:1", "a", {
-            add: Array.from({ length: 1024 }, (_, index) => ({
-              id: `a${index}`,
-              from: 0,
-              to: 1,
-            })),
-          }),
-        ]);
-        expect(held()).toBe(1024);
-        // Replacing a held id keeps the count; a new id would exceed it.
-        commit(engine, [
-          anchorsOp("of:full", "alice:2", { epoch: 1, version: 0 }, {
-            add: [{ id: "a0", from: 1, to: 1 }],
-          }),
-        ]);
-        expect(held()).toBe(1024);
-        const oneMore = () =>
-          commit(engine, [
-            anchorsOp("of:full", "alice:3", { epoch: 1, version: 0 }, {
-              add: [{ id: "one-more", from: 0, to: 1 }],
-            }),
+          const applied = commit(engine, [
+            setAnchors("of:set", { from: 1, to: 3 }),
           ]);
-        expect(oneMore).toThrow(OpCodecError);
-        expect(oneMore).toThrow("more than 1024 anchors");
-        expect(held()).toBe(1024);
-      } finally {
-        close(engine);
-        await Deno.remove(path);
-      }
+
+          expect(written(applied)).toEqual([
+            [anchorsDoc("of:set"), "set", false],
+          ]);
+          expect(storedAnchors(engine, "of:set")).toEqual({
+            value: { from: 1, to: 3 },
+          });
+        } finally {
+          close(engine);
+          await Deno.remove(path);
+        }
+      });
+
+      it("stores the anchor a `patch` adds beside those the document holds", async () => {
+        const { engine, path } = await openTestEngine();
+        try {
+          setup(engine, "of:patch", "hello");
+          commit(engine, [setAnchors("of:patch", { from: 1, to: 3 })]);
+
+          const applied = commit(engine, [addAnchor("of:patch", "end", 5)]);
+
+          expect(written(applied)).toEqual([
+            [anchorsDoc("of:patch"), "patch", false],
+          ]);
+          expect(storedAnchors(engine, "of:patch")).toEqual({
+            value: { from: 1, to: 3, end: 5 },
+          });
+        } finally {
+          close(engine);
+          await Deno.remove(path);
+        }
+      });
+
+      it("holds no document and no anchors after a `delete`", async () => {
+        const { engine, path } = await openTestEngine();
+        try {
+          setup(engine, "of:delete", "hello");
+          commit(engine, [setAnchors("of:delete", { from: 1, to: 3 })]);
+
+          const applied = commit(engine, [
+            { op: "delete", id: anchorsDoc("of:delete") },
+          ]);
+
+          expect(written(applied)).toEqual([
+            [anchorsDoc("of:delete"), "delete", false],
+          ]);
+          expect(storedAnchors(engine, "of:delete")).toBeNull();
+          expect(snapshot(engine, "of:delete").anchors).toEqual({});
+        } finally {
+          close(engine);
+          await Deno.remove(path);
+        }
+      });
+
+      it("throws `ConflictError` when the field moved after the commit's confirmed read of it", async () => {
+        const { engine, path } = await openTestEngine();
+        try {
+          setup(engine, "of:field-read", "hello");
+          const opened = commit(engine, [
+            applyOp("of:field-read", "alice:1", "hello", [changes(5, 5, "!")]),
+          ]);
+          const moved = commit(engine, [
+            applyOp("of:field-read", "alice:2", { epoch: 1, version: 1 }, [
+              changes(6, 0, ">"),
+            ]),
+          ]);
+          const writeAfterReadAt = (readSeq: number) =>
+            commit(engine, [setAnchors("of:field-read", { a: 1 })], {
+              session: "session:bob",
+              confirmed: [{
+                id: "of:field-read",
+                path: toDocumentPath(["value", "body"]),
+                seq: readSeq,
+              }],
+            });
+
+          expect(() => writeAfterReadAt(opened.seq)).toThrow(ConflictError);
+          expect(storedAnchors(engine, "of:field-read")).toBeNull();
+
+          writeAfterReadAt(moved.seq);
+          expect(storedAnchors(engine, "of:field-read")).toEqual({
+            value: { a: 1 },
+          });
+        } finally {
+          close(engine);
+          await Deno.remove(path);
+        }
+      });
+
+      it("throws `ConflictError` when the document moved after the commit's confirmed read of it", async () => {
+        const { engine, path } = await openTestEngine();
+        try {
+          setup(engine, "of:anchors-read", "hello");
+          const stored = commit(engine, [
+            setAnchors("of:anchors-read", { from: 1, to: 3 }),
+          ]);
+          // An edit ahead of both anchors moves them, which rewrites the
+          // document.
+          const moved = commit(engine, [
+            applyOp("of:anchors-read", "alice:1", "hello", [
+              changes(5, 0, ">"),
+            ]),
+          ]);
+          const addAfterReadAt = (readSeq: number) =>
+            commit(engine, [addAnchor("of:anchors-read", "end", 6)], {
+              session: "session:bob",
+              confirmed: [{
+                id: anchorsDoc("of:anchors-read"),
+                path: toDocumentPath(["value"]),
+                seq: readSeq,
+              }],
+            });
+
+          expect(() => addAfterReadAt(stored.seq)).toThrow(ConflictError);
+          expect(storedAnchors(engine, "of:anchors-read")).toEqual({
+            value: { from: 2, to: 4 },
+          });
+
+          addAfterReadAt(moved.seq);
+          expect(storedAnchors(engine, "of:anchors-read")).toEqual({
+            value: { from: 2, to: 4, end: 6 },
+          });
+        } finally {
+          close(engine);
+          await Deno.remove(path);
+        }
+      });
+
+      it("throws `ProtocolError` for a document that is not a map from anchor id to non-negative integer offset", async () => {
+        const { engine, path } = await openTestEngine();
+        try {
+          setup(engine, "of:invalid", "hello");
+          const notAMap = "is not a map from anchor id to offset";
+          const badId = "an anchor id that is empty or longer than 256";
+          const badOffset = "something other than a non-negative integer";
+          const refused: [Operation, string][] = [
+            [setAnchors("of:invalid", [1, 3]), notAMap],
+            [setAnchors("of:invalid", "1,3"), notAMap],
+            [setAnchors("of:invalid", null), notAMap],
+            [setAnchors("of:invalid", { "": 1 }), badId],
+            [setAnchors("of:invalid", { ["a".repeat(257)]: 1 }), badId],
+            [setAnchors("of:invalid", { a: { from: 1, to: 3 } }), badOffset],
+            [setAnchors("of:invalid", { a: -1 }), badOffset],
+            [setAnchors("of:invalid", { a: 1.5 }), badOffset],
+            [setAnchors("of:invalid", { a: "1" }), badOffset],
+          ];
+
+          for (const [operation, message] of refused) {
+            const attempt = () => commit(engine, [operation]);
+            expect(attempt).toThrow(ProtocolError);
+            expect(attempt).toThrow(`commit operation 0: anchors document`);
+            expect(attempt).toThrow(message);
+          }
+          expect(storedAnchors(engine, "of:invalid")).toBeNull();
+
+          // A patch is checked by the document it leaves.
+          commit(engine, [setAnchors("of:invalid", { a: 1 })]);
+          expect(() => commit(engine, [addAnchor("of:invalid", "b", -1)]))
+            .toThrow(badOffset);
+          expect(storedAnchors(engine, "of:invalid")).toEqual({
+            value: { a: 1 },
+          });
+        } finally {
+          close(engine);
+          await Deno.remove(path);
+        }
+      });
+
+      it("stores 1024 anchors and an id of 256 characters, and throws `ProtocolError` for one anchor more", async () => {
+        const { engine, path } = await openTestEngine();
+        try {
+          setup(engine, "of:full", "a");
+          const longest = "a".repeat(256);
+          const full = Object.fromEntries([
+            [longest, 0],
+            ...Array.from({ length: 1023 }, (_, index) => [`a${index}`, 1]),
+          ]);
+
+          commit(engine, [setAnchors("of:full", full)]);
+          expect(snapshot(engine, "of:full").anchors).toEqual(full);
+
+          // Replacing a held id keeps the count; a new id exceeds it.
+          commit(engine, [addAnchor("of:full", longest, 1)]);
+          const oneMore = () =>
+            commit(engine, [addAnchor("of:full", "one-more", 0)]);
+          expect(oneMore).toThrow(ProtocolError);
+          expect(oneMore).toThrow("holds more than 1024 anchors");
+          expect(snapshot(engine, "of:full").anchors).toEqual({
+            ...full,
+            [longest]: 1,
+          });
+        } finally {
+          close(engine);
+          await Deno.remove(path);
+        }
+      });
+
+      it("maps a write through an edit that follows it in the commit, and not through one that precedes it", async () => {
+        const { engine, path } = await openTestEngine();
+        try {
+          setup(engine, "of:write-first", "hello");
+          const writeFirst = commit(engine, [
+            setAnchors("of:write-first", { from: 1, to: 3 }),
+            applyOp("of:write-first", "alice:1", "hello", [
+              changes(5, 0, ">> "),
+            ]),
+          ]);
+
+          expect(written(writeFirst)).toEqual([
+            [anchorsDoc("of:write-first"), "set", false],
+            ["of:write-first", "patch", false],
+            [anchorsDoc("of:write-first"), "patch", true],
+          ]);
+          expect(storedAnchors(engine, "of:write-first")).toEqual({
+            value: { from: 4, to: 6 },
+          });
+
+          setup(engine, "of:edit-first", "hello");
+          const editFirst = commit(engine, [
+            applyOp("of:edit-first", "alice:1", "hello", [
+              changes(5, 0, ">> "),
+            ]),
+            setAnchors("of:edit-first", { from: 1, to: 3 }),
+          ]);
+
+          expect(written(editFirst)).toEqual([
+            ["of:edit-first", "patch", false],
+            [anchorsDoc("of:edit-first"), "set", false],
+          ]);
+          expect(storedAnchors(engine, "of:edit-first")).toEqual({
+            value: { from: 1, to: 3 },
+          });
+        } finally {
+          close(engine);
+          await Deno.remove(path);
+        }
+      });
     });
 
-    it("reports a codec that cannot map the stored anchors, maps none of the carried ones, or refuses the payload", async () => {
-      const codemirror = createDefaultOperationCodecRegistry().require(
-        CODEMIRROR_CHANGESET_CODEC,
-      );
-      const path = await Deno.makeTempFile({ suffix: ".sqlite" });
-      const engine = await open({
-        url: toFileUrl(path),
-        operationCodecs: new OperationCodecRegistry([
-          codemirror,
-          {
-            id: "test-anchorless@1",
-            mapAnchors: (input) => codemirror.mapAnchors(input),
-            integrate(input) {
-              const { anchors: _anchors, ...result } = codemirror.integrate(
-                input,
-              );
-              return result;
-            },
-          },
-          {
-            id: "test-refusing@1",
-            mapAnchors: (input) => codemirror.mapAnchors(input),
-            integrate() {
-              throw new ProtocolError("the codec refused the payload");
-            },
-          },
-          {
-            id: "test-strict@1",
-            mapAnchors() {
-              throw new ProtocolError("the codec refused the stored anchors");
-            },
-            integrate: (input) => codemirror.integrate(input),
-          },
-        ]),
-      });
-      try {
-        // A stored anchor the codec cannot map: its row names a range beyond
-        // the field. The edit is refused and lands once the row is repaired.
-        setup(engine, "of:unmappable", "hello");
-        commit(engine, [
-          anchorsOp("of:unmappable", "alice:1", "hello", {
-            add: [{ id: "h", from: 0, to: 5 }],
-          }),
-        ]);
-        const storeAnchors = (to: number) =>
-          engine.database.prepare(
-            `UPDATE op_field_epoch SET anchors = :anchors
-             WHERE id = 'of:unmappable'`,
-          ).run({
-            anchors: encodeMemoryBoundary([{ id: "h", from: 0, to }]),
-          });
-        const edit = () =>
+    describe("a document that holds no anchors", () => {
+      it("takes a document written with no value as holding none", async () => {
+        // A cell set to `undefined` writes the document with no value.
+
+        const { engine, path } = await openTestEngine();
+        try {
+          setup(engine, "of:cleared", "hello");
+          commit(engine, [setAnchors("of:cleared", { h: 1 })]);
+
+          commit(engine, [{
+            op: "set",
+            id: anchorsDoc("of:cleared"),
+            value: {},
+          }]);
+
+          expect(snapshot(engine, "of:cleared").anchors).toEqual({});
+          // The next edit has nothing to map, and lands.
           commit(engine, [
+            applyOp("of:cleared", "alice:1", "hello", [changes(5, 0, "> ")]),
+          ]);
+          expect(snapshot(engine, "of:cleared")).toMatchObject({
+            materialized: "> hello",
+            anchors: {},
+          });
+        } finally {
+          close(engine);
+          await Deno.remove(path);
+        }
+      });
+
+      it("takes a stored document that is not a map of anchors as holding none, and leaves it for a write to replace", async () => {
+        // Such a document was not written through the engine's check of
+        // anchors documents; here it is put in place beneath the engine.
+
+        const { engine, path } = await openTestEngine();
+        try {
+          setup(engine, "of:foreign", "hello");
+          commit(engine, [setAnchors("of:foreign", { h: 1 })]);
+          const foreign = encodeMemoryBoundary({
+            value: { epoch: 1, version: 0, anchors: [{ id: "h", from: 1 }] },
+          });
+          engine.database.prepare(
+            `UPDATE revision SET data = :data WHERE id = :id`,
+          ).run({ data: foreign, id: anchorsDoc("of:foreign") });
+
+          expect(snapshot(engine, "of:foreign").anchors).toEqual({});
+          const edited = commit(engine, [
+            applyOp("of:foreign", "alice:1", "hello", [changes(5, 0, "> ")]),
+          ]);
+          expect(written(edited)).toEqual([["of:foreign", "patch", false]]);
+          expect(snapshot(engine, "of:foreign").materialized).toBe("> hello");
+
+          commit(engine, [setAnchors("of:foreign", { h: 3 })]);
+          expect(snapshot(engine, "of:foreign").anchors).toEqual({ h: 3 });
+        } finally {
+          close(engine);
+          await Deno.remove(path);
+        }
+      });
+
+      it("refuses an `apply-op` whose field is an anchors document", async () => {
+        const { engine, path } = await openTestEngine();
+        try {
+          setup(engine, "of:target", "hello");
+          commit(engine, [setAnchors("of:target", { h: 1 })]);
+          const aimed = () =>
+            commit(engine, [{
+              ...applyOp("of:target", "alice:1", "hello", [
+                changes(5, 0, "> "),
+              ]),
+              id: anchorsDoc("of:target"),
+              path: toValuePath(["h"]),
+            }]);
+
+          expect(aimed).toThrow(ProtocolError);
+          expect(aimed).toThrow("apply-op cannot mutate an anchors document");
+          expect(storedAnchors(engine, "of:target")).toEqual({
+            value: { h: 1 },
+          });
+        } finally {
+          close(engine);
+          await Deno.remove(path);
+        }
+      });
+    });
+
+    describe("an edit to the field", () => {
+      it("keeps an anchor ahead of text inserted at it and moves one past text inserted before it, in a derived patch of the document", async () => {
+        // The anchors at 1 and 3 bound the `el` of `hello`. An insert at 1
+        // lands after the first anchor, inside the two.
+
+        const { engine, path } = await openTestEngine();
+        try {
+          setup(engine, "of:inserted", "hello");
+          commit(engine, [setAnchors("of:inserted", { from: 1, to: 3 })]);
+
+          const applied = commit(engine, [
+            applyOp("of:inserted", "alice:1", "hello", [changes(5, 1, "X")]),
+          ]);
+
+          expect(written(applied)).toEqual([
+            ["of:inserted", "patch", false],
+            [anchorsDoc("of:inserted"), "patch", true],
+          ]);
+          expect(applied.revisions[1].patches).toEqual([
+            { op: "replace", path: "/value", value: { from: 1, to: 4 } },
+          ]);
+          expect(storedAnchors(engine, "of:inserted")).toEqual({
+            value: { from: 1, to: 4 },
+          });
+        } finally {
+          close(engine);
+          await Deno.remove(path);
+        }
+      });
+
+      it("writes no revision of the document for an edit that moves no anchor", async () => {
+        // An insert at 3 lands after the anchor there, so neither anchor
+        // moves.
+
+        const { engine, path } = await openTestEngine();
+        try {
+          setup(engine, "of:unmoved", "hello");
+          commit(engine, [setAnchors("of:unmoved", { from: 1, to: 3 })]);
+
+          const inserted = commit(engine, [
+            applyOp("of:unmoved", "alice:1", "hello", [changes(5, 3, "Y")]),
+          ]);
+          const nothing = commit(engine, [
+            applyOp("of:unmoved", "alice:2", { epoch: 1, version: 1 }),
+          ]);
+
+          expect(written(inserted)).toEqual([["of:unmoved", "patch", false]]);
+          expect(written(nothing)).toEqual([]);
+          expect(snapshot(engine, "of:unmoved")).toMatchObject({
+            cursor: { epoch: 1, version: 1 },
+            materialized: "helYlo",
+          });
+          expect(storedAnchors(engine, "of:unmoved")).toEqual({
+            value: { from: 1, to: 3 },
+          });
+        } finally {
+          close(engine);
+          await Deno.remove(path);
+        }
+      });
+
+      it("brings the anchors inside deleted text to where the deletion began", async () => {
+        const { engine, path } = await openTestEngine();
+        try {
+          setup(engine, "of:deleted-text", "hello world");
+          commit(engine, [
+            setAnchors("of:deleted-text", { h: 2, from: 6, mid: 8, to: 11 }),
+          ]);
+
+          // Deletes `o wor`, leaving `hellld`.
+          commit(engine, [
+            applyOp("of:deleted-text", "alice:1", "hello world", [
+              ChangeSet.of({ from: 4, to: 9, insert: "" }, 11).toJSON(),
+            ]),
+          ]);
+
+          expect(snapshot(engine, "of:deleted-text").materialized).toBe(
+            "hellld",
+          );
+          expect(storedAnchors(engine, "of:deleted-text")).toEqual({
+            value: { h: 2, from: 4, mid: 4, to: 6 },
+          });
+        } finally {
+          close(engine);
+          await Deno.remove(path);
+        }
+      });
+
+      it("maps the anchors through an operation as rebased over the edits integrated since its base", async () => {
+        const { engine, path } = await openTestEngine();
+        try {
+          setup(engine, "of:rebased", "abc");
+          commit(engine, [
+            applyOp("of:rebased", "alice:1", "abc", [changes(3, 0, "XX")]),
+          ]);
+          commit(engine, [setAnchors("of:rebased", { a: 2, b: 3, c: 4 })]);
+
+          // Bob still holds `abc`, where his insert between `a` and `b` is at
+          // 1; it integrates at 3 of `XXabc`.
+          const applied = commit(engine, [
             applyOp(
-              "of:unmappable",
-              "alice:2",
+              "of:rebased",
+              "bob:1",
               { epoch: 1, version: 0 },
-              changes(5, 0, "> "),
+              [changes(3, 1, "Y")],
+              "bob",
             ),
+          ], { session: "session:bob" });
+
+          expect(applied.operationResolutions?.[0]).toMatchObject({
+            from: { epoch: 1, version: 1 },
+            to: { epoch: 1, version: 2 },
+          });
+          expect(snapshot(engine, "of:rebased").materialized).toBe("XXaYbc");
+          expect(storedAnchors(engine, "of:rebased")).toEqual({
+            value: { a: 2, b: 3, c: 5 },
+          });
+        } finally {
+          close(engine);
+          await Deno.remove(path);
+        }
+      });
+
+      it("maps the anchors through every operation one submission integrates", async () => {
+        const { engine, path } = await openTestEngine();
+        try {
+          setup(engine, "of:batch", "abc");
+          commit(engine, [setAnchors("of:batch", { a: 0, b: 1 })]);
+
+          const applied = commit(engine, [
+            applyOp("of:batch", "alice:1", "abc", [
+              changes(3, 0, "X"),
+              changes(4, 0, "Y"),
+            ]),
           ]);
-        storeAnchors(9);
-        expect(edit).toThrow(OpCodecError);
-        expect(edit).toThrow("could not map the field's anchors");
-        storeAnchors(5);
-        edit();
-        expect(read(engine, { id: anchorsDoc("of:unmappable") })).toEqual({
-          value: {
-            epoch: 1,
+
+          expect(applied.operationResolutions?.[0].operations).toHaveLength(2);
+          expect(snapshot(engine, "of:batch").materialized).toBe("YXabc");
+          expect(storedAnchors(engine, "of:batch")).toEqual({
+            value: { a: 0, b: 3 },
+          });
+        } finally {
+          close(engine);
+          await Deno.remove(path);
+        }
+      });
+
+      it("maps an offset past the end of the text as the end", async () => {
+        const { engine, path } = await openTestEngine();
+        try {
+          setup(engine, "of:past-end", "abc");
+          commit(engine, [setAnchors("of:past-end", { far: 99 })]);
+
+          commit(engine, [
+            applyOp("of:past-end", "alice:1", "abc", [changes(3, 0, "x")]),
+          ]);
+
+          expect(storedAnchors(engine, "of:past-end")).toEqual({
+            value: { far: 4 },
+          });
+        } finally {
+          close(engine);
+          await Deno.remove(path);
+        }
+      });
+
+      it("maps the anchors a field held before its first operation", async () => {
+        const { engine, path } = await openTestEngine();
+        try {
+          setup(engine, "of:inactive", "world");
+          commit(engine, [setAnchors("of:inactive", { w: 0, end: 5 })]);
+          expect(snapshot(engine, "of:inactive")).toMatchObject({
+            active: false,
+            cursor: null,
+          });
+          expect(snapshot(engine, "of:inactive").anchors).toEqual({
+            w: 0,
+            end: 5,
+          });
+
+          commit(engine, [
+            applyOp("of:inactive", "alice:1", "world", [
+              changes(5, 0, "hello "),
+            ]),
+          ]);
+
+          expect(snapshot(engine, "of:inactive")).toMatchObject({
+            active: true,
+            cursor: { epoch: 1, version: 1 },
+            materialized: "hello world",
+          });
+          expect(snapshot(engine, "of:inactive").anchors).toEqual({
+            w: 0,
+            end: 11,
+          });
+        } finally {
+          close(engine);
+          await Deno.remove(path);
+        }
+      });
+
+      it("keeps the other members of the document's envelope", async () => {
+        const { engine, path } = await openTestEngine();
+        try {
+          const cfc = {
             version: 1,
-            anchors: [{ id: "h", from: 2, to: 7 }],
-          },
+            labelMap: {
+              version: 1,
+              entries: [{
+                path: ["from"],
+                label: { confidentiality: ["secret"] },
+              }],
+            },
+          };
+          setup(engine, "of:envelope", "hello");
+          commit(engine, [{
+            op: "set",
+            id: anchorsDoc("of:envelope"),
+            value: { value: { from: 1, to: 3 }, cfc },
+          }]);
+
+          commit(engine, [
+            applyOp("of:envelope", "alice:1", "hello", [changes(5, 0, ">")]),
+          ]);
+
+          expect(storedAnchors(engine, "of:envelope")).toEqual({
+            value: { from: 2, to: 4 },
+            cfc,
+          });
+        } finally {
+          close(engine);
+          await Deno.remove(path);
+        }
+      });
+
+      it("leaves the anchors where the edit put them when its submission is sent again", async () => {
+        const { engine, path } = await openTestEngine();
+        try {
+          setup(engine, "of:resubmitted", "abc");
+          commit(engine, [setAnchors("of:resubmitted", { b: 1 })]);
+          const edit = applyOp("of:resubmitted", "alice:1", "abc", [
+            changes(3, 0, ">"),
+          ]);
+          const first = commit(engine, [edit]);
+
+          const again = commit(engine, [edit]);
+
+          expect(again.operationResolutions?.[0]).toEqual({
+            ...first.operationResolutions?.[0],
+            duplicate: true,
+          });
+          expect(written(again)).toEqual([]);
+          expect(storedAnchors(engine, "of:resubmitted")).toEqual({
+            value: { b: 2 },
+          });
+        } finally {
+          close(engine);
+          await Deno.remove(path);
+        }
+      });
+
+      it("keeps a per-user field's anchors in that user's document", async () => {
+        const { engine, path } = await openTestEngine();
+        const alice = "did:key:z6MkAnchorsAlice";
+        const bob = "did:key:z6MkAnchorsBob";
+        const mine = operationAnchorsDocId({
+          id: "of:mine",
+          scope: "user",
+          path: ["body"],
+        });
+        const commitAs = (principal: string, operations: Operation[]) =>
+          applyCommit(engine, {
+            sessionId: `session:${principal}`,
+            principal,
+            commit: {
+              localSeq: ++seq,
+              reads: { confirmed: [], pending: [] },
+              operations,
+            },
+          });
+        try {
+          for (const principal of [alice, bob]) {
+            commitAs(principal, [{
+              op: "set",
+              id: "of:mine",
+              scope: "user",
+              value: { value: { body: "abc" } },
+            }, {
+              op: "set",
+              id: mine,
+              scope: "user",
+              value: { value: { b: 1 } },
+            }]);
+          }
+
+          commitAs(alice, [{
+            ...applyOp("of:mine", "alice:1", "abc", [changes(3, 0, ">")]),
+            scope: "user",
+          }]);
+
+          const anchorsOf = (principal: string) =>
+            read(engine, { id: mine, scope: "user", principal });
+          expect(anchorsOf(alice)).toEqual({ value: { b: 2 } });
+          expect(anchorsOf(bob)).toEqual({ value: { b: 1 } });
+        } finally {
+          close(engine);
+          await Deno.remove(path);
+        }
+      });
+
+      it("throws `OpCodecError` for a codec that cannot map the anchors, and a codec's own `ProtocolError` as it was thrown", async () => {
+        const codemirror = createDefaultOperationCodecRegistry().require(
+          CODEMIRROR_CHANGESET_CODEC,
+        );
+        const path = await Deno.makeTempFile({ suffix: ".sqlite" });
+        const engine = await open({
+          url: toFileUrl(path),
+          operationCodecs: new OperationCodecRegistry([
+            {
+              id: "test-unmapping@1",
+              integrate: (input) => codemirror.integrate(input),
+              mapAnchors() {
+                throw new Error("the codec holds no positions");
+              },
+            },
+            {
+              id: "test-strict@1",
+              integrate: (input) => codemirror.integrate(input),
+              mapAnchors() {
+                throw new ProtocolError("the codec refused the anchors");
+              },
+            },
+            {
+              id: "test-refusing@1",
+              mapAnchors: (input) => codemirror.mapAnchors(input),
+              integrate() {
+                throw new ProtocolError("the codec refused the payload");
+              },
+            },
+          ]),
+        });
+        const edit = (id: string, codec: string) => () =>
+          commit(engine, [{
+            ...applyOp(id, "alice:1", "hello", [changes(5, 0, "> ")]),
+            codec,
+          }]);
+        try {
+          setup(engine, "of:unmapping", "hello");
+          commit(engine, [setAnchors("of:unmapping", { h: 1 })]);
+          const unmapping = edit("of:unmapping", "test-unmapping@1");
+          expect(unmapping).toThrow(OpCodecError);
+          expect(unmapping).toThrow(
+            "could not map the field's anchors: the codec holds no positions",
+          );
+          expect(snapshot(engine, "of:unmapping")).toMatchObject({
+            active: false,
+            materialized: "hello",
+          });
+          expect(storedAnchors(engine, "of:unmapping")).toEqual({
+            value: { h: 1 },
+          });
+
+          // With no anchors to map, the same codec's edit lands.
+          setup(engine, "of:anchorless", "hello");
+          edit("of:anchorless", "test-unmapping@1")();
+          expect(snapshot(engine, "of:anchorless").materialized).toBe(
+            "> hello",
+          );
+
+          setup(engine, "of:strict", "hello");
+          commit(engine, [setAnchors("of:strict", { h: 1 })]);
+          const strict = edit("of:strict", "test-strict@1");
+          expect(strict).toThrow(ProtocolError);
+          expect(strict).toThrow("the codec refused the anchors");
+
+          setup(engine, "of:refusing", "hello");
+          const refusing = edit("of:refusing", "test-refusing@1");
+          expect(refusing).toThrow(ProtocolError);
+          expect(refusing).toThrow("the codec refused the payload");
+        } finally {
+          close(engine);
+          await Deno.remove(path);
+        }
+      });
+
+      it("throws `OpCodecError` for a codec that maps the anchors to anything but anchors under the same ids", async () => {
+        const codemirror = createDefaultOperationCodecRegistry().require(
+          CODEMIRROR_CHANGESET_CODEC,
+        );
+        const path = await Deno.makeTempFile({ suffix: ".sqlite" });
+        const engine = await open({
+          url: toFileUrl(path),
+          operationCodecs: new OperationCodecRegistry([
+            {
+              id: "test-negative@1",
+              integrate: (input) => codemirror.integrate(input),
+              mapAnchors: () => ({ h: -1 }),
+            },
+            {
+              id: "test-renaming@1",
+              integrate: (input) => codemirror.integrate(input),
+              mapAnchors: () => ({ other: 1 }),
+            },
+          ]),
+        });
+        const edit = (id: string, codec: string) => () =>
+          commit(engine, [{
+            ...applyOp(id, "alice:1", "hello", [changes(5, 0, "> ")]),
+            codec,
+          }]);
+        try {
+          setup(engine, "of:negative", "hello");
+          commit(engine, [setAnchors("of:negative", { h: 1 })]);
+          const negative = edit("of:negative", "test-negative@1");
+          expect(negative).toThrow(OpCodecError);
+          expect(negative).toThrow(
+            "did not map the field's anchors to anchors: the result holds anchor h at something other than a non-negative integer offset",
+          );
+
+          setup(engine, "of:renaming", "hello");
+          commit(engine, [setAnchors("of:renaming", { h: 1 })]);
+          const renaming = edit("of:renaming", "test-renaming@1");
+          expect(renaming).toThrow(OpCodecError);
+          expect(renaming).toThrow("mapped the field's anchors to other ids");
+
+          // Neither edit landed, and the anchors are as their writer left them.
+          for (const id of ["of:negative", "of:renaming"]) {
+            expect(snapshot(engine, id)).toMatchObject({
+              active: false,
+              materialized: "hello",
+            });
+            expect(storedAnchors(engine, id)).toEqual({ value: { h: 1 } });
+          }
+        } finally {
+          close(engine);
+          await Deno.remove(path);
+        }
+      });
+
+      it("returns the rewrite as derived again when the commit is sent a second time", async () => {
+        const { engine, path } = await openTestEngine();
+        try {
+          setup(engine, "of:resent", "abc");
+          commit(engine, [setAnchors("of:resent", { c: 2 })]);
+          const resent = {
+            sessionId: "session:alice",
+            commit: {
+              localSeq: ++seq,
+              reads: { confirmed: [], pending: [] },
+              operations: [
+                applyOp("of:resent", "alice:1", "abc", [changes(3, 0, ">")]),
+              ],
+            },
+          };
+
+          const first = applyCommit(engine, resent);
+          const second = applyCommit(engine, resent);
+
+          expect(written(second)).toEqual(written(first));
+          expect(written(second)).toContainEqual([
+            anchorsDoc("of:resent"),
+            "patch",
+            true,
+          ]);
+          expect(storedAnchors(engine, "of:resent")).toEqual({
+            value: { c: 3 },
+          });
+        } finally {
+          close(engine);
+          await Deno.remove(path);
+        }
+      });
+
+      it("leaves the document as it was when a later operation rejects the commit", async () => {
+        const { engine, path } = await openTestEngine();
+        try {
+          setup(engine, "of:atomic", "abc");
+          commit(engine, [
+            applyOp("of:atomic", "alice:1", "abc", [changes(3, 3, "d")]),
+          ]);
+          commit(engine, [setAnchors("of:atomic", { a: 1 })]);
+
+          expect(() =>
+            commit(engine, [
+              addAnchor("of:atomic", "b", 2),
+              applyOp("of:atomic", "alice:2", { epoch: 1, version: 1 }, [
+                changes(4, 0, ">"),
+              ]),
+              {
+                op: "patch",
+                id: "of:atomic",
+                patches: [{ op: "replace", path: "/value/body", value: "xyz" }],
+              },
+            ])
+          ).toThrow(OpFieldWriteConflictError);
+
+          expect(snapshot(engine, "of:atomic")).toMatchObject({
+            cursor: { epoch: 1, version: 1 },
+            materialized: "abcd",
+          });
+          expect(storedAnchors(engine, "of:atomic")).toEqual({
+            value: { a: 1 },
+          });
+        } finally {
+          close(engine);
+          await Deno.remove(path);
+        }
+      });
+    });
+
+    it("returns the document's anchors in the field's snapshot, and none without the document", async () => {
+      const { engine, path } = await openTestEngine();
+      try {
+        setup(engine, "of:snapshot", "hello");
+        expect(snapshot(engine, "of:snapshot").anchors).toEqual({});
+
+        commit(engine, [setAnchors("of:snapshot", { from: 1, to: 3 })]);
+        expect(snapshot(engine, "of:snapshot").anchors).toEqual({
+          from: 1,
+          to: 3,
         });
 
-        // A codec that integrates the payload but returns no mapped anchors
-        // for the ones the operation carried.
-        setup(engine, "of:anchorless", "hello");
-        const anchorless = () =>
-          commit(engine, [{
-            ...anchorsOp("of:anchorless", "alice:1", "hello", {
-              add: [{ id: "h", from: 0, to: 5 }],
-            }),
-            codec: "test-anchorless@1",
-          }]);
-        expect(anchorless).toThrow(OpCodecError);
-        expect(anchorless).toThrow("did not map the carried anchors");
-        expect(read(engine, { id: anchorsDoc("of:anchorless") })).toBeNull();
-
-        // A codec's own protocol error reaches the client as it was thrown.
-        setup(engine, "of:refusing", "hello");
-        const refusing = () =>
-          commit(engine, [{
-            ...applyOp("of:refusing", "alice:1", "hello", changes(5, 5, "!")),
-            codec: "test-refusing@1",
-          }]);
-        expect(refusing).toThrow(ProtocolError);
-        expect(refusing).toThrow("the codec refused the payload");
-
-        // So does one it throws while mapping the stored anchors.
-        setup(engine, "of:strict", "hello");
-        commit(engine, [{
-          ...anchorsOp("of:strict", "alice:1", "hello", {
-            add: [{ id: "h", from: 0, to: 5 }],
-          }),
-          codec: "test-strict@1",
-        }]);
-        const strict = () =>
-          commit(engine, [{
-            ...applyOp(
-              "of:strict",
-              "alice:2",
-              { epoch: 1, version: 0 },
-              changes(5, 0, "> "),
-            ),
-            codec: "test-strict@1",
-          }]);
-        expect(strict).toThrow(ProtocolError);
-        expect(strict).toThrow("the codec refused the stored anchors");
+        commit(engine, [
+          applyOp("of:snapshot", "alice:1", "hello", [changes(5, 0, ">")]),
+        ]);
+        expect(snapshot(engine, "of:snapshot").active).toBe(true);
+        expect(snapshot(engine, "of:snapshot").anchors).toEqual({
+          from: 2,
+          to: 4,
+        });
+        const current = queryOperationField(engine, {
+          id: "of:snapshot",
+          path: body,
+          after: { epoch: 1, version: 1 },
+        });
+        expect(current.operations).toEqual([]);
+        expect(current.anchors).toEqual({ from: 2, to: 4 });
       } finally {
         close(engine);
         await Deno.remove(path);
       }
     });
 
-    it("deletes the anchors document when the field is released or its entity deleted", async () => {
+    it("keeps the anchors document when the field is released, for the writer that replaces the value to move", async () => {
       const { engine, path } = await openTestEngine();
+      const release = (
+        id: string,
+        cursor: { epoch: number; version: number },
+      ): Operation => ({
+        op: "release-op-field",
+        id,
+        path: body,
+        codec: CODEMIRROR_CHANGESET_CODEC,
+        cursor,
+      });
       try {
         setup(engine, "of:released", "abc");
         commit(engine, [
-          anchorsOp("of:released", "alice:0", "abc", {
-            add: [{ id: "a", from: 0, to: 1 }],
-          }),
+          applyOp("of:released", "alice:1", "abc", [changes(3, 3, "d")]),
         ]);
-        const released = commit(engine, [{
-          op: "release-op-field",
-          id: "of:released",
-          path: body,
-          codec: CODEMIRROR_CHANGESET_CODEC,
-          cursor: { epoch: 1, version: 0 },
-        }]);
-        expect(released.revisions).toMatchObject([{
-          id: anchorsDoc("of:released"),
-          op: "delete",
-        }]);
-        expect(read(engine, { id: anchorsDoc("of:released") })).toBeNull();
-        // A later activation starts with no anchors.
-        commit(engine, [
-          applyOp("of:released", "alice:1", "abc", changes(3, 3, "d")),
-        ]);
-        expect(queryOperationField(engine, { id: "of:released", path: body }))
-          .toMatchObject({ cursor: { epoch: 2, version: 1 }, anchors: [] });
+        commit(engine, [setAnchors("of:released", { c: 2 })]);
 
-        setup(engine, "of:deleted", "abc");
-        commit(engine, [
-          anchorsOp("of:deleted", "alice:0", "abc", {
-            add: [{ id: "a", from: 0, to: 1 }],
-          }),
+        const released = commit(engine, [
+          release("of:released", { epoch: 1, version: 1 }),
         ]);
-        const deleted = commit(engine, [{ op: "delete", id: "of:deleted" }]);
-        expect(deleted.revisions.map((revision) => [revision.id, revision.op]))
-          .toEqual([
-            [anchorsDoc("of:deleted"), "delete"],
-            ["of:deleted", "delete"],
-          ]);
-        expect(read(engine, { id: anchorsDoc("of:deleted") })).toBeNull();
+
+        expect(written(released)).toEqual([]);
+        expect(snapshot(engine, "of:released")).toMatchObject({
+          active: false,
+          materialized: "abcd",
+          anchors: { c: 2 },
+        });
+
+        // A released field takes an ordinary write, and the writer that
+        // replaces its value states the anchors against what it wrote.
+        commit(engine, [
+          { op: "set", id: "of:released", value: { value: { body: "xyz c" } } },
+          setAnchors("of:released", { c: 4 }),
+        ]);
+        expect(storedAnchors(engine, "of:released")).toEqual({
+          value: { c: 4 },
+        });
+
+        // The next activation maps the anchors the field then holds.
+        commit(engine, [
+          applyOp("of:released", "alice:2", "xyz c", [changes(5, 0, ">")]),
+        ]);
+        expect(snapshot(engine, "of:released")).toMatchObject({
+          cursor: { epoch: 2, version: 1 },
+          materialized: ">xyz c",
+          anchors: { c: 5 },
+        });
       } finally {
         close(engine);
         await Deno.remove(path);
       }
     });
 
-    it("refuses a commit that writes an anchors document itself", async () => {
+    it("keeps the anchors document when its entity is deleted, for the entity created anew", async () => {
       const { engine, path } = await openTestEngine();
       try {
-        setup(engine, "of:guarded", "abc");
-        expect(() =>
-          commit(engine, [{
-            op: "set",
-            id: anchorsDoc("of:guarded"),
-            value: { value: { epoch: 1, version: 0, anchors: [] } },
-          }])
-        ).toThrow("which only the field's operations can change");
-        expect(read(engine, { id: anchorsDoc("of:guarded") })).toBeNull();
+        setup(engine, "of:deleted", "abc");
+        commit(engine, [
+          applyOp("of:deleted", "alice:1", "abc", [changes(3, 3, "d")]),
+        ]);
+        commit(engine, [setAnchors("of:deleted", { a: 1 })]);
+
+        const deleted = commit(engine, [{ op: "delete", id: "of:deleted" }]);
+
+        expect(written(deleted)).toEqual([["of:deleted", "delete", false]]);
+        expect(storedAnchors(engine, "of:deleted")).toEqual({
+          value: { a: 1 },
+        });
+        setup(engine, "of:deleted", "abcd");
+        expect(snapshot(engine, "of:deleted").anchors).toEqual({ a: 1 });
       } finally {
         close(engine);
         await Deno.remove(path);
       }
     });
 
-    it("carries anchors into checkpoints and verifies them when pruning", async () => {
+    it("deletes the anchors document that the commit deleting its entity deletes", async () => {
+      const { engine, path } = await openTestEngine();
+      try {
+        setup(engine, "of:both", "abc");
+        commit(engine, [
+          applyOp("of:both", "alice:1", "abc", [changes(3, 3, "d")]),
+        ]);
+        commit(engine, [setAnchors("of:both", { a: 1 })]);
+
+        const deleted = commit(engine, [
+          { op: "delete", id: "of:both" },
+          { op: "delete", id: anchorsDoc("of:both") },
+        ]);
+
+        expect(written(deleted)).toEqual([
+          ["of:both", "delete", false],
+          [anchorsDoc("of:both"), "delete", false],
+        ]);
+        expect(storedAnchors(engine, "of:both")).toBeNull();
+      } finally {
+        close(engine);
+        await Deno.remove(path);
+      }
+    });
+
+    it("keeps the document through history pruning, and maps it through the edits after", async () => {
       const path = await Deno.makeTempFile({ suffix: ".sqlite" });
       const engine = await open({
         url: toFileUrl(path),
         operationCheckpointInterval: 2,
       });
       try {
-        setup(engine, "of:checkpointed", "ab");
+        setup(engine, "of:pruned", "ab");
+        commit(engine, [setAnchors("of:pruned", { b: 1 })]);
         commit(engine, [
-          anchorsOp("of:checkpointed", "alice:0", "ab", {
-            add: [{ id: "b", from: 1, to: 2 }],
-          }),
+          applyOp("of:pruned", "alice:1", "ab", [changes(2, 0, "x")]),
         ]);
-        commit(engine, [
-          applyOp(
-            "of:checkpointed",
-            "alice:1",
-            { epoch: 1, version: 0 },
-            changes(2, 0, "x"),
-          ),
-        ]);
-        commit(engine, [
-          applyOp(
-            "of:checkpointed",
-            "alice:2",
-            { epoch: 1, version: 1 },
-            changes(3, 0, "y"),
-          ),
-        ]);
-        expect(
-          engine.database.prepare(
-            `SELECT version, anchors FROM op_checkpoint ORDER BY version`,
-          ).all(),
-        ).toEqual([
-          {
-            version: 0,
-            anchors: encodeMemoryBoundary([{ id: "b", from: 1, to: 2 }]),
-          },
-          {
-            version: 2,
-            anchors: encodeMemoryBoundary([{ id: "b", from: 3, to: 4 }]),
-          },
-        ]);
-        commit(engine, [
-          applyOp(
-            "of:checkpointed",
-            "alice:3",
-            { epoch: 1, version: 2 },
-            changes(4, 0, "z"),
-          ),
-        ]);
+        for (const [version, insert] of [[1, "y"], [2, "z"]] as const) {
+          commit(engine, [
+            applyOp("of:pruned", `alice:${version + 1}`, {
+              epoch: 1,
+              version,
+            }, [changes(version + 2, 0, insert)]),
+          ]);
+        }
+
         expect(pruneOperationFieldHistory(engine, {
-          id: "of:checkpointed",
+          id: "of:pruned",
           path: body,
         })).toEqual({ cursor: { epoch: 1, version: 2 }, prunedOperations: 2 });
-        expect(read(engine, { id: anchorsDoc("of:checkpointed") })).toEqual({
-          value: {
-            epoch: 1,
-            version: 3,
-            anchors: [{ id: "b", from: 4, to: 5 }],
-          },
+        expect(storedAnchors(engine, "of:pruned")).toEqual({
+          value: { b: 4 },
         });
 
-        // An operation that adds an anchor after the checkpoint restates the
-        // set, which the checkpoint cannot know; pruning then trusts the head.
         commit(engine, [
-          applyOp(
-            "of:checkpointed",
-            "alice:4",
-            { epoch: 1, version: 3 },
-            changes(5, 5, "!"),
-          ),
+          applyOp("of:pruned", "alice:4", { epoch: 1, version: 3 }, [
+            changes(5, 0, "w"),
+          ]),
         ]);
-        commit(engine, [
-          anchorsOp("of:checkpointed", "alice:5", { epoch: 1, version: 4 }, {
-            add: [{ id: "all", from: 0, to: 6 }],
-          }),
-        ]);
-        commit(engine, [
-          applyOp(
-            "of:checkpointed",
-            "alice:6",
-            { epoch: 1, version: 4 },
-            changes(6, 6, "?"),
-          ),
-        ]);
-        expect(pruneOperationFieldHistory(engine, {
-          id: "of:checkpointed",
-          path: body,
-        })).toEqual({ cursor: { epoch: 1, version: 4 }, prunedOperations: 2 });
-
-        // A head whose anchors the document does not reproduce is refused,
-        // even where an anchor change after the checkpoint exempts the
-        // checkpoint from the check.
-        engine.database.prepare(
-          `UPDATE op_field_epoch
-           SET anchors = :anchors, anchors_seq = anchors_seq + 1000`,
-        ).run({
-          anchors: encodeMemoryBoundary([{ id: "all", from: 1, to: 2 }]),
-        });
-        expect(() =>
-          pruneOperationFieldHistory(engine, {
-            id: "of:checkpointed",
-            path: body,
-          })
-        ).toThrow("anchors document diverged");
-        // A head whose anchors the checkpoint does not reproduce is refused.
-        engine.database.prepare(
-          `UPDATE op_field_epoch SET anchors = :anchors, anchors_seq = NULL`,
-        ).run({
-          anchors: encodeMemoryBoundary([{ id: "all", from: 1, to: 2 }]),
-        });
-        expect(() =>
-          pruneOperationFieldHistory(engine, {
-            id: "of:checkpointed",
-            path: body,
-          })
-        ).toThrow("checkpoint anchors diverged");
+        expect(snapshot(engine, "of:pruned").materialized).toBe("wzyxab");
+        expect(snapshot(engine, "of:pruned").anchors).toEqual({ b: 5 });
       } finally {
         close(engine);
-        await Deno.remove(path);
-      }
-    });
-
-    it("replays a commit carrying anchors from its stored resolution", async () => {
-      const { engine, path } = await openTestEngine();
-      try {
-        setup(engine, "of:replayed", "abc");
-        const request = {
-          sessionId: "session:replay",
-          commit: {
-            localSeq: 7,
-            reads: { confirmed: [], pending: [] },
-            operations: [
-              anchorsOp("of:replayed", "alice:1", "abc", {
-                add: [{ id: "a", from: 0, to: 1 }],
-              }),
-            ],
-          },
-        };
-        const first = applyCommit(engine, request);
-        const again = applyCommit(engine, request);
-        expect(again.replayed).toBe(true);
-        expect(again.operationResolutions).toEqual(first.operationResolutions);
-        expect(again.revisions.map((revision) => revision.id)).toEqual([
-          anchorsDoc("of:replayed"),
-        ]);
-      } finally {
-        close(engine);
-        await Deno.remove(path);
-      }
-    });
-
-    it("answers a resubmission with the anchors it stored and refuses one that carries others", async () => {
-      const { engine, path } = await openTestEngine();
-      try {
-        setup(engine, "of:resubmitted", "abc");
-        const first = commit(engine, [
-          anchorsOp(
-            "of:resubmitted",
-            "alice:1",
-            "abc",
-            { add: [{ id: "a", from: 0, to: 1 }] },
-            changes(3, 3, "d"),
-          ),
-        ]);
-        // Bob's edit moves the anchor before Alice sends the operation again;
-        // the answer is what it landed as, not where the anchor is now.
-        commit(engine, [
-          applyOp(
-            "of:resubmitted",
-            "bob:1",
-            { epoch: 1, version: 1 },
-            changes(4, 0, ">> "),
-            "bob",
-          ),
-        ]);
-        const again = commit(engine, [
-          anchorsOp(
-            "of:resubmitted",
-            "alice:1",
-            "abc",
-            { add: [{ id: "a", from: 0, to: 1 }] },
-            changes(3, 3, "d"),
-          ),
-        ]);
-        expect(again.operationResolutions?.[0]).toEqual({
-          ...first.operationResolutions?.[0],
-          duplicate: true,
-        });
-        expect(
-          queryOperationField(engine, { id: "of:resubmitted", path: body }),
-        )
-          .toMatchObject({ anchors: [{ id: "a", from: 3, to: 4 }] });
-        expect(() =>
-          commit(engine, [
-            anchorsOp(
-              "of:resubmitted",
-              "alice:1",
-              "abc",
-              { add: [{ id: "a", from: 1, to: 2 }] },
-              changes(3, 3, "d"),
-            ),
-          ])
-        ).toThrow(OpSubmissionMismatchError);
-        expect(() =>
-          commit(engine, [
-            applyOp("of:resubmitted", "alice:1", "abc", changes(3, 3, "d")),
-          ])
-        ).toThrow(OpSubmissionMismatchError);
-      } finally {
-        close(engine);
-        await Deno.remove(path);
-      }
-    });
-
-    it("rolls back anchor changes when a later operation rejects the commit", async () => {
-      const { engine, path } = await openTestEngine();
-      try {
-        setup(engine, "of:atomic", "abc");
-        commit(engine, [
-          anchorsOp("of:atomic", "alice:1", "abc", {
-            add: [{ id: "a", from: 0, to: 1 }],
-          }),
-        ]);
-        expect(() =>
-          commit(engine, [
-            anchorsOp("of:atomic", "alice:2", { epoch: 1, version: 0 }, {
-              add: [{ id: "b", from: 1, to: 2 }],
-            }),
-            {
-              op: "patch",
-              id: "of:atomic",
-              patches: [{ op: "replace", path: "/value/body", value: "xyz" }],
-            },
-          ])
-        ).toThrow(OpFieldWriteConflictError);
-        expect(queryOperationField(engine, { id: "of:atomic", path: body }))
-          .toMatchObject({ anchors: [{ id: "a", from: 0, to: 1 }] });
-        expect(read(engine, { id: anchorsDoc("of:atomic") })).toEqual({
-          value: {
-            epoch: 1,
-            version: 0,
-            anchors: [{ id: "a", from: 0, to: 1 }],
-          },
-        });
-      } finally {
-        close(engine);
-        await Deno.remove(path);
-      }
-    });
-
-    it("reads a store from before the anchor columns as fields without anchors", async () => {
-      const { engine, path } = await openTestEngine();
-      try {
-        setup(engine, "of:migrated", "abc");
-        commit(engine, [
-          applyOp("of:migrated", "alice:1", "abc", changes(3, 3, "d")),
-        ]);
-        close(engine);
-        const database = new Database(path);
-        database.exec(`ALTER TABLE op_field_epoch DROP COLUMN anchors`);
-        database.exec(`ALTER TABLE op_field_epoch DROP COLUMN anchors_seq`);
-        database.exec(`ALTER TABLE op_checkpoint DROP COLUMN anchors`);
-        database.exec(`ALTER TABLE op_submission DROP COLUMN anchors`);
-        database.close();
-        const reopened = await open({ url: toFileUrl(path) });
-        try {
-          expect(
-            queryOperationField(reopened, { id: "of:migrated", path: body }),
-          )
-            .toMatchObject({ cursor: { epoch: 1, version: 1 }, anchors: [] });
-          // The submission from before the column answers a resubmission as
-          // one that carried no anchors.
-          expect(
-            commit(reopened, [
-              applyOp("of:migrated", "alice:1", "abc", changes(3, 3, "d")),
-            ]).operationResolutions?.[0],
-          ).toMatchObject({ duplicate: true });
-          commit(reopened, [
-            anchorsOp("of:migrated", "alice:2", { epoch: 1, version: 1 }, {
-              add: [{ id: "d", from: 3, to: 4 }],
-            }),
-          ]);
-          expect(
-            queryOperationField(reopened, { id: "of:migrated", path: body }),
-          )
-            .toMatchObject({ anchors: [{ id: "d", from: 3, to: 4 }] });
-        } finally {
-          close(reopened);
-        }
-      } finally {
-        try {
-          close(engine);
-        } catch {
-          // Closed above when the columns were dropped.
-        }
         await Deno.remove(path);
       }
     });

@@ -289,9 +289,9 @@ function schemaMemoAddressKey(address: IMemorySpaceAddress): string {
  * The part every memo key for the document `address` names opens with,
  * whatever type, path and schema the key goes on to name: the space, the
  * scope and the id, each length-prefixed, through the `t` that starts the
- * type. `forgetSchemaMemoDocuments()` matches memo keys by it.
+ * type.
  */
-export function schemaMemoDocumentPrefix(
+function schemaMemoDocumentPrefix(
   address: { space: string; scope?: IMemorySpaceAddress["scope"]; id: string },
 ): string {
   return `s${keyComponent(address.space)}c${
@@ -301,32 +301,6 @@ export function schemaMemoDocumentPrefix(
       ? memoIdComponent(address.id)
       : `i${keyComponent(address.id)}`
   }t`;
-}
-
-/** The `schemaMemoDocumentPrefix()` a memo key opens with. */
-function schemaMemoKeyDocumentPrefix(key: string): string {
-  let at = 0;
-  for (let component = 0; component < 3; component++) {
-    const colon = key.indexOf(":", at + 1);
-    at = colon + 1 + Number(key.slice(at + 1, colon));
-  }
-  return key.slice(0, at + 1);
-}
-
-/**
- * Drops every entry of `memo` for the documents `prefixes` name, each a
- * `schemaMemoDocumentPrefix()`. An entry stands for a traversal that
- * recorded the document's reads and tracker entries; once those records
- * are gone, a traversal that found the entry would skip the document and
- * record nothing in their place.
- */
-export function forgetSchemaMemoDocuments(
-  memo: SchemaMemo,
-  prefixes: ReadonlySet<string>,
-): void {
-  for (const key of memo.keys()) {
-    if (prefixes.has(schemaMemoKeyDocumentPrefix(key))) memo.delete(key);
-  }
 }
 
 /**
@@ -2067,6 +2041,15 @@ export interface IObjectCreator<T> {
    * leaves this unimplemented and keeps projecting `undefined`.
    */
   createOpaquePresence?(link: NormalizedFullLink): T;
+
+  /**
+   * Whether the property at `slot`, which the traversal read as `value`, is a
+   * verb its producer no longer publishes. An object leaves such a property
+   * out where the schema does not require it, as it leaves out an optional
+   * field the producer stopped publishing. Query traversal leaves this
+   * unimplemented and keeps every handle.
+   */
+  isWithdrawnVerb?(slot: NormalizedFullLink, value: T): boolean;
 
   /**
    * Creates a value whose schema has already been proven to contain only exact
@@ -4161,11 +4144,10 @@ export function createSchemaMemo(): SchemaMemo {
 // under ONE identity — schema narrowing memoized under one principal's
 // traversal would otherwise leak into another's (value-bleed). Every
 // sharing scope today is single-identity by construction
-// (`TrackedGraphState.memo` is bound to its manager; the query path's
-// sharedMemo instances are per call); this guard is what keeps a future
-// sharing change from silently becoming value-bleed rather than a loud
-// error. Bindings live in a side table so the memo type stays a plain
-// Map.
+// (the query path shares a memo only within one evaluation); this guard
+// is what keeps a future sharing change from silently becoming value-bleed
+// rather than a loud error. Bindings live in a side table so the memo type
+// stays a plain Map.
 const schemaMemoIdentityBindings = new WeakMap<SchemaMemo, string>();
 
 const schemaMemoIdentityKey = (identity: ScopeKeyIdentity): string =>
@@ -5118,10 +5100,13 @@ export class SchemaObjectTraverser<V extends FabricValue>
     // whatever is there, whatever shape it has: the declaration names a
     // reference rather than a value, so a stored string is as opaque as a
     // stored object, and one uniform answer is what lets a reader test,
-    // compare and pass on any of them the same way. A link is exempt — it is
-    // followed first, because the reference is to what it names and not to the
-    // link. Answering here descends into nothing, so it is also not part of a
-    // cycle and registers nothing with the tracker.
+    // compare and pass on any of them the same way. A link within the space
+    // is exempt — it is followed first, because the reference is to what it
+    // names and not to the link. A link into another space at a position
+    // typed `unknown` alone is answered without being followed, by
+    // `#traversePointerWithSchema()`, naming its target. Answering here
+    // descends into nothing, so it is also not part of a cycle and registers
+    // nothing with the tracker.
     const jsonType = getJsonType(doc.value);
     if (
       jsonType !== null && !isSigilLink(doc.value) &&
@@ -6112,6 +6097,8 @@ export class SchemaObjectTraverser<V extends FabricValue>
       }
     }
 
+    this.#omitWithdrawnVerbs(doc, schema, filteredObj);
+
     // Check that all required fields are present
     if (isObjectOrArray(schema) && "required" in schema) {
       const required = schema["required"] as string[];
@@ -6136,6 +6123,39 @@ export class SchemaObjectTraverser<V extends FabricValue>
       }
     }
     return filteredObj;
+  }
+
+  /**
+   * Leaves out of `filteredObj` each property the schema declares as a stream
+   * and does not require, whose value is a verb its producer no longer
+   * publishes. A required position keeps its handle: its producer cannot drop
+   * it through an update, so its absence is a deletion or an unfinished setup,
+   * not a contract the holder was built to read.
+   */
+  #omitWithdrawnVerbs(
+    doc: IMemorySpaceValueAttestation,
+    schema: JSONSchemaObj,
+    filteredObj: Record<string, FabricValue>,
+  ): void {
+    const creator = this.objectCreator;
+    if (
+      creator.isWithdrawnVerb === undefined ||
+      !isObjectNotArray(schema.properties)
+    ) return;
+    const required = Array.isArray(schema.required) ? schema.required : [];
+    for (const propKey of Object.keys(schema.properties)) {
+      if (
+        required.includes(propKey) || !Object.hasOwn(filteredObj, propKey) ||
+        !propertyDeclaresStream(schema, propKey)
+      ) continue;
+      const slot = getNormalizedLink(
+        { ...doc.address, path: appendToPath(doc.address.path, propKey) },
+        undefined,
+      );
+      if (creator.isWithdrawnVerb(slot, filteredObj[propKey])) {
+        delete filteredObj[propKey];
+      }
+    }
   }
 
   /**
@@ -6165,6 +6185,24 @@ export class SchemaObjectTraverser<V extends FabricValue>
     ) {
       const cellLink = getNextCellLink(this.tx, this.context, doc, schema);
       return { ok: this.objectCreator.createObject(cellLink, undefined) };
+    }
+    // A link into another space found at a position typed `unknown` without
+    // `asCell` is not followed, by a read or by a query-shaped walk: it is
+    // the form an unknown-valued handle takes once a link's schema is
+    // stripped of its `asCell` (`sanitizeSchemaForLinks()`), and the position
+    // declares nothing of the target to read or select. A read there answers
+    // the opaque presence an `unknown` position answers for whatever is
+    // there, naming the target as the link does, without loading it; a
+    // reader that reads through it loads the target then.
+    if (
+      pointerLink !== undefined && pointerLink.space !== doc.address.space &&
+      !isWriteRedirectLink(doc.value) && isUnknownValueSchema(schema)
+    ) {
+      const targetLink = getNextCellLink(this.tx, this.context, doc, schema);
+      return {
+        ok: this.objectCreator.createOpaquePresence?.(targetLink) ??
+          this.objectCreator.createObject(targetLink, undefined),
+      };
     }
 
     if (
@@ -6558,6 +6596,16 @@ export function getJsonType(value: unknown): JSONSchemaTypes | null {
   return (typeof value === "number")
     ? getJsonNumberType(value)
     : getPlainJsonType(value);
+}
+
+/**
+ * Whether `schema`, its references resolved, types its position `unknown` and
+ * nothing else: a union naming `unknown` beside other types decides by them.
+ */
+function isUnknownValueSchema(schema: JSONSchema | undefined): boolean {
+  if (!isObjectOrArray(schema)) return false;
+  const resolved = resolveSchemaRefsCanonical(schema);
+  return isObjectOrArray(resolved) && resolved.type === "unknown";
 }
 
 /** Returns whether a schema requests a cell handle with no declared value shape. */

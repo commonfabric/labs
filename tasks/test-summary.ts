@@ -6,8 +6,9 @@
  * to explain it, it gives the end of that command's output. It ends with
  * where the full logs are.
  *
- * A passing run's block is one line, and a second naming what ran without
- * reporting any test, where something did.
+ * A passing run's block is one line, then a line naming what ran without
+ * reporting any test, where something did, and then a section listing what
+ * the run left out without failing for it, where it left anything out.
  *
  * `tasks/workspace-tests.ts`, `tasks/integration.ts` and `tasks/ci-lane.ts`
  * each end with one.
@@ -67,6 +68,9 @@ export interface RunSummary {
   /** Lines saying anything else that kept the run from passing. */
   notes?: readonly string[];
 
+  /** Lines saying what the run left out without failing for it. */
+  omitted?: readonly string[];
+
   /** Where the run's full logs are. */
   logs?: string;
 
@@ -125,6 +129,11 @@ export function summaryLines(summary: RunSummary): string[] {
     lines.push(
       `Not counted, because they report no tests: ${unreported.join(", ")}`,
     );
+  }
+  const omitted = summary.omitted ?? [];
+  if (omitted.length > 0) {
+    lines.push("", "Left out, which is not a failure:");
+    for (const line of omitted) lines.push(`  ${line}`);
   }
   if (ok) return lines;
   for (const test of failing.slice(0, DESCRIBED_FAILURES)) {

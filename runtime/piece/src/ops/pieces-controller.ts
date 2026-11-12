@@ -20,6 +20,7 @@ import { isDID } from "@commonfabric/identity/did";
 import { HttpProgramResolver } from "@commonfabric/js-compiler/program";
 import { setLLMUrl } from "@commonfabric/llm";
 import type { ClientBuild } from "@commonfabric/memory/v2/client-info";
+import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
 import type { CfcPosture } from "@commonfabric/runner";
 import {
   applyPieceSourceTransition,
@@ -87,6 +88,7 @@ import type {
 import {
   entityKindOfIdString,
   hashStringForEntityAddress,
+  RECEIPT_URI_SCHEME,
 } from "@commonfabric/runner/entity-kind";
 import { rawMetaWriteAuthorization } from "@commonfabric/runner/meta-seam";
 import {
@@ -101,7 +103,6 @@ import { getLogger } from "@commonfabric/logger";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 
-import { prepareSourceClosureVerification } from "../../../runner/src/compilation-cache/cell-cache.ts";
 import { getResultCellWithSourceSchema } from "../../../runner/src/piece-helpers.ts";
 import { pieceId } from "../piece-id.ts";
 // System space-root pattern refs, their derivation, and the source→URL
@@ -113,6 +114,7 @@ import {
   HOME_PATTERN_SOURCE,
   patternSourceUrl,
 } from "../system-pattern-url.ts";
+import { adoptCatalogRoomsOf } from "./adopt-catalog-rooms.ts";
 import { isCfcMigrationRejection } from "./cfc-migration-rejection.ts";
 import {
   assertSuppliedLinkSchemasCompatible,
@@ -130,6 +132,7 @@ import {
 import {
   type DeletionMarkDecision,
   markDeletedSpaceOf,
+  retireDeletedProfileOf,
 } from "./mark-deleted-space.ts";
 import {
   advertisedSystemRelease,
@@ -138,7 +141,7 @@ import {
 import { ensurePrivateInboxOf } from "./private-inbox.ts";
 import { repairProfileRootsOf } from "./profile-space-root.ts";
 import { type ShareIntake, startShareIntakeOf } from "./share-intake.ts";
-import { compileProgram } from "./utils.ts";
+import { compileProgram, instanceTx } from "./utils.ts";
 export {
   DEFAULT_APP_PATTERN_SOURCE,
   deriveSystemPatternSource,
@@ -1058,7 +1061,9 @@ export class PiecesController<T = unknown> {
       ? id
       : this.runtime.getCellFromEntityId(
         this.#space,
-        entityIdFrom(id),
+        // A receipt's id is the whole of its address: a caller reads it off
+        // one command and hands it to another to read the handling's outcome.
+        id.startsWith(`${RECEIPT_URI_SCHEME}:`) ? id : entityIdFrom(id),
         [],
         undefined,
         undefined,
@@ -1538,7 +1543,13 @@ export class PiecesController<T = unknown> {
     if (argumentLink === undefined) {
       throw new Error("piece missing argument cell");
     }
-    return this.runtime.getCellFromLink(argumentLink);
+    // A piece read as one principal's instance has its argument read as
+    // that principal's too.
+    return this.runtime.getCellFromLink(
+      argumentLink,
+      undefined,
+      instanceTx(piece),
+    );
   }
 
   getResult<T = unknown>(
@@ -1735,11 +1746,18 @@ export class PiecesController<T = unknown> {
       ) => void;
       repository?: string;
       sourceTransition?: PieceSourceTransition;
+
+      /** The scope the piece is addressed at; absent, its space instance. */
+      scope?: CellScope;
     },
   ): Promise<Cell<unknown>> {
     const piece = this.runtime.getCellFromEntityId(
       this.#space,
       entityIdFrom(pieceId),
+      [],
+      undefined,
+      undefined,
+      options?.scope,
     );
     await piece.sync();
     const start = options?.start ?? true;
@@ -1808,6 +1826,16 @@ export class PiecesController<T = unknown> {
        * commit itself reconciled.
        */
       served?: { actingUser: string };
+
+      /** The scope the piece is addressed at; absent, its space instance. */
+      scope?: CellScope;
+
+      /**
+       * The principal, and for session scope the session, whose instance of
+       * a piece addressed at a user or session scope the update reads and
+       * writes (`RunSyncedOptions.scopeKeyIdentity`).
+       */
+      scopeKeyIdentity?: ScopeKeyIdentity;
     },
   ): Promise<{
     /** Cell view reconciled to the pattern current after post-commit work. */
@@ -1818,6 +1846,10 @@ export class PiecesController<T = unknown> {
     const piece = this.runtime.getCellFromEntityId(
       this.#space,
       entityIdFrom(pieceId),
+      [],
+      undefined,
+      undefined,
+      options.scope,
     );
     const result = await this.runtime.runSyncedWithCommit(
       piece,
@@ -1836,6 +1868,9 @@ export class PiecesController<T = unknown> {
             options.served.actingUser,
           ),
         }),
+        ...(options.scopeKeyIdentity === undefined
+          ? {}
+          : { scopeKeyIdentity: options.scopeKeyIdentity }),
       },
     );
     if (options.served !== undefined) return result;
@@ -1868,15 +1903,19 @@ export class PiecesController<T = unknown> {
       pattern.resultSchema,
     );
     // Setup verifies the source closure of a pattern that carries a
-    // content-addressed entry ref, and verifies it synchronously. Load the
-    // parser it needs first, since setup cannot await one.
+    // content-addressed entry ref, and verifies it synchronously. Prepare
+    // that verification first, since setup cannot await.
     const knownEntryRef = this.runtime.patternManager.getArtifactEntryRef(
       pattern,
     );
     if (knownEntryRef !== undefined) {
       await timePiecePhase(
         "setupPersistent.prepareSourceClosureVerification",
-        () => prepareSourceClosureVerification(),
+        () =>
+          this.runtime.patternManager.prepareSourceClosureVerification(
+            this.#space,
+            [knownEntryRef.identity],
+          ),
       );
     }
     await timePiecePhase(
@@ -2519,6 +2558,28 @@ export class PiecesController<T = unknown> {
   }
 
   /**
+   * Has the identity's chat manager adopt each room Home's catalog lists with
+   * no membership, a few rooms at a time, as `adoptCatalogRoomsOf()` says, so
+   * that the manager, which lists a room by its membership alone, lists it.
+   * This controller must be over the identity's Home space.
+   *
+   * Resolves once every entry has been tried, or once `signal` aborts or the
+   * runtime begins disposal, after the batch under way; an entry that fails
+   * to adopt is logged and tried again later. Rejects when Home cannot be
+   * brought up, or when reading its records fails.
+   */
+  async adoptCatalogRooms(signal?: AbortSignal): Promise<void> {
+    this.#assertHomeSpace("adopt its catalog's rooms");
+    const home = (await this.ensureDefaultPattern()).getCell();
+    await adoptCatalogRoomsOf(
+      this.runtime,
+      home,
+      this.runtime.userIdentityDID,
+      signal,
+    );
+  }
+
+  /**
    * Makes each of the identity's profiles that Home lists its space's root,
    * where the space has no root or one only a space-root ensure created, as
    * `repairProfileRootsOf()` does, through a controller over each profile's
@@ -2594,13 +2655,15 @@ export class PiecesController<T = unknown> {
   }
 
   /**
-   * Records in Home's shared-space catalog that `space` is deleted, as
-   * `markDeletedSpaceOf()` says, for a Home the identity has: a Home is not
-   * created for it, and `no-home` is answered where there is none. This
-   * controller must be over the identity's Home space.
+   * Records in Home that `space` is deleted, for a Home the identity has: in
+   * its shared-space catalog, as `markDeletedSpaceOf()` says, and, where the
+   * space is a profile's, among its retired profiles, as
+   * `retireDeletedProfileOf()` says. A Home is not created for it, and
+   * `no-home` is answered where there is none. This controller must be over
+   * the identity's Home space.
    *
-   * Resolves with what was decided, once any mark is sent, which is before
-   * Home has handled it.
+   * Resolves with what was decided for the catalog, once anything is sent,
+   * which is before Home has handled it.
    */
   async markDeletedSpace(
     space: MemorySpace,
@@ -2608,7 +2671,15 @@ export class PiecesController<T = unknown> {
     this.#assertHomeSpace("mark a deleted space");
     const home = await this.getDefaultPattern(false);
     if (home === undefined) return "no-home";
-    return await markDeletedSpaceOf(home, space);
+    // Each is sent whatever becomes of the other, since nothing sends either
+    // again; a failure of either is still reported.
+    const [mark, retirement] = await Promise.allSettled([
+      markDeletedSpaceOf(home, space),
+      retireDeletedProfileOf(home, space),
+    ]);
+    if (mark.status === "rejected") throw mark.reason;
+    if (retirement.status === "rejected") throw retirement.reason;
+    return mark.value;
   }
 
   #assertHomeSpace(operation: string): void {
@@ -3294,7 +3365,7 @@ export class PiecesController<T = unknown> {
       runtime,
       rootToStart,
       sourceSnapshot,
-      { allowUnavailable: true },
+      { allowUnavailable: true, candidateIdentity: officialRef.identity },
     );
     const sourceTransition: PieceSourceTransition = {
       revisionId: crypto.randomUUID(),

@@ -296,6 +296,9 @@ export interface HarnessToolContext {
     label: IFCLabel,
   ): Promise<string>;
 
+  /** Opt-in host return channel; false reports a recoverable publication failure. */
+  reportProgress?: (message: string) => Promise<void | boolean>;
+
   /**
    * Where the run's structured result goes, absent when the run was
    * configured with no schema. `record` writes a validated value where the

@@ -257,8 +257,9 @@ keep their data.
 > nothing they were still looking at.
 
 **Removing one is refused wherever the pattern publishes it.** A `PerSpace`
-field that also reaches the result is held by the result contract, and the
-compatibility check rejects a source that drops it, without touching the piece:
+field that also reaches the result is held by the result contract, which
+requires every field `CozyPollOutput` publishes, and the compatibility check
+rejects a source that drops a required result field, without touching the piece:
 
 ```
 Pattern schemas are not backward compatible:

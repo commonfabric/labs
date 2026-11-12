@@ -132,6 +132,10 @@ export const NO_OPTION_CANDIDATES = new Map<string, string>([
     "piece follow:expect-revision",
     "the revision head the caller inspected, or none",
   ],
+  [
+    "piece setsrc:origin",
+    "a `system:` ref or fabric URL the caller names for the piece to follow",
+  ],
   ["piece new:request-key", "an opaque caller retry key"],
   [
     "ingest mint:gmail-access-token",
@@ -157,6 +161,15 @@ export const NO_OPTION_CANDIDATES = new Map<string, string>([
   ],
   // Numbers, durations and bounds. Nothing enumerates a count.
   ["space compact:verify-sample", "an every-nth stride over the documents"],
+  [
+    "cell release-by-intent:clause",
+    "a clause digest the owner reads from the command's own listing and " +
+    "names on purpose",
+  ],
+  [
+    "space delete:confirm",
+    "the space's DID, typed out on purpose: offering one would undo the check",
+  ],
   ["limit", "a row count"],
   ["depth", "a graph depth"],
   ["seq", "a revision sequence number"],

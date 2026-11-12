@@ -236,9 +236,18 @@ directly to JSON Schema.
 
 ### Handling of `undefined`
 
-- In objects: Properties with `undefined` values are removed entirely (both key
-  and value)
-- In arrays: `undefined` values are replaced with `null`
+`undefined` is a value (`space-model-formal-spec/1-fabric-values.md`). An
+object property that holds `undefined` is present, which is not the same as
+absent, and an array element that holds `undefined` keeps it.
+
+- An optional property, `x?: T`, is one that may be absent. It stays out of
+  `required`, and its schema is `T`'s: the `?` adds no `"undefined"`
+  alternative. Patterns are type-checked with `exactOptionalPropertyTypes`,
+  which reads `?` the same way, so writing `undefined` into a declared `x?: T`
+  is an error. To leave the property out, leave the key out.
+- An `undefined` the type names, as in `x?: T | undefined` or
+  `x: T | undefined`, is a value the property may hold, and its schema carries
+  `{ "type": "undefined" }` for it.
 
 ### Handling of `void`
 

@@ -304,6 +304,8 @@ const DIRECTIVE_CASES: Array<[string, string, string | undefined]> = [
   ["cf space verify ", "dirs", undefined],
   ["cf space compact ", "files", "*.sqlite"],
   ["cf space compact x --against ", "files", "*.sqlite"],
+  ["cf space reap ", "files", "*.sqlite"],
+  ["cf space reap x --live ", "files", "*.sqlite"],
   ["cf space reset ", "dirs", undefined],
   ["cf inspect spaces --dir ", "dirs", undefined],
   ["cf profile repair-root --from-snapshot ", "dirs", undefined],
@@ -1533,7 +1535,7 @@ Deno.test("live candidates preserve qualified space, user scope, and nested path
 Deno.test("space compact: --scope and --documents offer the store's vocabulary", async () => {
   // `--scope` means a scope KIND here and a search scope on `wish`; the same
   // option name answers differently by command, which is what the provider's
-  // command scoping is for. `--documents` offers the three id namespaces a
+  // command scoping is for. `--documents` offers the four id namespaces a
   // store holds; a longer prefix is typed past them.
   assertEquals(
     (await liveCandidates(lineFor("cf space compact x --scope ")))
@@ -1543,7 +1545,7 @@ Deno.test("space compact: --scope and --documents offer the store's vocabulary",
   assertEquals(
     (await liveCandidates(lineFor("cf space compact x --documents ")))
       .candidates.map((candidate) => candidate.value).sort(),
-    ["cid:", "computed:", "of:"],
+    ["cid:", "computed:", "of:", "receipt:"],
   );
   const wish = (await liveCandidates(lineFor("cf wish --scope ")))
     .candidates.map((candidate) => candidate.value);

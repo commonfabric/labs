@@ -61,9 +61,9 @@ export function toURI(value: unknown, kind?: EntityKind): URI {
 }
 
 /**
- * Extract the hash from a URI by removing the entity scheme (`of:` or
- * `computed:`). NOTE: the scheme is part of the identity — the bare hash of
- * a `computed:` id is NOT an alias for it, so never feed the result back
+ * Extract the hash from a URI by removing the entity scheme (`of:`, `computed:`
+ * or `receipt:`). NOTE: the scheme is part of the identity — the bare hash of
+ * a kinded or `receipt:` id is NOT an alias for it, so never feed the result back
  * into `toURI` expecting the same entity.
  */
 export function fromURI(uri: URI | string): string {

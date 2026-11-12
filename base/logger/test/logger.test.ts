@@ -7,11 +7,14 @@ import {
   getGlobalLogFloor,
   getLogger,
   getLoggerCountsBreakdown,
+  getLoggerCountsByKey,
+  getLoggerErrorMessagesBreakdown,
   getTimingMeasuresState,
   getTimingStatsBreakdown,
   getTotalLoggerCounts,
   log,
   LOG_COLORS,
+  loggerCountsBreakdownOf,
   parseTimingMeasureCap,
   resetAllLoggerCounts,
   resetAllTimingStats,
@@ -905,6 +908,229 @@ describe("logger", () => {
     });
   });
 
+  describe("errorMessagesByKey", () => {
+    // Each logger is disabled, which prints nothing, and which a logger's
+    // kept messages are meant to survive.
+
+    const disabledLogger = (name: string) =>
+      getLogger(name, { enabled: false });
+
+    it("returns the text of what was logged at `error`, by key", () => {
+      const logger = disabledLogger("kept-messages-text");
+
+      logger.error("first-key", "something", "broke");
+      logger.error("second-key", "something else broke");
+
+      expect(logger.errorMessagesByKey).toStrictEqual({
+        "first-key": ["something broke"],
+        "second-key": ["something else broke"],
+      });
+    });
+
+    it("returns nothing of what was logged at any other level", () => {
+      const logger = disabledLogger("kept-messages-levels");
+
+      logger.debug("a-key", "debug");
+      logger.info("a-key", "info");
+      logger.warn("a-key", "warn");
+
+      expect(logger.errorMessagesByKey).toStrictEqual({});
+      expect(logger.countsByKey["a-key"]?.total).toBe(3);
+    });
+
+    it("returns the earliest three messages of a key, which goes on counting", () => {
+      const logger = disabledLogger("kept-messages-bound");
+
+      for (let i = 0; i < 5; i++) logger.error("a-key", `message ${i}`);
+
+      expect(logger.errorMessagesByKey["a-key"]).toStrictEqual([
+        "message 0",
+        "message 1",
+        "message 2",
+      ]);
+      expect(logger.countsByKey["a-key"]?.error).toBe(5);
+    });
+
+    it("cuts a message at a thousand characters", () => {
+      const logger = disabledLogger("kept-messages-length");
+
+      logger.error("a-key", "x".repeat(1001));
+      logger.error("a-key", "y".repeat(1000));
+
+      expect(logger.errorMessagesByKey["a-key"]).toStrictEqual([
+        `${"x".repeat(1000)}…`,
+        "y".repeat(1000),
+      ]);
+    });
+
+    it("evaluates a lazy message once it has room for it, and not after", () => {
+      const logger = disabledLogger("kept-messages-lazy");
+      let evaluated = 0;
+      const lazy = () => {
+        evaluated++;
+        return ["lazily", "built"];
+      };
+
+      for (let i = 0; i < 5; i++) logger.error("a-key", lazy);
+
+      expect(logger.errorMessagesByKey["a-key"]?.[0]).toBe("lazily built");
+      expect(evaluated).toBe(3);
+    });
+
+    it("returns a sentence for a lazy message that throws, rather than throwing", () => {
+      const logger = disabledLogger("kept-messages-throwing");
+
+      logger.error("a-key", () => {
+        throw new Error("the message could not be built");
+      });
+
+      expect(logger.errorMessagesByKey["a-key"]).toStrictEqual([
+        "(this message could not be rendered)",
+      ]);
+    });
+
+    it("returns an error's name, message and cause", () => {
+      const logger = disabledLogger("kept-messages-error");
+
+      logger.error(
+        "a-key",
+        "failed:",
+        new TypeError("the outer one", { cause: new Error("the inner one") }),
+      );
+
+      expect(logger.errorMessagesByKey["a-key"]).toStrictEqual([
+        "failed: TypeError: the outer one (cause: Error: the inner one)",
+      ]);
+    });
+
+    it("returns what an object reporting like an error reports", () => {
+      const logger = disabledLogger("kept-messages-error-like");
+      class DonutFailure {
+        get name() {
+          return "DonutFailure";
+        }
+
+        get message() {
+          return "the fryer went out";
+        }
+      }
+
+      logger.error("a-key", new DonutFailure());
+      logger.error("a-key", { message: "a record with no name" });
+
+      expect(logger.errorMessagesByKey["a-key"]).toStrictEqual([
+        "DonutFailure: the fryer went out",
+        "a record with no name",
+      ]);
+    });
+
+    it("returns the contents of records and arrays, to a bounded extent", () => {
+      const logger = disabledLogger("kept-messages-record");
+
+      logger.error("a-key", {
+        kind: "write",
+        count: 2,
+        error: new Error("it broke"),
+        deep: { deeper: { deepest: { value: 1 } } },
+        list: Array.from({ length: 12 }, (_, index) => index),
+      });
+
+      expect(logger.errorMessagesByKey["a-key"]).toStrictEqual([
+        "{kind: write, count: 2, error: Error: it broke, " +
+        "deep: {deeper: {deepest: …}}, " +
+        "list: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, …]}",
+      ]);
+    });
+
+    it("cuts a record at ten keys, and names a function rather than calling it", () => {
+      const logger = disabledLogger("kept-messages-wide-record");
+      let called = 0;
+      const record: Record<string, unknown> = {
+        callback: () => {
+          called++;
+        },
+      };
+      for (let i = 1; i < 11; i++) record[`key${i}`] = i;
+
+      logger.error("a-key", record);
+
+      expect(logger.errorMessagesByKey["a-key"]).toStrictEqual([
+        "{callback: [function], key1: 1, key2: 2, key3: 3, key4: 4, key5: 5, " +
+        "key6: 6, key7: 7, key8: 8, key9: 9, …}",
+      ]);
+      expect(called).toBe(0);
+    });
+
+    it("names an instance of a class, calling neither `toJSON()` nor `toString()`", () => {
+      const logger = disabledLogger("kept-messages-instance");
+      let called = 0;
+      class Donut {
+        toJSON() {
+          called++;
+          return "json";
+        }
+
+        toString() {
+          called++;
+          return "string";
+        }
+      }
+
+      logger.error("a-key", new Donut());
+
+      expect(logger.errorMessagesByKey["a-key"]).toStrictEqual(["[Donut]"]);
+      expect(called).toBe(0);
+    });
+
+    it("returns copies, which a caller cannot use to change what is kept", () => {
+      const logger = disabledLogger("kept-messages-copies");
+      logger.error("a-key", "kept");
+
+      logger.errorMessagesByKey["a-key"]?.push("not kept");
+
+      expect(logger.errorMessagesByKey["a-key"]).toStrictEqual(["kept"]);
+    });
+
+    it("evaluates a lazy message twice where the logger also prints it", () => {
+      const logger = getLogger("kept-messages-printed", { level: "error" });
+      let evaluated = 0;
+
+      captureConsole("error", () =>
+        logger.error("a-key", () => {
+          evaluated++;
+          return "lazily built";
+        }));
+
+      expect(logger.errorMessagesByKey["a-key"]).toStrictEqual([
+        "lazily built",
+      ]);
+      expect(evaluated).toBe(2);
+    });
+
+    it("returns nothing once the counts are reset", () => {
+      const logger = disabledLogger("kept-messages-reset");
+      logger.error("a-key", "kept");
+
+      logger.resetCounts();
+
+      expect(logger.errorMessagesByKey).toStrictEqual({});
+    });
+  });
+
+  describe("getLoggerErrorMessagesBreakdown()", () => {
+    it("returns each logger's kept messages by name, omitting a logger with none", () => {
+      getLogger("breakdown-quiet", { enabled: false }).warn("a-key", "warned");
+      getLogger("breakdown-failing", { enabled: false }).error(
+        "a-key",
+        "it broke",
+      );
+
+      expect(getLoggerErrorMessagesBreakdown()).toStrictEqual({
+        "breakdown-failing": { "a-key": ["it broke"] },
+      });
+    });
+  });
+
   describe("setLoggerCountObserver()", () => {
     afterEach(() => setLoggerCountObserver(undefined));
 
@@ -1026,6 +1252,55 @@ describe("logger", () => {
 
       resetAllLoggerCounts();
       expect(getTotalLoggerCounts()).toBe(0);
+    });
+  });
+
+  describe("loggerCountsBreakdownOf()", () => {
+    const counts = (debug: number, info: number) => ({
+      debug,
+      info,
+      warn: 0,
+      error: 0,
+      total: debug + info,
+    });
+
+    it("returns each logger's counts with its total, and the total across them", () => {
+      const breakdown = loggerCountsBreakdownOf({
+        a: { one: counts(1, 2), two: counts(0, 4) },
+        b: { one: counts(5, 0) },
+      });
+
+      expect(breakdown.a!.one).toEqual(counts(1, 2));
+      expect(breakdown.a!.total).toBe(7);
+      expect(breakdown.b!.total).toBe(5);
+      expect(breakdown.total).toBe(12);
+    });
+
+    it("skips a message key named `total`, which would overwrite the logger's", () => {
+      const breakdown = loggerCountsBreakdownOf({
+        a: { total: counts(9, 9), one: counts(1, 0) },
+      });
+
+      expect(breakdown.a!.total).toBe(1);
+      expect(breakdown.total).toBe(1);
+    });
+  });
+
+  describe("getLoggerCountsByKey()", () => {
+    it("returns each registered logger's counts by message key", () => {
+      captureConsole("log", () => {
+        const logger = getLogger("counts-by-key-test");
+        logger.info("one", "test");
+        logger.info("one", "test");
+        logger.warn("two", "test");
+      });
+
+      const byKey = getLoggerCountsByKey()["counts-by-key-test"];
+      expect(byKey?.one).toMatchObject({ info: 2, warn: 0, total: 2 });
+      expect(byKey?.two).toMatchObject({ info: 0, warn: 1, total: 1 });
+      expect(Object.keys(getLoggerCountsByKey())).toContain(
+        "counts-by-key-test",
+      );
     });
   });
 

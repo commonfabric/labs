@@ -1,13 +1,17 @@
 import {
   type Cell,
   Cfc,
+  computed,
   equals,
+  type FabricBytes,
   handler,
+  ifElse,
   linksOf,
   NAME,
   pattern,
   profileOwnerOf,
   resultOwnerOf,
+  spaceDeleted,
   spaceOf,
   Stream,
   UI,
@@ -22,6 +26,7 @@ import ProfileHome, {
   pointAtInboxIfUnset,
   type ProfileInbox,
   type SetProfileNameEvent,
+  type SetProfilePictureEvent,
 } from "../profile-home/profile-home.tsx";
 
 // Trusted UI surfaces / actions. The create surface authorizes appending a new
@@ -60,14 +65,27 @@ export type SeedProfileNameEvent = {
 
 /**
  * What the seed step needs of the profile it seeds: the stored name (to write
- * only where none is stored yet) and the stream it writes through, and what
+ * only where none is stored yet) and the streams it writes through, and what
  * pointing the profile at Home's private inbox needs. The profile is the one
  * just created, so it is current-vintage by construction and carries
- * `setName`.
+ * `setName` and `setPicture`; the picture's stream is optional only so that a
+ * profile without it is still named.
  */
 export type SeedProfileTarget = InboxPointable & {
   name: string;
   setName: Stream<SetProfileNameEvent>;
+  setPicture?: Stream<SetProfilePictureEvent>;
+};
+
+/**
+ * The profile the user's host suggests for their first profile, as the
+ * runtime stores it (`offerProfileSuggestion` in
+ * `runtime/runner/src/profile-suggestion.ts`): a name to start the field
+ * with, and a picture the profile takes unless the user removes it first.
+ */
+export type ProfileSuggestion = {
+  name?: string;
+  picture?: FabricBytes;
 };
 
 // Stores the creation name in the new profile's `name` cell, through
@@ -95,10 +113,18 @@ export type SeedProfileTarget = InboxPointable & {
 // name unstored. Only a profile whose stored `name` is still empty is
 // written: a re-delivery of this event, or the same profile seeded
 // elsewhere, is left alone.
+//
+// The picture a host's profile suggestion still holds is set here too,
+// through the profile's `setPicture`, which this runtime runs as the
+// profile's creator, so the picture's label names the owner as the face
+// readers require.
 export const seedProfileName = handler<
   SeedProfileNameEvent,
-  { privateInbox?: ProfileInbox }
->((event, { privateInbox }) => {
+  {
+    privateInbox?: ProfileInbox;
+    profileSuggestion?: Writable<ProfileSuggestion | undefined>;
+  }
+>((event, { privateInbox, profileSuggestion }) => {
   if (event === undefined) {
     throw new Error(
       "Cannot seed a profile's name: the event lacks a name or a profile, " +
@@ -117,6 +143,21 @@ export const seedProfileName = handler<
   // otherwise wait for the next worker.
   pointAtInboxIfUnset(target, privateInbox);
   target.setName.send({ name });
+  const picture = profileSuggestion?.get()?.picture;
+  if (picture?.length) target.setPicture?.send({ picture });
+});
+
+// Removes the suggested picture, so the profile the surface creates has none.
+// The picture is the user's own suggestion, so removing it changes nothing
+// anyone else holds.
+export const removeSuggestedPicture = handler<
+  void,
+  { profileSuggestion?: Writable<ProfileSuggestion | undefined> }
+>((_event, { profileSuggestion }) => {
+  const suggestion = profileSuggestion?.get();
+  if (suggestion?.picture === undefined) return;
+  const { picture: _, ...rest } = suggestion;
+  profileSuggestion!.set(rest);
 });
 
 // Appends a freshly-created profile (its own `inSpace` space) to the home
@@ -307,19 +348,19 @@ export type ProfileLists = {
   profiles: Cell<BackwardsCompatibleProfile[]>;
 
   /** Home's default profile slot, `DefaultProfileSlot`, if bound. */
-  defaultProfile?: Cell<DefaultProfileSlot>;
+  defaultProfile?: Cell<DefaultProfileSlot> | undefined;
 
   /**
    * The space of a default a home chose before `defaultProfile`, Home's
    * `legacyDefaultProfileSpace`, if bound.
    */
-  legacyDefaultProfileSpace?: Cell<string | undefined>;
+  legacyDefaultProfileSpace?: Cell<string | undefined> | undefined;
 
   /** Home's `mru` list. */
   mru: Cell<unknown[]>;
 
   /** Home's `retiredProfiles` list, if bound. */
-  retiredProfiles?: Cell<unknown[]>;
+  retiredProfiles?: Cell<unknown[]> | undefined;
 };
 
 /**
@@ -389,10 +430,22 @@ export const liveProfileSpaces = (
 // one where any is not the field of that name of the result that owns the
 // retired list (`resultOwnerOf()`), as each of Home's is.
 //
+// A profile whose space is deleted is retired too, though it is never one of
+// the user's own: its document cannot be read. It is admitted in place of the
+// ownership test when `profiles` lists it and `spaceDeleted(space)`, asked
+// here, returns `true`, so an event naming a profile that is not deleted
+// meets the usual refusals. The refusals that keep `#profile` from moving
+// without the person choosing do not apply, since a deleted profile is none
+// of the live ones they protect. Where the memory server has not yet answered
+// for the space, the handler runs again once it has. The runtime that holds
+// the person's Home sends the retirement when it hears of the deletion, as it
+// sends the catalog's `markDeleted` (`retireDeletedProfileOf()`).
+//
 // Restoring removes every link in the list into the space of the profile the
 // row binds or the event names, whatever it names, so that a link the list
 // came to hold some other way can be cleared. A profile that is not retired
-// is left as it is.
+// is left as it is. A deleted profile is not restored: its space admits no
+// one.
 export const setProfileRetired = handler<
   ProfileRetirementEvent,
   {
@@ -418,6 +471,9 @@ export const setProfileRetired = handler<
   const { retiredProfiles } = state;
   const retired = linksOf(retiredProfiles) ?? [];
   if (!state.retired) {
+    if (spaceDeleted(space) === true) {
+      throw new Error("Cannot restore a profile whose space is deleted.");
+    }
     const kept = retired.filter((entry) => spaceOf(entry) !== space);
     if (kept.length !== retired.length) retiredProfiles.set(kept);
     return;
@@ -438,6 +494,18 @@ export const setProfileRetired = handler<
         "not one Home's own.",
     );
   }
+  if (retired.some((entry) => spaceOf(entry) === space)) return;
+  // A deleted profile is decided before its document is read, since a
+  // runtime that read it earlier still holds it and would count it live.
+  const listed = (linksOf(profiles) ?? []).find((entry) =>
+    spaceOf(entry) === space
+  );
+  if (listed !== undefined && spaceDeleted(space) === true) {
+    // The list's own link: a deleted profile's document cannot be read, so
+    // no link is followed to it.
+    retiredProfiles.set([...retired, listed]);
+    return;
+  }
   const live = liveProfileSpaces(
     {
       profiles,
@@ -448,7 +516,6 @@ export const setProfileRetired = handler<
     },
     spaceOf(retiredProfiles),
   );
-  if (retired.some((entry) => spaceOf(entry) === space)) return;
   if (!live.includes(space)) {
     throw new Error(
       "Cannot retire a profile that is not one of the profiles this home " +
@@ -596,6 +663,17 @@ export type ProfileCreateInput = {
    * points at an inbox already.
    */
   privateInbox?: ProfileInbox;
+
+  /**
+   * The profile the user's host suggests, which the `#profile` wish hands
+   * over. Its name starts the field in place of `defaultName`; its picture is
+   * shown, with a control that removes it, and the profile created takes the
+   * picture still shown. Removing the picture removes it from the stored
+   * suggestion; creating a profile leaves the suggestion stored for the host
+   * to replace, and the wish shows this surface only while the user has no
+   * profile.
+   */
+  profileSuggestion?: Writable<ProfileSuggestion | undefined>;
 };
 
 export type ProfileCreateOutput = {
@@ -605,11 +683,19 @@ export type ProfileCreateOutput = {
 };
 
 export default pattern<ProfileCreateInput, ProfileCreateOutput>(
-  ({ profiles, inputId, defaultName, privateInbox }) => {
-    const seedName = seedProfileName({ privateInbox });
+  ({ profiles, inputId, defaultName, privateInbox, profileSuggestion }) => {
+    const seedName = seedProfileName({ privateInbox, profileSuggestion });
     const createProfile = submitProfileCreation({
       profiles,
       seedName,
+    });
+    const startingName = computed(() =>
+      profileSuggestion?.get()?.name ?? defaultName ?? ""
+    );
+    // An empty picture is none: the seed step and `setPicture` take only bytes.
+    const suggestedPicture = computed(() => {
+      const picture = profileSuggestion?.get()?.picture;
+      return picture?.length ? picture : undefined;
     });
     return {
       [NAME]: "Create Profile",
@@ -629,12 +715,35 @@ export default pattern<ProfileCreateInput, ProfileCreateOutput>(
               uncontrolled copy inside cf-submit-input) — it does not touch the
               trusted-click path. */
           }
+          {ifElse(
+            suggestedPicture,
+            <cf-hstack
+              gap="2"
+              align="center"
+              data-ui-region="profile-create-suggested-picture"
+            >
+              <cf-avatar
+                bytes={suggestedPicture}
+                name={startingName}
+                size="lg"
+              />
+              <cf-button
+                id="profile-create-remove-picture"
+                variant="ghost"
+                size="sm"
+                onClick={removeSuggestedPicture({ profileSuggestion })}
+              >
+                Remove picture
+              </cf-button>
+            </cf-hstack>,
+            null,
+          )}
           <cf-submit-input
             inputId={inputId ?? "profile-name-input"}
             data-ui-action={TRUSTED_PROFILE_CREATE_ACTION}
             placeholder="Your name..."
             buttonText="Create profile"
-            initialValue={defaultName ?? ""}
+            initialValue={startingName}
             onClick={createProfile}
           />
         </cf-vstack>

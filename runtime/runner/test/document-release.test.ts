@@ -168,6 +168,92 @@ describe("document-release", () => {
     expect(loaded(id)).toBe(false);
   });
 
+  it("reports a document it keeps only for a recent load, which the next pass releases", async () => {
+    await write("counter", 1);
+    const id = idOf("counter");
+    await load(id);
+
+    expect(await readerStorage.releaseUnreadDocuments()).toBe(true);
+    expect(loaded(id)).toBe(true);
+
+    expect(await readerStorage.releaseUnreadDocuments()).toBe(false);
+    expect(loaded(id)).toBe(false);
+  });
+
+  it("reports a document read while the pass waits to watch another on its own", async () => {
+    // A pass that releases a root first watches, on its own, a document
+    // something still reads only through that root's links. The counter is
+    // read while that watch is on its way, so the pass keeps it, and says
+    // so.
+
+    await write("child", 1);
+    const tx = writer.edit();
+    writer.getCell(space, "parent", parentSchema, tx).set({
+      child: writer.getCell(space, "child", counterSchema, tx),
+    });
+    expect((await tx.commit().settled).error).toBeUndefined();
+    await write("counter", 1);
+    const child = idOf("child");
+    const parent = idOf("parent");
+    const id = idOf("counter");
+    await load(parent, parentSchema);
+    await load(id);
+    const reading = readerStorage.addDocumentReader((address) =>
+      address.id === child
+    );
+    expect(await readerStorage.releaseUnreadDocuments()).toBe(true);
+
+    const watch = defer<void>();
+    const watching = defer<void>();
+    const watchAdd = server.watchAdd.bind(server);
+    server.watchAdd = async (message) => {
+      server.watchAdd = watchAdd;
+      watching.resolve();
+      await watch.promise;
+      return await watchAdd(message);
+    };
+    const pass = readerStorage.releaseUnreadDocuments();
+    await watching.promise;
+    expect(held(id)).toEqual({ value: { n: 1 } });
+    watch.resolve();
+
+    expect(await pass).toBe(true);
+    expect(held(parent)).toBeUndefined();
+    expect(loaded(id)).toBe(true);
+    reading();
+  });
+
+  it("releases what a stopped piece read in the pass after the one its stop asked for", async () => {
+    // The stop's own pass keeps what was loaded since the previous pass, as
+    // it keeps anything a read still under way may need; the pass that
+    // follows it, which nothing else asks for here, releases it.
+    await write("counter", 1);
+    const id = idOf("counter");
+    await load(id);
+
+    const { pattern, lift } = createTrustedBuilder(reader).commonfabric;
+    const doubled = pattern<{ n: number }>(({ n }) =>
+      lift((n: number) => n * 2, { type: "number" }, { type: "number" })(n)
+    );
+    const tx = reader.edit();
+    const piece = reader.run(
+      tx,
+      doubled,
+      { n: 2 },
+      reader.getCell<number>(space, "doubled-and-stopped", undefined, tx),
+    );
+    reader.prepareTxForCommit(tx);
+    expect((await tx.commit().settled).error).toBeUndefined();
+    expect(await piece.pull()).toBe(4);
+    expect(loaded(id)).toBe(true);
+
+    reader.runner.stop(piece);
+    // Shares the release the stop asked for, which is still waiting for the
+    // scheduler to be idle.
+    await reader.releaseUnreadDocuments();
+    expect(loaded(id)).toBe(false);
+  });
+
   it("keeps a document a scheduler action reads until the action is unsubscribed", async () => {
     await write("counter", 1);
     const id = idOf("counter");
@@ -371,6 +457,35 @@ describe("document-release", () => {
 
     await reader.releaseUnreadDocuments();
     expect(failed()).toBe(before + 1);
+  });
+
+  it("answers every call made while a pass is under way with one pass after it", async () => {
+    // Each call comes once the scheduler is idle again, as the unsubscribes of
+    // a closing pane arrive one message at a time.
+    const passBegan = defer();
+    const passMayEnd = defer();
+    const release = readerStorage.releaseUnreadDocuments.bind(readerStorage);
+    let passes = 0;
+    readerStorage.releaseUnreadDocuments = async () => {
+      passes++;
+      if (passes === 1) {
+        passBegan.resolve();
+        await passMayEnd.promise;
+      }
+      return await release();
+    };
+
+    const first = reader.releaseUnreadDocuments();
+    await passBegan.promise;
+    const later: Promise<void>[] = [];
+    for (let call = 0; call < 10; call++) {
+      later.push(reader.releaseUnreadDocuments());
+      await reader.scheduler.idle();
+    }
+    expect(passes).toBe(1);
+    passMayEnd.resolve();
+    await Promise.all([first, ...later]);
+    expect(passes).toBe(2);
   });
 
   it("keeps a document a refresh retracts while something reads it, unwatched, and drops it once nothing does", async () => {

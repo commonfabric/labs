@@ -176,12 +176,13 @@ import { isRuntime } from "./runtime-brand.ts";
 import {
   type Action,
   ignoreReadForScheduling,
+  type ReactivityLog,
   txToReactivityLog,
 } from "./scheduler.ts";
 import {
+  handlingReceiptLink,
   mintEventId,
   scopeCallerEventId,
-  servedReceiptCause,
 } from "./scheduler/event-identity.ts";
 import { withdrawHandlerWhileLoading } from "./scheduler/handler-load-wait.ts";
 import { InSpaceTargetUnresolved } from "./scheduler/retry-immediately.ts";
@@ -1381,8 +1382,13 @@ export function syncCellForIdentity<T>(
  * The container stores only the entity reference parts that need to be synchronized.
  */
 interface CauseContainer {
-  // Root cell that created this cause container
-  cell: OpaqueCell<unknown>;
+  // The object the siblings share as their identity: what the pattern builder
+  // attaches nodes under and what an export names. A cell made without a link
+  // is its own, since the builder compares it with the cells it made. One
+  // made from a link mints it on first use, without a transaction, so that
+  // the siblings of a cell bound to a transaction do not keep that
+  // transaction alive through it.
+  cell: OpaqueCell<unknown> | undefined;
   // Entity reference - shared across all siblings
   id: URI | undefined;
   space: MemorySpace | undefined;
@@ -1437,6 +1443,7 @@ let pullProjectedOf: <R>(
   project: (value: unknown) => R,
   options: { awaitDurability?: boolean },
 ) => Promise<R>;
+let writeTargetOf: (cell: CellImpl<FabricValue>) => Cell<FabricValue>;
 let sinkProjectedOf: <R>(
   cell: CellImpl<FabricValue>,
   project: (value: unknown) => R,
@@ -1589,7 +1596,9 @@ export class CellImpl<T extends FabricValue>
     // Use provided container or create one
     // If link has an id, extract it to the container
     this.#causeContainer = causeContainer ?? {
-      cell: this as unknown as OpaqueCell<unknown>,
+      cell: this.#_link.id === undefined
+        ? this as unknown as OpaqueCell<unknown>
+        : undefined,
       id: this.#_link.id,
       space: this.#_link.space,
       cause: undefined,
@@ -1745,9 +1754,31 @@ export class CellImpl<T extends FabricValue>
       space,
       ...(id !== undefined ? { id } : {}),
     });
-    for (const node of cellNodes.get(this.#causeContainer.cell) ?? []) {
+    for (const node of cellNodes.get(this.#identityCell()) ?? []) {
       (node.module as Module).targetSpace = space;
     }
+  }
+
+  /**
+   * The object the siblings share as their identity; `CauseContainer.cell`.
+   * A sibling made with no transaction and no frame, as `#linkOnlyCopy()`
+   * makes a copy: `withTx()` keeps the transaction of a cell bound to the run
+   * under way, and a frame carries its action's transaction.
+   */
+  #identityCell(): OpaqueCell<unknown> {
+    if (this.#causeContainer.cell === undefined) {
+      const identity = new CellImpl(
+        this.#runtime,
+        undefined,
+        this.#_link,
+        this.#synced,
+        this.#causeContainer,
+        this.#kind,
+      );
+      identity.#frame = undefined;
+      this.#causeContainer.cell = identity as unknown as OpaqueCell<unknown>;
+    }
+    return this.#causeContainer.cell;
   }
 
   /**
@@ -2992,13 +3023,10 @@ export class CellImpl<T extends FabricValue>
       if (firedEventId !== undefined && sendOptions?.echo === false) {
         if (settleCallback !== undefined) {
           const unechoed = this.#runtime.edit();
-          // In the stream's space: a served handling's transaction writes the
-          // one space its stream lives in, so a handling that settles wrote
-          // its receipt there (protocol.md §2b).
-          unechoed.handlingReceiptLink = this.#runtime.getCell(
-            resolvedToValueLink.space,
-            servedReceiptCause(firedEventId),
-          ).getAsNormalizedFullLink();
+          unechoed.handlingReceiptLink = handlingReceiptLink(
+            firedEventId,
+            resolvedToValueLink,
+          );
           void unechoed.commit().settled.then(() => settleCallback(unechoed));
         }
       } else {
@@ -3039,6 +3067,34 @@ export class CellImpl<T extends FabricValue>
           "Transaction required for .set() - mutations only work in handlers\n" +
             "help: use handler() to create transaction context, or computed() for read-only transformations",
         );
+      }
+
+      // A handler's write into another space, at a link-hop target whose
+      // document has not arrived (`pendingHopDoc`), cannot tell a send to a
+      // stream from a write: the stream marker is unknowable there, not
+      // absent. Written as a value, it would open a writer in a second space,
+      // which the transaction refuses, and lose the event. So while that
+      // document's load is in flight the run is withdrawn, and the dispatch
+      // runs it again once the load lands (events.md §5), as a cell resolved
+      // through a loading document is (`resolveAsCell()`); the resolution
+      // above kicked that load. A target confirmed absent, a same-space
+      // target, or one outside a handler, writes as before.
+      if (resolvedToValueLink.pendingHopDoc === true) {
+        const run = patternRun(this.#runtime);
+        if (
+          run?.kind === "handler" && run.space !== undefined &&
+          resolvedToValueLink.space !== run.space
+        ) {
+          withdrawHandlerWhileLoading(
+            this.#runtime,
+            run.tx,
+            resolvedToValueLink,
+            `a write into another space reached \`${resolvedToValueLink.id}\` while its document was still loading`,
+          );
+          if (run.tx.dispatchedHandlerNotRun !== undefined) {
+            return this as unknown as Cell<T>;
+          }
+        }
       }
 
       // No await for the sync, just kicking this off, so we have the data to
@@ -4165,13 +4221,22 @@ export class CellImpl<T extends FabricValue>
   }
 
   resolveAsCell(): Cell<T> {
+    return this.#resolveAsCell("value");
+  }
+
+  /**
+   * The cell this one's links lead to, for `"value"`, or the cell a write to
+   * this one lands in, for `"writeRedirect"`: write redirects are followed,
+   * and a link stored there as the value is not.
+   */
+  #resolveAsCell(lastNode: "value" | "writeRedirect"): Cell<T> {
     const readTx = this.#runtime.readTx(this.#tx);
     const tracesBefore = readTx.getCfcState().dereferenceTraces.length;
     let link: NormalizedFullLink = resolveLink(
       this.#runtime,
       readTx,
       this.#link,
-      "value",
+      lastNode,
       { markIfcCrossings: true },
     );
     // The handle carries how it was obtained, the restrictions of the slots
@@ -4475,7 +4540,7 @@ export class CellImpl<T extends FabricValue>
     // For cells created during pattern construction, we need to track which nodes
     // they're connected to. Since Cell doesn't have a nodes set like Reactive's store,
     // we'll store this in a WeakMap keyed by the cell instance.
-    const top = this.#causeContainer.cell;
+    const top = this.#identityCell();
     if (!cellNodes.has(top)) {
       cellNodes.set(top, new Set());
     }
@@ -4493,12 +4558,13 @@ export class CellImpl<T extends FabricValue>
           "disposed, so it cannot take part in building a pattern",
       );
     }
+    const identity = this.#identityCell();
     return {
-      cell: this.#causeContainer.cell,
+      cell: identity,
       path: this.#_link.path,
       schema: this.schema,
       scope: isCellScope(this.#_link.scope) ? this.#_link.scope : undefined,
-      nodes: cellNodes.get(this.#causeContainer.cell) ?? new Set(),
+      nodes: cellNodes.get(identity) ?? new Set(),
       frame: this.#frame,
       kind: this.#kind,
       name: this.#causeContainer.cause,
@@ -4620,12 +4686,12 @@ export class CellImpl<T extends FabricValue>
   query<Row = Record<string, unknown>>(
     sql: string,
     options?: {
-      params?: ReadonlyArray<unknown> | Record<string, unknown>;
+      params?: ReadonlyArray<unknown> | Record<string, unknown> | undefined;
       reactOn?: unknown;
-      requestKey?: string;
-      maxConfidentiality?: ReadonlyArray<unknown>;
-      onExceed?: "fail" | "skip";
-      readClearance?: boolean;
+      requestKey?: string | undefined;
+      maxConfidentiality?: ReadonlyArray<unknown> | undefined;
+      onExceed?: "fail" | "skip" | undefined;
+      readClearance?: boolean | undefined;
       scope?: CellScope;
     },
   ): Reactive<
@@ -4639,10 +4705,12 @@ export class CellImpl<T extends FabricValue>
   > {
     // The scope binds the node the way `.asScope` binds the builder export:
     // the runner folds the node's default scope into the result cell's link.
-    // Validated at the boundary: an invalid scope must not reach the link.
+    // Validated at the boundary: an invalid scope must not reach the link. A
+    // pattern input or a computed value is still a reference here, which no
+    // check can resolve, so the message names that case.
     if (options?.scope !== undefined && !isCellScope(options.scope)) {
       throw new TypeError(
-        `sqlite: invalid query result scope ${JSON.stringify(options.scope)}`,
+        debugStr`sqlite: \`db.query()\`'s \`scope\` is read when the pattern is built, so it is \`"space"\`, \`"user"\`, or \`"session"\` written in the pattern, not a pattern input or a computed value; got $quote${options.scope}`,
       );
     }
     const factory = options?.scope === undefined
@@ -5129,6 +5197,7 @@ export class CellImpl<T extends FabricValue>
       cell.#pullProjected(project, options, false);
     sinkProjectedOf = (cell, project, callback, options) =>
       cell.#sinkProjected(project, callback, options);
+    writeTargetOf = (cell) => cell.#resolveAsCell("writeRedirect");
   }
 }
 
@@ -5199,13 +5268,17 @@ function patternRunTx(
 }
 
 /**
- * Returns the kind and the transaction of the handler or lift of `runtime`
- * that is running, while that transaction is open.
+ * Returns the kind, the transaction and the space of the handler or lift of
+ * `runtime` that is running, while that transaction is open.
  */
 function patternRun(
   runtime: Runtime,
 ):
-  | { kind: "handler" | "lift"; tx: IExtendedStorageTransaction }
+  | {
+    kind: "handler" | "lift";
+    tx: IExtendedStorageTransaction;
+    space: MemorySpace | undefined;
+  }
   | undefined {
   let frame = getTopFrame();
   while (frame !== undefined && frame.frameKind === undefined) {
@@ -5213,7 +5286,7 @@ function patternRun(
   }
   const tx = frame?.runtime === runtime ? frame.tx : undefined;
   return frame?.frameKind !== undefined && tx?.status().status === "ready"
-    ? { kind: frame.frameKind, tx }
+    ? { kind: frame.frameKind, tx, space: frame.space }
     : undefined;
 }
 
@@ -5452,18 +5525,7 @@ function sinkHelper(
   });
   (sink.action as Action & { src?: string }).src = sinkName;
 
-  // Call action once immediately, which also defines what docs need to be
-  // subscribed to. Wrap with withExecutingAction so that any child sinks
-  // created during the callback see this action as their parent.
-  const tx = runtime.edit();
-  runtime.scheduler.withExecutingAction(sink.action, () => sink.action(tx));
-  const log = txToReactivityLog(tx);
-
-  // Technically unnecessary since we don't expect/allow callbacks to sink to
-  // write to other cells, and we retry by design anyway below when read data
-  // changed. But ideally we enforce read-only as well.
-  runtime.prepareTxForCommit(tx);
-  tx.commit();
+  const log = runSinkOnce(sink, runtime);
 
   // Mark as effect since sink() is a side-effectful consumer (FRP effect/sink)
   // Use resubscribe because we've already run it once above
@@ -5480,6 +5542,28 @@ function sinkHelper(
     if (isCancel(sink.cleanup)) sink.cleanup();
     sink.cleanup = undefined;
   };
+}
+
+/**
+ * Runs `sink`'s action once, in a transaction of its own, and returns what it
+ * read, which defines the documents it subscribes to. Any child sink the
+ * callback creates sees this action as its parent.
+ *
+ * The transaction is confined to this function: a closure here sharing scope
+ * with the cancel function `sinkHelper()` returns would keep it, and all it
+ * read, reachable for as long as the sink is live.
+ */
+function runSinkOnce(sink: SinkAction, runtime: Runtime): ReactivityLog {
+  const tx = runtime.edit();
+  runtime.scheduler.withExecutingAction(sink.action, () => sink.action(tx));
+  const log = txToReactivityLog(tx);
+
+  // Technically unnecessary since we don't expect/allow callbacks to sink to
+  // write to other cells, and we retry by design anyway below when read data
+  // changed. But ideally we enforce read-only as well.
+  runtime.prepareTxForCommit(tx);
+  tx.commit();
+  return log;
 }
 
 /**
@@ -5929,6 +6013,16 @@ export function pullProjected<R>(
   options: { awaitDurability?: boolean } = {},
 ): Promise<R> {
   return pullProjectedOf(requireCellImpl(cell), project, options);
+}
+
+/**
+ * The cell a write to `cell` lands in, as `resolveAsCell()` resolves one: its
+ * write redirects are followed, and a link stored there as the value is not.
+ * A host that must tell a value written into a cell from one reached through
+ * a link stored there compares this with `cell.resolveAsCell()`.
+ */
+export function resolveWriteTarget(cell: Cell<unknown>): Cell<unknown> {
+  return writeTargetOf(requireCellImpl(cell));
 }
 
 /**

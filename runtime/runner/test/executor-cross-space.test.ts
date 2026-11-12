@@ -69,6 +69,7 @@ import { parseLink } from "../src/link-utils.ts";
 import {
   newSharedServer,
   TEST_MEMORY_SERVER_AUTH,
+  writeDeletionTombstone,
 } from "./memory-v2-test-utils.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
@@ -2748,7 +2749,7 @@ type Piece = { name?: string };
 type Holder = { piece?: Cell<Piece> };
 const point = handler<void, { holder: Holder; kept: Writable<Holder> }>(
   (_event, { holder, kept }) => {
-    kept.set({ piece: holder.piece?.resolveAsCell() });
+    kept.set({ piece: holder.piece!.resolveAsCell() });
   },
 );
 export default pattern<
@@ -2792,6 +2793,104 @@ export default pattern<
     });
   });
 
+  /**
+   * A pattern whose `offer` handler sends to the `receive` stream of an inbox
+   * its holder links to, through a cell that carries no stream schema, as
+   * FabriChat's offers reach a profile's inbox.
+   */
+  const OFFERING_HANDLER_PATTERN = `
+import { type Cell, handler, pattern, type Stream } from "commonfabric";
+type Inbox = { receive: Stream<{ title: string }> };
+type Holder = { inbox?: Cell<unknown> };
+function inboxOf(link: unknown): Cell<Inbox>;
+function inboxOf(link: unknown): unknown {
+  return link;
+}
+const offer = handler<{ title: string }, { holder: Holder }>(
+  (event, { holder }) => {
+    inboxOf(holder.inbox!.resolveAsCell()).key("receive").send({
+      title: event.title,
+    });
+  },
+);
+export default pattern<{ holder: Holder }, { offer: Stream<{ title: string }> }>(
+  ({ holder }) => ({ offer: offer({ holder }) }),
+);`;
+
+  it("delivers a served handler's send to a foreign stream, through a link to a document the serving runtime has not loaded", async () => {
+    // Read without a stream schema, the target's stream marker is what tells
+    // a send from a write, and on a document the replica has not loaded it is
+    // unknowable. The run is withdrawn and runs again once the load lands,
+    // rather than writing into the foreign space and losing the event.
+    let inbox: Cell<unknown> | undefined;
+    const { result, entries } = await standUpServed(
+      "send-unloaded-stream",
+      OFFERING_HANDLER_PATTERN,
+      async (client) => {
+        inbox = await foreignDocument(
+          client,
+          "send-unloaded-stream-inbox",
+          "space",
+          { receive: { $stream: true } },
+        );
+        return { holder: { inbox } };
+      },
+    );
+
+    result.key("offer").send({ title: "hello" });
+    await clientManager.synced();
+    await awaitAdmitted(server, () => entries()[0]?.consequenced === true);
+
+    expect(entries()[0].status).toBeUndefined();
+    const foreign = await server.engineForSpace(foreignSpace);
+    const sidecarId = streamEntriesDocId({
+      id: inbox!.getAsNormalizedFullLink().id,
+      path: ["receive"],
+    });
+    const delivered = () =>
+      (readDoc(foreign, { id: sidecarId })?.value as
+        | StreamEventsDocValue
+        | undefined)?.entries ?? [];
+    await awaitAdmitted(server, () => delivered().length > 0);
+    expect(delivered().map((entry) => entry.payload)).toEqual([
+      { title: "hello" },
+    ]);
+  });
+
+  it("ends a served handler's send to a foreign target confirmed absent, rather than waiting on it", async () => {
+    // The run waits only while the target's load is in flight: once the load
+    // confirms there is no document, the send writes as before, which the
+    // transaction refuses, and the event ends there, delivering nothing.
+    let inbox: Cell<unknown> | undefined;
+    const { result, entries } = await standUpServed(
+      "send-absent-stream",
+      OFFERING_HANDLER_PATTERN,
+      (client) => {
+        inbox = client.getCell(
+          foreignSpace,
+          "send-absent-stream-inbox",
+          undefined,
+        );
+        return { holder: { inbox } };
+      },
+    );
+
+    result.key("offer").send({ title: "hello" });
+    await clientManager.synced();
+    await awaitAdmitted(server, () => entries()[0]?.consequenced === true);
+
+    const foreign = await server.engineForSpace(foreignSpace);
+    const sidecarId = streamEntriesDocId({
+      id: inbox!.getAsNormalizedFullLink().id,
+      path: ["receive"],
+    });
+    expect(readDoc(foreign, { id: sidecarId })).toBeNull();
+    // The handler ran and failed on its write, once; it was not withdrawn
+    // dispatch after dispatch until the drain gave up on it.
+    expect(entries()[0].error).toContain("Can not open transaction writer");
+    expect(entries()[0].reason).toBeUndefined();
+  });
+
   it("runs a served event whose declared value is a foreign space-scope document", async () => {
     let target: Cell<unknown> | undefined;
     const { result, entries, stored } = await standUpServed(
@@ -2814,6 +2913,119 @@ export default pattern<
 
     expect(entries()[0].status).toBeUndefined();
     expect(stored()?.counts).toEqual([5]);
+  });
+
+  describe("a served event whose dispatch load reaches a deleted space", () => {
+    /**
+     * A pattern whose `add` handler records what it reads of the piece its
+     * event links to: whether the piece's space is deleted, and its count.
+     */
+    const DELETED_SPACE_EVENT_PATTERN = `
+import { action, pattern, spaceDeleted, type Writable, type Stream } from "commonfabric";
+type Piece = { count?: number };
+export default pattern<
+  { answers: Writable<string[]> },
+  { add: Stream<{ piece: Writable<Piece> }> }
+>(({ answers }) => ({
+  add: action(({ piece }: { piece: Writable<Piece> }) => {
+    answers.push(\`deleted \${spaceDeleted(piece)}, count \${piece.get()?.count}\`);
+  }),
+}));`;
+
+    /**
+     * Stands up {@link DELETED_SPACE_EVENT_PATTERN} with two documents Alice
+     * writes in the foreign space, and returns them beside what
+     * `standUpServed()` returns.
+     */
+    const standUpDeletedSpaceEvents = async (label: string) => {
+      const pieces: Cell<unknown>[] = [];
+      const served = await standUpServed(
+        label,
+        DELETED_SPACE_EVENT_PATTERN,
+        async (client) => {
+          for (const [name, count] of [["first", 1], ["second", 2]] as const) {
+            pieces.push(
+              await foreignDocument(client, `${label}-${name}`, "space", {
+                count,
+              }),
+            );
+          }
+          return { answers: [] };
+        },
+      );
+      return { ...served, first: pieces[0], second: pieces[1] };
+    };
+
+    /** Deletes the foreign space, as Alice, and revokes its open sessions. */
+    const deleteForeignSpace = async () => {
+      writeDeletionTombstone(
+        await server.engineForSpace(foreignSpace),
+        foreignSpace,
+        aliceSigner.did(),
+      );
+      server.noticeDeletedSpace(foreignSpace);
+    };
+
+    it("runs the handler, which reads the document as absent and the space as deleted, when the deletion revokes the serving runtime's open session on the space", async () => {
+      // The first event opens the serving runtime's session on the foreign
+      // space, so the deletion reaches the runtime as that session's
+      // `deleted` revocation. The second event links to a document of that
+      // space the runtime has not loaded, so its run loads it after the
+      // revocation.
+
+      const revoked = Promise.withResolvers<void>();
+      onServingRuntime = (runtime) => {
+        runtime.storageManager.subscribeSpaceAccessLoss?.((space) => {
+          if (space === foreignSpace) revoked.resolve();
+        });
+        return Promise.resolve();
+      };
+      const { result, entries, stored, first, second } =
+        await standUpDeletedSpaceEvents("deleted-space-revoked");
+      result.key("add").send({ piece: first });
+      await clientManager.synced();
+      await awaitAdmitted(server, () => entries()[0]?.consequenced === true);
+      expect(stored()?.answers).toEqual(["deleted false, count 1"]);
+
+      await deleteForeignSpace();
+      await revoked.promise;
+      result.key("add").send({ piece: second });
+      await clientManager.synced();
+      await awaitAdmitted(
+        server,
+        () =>
+          entries()[1]?.consequenced === true ||
+          entries()[1]?.deliveryDeferral !== undefined,
+      );
+
+      expect(entries()[1].deliveryDeferral).toBeUndefined();
+      expect(entries()[1].status).toBeUndefined();
+      expect(stored()?.answers).toEqual([
+        "deleted false, count 1",
+        "deleted true, count undefined",
+      ]);
+    });
+
+    it("runs the handler, which reads the document as absent and the space as deleted, when the memory server refuses the serving runtime's open of the space", async () => {
+      // The space is deleted before the serving runtime reads anything there,
+      // so its open is refused with the deleted space's permanent refusal.
+
+      const { result, entries, stored, second } =
+        await standUpDeletedSpaceEvents("deleted-space-refused");
+      await deleteForeignSpace();
+      result.key("add").send({ piece: second });
+      await clientManager.synced();
+      await awaitAdmitted(
+        server,
+        () =>
+          entries()[0]?.consequenced === true ||
+          entries()[0]?.deliveryDeferral !== undefined,
+      );
+
+      expect(entries()[0].deliveryDeferral).toBeUndefined();
+      expect(entries()[0].status).toBeUndefined();
+      expect(stored()?.answers).toEqual(["deleted true, count undefined"]);
+    });
   });
 
   it("seals a permanent dispatch-load failure for a served handler whose bound state is a foreign scoped document, and runs nothing", async () => {

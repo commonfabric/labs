@@ -207,12 +207,14 @@ import {
   holdingsToCacheEntries,
   isEmptySync,
   mergeWatchesById,
+  pieceMarkInputsOf,
   sameSnapshot,
   sameWatchSpec,
   type SessionCacheEntry,
   toCacheEntry,
   toWireRemove,
   toWireUpsert,
+  trackedAndPieceKeysFromEntries,
   trackedIdsFromEntries,
   unionQuery,
 } from "./server-sync.ts";
@@ -241,7 +243,7 @@ import {
 import { assertReadOnly } from "./sqlite/guard.ts";
 import { ReadConnectionPool } from "./sqlite/read-pool.ts";
 import type { TableSchema } from "./sqlite/schema.ts";
-import { resolveSpaceStoreUrl } from "./storage-path.ts";
+import { cellDatabaseFileName, resolveSpaceStoreUrl } from "./storage-path.ts";
 import { compressServerMessageLabels } from "./sync-label-table.ts";
 import {
   compressServerMessageCommitLabels,
@@ -910,17 +912,6 @@ const isSpaceKeyAclGenesis = (
   isACL(commit.operations[0].value?.value) &&
   hasConcreteOwner(commit.operations[0].value?.value);
 
-/** Deterministic, collision-resistant-enough token for a filename component
- *  (FNV-1a 32-bit + length). Used to derive cell-db file names from (space,id). */
-function hashToken(s: string): string {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i);
-    h = Math.imul(h, 0x01000193);
-  }
-  return `${(h >>> 0).toString(16).padStart(8, "0")}${s.length.toString(16)}`;
-}
-
 /** Extract the table name from a SQLite "no such table: <name>" error, or
  *  undefined if the error is not that shape. SQLite reports the *unquoted* name,
  *  which may itself contain spaces or dots (e.g. `CREATE TABLE "my notes"`), so
@@ -1060,6 +1051,20 @@ type PublishTransactVerdict = (
   response: ResponseMessage<Engine.AppliedCommit>,
 ) => void;
 
+/**
+ * Sends a session's frame, called in the same synchronous step that records
+ * what the frame carries as delivered to the session. A later frame leaves out
+ * the `cid:` documents that record says the session holds, so no other frame
+ * of the session may reach the wire between that step and this frame
+ * (docs/specs/memory-v2/04-protocol.md, section 4.3.6). It is called at most
+ * once, and only for a frame that carries documents. A refusal, and a frame
+ * that carries none, comes back as the caller's return value. A connection's
+ * function holds a failed send until the caller has returned, so that the
+ * failure is not taken for one of the caller's own; a caller that wraps it may
+ * still throw for reasons of its own before it sends anything.
+ */
+type PublishFrame<M> = (message: M) => void;
+
 type TransactDecision = {
   response: ResponseMessage<Engine.AppliedCommit>;
   postCommit?: () => Promise<void>;
@@ -1114,8 +1119,9 @@ type SessionHandle = {
 /** Kind of the LAST operation an origin commit applied to a doc — decides the
  * own-write echo shape at flush (CT-1965): `set`/`delete` heads are elided
  * (the writer provably holds their outcome), `patch` heads ride the frame as
- * full post-apply documents. */
-type DirtyOp = "set" | "patch" | "delete";
+ * full post-apply documents, and `derived` heads, which the engine wrote from
+ * the commit rather than the writer supplying them, always ride it. */
+type DirtyOp = "set" | "patch" | "delete" | "derived";
 
 type DirtyOrigin = {
   sessionId: string;
@@ -1276,8 +1282,16 @@ export type DemandedInstanceRow = {
   identity?: { readonly principal?: string; readonly sessionId?: string };
 
   /** True when the row is a watch ROOT of its session (the structure
-   * load's input, unchanged in scope — design §2.8 flag 4). */
+   * load's input). */
   root: boolean;
+
+  /**
+   * True when the document the session was sent for the row is one of a
+   * piece's values (`trackedAndPieceKeysFromEntries()`), so that a serving
+   * loop can start the piece it belongs to though no watch names it as a
+   * root: a piece reached only through a data link (design §2.8 flag 4).
+   */
+  piece?: true;
 };
 
 /**
@@ -1380,6 +1394,14 @@ export type ServerConnectOptions = {
    * process's, leaves it unset.
    */
   inProcess?: boolean;
+
+  /**
+   * The process-instance component of the lease holder the peer's host
+   * acquires under (`executionLeaseHolder`), where the peer is a serving
+   * worker started with a component of its own. Absent, the component this
+   * realm mints holders with.
+   */
+  leaseHolderInstance?: string;
 };
 
 class Connection {
@@ -1458,6 +1480,7 @@ class Connection {
   readonly #sendRaw: Send;
   readonly #syncPartLimits: PartLimits | undefined;
   readonly #inProcess: boolean;
+  readonly #leaseHolderInstance: string | undefined;
 
   constructor(
     readonly id: string,
@@ -1466,12 +1489,14 @@ class Connection {
     routedOwns?: (space: string) => boolean,
     syncPartLimits?: PartLimits,
     inProcess = false,
+    leaseHolderInstance?: string,
   ) {
     this.#server = server;
     this.#sendRaw = sendRaw;
     this.#routedOwns = routedOwns;
     this.#syncPartLimits = syncPartLimits;
     this.#inProcess = inProcess;
+    this.#leaseHolderInstance = leaseHolderInstance;
   }
 
   /**
@@ -1783,6 +1808,15 @@ class Connection {
    */
   get inProcess(): boolean {
     return this.#inProcess;
+  }
+
+  /**
+   * The process-instance component of the lease holder this connection's
+   * peer acquires under (`ServerConnectOptions.leaseHolderInstance`), or
+   * `undefined` for the component this realm mints holders with.
+   */
+  get leaseHolderInstance(): string | undefined {
+    return this.#leaseHolderInstance;
   }
 
   /** Whether this routed session still has its lease and fenced owner. */
@@ -2366,6 +2400,32 @@ class Connection {
     );
   }
 
+  /**
+   * Helper for `#receiveOrdered()`, which runs a request that records a frame
+   * as delivered and sends the frame's response with `send`: in the step that
+   * records it when `run` publishes it, and once `run` has finished otherwise.
+   * A failure to send is thrown from here rather than into `run`, whose own
+   * failures it answers as a refused request, since this request's response
+   * has gone or is lost.
+   */
+  async #answerOnPublication<M extends ServerMessage>(
+    send: (response: M) => void,
+    run: (publish: PublishFrame<M>) => Promise<M>,
+  ): Promise<void> {
+    let published = false;
+    const sendFailures: unknown[] = [];
+    const response = await run((message) => {
+      published = true;
+      try {
+        send(message);
+      } catch (error) {
+        sendFailures.push(error);
+      }
+    });
+    if (sendFailures.length > 0) throw sendFailures[0];
+    if (!published) send(response);
+  }
+
   async #receiveOrdered(
     parsed: ClientMessage | RejectedClientMessage | null,
     payload: string,
@@ -2495,22 +2555,26 @@ class Connection {
           });
           return;
         }
-        const response = await this.#server.openSession(parsed, this);
-        // An open of a session ends the watch set it was staging.
-        if (
-          isFabricPlainObject(response.ok) &&
-          typeof response.ok.sessionId === "string"
-        ) {
-          this.#endStagedWatchSet(
-            sessionKey(parsed.space, response.ok.sessionId),
-          );
-        }
-        this.#send(
-          response,
-          isFabricPlainObject(response.ok) &&
-            typeof response.ok.sessionId === "string"
-            ? { space: parsed.space, sessionId: response.ok.sessionId }
-            : undefined,
+        await this.#answerOnPublication<ResponseMessage<SessionOpenResult>>(
+          (response) => {
+            // An open of a session ends the watch set it was staging.
+            if (
+              isFabricPlainObject(response.ok) &&
+              typeof response.ok.sessionId === "string"
+            ) {
+              this.#endStagedWatchSet(
+                sessionKey(parsed.space, response.ok.sessionId),
+              );
+            }
+            this.#send(
+              response,
+              isFabricPlainObject(response.ok) &&
+                typeof response.ok.sessionId === "string"
+                ? { space: parsed.space, sessionId: response.ok.sessionId }
+                : undefined,
+            );
+          },
+          (publish) => this.#server.openSession(parsed, this, publish),
         );
         return;
       }
@@ -2694,12 +2758,15 @@ class Connection {
           const key = sessionKey(parsed.space, parsed.sessionId);
           const held = this.#endStagedWatchSet(key);
           if (parsed.part === undefined) {
-            const response = await this.#server.watchSet(parsed);
-            this.#sendSessionResponse(
-              parsed.space,
-              parsed.sessionId,
-              parsed.requestId,
-              response,
+            await this.#answerOnPublication(
+              (response) =>
+                this.#sendSessionResponse(
+                  parsed.space,
+                  parsed.sessionId,
+                  parsed.requestId,
+                  response,
+                ),
+              (publish) => this.#server.watchSet(parsed, publish),
             );
             return;
           }
@@ -2754,15 +2821,19 @@ class Connection {
           }
           // The joined set is checked as one set: a view named in two parts
           // is refused as one named twice in one set is.
-          const response = await this.#server.watchSet({
-            ...staged.request,
-            requestId: parsed.requestId,
-          });
-          this.#sendSessionResponse(
-            parsed.space,
-            parsed.sessionId,
-            parsed.requestId,
-            response,
+          await this.#answerOnPublication(
+            (response) =>
+              this.#sendSessionResponse(
+                parsed.space,
+                parsed.sessionId,
+                parsed.requestId,
+                response,
+              ),
+            (publish) =>
+              this.#server.watchSet({
+                ...staged.request,
+                requestId: parsed.requestId,
+              }, publish),
           );
         }
         return;
@@ -2780,15 +2851,16 @@ class Connection {
         // router or a routed host can have left incomplete by refusing its
         // last part itself.
         this.#endStagedWatchSet(sessionKey(parsed.space, parsed.sessionId));
-        {
-          const response = await this.#server.watchAdd(parsed);
-          this.#sendSessionResponse(
-            parsed.space,
-            parsed.sessionId,
-            parsed.requestId,
-            response,
-          );
-        }
+        await this.#answerOnPublication(
+          (response) =>
+            this.#sendSessionResponse(
+              parsed.space,
+              parsed.sessionId,
+              parsed.requestId,
+              response,
+            ),
+          (publish) => this.#server.watchAdd(parsed, publish),
+        );
         return;
       case "session.watch.remove":
         if (
@@ -2804,15 +2876,16 @@ class Connection {
         // router or a routed host can have left incomplete by refusing its
         // last part itself.
         this.#endStagedWatchSet(sessionKey(parsed.space, parsed.sessionId));
-        {
-          const response = await this.#server.watchRemove(parsed);
-          this.#sendSessionResponse(
-            parsed.space,
-            parsed.sessionId,
-            parsed.requestId,
-            response,
-          );
-        }
+        await this.#answerOnPublication(
+          (response) =>
+            this.#sendSessionResponse(
+              parsed.space,
+              parsed.sessionId,
+              parsed.requestId,
+              response,
+            ),
+          (publish) => this.#server.watchRemove(parsed, publish),
+        );
         return;
       case "session.ack":
         if (
@@ -3069,6 +3142,39 @@ class Connection {
         }
       }
       processed += 1;
+      let delivered = false;
+      // Called in the step evaluation records the frame's documents, and on
+      // return for a frame that carries none (`PublishFrame`).
+      const deliver = (effect: SessionEffectMessage): void => {
+        delivered = true;
+        // Evaluation already advanced the session cache past this content;
+        // roll the delivery state back so a later pass (or a resumed
+        // session) recomputes and redelivers it.
+        if (this.#closed) {
+          this.#server.rollbackUndeliveredSync(space, sessionId, effect);
+          return;
+        }
+        // ACL revocation can remove the session while watch evaluation awaits
+        // its engine. Never emit the already-computed effect after that removal
+        // (the session is gone from the registry — nothing to roll back into).
+        if (this.#shouldSuppressSessionSend(space, sessionId)) return;
+        try {
+          this.#send(effect);
+        } catch (error) {
+          // The send boundary is the commit point for sync state. A send
+          // that throws is the only delivery failure visible in-process, so
+          // no buffering pretends otherwise (a dying socket loses frames
+          // silently either way — reconnect hardening owns that case):
+          // roll back exactly what evaluation advanced, so the next pass
+          // recomputes and redelivers from durable state (CT-1927 review,
+          // rounds 5-6).
+          this.#server.rollbackUndeliveredSync(space, sessionId, effect);
+          console.warn(
+            "memory v2: sync send failed; delivery state rolled back for recomputation",
+            error,
+          );
+        }
+      };
       let effect: SessionEffectMessage | null;
       try {
         effect = await this.#server.syncSessionForConnection(
@@ -3077,6 +3183,7 @@ class Connection {
           dirtyIds,
           dirtyOrigins,
           publicationLocked,
+          deliver,
         );
       } catch (error) {
         // A refresh evaluation failure means one of two things: a bad
@@ -3096,39 +3203,8 @@ class Connection {
         this.#server.markSessionForFullResync(space, sessionId);
         continue;
       }
-      if (this.#closed) {
-        // Evaluation already advanced the session cache past this content;
-        // roll the delivery state back so a later pass (or a resumed
-        // session) recomputes and redelivers it.
-        if (effect !== null) {
-          this.#server.rollbackUndeliveredSync(space, sessionId, effect);
-        }
-        return processed;
-      }
-      // ACL revocation can remove the session while watch evaluation awaits
-      // its engine. Never emit the already-computed effect after that removal
-      // (the session is gone from the registry — nothing to roll back into).
-      if (this.#shouldSuppressSessionSend(space, sessionId)) {
-        continue;
-      }
-      if (effect !== null) {
-        try {
-          this.#send(effect);
-        } catch (error) {
-          // The send boundary is the commit point for sync state. A send
-          // that throws is the only delivery failure visible in-process, so
-          // no buffering pretends otherwise (a dying socket loses frames
-          // silently either way — reconnect hardening owns that case):
-          // roll back exactly what evaluation advanced, so the next pass
-          // recomputes and redelivers from durable state (CT-1927 review,
-          // rounds 5-6).
-          this.#server.rollbackUndeliveredSync(space, sessionId, effect);
-          console.warn(
-            "memory v2: sync send failed; delivery state rolled back for recomputation",
-            error,
-          );
-        }
-      }
+      if (effect !== null && !delivered) deliver(effect);
+      if (this.#closed) return processed;
     }
     return processed;
   }
@@ -3208,6 +3284,13 @@ export type PatternLifecycleCall = {
 
   /** The DID the request's session was opened as, which holds WRITE on `space`. */
   principal: string;
+
+  /**
+   * The memory session the request came on, which a session-scoped address
+   * names the instance of, as it does for the session's own reads and
+   * commits.
+   */
+  sessionId: string;
 
   verb: PatternLifecycleVerb;
 
@@ -3560,6 +3643,8 @@ export class Server {
   constructor(
     readonly options: {
       sessions?: SessionRegistry;
+      /** Baked serving-process provenance; absent for unknown source builds. */
+      serverBuild?: string;
 
       /**
        * Client retirement is disabled. Only `0` is accepted; any other value
@@ -4844,7 +4929,8 @@ export class Server {
    * parts; without it, every sync goes whole. `options.inProcess` says the
    * peer runs in this process; a connection from another process leaves it
    * unset, and the read row (protocol.md §2) treats its sessions as another
-   * process's.
+   * process's. `options.leaseHolderInstance` names the holder component of
+   * a peer that acquires leases under one of its own.
    */
   connect(
     send: Send,
@@ -4858,6 +4944,7 @@ export class Server {
       undefined,
       syncParts,
       options.inProcess === true,
+      options.leaseHolderInstance,
     );
     this.#connections.set(connection.id, connection);
     return connection;
@@ -5673,7 +5760,8 @@ export class Server {
   /** Path for a cell-derived db file. Sibling of the space db for file stores;
    *  a deterministic temp file for in-memory stores (so it survives the
    *  connection, unlike an `:memory:` attach). The space + id are hashed into
-   *  the filename so distinct (space, id) pairs never collide.
+   *  the filename, with a hash that two pairs can share
+   *  (`cellDatabaseFileName()` says how).
    *
    *  `scopeKey` is the resolved scope key (`Engine.resolveScopeKey`): `space`
    *  for the default scope (left out of the name, so existing space-scoped files
@@ -5685,13 +5773,12 @@ export class Server {
     id: string,
     scopeKey: string = "space",
   ): string {
-    const scopeTag = scopeKey === "space" ? "" : `-${hashToken(scopeKey)}`;
-    const tag = `${hashToken(space)}-${hashToken(id)}${scopeTag}`;
+    const name = cellDatabaseFileName(space, id, scopeKey);
     if (engine.url.protocol === "file:") {
       const dir = Path.dirname(Path.fromFileUrl(engine.url));
-      return Path.join(dir, `cell-${tag}.sqlite`);
+      return Path.join(dir, name);
     }
-    return Path.join(Deno.env.get("TMPDIR") ?? "/tmp", `cf-cell-${tag}.sqlite`);
+    return Path.join(Deno.env.get("TMPDIR") ?? "/tmp", `cf-${name}`);
   }
 
   /**
@@ -6373,9 +6460,15 @@ export class Server {
     }
   }
 
+  /**
+   * Opens a session or resumes one. `publish`, when given, receives the
+   * response to a resume whose catch-up carries documents, in the step that
+   * records them as delivered (`PublishFrame`).
+   */
   async openSession(
     message: SessionOpenRequest,
     connection: Connection,
+    publish?: PublishFrame<ResponseMessage<SessionOpenResult>>,
   ): Promise<ResponseMessage<SessionOpenResult>> {
     let opened: ReturnType<SessionRegistry["open"]> | undefined;
     let catchup: SessionEffectMessage | null = null;
@@ -6714,86 +6807,113 @@ export class Server {
           resumed.forceFullResync = true;
         }
       }
-      // A resumed session's catch-up (below) is a FULL watch evaluation
+      const session = opened;
+      // What remains of the open is synchronous, so that a catch-up's frame
+      // can go out in the step that records it as delivered.
+      const finishOpen = (): ResponseMessage<SessionOpenResult> => {
+        if (connection.closed) {
+          return respondTypedError<SessionOpenResult>(
+            message.requestId,
+            toError("SessionError", "The connection closed during catch-up"),
+          );
+        }
+        // A resumed session is registered before catch-up, and catch-up awaits
+        // graph evaluation. An ACL commit (or takeover) can remove or replace it
+        // during that await. In active ACL modes, only the connection that
+        // still owns this exact token may receive its catch-up data.
+        const current = this.#sessions.get(message.space, session.sessionId);
+        if (
+          (connection.routed &&
+            !connection.allowsRoutedSession(
+              message.space,
+              session.sessionId,
+            )) ||
+          (this.isAclActive() &&
+            (current?.ownerConnectionId !== connection.id ||
+              current.sessionToken !== session.sessionToken))
+        ) {
+          return respondTypedError<SessionOpenResult>(
+            message.requestId,
+            toError(
+              "SessionRevokedError",
+              "Session was revoked while opening",
+            ),
+          );
+        }
+        if (principal !== undefined) {
+          this.#admissionWaiters.remove(
+            connection.id,
+            message.space,
+            principal,
+          );
+          // The open proves the principal admitted, so the runtimes still
+          // waiting on a held refusal of it are told before it goes: this open
+          // may be on another device, or may have found a grant another process
+          // wrote before the space's refresh turn would have.
+          // A recipient's own refusal of the space is answered by the same
+          // notice, so it goes too, or the space's refresh would tell it again.
+          if (this.#admissionWaiters.removeHeld(message.space, principal)) {
+            for (const serving of this.#connectionsServing(principal)) {
+              if (serving !== connection) {
+                this.#admissionWaiters.remove(
+                  serving.id,
+                  message.space,
+                  principal,
+                );
+                serving.sendAdmissible(message.space, principal);
+              }
+            }
+          }
+        }
+        const nextSessionOpen = connection.issueSessionOpenAuth();
+        // Activation trigger (serving-loop.md §1): session open makes the
+        // space ACTIVE-eligible; notify the host after the open succeeded.
+        this.#notifySessionOpened(message.space);
+        completed = true;
+        return {
+          type: "response",
+          requestId: message.requestId,
+          ok: {
+            sessionId: session.sessionId,
+            sessionToken: session.sessionToken,
+            serverSeq: session.serverSeq,
+            caughtUpLocalSeq: session.caughtUpLocalSeq,
+            ...(session.resumed === true ? { resumed: true } : {}),
+            ...(catchup ? { sync: catchup.effect } : {}),
+            ...(spaceKind !== undefined ? { spaceKind } : {}),
+            sessionOpen: nextSessionOpen,
+            ...(this.options.serverBuild
+              ? { serverBuild: this.options.serverBuild }
+              : {}),
+            ...(redemption === undefined ? {} : { invite: redemption }),
+          },
+        };
+      };
+      let response: ResponseMessage<SessionOpenResult> | undefined;
+      // A resumed session's catch-up is a FULL watch evaluation
       // under the session's explicit-instance admission, which the resume
       // carries over (`leaseHolderReads` is the session's for its life):
       // the foreign instances it named are delivered KEYED, in the
       // session's sticky wire vocabulary, and an instance the session
       // lost is retracted KEYED, so the retraction names exactly it and
       // never the session's own instance.
-      catchup = opened.resumed === true
+      const caughtUp = session.resumed === true
         ? await this.syncSessionForConnection(
           message.space,
-          opened.sessionId,
+          session.sessionId,
+          undefined,
+          undefined,
+          false,
+          (effect) => {
+            catchup = effect;
+            response = finishOpen();
+            if (completed) publish?.(response);
+          },
         )
         : null;
-      if (connection.closed) {
-        return respondTypedError<SessionOpenResult>(
-          message.requestId,
-          toError("SessionError", "The connection closed during catch-up"),
-        );
-      }
-      // A resumed session is registered before catch-up, and catch-up awaits
-      // graph evaluation. An ACL commit (or takeover) can remove or replace it
-      // during that await. In active ACL modes, only the connection that
-      // still owns this exact token may receive its catch-up data.
-      const current = this.#sessions.get(message.space, opened.sessionId);
-      if (
-        (connection.routed &&
-          !connection.allowsRoutedSession(message.space, opened.sessionId)) ||
-        (this.isAclActive() &&
-          (current?.ownerConnectionId !== connection.id ||
-            current.sessionToken !== opened.sessionToken))
-      ) {
-        return respondTypedError<SessionOpenResult>(
-          message.requestId,
-          toError(
-            "SessionRevokedError",
-            "Session was revoked while opening",
-          ),
-        );
-      }
-      if (principal !== undefined) {
-        this.#admissionWaiters.remove(connection.id, message.space, principal);
-        // The open proves the principal admitted, so the runtimes still
-        // waiting on a held refusal of it are told before it goes: this open
-        // may be on another device, or may have found a grant another process
-        // wrote before the space's refresh turn would have.
-        // A recipient's own refusal of the space is answered by the same
-        // notice, so it goes too, or the space's refresh would tell it again.
-        if (this.#admissionWaiters.removeHeld(message.space, principal)) {
-          for (const serving of this.#connectionsServing(principal)) {
-            if (serving !== connection) {
-              this.#admissionWaiters.remove(
-                serving.id,
-                message.space,
-                principal,
-              );
-              serving.sendAdmissible(message.space, principal);
-            }
-          }
-        }
-      }
-      const nextSessionOpen = connection.issueSessionOpenAuth();
-      // Activation trigger (serving-loop.md §1): session open makes the
-      // space ACTIVE-eligible; notify the host after the open succeeded.
-      this.#notifySessionOpened(message.space);
-      completed = true;
-      return {
-        type: "response",
-        requestId: message.requestId,
-        ok: {
-          sessionId: opened.sessionId,
-          sessionToken: opened.sessionToken,
-          serverSeq: opened.serverSeq,
-          caughtUpLocalSeq: opened.caughtUpLocalSeq,
-          ...(opened.resumed === true ? { resumed: true } : {}),
-          ...(catchup ? { sync: catchup.effect } : {}),
-          ...(spaceKind !== undefined ? { spaceKind } : {}),
-          sessionOpen: nextSessionOpen,
-          ...(redemption === undefined ? {} : { invite: redemption }),
-        },
-      };
+      if (response !== undefined) return response;
+      catchup = caughtUp;
+      return finishOpen();
     } catch (error) {
       const name = error instanceof Error && error.name === "AuthorizationError"
         ? "AuthorizationError"
@@ -7011,6 +7131,7 @@ export class Server {
       const outcome = await handler({
         space,
         principal: writer.principal,
+        sessionId,
         verb: message.verb,
         body: message.body,
       });
@@ -7797,9 +7918,15 @@ export class Server {
           for (const revision of commit.revisions) {
             const scopeKey = revision.scopeKey as ScopeKey;
             committedWrites.push({ id: revision.id, scopeKey });
+            // A revision the engine derived, a field's anchors document
+            // rewritten for an edit, is no write of the committing session's,
+            // which holds nothing of it to promote. With own-write echo on, a
+            // `patch` head reaches its writer anyway; with it off, a `patch`
+            // head is withheld from its writer, so only the `derived` kind
+            // gets the rewrite to the session whose edit moved the anchors.
             dirtyOps.set(
               toDirtyKey(revision.id, scopeKey),
-              revision.op,
+              revision.derived === true ? "derived" : revision.op,
             );
           }
           if (dirtyOps.size > 0) {
@@ -8619,8 +8746,14 @@ export class Server {
     };
   }
 
+  /**
+   * Replaces a session's watches. `publish`, when given, receives a successful
+   * response in the step that records its documents as delivered
+   * (`PublishFrame`).
+   */
   async watchSet(
     message: WatchSetRequest,
+    publish?: PublishFrame<ResponseMessage<WatchSetResult>>,
   ): Promise<ResponseMessage<WatchSetResult>> {
     if (
       message.views !== undefined ||
@@ -8629,22 +8762,25 @@ export class Server {
     ) {
       return await this.#withSpacePublicationLock(
         message.space,
-        () => this.#watchSet(message),
+        () => this.#watchSet(message, "replace", publish),
       );
     }
-    return await this.#watchSet(message);
+    return await this.#watchSet(message, "replace", publish);
   }
 
   /**
    * Removes the named watches from a session and answers with the difference
    * between what the session was delivered and the union that remains.
+   * `publish`, when given, receives a successful response in the step that
+   * records that difference as delivered (`PublishFrame`).
    */
   async watchRemove(
     message: WatchRemoveRequest,
+    publish?: PublishFrame<ResponseMessage<WatchSetResult>>,
   ): Promise<ResponseMessage<WatchSetResult>> {
     const startedAt = performance.now();
     try {
-      return await this.#watchRemove(message);
+      return await this.#watchRemove(message, publish);
     } finally {
       timing.time(startedAt, "memory", "watchRemove", "total");
     }
@@ -8659,6 +8795,7 @@ export class Server {
    */
   async #watchRemove(
     message: WatchRemoveRequest,
+    publish?: PublishFrame<ResponseMessage<WatchSetResult>>,
   ): Promise<ResponseMessage<WatchSetResult>> {
     // Read when the request runs, which for a session with views is once the
     // publication lock is held.
@@ -8677,13 +8814,13 @@ export class Server {
     if (session !== null && session.views.length > 0) {
       return await this.#withSpacePublicationLock(
         message.space,
-        () => this.#watchSet(remaining(), "remove"),
+        () => this.#watchSet(remaining(), "remove", publish),
       );
     }
     if (session === null || session.forceFullResync) {
-      return await this.#watchSet(remaining(), "remove");
+      return await this.#watchSet(remaining(), "remove", publish);
     }
-    return await this.#removeWatchesByRelease(message, session);
+    return await this.#removeWatchesByRelease(message, session, publish);
   }
 
   /**
@@ -8696,6 +8833,7 @@ export class Server {
   async #removeWatchesByRelease(
     message: WatchRemoveRequest,
     session: SessionState,
+    publish?: PublishFrame<ResponseMessage<WatchSetResult>>,
   ): Promise<ResponseMessage<WatchSetResult>> {
     const aclEngine = this.#aclMode() === "off"
       ? undefined
@@ -8910,6 +9048,7 @@ export class Server {
           ...attribution,
         },
       );
+      publish?.(response);
       return response;
     } catch (error) {
       // Evaluation state is staged (the session's graphs and watches are
@@ -8935,6 +9074,7 @@ export class Server {
   async #watchSet(
     message: WatchSetRequest,
     mode: "replace" | "add" | "remove" = "replace",
+    publish?: PublishFrame<ResponseMessage<WatchSetResult>>,
   ): Promise<ResponseMessage<WatchSetResult>> {
     const incremental = mode === "add";
     const session = this.#sessions.get(message.space, message.sessionId);
@@ -9239,7 +9379,7 @@ export class Server {
       if (message.views !== undefined) {
         this.#notifyViewsChanged(message.space, session.id);
       }
-      return {
+      const response: ResponseMessage<WatchSetResult> = {
         type: "response",
         requestId: message.requestId,
         ok: {
@@ -9247,6 +9387,8 @@ export class Server {
           sync,
         },
       };
+      publish?.(response);
+      return response;
     } catch (error) {
       // Evaluation state is staged (the session's graphs and watches are
       // assigned only on success), so a failure answers the requester —
@@ -9327,13 +9469,18 @@ export class Server {
     return { graphs, updates, attribution };
   }
 
-  /** Add session watches, timing admission through the handler's completion. */
+  /**
+   * Add session watches, timing admission through the handler's completion.
+   * `publish`, when given, receives a successful response in the step that
+   * records its documents as delivered (`PublishFrame`).
+   */
   async watchAdd(
     message: WatchAddRequest,
+    publish?: PublishFrame<ResponseMessage<WatchAddResult>>,
   ): Promise<ResponseMessage<WatchAddResult>> {
     const startedAt = performance.now();
     try {
-      return await this.#watchAdd(message);
+      return await this.#watchAdd(message, publish);
     } finally {
       timing.time(startedAt, "memory", "watchAdd", "total");
     }
@@ -9342,6 +9489,7 @@ export class Server {
   /** Helper for watchAdd(), which authorizes, evaluates, and installs watches. */
   async #watchAdd(
     message: WatchAddRequest,
+    publish?: PublishFrame<ResponseMessage<WatchAddResult>>,
   ): Promise<ResponseMessage<WatchAddResult>> {
     const session = this.#sessions.get(message.space, message.sessionId);
     if (session === null) {
@@ -9354,10 +9502,14 @@ export class Server {
       return await this.#withSpacePublicationLock(
         message.space,
         () =>
-          this.#watchSet({
-            ...message,
-            type: "session.watch.set",
-          }, "add"),
+          this.#watchSet(
+            {
+              ...message,
+              type: "session.watch.set",
+            },
+            "add",
+            publish,
+          ),
       );
     }
     const aclEngine = this.#aclMode() === "off"
@@ -9665,6 +9817,7 @@ export class Server {
           ...attribution,
         },
       );
+      publish?.(response);
       return response;
     } catch (error) {
       // Evaluation state is staged (the session's graphs and watches are
@@ -9689,7 +9842,9 @@ export class Server {
       this.#queryEvaluationCaches.set(space, cache);
       return cache;
     }
-    cache = createQueryEvaluationCache();
+    cache = createQueryEvaluationCache(
+      this.options.queryEvaluationCacheBudget ?? QUERY_EVALUATION_CACHE_BUDGET,
+    );
     this.#queryEvaluationCaches.set(space, cache);
     // An inactive space's cache would otherwise linger until that space's
     // next commit — which may never come. The space bound is the
@@ -9705,8 +9860,8 @@ export class Server {
 
   /** Evict least-recently-evaluated spaces' oldest entries until the
    * caches' total retained weight fits the budget. Runs after every
-   * evaluation that may have inserted; an entry heavier than the whole
-   * budget is therefore never retained past its own evaluation. */
+   * evaluation that may have inserted. Entries heavier than the whole
+   * budget are refused before cloning by the cache's admission bound. */
   #enforceEvaluationCacheBudget(): void {
     const budget = this.options.queryEvaluationCacheBudget ??
       QUERY_EVALUATION_CACHE_BUDGET;
@@ -9928,11 +10083,12 @@ export class Server {
     // wake the push loop, but they are not graph execution demand. Rebuild
     // the graph-only provenance from delivered entries plus traversal misses
     // before producing demand rows.
-    const graphTrackedIds = trackedIdsFromEntries(
-      (session.views.length === 0
-        ? session.entities
-        : session.viewDemandEntities).values(),
-    );
+    const { tracked: graphTrackedIds, pieces: pieceKeys } =
+      trackedAndPieceKeysFromEntries(
+        (session.views.length === 0
+          ? session.entities
+          : session.viewDemandEntities).values(),
+      );
     this.#addMissedToTrackedIds(
       graphTrackedIds,
       (session.views.length === 0 ? session.graphs : session.viewDemandGraphs)
@@ -9950,13 +10106,15 @@ export class Server {
       } catch {
         return;
       }
-      rows.set(dirtyKey, {
+      const row: DemandedInstanceRow = {
         id: parsed.id,
         scope: parsed.scope,
         scopeKey: parsed.scopeKey,
         identity,
         root,
-      });
+      };
+      if (pieceKeys.has(dirtyKey)) row.piece = true;
+      rows.set(dirtyKey, row);
     };
     for (const dirtyKey of session.trackedIds) {
       if (graphTrackedIds.has(dirtyKey)) {
@@ -10263,6 +10421,7 @@ export class Server {
     dirtyIds?: ReadonlySet<string>,
     dirtyOrigins?: ReadonlyMap<string, DirtyOrigin>,
     publicationLocked = false,
+    publish?: PublishFrame<SessionEffectMessage>,
   ): Promise<SessionEffectMessage | null> {
     if (
       !publicationLocked &&
@@ -10276,6 +10435,7 @@ export class Server {
             sessionId,
             dirtyIds,
             dirtyOrigins,
+            publish,
           ),
       );
     }
@@ -10284,6 +10444,7 @@ export class Server {
       sessionId,
       dirtyIds,
       dirtyOrigins,
+      publish,
     );
   }
 
@@ -10292,6 +10453,7 @@ export class Server {
     sessionId: string,
     dirtyIds?: ReadonlySet<string>,
     dirtyOrigins?: ReadonlyMap<string, DirtyOrigin>,
+    publish?: PublishFrame<SessionEffectMessage>,
   ): Promise<SessionEffectMessage | null> {
     const session = this.#sessions.get(space, sessionId);
     if (session === null) {
@@ -10637,6 +10799,7 @@ export class Server {
                     const held = origin !== undefined &&
                       origin.sessionId === sessionId &&
                       origin.seq === entry.seq &&
+                      origin.op !== "derived" &&
                       (origin.op !== "patch" || !getOwnWriteEchoConfig());
                     if (!held) {
                       upserts.push(entry);
@@ -10672,10 +10835,19 @@ export class Server {
                     session.viewSupportGrown = false;
                   }
                   // A new delivered entity adds a key to the session's
-                  // demand; a changed snapshot of a held one does not.
+                  // demand, and a changed snapshot of a held one changes it
+                  // only when it changes a row's mark: when it becomes or
+                  // stops being one of a piece's values, or, as a piece's
+                  // result, names another argument.
                   let enteredEntity = false;
                   for (const [key, entry] of updates) {
-                    if (!session.entities.has(key)) enteredEntity = true;
+                    const held = session.entities.get(key);
+                    if (
+                      held === undefined ||
+                      pieceMarkInputsOf(held) !== pieceMarkInputsOf(entry)
+                    ) {
+                      enteredEntity = true;
+                    }
                     session.entities.set(key, entry);
                   }
                   for (const key of removed.keys()) {
@@ -10743,6 +10915,15 @@ export class Server {
                 // fromSeq is not stale. emptyCatchUp receives the original fromSeq
                 // explicitly, so this does not mutate the bounds of this sync (the
                 // Cubic fix keeps fromSeq pinned to the pre-refresh value).
+                //
+                // What this records can be the session's own writes, `cid:`
+                // documents included, with only a marker to say so, sent on
+                // return. A watch mutation's response may leave such a
+                // document out and reach the wire ahead of that marker. No
+                // frame order protects that: the client holds the document
+                // because it wrote it, keeping the write visible until the
+                // marker promotes it, and it validates an arrival against what
+                // is visible (04-protocol.md section 4.3.6).
                 commitEntities();
                 session.lastSyncedSeq = Math.max(session.lastSyncedSeq, toSeq);
                 return await emptyCatchUp(fromSeq, toSeq);
@@ -10802,6 +10983,7 @@ export class Server {
               commitEntities();
               this.#markCrossingsDelivered(session, newCrossings.keys);
               session.lastSyncedSeq = toSeq;
+              publish?.(message);
               return message;
             } finally {
               timing.timeDetailed(
@@ -10972,6 +11154,7 @@ export class Server {
             crossings: newCrossings.keys,
           });
           commitWatchState();
+          publish?.(message);
           return message;
         } catch (error) {
           // A throwing evaluation may have consumed the marker obligation
@@ -11461,6 +11644,14 @@ export class Server {
   }
 
   /**
+   * The session lifecycle events that bring a mirror of `space`'s sessions
+   * up to date, as installing an observer replays them for every space.
+   */
+  sessionSnapshot(space: string): SessionLifecycleEvent[] {
+    return this.#sessions.snapshot(space);
+  }
+
+  /**
    * Installs what runs `pattern.lifecycle` requests, or with `undefined`
    * removes it. The server advertises `patternLifecycle` from the next
    * `hello` on while one is installed. Connections that said `hello` before
@@ -11620,8 +11811,9 @@ export class Server {
    * Whether `session` is `space`'s serving session on this server: the
    * SpaceServer's own loopback session, which reached the server from this
    * process and whose principal holds the space's lease (protocol.md §2's
-   * read row). A session from another process carries the same principal, so
-   * the connection decides.
+   * read row) under the holder component its connection names. A session
+   * from another process carries the same principal, as does one from
+   * another serving worker of this process, so the connection decides.
    */
   #isServingSession(space: string, session: SessionState): boolean {
     if (session.principal === undefined) return false;
@@ -11630,7 +11822,10 @@ export class Server {
       : this.#connections.get(session.ownerConnectionId);
     return connection?.inProcess === true &&
       this.#executionLeases.holderOf(space) ===
-        executionLeaseHolder(session.principal);
+        executionLeaseHolder(
+          session.principal,
+          connection.leaseHolderInstance,
+        );
   }
 
   /**
@@ -12294,6 +12489,16 @@ export class Server {
    */
   engineForSpace(space: string): Promise<Engine.Engine> {
     return this.#openEngine(space);
+  }
+
+  /**
+   * Whether `space`'s store holds stream events no serving loop has
+   * delivered, read from the store as it stands (serving-loop.md §1's second
+   * ACTIVE criterion). Rejects when the store cannot be opened or read.
+   */
+  async hasUndeliveredEvents(space: string): Promise<boolean> {
+    const engine = await this.#openEngine(space);
+    return Engine.selectPendingStreamEventDocs(engine).length > 0;
   }
 
   /**
@@ -13090,7 +13295,7 @@ const parseDecodedClientMessage = (
     typeof parsed.space === "string" &&
     typeof parsed.sessionId === "string" &&
     (parsed.verb === "upload" || parsed.verb === "instantiate" ||
-      parsed.verb === "setsrc") &&
+      parsed.verb === "setsrc" || parsed.verb === "follow") &&
     isFabricPlainObject(parsed.body)
   ) {
     return {

@@ -96,7 +96,7 @@ export class Builder extends EventTarget {
 
       // Generate build manifest with content hashes of output files.
       // Used by the shell to cache-bust the worker bundle URL (?v=<hash>).
-      await this.#writeBuildManifest();
+      await this.#writeBuildManifest(mergeMetafiles(passMetafiles));
 
       const buildTime = Math.round(performance.now() - startTime);
       console.log(`   ${dim(`Total build time: ${buildTime}ms`)}`);
@@ -228,11 +228,15 @@ export class Builder extends EventTarget {
    * The manifest is used by the shell to cache-bust the worker bundle URL
    * (`?v=<hash>`), so a deploy always loads the fresh worker.
    */
-  async #writeBuildManifest(): Promise<void> {
+  async #writeBuildManifest(metafile: esbuild.Metafile): Promise<void> {
     const manifest: Record<string, string> = {};
-    for (const entry of this.manifest.entries) {
-      // esbuild appends .js to entry.out; only .js outputs are hashed.
-      const outPath = `${entry.out}.js`;
+    const outputs = new Set(
+      this.manifest.entries.map((entry) => `${entry.out}.js`),
+    );
+    for (const output of Object.keys(metafile.outputs)) {
+      if (output.endsWith(".js")) outputs.add(resolvePath(output));
+    }
+    for (const outPath of outputs) {
       try {
         const content = await Deno.readFile(outPath);
         const hash = await crypto.subtle.digest("SHA-256", content);

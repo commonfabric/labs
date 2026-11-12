@@ -15,6 +15,7 @@
 import { isDeepFrozen } from "@commonfabric/data-model";
 import type { CfcAtom } from "@commonfabric/api/cfc";
 import type { URI } from "@commonfabric/memory/interface";
+import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   isObjectNotArray,
@@ -30,7 +31,6 @@ import type {
 import { internalVerifierRead } from "../storage/reactivity-log.ts";
 import { normalizeCellScope } from "../scope.ts";
 import { canonicalizeLogicalPath } from "./canonical.ts";
-import type { CfcConfClause } from "./clause.ts";
 import {
   cfcLabelDocumentHash,
   isCfcLabelDocumentContent,

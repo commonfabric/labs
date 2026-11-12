@@ -629,6 +629,47 @@ describe("sync", () => {
       }
     });
 
+    describe("on a deployment whose naming mode it is told", () => {
+      // The memory server admits a session by the naming mode it declares
+      // (INV-16): a space a naming runtime wrote refuses a session that
+      // declares none, and a server whose posture names no instances refuses
+      // one that declares it. A session opened in this build's default mode
+      // is therefore refused one of these two boards, whichever the default
+      // is.
+
+      for (const namesInstances of [true, false]) {
+        it(`reads a board whose deployment runs \`instanceNames: ${namesInstances}\``, async () => {
+          const deployed = await boardServer({ namesInstances });
+          try {
+            const identity = join(dir, "identity.key");
+            await Deno.writeFile(identity, await Identity.generatePkcs8());
+            const source = await openDocSource(
+              { apiUrl: "http://localhost:1", space: SPACE, identity },
+              {
+                settings: () =>
+                  Promise.resolve({
+                    experimental: { instanceNames: namesInstances },
+                    memoryHost: new URL("https://memory.example"),
+                  }),
+                Sessions: deployed.Sessions,
+              },
+            );
+            try {
+              expect(
+                (await source.fetch(["of:fid1:topic-piece-2"], [])).map((
+                  doc,
+                ) => doc.id),
+              ).toEqual(["of:fid1:topic-piece-2"]);
+            } finally {
+              await source.close();
+            }
+          } finally {
+            await deployed.close();
+          }
+        });
+      }
+    });
+
     it("throws, naming the keyfile, when it cannot be read", async () => {
       const identity = join(dir, "missing.key");
 

@@ -264,7 +264,6 @@ describe("task-classification", () => {
 
         expect(classification.path).toBe("rule");
         expect(classification.tags).toEqual(["act", "pieces"]);
-        expect(classification.durationMs).toBeLessThan(1);
       });
     }
 

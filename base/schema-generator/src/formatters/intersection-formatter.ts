@@ -66,16 +66,6 @@ type PropertyDeclaration = {
   readonly required: boolean;
 };
 
-/**
- * The JSDoc an intersection's constituents carry: the first doc of each that
- * has one, the names of those, and the names of the rest.
- */
-type ConstituentDocs = {
-  readonly docTexts: string[];
-  readonly documentedSources: string[];
-  readonly missingSources: string[];
-};
-
 /** The keywords a declaration's JSDoc writes into its property's schema. */
 const DOC_KEYWORDS = ["description", "deprecated"] as const;
 
@@ -335,16 +325,16 @@ export class IntersectionFormatter implements TypeFormatter {
         getArrayElementInfo(part, checker) !== undefined
       )
     ) {
-      return this.#applyIntersectionDocs({
-        schema: {
+      return this.#applyIntersectionDocs(
+        {
           type: "array",
           items: this.#schemaGenerator.formatChildType(
             checker.getIndexTypeOfType(type, ts.IndexKind.Number)!,
             context,
           ),
         },
-        ...this.#constituentDocs(partsToProcess, checker),
-      });
+        this.#constituentDocs(partsToProcess, checker),
+      );
     }
 
     const failureReason = this.#validateIntersectionParts(
@@ -369,8 +359,10 @@ export class IntersectionFormatter implements TypeFormatter {
       return schema;
     }
 
-    const merged = this.#mergeIntersectionParts(partsToProcess, type, context);
-    return this.#applyIntersectionDocs(merged);
+    return this.#applyIntersectionDocs(
+      this.#mergeIntersectionParts(partsToProcess, type, context),
+      this.#constituentDocs(partsToProcess, checker),
+    );
   }
 
   /**
@@ -452,7 +444,7 @@ export class IntersectionFormatter implements TypeFormatter {
     parts: readonly ts.Type[],
     intersection: ts.Type,
     context: GenerationContext,
-  ): { schema: MutableJSONSchemaObj } & ConstituentDocs {
+  ): MutableJSONSchemaObj {
     const checker = context.typeChecker;
     const declarations = new Map<string, PropertyDeclaration[]>();
     const requiredSet = new Set<string>();
@@ -519,32 +511,20 @@ export class IntersectionFormatter implements TypeFormatter {
       result.required = Array.from(requiredSet);
     }
 
-    return {
-      schema: result,
-      ...this.#constituentDocs(parts, context.typeChecker),
-    };
+    return result;
   }
 
-  /** The JSDoc `parts`, an intersection's constituents, carry. */
+  /**
+   * The JSDoc `parts`, an intersection's constituents, carry: the first doc of
+   * each that has one, in constituent order.
+   */
   #constituentDocs(
     parts: readonly ts.Type[],
     checker: ts.TypeChecker,
-  ): ConstituentDocs {
-    const docs: ConstituentDocs = {
-      docTexts: [],
-      documentedSources: [],
-      missingSources: [],
-    };
-    for (const part of parts) {
-      const docInfo = extractDocFromType(part, checker);
-      if (docInfo.firstDoc) {
-        docs.docTexts.push(docInfo.firstDoc);
-        docs.documentedSources.push(docInfo.typeName);
-      } else {
-        docs.missingSources.push(docInfo.typeName);
-      }
-    }
-    return docs;
+  ): string[] {
+    return parts.flatMap((part) =>
+      extractDocFromType(part, checker).firstDoc ?? []
+    );
   }
 
   /**
@@ -687,16 +667,25 @@ export class IntersectionFormatter implements TypeFormatter {
     return undefined;
   }
 
+  /**
+   * `schema`, an intersection's, with a description where it has none of its
+   * own: each distinct doc in `docTexts`, its constituents' docs, in
+   * constituent order and separated by a blank line.
+   *
+   * Nothing records which constituents the description came from. The schema
+   * is stored and compared by its content, and a constituent's name as the
+   * checker prints it depends on the compiler's options, so a note naming
+   * constituents would make an option change a change to the schema.
+   */
   #applyIntersectionDocs(
-    data: { schema: MutableJSONSchemaObj } & ConstituentDocs,
+    schema: MutableJSONSchemaObj,
+    docTexts: readonly string[],
   ): MutableJSONSchemaObj {
-    const { schema, docTexts, documentedSources, missingSources } = data;
     if (!isObjectOrArray(schema)) return schema;
 
     const uniqueDocTexts = docTexts.filter((doc, index, arr) =>
       arr.indexOf(doc) === index
     );
-
     if (
       uniqueDocTexts.length > 0 && typeof schema.description !== "string"
     ) {
@@ -704,36 +693,6 @@ export class IntersectionFormatter implements TypeFormatter {
         "\n\n",
       );
     }
-
-    const commentParts: string[] = [];
-    const existingComment = typeof schema.$comment === "string"
-      ? schema.$comment as string
-      : undefined;
-
-    const uniqueDocumented = Array.from(new Set(documentedSources)).filter((
-      name,
-    ) => name);
-    const uniqueMissing = Array.from(new Set(missingSources)).filter((name) =>
-      name
-    );
-
-    if (uniqueDocTexts.length > 0) {
-      commentParts.push("Docs inherited from intersection constituents.");
-    }
-    if (uniqueDocTexts.length > 1 && uniqueDocumented.length > 0) {
-      commentParts.push(`Sources: ${uniqueDocumented.join(", ")}.`);
-    }
-    if (uniqueDocTexts.length > 0 && uniqueMissing.length > 0) {
-      commentParts.push(`Missing docs for: ${uniqueMissing.join(", ")}.`);
-    }
-
-    if (commentParts.length > 0) {
-      const commentMessage = commentParts.join(" ");
-      (schema as Record<string, unknown>).$comment = existingComment
-        ? `${existingComment} ${commentMessage}`
-        : commentMessage;
-    }
-
     return schema;
   }
 }

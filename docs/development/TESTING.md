@@ -718,10 +718,26 @@ the test's `fetchMocks`, and a multi-user test's participants to
 `listenServingMemoryServer()`, with no access list, as on the OFF arm. Each
 settle also waits until every event the runtime fired has its consequence
 back at the runtime, which `runtime.idle()` and `storageManager.synced()` do
-not cover, so an assertion after an action reads what the served handler
-wrote, and a multi-user marker is announced after it. An event a served
-handler fires on its own account is no client's, and nothing waits for it.
-A run against a caller-supplied `storageHost` is refused on the ON arm,
+not cover, and then until the serving loop has finished what that set off, so
+an assertion after an action reads what the served handler wrote, and a
+multi-user marker is announced after it. An event a served handler fires on
+its own account is no client's, and its consequence can land a wave or more
+after the event that fired it, or in another space.
+`ExecutorHost.whenQuiescent()` reports the end of all of that. A settle asks for
+it once its own runtime is done, makes a round trip on each connection to
+receive what the loop wrote, settles again, and asks again, and returns once two
+of its results are equal, which says the reactions gave the loop nothing further
+to do.
+A multi-user participant asks the orchestrator, which holds the loop, over its
+worker's message channel.
+
+Quiescence is a statement about what the loop can do on its own. An event stays
+pending through it when what it waits for lies outside the loop, such as a
+program closure another runtime has yet to write, or recovery evidence for a
+delivery in its failed state, and a time gate's trailing wake is not waited
+for. A cascade that never ends leaves the settle waiting, as a client's own
+non-converging graph leaves `runtime.idle()` waiting on the OFF arm. A run
+against a caller-supplied `storageHost` is refused on the ON arm,
 since the store is the caller's and there is no memory server to host a loop
 beside.
 
@@ -765,7 +781,9 @@ It comes in two shapes, by how the test's clients reach it:
   which also lists the service identity as the server's delegating
   principal, as a toolshed running server execution lists its own.
 
-Both return a handle that `await using` closes, serving loop first. The host
+Both return a handle that `await using` closes, serving loop first. With the
+loop on the test's thread, `host.host.whenQuiescent()` is the wait described
+above; a loop in a worker has no such wait. The host
 keeps the process's ambient server-execution flag on while it lives, so a
 runtime in the same realm that asks for the OFF arm runs ON beside it. The
 serving loop's own options pass through: `policy`, the `on*` diagnostic hooks,
@@ -774,12 +792,15 @@ loop keeps for tests. `prepareStorageManager` hands the test each serving
 runtime's storage manager before the runtime is built, which is where a stub on
 one of its providers goes.
 
-Either shape runs its loop in a Worker of the test's process when
+Either shape runs its loop in Workers of the test's process, one per served
+space, when
 `SERVER_EXECUTION_WORKER` is `true` in the environment, where a toolshed over a
-file store runs it in a worker unless that variable is `false`
+file store runs it in workers unless that variable is `false`
 ([`EXPERIMENTAL_OPTIONS.md`](EXPERIMENTAL_OPTIONS.md#server_execution_worker)),
 unless its `worker` option says otherwise, over a store in a temporary
-directory, since a worker cannot open a non-persistent one. `serving.host` is
+directory, since a worker cannot open a non-persistent one. Its `maxWorkers`
+option, or `SERVER_EXECUTION_MAX_WORKERS` in the environment, caps the workers
+spaces are placed on, and `1` serves every space from one. `serving.host` is
 then the loop's handle, with `stats()` and `close()`, and its `host` is
 `undefined`; on this thread `serving.host.host` is the `ExecutorHost`. Either
 way `serving.host.diagnostics()` returns the logger counts and timing statistics

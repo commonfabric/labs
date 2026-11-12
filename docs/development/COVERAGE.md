@@ -951,9 +951,9 @@ The pattern-integration process owns one shared cache in
 capability-gate controller, and the serving loop the multi-runtime harness hosts
 on the test's thread all inject that cache into every runtime they create. A
 custom runtime in this suite must do the same. A serving loop that
-`SERVER_EXECUTION_WORKER` puts in a worker cannot, since a worker takes no
-closure: its runtimes share a cache the worker builds for itself, which holds
-only what the worker compiled. Setting
+`SERVER_EXECUTION_WORKER` puts in workers cannot, since a worker takes no
+closure: each worker's runtimes share a cache that worker builds for itself,
+which holds only what that worker compiled. Setting
 `CF_COMPILE_CACHE_FILE` only tells the test-support cache where to persist its
 bytes; a runtime uses those bytes only when it receives the cache through its
 `moduleByteCache` option.
@@ -986,12 +986,13 @@ that file to the build-artifacts bucket next to the release tarball. The point
 is to give someone working in an IDE a single file that shows coverage for the
 whole repository, instead of one fragment per lane.
 
-Two things happen during the merge. The source paths in each fragment are
-absolute paths rooted at whichever runner produced them, so they are rewritten
-to repository-relative paths that an IDE can map onto a local checkout. Records
-for the same source file are then combined into one, with the per-line hit
-counts added together, so a file exercised by several lanes is reported once
-with its combined coverage.
+Each lane writes its fragments with repository-relative source paths, rewriting
+the absolute paths `deno coverage` and the pattern instrumentation record once
+it has finished converting. The fragments therefore map onto any checkout: the
+`Status` job, which reads them from a different directory than the one the lane
+ran from, and an IDE with a local checkout. The merge combines the records for
+the same source file into one, with the per-line hit counts added together, so a
+file exercised by several lanes is reported once with its combined coverage.
 
 The merged file carries line coverage only. LCOV identifies a function by its
 name, and `deno coverage --lcov` can emit several functions with the same name

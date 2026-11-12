@@ -221,8 +221,9 @@ needs, and a count far short of the run's needs can show a smaller total
 than one close to it, so no total measured at one count says what another
 count would achieve.
 
-The search is a bisection between one lane and `LANES_MAX`, so it packs a
-handful of counts and none past the cap. Each count it tries is packed
+The search is a bisection between one lane and the run's cap, `LANES_MAX`, or
+`FULL_LANES_MAX` for the run on the default branch and a pull request labelled
+`ci: full`, so it packs a handful of counts and none past the cap. Each count it tries is packed
 through the mandatory pass only, since that settles whether the count holds
 the run. It relies on an added lane not making anything overflow that did
 not before, nor leaving less room. Where the packing breaks that, the count
@@ -236,15 +237,17 @@ anything to run and what packing the stand-ins asks for — and says on the
 error stream that it did so, since a projection from costs nobody has
 measured would be arithmetic over an invented figure.
 
-Whichever way it gets its answer, it answers no more than `LANES_MAX`, so
-that one run leaves runners for the runs waiting behind it. A run that needs
+Whichever way it gets its answer, it answers no more than `LANES_MAX`, or
+`FULL_LANES_MAX` for the run on the default branch and a pull request
+labelled `ci: full`, so that one run leaves runners for the runs waiting
+behind it. A run that needs
 more takes that many and says on the error stream that it needs more. A
 change's tests chosen by score then get what room is left, which it also
 says. In the run on the default branch every test still runs. A test whose
 repeated runs fit in no lane runs fewer times, down to once, and a test
 that fits nowhere even once goes into the lane it leaves shortest, so the
 lanes run past their budget instead. A full run that needs more is the sign
-to raise `LANES_MAX`.
+to raise `FULL_LANES_MAX`.
 
 ## How continuous integration runs the lanes
 
@@ -267,6 +270,13 @@ workflow. A run's lanes come from two jobs.
   Each runs `deno run -A tasks/ci-lane.ts --lane N --of M` with `plan`'s
   `args`. A lane packs the same plan from the manifest and the tree as every
   other lane of its run, and runs its own share of it.
+- Each job of `tests` mounts its checkout a second time, at
+  `$HOME/checkout 🦆`, and runs the lane from there. A test that turns a file
+  URL into a path without decoding it, which works in the workspace's plain
+  ASCII path, fails in one holding a space and an emoji. The lane's coverage
+  reports name each file of the repository by its path relative to the
+  checkout, so `Status` and the release job, which read them from the
+  workspace, resolve them to the same files.
 - Each job of `tests` plans before it runs. Its `🗺️ Plan the lane` step runs
   the lane with `--dry-run`, which prints the lane's share, what it is
   projected to take, and what was withheld, in a step of their own. The
@@ -279,8 +289,14 @@ workflow. A run's lanes come from two jobs.
   take, and the manifest it was packed against. It then prints a line as it
   begins to open each capability, one just before each command that setup
   runs, one once each capability has opened, and one as each batch starts.
-  Setup captures its commands' output, so in a lane that stops without saying
-  why, the last of these lines names the step it stopped in.
+  Setup captures the output of most of its commands, so in a lane that stops
+  without saying why, the last of these lines names the step it stopped in.
+  `apt-get` writes to the job's log directly, so that a stall shows how far it
+  got, and each `apt-get` command is stopped after five minutes.
+- A capability that fails to open costs only the batches needing it. The lane
+  says why it did not open, runs every other batch, and fails, with each batch
+  it did not run named in its closing summary and raised as an error annotation
+  saying it did not run and why.
 - After each batch, the lane raises GitHub Actions error annotations for the
   failures it fails for, with a local rerun command where one exists. These
   appear while the remaining batches, diagnostic reruns, and coverage work
@@ -301,7 +317,9 @@ workflow. A run's lanes come from two jobs.
   signal is one an error it did not catch stopped, and is recorded as failed.
   The lane then prints the end of each server's log, keeps its working
   directory for the upload of what a failing lane left behind, and exits
-  without converting its coverage, which takes longer than GitHub waits.
+  without converting its coverage, which takes longer than GitHub waits. Its
+  closing summary says which pass it was running and which batches it did not
+  start, and does not report anything it stopped as having run no test.
 
 Only the `🧪 Run the lane` step is given `GITHUB_TOKEN` in its
 environment, and `tasks/ci-workflow.test.ts` fails a lane job in which the
@@ -763,7 +781,8 @@ measurement to look at rather than a setting to fix.
 | `FULL_LANE_BOUND_SECONDS` | 1800 | seconds | chosen | Up when the run on `main` uses more jobs than it needs; down when `main` takes too long to say something broke. |
 | `FULL_LANE_BUDGET_SECONDS` | 1730 | seconds | derived | Nothing edits this. It is the full run's bound less the same prologue and safety margin a pull request's lane pays, since a lane of either run is the same job doing the same setup on the same runner. |
 | `DISCRETIONARY_SECONDS` | 575 | seconds | chosen | Up when regressions reach the default branch past pull requests that did not run the test chosen by score that would have caught them; down when pull requests take more lanes than runner minutes allow. A pull request whose mandatory work fits in five lanes with room to spare most often takes five at this figure. The label `ci: <n>x` multiplies it by n for one pull request. |
-| `LANES_MAX` | 30 | lanes | chosen | Up when the lane-count job says a run needs more lanes than this, and the organization's runner limit has room; down when one run crowds out the runs behind it. A run needing more lanes than this takes this many: a pull request then runs fewer tests chosen by score, and any run's mandatory work may put its lanes past their budget. |
+| `LANES_MAX` | 30 | lanes | chosen | The most lanes a run other than the full run takes. Up when the lane-count job says such a run needs more lanes than this, and the organization's runner limit has room; down when one run crowds out the runs behind it. A pull request needing more lanes than this takes this many, and then runs fewer tests chosen by score, and its mandatory work may put its lanes past their budget. |
+| `FULL_LANES_MAX` | 40 | lanes | chosen | `LANES_MAX` for the full run. Up when the lane-count job says the full run needs more lanes than this and its lanes near the lane step's bound, and the organization's runner limit has room; down when one full run crowds out the runs behind it. |
 | `FULL_RUN_LABEL` | ci: full | a label | chosen | Not a quantity. Change it only if the label collides with one the repository already uses for something else. |
 | `UNMEASURED_COST_SECONDS` | 1 | seconds | chosen | Up when a lane holding new tests runs long; down when it finishes early. It is reached for only by a suite with no measured unit at all, since a suite that has any charges an unmeasured one the larger of its units' mean and their ninetieth percentile. |
 | `VALUE_FLOOR` | 0.05 | score | chosen | Up when the cheap tail is not being swept up; down when it crowds out tests with a record of new real test failures. |
@@ -1747,7 +1766,16 @@ for a change. Where it may be run without its neighbours, the run on the
 default branch runs it as many times as its share asks for and does not
 fail for it, so it goes on being measured while it is out of changes, and
 a green run of the default branch can carry a failure of one of these
-tests and still deploy. `explain <identity>` says of any test whether the
+tests and still deploy.
+
+That count is the most a lane runs it. A lane stops repeating a unit once
+each test that asked for its repeats has either passed and failed at the
+commit, which is the disagreement the publisher reads a flake from, or
+failed twice running, which is a test failing at that commit, whose further
+runs would each take as long as its failure does. Every run the lane makes
+is recorded and measured as before, and its closing summary says, under
+"Left out, which is not a failure", how many runs of each unit it did not
+need and why. `explain <identity>` says of any test whether the
 manifest this commit resolves withholds it and how many runs it is given.
 The reasoning behind each part is in [the archived
 plan](../history/plans/pull-request-test-selection.md#an-excluded-test-still-runs-on-main).
@@ -1798,8 +1826,8 @@ leaves](#the-comment-a-run-on-the-default-branch-leaves), which does not name
 it as a first failure. A test that failed every rerun counts each of those
 failures in its churn.
 
-A unit runs again as its batch ran it, with the same skip list, so that the
-rerun asks the same tests the same thing. A [unit that runs
+A unit runs again as its batch's first pass ran it, with the same skip list,
+so that the rerun asks the same tests the same thing. A [unit that runs
 whole](#units-that-run-whole) runs whole again, and the records of every test
 in it ship. Coverage is off for a rerun, since nothing scores what a rerun
 would measure. A test that has already passed beside its failure in the lane,
@@ -2212,11 +2240,33 @@ where its budget has room: a file the default branch gained after the commit
 the manifest was published from is not forced in for want of records, and
 the exploration pass reaches its stand-in first. A new test
 inside a unit the manifest already knows is not made mandatory on its own.
-It runs whenever a lane runs its unit, because a lane's skip list names only
-identities the manifest holds. Where that unit is a file, the change that
-adds the test edits it, which makes the unit mandatory. A record that
+It runs once whenever a lane runs its unit, because a lane's skip list names
+only identities the manifest holds. Where that unit is a file, the change
+that adds the test edits it, which makes the unit mandatory. A record that
 belongs to a suite as a whole rather than to one of its units makes no unit
 known.
+
+A lane runs such a test once however many times its batch runs the unit. A
+unit runs as many times as the most runs any identity the lane holds in it
+asks for by
+[its flake rate](../specs/test-selection.md#how-many-times-a-lane-runs-one-test),
+and the packer charges each of those runs for the identities the manifest
+holds in the unit and for nothing else. So every pass after the first adds to
+the unit's skip list each name the first pass registered that the manifest
+does not hold and that encloses nothing it does, and a new test runs in the
+first pass alone. A new test beside one whose flake rate asks for ten runs
+would otherwise run ten times with none of them charged, and a few tests of a
+few minutes each are then enough to run a lane past its step's bound. A unit
+that runs whole, or whose first pass left no name map, runs every pass as it
+ran the first.
+
+[Running a failure again](#running-a-failure-again) is the exception. A rerun
+runs its unit as the first pass did, new tests included, so that it asks the
+same tests the same thing, and a new test that failed is one a rerun can be
+for. A rerun starts only where the packer's charge for its unit fits in what
+is left of `RERUN_BUDGET_SECONDS`, and that charge leaves new tests out, so a
+rerun of a unit holding them can take longer than it was charged; the lane's
+step timeout is what bounds that.
 
 Two things are worth knowing while writing one, and both are consequences
 of the identity being the reported name:

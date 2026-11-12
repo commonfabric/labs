@@ -21,7 +21,11 @@ import {
   wish,
   Writable,
 } from "commonfabric";
-import { profileLook } from "../../system/profile-look/profile-look.ts";
+import {
+  type ProfileFace,
+  profileFace,
+  type ProfileFaceFields,
+} from "../../system/profile-face/profile-face.ts";
 import type {} from "commonfabric/schema";
 
 import { isMemberName } from "../../product/collection-naming/allocator.ts";
@@ -1015,12 +1019,11 @@ export const topicAuthorFromAgent = (
 /** Snapshot the canonical Profile fields used by browser mutations. */
 export const topicAuthorFromPerson = (
   profileName: string,
-  picture?: FabricBytes,
-  avatar?: string,
+  face: ProfileFace = {},
 ): TopicAuthor | undefined => {
   const name = (profileName ?? "").trim();
   if (!name) return undefined;
-  return { kind: "person", name, ...profileLook(picture, avatar) };
+  return { kind: "person", name, ...face };
 };
 
 /** Reject a mutation loudly. To a headless caller a silent early-return is
@@ -1093,7 +1096,7 @@ export const appendLink = (
     kind: kind ?? ("web" as const),
     url: trimmedUrl,
     label: (label ?? "").trim() || trimmedUrl,
-    addedBy: author,
+    ...(author !== undefined && { addedBy: author }),
     addedAt: Date.now(),
   };
   links.push(link);
@@ -1317,9 +1320,12 @@ const upgradeLegacyAuthors = (
  * retracted, reordering the board under a reader. A retraction is itself
  * activity, so its own stamp moves the clock forward.
  */
+/** The stamps of one record as its keys read, `undefined` where one is absent. */
+type StampsRead<K extends string> = { readonly [P in K]: number | undefined };
+
 const activityOf = (
-  comments: readonly TopicUpgradeComment[],
-  links: readonly TopicUpgradeLink[],
+  comments: readonly StampsRead<"sentAt" | "editedAt" | "removedAt">[],
+  links: readonly StampsRead<"addedAt" | "removedAt">[],
   createdAt: number,
   bodyUpdatedAt: number,
   titleUpdatedAt: number,
@@ -1546,11 +1552,8 @@ type SubmitProfileCommentState = {
   /** Resolved canonical Profile name for attribution. */
   profileName: string;
 
-  /** Resolved canonical Profile picture for attribution. */
-  profilePicture?: FabricBytes;
-
-  /** Resolved canonical Profile avatar text, used when there is no picture. */
-  profileAvatar?: string;
+  /** Resolved canonical Profile face for attribution (`profileFace()`). */
+  profileFace?: ProfileFace;
 };
 
 /** Browser comment submit with Profile fields already resolved by the pattern.
@@ -1572,16 +1575,11 @@ export const submitProfileComment = handler<void, SubmitProfileCommentState>(
       comments,
       commentDraft,
       profileName,
-      profilePicture,
-      profileAvatar,
+      profileFace: face,
     },
   ) => {
     const text = commentDraft.get();
-    const author = topicAuthorFromPerson(
-      profileName,
-      profilePicture,
-      profileAvatar,
-    );
+    const author = topicAuthorFromPerson(profileName, face);
     if (!text.trim() || !author) return;
     upgradeTopicState(upgrade.get(), "submitProfileComment");
     const comment = appendComment(comments, text, author);
@@ -2014,7 +2012,9 @@ const backlinksOf = lift((
  * cells are `unknown`, compared by identity and never read through.
  *
  * A URL naming no piece resolves with no cell, which is how an ordinary web
- * link stays an ordinary web link.
+ * link stays an ordinary web link. A reference into another space is kept
+ * whether or not its piece is still there: it reads as present without the
+ * piece being loaded, and whoever shows it reads the piece through it.
  */
 const mentionsOf = lift((
   { references, mentioned, linkTargets }: {
@@ -2471,20 +2471,17 @@ export default pattern<TopicInput, TopicOutput>(
     // Browser mutations snapshot the current viewer's canonical Profile.
     // Agent-facing streams below deliberately remain wish-free and accept the
     // agent's content-level signature in the same event as the mutation.
-    // One wish, not three: `#profile` resolves the profile itself, and `name`
-    // and `picture` and `avatar` are fields on it.
-    const profileWish = wish<
-      { name: string; picture?: FabricBytes; avatar?: string }
-    >({
+    // One wish: `#profile` resolves the profile itself, `name` is a field on
+    // it, and its face is read from it as its owner set it.
+    const profileWish = wish<Writable<{ name: string } & ProfileFaceFields>>({
       query: "#profile",
     });
     // A wish resolves after setup, so each of these stays a derivation. Reading
     // the fields once here would pin the page to the empty profile the topic
     // opened with: the composer's controls never enable, and a comment or edit
     // made through them carries blank attribution.
-    const profileName = profileWish.result?.name ?? "";
-    const profilePicture = profileWish.result?.picture;
-    const profileAvatar = profileWish.result?.avatar;
+    const profileName = computed(() => profileWish.result?.get()?.name ?? "");
+    const viewerFace = computed(() => profileFace(profileWish.result));
     const hasProfile = profileName.trim().length > 0;
     const createdByView = createdByOf({ createdBy });
 
@@ -2542,8 +2539,7 @@ export default pattern<TopicInput, TopicOutput>(
       comments,
       commentDraft,
       profileName,
-      profilePicture,
-      profileAvatar,
+      profileFace: viewerFace,
     });
 
     const startEditTitle = action(() => {

@@ -1,11 +1,11 @@
 import type { CfcAtom } from "@commonfabric/api/cfc";
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import type { NonDocumentPath } from "@commonfabric/memory/v2";
+import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import { encodePointer } from "../../../memory/v2/path.ts";
-import type { CfcConfClause } from "./clause.ts";
 import { normalizeClause } from "./clause.ts";
 import { uniqueCfcAtoms } from "./observation.ts";
 

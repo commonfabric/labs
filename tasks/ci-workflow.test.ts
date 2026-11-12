@@ -24,6 +24,7 @@ import { ORDER_JOB_NAME } from "./test-order-tomorrow.ts";
 import { measuredSetDirectory } from "./test-topology/coverage-gates.ts";
 import {
   FULL_LANE_BOUND_SECONDS,
+  FULL_LANES_MAX,
   LANE_BOUND_SECONDS,
   LANES_MAX,
   RERUN_BUDGET_SECONDS,
@@ -289,8 +290,20 @@ Deno.test("the first CI wave leaves runner capacity for another run", async () =
       `two overlapping runs must fit within GitHub's ` +
       `${githubParallelRunnerLimit}-runner limit`,
   );
-  // Every run's lanes are held to the same limit by the cap on them.
-  assert(LANES_MAX <= githubParallelRunnerLimit / 2);
+  // A run's lanes wait for the job counting them, so what holds them is the
+  // cap: half the limit for a pull request's run, and two thirds for the full
+  // run.
+  assert(
+    LANES_MAX <= githubParallelRunnerLimit / 2,
+    `a run may take ${LANES_MAX} lanes, more than half of GitHub's ` +
+      `${githubParallelRunnerLimit}-runner limit`,
+  );
+  assert(
+    FULL_LANES_MAX <= githubParallelRunnerLimit * 2 / 3,
+    `the full run may take ${FULL_LANES_MAX} lanes, which leaves less than a ` +
+      `third of GitHub's ${githubParallelRunnerLimit}-runner limit for ` +
+      `anything else`,
+  );
 });
 
 Deno.test("every step we name carries a phase marker", async () => {
@@ -460,6 +473,7 @@ interface Step {
   env?: Record<string, string>;
   with?: Record<string, string | boolean | number>;
   "timeout-minutes"?: unknown;
+  "working-directory"?: string;
 }
 
 interface Job {
@@ -644,6 +658,49 @@ Deno.test("a lane runs the lane runner and holds the token alone", async () => {
     const checkout = namedStep(job, "📥 Checkout repository");
     assertEquals(checkout.with?.["fetch-depth"], 0);
     assertEquals(checkout.with?.["persist-credentials"], false);
+  }
+});
+
+Deno.test("a lane runs the repository's code from a path with a space and an emoji", async () => {
+  // A test that turns a file URL into a path without decoding it passes in a
+  // checkout whose path is plain ASCII, so the lane runs from one whose path
+  // is not.
+  const job = (await parsedWorkflow("deno.yml")).jobs.tests;
+  const steps = job.steps ?? [];
+  const mount = namedStep(
+    job,
+    "📥 Mount the checkout at a path with a space and an emoji",
+  );
+  assert(
+    steps.indexOf(namedStep(job, "📥 Checkout repository")) <
+      steps.indexOf(mount),
+  );
+  for (const name of ["🗺️ Plan the lane", "🧪 Run the lane"]) {
+    const step = namedStep(job, name);
+    assertEquals(step["working-directory"], "${{ env.CHECKOUT }}", name);
+    assert(steps.indexOf(mount) < steps.indexOf(step), name);
+  }
+
+  const home = await Deno.makeTempDir({ prefix: "ci-workflow-home-" });
+  try {
+    const run = await runStep(mount.run ?? "", {
+      HOME: home,
+      GITHUB_WORKSPACE: "/work/labs/labs",
+      GITHUB_ENV: `${home}/env`,
+    }, { sudo: `printf '%s\\n' "$@" > '${home}/sudo'` });
+    assertStepCode(run, 0, "the mount step failed");
+    const checkout = `${home}/checkout 🦆`;
+    assert((await Deno.stat(checkout)).isDirectory);
+    assertEquals(
+      await Deno.readTextFile(`${home}/sudo`),
+      `mount\n--bind\n/work/labs/labs\n${checkout}\n`,
+    );
+    assertEquals(
+      await Deno.readTextFile(`${home}/env`),
+      `CHECKOUT=${checkout}\n`,
+    );
+  } finally {
+    await Deno.remove(home, { recursive: true });
   }
 });
 

@@ -47,8 +47,8 @@ weeks later.
 ## 1. Wish targets and result semantics
 
 **Contract.** The runtime resolves the well-known profile targets
-`#profile`, `#profileName`, `#profileAvatar`, `#profilePicture`,
-`#profileBio`, `#profileSpace`, and hashtag search over profile elements with
+`#profile`, `#profileName`, `#profileBio`, `#profileSpace`, and hashtag
+search over profile elements with
 `scope: ["profile"]`. Reads are read-only; writes go only through the
 profile pattern's own owner-protected handlers (seam 7). At zero
 profiles, `#profile` renders the trusted create surface inline
@@ -63,7 +63,10 @@ settling single-result semantics; do not bind to a fixed ordering.
 
 A host renders the profile by mounting a thin wrapper pattern that
 wishes `#profile` inside the runtime it already boots — never by
-re-implementing resolution host-side. Full wish semantics:
+re-implementing resolution host-side. A host that already knows who its
+user is suggests their first profile's name and picture with
+`RuntimeClient.offerProfileSuggestion()`, which the create surface offers
+for the user to keep, edit, or drop. Full wish semantics:
 [docs/common/conventions/wish.md](../common/conventions/wish.md).
 
 ---
@@ -612,7 +615,10 @@ deciding nothing, the same payload refused through `sendStrict()`, a refused
 handling resolving `sendStrict()` without `awaitHandling`, a reviewed grant
 changing a space's access list for an `OWNER` and refused for a member without
 one, the same grant changing nothing through `sendStrict()`, the event the
-worker delivers, and the requests it refuses.
+worker delivers, and the requests it refuses. It also sends from a worker that
+has loaded nothing of the pattern, to a stream nested two patterns deep, and
+covers what a failed load, a disposal, a second send, and an idle wait do to
+such a send.
 `runtime/runner/test/builder/space-access-change.test.ts` and
 `runtime/runner/test/executor-space-access-change.test.ts` cover a native
 control's grant and revoke on a client and on a serving runtime.

@@ -85,6 +85,8 @@ type HostEnsure = {
   outcome: string;
   reason?: string;
   inbox?: { id: string; space: string };
+  inboxes?: { id: string; space: string }[];
+  refused?: { reason: string; inbox: { id: string; space: string } };
   profile?: { id: string; space: string };
 };
 
@@ -263,13 +265,23 @@ describe("private inbox across runtimes", () => {
    */
   const offer = async (
     title: string,
-    stream: "offer" | "queuedOffer" | "offerToReadopting" = "offer",
+    stream:
+      | "offer"
+      | "queuedOffer"
+      | "offerToReadopting"
+      | "offerToHolding" = "offer",
     id: string = title,
     from: MultiRuntimeSession = sender,
     to: PieceAddress = inbox,
+    profile?: number,
   ): Promise<void> => {
     const refusedBefore = await refusals(from);
-    await from.send(stream, { id, space: harness.spaceDid, title });
+    await from.send(stream, {
+      id,
+      space: harness.spaceDid,
+      title,
+      ...(profile === undefined ? {} : { profile }),
+    });
     await harness.settleUntil(async () =>
       (await ownerOffers(to)).some((each) => each.title === title) ||
       await refusals(from) > refusedBefore
@@ -313,16 +325,17 @@ describe("private inbox across runtimes", () => {
 
   /**
    * `adoptingHome`: two current profiles and two of an earlier vintage. The
-   * second points at an inbox of the owner's shaped as a loom daemon's, and
-   * the third at the owner's other inbox.
+   * second points at an inbox in Home's own `private-inbox` space, as another
+   * runtime's Home makes one, and the third at the owner's other inbox.
    */
   const adopting = once(async () => {
     await owner.send("createAdoptingProfile");
     await owner.send("createAdoptingProfile");
     await owner.send("createAdoptingEarlierProfile");
     await owner.send("createAdoptingEarlierProfile");
+    await owner.send("createHomeMadeInbox");
     await harness.settle();
-    await owner.send("pointAdoptingProfileAtLoom", { index: 1 });
+    await owner.send("pointAdoptingProfileAtHomeMade", { index: 1 });
     await owner.send("pointAdoptingProfileAtOther", { index: 2 });
     await harness.settleUntil(async () =>
       await pointed(["adoptingHome", "profiles", 1]) &&
@@ -422,8 +435,9 @@ describe("private inbox across runtimes", () => {
   /**
    * `curedHome`: two profiles, both pointing at the stranger's inbox. Once the
    * refusal is recorded, the first, the deciding one, is pointed at a usable
-   * inbox of the owner's, and the second still points at the stranger's, so
-   * only the adoption can clear the record.
+   * inbox of the owner's, shaped as a loom daemon's, and the second still
+   * points at the stranger's, so only replacing the usable one can clear the
+   * record.
    */
   const curing = once(async () => {
     await owner.send("createCuredProfile");
@@ -458,12 +472,12 @@ describe("private inbox across runtimes", () => {
       (await owner.link(["curedHome", "profiles", 0, "inbox", "piece"]))
         .id === cure.id
     );
-    const curedAdoption = await ensureThroughHost(["curedHome"]);
+    const curedReplacement = await ensureThroughHost(["curedHome"]);
     await harness.settleUntil(async () =>
       (await owner.read(["curedHome", "privateInbox", "piece"])) !==
         undefined
     );
-    return { curedRefusal, curedRecord, curedAdoption };
+    return { curedRefusal, curedRecord, curedReplacement };
   });
 
   /**
@@ -523,10 +537,10 @@ describe("private inbox across runtimes", () => {
 
   /**
    * `readoptingHome`: two profiles. Home creates its inbox and points both at
-   * it, and a sender delivers an offer there. The second is made the default
-   * and then pointed at another inbox of the owner's, shaped as a loom
-   * daemon's, as when the daemon writes the pointer last, and Home is ensured
-   * again; the first still points at the inbox Home created.
+   * it. The second is made the default and then pointed at another inbox of
+   * the owner's, shaped as a loom daemon's, as when the daemon writes the
+   * pointer last, a sender delivers an offer through it there, and Home is
+   * ensured again; the first still points at the inbox Home created.
    */
   const readopting = once(async () => {
     await owner.send("createReadoptingProfile");
@@ -543,13 +557,6 @@ describe("private inbox across runtimes", () => {
       "privateInbox",
       "piece",
     ]);
-    await offer(
-      "before the switch",
-      "offerToReadopting",
-      "before the switch",
-      sender,
-      readoptOriginal,
-    );
     const readoptLoom = await owner.link(["readoptLoomInbox", "piece"]);
     await owner.send("setReadoptingDefault", { index: 1 });
     await owner.send("pointReadoptingProfileAtLoom", { index: 1 });
@@ -559,12 +566,58 @@ describe("private inbox across runtimes", () => {
       (await owner.read(["readoptingHome", "defaultProfile", "profile"])) !==
         undefined
     );
+    await offer(
+      "through the loom's inbox",
+      "offerToReadopting",
+      "through the loom's inbox",
+      sender,
+      readoptLoom,
+      1,
+    );
     const readoption = await ensureThroughHost(["readoptingHome"]);
     await harness.settleUntil(async () =>
-      (await owner.link(["readoptingHome", "privateInbox", "piece"])).id ===
-        readoptLoom.id
+      (await owner.link(["readoptingHome", "profiles", 1, "inbox", "piece"]))
+        .id === readoptOriginal.id
     );
     return { readoptCreated, readoptOriginal, readoption };
+  });
+
+  /**
+   * `holdingHome`: one profile. Home holds an inbox of the owner's shaped as a
+   * loom daemon's, its profile points at another such inbox, and a sender
+   * delivers an offer through the profile there before Home is ensured.
+   */
+  const holding = once(async () => {
+    await owner.send("createHoldingProfile");
+    await owner.send("createHoldingHeldInbox");
+    await owner.send("createHoldingDecidingInbox");
+    await harness.settle();
+    await owner.send("holdHoldingInbox");
+    await owner.send("pointHoldingProfileAtDeciding", { index: 0 });
+    const heldLoom = await owner.link(["holdingHeldInbox", "piece"]);
+    const decidingLoom = await owner.link(["holdingDecidingInbox", "piece"]);
+    await harness.settleUntil(async () =>
+      (await owner.read(["holdingHome", "privateInbox", "piece"])) !==
+        undefined &&
+      (await owner.link(["holdingHome", "profiles", 0, "inbox", "piece"]))
+          .id === decidingLoom.id
+    );
+    await offer(
+      "through the deciding profile",
+      "offerToHolding",
+      "through the deciding profile",
+      sender,
+      decidingLoom,
+    );
+    const holdingEnsure = await ensureThroughHost(["holdingHome"]);
+    await harness.settleUntil(async () =>
+      (await owner.link(["holdingHome", "privateInbox", "piece"])).id !==
+        heldLoom.id &&
+      (await owner.link(["holdingHome", "profiles", 0, "inbox", "piece"]))
+          .id ===
+        (await owner.link(["holdingHome", "privateInbox", "piece"])).id
+    );
+    return { heldLoom, decidingLoom, holdingEnsure };
   });
 
   /**
@@ -783,18 +836,16 @@ describe("private inbox across runtimes", () => {
     expect(other.id).not.toBe(inbox.id);
   });
 
-  it("adopts the owner's inbox in a space of its own that a profile advertises, and creates none", async () => {
+  it("adopts an inbox in Home's own space that a profile advertises, as another runtime's Home makes one, and creates none", async () => {
     const { adoption, adopted } = await adopting();
-    const loom = await owner.link(["loomInbox", "piece"]);
+    const homeMade = await owner.link(["homeMadeInbox", "piece"]);
 
-    expect(await aclOf(loom)).toEqual({
-      [owner.identity.did()]: "OWNER",
-      "*": "WRITE",
-    });
+    expect(homeMade.space).toBe(inbox.space);
+    expect(homeMade.id).not.toBe(inbox.id);
     expect(adoption.outcome).toBe("adopt");
-    expect(adoption.inbox).toEqual({ id: loom.id, space: loom.space });
-    expect(adopted.id).toBe(loom.id);
-    expect(adopted.space).toBe(loom.space);
+    expect(adoption.inbox).toEqual({ id: homeMade.id, space: homeMade.space });
+    expect(adopted.id).toBe(homeMade.id);
+    expect(adopted.space).toBe(homeMade.space);
   });
 
   it("points the adopting Home's profiles with no inbox at the adopted inbox, current and earlier vintage", async () => {
@@ -858,20 +909,23 @@ describe("private inbox across runtimes", () => {
     ).toBe("number");
   });
 
-  it("clears a recorded refusal when the refused profile is pointed at a usable inbox and the next ensure adopts it", async () => {
-    // Another profile still points at the refused inbox, so the adoption's
-    // clear is the one that clears the record here.
-    const { curedRefusal, curedRecord, curedAdoption } = await curing();
+  it("clears a recorded refusal when the refused profile is pointed at a usable inbox and the next ensure replaces it with Home's own", async () => {
+    // Another profile still points at the refused inbox, so the clear that
+    // creating Home's own inbox makes is the one that clears the record here.
+    const { curedRefusal, curedRecord, curedReplacement } = await curing();
     const strangers = await owner.link(["strangerInbox", "piece"]);
     const cure = await owner.link(["cureInbox", "piece"]);
 
     expect(curedRefusal.outcome).toBe("refused");
     expect(curedRecord.reason).toBe("inbox-adoption-acl-mismatch");
     expect(curedRecord.inbox.id).toBe(strangers.id);
-    expect(curedAdoption.outcome).toBe("adopt");
-    expect(
-      (await owner.link(["curedHome", "privateInbox", "piece"])).id,
-    ).toBe(cure.id);
+    expect(curedReplacement.outcome).toBe("replace");
+    expect(curedReplacement.inboxes).toEqual([
+      { id: cure.id, space: cure.space },
+    ]);
+    const held = await owner.link(["curedHome", "privateInbox", "piece"]);
+    expect(held.space).toBe(inbox.space);
+    expect(held.id).not.toBe(cure.id);
     expect(await owner.read(["curedHome", "privateInboxRefusal"])).toEqual({});
     expect(
       (await owner.link(["curedHome", "profiles", 1, "inbox", "piece"])).id,
@@ -916,30 +970,37 @@ describe("private inbox across runtimes", () => {
     expect(await pointed(["refusingHome", "profiles", 0])).toBe(false);
   });
 
-  it("adopts the inbox its default profile is pointed at, though another profile still points at the one it holds, and retains that one", async () => {
+  it("keeps its own inbox when its default profile is pointed at one Home did not make, retains that one, and points the profile back at its own", async () => {
     const { readoptCreated, readoptOriginal, readoption } = await readopting();
     const loom = await owner.link(["readoptLoomInbox", "piece"]);
     const deciding = await owner.link(["readoptingHome", "profiles", 1]);
 
     expect(readoptCreated.outcome).toBe("none-advertised");
     expect(readoptOriginal.id).not.toBe(loom.id);
-    expect(readoption.outcome).toBe("adopt");
-    expect(readoption.inbox).toEqual({ id: loom.id, space: loom.space });
+    expect(readoption.outcome).toBe("replace");
+    expect(readoption.inboxes).toEqual([{ id: loom.id, space: loom.space }]);
     expect(readoption.profile?.space).toBe(deciding.space);
-    expect(
-      (await owner.link(["readoptingHome", "profiles", 0, "inbox", "piece"]))
-        .id,
-    ).toBe(readoptOriginal.id);
+    for (const index of [0, 1]) {
+      expect(
+        (await owner.link([
+          "readoptingHome",
+          "profiles",
+          index,
+          "inbox",
+          "piece",
+        ])).id,
+      ).toBe(readoptOriginal.id);
+    }
     const held = await owner.link(["readoptingHome", "privateInbox", "piece"]);
-    expect(held.id).toBe(loom.id);
-    expect(held.space).toBe(loom.space);
+    expect(held.id).toBe(readoptOriginal.id);
+    expect(held.space).toBe(readoptOriginal.space);
     const retained = await owner.link([
       "readoptingHome",
       "retainedPrivateInboxes",
       0,
     ]);
-    expect(retained.id).toBe(readoptOriginal.id);
-    expect(retained.space).toBe(readoptOriginal.space);
+    expect(retained.id).toBe(loom.id);
+    expect(retained.space).toBe(loom.space);
     expect(
       ((await owner.readRaw([
         "readoptingHome",
@@ -948,7 +1009,7 @@ describe("private inbox across runtimes", () => {
     ).toBe(1);
   });
 
-  it("keeps an offer delivered to the inbox it held readable through the retained link", async () => {
+  it("keeps an offer delivered through the deciding profile to the inbox it replaced readable through the retained link", async () => {
     await readopting();
     const retained = await owner.link([
       "readoptingHome",
@@ -957,18 +1018,16 @@ describe("private inbox across runtimes", () => {
     ]);
 
     const offers = await ownerOffers(retained);
-    expect(offers.map((each) => each.title)).toContain("before the switch");
+    expect(offers.map((each) => each.title)).toContain(
+      "through the loom's inbox",
+    );
     expect(
-      offers.find((each) => each.title === "before the switch")?.from,
+      offers.find((each) => each.title === "through the loom's inbox")?.from,
     ).toBe(sender.identity.did());
   });
 
-  it("keeps the adopted inbox, retains nothing more and points a profile created since when ensured again", async () => {
-    // The adopted inbox's link names its result document, so Home's holder
-    // carries the offers' label now; the pointing waits on the ensure's own
-    // run having committed.
-    await readopting();
-    const loom = await owner.link(["readoptLoomInbox", "piece"]);
+  it("keeps its own inbox, retains nothing more and points a profile created since when ensured again", async () => {
+    const { readoptOriginal } = await readopting();
     await owner.send("createReadoptingProfile");
     await harness.settle();
 
@@ -980,17 +1039,48 @@ describe("private inbox across runtimes", () => {
     expect(again.outcome).toBe("held");
     expect(
       (await owner.link(["readoptingHome", "privateInbox", "piece"])).id,
-    ).toBe(loom.id);
+    ).toBe(readoptOriginal.id);
     expect(
       (await owner.link(["readoptingHome", "profiles", 2, "inbox", "piece"]))
         .id,
-    ).toBe(loom.id);
+    ).toBe(readoptOriginal.id);
     expect(
       ((await owner.readRaw([
         "readoptingHome",
         "retainedPrivateInboxes",
       ])) as unknown[]).length,
     ).toBe(1);
+  });
+
+  it("replaces both the inbox it holds and the deciding profile's when it made neither, and reads an offer delivered to the second through the retained link", async () => {
+    const { heldLoom, decidingLoom, holdingEnsure } = await holding();
+    const deciding = await owner.link(["holdingHome", "profiles", 0]);
+
+    expect(holdingEnsure.outcome).toBe("replace");
+    // The held inbox is named by the link Home holds it through, and the
+    // retained list below shows it reaches the one Home held.
+    expect(holdingEnsure.inboxes?.length).toBe(2);
+    expect(holdingEnsure.inboxes?.[0].space).toBe(heldLoom.space);
+    expect(holdingEnsure.inboxes?.[1]).toEqual({
+      id: decidingLoom.id,
+      space: decidingLoom.space,
+    });
+    expect(holdingEnsure.profile?.space).toBe(deciding.space);
+    const held = await owner.link(["holdingHome", "privateInbox", "piece"]);
+    expect(held.space).toBe(inbox.space);
+    expect(
+      (await owner.link(["holdingHome", "profiles", 0, "inbox", "piece"])).id,
+    ).toBe(held.id);
+    const retained = ["holdingHome", "retainedPrivateInboxes"];
+    expect(((await owner.readRaw(retained)) as unknown[]).length).toBe(2);
+    expect((await owner.link([...retained, 0])).id).toBe(heldLoom.id);
+    const replacedDeciding = await owner.link([...retained, 1]);
+    expect(replacedDeciding.id).toBe(decidingLoom.id);
+    const offers = await ownerOffers(replacedDeciding);
+    expect(
+      offers.find((each) => each.title === "through the deciding profile")
+        ?.from,
+    ).toBe(sender.identity.did());
   });
 
   it("points a profile created through the profile-create surface after the inbox exists", async () => {

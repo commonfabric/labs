@@ -292,6 +292,12 @@ export enum RequestType {
   JoinVisitedRoom = "runtime:joinVisitedRoom",
 
   /**
+   * Stores a profile the host suggests for its user's first profile, which
+   * the `#profile` wish's create surface offers.
+   */
+  OfferProfileSuggestion = "runtime:offerProfileSuggestion",
+
+  /**
    * Waits for reactive quiescence *and* for every issued commit to be durable.
    * The client reads that pair as the point at which navigating or reloading
    * is safe, so quiescence alone is a weaker condition than this reports.
@@ -337,9 +343,20 @@ export enum RequestType {
    * Asks the memory server once more for a space it refused this runtime,
    * and is done once the server has admitted or refused it again. It is for a
    * host that has word the runtime's principal was granted access, and does
-   * nothing for a space the runtime has not opened or was not refused.
+   * nothing for a space the runtime has not opened or was not refused. A space
+   * whose first connection never completed a handshake counts as refused: the
+   * retry dials it once more, for a host with reason to think it is reachable
+   * now, and rejects if it still is not.
    */
   RetrySpaceAccess = "runtime:retrySpaceAccess",
+
+  /**
+   * Asks again, as `RetrySpaceAccess` does, for every space whose first
+   * connection never completed a handshake, and is done once each retry has
+   * settled. It is for a host that learns the network changed, and does
+   * nothing where no space is out of reach.
+   */
+  RetryUnreachableSpaces = "runtime:retryUnreachableSpaces",
 
   /** Waits for the pattern manager's compile-cache writes to land. */
   FlushCompileCacheWrites = "runtime:flushCompileCacheWrites",
@@ -352,6 +369,7 @@ export enum RequestType {
    * round trip covering all four.
    */
   GetLoggerCounts = "runtime:getLoggerCounts",
+  GetLoggerErrorMessages = "runtime:getLoggerErrorMessages",
 
   /** Snapshot storage work without waiting for the durability barrier. */
   GetStorageDiagnostics = "runtime:getStorageDiagnostics",
@@ -601,7 +619,9 @@ export enum NotificationType {
 
   /**
    * Reports that a space which refused the runtime principal has admitted it
-   * again, so a load that the refusal failed may succeed if asked again.
+   * again, or that a retry reached a space whose first connection never
+   * completed a handshake, so a load that the refusal or the failed
+   * connection failed may succeed if asked again.
    */
   SpaceAccessRestored = "callback:space-access-restored",
 
@@ -692,6 +712,9 @@ export type IPCClientMessage = {
    */
   msgId: MessageId;
 
+  /** Loaded peer commit, for diagnostics only; never an admission rule. */
+  runtimeBuild?: string;
+
   /**
    * The request itself.
    */
@@ -729,6 +752,23 @@ export enum RuntimeErrorCode {
    * space answers to the address, and to offer to create one.
    */
   SpaceNotFound = "space-not-found",
+
+  /**
+   * The request named a deleted space, which the memory server refuses to
+   * everyone for good. No retry admits anyone, so the client's remedy is to
+   * tell the reader that the space was deleted.
+   */
+  SpaceDeleted = "space-deleted",
+
+  /**
+   * The request needed a space whose first connection to its memory host
+   * never completed a handshake, as when the host is down or out of the
+   * network's reach. The runtime does not dial it again on its own, so the
+   * client's remedy is to ask it to (`RetryUnreachableSpaces`) once the host
+   * may be reachable, such as when a person asks to try again; a retry that
+   * connects is announced as `SpaceAccessRestored`.
+   */
+  SpaceUnreachable = "space-unreachable",
 }
 
 /**
@@ -742,6 +782,9 @@ export type IPCRemoteResponse = {
    */
   msgId: MessageId;
 
+  /** Loaded peer commit, for diagnostics only; never an admission rule. */
+  runtimeBuild?: string;
+
   /**
    * What the handler returned, absent where it returned nothing.
    */
@@ -751,6 +794,9 @@ export type IPCRemoteResponse = {
    * The request this answers.
    */
   msgId: MessageId;
+
+  /** Loaded peer commit, for diagnostics only; never an admission rule. */
+  runtimeBuild?: string;
 
   /**
    * What went wrong, as text. Its presence is what makes this the
@@ -1365,6 +1411,22 @@ export type CellResolveAsCellRequest = BaseRequest & {
    * The cell whose aliases to follow.
    */
   cell: CellRef;
+
+  /**
+   * Whether to answer also with where a write to the cell lands, read
+   * together with the cell its links lead to: write redirects are followed,
+   * and a link stored as the value there is not.
+   */
+  withWriteTarget?: true;
+};
+
+/** The {@link RequestType.CellResolveAsCell} response. */
+export type CellResolveAsCellResponse = CellResponse & {
+  /**
+   * Where a write to the cell lands, when the request asked for it, read
+   * with {@link CellResponse.cell}.
+   */
+  writeTarget?: CellRef;
 };
 
 /** The {@link RequestType.CellGetCfcLabel} request. */
@@ -1939,6 +2001,22 @@ export type EnsureHomePatternRunningRequest = BaseRequest & {
   existingOnly?: boolean;
 };
 
+/**
+ * The {@link RequestType.OfferProfileSuggestion} request: a name and,
+ * optionally, a picture, which the worker's runtime stores as the profile
+ * suggested for its user (`offerProfileSuggestion` in the runner).
+ */
+export type OfferProfileSuggestionRequest = BaseRequest & {
+  type: RequestType.OfferProfileSuggestion;
+  name: string;
+
+  /**
+   * The picture's bytes, which the envelope carries whole and decodes back
+   * into a `FabricBytes`, as for `UploadBlobRequest.body`.
+   */
+  picture?: FabricBytes;
+};
+
 /** The {@link RequestType.JoinVisitedRoom} request. */
 export type JoinVisitedRoomRequest = BaseRequest & {
   type: RequestType.JoinVisitedRoom;
@@ -2055,6 +2133,11 @@ export type RegisterSpaceHostDetailedRequest = BaseRequest & {
   host: string;
 };
 
+/** The {@link RequestType.RetryUnreachableSpaces} request. */
+export type RetryUnreachableSpacesRequest = BaseRequest & {
+  type: RequestType.RetryUnreachableSpaces;
+};
+
 /** The {@link RequestType.RetrySpaceAccess} request. */
 export type RetrySpaceAccessRequest = BaseRequest & {
   type: RequestType.RetrySpaceAccess;
@@ -2097,6 +2180,14 @@ export type StorageDiagnosticsResponse = {
 /** The {@link RequestType.GetLoggerCounts} request, which carries no payload. */
 export type GetLoggerCountsRequest = BaseRequest & {
   type: RequestType.GetLoggerCounts;
+};
+
+/**
+ * The {@link RequestType.GetLoggerErrorMessages} request, which carries no
+ * payload.
+ */
+export type GetLoggerErrorMessagesRequest = BaseRequest & {
+  type: RequestType.GetLoggerErrorMessages;
 };
 
 /**
@@ -2671,6 +2762,12 @@ export type LoggerFlagsData = Record<
   string,
   Record<string, Record<string, FabricPlainObject | null>>
 >;
+
+/**
+ * The earliest messages each logger logged at `error`, by logger name and
+ * message key, as text.
+ */
+export type LoggerErrorMessagesData = Record<string, Record<string, string[]>>;
 
 /**
  * The {@link RequestType.PieceCreate} request. `source` names a URL or a
@@ -3489,11 +3586,13 @@ export type IPCClientRequest =
   | GetHomeSpaceCellRequest
   | EnsureHomePatternRunningRequest
   | JoinVisitedRoomRequest
+  | OfferProfileSuggestionRequest
   | ListEventAttentionRequest
   | ResolveEventAttentionRequest
   | GetGraphSnapshotRequest
   | GetStorageDiagnosticsRequest
   | GetLoggerCountsRequest
+  | GetLoggerErrorMessagesRequest
   | GetPatternCoverageRequest
   | SetLoggerLevelRequest
   | SetLoggerEnabledRequest
@@ -3535,6 +3634,7 @@ export type IPCClientRequest =
   | RegisterSpaceHostRequest
   | RegisterSpaceHostDetailedRequest
   | RetrySpaceAccessRequest
+  | RetryUnreachableSpacesRequest
   | VDomMountRequest
   | VDomUnmountRequest
   | DetectNonIdempotentRequest
@@ -3885,6 +3985,18 @@ export type GraphSnapshotResponse = {
 };
 
 /**
+ * The messages behind a logger's `error` counts. It is a request of its own,
+ * rather than part of the counts, because this text can quote a value and the
+ * counts are read by tools that write what they read into their own output.
+ */
+export type LoggerErrorMessagesResponse = {
+  /**
+   * The messages, by logger and message key.
+   */
+  messages: LoggerErrorMessagesData;
+};
+
+/**
  * Everything the logger diagnostics read returns: counts, per-logger
  * metadata, timings, active flags, the runtime's CFC counters, the pattern
  * manager's compile-cache counters, and the sizes of the runtime's live
@@ -4134,9 +4246,11 @@ export type SpaceAccessLostNotification = {
 };
 
 /**
- * The runtime principal admitted again to one space that had refused it, as
- * a retry of the space's access decides: one the memory server's
- * `session/admissible` notice started, or one a client asked for.
+ * One space usable again: the runtime principal admitted to it again after
+ * it refused it, as a retry of the space's access decides (one the memory
+ * server's `session/admissible` notice started, or one a client asked for),
+ * or a space a client's retry reached after its first connection never
+ * completed a handshake.
  */
 export type SpaceAccessRestoredNotification = {
   type: NotificationType.SpaceAccessRestored;
@@ -4418,6 +4532,7 @@ export type RemoteResponse =
   | GraphSnapshotResponse
   | StorageDiagnosticsResponse
   | LoggerCountsResponse
+  | LoggerErrorMessagesResponse
   | PatternCoverageResponse
   | SettleStatsResponse
   | SettleStatsHistoryResponse
@@ -4505,6 +4620,10 @@ export type Commands = {
     request: JoinVisitedRoomRequest;
     response: JoinVisitedRoomResponse;
   };
+  [RequestType.OfferProfileSuggestion]: {
+    request: OfferProfileSuggestionRequest;
+    response: EmptyResponse;
+  };
   [RequestType.Idle]: {
     request: IdleRequest;
     response: EmptyResponse;
@@ -4532,6 +4651,10 @@ export type Commands = {
   [RequestType.GetLoggerCounts]: {
     request: GetLoggerCountsRequest;
     response: LoggerCountsResponse;
+  };
+  [RequestType.GetLoggerErrorMessages]: {
+    request: GetLoggerErrorMessagesRequest;
+    response: LoggerErrorMessagesResponse;
   };
   [RequestType.GetPatternCoverage]: {
     request: GetPatternCoverageRequest;
@@ -4640,7 +4763,7 @@ export type Commands = {
   };
   [RequestType.CellResolveAsCell]: {
     request: CellResolveAsCellRequest;
-    response: CellResponse;
+    response: CellResolveAsCellResponse;
   };
   [RequestType.CellGetCfcLabel]: {
     request: CellGetCfcLabelRequest;
@@ -4757,6 +4880,10 @@ export type Commands = {
   };
   [RequestType.RetrySpaceAccess]: {
     request: RetrySpaceAccessRequest;
+    response: EmptyResponse;
+  };
+  [RequestType.RetryUnreachableSpaces]: {
+    request: RetryUnreachableSpacesRequest;
     response: EmptyResponse;
   };
   [RequestType.PieceGet]: {

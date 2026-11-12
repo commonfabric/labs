@@ -59,6 +59,7 @@ import {
   InitializationData,
   type LoggerCountsData,
   type LoggerCountsResponse,
+  type LoggerErrorMessagesData,
   type LoggerFlagsData,
   type LoggerMetadata,
   type LoggerTimingData,
@@ -177,9 +178,11 @@ export type RuntimeClientEvents = {
   spaceaccesslost: [{ space: DID; deleted?: true }];
 
   /**
-   * A space that refused the runtime principal admitted it again. A load the
-   * refusal failed may succeed if asked again, and this is the word to ask
-   * on for that space.
+   * A space that refused the runtime principal admitted it again, or a retry
+   * reached a space the runtime had never reached (see
+   * `retryUnreachableSpaces()`). A load the refusal or the failed connection
+   * failed may succeed if asked again, and this is the word to ask on for
+   * that space.
    */
   spaceaccessrestored: [{ space: DID }];
 
@@ -1002,6 +1005,26 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
   }
 
   /**
+   * Stores `suggestion` as the profile suggested for this runtime's user, to
+   * be offered by the create surface the `#profile` wish shows while the user
+   * has no profile, and resolves once it is stored. It replaces any
+   * suggestion stored before, so a host offers one once, when it learns it,
+   * as Web Weaver does from the receipt of an invitation that carries one.
+   * `picture` is copied into the value that crosses.
+   */
+  async offerProfileSuggestion(
+    suggestion: { name: string; picture?: Uint8Array },
+  ): Promise<void> {
+    await this.#conn.request<RequestType.OfferProfileSuggestion>({
+      type: RequestType.OfferProfileSuggestion,
+      name: suggestion.name,
+      ...(suggestion.picture === undefined
+        ? {}
+        : { picture: new FabricBytes(suggestion.picture) }),
+    });
+  }
+
+  /**
    * Tells the user's chat manager that the user has joined the FabriChat room
    * declared by `space`: the writable standalone root or the writable
    * container root's explicit `chatRoom`. The manager makes the room
@@ -1483,11 +1506,31 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
    * whether this client's or a rendered retry control's, shares that retry
    * rather than asking again, and a rendered retry control shows it in
    * flight either way. It rejects on any failure other than a refusal.
+   *
+   * A space whose first connection never completed a handshake, such as one
+   * on a host that was down or out of the network's reach, counts as refused
+   * here: its loads fail at once without dialing again until this call makes
+   * one more round of connection attempts, after which the loads that failed
+   * are made again. It rejects if the space is still out of reach.
    */
   async retrySpaceAccess(space: DID): Promise<void> {
     await this.#conn.request<RequestType.RetrySpaceAccess>({
       type: RequestType.RetrySpaceAccess,
       space,
+    });
+  }
+
+  /**
+   * Asks again, as `retrySpaceAccess()` does, for every space the runtime
+   * could not reach: those whose first connection never completed a
+   * handshake. It is for a host that learns the network changed, such as from
+   * the platform's path monitor, and so cannot know which spaces were out of
+   * reach. Resolves once each retry has settled, whatever it decided; a space
+   * still out of reach stays as it was, and its loads keep failing at once.
+   */
+  async retryUnreachableSpaces(): Promise<void> {
+    await this.#conn.request<RequestType.RetryUnreachableSpaces>({
+      type: RequestType.RetryUnreachableSpaces,
     });
   }
 
@@ -1533,6 +1576,11 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
     return this.#conn.getRequestTimelineDiagnostics();
   }
 
+  /** Provenance of the client library and the worker it joined. */
+  get buildDiagnostics() {
+    return this.#conn.buildDiagnostics;
+  }
+
   resetSubscriptionDiagnostics(): void {
     this.#conn.resetSubscriptionDiagnostics();
   }
@@ -1569,6 +1617,17 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
       compileCache: res.compileCache,
       sizes: res.sizes,
     };
+  }
+
+  /**
+   * The earliest messages the worker's loggers logged at `error`, which a
+   * browser test's failure report prints. The text can quote a value.
+   */
+  async getLoggerErrorMessages(): Promise<LoggerErrorMessagesData> {
+    const res = await this.#conn.request<RequestType.GetLoggerErrorMessages>({
+      type: RequestType.GetLoggerErrorMessages,
+    });
+    return res.messages;
   }
 
   /**

@@ -1,7 +1,23 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
-import type { CellHandle, CellRef } from "@commonfabric/runtime-client";
+import { realmFromFabricValue } from "@commonfabric/data-model/codecs";
+import { Identity } from "@commonfabric/identity";
+import { Runtime } from "@commonfabric/runner";
+import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  type CellHandle,
+  type CellRef,
+  isCellHandle,
+  RuntimeClient,
+} from "@commonfabric/runtime-client";
+import { MessagePortRuntimeTransport } from "@commonfabric/runtime-client/transports/message-port";
 
+import { RuntimeClients } from "../../../../../runtime-client/src/backends/client-registry.ts";
+import type { RuntimeProcessor } from "../../../../../runtime-client/src/backends/runtime-processor.ts";
+import { createCellRef } from "../../../../../runtime-client/src/backends/utils.ts";
+import { RequestType } from "../../../../../runtime-client/src/protocol/mod.ts";
+import { buildProcessor } from "../../../../../runtime-client/test/backends/build-processor.ts";
+import { LinkTargetWatch } from "../../core/link-target-watch.ts";
 import { createMockCellHandle } from "../../test-utils/mock-cell-handle.ts";
 import {
   drawnCards,
@@ -9,6 +25,7 @@ import {
   isUnobscuredEntry,
   lookOf,
   type SuggestionCard,
+  suggestionRowsSchema,
 } from "./suggestion-cards.ts";
 
 const SPACE = "did:key:list-space";
@@ -42,6 +59,82 @@ function drawnIds(
 ): string[] {
   return drawnCards(cards, here, options.tags, options.listSpace ?? SPACE)
     .map(({ card }) => card.id);
+}
+
+/**
+ * A worker holding a ranked list whose rows link to things, and the element
+ * of a `.map()` over a list of those things: a cell holding a link to `item`.
+ * The client reaches both over a channel, as the page does.
+ */
+async function rankedListOverWorker() {
+  const signer = await Identity.fromPassphrase("suggestion-cards-worker", {
+    implementation: "noble",
+  });
+  const space = signer.did();
+  const apiUrl = "http://localhost/";
+  const storage = StorageManager.emulate({ as: signer });
+  const runtime = new Runtime({
+    apiUrl: new URL(apiUrl),
+    storageManager: storage,
+  });
+  const cause = `suggestion-cards-${crypto.randomUUID()}`;
+  const item = runtime.getCell<{ title: string }>(space, `${cause}-item`);
+  const other = runtime.getCell<{ title: string }>(space, `${cause}-other`);
+  const ranked = runtime.getCell<unknown[]>(space, `${cause}-ranked`);
+  const mapped = runtime.getCell<unknown>(space, `${cause}-mapped`);
+  const tx = runtime.edit();
+  item.withTx(tx).set({ title: "Water the plants" });
+  other.withTx(tx).set({ title: "Call the plumber" });
+  ranked.withTx(tx).set([
+    { id: "anchored", anchor: item },
+    { id: "shelf-only", anchor: null },
+    { id: "anchored-elsewhere", anchor: other },
+  ]);
+  mapped.withTx(tx).set({ element: item });
+  const { error } = await tx.commit().settled;
+  if (error) throw new Error(`The commit failed: ${error.name}`);
+  await runtime.scheduler.idleWithPendingCommits();
+
+  const clients = new RuntimeClients({
+    setConsoleBridge: () => {},
+    owner: { id: 0, post: () => true },
+    initializeRuntime: () =>
+      Promise.resolve(
+        buildProcessor({
+          runtime,
+          identity: signer,
+          space,
+        }) as unknown as RuntimeProcessor,
+      ),
+  });
+  await clients.handleMessage(
+    clients.owner,
+    new MessageEvent("message", {
+      data: realmFromFabricValue({
+        msgId: 1,
+        data: {
+          type: RequestType.Initialize,
+          data: { apiUrl, identity: { placeholder: true }, spaceDid: space },
+        },
+      } as never),
+    }),
+  );
+  const channel = new MessageChannel();
+  clients.attach(channel.port2);
+  const client = await RuntimeClient.attach(
+    new MessagePortRuntimeTransport({ port: channel.port1 }),
+    { apiUrl: new URL(apiUrl), identity: signer.did(), spaceDid: space },
+  );
+  return {
+    items: client.getCellFromRef<unknown[]>(createCellRef(ranked)),
+    about: client.getCellFromRef<{ element: unknown }>(createCellRef(mapped))
+      .key("element") as CellHandle,
+    [Symbol.asyncDispose]: async () => {
+      await client.dispose();
+      await runtime.dispose();
+      await storage.close();
+    },
+  };
 }
 
 /** An observer entry reporting only the fields the element reads. */
@@ -198,6 +291,36 @@ describe("suggestion-cards", () => {
         "not-array",
         "untagged",
       ]);
+    });
+  });
+
+  describe("over a real worker", () => {
+    it("reads each row's anchor as a handle and draws at what a map element links to", async () => {
+      // The element reads the rows under its own schema and compares the
+      // cell its `about` resolves to, so a slot placed per mapped item draws
+      // the cards anchored at that item.
+
+      await using fixture = await rankedListOverWorker();
+      const rows = await fixture.items.asSchema<SuggestionCard[]>(
+        suggestionRowsSchema,
+      ).sync() ?? [];
+      expect(rows.map(({ anchor }) => isCellHandle(anchor))).toEqual([
+        true,
+        false,
+        true,
+      ]);
+      expect(rows[1].anchor).toBeNull();
+
+      const watch = new LinkTargetWatch({ onRetarget: () => {} });
+      const followed = await watch.follow(fixture.about, () => false);
+      watch.cancel();
+      const space = fixture.items.space();
+      expect(
+        drawnCards(rows, followed?.cell, undefined, space).map(({ card }) =>
+          card.id
+        ),
+      ).toEqual(["anchored"]);
+      expect(drawnCards(rows, fixture.about, undefined, space)).toEqual([]);
     });
   });
 

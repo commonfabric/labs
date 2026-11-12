@@ -50,9 +50,10 @@
  * the handshake a data barrier. Each participant announces into its own
  * marker document, committing after everything it has already committed;
  * on the server-execution arm it first waits for every event it fired to
- * reach its served consequence, so what those handlers wrote is committed
- * before the marker too, while an event a served handler fires on its own
- * account is not waited for. Crossing a marker waits for it to arrive in the
+ * reach its served consequence and for the serving loop to finish what that
+ * set off, so what those handlers wrote, and what the events they fired on
+ * their own account wrote, is committed before the marker too. Crossing a
+ * marker waits for it to arrive in the
  * awaiting participant's replica. By then the server holds what the
  * announcing participant wrote first, so the reads that follow resolve
  * against it. An assertion placed after a marker is therefore read once, and
@@ -70,6 +71,7 @@ import { StorageManager } from "@commonfabric/runner/storage/cache";
 import { namesInstancesByDefault } from "@commonfabric/runner/storage/cache.deno";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 import { terminateWorker } from "@commonfabric/platform/worker-lifetime";
+import type { ServedQuiescence } from "./served-settle.ts";
 import type {
   TestResult,
   TestRunnerOptions,
@@ -79,6 +81,8 @@ import type {
   ParticipantInitResult,
   StepMeta,
   WorkerLifetimeNotice,
+  WorkerQuiescenceAnswer,
+  WorkerQuiescenceRequest,
   WorkerRequest,
   WorkerResponse,
 } from "./multi-user-test-worker.ts";
@@ -207,17 +211,41 @@ class ParticipantWorker {
     { resolve: (value: unknown) => void; reject: (error: Error) => void }
   >();
 
-  constructor(name: string, onError: (error: Error) => void) {
+  /**
+   * `servedQuiescence` answers the worker's requests to wait for the serving
+   * loop, which runs here, beside the storage server.
+   */
+  constructor(
+    name: string,
+    onError: (error: Error) => void,
+    servedQuiescence: ServedQuiescence | undefined,
+  ) {
     this.name = name;
     this.#worker = new Worker(
       new URL("./multi-user-test-worker.ts", import.meta.url),
       { type: "module", name: `cf-test:${name}` },
     );
     this.#worker.onmessage = (
-      event: MessageEvent<WorkerResponse | WorkerLifetimeNotice>,
+      event: MessageEvent<
+        WorkerResponse | WorkerLifetimeNotice | WorkerQuiescenceRequest
+      >,
     ) => {
       if ("lifetimeLock" in event.data) {
         this.#lifetimeLock = event.data.lifetimeLock;
+        return;
+      }
+      if ("quiescenceRequest" in event.data) {
+        const quiescenceAnswer = event.data.quiescenceRequest;
+        const answer = (body: { reached: number } | { error: string }) =>
+          this.#worker.postMessage(
+            { quiescenceAnswer, ...body } satisfies WorkerQuiescenceAnswer,
+          );
+        // Only a worker on the server-execution arm asks, and its orchestrator
+        // is on that arm too.
+        servedQuiescence!().then(
+          (reached) => answer({ reached }),
+          (error: unknown) => answer({ error: String(error) }),
+        );
         return;
       }
       const pending = this.#pending.get(event.data.id);
@@ -329,6 +357,7 @@ export async function runMultiUserTestPattern(
 
   const experimental = patternTestExperimentalOptions(Deno.env.get);
   let server: { readonly url: URL; close(): Promise<void> } | undefined;
+  let servedQuiescence: ServedQuiescence | undefined;
   const participants: ParticipantState[] = [];
   const workers: ParticipantWorker[] = [];
 
@@ -337,19 +366,23 @@ export async function runMultiUserTestPattern(
     // beside it, as a toolshed running that arm has, so the events the
     // participants commit are served. Like the plain server, it is given no
     // access list.
-    server = experimental.serverExecution
-      ? await listenServingMemoryServer({
+    if (experimental.serverExecution) {
+      const serving = await listenServingMemoryServer({
         apiUrl: new URL(import.meta.url),
         experimental,
         // On this thread whatever the environment selects for a toolshed,
         // as the single-runtime runner's loop is.
         worker: false,
-      })
-      : StandaloneMemoryServer.start({
+      });
+      server = serving;
+      servedQuiescence = () => serving.host.host!.whenQuiescent();
+    } else {
+      server = StandaloneMemoryServer.start({
         // The posture of a toolshed whose runtimes run the participants'
         // flags (INV-16).
         namesInstances: () => namesInstancesByDefault(experimental),
       });
+    }
     const identities = new Map<string, Identity>();
     for (const spec of meta.participants) {
       if (!identities.has(spec.user)) {
@@ -386,7 +419,7 @@ export async function runMultiUserTestPattern(
         // await, including during initialization, and cleanup can proceed.
         // Every worker is terminated again, and waited for, on the way out.
         for (const worker of workers) void worker.terminate(error);
-      });
+      }, servedQuiescence);
       workers.push(worker);
       try {
         const init = await worker.call("init", {

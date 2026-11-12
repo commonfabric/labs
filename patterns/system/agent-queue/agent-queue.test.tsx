@@ -100,11 +100,15 @@ export default pattern(() => {
     queue.agentRunner?.registeredAt === RUNNER.registeredAt
   );
 
-  // The builtin appends entries as the runtime; a push stands in for it.
+  // The builtin lists a record as the runtime, at the address its id gives its
+  // entry; this lists each one at such an address too.
   const action_append_entry = action(() => {
-    queue.entries.push({ run: record, host: "https://cloud.example" });
-    queue.entries.push({ run: running, host: "https://cloud.example" });
-    queue.entries.push({ run: finished, host: "https://cloud.example" });
+    const runs = { record, running, finished };
+    for (const [id, run] of Object.entries(runs)) {
+      const entry = queue.entries.elementById(id);
+      entry.set({ run, host: "https://cloud.example" });
+      queue.entries.addUnique(entry);
+    }
   });
   const assert_entry_links_the_record = assert(() =>
     queue.entries.get().length === 3 &&
@@ -158,6 +162,29 @@ export default pattern(() => {
     )
   );
 
+  const assert_only_finished_run_offers_removal = assert(() =>
+    !hasText(findNodeByProp(queue[UI], "data-agent-run", "hash-1"), "Remove") &&
+    !hasText(findNodeByProp(queue[UI], "data-agent-run", "hash-2"), "Remove") &&
+    hasText(findNodeByProp(queue[UI], "data-agent-run", "hash-3"), "Remove")
+  );
+  const action_remove_finished = action(() => {
+    const row = findNodeByProp(queue[UI], "data-agent-run", "hash-3");
+    const button = findElementByText(row, "cf-button", "Remove");
+    const onClick = propsOf(button)?.onClick;
+    if (typeof onClick === "object" && onClick !== null && "send" in onClick) {
+      (onClick as { send: () => void }).send();
+    }
+  });
+  const assert_only_finished_run_removed = assert(() =>
+    queue.entries.get().length === 2 &&
+    hasText(findNodeByProp(queue[UI], "data-agent-run", "hash-1"), "queued") &&
+    hasText(findNodeByProp(queue[UI], "data-agent-run", "hash-2"), "running") &&
+    !hasText(queue[UI], "find books")
+  );
+  const assert_removed_record_stays = assert(() =>
+    finished.get().state === "completed" && finished.get().task === "find books"
+  );
+
   const action_clear_runner = action(() => {
     queue.setAgentRunner.send({ expectedRegistrationId: "runner-2" });
   });
@@ -192,6 +219,10 @@ export default pattern(() => {
       { assertion: assert_three_record_views },
       { action: action_cancel_running },
       { assertion: assert_only_running_cancelled },
+      { assertion: assert_only_finished_run_offers_removal },
+      { action: action_remove_finished },
+      { assertion: assert_only_finished_run_removed },
+      { assertion: assert_removed_record_stays },
       { action: action_replace_runner },
       { action: action_stale_clear },
       { assertion: assert_replacement_survives_stale_clear },

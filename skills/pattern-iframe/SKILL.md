@@ -49,6 +49,20 @@ What the guides cannot leave to judgment:
   that verb an event over making the same change through its own cell writes.
   The general guide's "Optional streams" section covers this, including LLM
   built-ins.
+- For interim `agent()` messages, opt in with `progress: true` in the wrapper
+  and expose the returned `progress` in `$context` as a `readonly` resource. The
+  guest subscribes to it alongside the request's other state. The example is in
+  `docs/common/ai/iframe-pattern-guide.md`; reporting and confidentiality
+  semantics are in `docs/common/capabilities/agent.md`.
+- A pattern whose result is a document, a list, a schedule or a board returns
+  `[FS]` from `main.tsx`, that result as text: a `computed` over the state that
+  gives a `text/markdown` projection, its `content` the names, dates, items and
+  choices the page shows now and its `frontmatter.title` the pattern's name. A
+  host that finds patterns by what they hold reads `[FS]` and never the guest's
+  DOM, so such a pattern without one is known by its `[NAME]` alone.
+  `patterns/examples/iframe-verb-list/` returns one;
+  `docs/common/concepts/pattern.md` lists the key and
+  `docs/specs/fuse-filesystem/8-fs-projections.md` its shapes.
 - One joint initial `pull()` barrier owns readiness for every resource an action
   uses. Keep action controls disabled until it resolves; an individual
   synchronous `sink()` callback must never declare the guest ready.

@@ -359,14 +359,14 @@ step "14. A detached call returns an address that reads back the outcome"
 # only the readback is skipped. The envelope still carries the receipt, so a
 # detached call is a handle rather than a dead end — collecting the outcome
 # later is an ordinary read of that address, verbatim: the envelope publishes
-# it as one canonical reference string, of: prefix included, and the verb's
+# it as one canonical reference string, receipt: prefix included, and the verb's
 # body does not run a second time.
 NW=$("${CF[@]}" piece call --quiet --piece "$BOARD" $ARGS --invocation detached-1 \
   --no-wait setLabel '{"label":"Detached label"}' 2>/dev/null)
 check "committed" "$(echo "$NW" | jq -r '.status')" \
   "--no-wait returns at committed"
 RECEIPT_ID=$(echo "$NW" | jq -r '.receipt // empty')
-check "/of:" "${RECEIPT_ID:0:4}" \
+check "/receipt:" "${RECEIPT_ID:0:9}" \
   "the envelope names the receipt, scheme included"
 if [ -n "$RECEIPT_ID" ]; then
   COLLECTED=$("${CF[@]}" cell get --quiet --piece "$RECEIPT_ID" $ARGS 2>/dev/null)

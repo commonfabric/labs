@@ -370,9 +370,12 @@ For a detached profile with the legacy inbox descriptor, the manual migration is
 `cf piece follow --cell <profile> system:system/profile-home/profile-home.tsx
 --dangerously-allow-incompatible-schema`
 with the profile owner’s identity and API URL. Inspect the incompatibility
-before accepting it; the new inbox contract uses a piece link. The command
-refuses deployments that serve piece lifecycle verbs, where `follow` is not yet
-served.
+before accepting it; the new inbox contract uses a piece link.
+
+Against a deployment that serves piece lifecycle verbs, the serving runtime
+resolves the origin, reviews the candidate and commits the follow, and the
+command reports the same outcomes, pins included
+([Where a piece is created](#where-a-piece-is-created)).
 
 ## Pattern test read costs
 
@@ -602,11 +605,28 @@ Ctrl-F / Ctrl-B also page down / up. Pages follow the dialog's visible height,
 with one row of overlap. While browsing, `j` / `k` and `J` / `K` move down / up,
 Space and `b` / `B` page down / up, and `g` / `G` jump to the top / bottom.
 Ctrl-N / Ctrl-P move down / up, and Ctrl-D / Ctrl-U move half a page.
-Confirmation prompts use navigation keys to move button focus; Space activates
-the focused button. Pressing the primary mouse button on a button pushes it, and
-releasing it over the same button activates that button. Releasing it anywhere
-else, or pressing a key first, lets go of the button without activating it.
-Printable keys enter text while a filter is active.
+Confirmation prompts use navigation keys to move the focus among their controls,
+except while an input line has it; Space activates the focused button. Pressing
+the primary mouse button on a button pushes it, and releasing it over the same
+button activates that button. Releasing it anywhere else, or pressing a key
+first, lets go of the button without activating it. Printable keys enter text
+while a filter is active.
+
+Some dialogs also hold check boxes and input lines, drawn as Turbo Vision draws
+them. Tab and Shift-Tab, like the navigation keys, move the focus through those
+first and then through the buttons. Space toggles the focused check box, and so
+does a click on it. Moving the focus to an input line selects its text, so that
+typing replaces it. While an input line is focused, every key but Tab,
+Shift-Tab, Enter, Escape, and Alt with a letter goes to it: typed text goes in,
+Backspace and Delete (or Ctrl-D) delete a character, Alt-Backspace deletes the
+word before the cursor, and Left, Right, Home, and End (or Ctrl-B, Ctrl-F,
+Ctrl-A, and Ctrl-E) move its cursor. A click on an input line puts its cursor
+where the click lands, and a click on its label selects its text. An arrow at
+either end of the line says that its text runs on past that end. A check box's
+highlighted letter toggles it, an input line's moves the focus to it, and a
+button's activates it; while an input line is focused, Alt with the letter does.
+Enter activates the default button wherever the focus is, unless it is on
+another button.
 
 Press `i` in a diff to open its file and commit list. The list starts in browse
 mode. Press `/` to filter it by file name, commit hash, or commit subject. In
@@ -628,6 +648,17 @@ whose text differs only in whitespace. The third also removes lines containing
 only whitespace or comments. It compares the remaining lines without comments or
 whitespace across the complete diff, so code moved between files does not count
 as an addition and a removal.
+
+Press `S` in that list to order the files within each commit, or all the files
+of a diff with no commit, by net line change. Press it again to restore the
+order of the diff. The list keeps its order when it is closed and opened again.
+The files that add the most lines beyond those they remove come first, and the
+files that remove the most beyond those they add come last, so a file with 100
+added and 10 removed lines precedes one with 1,000 of each, which precedes one
+with 10 added and 100 removed. Between files with the same net change, the one
+with more changed lines in total comes first. The order uses the counts of the
+selected count policy, and the policy line in the summary says when the list is
+sorted.
 
 Press `C` in a diff or in its list to hide the files whose changes touch only
 comments, and press it again to show them. `C` compares the complete file before
@@ -668,6 +699,34 @@ program `SSH_ASKPASS` names, and fails when it names none. `P` refuses to push
 (`git remote set-head origin --auto` finds it). It also refuses a checkout not
 on a branch, and refuses when git started the viewer as its pager for a
 different repository.
+
+Press `O` to open the settings dialog. Its check box, "Quit when the pushed
+branch's pull request opens", has the viewer watch the GitHub webhook relay
+while the push dialog is up. The relay passes on each delivery of the
+organization's GitHub webhook as it arrives, and keeps none for a subscriber
+that was not connected; `github-webhook-relay/README.md` in the infra repository
+describes it. The dialog's input line holds the `host:port` of the relay's
+subscriber listener. When the push succeeds and the server offers a page for
+creating a pull request, the viewer connects to the relay, and opens the page
+once it has connected or failed to. While it connects, Abort, or an interrupt,
+gives up on the connection and opens the page. When a delivery reports that a
+pull request was opened from the pushed branch, at the pushed commit, in the
+GitHub repository that `origin` names, the viewer closes the push dialog and
+quits as Quit does. Once the screen is restored, it prints the pull request's
+address on the terminal. The address is printed only when the viewer quit for
+it, so a quit after cancelling the save prompt it raised prints nothing. With
+the check box on, the push dialog says under git's output whether the viewer is
+connecting or watching, or why it is not watching: no relay is set, `origin` is
+not on GitHub, or the connection failed or ended. Closing the push dialog stops
+the watch.
+
+The viewer keeps these settings in git's configuration, as the boolean
+`cf-view.quitOnPullRequest` and the string `cf-view.webhookRelay`, so the
+`git config` command can set them too. OK saves each setting that differs from
+what the dialog opened showing. It saves it in the configuration file that git
+read the setting's value from, which may be a file another one includes, so that
+git then reads the new value. A value read from the machine's own configuration
+file, or set nowhere, is saved in the user's global configuration file instead.
 
 In the main view, `b` shows or hides the blame column in place of paging up;
 Page Up and Ctrl-B still page up there. The column takes the right 20 columns of
@@ -1015,7 +1074,8 @@ see whether the write committed.
 ## Cell references
 
 `cf cell` holds the commands that act on a cell: `get` and `set` for its value,
-`get-label` and `set-label` for the CFC label on it. Each takes a reference.
+`get-label`, `set-label` and `release-by-intent` for the CFC label on it. Each
+takes a reference.
 
 A reference names a cell, and one grammar covers every part of the name:
 
@@ -1254,6 +1314,13 @@ directly to the store (see
 [Where a piece is created](#where-a-piece-is-created)). The check stays in this
 process on every deployment.
 
+A source update detaches the piece from the origin it follows. With
+`--origin <origin>`, a `system:` ref or a fabric URL, the update records that
+origin with its revision instead: the piece runs the source the command names,
+and takes what the origin serves the next time it is opened. An embedder that
+deploys its own copy of a first-party pattern uses this to keep the piece on the
+pattern's later releases.
+
 Preflight uses setup's stored-argument validation: optional fields holding
 `undefined` count as absent, and unreadable linked values defer to reactive
 reads. A compatible verdict therefore does not prove that every linked value has
@@ -1340,33 +1407,33 @@ print.
 
 `cf space compact <store.sqlite> --documents <prefix> [--out <path>]` compacts a
 space store's revision history and writes the result as a fresh file. It is
-[the compaction plan](../../docs/plans/compact-space.md)'s tool, the one
-`cf space` command that rewrites a store's rows rather than copying or restoring
-a file. The write path runs offline against a copy of a backup, never against a
-file a server has open: the operator stops the owning instance, takes the
-backup, compacts a copy of it, verifies the result against the backup, and
-installs it, in the order that plan's §4 gives. `--dry-run` prints the report
-below and writes nothing; `--verify` checks a result against its backup; both
-open their files read-only and may be run on a snapshot taken while the space is
-still served.
+[the compaction plan](../../docs/plans/compact-space.md)'s tool, and with
+`cf space reap` one of the two `cf space` commands that rewrite a store's rows
+rather than copying or restoring a file. The write path runs offline against a
+copy of a backup, never against a file a server has open: the operator stops the
+owning instance, takes the backup, compacts a copy of it, verifies the result
+against the backup, and installs it, in the order that plan's §4 gives.
+`--dry-run` prints the report below and writes nothing; `--verify` checks a
+result against its backup; both open their files read-only and may be run on a
+snapshot taken while the space is still served.
 
 It takes the store's file path rather than a space name, for the reason the
 [staging copy procedure](../../docs/development/staging-space-copy.md) gives:
 the directory's neighbors are the authority on where a space's file is.
-`--documents` names the instances by id prefix (`of:`, `computed:` or `cid:`),
-and may repeat; the ACL document is never selected. `--scope` restricts the
-selection to `space`, `user` or `session` instances; repeated or nested prefixes
-count as one selection. The cut is the head of every selected instance unless
-`--before-seq`, `--before <YYYY-MM-DD HH:MM:SS>` (UTC, in the store's own format
-and no other) or `--keep-last <n>` bounds it, and a row survives if any bound
-keeps it. `--keep-payloads <duration>` (default `24h`) is the window, measured
-from the newest client commit, within which commits keep their payload; outside
-it a commit's payload is replaced by a marker carrying a hash of what it held,
-unless its seq is 1, an `op_*` row references it, or it is a compaction commit,
-whether or not a surviving revision still points at the commit. A hollowed
-commit is still a row in the log, told apart from an elided write by its marker;
-what is gone is its contents, which the backup keeps. A commit whose payload
-survives stays inspectable in full.
+`--documents` names the instances by id prefix (`of:`, `computed:`, `receipt:`
+or `cid:`), and may repeat; the ACL document is never selected. `--scope`
+restricts the selection to `space`, `user` or `session` instances; repeated or
+nested prefixes count as one selection. The cut is the head of every selected
+instance unless `--before-seq`, `--before <YYYY-MM-DD HH:MM:SS>` (UTC, in the
+store's own format and no other) or `--keep-last <n>` bounds it, and a row
+survives if any bound keeps it. `--keep-payloads <duration>` (default `24h`) is
+the window, measured from the newest client commit, within which commits keep
+their payload; outside it a commit's payload is replaced by a marker carrying a
+hash of what it held, unless its seq is 1, an `op_*` row references it, or it is
+a compaction commit, whether or not a surviving revision still points at the
+commit. A hollowed commit is still a row in the log, told apart from an elided
+write by its marker; what is gone is its contents, which the backup keeps. A
+commit whose payload survives stays inspectable in full.
 
 A run plans first, read-only, and prints the plan; refuses a store the plan says
 it must not write — one whose schema is behind the engine's, so that opening it
@@ -1374,26 +1441,26 @@ would migrate it (a table, index or column the engine declares and the store
 lacks, a column declared differently, a legacy table the engine drops), one with
 a second branch, one with no commit 1, one with foreign-key violations, one
 holding more than one ACL document or an ACL document whose value is not an ACL,
-one with a non-empty `-wal` or `-journal` beside it, or a store or result path
-under a directory a local server serves; then opens the store through the engine
-with an exclusive lock and, in order: inserts the compaction commit at the next
-seq, a `system` commit under the `compaction:<run id>` session with the plan as
-its payload; compacts each selected instance in its own transaction — the oldest
-row the cut keeps becomes the base, rewritten as a `set` holding the engine's
-reconstruction at exactly that row if it was a patch, and attributed to the
-compaction commit whatever its op, with the rows and snapshots behind it
-deleted; hollows the payloads outside the window in seq-ranged batches; writes
-the audit revision on the space's ACL document, a whole-document `set` of the
-document as it stands with a `compaction` member beside `value`, when the store
-has a live one (a space with no ACL document gets none, and a tombstoned one is
-left as it is, since a `set` would recreate it); checks the foreign keys and the
-file's integrity; and writes the result with `VACUUM
-INTO` to `--out`,
-`<store>.compacted.sqlite` beside the source by default, never overwriting. A
-run interrupted anywhere leaves a store every reader can use, and running it
-again resumes it under a second compaction commit. The run's own summary follows
-the plan on stdout; progress goes to stderr; `--json` emits the summary as one
-document.
+one with a non-empty `-wal` or `-journal` beside it, one another connection
+holds, or a store or result path under a directory a local server serves; then
+opens the store through the engine with an exclusive lock and, in order: inserts
+the compaction commit at the next seq, a `system` commit under the
+`compaction:<run id>` session with the plan as its payload; compacts each
+selected instance in its own transaction — the oldest row the cut keeps becomes
+the base, rewritten as a `set` holding the engine's reconstruction at exactly
+that row if it was a patch, and attributed to the compaction commit whatever its
+op, with the rows and snapshots behind it deleted; hollows the payloads outside
+the window in seq-ranged batches; writes the audit revision on the space's ACL
+document, a whole-document `set` of the document as it stands with a
+`compaction` member beside `value`, when the store has a live one (a space with
+no ACL document gets none, and a tombstoned one is left as it is, since a `set`
+would recreate it); checks the foreign keys and the file's integrity; and writes
+the result with `VACUUM
+INTO` to `--out`, `<store>.compacted.sqlite` beside the
+source by default, never overwriting. A run interrupted anywhere leaves a store
+every reader can use, and running it again resumes it under a second compaction
+commit. The run's own summary follows the plan on stdout; progress goes to
+stderr; `--json` emits the summary as one document.
 
 `cf space compact <result.sqlite> --verify --against <backup.sqlite>` checks a
 result against the store it was compacted from, read-only on both, and exits
@@ -1427,6 +1494,43 @@ commit would take, and the preconditions a run checks, foreign-key integrity
 among them. The payload accounting reads every commit's payload and is the slow
 part of the plan. `--json` emits the same report as JSON.
 
+## Reaping a deleted space's store
+
+`cf space reap <store.sqlite> [--out <path>]` reclaims a deleted space's storage
+([reaping a deleted space](../../docs/specs/random-space-identities.md#reaping-a-deleted-space)).
+It takes only a store whose access-control document holds a deletion tombstone,
+and refuses any other, a store with a commit after the deletion, a store with a
+log beside it that is not empty, a store another connection holds, one the
+server would migrate on opening it, and a result path that exists or sits in a
+served directory. Whether a connection holds the store is asked of SQLite, by
+taking the file's exclusive lock: any connection to a WAL-mode store prevents
+that, as does one to a rollback-mode store inside a transaction, but an idle
+connection to a rollback-mode store holds no lock to see, so that the store is a
+copy nothing has open is still the procedure's to ensure. It reads the store, a
+copy of the space's backup, without writing it, and writes the result fresh,
+`<store>.reaped.sqlite` beside it by default. The result keeps the deletion
+commit's row, the invocation and authorization rows it references, the deletion
+tombstone's revision and head rows, and the default branch's row; every other
+row of every table goes. So the space goes on refusing every principal as
+deleted, under the same `aclRevision`, and its server sequence stays the
+deletion commit's.
+
+Before it reports, the command checks the result against the store it was reaped
+from, read-only on both: integrity and foreign keys; the store's access-control
+document a deletion tombstone at the server sequence; and, for every table, the
+kept rows byte-identical and no other row, and no table the store lacks. A
+result that fails a check is removed and the command exits nonzero. `--dry-run`
+reports what would be kept and removed, and writes nothing. The space's cell
+databases are files beside the live store, not in it, so the report names them,
+`cell-<hash>-*.sqlite`, and `--dry-run --live <live.sqlite>` lists the files
+under that prefix beside the space's live store, which the install moves. The
+prefix is a 32-bit hash of the DID, so when another store sits there whose
+prefix is the same, the files under it cannot be told apart by name: the list is
+empty, and the report names that store. The install that puts the result in
+place of the live store moves the listed files out of the live directory, beside
+the copy of the live store it keeps. `cf inspect summary` reads a reaped store
+as the deleted space it is.
+
 ## Creating a space
 
 `cf space create [--label <label>]` creates a space and prints its DID. The DID
@@ -1450,6 +1554,19 @@ A Home's source is changed in place, with
 installs or replaces a Home root.
 [Custom Home pattern](../../docs/common/conventions/HOME_SPACE.md#custom-home-pattern)
 walks through it.
+
+## Deleting a space
+
+`cf space delete --space <space> --confirm <space-DID>` deletes a space as its
+sole member, for everyone and for good
+([deleting a space](../../docs/specs/random-space-identities.md#deleting-a-space)).
+It refuses while the access list names any principal besides the identity the
+command connects as, `"*"` included, and names those principals, so that each
+one's removal is a `cf acl remove` of its own. It runs only when `--confirm` is
+the space's own DID, which a mistyped `--space` never resolves to. The memory
+server decides the deletion again, refusing a Home and a list that changed
+since, and revokes every session on the space. Deleting a self-owned space
+through a delegation chain is not part of this command.
 
 ## Where a piece is created
 
@@ -1499,9 +1616,22 @@ store, since a source update publishes module update authority that requires a
 transaction committing to storage itself. What stays in this process is the
 refresh a client-side update runs after its commit: the command starts the piece
 it holds and reports that outcome beside the receipt, exiting non-zero when the
-refresh fails over a durable commit. A piece addressed at a scope keeps the
-client-side path. `cf piece setsrc --check` performs every step in this process
-on every deployment. The contract, including the refusals and their codes, is
+refresh fails over a durable commit. A piece addressed at a scope (`<id>@user`,
+`<id>@session`) is sent with its scope, and the serving runtime changes your
+instance of it. `cf piece setsrc --check` performs every step in this process on
+every deployment. `cf piece follow` sends the piece's id and the origin, with
+its pins and override, as the `follow` verb; the serving runtime resolves the
+origin, reviews what it serves, and commits the transition that records it. The
+command then asks the server for the piece's result, and reports a failure of
+that over the durable follow and sends a scoped piece's scope, as `setsrc` does.
+A deployment whose memory server does not advertise that its lifecycle verbs
+take an origin (`patternLifecycleOrigins`) is told, before anything is sent,
+that it does not serve `follow` yet, and `setsrc --origin` is refused there the
+same way, as `origin-unsupported`; one that does not advertise that they take a
+scope (`patternLifecycleScopes`) is sent no scoped `setsrc` or `follow`, which
+is refused as `scope-unsupported`. Under server execution neither command
+changes a piece's source in this process. The contract, including the refusals
+and their codes, is
 [`server-pattern-lifecycle.md`](../../docs/features/server-pattern-lifecycle.md).
 
 ## Piece discovery
@@ -1797,6 +1927,76 @@ identity alone, recording the clauses removed, the paths they were removed at,
 and digests of the stored metadata before and after. Reads served before the
 lowering keep the label they were served under.
 
+`cf cell release-by-intent` is the owner's release of clauses that are not
+theirs alone, such as the stamps an earlier setup left on a result's membership
+naming other principals whose data the result does not hold. A lowering with
+`set-label` refuses those; this command releases them on a request the space's
+owner signs. That is the owner release by intent (§8.12.7 route 2d) proposed in
+[specs#90](https://github.com/commonfabric/specs/pull/90), which this runtime
+implements ahead of its ruling. Without `--clause` it only lists the
+confidentiality clauses the label map stores at the path, each with its
+canonical clause digest and the labels holding it (component and observation
+class), and the space's owner, and changes nothing. A clause's plaintext and
+committed spellings are two clauses, each with its own digest. The space's owner
+is the owner its access list names; where the space stores no access list, it is
+the identity whose DID is the space's, as for a home space; and a stored list
+naming no valid concrete owner gives the space no owner, so no release by intent
+is possible there:
+
+```bash
+cf cell release-by-intent --cell ID
+```
+
+Each `--clause` names a clause to release by its digest, or by a prefix of it
+that begins no other stored clause's digest; an ambiguous prefix is refused,
+naming the digests it begins. A named clause comes off every label stored at the
+path, whoever it stands for: the declared label and the stored schema's
+declaration, the labels derived from what was written there (the existence entry
+and the membership entries included), and a link's own label. Labels at other
+paths, an ancestor's included, the value, and integrity labels are not changed.
+A clause the stored schema declares is declared again by the next write through
+that schema.
+
+```bash
+cf cell release-by-intent --cell ID --clause 3gYWzS --clause oYjOtO
+```
+
+The path names one stored position. The links it crosses are followed to the
+document it lands in, and a link stored at the path is not, so a link slot's own
+label is what it releases. A `*` segment names the wildcard position stored
+there, such as the per-element templates a list's membership is stamped on, and
+none of the elements or fields it covers. A clause stamped across a container is
+usually stored at several positions, the container's own path and its `*`
+position among them, so the listing names, beside the clauses at the path, the
+document's other positions holding any of them; each is a release of its own,
+and a release reaches none of them.
+
+```bash
+cf cell release-by-intent --cell ID '*' --clause 3gYWzS --clause oYjOtO
+```
+
+Before anything is signed, the command shows the document, the path, the signer,
+each clause that comes off and each that stays, and the other positions still
+holding a clause it releases, and asks for the word `release` to be typed. Only
+then does it sign the request with the identity and commit the release together
+with its record, a create-only document in the space holding the signed request,
+the owner, the document and path, the released clauses' digests, and digests of
+the stored labels before and after; the record is readable by the owner. With
+`--clause`, the command runs only with standard input and standard error at a
+terminal, so what it shows reaches the owner who confirms it, and refuses before
+it builds or signs anything otherwise; it refuses as well when the identity is
+not the space's owner. No option skips the confirmation: the signature stands
+for the owner's own decision, made in person, which is the one thing the store
+cannot check.
+
+The store checks the rest at the commit: that the signature verifies, that the
+signer is the space's owner, that the request names the space, document and path
+the commit changes, that every clause it names is stored there, that the stored
+labels are still the ones the request was made against, and that the request has
+not been used before. Any failure refuses the release whole. A request is used
+once: running the command again builds a new request against the labels as they
+are then. Reads served before the release keep the label they were served under.
+
 ## Invocation sessions
 
 An invocation id is the caller's own word for one call, and another caller can
@@ -1836,10 +2036,19 @@ for the runner to observe. A repeated cancellation keeps the first timestamp,
 and a terminal record is unchanged. Cancellation does not synchronously change
 the run's state; the runner acknowledges it by ending the run `cancelled`.
 
-All three commands take `--identity` / `CF_IDENTITY` and `--api-url` /
+`cf agent remove <run> [--json]` takes a finished run off the home queue, so
+`ls` and `show` stop finding it. The record stays where it is, and the piece
+that requested it keeps following it. It removes the one entry at the address
+the record's id gives it, which is where the `agent` builtin lists every run. A
+run that has not ended is refused (cancel it first), and so is a run the queue
+lists more than once or anywhere else; nothing is removed then. Removing an
+entry lowers no label: the entry's document keeps what it holds, and the queue
+stops naming it, so reading the queue no longer reaches that entry's labels.
+
+All four commands take `--identity` / `CF_IDENTITY` and `--api-url` /
 `CF_API_URL`. The API URL names the home toolshed; each queue entry determines
-the host used to read or cancel that record. Completion offers the state
-vocabulary and live run ids from the home queue.
+the host used to read, cancel, or remove that record. Completion offers the
+state vocabulary and live run ids from the home queue.
 
 ## Agent runner
 
@@ -2510,7 +2719,7 @@ cf piece call --cell ID listTopics -- --filter '.status == "open"'
 `wish` writes them beside the target it resolves:
 
 ```bash
-cf wish '#profile' -i ./claude.key --select name,avatar
+cf wish '#profile' -i ./claude.key --select name,bio
 cf wish '#mentionable' -i ./claude.key -s my-space --filter '.status == "open"'
 ```
 

@@ -11,7 +11,7 @@ import {
   _internal,
   cursorScreenPos,
   dialogBox,
-  dialogButtonAt,
+  dialogControlAt,
   type DialogState,
   type Match,
   overlayBox,
@@ -673,7 +673,7 @@ Deno.test("dialog: a button is hit exactly where it is drawn, at rest or pushed"
           spans.some((f) => x >= f.from && x < f.to)
         );
       assertEquals(
-        dialogButtonAt(view, SAVE_DIALOG, x, y),
+        dialogControlAt(view, SAVE_DIALOG, x, y),
         expected,
         `cell ${x}, ${y}`,
       );
@@ -695,7 +695,7 @@ Deno.test("dialog: no button is hit where the box has no room to draw it", () =>
   );
   for (let y = 0; y < short.height; y++) {
     for (let x = 0; x < short.width; x++) {
-      assertEquals(dialogButtonAt(short, dialog, x, y), -1, `cell ${x}, ${y}`);
+      assertEquals(dialogControlAt(short, dialog, x, y), -1, `cell ${x}, ${y}`);
     }
   }
 
@@ -707,8 +707,8 @@ Deno.test("dialog: no button is hit where the box has no room to draw it", () =>
     " Discard ",
   );
   const border = box.x + box.boxW - 1;
-  assertEquals(dialogButtonAt(narrow, SAVE_DIALOG, border - 1, y), 2);
-  assertEquals(dialogButtonAt(narrow, SAVE_DIALOG, border, y), -1);
+  assertEquals(dialogControlAt(narrow, SAVE_DIALOG, border - 1, y), 2);
+  assertEquals(dialogControlAt(narrow, SAVE_DIALOG, border, y), -1);
 });
 
 Deno.test("dialog: collapses on a terminal too narrow to frame", () => {

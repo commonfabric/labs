@@ -6,6 +6,8 @@
  */
 
 import { debugStr } from "@commonfabric/data-model";
+import { getLogger } from "@commonfabric/logger";
+import { SERVER_EXECUTION_DEFAULT_ENABLED } from "@commonfabric/memory/v2/server-execution-default";
 
 import {
   ADOPT_SERVER_FLAGS_ENV,
@@ -18,6 +20,8 @@ import {
 } from "./experimental-posture.ts";
 import type { ExperimentalOptions } from "./runtime.ts";
 import { namesApiOrigin, readMemoryUrl } from "./space-host.ts";
+
+const logger = getLogger("deployment-meta", { enabled: true, level: "warn" });
 
 /**
  * The name of the `<meta>` element in which a compiled toolshed publishes what
@@ -125,13 +129,27 @@ export function shellFlagsFromDeclared(declared: unknown): ExperimentalOptions {
   return flags;
 }
 
-/** How long one attempt to read the meta document may take. */
-const META_ATTEMPT_TIMEOUT_MS = 5_000;
+/**
+ * How long a deployed client waits on its server before treating it as dead:
+ * the whole of a read of the meta document, and a health check of its hosts.
+ * Firing early costs a client its posture, or fails its startup, so this sits
+ * well above the slowest response measured under load, which
+ * `docs/development/waiting-in-tests-rationale.md` records ("A deployed client's
+ * wait on its server").
+ */
+export const DEPLOYMENT_RESPONSE_BOUND_MS = 60_000;
+
+/**
+ * How long a read of the meta document stays outstanding before it is logged
+ * at error level: longer than the slowest response measured under load, so a
+ * server that reaches this is worth someone's attention. The read goes on.
+ */
+const META_SLOW_READ_LOG_MS = 5_000;
 
 /**
  * The waits before the second and the third attempt to read a meta document
  * that could not be read for a transient reason: three attempts, 1.25 seconds
- * of waiting in all.
+ * of waiting in all, all within {@link DEPLOYMENT_RESPONSE_BOUND_MS}.
  */
 const META_RETRY_DELAYS_MS: readonly number[] = [250, 1_000];
 
@@ -163,18 +181,18 @@ export interface DeploymentMetaParams {
 
   /**
    * Cancels the read, the waits between attempts included. A caller whose
-   * startup is cancellable must pass its signal. Each attempt also gives up
-   * on its own after five seconds, whether or not a signal is passed, so a
-   * deployment that accepts the connection and then says nothing cannot hold
-   * a caller indefinitely.
+   * startup is cancellable must pass its signal. The read also gives up on its
+   * own after {@link DEPLOYMENT_RESPONSE_BOUND_MS}, whether or not a signal is
+   * passed, so a deployment that accepts the connection and then says nothing
+   * cannot hold a caller indefinitely.
    */
   signal?: AbortSignal;
 
   /** @internal Seam for tests: the real `fetch` otherwise. */
   fetch?: typeof globalThis.fetch;
 
-  /** @internal Seam for tests: how long one attempt may take. */
-  attemptTimeoutMs?: number;
+  /** @internal Seam for tests: how long the whole read may take. */
+  boundMs?: number;
 
   /** @internal Seam for tests: the waits before the second and later
    * attempts. Empty makes one attempt. */
@@ -194,17 +212,16 @@ export interface DeployedClientParams extends DeploymentMetaParams {
  *   or said it has none ({@link NO_DOCUMENT_STATUSES}), as an undefined
  *   `document`. Either settles what the deployment publishes.
  * - `conclusive: false`: the document could not be read. Every other outcome
- *   is this: the server was unreachable or refused the request, an attempt
- *   timed out, it returned another status, or an OK response's body was not a
- *   JSON object. `transient` says whether asking again may succeed: a
- *   connection that failed and a status in {@link TRANSIENT_STATUSES} are
- *   transient. An attempt that timed out is not: a server that accepted the
- *   connection and then sent nothing for five seconds is not asked again,
- *   since the health check that follows would wait on it too. A refusal such
- *   as a 401, a 403 or a 500, a redirect that was not followed, a body that is
- *   not JSON, and an error that is not a network failure, such as a
- *   permission the process lacks, get the same result however often they are
- *   asked.
+ *   is this: the server was unreachable or refused the request, the read
+ *   outlasted {@link DEPLOYMENT_RESPONSE_BOUND_MS}, it returned another status,
+ *   or an OK response's body was not a JSON object. `transient` says whether
+ *   asking again may succeed: a connection that failed, a read that outlasted
+ *   the bound, and a status in {@link TRANSIENT_STATUSES} are transient. A
+ *   refusal such as a 401, a 403 or a 500, a redirect that was not followed, a
+ *   body that is not JSON, and an error that is not a network failure, such as
+ *   a permission the process lacks, get the same result however often they are
+ *   asked. `reason` says what went wrong, for a log message: over a whole read,
+ *   what went wrong at each attempt.
  *
  * `redirectedOffOrigin` is the URL a followed redirect ended at, when that is
  * not the API URL's deployment ({@link staysOnDeployment}), such as a login or
@@ -216,29 +233,92 @@ type DeploymentMeta =
   & { redirectedOffOrigin?: string }
   & (
     | { conclusive: true; document: Record<string, unknown> | undefined }
-    | { conclusive: false; transient: boolean }
+    | { conclusive: false; transient: boolean; reason: string }
   );
 
 /**
  * Reads the deployment's meta document, and returns the last attempt's
- * outcome. A document that could not be read for a transient reason is asked
- * for again, up to three attempts in all, since a deployment that is
- * restarting a toolshed or behind a proxy that is reloading responds again
- * within moments. An aborted `signal` throws its reason instead of resolving,
- * whether it arrives before the read, while a request or its body is in
- * flight, or during a wait between attempts.
+ * outcome. A request stays outstanding until the server responds, since a slow
+ * server's answer is the one the client needs, and the whole read ends at
+ * {@link DEPLOYMENT_RESPONSE_BOUND_MS}. A read still going at
+ * {@link META_SLOW_READ_LOG_MS} is logged at error level. A document that could
+ * not be read for a transient reason is asked for again, up to three attempts
+ * in all, since a deployment that is restarting a toolshed or behind a proxy
+ * that is reloading responds again within moments. A document read after a
+ * failed attempt, or after that error, is logged as a warning, so that the
+ * error is not the last word and a retry that succeeds still leaves a trace. An
+ * aborted `signal` throws its reason instead of resolving, whether it arrives
+ * before the read, while a request or its body is in flight, or during a wait
+ * between attempts.
  */
 async function readDeploymentMeta(
   params: DeploymentMetaParams,
 ): Promise<DeploymentMeta> {
   const delays = params.retryDelaysMs ?? META_RETRY_DELAYS_MS;
-  for (let attempt = 0;; attempt++) {
-    params.signal?.throwIfAborted();
-    const meta = await readMetaOnce(params);
-    if (meta.conclusive || !meta.transient || attempt >= delays.length) {
-      return meta;
+  const boundMs = params.boundMs ?? DEPLOYMENT_RESPONSE_BOUND_MS;
+  const metaUrl = metaUrlOf(params.apiUrl);
+  const startedAt = Date.now();
+  const deadline = new AbortController();
+  const boundTimer = setTimeout(
+    () => deadline.abort(new DOMException("timed out", "TimeoutError")),
+    boundMs,
+  );
+  let loggedSlow = false;
+  const slowTimer = setTimeout(() => {
+    loggedSlow = true;
+    logger.error(
+      "read-slow",
+      `No response from ${metaUrl} after ${META_SLOW_READ_LOG_MS} ms. This ` +
+        `client waits for one, for up to ${boundMs} ms, and does not know ` +
+        `what its deployment publishes until then.`,
+    );
+  }, META_SLOW_READ_LOG_MS);
+  const signal = params.signal === undefined
+    ? deadline.signal
+    : AbortSignal.any([params.signal, deadline.signal]);
+  const outlasted = `no response within ${boundMs} ms`;
+  const failures: string[] = [];
+  try {
+    for (let attempt = 0;; attempt++) {
+      params.signal?.throwIfAborted();
+      if (deadline.signal.aborted) {
+        failures.push(outlasted);
+        return {
+          conclusive: false,
+          transient: true,
+          reason: failures.join("; "),
+        };
+      }
+      const meta = await readMetaOnce(
+        params,
+        signal,
+        deadline.signal,
+        outlasted,
+      );
+      if (meta.conclusive) {
+        if (attempt > 0 || loggedSlow) {
+          logger.warn(
+            "read-late",
+            `Read ${metaUrl} on attempt ${attempt + 1}, ` +
+              `${Date.now() - startedAt} ms after asking` +
+              `${
+                failures.length > 0 ? `, after: ${failures.join("; ")}` : ""
+              }.`,
+          );
+        }
+        return meta;
+      }
+      failures.push(meta.reason);
+      if (
+        !meta.transient || deadline.signal.aborted || attempt >= delays.length
+      ) {
+        return { ...meta, reason: failures.join("; ") };
+      }
+      await waitUnlessAborted(delays[attempt], signal);
     }
-    await waitOrAbort(delays[attempt], params.signal);
+  } finally {
+    clearTimeout(boundTimer);
+    clearTimeout(slowTimer);
   }
 }
 
@@ -259,19 +339,19 @@ function staysOnDeployment(url: string, apiUrl: URL): boolean {
       final.host === apiUrl.host);
 }
 
+/** The URL of the meta document of the deployment at `apiUrl`. */
+function metaUrlOf(apiUrl: URL): string {
+  return new URL(SERVER_EXPERIMENTAL_PATH, apiUrl).href;
+}
+
 /** One attempt of {@link readDeploymentMeta}. */
 async function readMetaOnce(
   params: DeploymentMetaParams,
+  signal: AbortSignal,
+  deadline: AbortSignal,
+  outlasted: string,
 ): Promise<DeploymentMeta> {
   const fetchImpl = params.fetch ?? globalThis.fetch;
-  const attempt = new AbortController();
-  const timer = setTimeout(
-    () => attempt.abort(new DOMException("timed out", "TimeoutError")),
-    params.attemptTimeoutMs ?? META_ATTEMPT_TIMEOUT_MS,
-  );
-  const signal = params.signal === undefined
-    ? attempt.signal
-    : AbortSignal.any([params.signal, attempt.signal]);
   try {
     // The signal rides the request, which is what makes the BODY read below
     // cancellable too: aborting a signal passed to `fetch` terminates the
@@ -300,6 +380,7 @@ async function readMetaOnce(
           ...offOrigin,
           conclusive: false,
           transient: TRANSIENT_STATUSES.has(status),
+          reason: `status ${status}`,
         };
     }
     const body: unknown = await response.json();
@@ -310,40 +391,44 @@ async function readMetaOnce(
         conclusive: true,
         document: body as Record<string, unknown>,
       }
-      : { ...offOrigin, conclusive: false, transient: false };
+      : {
+        ...offOrigin,
+        conclusive: false,
+        transient: false,
+        reason: "the body is not a JSON object",
+      };
   } catch (error) {
     // A cancelled startup is the caller's decision, not a server that failed
     // to respond: propagate it instead of resolving settings for a runtime
     // construction the caller is abandoning. `fetch` reports a connection
     // that failed as a `TypeError`, and so does a body whose stream broke
-    // off; a body that is not JSON is a `SyntaxError`. An attempt that
-    // timed out is not asked again ({@link DeploymentMeta}).
+    // off; a body that is not JSON is a `SyntaxError`. A read that outlasted
+    // its bound is reported however the abort surfaced.
     params.signal?.throwIfAborted();
     return {
       conclusive: false,
-      transient: !attempt.signal.aborted && error instanceof TypeError,
+      transient: deadline.aborted || error instanceof TypeError,
+      reason: deadline.aborted ? outlasted : debugStr`${error}`,
     };
-  } finally {
-    clearTimeout(timer);
   }
 }
 
-/** Waits `ms`, or rejects with `signal`'s reason when it aborts first. */
-function waitOrAbort(ms: number, signal: AbortSignal | undefined) {
-  return new Promise<void>((resolve, reject) => {
-    if (signal?.aborted) {
-      reject(signal.reason);
+/** Waits `ms`, or until `signal` aborts, whichever comes first. */
+function waitUnlessAborted(ms: number, signal: AbortSignal) {
+  return new Promise<void>((resolve) => {
+    if (signal.aborted) {
+      resolve();
       return;
     }
     const onAbort = () => {
       clearTimeout(timer);
-      reject(signal!.reason);
+      resolve();
     };
     const timer = setTimeout(() => {
-      signal?.removeEventListener("abort", onAbort);
+      signal.removeEventListener("abort", onAbort);
       resolve();
     }, ms);
-    signal?.addEventListener("abort", onAbort, { once: true });
+    signal.addEventListener("abort", onAbort, { once: true });
   });
 }
 
@@ -373,7 +458,7 @@ function memoryUrlFromMeta(
   meta: DeploymentMeta,
   apiUrl: URL,
 ): URL | undefined {
-  const metaUrl = new URL(SERVER_EXPERIMENTAL_PATH, apiUrl).href;
+  const metaUrl = metaUrlOf(apiUrl);
   if (meta.redirectedOffOrigin !== undefined) {
     console.warn(
       `[deployment-meta] ${metaUrl} redirected to ` +
@@ -402,6 +487,32 @@ function memoryUrlFromMeta(
     return undefined;
   }
   return parsed.memoryUrl;
+}
+
+/**
+ * Says at error level that a client could not learn its deployment's posture,
+ * why, and what it runs on instead. A client on another posture than its
+ * deployment's reads what the deployment stores and serves differently from
+ * everyone else, and a server that is only slow fails none of the client's real
+ * work, so nothing else reports it.
+ */
+function logPostureUnread(
+  meta: Extract<DeploymentMeta, { conclusive: false }>,
+  apiUrl: URL,
+  runsOn: string,
+): void {
+  logger.error(
+    "posture-unread",
+    `Could not read ${metaUrlOf(apiUrl)} (${meta.reason}), so this client ` +
+      `does not know its deployment's posture. It runs on ${runsOn}, which ` +
+      `does not match a deployment whose posture differs, such as one on the ` +
+      `other server-execution arm.`,
+  );
+}
+
+/** `serverExecution` as {@link logPostureUnread} names its value. */
+function serverExecutionWord(enabled: boolean): string {
+  return `\`serverExecution\` ${enabled ? "on" : "off"}`;
 }
 
 /** The origin of `url`, or `url` itself where it does not parse. */
@@ -436,12 +547,12 @@ export interface DeploymentForShell {
 
   /**
    * Whether the document could not be read for a transient reason, a
-   * connection that failed or a status in {@link TRANSIENT_STATUSES}, so that
-   * reading it again may give another result. A caller that keeps the result
-   * keeps it unless this is set: a document the server returned, or said it
-   * has none of, settles what the deployment publishes, and a failure that is
-   * not transient, such as a 401 or an attempt that timed out, would most
-   * likely come out the same way again.
+   * connection that failed, a read that outlasted its bound or a status in
+   * {@link TRANSIENT_STATUSES}, so that reading it again may give another
+   * result. A caller that keeps the result keeps it unless this is set: a
+   * document the server returned, or said it has none of, settles what the
+   * deployment publishes, and a failure that is not transient, such as a 401,
+   * would most likely come out the same way again.
    */
   transient: boolean;
 }
@@ -451,12 +562,22 @@ export interface DeploymentForShell {
  * document: the memory URL and the flags it decides for the shell. For a
  * shell whose page does not state them. The posture is read from wherever a
  * redirect ended, as {@link settingsForDeployedClient} reads it; the memory
- * URL is not.
+ * URL is not. A document that could not be read adopts no flag, which is
+ * logged at error level ({@link logPostureUnread}).
  */
 export async function deploymentForShell(
   params: DeploymentMetaParams,
 ): Promise<DeploymentForShell> {
   const meta = await readDeploymentMeta(params);
+  if (!meta.conclusive) {
+    logPostureUnread(
+      meta,
+      params.apiUrl,
+      `the flags its build gives it, with ` +
+        serverExecutionWord(SERVER_EXECUTION_DEFAULT_ENABLED) +
+        ` unless the build sets it`,
+    );
+  }
   return {
     memoryUrl: memoryUrlFromMeta(meta, params.apiUrl),
     experimental: !meta.conclusive || meta.document === undefined
@@ -484,8 +605,8 @@ export async function deploymentForShell(
  *   client could resolve wrongly if it guessed: the origin may route Memory
  *   through a router that the origin itself does not serve, and the client's
  *   own default is its own deployment's router, which is no place for another
- *   deployment's space. Nothing is warned about here; the caller decides how
- *   often to.
+ *   deployment's space. An unread origin is not warned about here; the caller
+ *   decides how often to.
  */
 export type ForeignMemoryHost =
   | { memoryHost: URL }
@@ -502,7 +623,7 @@ export async function memoryHostForForeignOrigin(
 ): Promise<ForeignMemoryHost> {
   const origin = params.apiUrl;
   const meta = await readDeploymentMeta(params);
-  const metaUrl = new URL(SERVER_EXPERIMENTAL_PATH, origin).href;
+  const metaUrl = metaUrlOf(origin);
   if (meta.redirectedOffOrigin !== undefined) {
     return {
       unread: true,
@@ -555,7 +676,10 @@ export interface DeployedClientSettings {
  * read, and a server that said it has none, resolve to the
  * environment alone: the caller is about to fail loudly on its real work if
  * the server is genuinely down, and failing here first would only obscure
- * that. A server that RETURNS a pre-flag document (a meta document
+ * that. A server that is only slow does not fail that work, so a document that
+ * could not be read is logged at error level, naming what the client runs on
+ * ({@link logPostureUnread}), unless {@link ADOPT_SERVER_FLAGS_ENV} refuses the
+ * posture anyway. A server that RETURNS a pre-flag document (a meta document
  * without an `experimental` field, or a posture record silent on
  * `readerSchemaPrecedence` or `agentBuiltin`) is different: those flags adopt
  * their legacy declared `false` ({@link parseServerExperimentalOptions}). For
@@ -565,12 +689,13 @@ export interface DeployedClientSettings {
  * Memory rather than what a flag is. A response a redirect brought from off
  * the API URL's deployment gives the posture as before, and no memory URL.
  *
- * The read is bounded. Each attempt may take five seconds, and one that does
- * ends the read. A transient failure is asked again, up to three attempts with
- * 1.25 seconds of waiting between them. So a server that stalls costs five
- * seconds, and one that keeps refusing the connection about 1.25. What the
- * caller does next, such as the runtime's health check, has bounds of its own
- * or none.
+ * The read is bounded. A request stays outstanding until the server responds,
+ * since a slow server's answer is the posture this client needs, and at five
+ * seconds that is logged at error level. The whole read ends at
+ * {@link DEPLOYMENT_RESPONSE_BOUND_MS}, so a server that says nothing costs that
+ * long. A transient failure is asked again, up to three attempts with 1.25
+ * seconds of waiting between them, so one that keeps refusing the connection
+ * costs about 1.25 seconds.
  *
  * An aborted `signal` is the one case that does NOT resolve: the caller asked
  * to stop, so this throws the abort reason rather than handing back settings
@@ -586,6 +711,17 @@ export async function settingsForDeployedClient(
   const refused = raw !== undefined &&
     parseFlagValue(raw, ADOPT_SERVER_FLAGS_ENV, "deployment-meta") === false;
   const meta = await readDeploymentMeta(params);
+  if (!meta.conclusive && !refused) {
+    logPostureUnread(
+      meta,
+      params.apiUrl,
+      `its own flags: ${JSON.stringify(env)} from the environment, and this ` +
+        `build's defaults otherwise, with ` +
+        serverExecutionWord(
+          env.serverExecution ?? SERVER_EXECUTION_DEFAULT_ENABLED,
+        ),
+    );
+  }
   return {
     experimental: refused || !meta.conclusive || meta.document === undefined
       ? env

@@ -62,21 +62,21 @@ All special types in JSON use a single convention: single-key objects where the
 key follows the pattern `/<Type>@<Version>`.
 
 - `/` — sigil prefix (nodding to IPLD heritage)
-- `<Type>` — type name, after any namespace prefixes
+- `<Type>` — type name, after any namespace prefixes, in any case
 - `@<Version>` — version number
 
 The key is a type tag with the sigil in front of it, and the tag is the key
-without its sigil. The tag syntax is not particular to JSON: it is the one
+without its sigil. The type-tag syntax is not particular to JSON: it is the one
 every interchange format shares, defined in `1-fabric-values.md` Section 2.5.
-So `Bytes@1` and `sys.beep.Boop@1` are tags, written as the keys `/Bytes@1` and
-`/sys.beep.Boop@1`, while `bytes@1` and `sys.Boop` are not.
+So `Bytes@1`, `bytes@1` and `sys.beep.Boop@1` are type tags, written as the keys
+`/Bytes@1`, `/bytes@1` and `/sys.beep.Boop@1`, while `Bytes` and `sys.Boop` are
+not.
 
-A key whose remainder after the sigil is not a tag is a structural violation
-under Section 9 rather than an `UnknownValue` under Section 8. The escapes
-`/quote` and `/object` (Section 6), and the sparse-array marker `/hole`
-(Section 3), fall outside the tag syntax deliberately — none of them has an
-uppercase name or an `@<Version>` — each being a structural marker the format
-handles itself rather than a type anything encodes.
+A key whose remainder after the sigil is not a type tag is a structural
+violation under Section 9 rather than an `UnknownValue` under Section 8. The
+escapes `/quote` and `/object` (Section 6), and the sparse-array marker `/hole`
+(Section 3), are the format's own forms rather than types anything encodes, and
+their names are not type tags, having no `@<Version>`.
 
 This convention does **not** prohibit storing plain objects that happen to have
 `/`-prefixed keys. The escaping mechanism in Section 6 (`/object` and
@@ -147,10 +147,12 @@ a string nor `null`, produces a `ProblematicValue`.
 ### `Hash@1` — content hashes
 
 State is `{ tag: string, hash: string }`. `tag` is the algorithm tag (for
-example `fid1`), and `hash` is the hash bytes as an unpadded base64url string,
-per the convention above. On decoding, a state that is not an object, or whose
-fields are not strings, produces a `ProblematicValue`. See `1-fabric-values.md`
-Section 1.4.9.
+example `fid1`), in the general tag syntax of `1-fabric-values.md` Section 2.5,
+and `hash` is the hash bytes as an unpadded base64url string, per the
+convention above. An encoder does not write a hash whose algorithm tag is
+outside that syntax. On decoding, a state that is not an object, whose fields
+are not strings, or whose `tag` is outside that syntax, produces a
+`ProblematicValue`. See `1-fabric-values.md` Section 1.4.9.
 
 ### `KeyPair@1` — asymmetric key pairs
 
@@ -749,7 +751,8 @@ Each measure has a floor, the smallest guarantee an implementation may state:
 | Length of a string | 2^24 (16,777,216) code points |
 | Length of a byte sequence | 2^24 (16,777,216) bytes |
 | Length of a registered symbol's key | 2^10 (1,024) code points |
-| Depth | 2^10 (1,024) containers |
+| Depth | 2^9 (512) containers |
+| Size of a bigint, in bytes of its two's-complement representation | 2^21 (2,097,152) bytes (2^24 bits) |
 
 A guarantee covers one measure taken alone. The format sets no floor on a
 value's size as a whole, and an implementation may fail a value that is within
@@ -793,6 +796,15 @@ holds no container has depth 2. Depth is the value's, not the text's: an escape
 wrapper, `/object` or `/quote`, adds nothing, and nor does a `hole` entry; the
 single-key object wrapping an instance is the instance; and a primitive adds
 nothing, whatever the shape of its state in the text.
+
+**Bigints.** A bigint's size is the length of its minimal two's-complement
+representation in bytes, the bytes `BigInt@1` writes (Section 3): at least one
+byte, and no leading `0x00` or `0xFF` byte that only repeats the sign the next
+byte carries. `0n`, `-1n`, `127n` and `-128n` are 1 byte each, and `128n` and
+`-129n` are 2. The size is the value's, not the text's: it counts the bytes, not
+the base64url characters of the state that writes them. The guarantee covers
+every bigint the value holds: a `BigInt@1` value, and the bigint each temporal
+quantity carries.
 
 **What the floors do not bind.** The floors bind only the guarantees an
 implementation states. A caller reading untrusted text may set a lower bound

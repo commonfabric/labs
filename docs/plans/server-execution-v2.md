@@ -509,12 +509,12 @@ load walk, COMMITTING NOTHING in the recovery arm. Not #6208's
 re-commit retry (census-proved non-convergent, closed — its
 `isStaleConfirmedReadConflict` discriminator and
 `awaitCommitRetryReadiness` extraction are cherry-picked as live
-pieces of this build); not the old refuse-to-start. ON-only (the
-coordinator's conservative default; OFF byte-identical, pinned —
-under OFF the refusal means another CLIENT raced and cross-tab mutex
-semantics own that story). OW62 is RE-FRAMED from adopt-not-start to
-START-WITHOUT-COMMIT (clients start speculatively; server-state
-wins); its remaining open piece is the stage-2
+pieces of this build); not the old refuse-to-start. Both arms:
+under OFF the refusal means another client, a second tab of the same
+user among them, set the piece up first, and the client that lost
+needs the piece's context as much. OW62 is RE-FRAMED from
+adopt-not-start to START-WITHOUT-COMMIT (clients start speculatively;
+server-state wins); its remaining open piece is the stage-2
 unmaterialized-fallback question. Binding sentence: serving-loop.md
 §3d's RULED 2026-08-24 refusal-arm paragraph; full record: the
 register's OW45 CATCH-UP-AND-START block (ruling + owner model

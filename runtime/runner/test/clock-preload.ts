@@ -48,6 +48,10 @@ installFakeClock({
     // The compiled-child suite runs the same live serving host, whose flush
     // deadline must advance in real time while compiler work settles.
     "executor-compile-and-run",
+    // The quiescence suite asks what the same live serving host has finished,
+    // among it what real-time timers hold back: a rescan backstop, a wave's
+    // flush deadline. Auto-advance would fire them as they arm.
+    "executor-quiescence",
     // Scoped effect requests use the same live serving host and deadlines.
     "executor-fetch-instances",
     "executor-fetch-program-instances",
@@ -75,6 +79,9 @@ installFakeClock({
     // The lifecycle-verb suite drives a live ExecutorHost through verbs
     // and reads what they left through a client under the same policies.
     "executor-lifecycle-verbs",
+    // A cold origin update drives the same serving host across a disk-store
+    // reopen, under its real-time flush and park policies.
+    "served-source-reconciler-protected-argument",
     // The Phase-2 speculation-overlay journeys run a live ExecutorHost
     // (the serving side of the client-loses-derivation-commit journey)
     // under the same wall-clock policies.
@@ -121,7 +128,7 @@ installFakeClock({
     "executor-fan-out",
     // The (d′) demand-model suite (stage-C build W1) drives the same live
     // ExecutorHost + N flag-ON clients under the same wall-clock policies
-    // — the demand-wake grace, the flush deadline, and the session TTL —
+    // — the flush deadline and the session TTL —
     // waiting on store/replica/demand edges; auto-advance turns those
     // real-time policies into a runaway.
     "executor-dprime-w0",

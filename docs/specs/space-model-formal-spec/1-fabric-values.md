@@ -1195,18 +1195,35 @@ The `tag` field is an opaque string identifier. Known algorithm tags:
 | Algorithm Tag | Meaning | Hash Algorithm | Output Size |
 |:--------------|:--------|:---------------|:------------|
 | `fid1`        | Fabric ID, version 1 | SHA-256 (Section 6.4) | 32 bytes |
+| `sha256`      | SHA-256 digest of a byte sequence | SHA-256 over the content of a `FabricBytes`, and of no other type of value | 32 bytes |
 
 Future algorithm tags may be added for different hash algorithms or versioned
 content-addressing schemes. The algorithm tag is part of the content ID's
 identity — two `FabricHash` instances with the same hash bytes but
 different algorithm tags are distinct values.
 
+`sha256` is the raw digest of the bytes a `FabricBytes` holds, with nothing
+added before or after them, so it agrees with any other SHA-256 of the same
+bytes; a value of any other type has no `sha256` hash. This implementation
+produces no `sha256` hash, and reads and writes one like any other
+`FabricHash`.
+
+An algorithm tag carried in an interchange format — the `tag` of a `Hash@1`
+state, in FVJ1 and in the realm format alike — is in the general tag syntax of
+Section 2.5.1, and need not have a version. An encoder must not write a `Hash@1`
+state whose `tag` is outside that syntax, and a decoder treats such a state as
+malformed, settling it against `lenient` as it settles any other (Section
+2.5.3). The known algorithm tags have no prefix, as Section 2.5.2 reserves for
+what the interchange specifications define, and a tag defined elsewhere has one,
+and therefore a version, such as `sys.sha@2`.
+
 Like every `FabricPrimitive`, `FabricHash` hosts a `[JSON_CODEC]` (tag
 `Hash@1`). Its encoded state is `{ tag, hash }` — the algorithm tag plus the
-hash as an unpadded base64url string (i.e., `.hashString`); `canDecode()`
-refuses a state that is not a record of two strings, and `decode()` produces a
-`ProblematicValue` for a `hash` that is not valid base64url. See Section 3 of
-`3-json-encoding.md` for the wire format.
+hash as an unpadded base64url string (i.e., `.hashString`); `encode()` refuses
+a hash whose algorithm tag is outside the general tag syntax, `canDecode()`
+refuses a state that is not a record of two strings or whose `tag` is outside
+that syntax, and `decode()` produces a `ProblematicValue` for a `hash` that is
+not valid base64url. See Section 3 of `3-json-encoding.md` for the wire format.
 
 #### 1.4.10 `FabricBytes`
 
@@ -2739,47 +2756,83 @@ Key contracts:
 A **type tag** is the string that names the type of a codec's state: the
 `recognizedTypeTag` a codec is registered under, what its `tagForValue()`
 returns, the `typeTag` its `decode()` is handed, and what an `UnknownValue`
-preserves (Section 3). Each interchange format lays a tag out on the wire in its
-own way — JSON as a `/`-prefixed key (`3-json-encoding.md` Section 2), the realm
-format as one slot of a tagged form (`4-realm-encoding.md` Section 3.3) — and
-every one of them writes tags of the syntax defined here.
+preserves (Section 3). Each interchange format lays a type tag out on the wire
+in its own way — JSON as a `/`-prefixed key (`3-json-encoding.md` Section 2),
+the realm format as one slot of a tagged form (`4-realm-encoding.md` Section
+3.3) — and every one of them writes type tags of the syntax defined here.
 
 #### 2.5.1 Syntax
 
-The interchange syntax of a type tag is exact, because that syntax is what
+The interchange syntax of a tag is exact, and that of a type tag is what
 separates an unrecognized type from a malformation. A tag is zero or more
-prefixes, each followed by `.`, then a name, `@`, and a version, with nothing
-before or after:
+prefixes, each followed by `.`, then a name, then optionally `@` and a version,
+with nothing before or after:
 
 ```
-(<prefix>.)*<Name>@<Version>
+(<prefix>.)*<name>(@<version>)?
 ```
 
-- A **prefix** is a lowercase ASCII letter followed by any number of ASCII
-  letters and digits — `lowerCamelCase`.
-- A **name** is an uppercase ASCII letter followed by any number of ASCII
-  letters and digits — `UpperCamelCase`.
+- A **prefix** and a **name** are each an ASCII letter followed by ASCII
+  letters and digits, in any case, **at most 100 characters** in all.
+- A tag has **at most ten components**, its prefixes and its name counted
+  together, so at most nine prefixes.
 - A **version** is a decimal integer with no leading zero, so the lowest
-  version is 1.
+  version is 1, of **at most ten digits**, so the highest is 9999999999.
+- The version is **optional on a tag with no prefix** and **required on a tag
+  with at least one prefix**.
 
-`Bytes@1`, `Abc123@1234` and `sys.beep.Boop@1` are tags. None of these is:
+The three limits are syntax, as much as the alphabet is. They are not
+guarantees of the kind `3-json-encoding.md` Section 12 has an implementation
+state, past which the implementation may refuse a value or may handle it: a
+string past any of them is not a tag, for every implementation alike, as a
+string holding a `_` is not.
 
-- `bytes@1` and `sys.boop@1`, whose names do not start uppercase.
-- `Sys.Boop@1`, whose prefix does not start lowercase.
+As a regular expression, which states the limits with bounded repetitions:
+
+```
+^(?:[A-Za-z][A-Za-z0-9]{0,99}(?:@[1-9][0-9]{0,9})?|(?:[A-Za-z][A-Za-z0-9]{0,99}\.){1,9}[A-Za-z][A-Za-z0-9]{0,99}@[1-9][0-9]{0,9})$
+```
+
+A **type tag** is a tag that **always has a version**, whatever its prefixes
+and whatever its case:
+
+```
+(<prefix>.)*<name>@<version>
+```
+
+As a regular expression:
+
+```
+^(?:[A-Za-z][A-Za-z0-9]{0,99}\.){0,9}[A-Za-z][A-Za-z0-9]{0,99}@[1-9][0-9]{0,9}$
+```
+
+`Bytes@1`, `Abc123@1234`, `sys.beep.Boop@1`, `Sys.Boop@1`, `bytes@1` and
+`quote@1` are type tags. So are `a.b.c.d.e.f.g.h.i.j@1`, with ten components,
+`Abc@1234567890`, whose version has ten digits, and a tag whose prefix or name
+has 100 characters. `Bytes`, `widget`, `fid1` and `sha256` are tags but not
+type tags, having no version, and are valid only where a format calls for a tag
+in the general syntax, as it does for a hash algorithm tag (Section 1.4.9).
+None of these is a tag at all:
+
+- `sys.Boop` and `core.Globals`, which have a prefix and no version.
 - `sys_x.Boop@1` and `By-tes@1`, which hold characters that are neither ASCII
   letters nor digits.
+- `1Bytes@1`, whose name does not start with a letter.
 - `.Boop@1` and `sys..Boop@1`, which hold an empty prefix.
-- `Bytes@0`, `Bytes@01` and `Bytes@1.0`, whose versions are not decimal
-  integers without a leading zero, starting at 1.
-- `Bytes` and `sys.Boop`, which have no version.
+- `Bytes@0`, `Bytes@01`, `Bytes@1.0` and `Bytes@`, whose versions are not
+  decimal integers without a leading zero, starting at 1.
+- `a.b.c.d.e.f.g.h.i.j.k@1`, which has eleven components.
+- A string whose prefix or name has 101 characters, with or without a version.
+- `Abc@12345678901`, whose version has eleven digits.
 - Any tag padded with whitespace or a newline.
 
-A string outside that syntax is not an unrecognized tag; it is not a tag at
-all. A decoder reading one where an interchange format puts a tag treats it as
-a structural violation, never as an `UnknownValue`, and that is what lets an
-`UnknownValue` always hold a real tag. A string inside the syntax that no codec
-claims is an `UnknownValue`, whatever its prefixes are: a decoder gives no
-prefix, and no absence of one, any meaning of its own.
+A string that is not a type tag is not an unrecognized type; it names no type
+at all. A decoder reading one where an interchange format puts a type tag
+treats it as a structural violation, never as an `UnknownValue`, and that is
+what lets an `UnknownValue` always hold a real type tag. A type tag that no
+codec claims is an `UnknownValue`, whatever its prefixes are and whatever its
+case: a decoder gives no prefix, no absence of one, and no case any meaning of
+its own.
 
 #### 2.5.2 Conventional Reservations
 
@@ -2787,39 +2840,54 @@ These reservations are conventions rather than syntax. A decoder sorts tags by
 the syntax of Section 2.5.1 alone, and treats a tag that departs from a
 convention exactly as it treats any other.
 
-- **A tag with no prefix** is reserved by convention for the types the
-  interchange specifications themselves define, such as `Bytes@1` and `Map@1`.
-  Anyone else defining a type gives its tag a prefix.
-- **A tag without its `@<Version>` suffix** is the recommended form for an
-  implementation's general use of tags in contexts other than interchange. Such
-  a tag is outside the interchange syntax, so it never reaches an interchange
-  format (Section 2.5.3).
+- **The name of a type tag starts with a capital letter**, as in `Bytes@1` and
+  `sys.beep.Boop@1`. This is convention, not syntax: `bytes@1` is a type tag
+  like any other.
+- **A tag with no prefix** is reserved by convention for what the interchange
+  specifications themselves define: the types they define, whose type tags are
+  versioned, such as `Bytes@1` and `Map@1`; and the names they give without a
+  version, which are the hash algorithm tags of Section 1.4.9, such as `fid1`
+  and `sha256`, and an interchange format's names for its own forms, such as
+  FVJ1's `quote`. Anyone else defining a tag gives it a prefix.
+- **A tag with a prefix and without an `@<version>` suffix**, such as
+  `core.Globals`, is the recommended form for an implementation's general use
+  of tags in contexts other than interchange. Such a tag is outside the
+  interchange syntax, so it never reaches an interchange format (Section
+  2.5.3).
 - **The prefix `core.`** is recommended to be reserved by each implementation
   for its own implementation-specific purposes, where an unversioned tag is the
-  expected form. A `core.` tag with a version is still a conforming tag and may
-  reach the wire, where an implementation that does not claim it decodes it as
-  an `UnknownValue` like any other.
+  expected form. A `core.` tag with a version is still a conforming type tag
+  and may reach the wire, where an implementation that does not claim it
+  decodes it as an `UnknownValue` like any other.
 
 #### 2.5.3 Interchange and Implementation Latitude
 
 The syntax binds interchange, not an implementation's internals. An
 implementation need not restrict the tags it uses internally at all, but a codec
 engine writing an interchange format — FVJ1 (`3-json-encoding.md`) or the realm
-format (`4-realm-encoding.md`) — **must not** encode a tag outside the syntax. A
-`ProblematicValue` is no exception: what it writes is its own tag,
-`Problematic@1`, and the tag it preserves travels as data (Section 3.2).
+format (`4-realm-encoding.md`) — **must not** write a string that is not a type
+tag where a type tag belongs, nor a hash algorithm tag outside the general
+syntax. A `ProblematicValue` is no exception: what it writes is its own type
+tag, `Problematic@1`, and the tag it preserves travels as data (Section 3.2).
 
 What a decoder does is independent of that latitude. Reading an interchange
-format, it treats a string outside the syntax where a tag belongs as a
-structural violation, and a tag inside the syntax that no codec claims as an
-`UnknownValue` (Section 2.5.1).
+format, it treats a string that is not a type tag where a type tag belongs as a
+structural violation, and a type tag that no codec claims as an `UnknownValue`
+(Section 2.5.1).
 
-This implementation takes none of the latitude. It holds every tag to the
-interchange syntax: `UnknownValue` refuses construction over a tag outside it
-(Section 3.2), `CodecRegistry` refuses a codec that declares a fixed tag outside
-it (Section 4.5), and both decoders refuse one on the wire. A tag here is
-therefore always one an interchange format can carry. That is a choice of this
-implementation rather than a requirement of the formats.
+This implementation takes none of the latitude for type tags. It holds every
+type tag to the interchange syntax: `UnknownValue` refuses construction over a
+string that is not a type tag (Section 3.2), `CodecRegistry` refuses a codec
+that declares a fixed tag that is not one (Section 4.5), and both decoders
+refuse one on the wire. A type tag here is therefore always one an interchange
+format can carry. That is a choice of this implementation rather than a
+requirement of the formats.
+
+It takes the latitude for hash algorithm tags: a `FabricHash` holds any string
+as its tag, and it is the `Hash@1` codec of each format that holds the tag to
+the general syntax, refusing to encode a hash whose tag is outside it, and
+refusing such a state on decode as it refuses any other malformed state
+(Section 1.4.9).
 
 ### 2.6 Live Environment
 
@@ -3200,8 +3268,8 @@ Both `UnknownValue` and `ProblematicValue` preserve a type tag and raw state
 for round-tripping. They differ in what a preserved tag is allowed to be, and
 that difference decides how each reaches the wire.
 
-An `UnknownValue` preserves a tag that **is** a tag — syntactically valid per
-Section 2.5, though claimed by no codec here. It is checked at construction.
+An `UnknownValue` preserves a tag that **is** a type tag — syntactically valid
+per Section 2.5, though claimed by no codec here. It is checked at construction.
 That is what lets the class encode back under the tag it preserved: a tag a
 decoder would refuse would otherwise make an instance that encodes and cannot be
 read back.
@@ -3857,8 +3925,8 @@ The decoding act's walk processes the `JsonCodecValue` tree:
 3. **State decode + tag syntax check** — for any other tag, the walker first
    recursively decodes the wrapped state, then rejects any tag that is not
    syntactically a type tag as an encoding error: a bare `"/"` key (the
-   empty tag), and equally a name outside the tag syntax of Section 2.5,
-   such as a meta-tag found outside the context that defines it. That
+   empty tag), and equally a name outside the type-tag syntax of Section
+   2.5, such as a meta-tag found outside the context that defines it. That
    rejection, and every other malformed-wire fault the walker finds for
    itself, is settled against `lenient` exactly as a codec's is: a
    `ProblematicValue` leniently (Section 3.5), a raise strictly (see also
@@ -3874,11 +3942,11 @@ The decoding act's walk processes the `JsonCodecValue` tree:
    guarantees the same, the unknown-tag arm (step 5) included, so a caller need
    not ask which arm produced what it was handed. See Section 2.3 for the
    deep-freeze protocol and Section 2.10 for the egress-freezing call sites.
-5. **Unknown tags** — a syntactically valid tag with no registered codec
-   produces an `UnknownValue` wrapping the tag and (already-decoded) state,
-   preserving the form for round-tripping (Section 3). Syntax is what
-   separates this from step 3: a tag names a type nothing here knows,
-   whereas a non-tag names nothing at all.
+5. **Unknown tags** — a syntactically valid type tag with no registered
+   codec produces an `UnknownValue` wrapping the tag and (already-decoded)
+   state, preserving the form for round-tripping (Section 3). Syntax is what
+   separates this from step 3: a type tag names a type nothing here knows,
+   whereas anything else names nothing at all.
 6. **Primitives** — pass through.
 7. **Arrays** — recursively decoded; `hole` entries decoded as true holes
    (absent indices).

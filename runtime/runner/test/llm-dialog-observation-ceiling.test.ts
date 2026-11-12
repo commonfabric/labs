@@ -4,9 +4,9 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import type { FabricValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
 
 import { llmToolExecutionHelpers } from "../src/builtins/llm-dialog.ts";
-import type { CfcConfClause } from "../src/cfc/clause.ts";
 import { cfcObservationFitsCeiling } from "../src/cfc/observation.ts";
 import { Runtime } from "../src/runtime.ts";
 

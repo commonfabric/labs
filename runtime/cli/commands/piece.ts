@@ -37,6 +37,7 @@ import {
 import { decode } from "@commonfabric/text/utf8";
 import { maxOf } from "@commonfabric/collections/math";
 
+import { deleteSpace } from "../lib/acl.ts";
 import { normalizeApiUrl } from "../lib/api-url.ts";
 import {
   type PhaseRetarget,
@@ -113,6 +114,7 @@ import {
   PieceResultProjectionError,
   PieceVerbReadError,
   recreateSpaceRootPattern,
+  releaseCellConfidentialityByIntent,
   removePiece,
   savePiecePattern,
   searchPieces,
@@ -221,7 +223,9 @@ export function setsrcSuccessLine(
 ): string {
   return `Committed source update for piece ${config.piece} (Pattern Ref: ${
     formatPatternIdentity(update.ref)
-  }, Revision: ${update.revisionId}, Seq: ${update.seq})`;
+  }, Revision: ${update.revisionId}, Seq: ${update.seq})${
+    update.origin === undefined ? "" : `; it follows ${update.origin}`
+  }`;
 }
 
 /** A warning for work which failed after storage accepted the source update. */
@@ -2040,6 +2044,7 @@ function refuseJsonOutput(spelling: string, options: { json?: boolean }): void {
 interface SpaceCommandCLIOptions extends PieceCLIOptions {
   quiet?: boolean;
   label?: string;
+  confirm?: string;
 }
 
 /**
@@ -2117,6 +2122,51 @@ export function buildCreateSpaceCommand(spelling: string): Command<any> {
       "What the space is called in the Home space list.",
     );
   return targetOptions(command.action(act), { global: false, space: false });
+}
+
+/**
+ * `space delete`, which deletes a space as its sole member
+ * (`docs/specs/random-space-identities.md`, "Deleting a space from the command
+ * line"). It runs only with `--confirm` naming the space's own DID.
+ *
+ * `spelling` carries the meaning it has in {@link buildRecreateRootCommand}.
+ */
+// deno-lint-ignore no-explicit-any
+export function buildDeleteSpaceCommand(spelling: string): Command<any> {
+  const act = async (options: SpaceCommandCLIOptions) => {
+    refuseJsonOutput(spelling, options);
+    setQuietMode(!!options.quiet);
+    if (options.confirm === undefined) {
+      throw new ValidationError(
+        "Deleting a space cannot be undone: --confirm <space-DID> has to " +
+          "name the space's own DID.",
+        { exitCode: 1 },
+      );
+    }
+    const config = parseSpaceOptions(options);
+    await deleteSpace(config, options.confirm);
+    render(`Deleted ${options.confirm}.`);
+  };
+  // deno-lint-ignore no-explicit-any
+  const command: Command<any> = new Command()
+    .description(
+      "Delete a space, for everyone and for good, as its sole member: the " +
+        "one principal its access list names. Each other member is removed " +
+        "first with `acl remove`. Runs only with --confirm naming the " +
+        "space's own DID.",
+    )
+    .example(
+      cliText(
+        `cf ${spelling} ${EX_ID} -a http://localhost:${ports.toolshed} ` +
+          "--space did:key:z6Mk... --confirm did:key:z6Mk...",
+      ),
+      "Delete a space whose access list names only the identity.",
+    )
+    .option(
+      "--confirm <space-did:string>",
+      "The space's own DID, which a mistyped --space never resolves to.",
+    );
+  return targetOptions(command.action(act), { global: false });
 }
 
 /**
@@ -2258,6 +2308,83 @@ where it leads.`,
   return targetOptions(command.action(setCellCfcLabelFromCommand), {
     global: false,
   });
+}
+
+/**
+ * `release-by-intent`, which releases named confidentiality clauses stored at
+ * a cell path on the signed request of the space's owner (spec §8.12.7 route
+ * 2d).
+ *
+ * `spelling` carries the meaning it has in {@link buildRecreateRootCommand}.
+ */
+// deno-lint-ignore no-explicit-any
+export function buildReleaseByIntentCommand(spelling: string): Command<any> {
+  // deno-lint-ignore no-explicit-any
+  const command: Command<any> = new Command()
+    .description(
+      cliText(
+        `Release CFC clauses stored at a piece data path, as its space's owner.
+
+Without --clause, the command lists every confidentiality clause stored at the
+path, each with its canonical clause digest and the labels holding it, and the
+document's other stored positions holding any of them, and changes nothing.
+
+With --clause, it releases the clauses named, whoever they stand for: each
+comes off every label stored at the path, the declared label, the labels
+derived from what was written there (existence and membership included), and
+a link's own label. Labels at other paths, an ancestor's included, the value,
+and integrity labels are not changed. The path names one stored position: the
+links it crosses are followed to the document it lands in, a link stored at
+the path is not, and a "*" segment names the wildcard position stored there,
+such as a list's per-element templates, and none of the elements it covers.
+Each other position holding a clause is a release of its own, and the command
+names them.
+
+The command shows the document, the path, and each clause that comes off and
+stays, and asks you to type "release". Only then does it sign the request
+with the identity, which must be the space's owner, and commit the release
+together with a record of it, holding the signed request. The space's owner is
+the owner its access list names; with no access list stored, it is the space's
+own DID, as in a home space; and a stored list naming no valid owner has none,
+so no release is possible there. With --clause it runs only with standard
+input and standard error at a terminal, and only for the space's owner, and
+nothing skips the confirmation. The store checks the signature, the owner,
+and that the labels are still the ones you were shown; a request is used
+once.`,
+      ),
+    )
+    .usage(`${pieceUsage} [path]`)
+    .example(
+      cliText(`cf ${spelling} ${EX_ID} ${EX_COMP_PIECE}`),
+      "List the clauses stored at a result's root, with their digests.",
+    )
+    .example(
+      cliText(
+        `cf ${spelling} ${EX_ID} ${EX_COMP_PIECE} --clause 3gYWzS --clause oYjOtO`,
+      ),
+      "Release two clauses at the root, named by digest prefixes.",
+    )
+    .option("-c,--cell, --piece <cell:string>", PIECE_OPTION_PATH_HELP)
+    .option(
+      "--input",
+      "Release at the piece's input cell instead of result cell (the " +
+        '"#argument" reference suffix spells the same selection)',
+    )
+    .option(
+      "--clause <digest:string>",
+      "The canonical clause digest of a clause to release, or a prefix of " +
+        "it that names one stored clause alone. Repeat for each clause.",
+      { collect: true },
+    )
+    .option(
+      "--json",
+      "Select JSON output explicitly. This command always outputs JSON.",
+    )
+    .arguments("[path:string]");
+  return targetOptions(
+    command.action(releaseCellConfidentialityByIntentFromCommand),
+    { global: false },
+  );
 }
 
 export const piece = targetOptions(
@@ -2520,6 +2647,10 @@ export const piece = targetOptions(
     "Replace the source even when pattern or retained-link schema compatibility cannot be proven, or when the current pattern cannot be loaded at all.",
   )
   .option(
+    "--origin <origin:string>",
+    "Record this origin (a system: ref or fabric URL) with the revision, so the piece follows it from then on. Without it, setsrc detaches the piece.",
+  )
+  .option(
     "--check",
     "Report whether the source could replace the piece's current one, without issuing storage writes. Exits non-zero when it could not.",
   )
@@ -2554,9 +2685,12 @@ the children of system pieces, say:
 
   cf piece follow --cell <profile> system:system/profile-home/profile-home.tsx
 
-Unlike 'setsrc', which detaches, the origin is recorded with the revision.
-Not served yet: against a deployment that serves piece lifecycle verbs the
-command refuses, since the served update takes no origin.
+The origin is recorded with the revision, and the source adopted is what it
+serves now. A plain 'setsrc' detaches instead; 'setsrc --origin' records an
+origin over source you supply. Against a deployment that serves piece
+lifecycle verbs, its serving runtime resolves the origin, reviews what it
+serves, and commits the follow; there, a piece addressed at a scope
+(<id>@user, <id>@session) is followed on your instance of it.
 
 --expect and --expect-revision make the follow conditional on the source state
 a caller inspected ('cf piece inspect --pattern-identity --json' reports both):
@@ -3229,6 +3363,9 @@ export interface PieceCLIOptions {
   test?: string[];
   datafile?: string[];
   dangerouslyAllowIncompatibleSchema?: boolean;
+
+  /** `setsrc`: the origin the piece follows from then on. */
+  origin?: string;
   json?: boolean;
 }
 
@@ -3727,6 +3864,43 @@ export async function setCellCfcLabelFromCommand(
     },
   );
   (deps.render ?? render)(label, { json: true });
+}
+
+/** The options `release-by-intent` takes beyond those `get-label` takes. */
+export interface PieceReleaseByIntentCLIOptions extends PieceLabelCLIOptions {
+  /** The digests, or digest prefixes, of the clauses to release. */
+  clause?: string[];
+}
+
+/** The collaborators the `release-by-intent` action goes through. */
+export interface PieceReleaseByIntentCommandDependencies {
+  releaseCellConfidentialityByIntent?:
+    typeof releaseCellConfidentialityByIntent;
+  render?: typeof render;
+}
+
+export async function releaseCellConfidentialityByIntentFromCommand(
+  options: PieceReleaseByIntentCLIOptions,
+  pathString?: string,
+  deps: PieceReleaseByIntentCommandDependencies = {},
+): Promise<void> {
+  setQuietMode(!!options.quiet);
+  const initialConfig = {
+    ...parsePieceOptions(options, { acceptsPath: true, acceptsArgument: true }),
+    jsonOutput: true,
+  };
+  const { pieceConfig, pathSegments } = resolvePiecePath(
+    options.input ? { ...initialConfig, pieceInput: true } : initialConfig,
+    pathString,
+  );
+  const outcome = await (deps.releaseCellConfidentialityByIntent ??
+    releaseCellConfidentialityByIntent)(
+      pieceConfig,
+      pathSegments,
+      options.clause ?? [],
+      { input: pieceConfig.pieceInput },
+    );
+  (deps.render ?? render)(outcome, { json: true });
 }
 
 export interface PieceListCommandDependencies {
@@ -5055,6 +5229,7 @@ export async function setPieceSourceFromCommand(
     {
       dangerouslyAllowIncompatibleSchema:
         options.dangerouslyAllowIncompatibleSchema,
+      ...(options.origin === undefined ? {} : { origin: options.origin }),
     },
   );
   return { config, update };

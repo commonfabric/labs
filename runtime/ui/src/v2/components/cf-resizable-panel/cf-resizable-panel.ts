@@ -11,6 +11,9 @@ import { BaseElement } from "../../core/base-element.ts";
  * @attribute {number} min-size - Minimum size of the panel as a percentage (0-100). Defaults to 0.
  * @attribute {number} max-size - Maximum size of the panel as a percentage (0-100). Defaults to 100.
  * @attribute {boolean} collapsible - Whether the panel can be collapsed to zero size
+ * @attribute {boolean} hide-when-stacked - Sets `hideWhenStacked`: while its
+ *   group is stacked (narrower than the group's `stackBelow`), the panel and
+ *   the handles beside it are not drawn, and the other panels share its room
  *
  * @slot default - Content of the resizable panel
  *
@@ -62,11 +65,13 @@ export class CFResizablePanel extends BaseElement {
     defaultSize: { type: Number, attribute: "default-size" },
     maxSize: { type: Number, attribute: "max-size" },
     collapsible: { type: Boolean },
+    hideWhenStacked: { type: Boolean, attribute: "hide-when-stacked" },
   };
   declare minSize: number;
   declare defaultSize: number;
   declare maxSize: number;
   declare collapsible: boolean;
+  declare hideWhenStacked: boolean;
 
   static override styles = css`
     :host {
@@ -94,6 +99,7 @@ export class CFResizablePanel extends BaseElement {
     this.defaultSize = 50;
     this.maxSize = 100;
     this.collapsible = false;
+    this.hideWhenStacked = false;
   }
 
   override connectedCallback() {
@@ -104,12 +110,15 @@ export class CFResizablePanel extends BaseElement {
   override updated(changedProperties: Map<string | number | symbol, unknown>) {
     super.updated(changedProperties);
 
-    if (
-      changedProperties.has("minSize") ||
+    const sized = changedProperties.has("minSize") ||
       changedProperties.has("defaultSize") ||
-      changedProperties.has("maxSize")
-    ) {
-      this.validateSizes();
+      changedProperties.has("maxSize");
+    if (sized) this.validateSizes();
+    // A renderer assigns these as properties, possibly after the group
+    // read its panels, so the group reads them again.
+    if (sized) this.emit("cf-panel-sizes", undefined, { composed: false });
+    else if (changedProperties.has("hideWhenStacked")) {
+      this.emit("cf-panel-shown", undefined, { composed: false });
     }
   }
 

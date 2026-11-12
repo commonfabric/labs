@@ -111,7 +111,10 @@ import {
 import { isRendererTrustedEvent } from "./cfc/ui-contract.ts";
 import { collectConsumedLabel, deriveFlowJoin } from "./cfc/prepare.ts";
 import { createRef, EntityId } from "./create-ref.ts";
-import { memoryHostForForeignOrigin } from "./deployment-meta.ts";
+import {
+  DEPLOYMENT_RESPONSE_BOUND_MS,
+  memoryHostForForeignOrigin,
+} from "./deployment-meta.ts";
 import { DerivedInternalCellIds } from "./derived-internal-cell-ids.ts";
 import {
   type DelegatedCarriage,
@@ -123,6 +126,7 @@ import { applyLocalExperimentalDefaults } from "./experimental-defaults.ts";
 import type { CompileTurns } from "./harness/compile-interleave.ts";
 import type { ConsoleMethod } from "./harness/console.ts";
 import { Engine } from "./harness/index.ts";
+import type { ModuleCompiler } from "./harness/module-compile.ts";
 import type { CompiledModuleArtifact } from "./harness/types.ts";
 import {
   immutableCellsFor,
@@ -1015,6 +1019,15 @@ export interface RuntimeOptions {
   compileTurns?: CompileTurns;
 
   /**
+   * Where this runtime's compiles run their type-check, transform and emit
+   * step, when not in this realm: a compile worker, which keeps that step and
+   * the heap it takes off this runtime's thread. A compile instrumented for
+   * pattern coverage, or one that asks for its transformed program, runs here
+   * regardless. When unset, every compile runs here.
+   */
+  moduleCompiler?: ModuleCompiler;
+
+  /**
    * Statement-coverage collector for authored patterns. When set, every compile
    * this runtime performs is instrumented — the transformer injects a hit call
    * in front of each authored statement — and the collector receives the hits.
@@ -1452,8 +1465,14 @@ export type CommitRetryPullFailure = {
 export class Runtime {
   #tearingDownWrites = false;
 
-  /** The release pass waiting for the scheduler to go idle, if any. */
+  /**
+   * The release pass not yet under way, if any: waiting for the one under
+   * way to finish, or for the scheduler to go idle.
+   */
   #documentRelease: Promise<void> | undefined;
+
+  /** The release pass under way, if any, settled whether or not it failed. */
+  #documentReleaseRunning: Promise<void> | undefined;
 
   /** Undoes what `#installDocumentRelease()` registered. */
   readonly #documentReleaseCancels: Cancel[] = [];
@@ -1461,6 +1480,7 @@ export class Runtime {
   readonly #transactions = new WeakSet<IExtendedStorageTransaction>();
   readonly #derivedInternalCellIds = new DerivedInternalCellIds();
   readonly #compileTurns: CompileTurns | undefined;
+  readonly #moduleCompiler: ModuleCompiler | undefined;
 
   readonly id: string;
   readonly scheduler: Scheduler;
@@ -1670,6 +1690,11 @@ export class Runtime {
     return this.#compileTurns;
   }
 
+  /** See `RuntimeOptions.moduleCompiler`. */
+  get moduleCompiler(): ModuleCompiler | undefined {
+    return this.#moduleCompiler;
+  }
+
   /**
    * Fires once this runtime stops minting write work, at the point in
    * `dispose()` where retries would otherwise re-run against a storage that
@@ -1744,6 +1769,18 @@ export class Runtime {
   readonly #moduleDelegations = new ModuleDelegationRegistry();
 
   /**
+   * The authored import list each module identity's compiled document
+   * attests, by the space whose compiler-stamped document this runtime read
+   * it from. Verifying a source closure in a space takes a module's list from
+   * here in place of parsing its source, and only from that space, since the
+   * stamp is trusted where it was read, as the compiled bodies are.
+   */
+  readonly #sourceImportAttestations = new Map<
+    MemorySpace,
+    Map<string, readonly string[]>
+  >();
+
+  /**
    * Records that, in `space`, each successor identity in `delegations`
    * inherits the writer authority of its predecessors. A registration that
    * adds nothing leaves the published snapshot as it was; one that adds a
@@ -1756,6 +1793,36 @@ export class Runtime {
     delegations: ReadonlyMap<string, ReadonlySet<string>>,
   ): void {
     this.#moduleDelegations.register(space, delegations);
+  }
+
+  /**
+   * Records, for `space`, the authored import list a compiler-stamped compiled
+   * document there attests for each identity in `attestations`.
+   */
+  registerSourceImportAttestations(
+    space: MemorySpace,
+    attestations: ReadonlyMap<string, readonly string[]>,
+  ): void {
+    if (attestations.size === 0) return;
+    let bySpace = this.#sourceImportAttestations.get(space);
+    if (bySpace === undefined) {
+      bySpace = new Map();
+      this.#sourceImportAttestations.set(space, bySpace);
+    }
+    for (const [identity, imports] of attestations) {
+      bySpace.set(identity, imports);
+    }
+  }
+
+  /**
+   * The authored import list a compiled document read in `space` attests for
+   * `identity`, or `undefined` when this runtime has read none.
+   */
+  attestedSourceImports(
+    space: MemorySpace,
+    identity: string,
+  ): readonly string[] | undefined {
+    return this.#sourceImportAttestations.get(space)?.get(identity);
   }
 
   /**
@@ -2186,6 +2253,7 @@ export class Runtime {
       );
       this.moduleByteCache = options.moduleByteCache;
       this.#compileTurns = options.compileTurns;
+      this.#moduleCompiler = options.moduleCompiler;
       this.patternCoverage = options.patternCoverage;
       // Validated + digested + frozen before the trust-snapshot provider
       // default below, whose `revision` covers the config digest (a trust
@@ -2493,6 +2561,11 @@ export class Runtime {
       : addressKey(owner.getAsNormalizedFullLink());
     this.#pendingAsyncWork.set(tracked, ownerKey);
     tracked.finally(() => this.#pendingAsyncWork.delete(tracked));
+  }
+
+  /** Whether an operation `trackAsyncWork()` was given is still in flight. */
+  get hasAsyncWorkPending(): boolean {
+    return this.#pendingAsyncWork.size > 0;
   }
 
   /**
@@ -3324,18 +3397,43 @@ export class Runtime {
    * (`IStorageManager.releaseUnreadDocuments()`), and resolves when that
    * pass has run. Stopping a piece asks for one. A host asks for one when
    * something that read documents through this runtime has gone, such as a
-   * client whose subscriptions it cancelled. Calls made while a pass waits
-   * for the scheduler share it.
+   * client whose subscriptions it cancelled. Calls made before a pass begins
+   * share it. A call made while a pass is under way is answered by the next
+   * one, which waits for that one to finish and then for the scheduler. So at
+   * most one pass waits at a time, however many calls are made.
+   *
+   * A pass keeps a document loaded or read since the previous pass began, so
+   * that a read still under way finishes with it. Where it kept one for that
+   * reason alone, a second pass runs once the scheduler is next idle, and the
+   * call resolves when that has run too: the documents a stopped piece read
+   * are released by the pass after the one its stop asked for, which nothing
+   * else may ever ask for. The second pass asks for no third.
    */
   releaseUnreadDocuments(): Promise<void> {
     this.#documentRelease ??= (async () => {
       try {
+        // The pass under way may have begun before what this call is about
+        // let go of its documents, so it cannot answer the call.
+        await this.#documentReleaseRunning;
         await this.scheduler.idle();
       } finally {
         // A request made from here on asks for a pass of its own.
         this.#documentRelease = undefined;
       }
-      await this.storageManager.releaseUnreadDocuments?.();
+      const running = (async () => {
+        const deferred = await this.storageManager.releaseUnreadDocuments?.();
+        if (deferred !== true) return;
+        await this.scheduler.idle();
+        await this.storageManager.releaseUnreadDocuments?.();
+      })();
+      const settled = running.catch(() => {});
+      this.#documentReleaseRunning = settled;
+      settled.then(() => {
+        if (this.#documentReleaseRunning === settled) {
+          this.#documentReleaseRunning = undefined;
+        }
+      });
+      await running;
     })().catch((error) => {
       documentReleaseLogger.warn("release-failed", () => [
         "releasing the documents nothing reads failed:",
@@ -4599,6 +4697,9 @@ export class Runtime {
   /**
    * Makes a read-only cell whose content is `data`, carried entirely in the
    * runtime's snapshot store behind a compact URI; there is no stored document to fetch.
+   * The snapshot lives as long as its frozen value, the returned cell, or a
+   * cell or link derived from it does; a bare id string taken from it does not
+   * keep it, and `portableSnapshotId()` makes one that does not need it.
    *
    * **Contract note:** `data` is an arbitrary value, deliberately NOT limited
    * to `FabricValue`. Callers pass, among other things, `Cell` objects (wish
@@ -4649,7 +4750,7 @@ export class Runtime {
     // immutable data.
     const store = immutableCellsFor(this);
     const readerSchema = internCellLinkSchema(schema);
-    const snapshot = store.create(
+    const snapshot = store.createOwned(
       fabricFromConvertibleJsValue(
         flattenBuilderArtifacts(data, {
           isLeaf: isRendererTrustedEvent,
@@ -4963,15 +5064,21 @@ export class Runtime {
     const provider = this.storageManager.open(space);
     const aclUri = aclDocId(space) as URI;
     const spaceCell = this.getSpaceCell(space);
+    const spaceId = spaceCell.getAsNormalizedFullLink().id;
     const loads = await Promise.all([
       provider.sync(aclUri),
-      provider.sync(spaceCell.getAsNormalizedFullLink().id),
+      provider.sync(spaceId),
     ]);
     const denied = this.storageManager.spaceAccessError?.(space) ??
       this.storageManager.authorizationError?.(space);
     if (denied !== undefined) return true;
     for (const { error } of loads) {
       if (error !== undefined) throw error;
+    }
+    // Neither reads as absent while a quarantine holds it back.
+    for (const id of [aclUri, spaceId]) {
+      const failure = await provider.replica.quarantineFailure?.(id);
+      if (failure !== undefined) throw failure;
     }
     const tx = this.edit();
     try {
@@ -5165,6 +5272,24 @@ export class Runtime {
     } finally {
       this.#inSpaceResolutions.delete(creationKey);
     }
+  }
+
+  /**
+   * Returns the space that `space`'s allocation record names for the
+   * `PatternFactory.inSpace(name)` target `name`, once the record has loaded,
+   * or `undefined` when `space` records none, as before any run asked for
+   * that name. Reads only: unlike {@link resolveInSpaceName}, it creates no
+   * space and writes no record, so a caller can ask which space a name
+   * stands for without bringing it into being.
+   */
+  async recordedInSpaceName(
+    space: MemorySpace,
+    name: string,
+  ): Promise<MemorySpace | undefined> {
+    const record = this.#inSpaceAllocationCell(space, name);
+    await record.sync();
+    const recorded = record.get()?.did;
+    return isDID(recorded) ? recorded : undefined;
   }
 
   #inSpaceAllocationCell(
@@ -5577,7 +5702,9 @@ export class Runtime {
   /**
    * True iff the default host AND every distinct mapped host are
    * reachable — one runtime can span hosts, so health is the
-   * conjunction over all of them. The optional signal cancels the requests.
+   * conjunction over all of them. A host with no response within
+   * {@link DEPLOYMENT_RESPONSE_BOUND_MS} counts as unreachable. The optional
+   * signal cancels the requests.
    */
   async healthCheck(signal?: AbortSignal): Promise<boolean> {
     // Overlapping calls each capture into their own generation; only the
@@ -5599,9 +5726,19 @@ export class Runtime {
         return false; // a malformed mapped host is unhealthy by definition
       }
     }
+    const deadline = new AbortController();
+    const timer = setTimeout(
+      () => deadline.abort(new DOMException("timed out", "TimeoutError")),
+      DEPLOYMENT_RESPONSE_BOUND_MS,
+    );
+    const requestSignal = signal === undefined
+      ? deadline.signal
+      : AbortSignal.any([signal, deadline.signal]);
     const checks = [...hosts].map(async (host) => {
       try {
-        const res = await fetch(new URL("/_health", host), { signal });
+        const res = await fetch(new URL("/_health", host), {
+          signal: requestSignal,
+        });
         if (
           host === defaultHost && generation === this.#healthCheckGeneration
         ) {
@@ -5614,6 +5751,10 @@ export class Runtime {
         return false;
       }
     });
-    return (await Promise.all(checks)).every(Boolean);
+    try {
+      return (await Promise.all(checks)).every(Boolean);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 }

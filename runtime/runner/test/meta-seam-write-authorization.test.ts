@@ -4,6 +4,7 @@ import { describe, it } from "@std/testing/bdd";
 import type { FabricValue } from "@commonfabric/api";
 import {
   isMetaField,
+  META_FIELDS,
   type MetaField,
   rawMetaWriteAuthorization,
 } from "../src/meta-seam.ts";
@@ -16,6 +17,7 @@ import type { CfcEnforcementMode } from "../src/cfc/types.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { getTransactionReadActivities } from "../src/storage/transaction-inspection.ts";
+import { seedStoredEnvelope } from "./cfc-seed-envelope.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 
 const signer = await Identity.fromPassphrase("runner-meta-seam-write");
@@ -406,6 +408,91 @@ describe("meta-seam-write-authorization", () => {
           );
         },
       );
+    });
+  });
+
+  describe("a write to the storage transaction beneath the chokepoint", () => {
+    // Anything holding an extended transaction reaches the storage
+    // transaction beneath it as `.tx`, and a write made there skips the
+    // chokepoint. The storage transaction refuses such a write itself when
+    // it changes a meta field, as each case below shows for one field: an
+    // address naming it, a root write carrying another value, a root write
+    // leaving it out, and a root delete.
+
+    const storedValueOf = (field: MetaField): FabricValue =>
+      field === "schema" ? { type: "object" } : { seeded: field };
+
+    const withStoredField = async (
+      field: MetaField,
+      body: (context: {
+        runtime: Runtime;
+        address: ReturnType<typeof documentAddress>;
+        stored: Record<string, FabricValue>;
+      }) => Promise<void>,
+    ): Promise<void> => {
+      const storageManager = StorageManager.emulate({ as: signer });
+      const runtime = new Runtime({
+        apiUrl: new URL("https://example.com"),
+        storageManager,
+      });
+      try {
+        const seed = runtime.edit();
+        const cell = runtime.getCell(
+          signer.did(),
+          `inner-meta-${field}`,
+          undefined,
+          seed,
+        );
+        const address = documentAddress(
+          cell.getAsNormalizedFullLink().id as URI,
+          [],
+        );
+        const stored = {
+          value: { note: "one" },
+          [field]: storedValueOf(field),
+        };
+        seedStoredEnvelope(seed, address, stored);
+        expect((await seed.tx.commit().settled).ok).toBeDefined();
+        await body({ runtime, address, stored });
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    };
+
+    const refusal = /refusing a write that changes meta fields/;
+
+    for (const field of META_FIELDS) {
+      it(`throws on each write that changes \`${field}\``, async () => {
+        await withStoredField(field, async ({ runtime, address, stored }) => {
+          const inner = runtime.edit().tx;
+          expect(() =>
+            inner.write({ ...address, path: [field] }, { forged: true })
+          ).toThrow(refusal);
+          expect(() =>
+            inner.write(address, { ...stored, [field]: { forged: true } })
+          ).toThrow(refusal);
+          expect(() => inner.write(address, { value: { note: "two" } }))
+            .toThrow(refusal);
+          expect(() => inner.write(address, stored, { delete: true }))
+            .toThrow(refusal);
+          await inner.commit().settled;
+
+          const after = runtime.edit();
+          expect(after.readOrThrow(address)).toEqual(stored);
+          await after.commit().settled;
+        });
+      });
+    }
+
+    it("commits a root write that carries every stored meta field forward", async () => {
+      await withStoredField("slug", async ({ runtime, address, stored }) => {
+        const inner = runtime.edit().tx;
+        expect(
+          inner.write(address, { ...stored, value: { note: "two" } }).ok,
+        ).toBeDefined();
+        expect((await inner.commit().settled).ok).toBeDefined();
+      });
     });
   });
 });

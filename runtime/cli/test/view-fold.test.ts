@@ -242,6 +242,16 @@ Deno.test("isTestPath: directories and basenames", () => {
       "pkg/test_parse.py",
       "goldens/OUTPUT.GOLDEN",
       "packages\\x\\integration\\helper.ts",
+      "app/src/androidTest/java/com/example/Rules.kt",
+      "apple/AppTests/Support.swift",
+      "apple/AppUITests/Launch.swift",
+      "src/main/kotlin/ParserTest.kt",
+      "Sources/ParserTests.swift",
+      "Probe/RouteFixtures.swift",
+      "Probe/RouteFixture.swift",
+      "Sources/JSONTests.swift",
+      "Sources/HTTPTests/Client.swift",
+      "types/ParserTests.d.ts",
     ]
   ) {
     assert(isTestPath(p), `expected ${p} to be a test file`);
@@ -265,6 +275,14 @@ Deno.test("isTestPath: directories and basenames", () => {
       "pkg/test_parse.ts",
       "tasks/aliases/x-test.ts.jsonl",
       "bin/test",
+      "Sources/Contest/Latest.swift", // "test" inside a word, not a camel-case word
+      "Sources/TestRunner.swift",
+      "Sources/Attest/Tests.swift",
+      "Sources/RouteTests.swift.json",
+      "cmake/CTest.cmake",
+      "src/experiments/ABTest.kt",
+      "scripts/runTests.ts",
+      "lib/isTest.ts",
     ]
   ) {
     assert(!isTestPath(p), `expected ${p} not to be a test file`);
@@ -461,6 +479,47 @@ Deno.test("fold: T hides shown test files and shows them when all are hidden", (
   press(s, "T");
   assertEquals(s.displayDoc().lines.length, full, "T shows the hidden test");
   assertEquals(s.view().message, "Showing 1 test file.");
+});
+
+Deno.test("fold: T follows the tests the repository declares over file names", () => {
+  // The workspace declares src/app.ts a test and src/app.test.ts not one.
+  const ws: DiffWorkspace = {
+    resolve: () => null,
+    read: () => null,
+    declaredTests: (paths) =>
+      new Map(paths.map((path) => [path, path === "src/app.ts"])),
+  };
+  const model = parseDiff(TWO_FILES)!;
+  const { doc, edit } = buildDiffDocument(TWO_FILES, model, ws);
+  const s = new Session(
+    doc,
+    { color: false, showLineNumbers: false },
+    { width: 80, height: 30 },
+    undefined,
+    diffSource(ws, edit),
+  );
+  press(s, "T");
+  const lines = s.displayDoc().lines.map((l) => l.text);
+  assert(lines.includes("▸ src/app.ts  +1 −1"), lines.join("|"));
+  assert(!lines.includes("▸ src/app.test.ts  +1 −0"), lines.join("|"));
+  assertEquals(s.view().message, "Hid 1 test file.");
+});
+
+Deno.test("diffFiles: a declared test status overrides the path's own", () => {
+  const declared: string[][] = [];
+  const files = diffFiles(TWO_FILES, (paths) => {
+    declared.push([...paths]);
+    return new Map([["src/app.test.ts", false]]);
+  });
+  assertEquals(declared, [["src/app.ts", "src/app.test.ts"]]);
+  assertEquals(files.map((f) => f.isTest), [false, false]);
+  const undeclared = diffFiles(TWO_FILES, () => new Map());
+  assertEquals(undeclared.map((f) => f.isTest), [false, true]);
+  const declaredTest = diffFiles(
+    TWO_FILES,
+    () => new Map([["src/app.ts", true]]),
+  );
+  assertEquals(declaredTest.map((f) => f.isTest), [true, true]);
 });
 
 const CATEGORY_FILES = [

@@ -1,7 +1,7 @@
 /**
  * A production room over flat bindings in a synthetic Home wrapper chain: a
- * send, and an add that asks the viewer's manager to tell the person added of
- * the room. The manager is public, or root-private: its core document declares
+ * send, an add that asks the viewer's manager to tell the person added of the
+ * room, and an update of the room's code, opened again in a fresh session. The manager is public, or root-private: its core document declares
  * the viewer's `PersonalSpace` label over all of it, in their home space, as a
  * real Home's manager can. The room lives in another space, so every labeled
  * read the room makes of a root-private manager comes from outside the room's
@@ -17,9 +17,13 @@ import { Identity } from "@commonfabric/identity";
 import { aclDocId } from "@commonfabric/memory/acl";
 import {
   type Cell,
+  getPatternIdentityRef,
   isCell,
   type JSONSchema,
+  parseLink,
+  type Pattern,
   Runtime,
+  type RuntimeProgram,
   RuntimeTelemetryEvent,
   type RuntimeTelemetryMarker,
 } from "@commonfabric/runner";
@@ -443,5 +447,242 @@ describe("FabriChat flat manager sends", () => {
     // through a public manager.
     expect(addRequests).toEqual({ "add-bob": { status: "done" } });
     expect(refusals).toEqual([]);
+  });
+
+  describe("a room whose code changes", () => {
+    // A room is created from room.tsx, and its code then changes to the
+    // same source with a comment added, which gives the room's module, and
+    // so its core's, another identity. Adopting it runs the core's setup
+    // again over the argument the core stored, in a transaction that also
+    // writes the core's result. The viewer's manager lists people whose
+    // profiles point at inboxes labeled for each of them, as a real Home's
+    // does.
+
+    /** room.tsx, read from this tree. */
+    const roomProgram = async (): Promise<RuntimeProgram> =>
+      await resolveLocalProgram(
+        (resolver) => runtime.harness.resolve(resolver),
+        {
+          main: fromFileUrl(
+            new URL("../system/fabrichat/room.tsx", import.meta.url),
+          ),
+          root: PATTERNS,
+        },
+      );
+
+    /** `program` with a comment added to room.tsx, and nothing else. */
+    const withChangedRoom = (program: RuntimeProgram): RuntimeProgram => ({
+      ...program,
+      files: program.files.map((file) =>
+        file.name.endsWith("/fabrichat/room.tsx")
+          ? { ...file, contents: `${file.contents}\n// A later release.\n` }
+          : file
+      ),
+    });
+
+    /** Compiles `program` in `space`. */
+    const compile = async (
+      program: RuntimeProgram,
+      space: Awaited<ReturnType<Runtime["createSpace"]>>,
+    ): Promise<Pattern> => {
+      const tx = runtime.edit();
+      const pattern = await runtime.patternManager.compilePattern(program, {
+        space,
+        tx,
+      });
+      runtime.prepareTxForCommit(tx);
+      expect((await tx.commit().settled).error).toBeUndefined();
+      return pattern;
+    };
+
+    /**
+     * Writes a profile named `name` in a space of its own, pointing at an
+     * inbox in another space whose `offers` carry the `PersonalSpace` label
+     * of `person`, as a private inbox's offers do.
+     */
+    const writeInboxProfile = async (person: string, name: string) => {
+      const label = [{
+        type: "https://commonfabric.org/cfc/atom/PersonalSpace",
+        owner: person,
+      }];
+      const offersSchema = {
+        type: "array",
+        items: { type: "object", additionalProperties: true },
+        ifc: { confidentiality: label },
+      } as const satisfies JSONSchema;
+      const inboxSpace = await runtime.createSpace({});
+      const inboxTx = runtime.edit();
+      const offers = runtime.getCell(
+        inboxSpace,
+        "offers",
+        offersSchema,
+        inboxTx,
+      );
+      offers.set([{ id: "an earlier offer" }]);
+      const inbox = runtime.getCell(inboxSpace, "inbox", {
+        type: "object",
+        properties: { offers: offersSchema },
+      }, inboxTx);
+      inbox.set({ offers });
+      runtime.prepareTxForCommit(inboxTx);
+      expect((await inboxTx.commit().settled).error).toBeUndefined();
+      const profileSpace = await runtime.createSpace({});
+      const profileTx = runtime.edit();
+      const profile = runtime.getCell(profileSpace, "profile", {
+        type: "object",
+        properties: {
+          name: { type: "string" },
+          inbox: {
+            type: "object",
+            properties: { piece: { asCell: ["cell"] } },
+          },
+        },
+      }, profileTx);
+      profile.set({ name, inbox: { piece: inbox } });
+      runtime.prepareTxForCommit(profileTx);
+      expect((await profileTx.commit().settled).error).toBeUndefined();
+      return profile;
+    };
+
+    /**
+     * Writes the viewer's Home, `labeled` or not, listing three people, and
+     * a room created from room.tsx in a space of its own, whose view is read
+     * as a renderer reads it. Returns the room and the pattern its code
+     * changes to.
+     */
+    const createRoom = async (labeled: boolean) => {
+      const profile = await writeOwnProfile(
+        runtime,
+        await runtime.createSpace({}),
+        "viewer profile",
+        "Viewer",
+      );
+      const people: Record<string, Cell<unknown>[]> = {};
+      for (const name of ["Ada", "Grace", "Hedy"]) {
+        const person = (await Identity.fromPassphrase(name)).did();
+        people[person] = [await writeInboxProfile(person, name)];
+      }
+      await writeHome(labeled, profile, people);
+      const space = await runtime.createSpace({});
+      const program = await roomProgram();
+      const before = await compile(program, space);
+      const after = await compile(withChangedRoom(program), space);
+      const tx = runtime.edit();
+      const room = runtime.run(
+        tx,
+        before,
+        {},
+        runtime.getCell(space, "room", undefined, tx),
+      );
+      runtime.prepareTxForCommit(tx);
+      expect((await tx.commit().settled).error).toBeUndefined();
+      await runtime.idle();
+      await render(room);
+      await runtime.idle();
+      expect(refusals).toEqual([]);
+      return { room, after };
+    };
+
+    /** Points `room` at `pattern`, as an adopted update does. */
+    const changeCode = async (room: Cell<unknown>, pattern: Pattern) => {
+      const tx = runtime.edit();
+      runtime.run(tx, pattern, {}, room.withTx(tx));
+      runtime.prepareTxForCommit(tx);
+      expect((await tx.commit().settled).error).toBeUndefined();
+    };
+
+    // Reads what a renderer reads of a room's session state.
+    const sessionStateSchema = {
+      type: "object",
+      properties: {
+        canSend: { type: "boolean" },
+        viewer: { type: "object", additionalProperties: true },
+      },
+    } as const satisfies JSONSchema;
+
+    /**
+     * Opens `room` in a session of its own, in a runtime of its own, as a
+     * client starting after the room's code changed does, and reads its view
+     * there. Returns what CFC prepare refused in that session, the room's
+     * session state as that session reads it, and the pattern its core runs.
+     */
+    const openInFreshSession = async (room: Cell<unknown>) => {
+      const freshStorage = EmulatedStorageManager.connectTo(server, {
+        as: owner,
+      });
+      const fresh = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: freshStorage,
+      });
+      const freshRefusals: Refusal[] = [];
+      fresh.telemetry.addEventListener("telemetry", (event) => {
+        if (
+          event instanceof RuntimeTelemetryEvent &&
+          event.marker.type === "cfc.prepare-reject"
+        ) freshRefusals.push(event.marker);
+      });
+      try {
+        const opened = fresh.getCellFromLink(room.getAsNormalizedFullLink());
+        await opened.sync();
+        await fresh.start(opened);
+        await fresh.idle();
+        await render(opened);
+        await fresh.idle();
+        return {
+          refusals: freshRefusals,
+          state: await opened.asSchema(sessionStateSchema).pull(),
+          corePattern: getPatternIdentityRef(await coreOf(fresh, opened)),
+        };
+      } finally {
+        await fresh.idle();
+        await freshStorage.synced();
+        await fresh.dispose();
+        await freshStorage.close();
+      }
+    };
+
+    /**
+     * The result document of `room`'s core, as `reading` reads it: `canSend`
+     * redirects into a cell of the room's own, whose value links the core's
+     * result.
+     */
+    const coreOf = async (
+      reading: Runtime,
+      room: Cell<unknown>,
+    ): Promise<Cell<unknown>> => {
+      const redirect = parseLink(room.key("canSend").getRaw(), room);
+      const alias = reading.getCellFromLink({ ...redirect, path: [] });
+      await alias.sync();
+      const coreLink = parseLink(alias.getRaw(), alias);
+      if (coreLink === undefined) {
+        throw new Error("The room's core is linked from no cell of the room's");
+      }
+      const core = reading.getCellFromLink(coreLink);
+      await core.sync();
+      return core;
+    };
+
+    /** The pattern a core runs in a room created from `room`. */
+    const coreEntryOf = (room: Pattern) => ({
+      identity: runtime.patternManager.getArtifactEntryRef(room)?.identity,
+      symbol: "FabriChatRoomCore",
+    });
+
+    for (const labeled of [false, true]) {
+      it(`adopts it over a ${labeled ? "root-private" : "public"} manager, and a fresh session derives its state`, async () => {
+        const { room, after } = await createRoom(labeled);
+        await changeCode(room, after);
+        await runtime.idle();
+        await render(room);
+        await runtime.idle();
+        expect(refusals).toEqual([]);
+
+        const opened = await openInFreshSession(room);
+        expect(opened.refusals).toEqual([]);
+        expect(opened.corePattern).toEqual(coreEntryOf(after));
+        expect(opened.state?.canSend).toBe(true);
+        expect(opened.state?.viewer?.principal).toBe(owner.did());
+      });
+    }
   });
 });

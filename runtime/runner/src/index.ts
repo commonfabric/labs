@@ -153,9 +153,11 @@ export {
   isStream,
   pullProjected,
   readProjected,
+  resolveWriteTarget,
   sendEvent,
   setCell,
   sinkProjected,
+  syncCellForIdentity,
 } from "./cell.ts";
 export {
   getCellOrThrow,
@@ -251,6 +253,7 @@ export {
   profileOwnership,
 } from "./profile-order.ts";
 export { loadProfileOwnerDocuments, profileOwnerAt } from "./profile-owner.ts";
+export { writtenPrincipalAt } from "./written-principal.ts";
 export {
   classifyPieceOriginString,
   type PieceOriginKind as PieceOriginClassification,
@@ -274,6 +277,7 @@ export {
   keepLaterConfirmation,
   knownPieceReleasedAt,
   mergeSchemaDefaults,
+  normalizePieceSourceOrigin,
   patternIdentityKey,
   type PatternSetupCommitReceipt,
   PatternSetupPostCommitError,
@@ -416,7 +420,7 @@ export { deepEqual } from "@commonfabric/js-values/deep-equal";
 export { getValueAtPath, setValueAtPath } from "./path-utils.ts";
 export { schemaToTypeString } from "./schema-format.ts";
 export type { SchemaFormatOptions } from "./schema-format.ts";
-export { ACLManager } from "./acl-manager.ts";
+export { ACLManager, SpaceMembersRemainError } from "./acl-manager.ts";
 export {
   cellEntityIdString,
   type CellPath,

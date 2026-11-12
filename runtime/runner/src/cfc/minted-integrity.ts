@@ -17,10 +17,10 @@ import type { CfcAtom } from "@commonfabric/api/cfc";
 import { isKeyableObjectOrArray } from "@commonfabric/data-model";
 import { isArrayIndexPropertyName } from "@commonfabric/js-values/arrays";
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
+import { uniqueCfcAtoms } from "@commonfabric/memory/v2/cfc-clause-identity";
 
 import { encodePointer, pathsOverlap } from "../../../memory/v2/path.ts";
 import { isPrimitiveCellLink } from "../link-types.ts";
-import { uniqueCfcAtoms } from "./atoms.ts";
 import { principalClaimSpelling } from "./represents-principal.ts";
 import type { LabelEntryOrigin, LabelMapEntry } from "./types.ts";
 

@@ -8,7 +8,8 @@
  * is offered to, as a pointer can come to carry its inbox's label. That
  * person's stand-in creates a private inbox and points their labeled profile
  * at it, as Home's own steps do. Fixture for
- * `fabrichat-labeled-inbox-multi-runtime.test.ts`.
+ * `fabrichat-labeled-inbox-multi-runtime.test.ts` and
+ * `fabrichat-offer-no-stream-multi-runtime.test.ts`.
  */
 
 import {

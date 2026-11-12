@@ -141,6 +141,12 @@ decide what is the viewer's at the leaf. See
 `docs/common/patterns/multi-user-patterns.md#keep-the-viewer-out-of-shared-derivations`
 and `docs/common/components/COMPONENTS.md#identity-components`.
 
+**What the pattern holds, as text:** a pattern whose result is a document, a
+list, a schedule or a board returns `[FS]`, a `text/markdown` projection
+computed from its state (`docs/specs/fuse-filesystem/8-fs-projections.md`). The
+filesystem view and any host that finds a pattern by what it holds read that
+text, not the UI, so a pattern without it is known by its `[NAME]` alone.
+
 When you're unsure whether a reactive expression site lowers the way you expect,
 inspect the emitted source directly with:
 

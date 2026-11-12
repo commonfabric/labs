@@ -13,10 +13,20 @@ import {
   codecOf,
   NULL_LIVE_ENVIRONMENT,
 } from "@commonfabric/data-model/codec-common";
-import { createSession, legacySpaceDid, Session } from "@commonfabric/identity";
+import {
+  type AsBytes,
+  createSession,
+  legacySpaceDid,
+  Session,
+} from "@commonfabric/identity";
 import { isDID } from "@commonfabric/identity/did";
 import { createLLMFriendlyLink } from "@commonfabric/runner/shared";
 import { setLLMUrl } from "@commonfabric/llm";
+import {
+  ownerReleaseByIntentRequest,
+  ownerReleaseByIntentSignature,
+  ownerReleaseByIntentSignedBytes,
+} from "@commonfabric/memory/v2/cfc-owner-release-by-intent";
 import {
   assignSlug,
   listSlugs,
@@ -39,6 +49,7 @@ import {
   type PiecePatternRef,
   PiecesController,
   type PieceSourceActionResult,
+  PieceSourceChangedError,
   servedInstantiatePiece,
   ServedLifecycleRefusal,
 } from "@commonfabric/piece/ops";
@@ -101,7 +112,12 @@ import {
   type ResolvedLabelReadOptions,
   validateSchemaValue,
 } from "@commonfabric/runner/cfc";
-import { releaseCellConfidentiality } from "@commonfabric/runner/cfc/confidentiality-release";
+import {
+  releaseByIntentTargetOf,
+  releaseCellConfidentiality,
+  releaseConfidentialityByIntent,
+  storedClausesForRelease,
+} from "@commonfabric/runner/cfc/confidentiality-release";
 import { entityKindOfIdString } from "@commonfabric/runner/entity-kind";
 import { waitForSettledThroughHead } from "@commonfabric/runner/executor/watermark";
 import { StorageManager } from "@commonfabric/runner/storage/cache";
@@ -153,9 +169,11 @@ import { loadIdentity } from "./identity.ts";
 import { stderrConsoleHandler } from "./json-output.ts";
 import { validateEmbeddedSpaces } from "./llm-friendly-ref.ts";
 import {
+  followPieceOnServer,
   instantiatePieceOnServer,
   type LifecycleClientConfig,
   ServedLifecycleError,
+  type ServedPieceScope,
   setPieceSourceOnServer,
 } from "./pattern-lifecycle.ts";
 import { claimProcessDeployment } from "./process-deployment.ts";
@@ -246,6 +264,12 @@ export interface PieceConfig extends SpaceConfig {
 
 export interface SetPiecePatternOptions {
   dangerouslyAllowIncompatibleSchema?: boolean;
+
+  /**
+   * The origin the piece follows from then on, recorded with the revision;
+   * absent, the update detaches the piece.
+   */
+  origin?: string;
 }
 
 export interface GetCellValueOptions {
@@ -537,6 +561,7 @@ interface PieceOperationDependencies extends PieceResolutionDeps {
   getPinnedProgramFromFile?: typeof getPinnedProgramFromFile;
   instantiatePieceOnServer?: typeof instantiatePieceOnServer;
   setPieceSourceOnServer?: typeof setPieceSourceOnServer;
+  followPieceOnServer?: typeof followPieceOnServer;
 
   /** Where creation's phases report; the process-wide trace by default. */
   phaseTrace?: PhaseTrace;
@@ -1771,7 +1796,25 @@ function lifecycleClient(pieces: PiecesController): LifecycleClientConfig {
       }
       return storageManager.runPatternLifecycle(space, verb, body);
     },
+    takesOrigins: async (space) => {
+      const flags = await storageManager?.serverFlags?.(space);
+      return flags === undefined
+        ? undefined
+        : flags?.patternLifecycleOrigins === true;
+    },
+    takesScopes: async (space) =>
+      (await storageManager?.serverFlags?.(space))?.patternLifecycleScopes,
   };
+}
+
+/**
+ * The scope a served verb names `scope`'s requester instance at: none for a
+ * piece's space instance, which the verb addresses by its id alone.
+ */
+function servedScope(
+  scope: PieceConfig["pieceScope"],
+): ServedPieceScope | undefined {
+  return scope === undefined || scope === "space" ? undefined : scope;
 }
 
 /**
@@ -2194,15 +2237,18 @@ async function updateOnServer(
   config: PieceConfig,
   pieces: PiecesController,
   pieceId: string,
+  scope: PieceConfig["pieceScope"],
   program: RuntimeProgram,
   entry: EntryConfig,
   options: SetPiecePatternOptions,
   deps: PieceOperationDependencies,
 ): Promise<PatternUpdateReceipt> {
+  const served = servedScope(scope);
   const receipt = await (deps.setPieceSourceOnServer ??
     setPieceSourceOnServer)(lifecycleClient(pieces), {
       space: pieces.getSpace(),
       piece: pieceId,
+      ...(served === undefined ? {} : { scope: served }),
       program,
       ...(entry.repository === undefined
         ? {}
@@ -2210,11 +2256,26 @@ async function updateOnServer(
       ...(options.dangerouslyAllowIncompatibleSchema
         ? { dangerouslyAllowIncompatibleSchema: true }
         : {}),
+      ...(options.origin === undefined ? {} : { origin: options.origin }),
     });
   noteWroteTo(config.space);
+  // A server from before `setsrc` took an origin drops the field and
+  // detaches the piece, and its receipt names no origin.
+  if (options.origin !== undefined && receipt.origin === undefined) {
+    throw new Error(
+      `The source update committed as revision ${receipt.revisionId}, but ` +
+        `this deployment does not record an origin with \`setsrc\` yet, ` +
+        `so the piece follows nothing.`,
+    );
+  }
   let refresh: PatternUpdateReceipt["refresh"];
   try {
-    const cell = await pieces.getPieceCell(receipt.pieceId, false);
+    const cell = await pieces.getPieceCell(
+      receipt.pieceId,
+      false,
+      undefined,
+      scope,
+    );
     await (deps.pullServed ?? pullServed)(pieces, pieces.getResult(cell));
     refresh = { status: "completed" };
   } catch (error) {
@@ -2230,6 +2291,7 @@ async function updateOnServer(
     seq: receipt.seq,
     revisionId: receipt.revisionId,
     detachedOrigin: receipt.detachedOrigin,
+    ...(receipt.origin === undefined ? {} : { origin: receipt.origin }),
     refresh,
   };
 }
@@ -2252,10 +2314,18 @@ export interface FollowPieceSourceOptions
 
 /** A follow receipt includes the incompatibility this invocation accepted. */
 export type FollowPieceSourceResult =
-  | Extract<PieceSourceActionResult, { status: "incompatible" }>
+  | { status: "incompatible"; message: string }
   | (Extract<PieceSourceActionResult, { status: "applied" }> & {
     acceptedIncompatibility?: string;
   });
+
+/**
+ * What a follow sent to a deployment whose memory server cannot read a
+ * `follow` request is refused with.
+ */
+const FOLLOW_NOT_SERVED =
+  "This deployment serves piece lifecycle verbs, and `follow` is not " +
+  "served yet: its memory server could not read the request.";
 
 /**
  * Points a piece at `origin` and adopts what that origin currently serves,
@@ -2264,14 +2334,25 @@ export type FollowPieceSourceResult =
  *
  * This is how a piece created detached — a profile made before the runtime
  * claimed origins for children of system pieces, say — is put on the
- * lifecycle a release reaches. Unlike `setsrc`, which detaches, the origin
- * is recorded with the revision. The transition carries the same writer
- * delegation a `setsrc` does, since it is the owner's explicit act.
+ * lifecycle a release reaches. The origin is recorded with the revision, and
+ * the source adopted is what the origin serves now; a `setsrc` that names an
+ * origin records it over source the caller supplies instead, and one that
+ * names none detaches. The transition carries the same writer delegation a
+ * `setsrc` does, since it is the owner's explicit act.
  *
- * @throws Error when the deployment serves piece lifecycle verbs (the served
- * update takes no origin), when the piece cannot be resolved, or when the
- * origin cannot be read or does not compile; `PieceSourceChangedError` when
- * the piece is off a pin `options` names.
+ * Against a deployment that serves piece lifecycle verbs, the serving runtime
+ * resolves the origin, reviews the candidate and commits the transition
+ * (docs/features/server-pattern-lifecycle.md), on this identity's instance
+ * of a piece addressed at a scope, and this connection then asks the server
+ * for the piece's result, reporting a failure of that as `executionWarning`.
+ * Nothing changes the source in this process there.
+ *
+ * @throws Error when the piece cannot be resolved, or when the origin cannot
+ * be read or does not compile; against a serving deployment, also when its
+ * memory server cannot read a `follow` request;
+ * `ServedLifecycleError` (`scope-unsupported`) for a piece addressed at a
+ * scope on a deployment whose verbs do not take one;
+ * `PieceSourceChangedError` when the piece is off a pin `options` names.
  */
 export async function followPieceSource(
   config: PieceConfig,
@@ -2280,20 +2361,25 @@ export async function followPieceSource(
   deps: PieceOperationDependencies = {},
 ): Promise<FollowPieceSourceResult> {
   const pieces = await (deps.loadPieces ?? loadPieces)(config);
-  // Against a serving deployment a source transition is the serving
-  // runtime's to commit, and the served update verb carries no origin yet;
-  // a client-side repoint there would commit outside the served lifecycle.
-  if (servesLifecycleVerbs(pieces)) {
-    throw new Error(
-      "This deployment serves piece lifecycle verbs, and `follow` is not " +
-        "served yet; the served update takes no origin.",
-    );
-  }
   const resolvedConfig = await resolvePieceConfigWithPieces(
     config,
     pieces,
     deps,
   );
+  // Against a serving deployment a source transition is the serving
+  // runtime's to commit; a client-side repoint there would commit outside
+  // the served lifecycle.
+  if (servesLifecycleVerbs(pieces)) {
+    return await followOnServer(
+      config,
+      pieces,
+      resolvedConfig.piece,
+      resolvedConfig.pieceScope,
+      origin,
+      options,
+      deps,
+    );
+  }
   const piece = await pieces.get(
     resolvedConfig.piece,
     false,
@@ -2301,7 +2387,32 @@ export async function followPieceSource(
     resolvedConfig.pieceScope,
   );
   const action = { kind: "repoint" as const, url: origin };
-  const pins = {
+  const pins = followPins(options);
+  const reviewed = await piece.changeSource(action, pins);
+  if (
+    reviewed.status === "incompatible" &&
+    options.dangerouslyAllowIncompatibleSchema
+  ) {
+    // Confirm only this review and its pinned candidate. Changed source
+    // state or retained input may require a new review by the caller.
+    const confirmed = await piece.changeSource(action, {
+      ...pins,
+      confirmedChange: reviewed.prepared,
+    });
+    if (confirmed.status !== "applied") return confirmed;
+    noteWroteTo(config.space);
+    return { ...confirmed, acceptedIncompatibility: reviewed.message };
+  }
+  if (reviewed.status === "applied") noteWroteTo(config.space);
+  return reviewed;
+}
+
+/** The pins `options` names, as a source change takes them. */
+function followPins(options: FollowPieceSourceOptions): {
+  expectedPattern?: { identity: string; symbol: string };
+  expectedRevision?: string | null;
+} {
+  return {
     ...(options.expectedPattern === undefined
       ? {}
       : { expectedPattern: options.expectedPattern }),
@@ -2309,31 +2420,88 @@ export async function followPieceSource(
       ? {}
       : { expectedRevision: options.expectedRevision }),
   };
-  let result: FollowPieceSourceResult = await piece.changeSource(action, pins);
-  if (
-    result.status === "incompatible" &&
-    options.dangerouslyAllowIncompatibleSchema
-  ) {
-    // Confirm only this review and its pinned candidate. Changed source
-    // state or retained input may require a new review by the caller.
-    const acceptedIncompatibility = result.message;
-    result = await piece.changeSource(action, {
-      ...pins,
-      confirmedChange: result.prepared,
-    });
-    if (result.status === "applied") {
-      result = { ...result, acceptedIncompatibility };
+}
+
+/**
+ * The served half of `followPieceSource`: the serving runtime reviews the
+ * candidate and commits the follow, and this connection then asks the
+ * server for the piece's result, which is what makes the new source run,
+ * reporting a failure of that as `executionWarning`, since the follow is
+ * durable whatever the refresh did. A refusal the review answers with
+ * comes back as it does from a client-side follow: an incompatible
+ * candidate as the result, a piece off a pin as `PieceSourceChangedError`.
+ */
+async function followOnServer(
+  config: PieceConfig,
+  pieces: PiecesController,
+  pieceId: string,
+  scope: PieceConfig["pieceScope"],
+  origin: string,
+  options: FollowPieceSourceOptions,
+  deps: PieceOperationDependencies,
+): Promise<FollowPieceSourceResult> {
+  const served = servedScope(scope);
+  let receipt: Awaited<ReturnType<typeof followPieceOnServer>>;
+  try {
+    receipt = await (deps.followPieceOnServer ?? followPieceOnServer)(
+      lifecycleClient(pieces),
+      {
+        space: pieces.getSpace(),
+        piece: pieceId,
+        ...(served === undefined ? {} : { scope: served }),
+        origin,
+        ...followPins(options),
+        ...(options.dangerouslyAllowIncompatibleSchema
+          ? { dangerouslyAllowIncompatibleSchema: true }
+          : {}),
+      },
+    );
+  } catch (error) {
+    if (error instanceof ServedLifecycleError) {
+      if (error.code === "incompatible") {
+        return { status: "incompatible", message: error.message };
+      }
+      if (error.code === "source-moved") {
+        throw new PieceSourceChangedError(error.message);
+      }
     }
+    // A memory server that predates the verb refuses the frame unread.
+    if (error instanceof Error && error.name === "InvalidMessageError") {
+      throw new Error(FOLLOW_NOT_SERVED, { cause: error });
+    }
+    throw error;
   }
-  if (result.status === "applied") noteWroteTo(config.space);
-  return result;
+  noteWroteTo(config.space);
+  let executionWarning: string | undefined;
+  try {
+    const cell = await pieces.getPieceCell(
+      receipt.pieceId,
+      false,
+      undefined,
+      scope,
+    );
+    await (deps.pullServed ?? pullServed)(pieces, pieces.getResult(cell));
+  } catch (error) {
+    executionWarning = describeFailure(error);
+  }
+  return {
+    status: "applied",
+    ...(receipt.acceptedIncompatibility === undefined
+      ? {}
+      : { acceptedIncompatibility: receipt.acceptedIncompatibility }),
+    ...(executionWarning === undefined ? {} : { executionWarning }),
+  };
 }
 
 /**
  * Replaces the piece's source and returns its setup transaction receipt.
- * Against a serving deployment the update is the serving runtime's to
- * commit; a piece addressed at a scope keeps the client-side path, since
- * the served verb takes the piece's id alone.
+ * The update detaches the piece unless `options.origin` names the origin it
+ * follows from then on. Against a serving deployment the update is the
+ * serving runtime's to commit, on this identity's instance of a piece
+ * addressed at a scope, and nothing changes the source in this process.
+ *
+ * @throws ServedLifecycleError (`scope-unsupported`) for a piece addressed
+ * at a scope on a serving deployment whose verbs do not take one.
  */
 export async function setPiecePattern(
   config: PieceConfig,
@@ -2349,13 +2517,12 @@ export async function setPiecePattern(
   );
   const program = await (deps.getPinnedProgramFromFile ??
     getPinnedProgramFromFile)(pieces, entry);
-  if (
-    servesLifecycleVerbs(pieces) && resolvedConfig.pieceScope === undefined
-  ) {
+  if (servesLifecycleVerbs(pieces)) {
     return await updateOnServer(
       config,
       pieces,
       resolvedConfig.piece,
+      resolvedConfig.pieceScope,
       program,
       entry,
       options,
@@ -2373,6 +2540,7 @@ export async function setPiecePattern(
     ...(options.dangerouslyAllowIncompatibleSchema
       ? { dangerouslyAllowIncompatibleSchema: true }
       : {}),
+    ...(options.origin === undefined ? {} : { origin: options.origin }),
   });
   noteWroteTo(config.space);
   return receipt;
@@ -5214,6 +5382,315 @@ export async function setCellCfcLabel(
 
   noteWroteTo(config.space);
   return cfcLabelViewForCommand(targetCell, path);
+}
+
+/** One clause stored at the path a release by intent names. */
+export interface ReleasableClause {
+  /** The canonical clause digest, by which a release names it. */
+  readonly digest: string;
+
+  /** The clause, as stored. */
+  readonly clause: unknown;
+
+  /** Each label-map entry holding it, by component and observation class. */
+  readonly positions: readonly { origin: string; observes?: string }[];
+}
+
+/** What `cf cell release-by-intent` read, released, or would release. */
+export interface ReleaseByIntentOutcome {
+  /** The space holding the document. */
+  readonly space: string;
+
+  /**
+   * The space's owner, whose signature alone releases there: the owner its
+   * stored access list names; the space's own DID, a home space's owner, where
+   * it stores no access list; or `undefined` where its stored list names no
+   * valid concrete owner, so that no signature releases there.
+   */
+  readonly owner: string | undefined;
+
+  /** The document the path lands in, its crossed links followed. */
+  readonly document: string;
+
+  /** The stored path in that document. */
+  readonly path: readonly string[];
+
+  /** Every confidentiality clause stored at the path before the release. */
+  readonly clauses: readonly ReleasableClause[];
+
+  /**
+   * The document's other stored positions holding any of `.clauses`, with the
+   * digests each holds: each is a further release, of its own path, for a
+   * clause to be gone from the document. Named only; a release reaches none
+   * of them.
+   */
+  readonly otherPositions: readonly {
+    readonly path: readonly string[];
+    readonly digests: readonly string[];
+  }[];
+
+  /**
+   * The digests of the clauses released, or absent when no clause was named
+   * and the outcome only lists what is stored.
+   */
+  readonly released?: readonly string[];
+
+  /** The id of the release's record, when a release was committed. */
+  readonly record?: string;
+}
+
+/**
+ * The collaborators {@link releaseCellConfidentialityByIntent} asks the owner
+ * through, which a test supplies.
+ */
+export interface ReleaseByIntentDependencies
+  extends PieceOperationDependencies {
+  /** Whether standard input is a terminal. */
+  isStdinTerminal?: () => boolean;
+
+  /** Whether standard error, where the release is shown, is a terminal. */
+  isStderrTerminal?: () => boolean;
+
+  /**
+   * Shows `prompt` to the owner and returns the line they type, or `null` at
+   * the end of input.
+   */
+  readConfirmation?: (prompt: string) => Promise<string | null>;
+
+  /** Shows the owner a line of what the release would do. */
+  show?: (line: string) => void;
+}
+
+/** The word an owner types to confirm a release by intent. */
+export const RELEASE_BY_INTENT_CONFIRMATION = "release";
+
+/**
+ * Helper for {@link releaseCellConfidentialityByIntent}, which returns the
+ * digest each of `selectors` names among `clauses`: the digest it is, or the
+ * one digest it is a prefix of.
+ *
+ * @throws If a selector names no stored clause, or is a prefix of more than
+ *   one digest.
+ */
+export const resolveClauseSelectors = (
+  selectors: readonly string[],
+  clauses: readonly ReleasableClause[],
+): string[] => {
+  const resolved = new Set<string>();
+  for (const selector of selectors) {
+    const exact = clauses.find((clause) => clause.digest === selector);
+    const matches = exact === undefined
+      ? clauses.filter((clause) => clause.digest.startsWith(selector))
+      : [exact];
+    if (selector.length === 0 || matches.length === 0) {
+      throw new Error(
+        `No clause stored at the path has a digest beginning \`${selector}\`.`,
+      );
+    }
+    if (matches.length > 1) {
+      throw new Error(
+        `The digest prefix \`${selector}\` is ambiguous: it begins ` +
+          matches.map((clause) => `\`${clause.digest}\``).join(", ") +
+          ". Name more of the digest.",
+      );
+    }
+    resolved.add(matches[0].digest);
+  }
+  return [...resolved];
+};
+
+/**
+ * Helper for {@link releaseCellConfidentialityByIntent}, which renders one
+ * clause.
+ */
+const describeClause = (clause: ReleasableClause): string =>
+  `  ${clause.digest}  ${JSON.stringify(clause.clause)}\n    stored in ` +
+  clause.positions.map((position) =>
+    position.observes === undefined
+      ? position.origin
+      : `${position.origin} (${position.observes})`
+  ).join(", ");
+
+/**
+ * Reads, from the owner at a terminal, one line typed in answer to `prompt`,
+ * or `null` at the end of input.
+ */
+const readTerminalLine = async (prompt: string): Promise<string | null> => {
+  await Deno.stderr.write(new TextEncoder().encode(prompt));
+  const reader = Deno.stdin.readable.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) return text.length > 0 ? text : null;
+      text += decoder.decode(value, { stream: true });
+      const end = text.indexOf("\n");
+      if (end >= 0) return text.slice(0, end).replace(/\r$/, "");
+    }
+  } finally {
+    reader.releaseLock();
+  }
+};
+
+/**
+ * An owner's release by intent (§8.12.7 route 2d) at one piece data path: the
+ * clauses `selectors` names, by canonical clause digest or an unambiguous
+ * prefix of one, come off every label stored at the path, whoever they stand
+ * for, on a request the identity signs as the space's owner.
+ *
+ * The path is resolved to the document it lands in, the links it crosses
+ * followed and a link stored at the path itself not, and names one stored
+ * position, matched literally: a `*` segment names the wildcard position. With
+ * no selector, this only lists the clauses stored there, the document's other
+ * stored positions holding any of them, and the space's owner. With
+ * selectors, it refuses before building or signing anything unless standard
+ * input and standard error are both terminals, and unless the identity is the
+ * owner the space's access list names; it shows the owner the document, the
+ * path, each clause that would come off and stay, and the other positions
+ * still holding a released clause, asks them to type
+ * {@link RELEASE_BY_INTENT_CONFIRMATION}, and signs with the identity only
+ * once they have. Nothing bypasses the confirmation: the signature stands for
+ * the owner's own decision, which is the one thing the store cannot check.
+ *
+ * @throws If standard input or standard error is not a terminal when a clause
+ *   is named, if the identity is not the space's owner, if a selector names no
+ *   stored clause or several, if the owner does not confirm, or if the release
+ *   is refused, by the runtime or the store.
+ */
+export async function releaseCellConfidentialityByIntent(
+  config: PieceConfig,
+  addressedPath: (string | number)[],
+  selectors: readonly string[],
+  options: { input?: boolean } = {},
+  deps: ReleaseByIntentDependencies = {},
+): Promise<ReleaseByIntentOutcome> {
+  const naming = selectors.length > 0;
+  const atTerminal =
+    (deps.isStdinTerminal ?? (() => Deno.stdin.isTerminal()))() &&
+    (deps.isStderrTerminal ?? (() => Deno.stderr.isTerminal()))();
+  if (naming && !atTerminal) {
+    throw new Error(
+      "A release by intent is shown to its owner and confirmed at a " +
+        "terminal, and standard input or standard error is not one. Run it " +
+        "interactively; nothing was signed.",
+    );
+  }
+  const pieces = await (deps.loadPieces ?? loadPieces)(config);
+  const { config: resolvedConfig, path } = await resolvePieceTargetWithPieces(
+    config,
+    addressedPath,
+    pieces,
+    deps,
+  );
+  const piece = await pieces.get(
+    resolvedConfig.piece,
+    false,
+    undefined,
+    resolvedConfig.pieceScope,
+  );
+  const rootCell =
+    await (options.input ? piece.input.getCell() : piece.result.getCell());
+  const targetCell = rootCell.key(...path);
+  await targetCell.pull();
+  const target = releaseByIntentTargetOf(targetCell);
+  const stored = await storedClausesForRelease(pieces.runtime, target);
+  const clauses: ReleasableClause[] = stored.clauses.map((clause) => ({
+    digest: clause.digest,
+    clause: clause.clause,
+    positions: clause.positions,
+  }));
+  const listed = {
+    space: target.space,
+    document: target.id,
+    path: [...target.path],
+    owner: stored.owner,
+    clauses,
+    otherPositions: stored.otherPositions,
+  };
+  if (!naming) return listed;
+
+  const released = resolveClauseSelectors(selectors, clauses);
+  const identity = await (deps.loadIdentity ?? loadIdentity)(config.identity);
+  if (stored.owner !== identity.did()) {
+    throw new Error(
+      `The identity ${identity.did()} is not the space's owner (` +
+        (stored.owner ??
+          "it has none: its access list names no valid concrete owner") +
+        "), and only the owner's signature releases by intent there; " +
+        "nothing was signed.",
+    );
+  }
+  const request = ownerReleaseByIntentRequest({
+    space: target.space,
+    document: target.id,
+    path: target.path,
+    releasedClauseDigests: released,
+    envelopeDigest: stored.envelopeDigest,
+    signer: identity.did(),
+  });
+  const show = deps.show ?? ((line: string) => console.error(line));
+  const location = target.path.length === 0 ? "<root>" : target.path.join("/");
+  show(`Release by intent in space ${target.space}`);
+  show(`  document ${target.id}, path ${location}`);
+  show(
+    `  to be signed by ${identity.did()}, the space's owner`,
+  );
+  show("Clauses that come off every label stored at the path:");
+  for (const clause of clauses) {
+    if (released.includes(clause.digest)) show(describeClause(clause));
+  }
+  show("Clauses that stay:");
+  const kept = clauses.filter((clause) => !released.includes(clause.digest));
+  if (kept.length === 0) show("  (none)");
+  for (const clause of kept) show(describeClause(clause));
+  const elsewhere = stored.otherPositions.flatMap((position) => {
+    const digests = position.digests.filter((digest) =>
+      released.includes(digest)
+    );
+    return digests.length === 0 ? [] : [{ path: position.path, digests }];
+  });
+  if (elsewhere.length > 0) {
+    show(
+      "Other stored positions of the document hold a clause being released, " +
+        "and keep it; each takes a release of its own path:",
+    );
+    for (const position of elsewhere) {
+      show(
+        `  ${
+          position.path.length === 0 ? "<root>" : position.path.join("/")
+        }: ${position.digests.join(", ")}`,
+      );
+    }
+  }
+  show(
+    "Labels at other paths, the value, and integrity are not changed. The " +
+      "release is recorded, with your signature, in the space.",
+  );
+  const answer = await (deps.readConfirmation ?? readTerminalLine)(
+    `Type ${RELEASE_BY_INTENT_CONFIRMATION} to sign and commit it: `,
+  );
+  if (answer?.trim() !== RELEASE_BY_INTENT_CONFIRMATION) {
+    throw new Error("Not confirmed; nothing was signed or released.");
+  }
+  // Only the owner's typed confirmation reaches this signature. This host
+  // holds the owner's key, so the route's obligation that a signature stands
+  // for the owner's direct decision rests here.
+  const signature = await identity.sign(
+    ownerReleaseByIntentSignedBytes(request) as AsBytes<unknown>,
+  );
+  if (signature.error) throw signature.error;
+  const release = await releaseConfidentialityByIntent(pieces.runtime, {
+    request,
+    signature: ownerReleaseByIntentSignature(new Uint8Array(signature.ok)),
+  });
+  await pieces.synced();
+  noteWroteTo(target.space);
+  return {
+    ...listed,
+    released: release.releasedDigests,
+    record: release.recordId,
+  };
 }
 
 /** Resolve the canonical piece before the read selects its demand boundary. */

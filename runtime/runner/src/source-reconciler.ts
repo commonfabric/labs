@@ -1538,7 +1538,7 @@ export class SourceReconciler {
       runtime,
       resultCell,
       state.snapshot,
-      { allowUnavailable: true },
+      { allowUnavailable: true, candidateIdentity: candidateRef.identity },
     );
     // A release re-mints every handler identity in the file, so a field the
     // running pattern's handler protects would refuse the successor's write
@@ -1803,7 +1803,7 @@ export class SourceReconciler {
       runtime,
       resultCell,
       state.snapshot,
-      { allowUnavailable: true },
+      { allowUnavailable: true, candidateIdentity: state.running.identity },
     );
     const transition: PieceSourceTransition = {
       revisionId: crypto.randomUUID(),

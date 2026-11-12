@@ -428,8 +428,7 @@ export const startSessionCommand = handler<void, {
     text: state.kickoff,
     cwd: state.spawnRoot.get().trim(),
     title: sessionTitle,
-    mode: desktop ? undefined : state.startMode.trim(),
-    surface: desktop ? "desktop" : undefined,
+    ...(desktop ? { surface: "desktop" } : { mode: state.startMode.trim() }),
   });
   state.commands.push(command.value);
   // Recorded, not attached: nothing here knows whether a queue took the
