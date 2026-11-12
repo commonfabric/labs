@@ -9,7 +9,10 @@
  * that no longer admits the person, is refused.
  *
  * Each client is a runtime of its own, beside an in-process storage server,
- * with server execution off. No toolshed or browser required.
+ * with server execution off, the posture this holds in, whichever posture the
+ * suite runs under: with server execution on, the server renders Home's view,
+ * and a client's sync of it reaches each room the view links. No toolshed or
+ * browser required.
  */
 
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
@@ -255,7 +258,13 @@ describe("fabrichat-room-list", () => {
     );
   }
 
+  // Every client this file starts takes its posture from the environment.
+  const previousServerExecution = Deno.env.get(
+    "EXPERIMENTAL_SERVER_EXECUTION",
+  );
+
   beforeAll(async () => {
+    Deno.env.set("EXPERIMENTAL_SERVER_EXECUTION", "false");
     server = StandaloneMemoryServer.start({
       namesInstances: () => namesInstancesByDefault(undefined),
       serve: (request: Request) => systemPatternsRoute().serve(request),
@@ -296,6 +305,12 @@ describe("fabrichat-room-list", () => {
 
   afterAll(async () => {
     await server?.close();
+    if (previousServerExecution === undefined) {
+      Deno.env.delete("EXPERIMENTAL_SERVER_EXECUTION");
+    } else {Deno.env.set(
+        "EXPERIMENTAL_SERVER_EXECUTION",
+        previousServerExecution,
+      );}
   });
 
   //

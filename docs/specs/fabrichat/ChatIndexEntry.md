@@ -48,10 +48,12 @@ interface ChatIndexEntry {
   profile, because a person can have several profiles, and one conversation with
   a person must not split along them. The manager records the one it verified
   when it created or accepted the room.
-- **`since`** is the room's listing time for this user: its first recorded
-  join time, preserved across forgetting and restoration. It comes from the
-  corresponding handler's clock, at whatever resolution the system provides
-  (see the [timing side-channel
+- **`since`** is the room's listing time for this user, recorded with its
+  membership and preserved across forgetting and restoration: for a room the
+  catalog lists when the membership is recorded, the catalog entry's admission
+  time, so adopting a room leaves its place in the list, and otherwise the
+  recording handler's clock, at whatever resolution the system provides (see
+  the [timing side-channel
   mitigations](../sandboxing/TIMING_SIDE_CHANNELS.md)).
 - **`title`** is a hint: the room's `about.title` as the manager last read it,
   when it created, accepted or joined the room, or handled a `joinRoom` that no
