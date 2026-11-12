@@ -230,11 +230,13 @@ uncovered, unless it compiles to no code at all or opts out of coverage — see 
 file that compiles to nothing is charged
 nothing](#a-file-that-compiles-to-nothing-is-charged-nothing) and [A file that
 opts out of coverage is charged
-nothing](#a-file-that-opts-out-of-coverage-is-charged-nothing). A file with a
-record is scored against the lines that record names. For a file measured by
-Deno's V8 coverage that is every executable line; pattern instrumentation names
-only the statements it could instrument, so a pattern file's first record both
-covers real lines and drops the never-named lines out of the count.
+nothing](#a-file-that-opts-out-of-coverage-is-charged-nothing). A record that
+names none of a file's lines says nothing about which of them ran, so it counts
+as no record. A file with a record is scored against the lines that record
+names. For a file measured by Deno's V8 coverage that is every executable line;
+pattern instrumentation names only the statements it could instrument, so a
+pattern file's first record both covers real lines and drops the never-named
+lines out of the count.
 
 Gaining a record can therefore only *lower* a file's count, since the record
 names a subset of the file's lines and the rest stop being counted. A figure
