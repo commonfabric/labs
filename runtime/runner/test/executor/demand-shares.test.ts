@@ -168,4 +168,38 @@ describe("demand-shares", () => {
 
     expect(r.asked).toEqual([["a"], ["a"]]);
   });
+
+  it("leaves out a share whose session closed during the read, and reads it again once live", async () => {
+    const cache = new DemandShareCache();
+    const sessions = live(["a", undefined], ["b", undefined]);
+    const asked: string[][] = [];
+    const read = (sessionIds: string[]) => {
+      asked.push([...sessionIds]);
+      if (asked.length === 1) sessions.delete("b");
+      return Promise.resolve(sessionIds.map(share));
+    };
+
+    const during = await cache.sharesFor(space, sessions, undefined, read);
+    sessions.set("b", { principal: undefined });
+    const after = await cache.sharesFor(space, sessions, undefined, read);
+
+    expect(during.map((s) => s.sessionId)).toEqual(["a"]);
+    expect(after.map((s) => s.sessionId)).toEqual(["a", "b"]);
+    expect(asked).toEqual([["a", "b"], ["b"]]);
+  });
+
+  describe("forget()", () => {
+    it("holds no stale mark for a space once its last stale session is forgotten", () => {
+      const cache = new DemandShareCache();
+      cache.noteChanged(space, "a");
+      cache.noteChanged(space, "b");
+
+      cache.forget(space, "a");
+      expect(cache.accessForTestingOnly.stale.get(space)).toEqual(
+        new Set(["b"]),
+      );
+      cache.forget(space, "b");
+      expect(cache.accessForTestingOnly.stale.has(space)).toBe(false);
+    });
+  });
 });

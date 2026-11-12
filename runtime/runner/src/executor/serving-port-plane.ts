@@ -97,6 +97,12 @@ export type ServingPlaneHost = {
   close: () => Promise<void>;
 };
 
+/** The loopback plane this module builds: one that makes transports. */
+type TransportPlane = Extract<
+  LoopbackPlane,
+  { createTransport(): MemoryClient.Transport }
+>;
+
 /** A session as the mirror holds it. */
 type MirroredSession = {
   principal: string | undefined;
@@ -598,7 +604,7 @@ export class ServingPlane {
     MemoryClient.QueuedFrameTransport
   >();
   readonly #server: HostMemoryServer;
-  readonly #loopback: LoopbackPlane;
+  readonly #loopback: TransportPlane;
   #observer: ServerExecutionObserver | undefined;
   #host: ServingPlaneHost | undefined;
   #nextTransport = 1;
@@ -653,7 +659,7 @@ export class ServingPlane {
   }
 
   /** The loopback plane, for the serving runtime factory. */
-  get loopback(): LoopbackPlane {
+  get loopback(): TransportPlane {
     return this.#loopback;
   }
 

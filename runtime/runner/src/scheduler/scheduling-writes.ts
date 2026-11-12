@@ -161,31 +161,6 @@ export class SchedulerWriteIndex
   }
 }
 
-export function getSchedulingWrites(
-  state: SchedulingWriteState,
-  action: Action,
-): IMemorySpaceAddress[] | undefined {
-  return state.getSchedulingWrites(action);
-}
-
-export function getSchedulingWritesMap(
-  state: SchedulingWriteState,
-): WeakMap<Action, IMemorySpaceAddress[]> {
-  return state.getSchedulingWritesMap();
-}
-
-export function updateWriterIndex(
-  state: WriterIndexState,
-  action: Action,
-  nextSchedulingWrites: readonly IMemorySpaceAddress[],
-): {
-  nextEntities: Set<SpaceScopeAndURI>;
-  addedEntities: Set<SpaceScopeAndURI>;
-  removedEntities: Set<SpaceScopeAndURI>;
-} {
-  return state.updateWriterIndex(action, nextSchedulingWrites);
-}
-
 export function readsOverlapWrites(
   reads: readonly IMemorySpaceAddress[],
   shallowReads: readonly IMemorySpaceAddress[],

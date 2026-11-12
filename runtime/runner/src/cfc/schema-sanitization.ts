@@ -658,10 +658,10 @@ const typeMatches = (
  * exactly, however large: a finite `multipleOf` is the dyadic rational
  * `p / 2^k`, found by doubling it until it is whole, and `value` is a multiple
  * of it when `value * 2^k` is a multiple of `p`. A number is measured within
- * floating-point tolerance.
+ * floating-point tolerance. `multipleOf` is positive and finite, which
+ * `strictConstraintDefinitionIssue()` checks before any value is measured.
  */
 const isMultipleOf = (value: number | bigint, multipleOf: number): boolean => {
-  if (!(multipleOf > 0) || !Number.isFinite(multipleOf)) return false;
   if (typeof value === "bigint") {
     let whole = multipleOf;
     let shift = 0n;
@@ -1435,12 +1435,17 @@ const createSchemaValidationContext = (): SchemaValidationContext => ({
 const primitiveValidationKey = (value: unknown): string =>
   `${typeof value}:${String(value)}`;
 
+/**
+ * Marks `value` active against `schema` under `root`, and returns the root's
+ * activity record, which {@link unmarkSchemaValueActive} takes back; returns
+ * `undefined`, marking nothing, when the pair is already active.
+ */
 const markSchemaValueActive = (
   root: object,
   schema: object,
   value: unknown,
   context: SchemaValidationContext,
-): boolean => {
+): SchemaRootValidationActivity | undefined => {
   let activity = context.activeByRoot.get(root);
   if (!activity) {
     activity = {
@@ -1455,33 +1460,30 @@ const markSchemaValueActive = (
   ) {
     const objectValue = value as object;
     let active = activity.activeObjectValues.get(schema);
-    if (active?.has(objectValue)) return false;
+    if (active?.has(objectValue)) return undefined;
     if (!active) {
       active = new WeakSet();
       activity.activeObjectValues.set(schema, active);
     }
     active.add(objectValue);
-    return true;
+    return activity;
   }
   const key = primitiveValidationKey(value);
   let active = activity.activePrimitiveValues.get(schema);
-  if (active?.has(key)) return false;
+  if (active?.has(key)) return undefined;
   if (!active) {
     active = new Set();
     activity.activePrimitiveValues.set(schema, active);
   }
   active.add(key);
-  return true;
+  return activity;
 };
 
 const unmarkSchemaValueActive = (
-  root: object,
+  activity: SchemaRootValidationActivity,
   schema: object,
   value: unknown,
-  context: SchemaValidationContext,
 ): void => {
-  const activity = context.activeByRoot.get(root);
-  if (!activity) return;
   if (
     isObjectOrArray(value) ||
     typeof value === "function"
@@ -1807,7 +1809,8 @@ const validateAgainstSchemaUncached = (
   }
   const schemaRoot = fullSchema;
   const rootKey = isObjectOrArray(schemaRoot) ? schemaRoot : schema;
-  if (!markSchemaValueActive(rootKey, schema, value, context)) {
+  const activity = markSchemaValueActive(rootKey, schema, value, context);
+  if (activity === undefined) {
     context.cycleVersion++;
     return indeterminate("recursive schema validation made no progress");
   }
@@ -2085,7 +2088,7 @@ const validateAgainstSchemaUncached = (
 
     return undefined;
   } finally {
-    unmarkSchemaValueActive(rootKey, schema, value, context);
+    unmarkSchemaValueActive(activity, schema, value);
   }
 };
 

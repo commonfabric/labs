@@ -206,4 +206,37 @@ describe("stream-send-origin-transaction", () => {
     await tx.commit().settled;
     expect(appended).toEqual([{ n: 10 }]);
   });
+
+  it("reports an append that has not settled as a pending event intent in its space", async () => {
+    const held = Promise.withResolvers<{ delivered: true }>();
+    storageManager.open(space).replica.enqueueEventAppend = (entry) => {
+      appended.push(entry.payload);
+      return held.promise;
+    };
+
+    stream.send({ n: 12 });
+
+    expect(appended).toEqual([{ n: 12 }]);
+    expect(
+      storageManager.getDiagnostics().pendingCommits.map((
+        { kind, spaces },
+      ) => ({
+        kind,
+        spaces,
+      })),
+    ).toEqual([{ kind: "event-intent", spaces: [space] }]);
+    held.resolve({ delivered: true });
+    await runtime.idle();
+    expect(
+      storageManager.getDiagnostics().pendingCommits.map(({ kind }) => kind),
+    ).not.toContain("event-intent");
+  });
+
+  it("throws for a fire where the storage provider cannot append events", () => {
+    storageManager.open(space).replica.enqueueEventAppend = undefined;
+
+    expect(() => stream.send({ n: 13 })).toThrow(
+      "event fire refused: the storage provider does not support event appends",
+    );
+  });
 });

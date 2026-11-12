@@ -1,16 +1,16 @@
 /**
- * The debug command surface and the scheduler graph both bridge between
- * human-typed bare ids and the full schemed URIs that programmatic surfaces
- * (diagnostics `pieceId`, error strings) emit. A full schemed id passes
- * through untouched, since the scheme is part of the identity, while adding
- * `of:` to a bare id is a human-input convenience only.
+ * The debug command surface bridges between human-typed bare ids and the full
+ * schemed URIs that programmatic surfaces (diagnostics `pieceId`, error
+ * strings) emit. A full schemed id passes through untouched, since the scheme
+ * is part of the identity, while adding `of:` to a bare id is a human-input
+ * convenience only. `scheduler-graph-layout.test.ts` covers the scheduler
+ * graph's side, `extractEntityId()`.
  */
 
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { normalizeEntityId } from "../src/lib/debug-utils.ts";
-import { XSchedulerGraph } from "../src/views/SchedulerGraphView.ts";
 
 describe("entity-id-scheme-parsing", () => {
   describe("normalizeEntityId()", () => {
@@ -27,23 +27,6 @@ describe("entity-id-scheme-parsing", () => {
       expect(normalizeEntityId({ did: "computed:fid1:def" })).toBe(
         "computed:fid1:def",
       );
-    });
-  });
-
-  describe("XSchedulerGraph", () => {
-    describe("static members", () => {
-      describe("#extractEntityId()", () => {
-        it("returns the entity id with its scheme", () => {
-          const helpers = XSchedulerGraph.accessForTestingOnly;
-
-          expect(
-            helpers.extractEntityId("sink:did:key:z6Mkabc/of:fid1:AAA/path"),
-          ).toBe("of:fid1:AAA");
-          expect(helpers.extractEntityId(
-            "action:pattern:did:key:z6Mkabc/computed:fid1:BBB/value",
-          )).toBe("computed:fid1:BBB");
-        });
-      });
     });
   });
 });

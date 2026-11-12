@@ -82,6 +82,25 @@ describe("runtime-conflict-readiness", () => {
     expect(sync.calls).toHaveLength(0);
   });
 
+  it("pulls the conflicting documents after a catch-up gate that rejects", async () => {
+    using sync = stub(
+      storage.open(space),
+      "sync",
+      () => Promise.resolve({ ok: {} }),
+    );
+    let gateAsked = false;
+    const failures = await runtime.awaitCommitRetryReadiness({
+      readyToRetry: () => {
+        gateAsked = true;
+        return Promise.reject(new Error("catch-up aborted"));
+      },
+      conflict: { space, of: "of:after-gate", scope: "space" },
+    });
+    expect(gateAsked).toBe(true);
+    expect(failures).toEqual([]);
+    expect(sync.calls.map(({ args }) => args[0])).toEqual(["of:after-gate"]);
+  });
+
   it("continues other recovery pulls when one throws synchronously", async () => {
     using sync = stub(storage.open(space), "sync", (of) => {
       if (of === "of:failed") throw new Error("provider unavailable");

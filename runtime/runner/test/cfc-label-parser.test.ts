@@ -153,6 +153,62 @@ describe("label-parser", () => {
       });
     }
 
+    it("throws for a type that is not an absolute URI", () => {
+      expectInvalid(
+        { integrity: [{ type: "cfc/atom/Extension" }] },
+        "/integrity/0/type",
+      );
+    });
+
+    it("throws for a symbol-keyed property on an object", () => {
+      expectInvalid({ [Symbol("hidden")]: [] }, "/");
+    });
+
+    it("throws for a non-enumerable property on an object", () => {
+      const atom = { type: "https://example.com/cfc/atom/Extension" };
+      Object.defineProperty(atom, "hidden", { enumerable: false, value: 1 });
+      expectInvalid({ integrity: [atom] }, "/integrity/0/hidden");
+    });
+
+    it("throws for a symbol-keyed property on an array", () => {
+      const integrity = Object.assign([USER], { [Symbol("hidden")]: 1 });
+      expectInvalid({ integrity }, "/integrity");
+    });
+
+    it("throws for a named property on an array", () => {
+      const integrity = Object.assign([USER], { extra: 1 });
+      expectInvalid({ integrity }, "/integrity/extra");
+    });
+
+    it("throws for a sparse array", () => {
+      const integrity = [USER];
+      integrity.length = 2;
+      expectInvalid({ integrity }, "/integrity/1");
+    });
+
+    it("throws for a value that contains itself", () => {
+      const atom: Record<string, unknown> = {
+        type: "https://example.com/cfc/atom/Extension",
+      };
+      atom.self = atom;
+      expectInvalid({ integrity: [atom] }, "/integrity/0/self");
+    });
+
+    it("returns the path and reason of a refusal on the error", () => {
+      try {
+        parseIfcLabel({ opaque: [] });
+        throw new Error("Expected parseIfcLabel() to throw.");
+      } catch (error) {
+        if (!(error instanceof InvalidIfcLabelError)) throw error;
+        expect(error.name).toBe("InvalidIfcLabelError");
+        expect(error.path).toBe("/opaque");
+        expect(error.reason).toBe("unknown label property");
+        expect(error.message).toBe(
+          "Invalid IFC label at /opaque: unknown label property",
+        );
+      }
+    });
+
     it("returns a deeply detached label", () => {
       const source = {
         confidentiality: [{

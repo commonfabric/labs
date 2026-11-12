@@ -39,7 +39,10 @@ import {
 } from "./list-op-argument-usage.ts";
 import { resumeContainerWait } from "./list-result-container-seed.ts";
 import { issueResultContainerSetup } from "./list-result-container.ts";
-import { resumeSettleRunKind } from "./resume-republish.ts";
+import {
+  resumeSettleRunKind,
+  settleOnceInputSyncs,
+} from "./resume-republish.ts";
 import { exposedResultCell } from "./scope-policy.ts";
 
 export const MAP_INPUT_SCHEMA = internSchema({
@@ -219,51 +222,41 @@ function createMapInstance(
   // re-triggers the normal reconcile via its journaled read, so it converges
   // either way.
   const awaitInputThenSettle = (inputListCell: Cell<any>): void => {
-    runtime.storageManager.trackUntilSettled(
-      syncCellForIdentity(inputListCell, identity)
-        .then(() =>
-          !active ? undefined : runtime.editWithRetry((settleTx) => {
-            if (!active || !result) return;
-            if (identity !== undefined) settleTx.tx.scopeKeyIdentity = identity;
-            // Out-of-band recovery write; the kind decision (bookkeeping
-            // on the serving posture, derivation on clients — the settle
-            // writes DERIVED content) is shared across map/filter/flatMap
-            // in resumeSettleRunKind (r3756175819).
-            runtime.stampServerRun(settleTx, {
-              actionId: `map/resume-settle/${parentCell.sourceURI}`,
-              kind: resumeSettleRunKind(runtime),
-              scopeKeyIdentity: identity,
-            });
-            // The list is read as the reconcile reads it, its membership
-            // declared onward onto the container. Only the raw list is
-            // needed here, so the slots are not resolved.
-            const { rawList: raw } = listMembershipRead(
-              settleTx,
-              inputsCell,
-              "list",
-              result,
-            );
-            if (raw === undefined || (Array.isArray(raw) && raw.length === 0)) {
-              settleTx.runWithAmbientReadMeta(
-                { ...linkResolutionProbe, ...machineryRead },
-                () =>
-                  result!.asSchema(RESULT_PRESENCE_SCHEMA).withTx(settleTx)
-                    .set([]),
-              );
-            }
-          }).then(({ error }) => {
-            if (error) {
-              logger.warn("resume-input", "settling the resumed input failed", {
-                error,
-              });
-            }
-          })
-        )
-        .catch((error) =>
-          logger.warn("resume-input", "the resumed input list sync rejected", {
-            error,
-          })
-        ),
+    settleOnceInputSyncs(
+      runtime,
+      logger,
+      syncCellForIdentity(inputListCell, identity),
+      () => active,
+      (settleTx) => {
+        if (!active || !result) return;
+        if (identity !== undefined) settleTx.tx.scopeKeyIdentity = identity;
+        // Out-of-band recovery write; the kind decision (bookkeeping
+        // on the serving posture, derivation on clients — the settle
+        // writes DERIVED content) is shared across map/filter/flatMap
+        // in resumeSettleRunKind (r3756175819).
+        runtime.stampServerRun(settleTx, {
+          actionId: `map/resume-settle/${parentCell.sourceURI}`,
+          kind: resumeSettleRunKind(runtime),
+          scopeKeyIdentity: identity,
+        });
+        // The list is read as the reconcile reads it, its membership
+        // declared onward onto the container. Only the raw list is
+        // needed here, so the slots are not resolved.
+        const { rawList: raw } = listMembershipRead(
+          settleTx,
+          inputsCell,
+          "list",
+          result,
+        );
+        if (raw === undefined || (Array.isArray(raw) && raw.length === 0)) {
+          settleTx.runWithAmbientReadMeta(
+            { ...linkResolutionProbe, ...machineryRead },
+            () =>
+              result!.asSchema(RESULT_PRESENCE_SCHEMA).withTx(settleTx)
+                .set([]),
+          );
+        }
+      },
     );
   };
 

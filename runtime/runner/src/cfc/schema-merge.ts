@@ -231,7 +231,7 @@ const reconcileWriterClaimStamp = (
 };
 
 const mergeSetLikeIfcArray = (
-  key: string,
+  key: IfcKey,
   existing: unknown,
   candidate: unknown,
   path: string,
@@ -358,7 +358,7 @@ const mergeSetLikeIfcArray = (
       }
       return existing;
     default:
-      return candidate;
+      throw new Error(`No merge rule for the ifc key ${key satisfies never}`);
   }
 };
 

@@ -143,9 +143,10 @@ export interface SessionFactory {
    *  only the messages under test. */
   readonly supportsAclBootstrap?: boolean;
 
+  /** Opens a session on `space`, authenticated as `signer`. */
   create(
     space: MemorySpace,
-    signer?: Signer,
+    signer: Signer,
     mountOptions?: MemoryClient.MountOptions,
     signal?: AbortSignal,
   ): Promise<{
@@ -773,7 +774,7 @@ export class WebSocketTransport implements MemoryClient.Transport {
     this.#dials.enqueue(address, () => {
       if (this.#opening !== opening) return Promise.resolve();
       this.#abandonDial = null;
-      dial.resolve(this.#dial(address, opening));
+      dial.resolve(this.#dial(address));
       // The host's next dial waits until this one opens, closes or fails.
       return opening.then(() => {}, () => {});
     });
@@ -781,13 +782,10 @@ export class WebSocketTransport implements MemoryClient.Transport {
   }
 
   /**
-   * Helper for `#open()`, which creates the socket of `opening` and returns
-   * the promise that settles as the socket opens, closes or fails.
+   * Helper for `#open()`, which creates a socket to `address` and returns the
+   * promise that settles as the socket opens, closes or fails.
    */
-  #dial(
-    address: URL,
-    opening: Promise<MemorySocketConnection>,
-  ): Promise<MemorySocketConnection> {
+  #dial(address: URL): Promise<MemorySocketConnection> {
     return new Promise<MemorySocketConnection>((resolve, reject) => {
       const connection = this.#createSocket(address);
       const { socket } = connection;
@@ -851,7 +849,6 @@ export class WebSocketTransport implements MemoryClient.Transport {
                   : this.#receiveCompressionEnabled,
                 this.#routedFrameSlots,
               );
-              if (this.#socket !== socket) return;
               if (decoded.body.type === "router.credit") {
                 throw new Error("Unexpected text router credit");
               }
@@ -964,11 +961,6 @@ export class WebSocketTransport implements MemoryClient.Transport {
           this.#detachSocket(
             new Error("Memory websocket transport closed"),
           );
-        }
-        if (this.#opening === opening) {
-          this.#opening = null;
-        }
-        if (isCurrentSocket) {
           this.#closeReceiver();
         }
         if (!opened) {
@@ -988,11 +980,6 @@ export class WebSocketTransport implements MemoryClient.Transport {
           this.#detachSocket(
             new Error("Memory websocket transport failed"),
           );
-        }
-        if (this.#opening === opening) {
-          this.#opening = null;
-        }
-        if (isCurrentSocket) {
           this.#closeReceiver(error);
         }
         reject(MemoryClient.connectionError(error.message, error));
@@ -1006,42 +993,37 @@ export class WebSocketTransport implements MemoryClient.Transport {
     const response = Promise.withResolvers<boolean>();
     void response.promise.catch(() => {});
     this.#compressionRequests.set(requestId, response);
-    if (this.#uploadCredits !== undefined) {
-      try {
+    try {
+      if (this.#uploadCredits !== undefined) {
         await this.send(encodeMemoryBoundary({
           type: "memory.compression",
           requestId,
           enabled,
         }));
-        return await response.promise;
-      } catch (cause) {
-        this.#compressionRequests.delete(requestId);
-        throw cause;
+      } else {
+        const opening = this.#open();
+        const send = this.#sending.then(async () => {
+          const connection = await opening;
+          if (this.#socket !== connection.socket) {
+            throw MemoryClient.connectionError(
+              "Memory websocket changed before compression control",
+            );
+          }
+          this.#messagesSent++;
+          await this.#write(
+            connection,
+            this.#routedMessages
+              ? encodeMemoryBoundary({
+                type: "memory.compression",
+                requestId,
+                enabled,
+              })
+              : encodeMemoryCompressionControlMessage({ requestId, enabled }),
+          );
+        });
+        this.#sending = send.catch(() => {});
+        await send;
       }
-    }
-    const opening = this.#open();
-    const send = this.#sending.then(async () => {
-      const connection = await opening;
-      if (this.#socket !== connection.socket) {
-        throw MemoryClient.connectionError(
-          "Memory websocket changed before compression control",
-        );
-      }
-      this.#messagesSent++;
-      await this.#write(
-        connection,
-        this.#routedMessages
-          ? encodeMemoryBoundary({
-            type: "memory.compression",
-            requestId,
-            enabled,
-          })
-          : encodeMemoryCompressionControlMessage({ requestId, enabled }),
-      );
-    });
-    this.#sending = send.catch(() => {});
-    try {
-      await send;
       return await response.promise;
     } catch (cause) {
       this.#compressionRequests.delete(requestId);
@@ -1070,9 +1052,9 @@ export class WebSocketTransport implements MemoryClient.Transport {
     this.#bytesSent += frameSize(frame);
     try {
       if (credits !== undefined) {
-        if (typeof frame === "string" || frame.length > credits.window) {
-          throw new Error("Router upload record exceeds credit window");
-        }
+        // `frame` is a router record, at most `ROUTER_CHUNK_BYTES + 5` bytes,
+        // the smallest window `setRoutedMessagesEnabled()` accepts, so enough
+        // credit can always arrive.
         for (;;) {
           if (
             this.#socket !== connection.socket ||
@@ -1757,7 +1739,7 @@ export class RemoteSessionFactory implements SessionFactory {
    * factory's totals so a closed connection's traffic stays counted.
    */
   #retire(transport: WebSocketTransport): void {
-    if (!this.#transports.delete(transport)) return;
+    this.#transports.delete(transport);
     this.#closedTransports++;
     const carried = transport.getSizes();
     const totals = this.#closedTransportSizes;

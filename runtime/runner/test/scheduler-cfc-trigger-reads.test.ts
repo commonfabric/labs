@@ -127,7 +127,6 @@ function makeNotificationState(args: {
     getActionId: () => "test-action",
     recordCellUpdate: () => {},
     recordTriggerTrace: () => {},
-    scheduleWithDebounce: () => {},
     markInvalid: (action, cause) => {
       markInvalid(nodes, action, cause);
     },

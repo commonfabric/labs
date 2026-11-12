@@ -63,16 +63,13 @@ export class SpaceAccessWatch {
    * with a storage manager that reports no such changes.
    */
   rerunOnChange(space: MemorySpace, action: Action): void {
-    if (this.#disposed) return;
+    const subscribe = this.#storage.subscribeSpaceAccessChange;
+    if (this.#disposed || subscribe === undefined) return;
     if (!this.#subscribed) {
       this.#subscribed = true;
-      const cancelChanges = this.#storage.subscribeSpaceAccessChange?.((
-        changed,
-      ) => this.#changed(changed));
-      if (cancelChanges === undefined) return;
-      this.#cancels.push(cancelChanges);
-    } else if (this.#storage.subscribeSpaceAccessChange === undefined) {
-      return;
+      this.#cancels.push(
+        subscribe.call(this.#storage, (changed) => this.#changed(changed)),
+      );
     }
     this.#observeUnsubscribes();
 
@@ -93,16 +90,13 @@ export class SpaceAccessWatch {
    * reports no answers.
    */
   rerunOnAnswer(space: MemorySpace, action: Action): void {
-    if (this.#disposed) return;
+    const subscribe = this.#storage.subscribeSpaceAnswer;
+    if (this.#disposed || subscribe === undefined) return;
     if (!this.#subscribedToAnswers) {
       this.#subscribedToAnswers = true;
-      const cancelAnswers = this.#storage.subscribeSpaceAnswer?.((answered) =>
-        this.#answered(answered)
+      this.#cancels.push(
+        subscribe.call(this.#storage, (answered) => this.#answered(answered)),
       );
-      if (cancelAnswers === undefined) return;
-      this.#cancels.push(cancelAnswers);
-    } else if (this.#storage.subscribeSpaceAnswer === undefined) {
-      return;
     }
     this.#observeUnsubscribes();
 

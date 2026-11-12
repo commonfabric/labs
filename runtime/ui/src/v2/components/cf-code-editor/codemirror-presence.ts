@@ -275,16 +275,15 @@ class RemoteCaretWidget extends WidgetType {
 
 /** Decodes a selection when every range fits the current document. */
 const decodeSelection = (
-  record: ParticipantPresence,
+  selection: PresenceSelectionJSON,
   documentLength: number,
 ): EditorSelection | undefined => {
-  if (record.selection === null) return undefined;
   if (
-    record.selection.ranges.length === 0 ||
-    !Number.isInteger(record.selection.main) ||
-    record.selection.main < 0 ||
-    record.selection.main >= record.selection.ranges.length ||
-    record.selection.ranges.some((range) =>
+    selection.ranges.length === 0 ||
+    !Number.isInteger(selection.main) ||
+    selection.main < 0 ||
+    selection.main >= selection.ranges.length ||
+    selection.ranges.some((range) =>
       !Number.isInteger(range.anchor) || !Number.isInteger(range.head) ||
       range.anchor < 0 || range.head < 0 || range.anchor > documentLength ||
       range.head > documentLength ||
@@ -294,7 +293,7 @@ const decodeSelection = (
     return undefined;
   }
   return EditorSelection.create(
-    record.selection.ranges.map((range) =>
+    selection.ranges.map((range) =>
       EditorSelection.range(
         range.anchor,
         range.head,
@@ -303,7 +302,7 @@ const decodeSelection = (
         range.assoc,
       )
     ),
-    record.selection.main,
+    selection.main,
   );
 };
 
@@ -326,7 +325,7 @@ const displayRecord = (
     return { record, selection: null };
   }
   const selection = decodeSelection(
-    record,
+    record.selection,
     composed?.length ?? documentLength,
   );
   if (selection === undefined) return undefined;
@@ -423,15 +422,12 @@ const applyCursor = (
   pendingChanges: readonly ChangeDesc[],
 ): Map<string, ParticipantPresenceState> => {
   if (next.epoch !== previous.epoch) return new Map();
-  if (next.version < previous.version) return participants;
 
   for (const [participantId, participant] of participants) {
+    // An upsert queues only a record in the cursor's epoch, and an epoch
+    // change clears every participant, so `latest` is in `next`'s epoch.
     const latest = participant.latest;
     if (latest === undefined) continue;
-    if (latest.cursor.epoch !== next.epoch) {
-      participants.delete(participantId);
-      continue;
-    }
     if (latest.cursor.version === next.version) {
       const displayed = displayRecord(latest, documentLength, pendingChanges);
       if (displayed !== undefined) {

@@ -394,12 +394,20 @@ export function setConflictAdmissionEnabled(value: boolean | undefined): void {
     ? undefined
     : (value ? "preempt" : "off");
 }
-function conflictAdmissionMode(): ConflictAdmissionMode {
+/**
+ * The conflict admission mode in force: the override when one is set, else
+ * the mode `CF_CONFLICT_ADMISSION` names as `readEnvironment` reads it, and
+ * `off` where the environment cannot be read.
+ */
+export function conflictAdmissionMode(
+  readEnvironment: (name: string) => string | undefined = (name) =>
+    Deno.env.get(name),
+): ConflictAdmissionMode {
   if (conflictAdmissionModeOverride !== undefined) {
     return conflictAdmissionModeOverride;
   }
   try {
-    const value = Deno.env.get("CF_CONFLICT_ADMISSION");
+    const value = readEnvironment("CF_CONFLICT_ADMISSION");
     if (value === "preempt" || value === "1" || value === "true") {
       return "preempt";
     }
@@ -3929,9 +3937,6 @@ export class StorageManager implements IStorageManager {
     options?: { scopeKeyIdentity?: ScopeKeyIdentity },
   ): Promise<Cell<T>> {
     const { space, id, schema, scope } = cell.getAsNormalizedFullLink();
-    if (!space) {
-      throw new Error("No space set");
-    }
 
     if (hasInlineCellScheme(id)) {
       return this.#syncImmutableCell(
@@ -5508,13 +5513,6 @@ type NativeCommitOperation =
   }
   | { op: "delete"; id: URI; scope?: CellScope };
 
-class StorageTransactionRejectionError extends Error {
-  constructor(readonly rejection: StorageTransactionRejected) {
-    super(rejection.message);
-    this.name = rejection.name;
-  }
-}
-
 /**
  * A commit that has been issued (optimistic write applied, verdict not yet
  * settled) and that carries PENDING reads — i.e. its read set depends on
@@ -6936,13 +6934,13 @@ export class SpaceReplica
    * The refusal a gated scoped read of `address` is answered with, or
    * `undefined` for one the gate admits: a read naming an actor's instance
    * whose actor the space's access list grants READ, as the probe resolves
-   * it. A space-scope read is never gated.
+   * it. `address` names a scoped document: a space-scope read is never
+   * gated, and `pull()` does not ask.
    */
   async #foreignScopedReadRefusal(
     address: { id: URI; scope?: CellScope; scopeKey?: ScopeKey },
   ): Promise<IForeignScopedReadRefusedError | undefined> {
-    const scope = normalizeCellScope(address.scope) ?? "space";
-    if (scope === "space") return undefined;
+    const scope = normalizeCellScope(address.scope);
     const refusal = (
       why: string,
       unnamed = false,
@@ -8143,22 +8141,6 @@ export class SpaceReplica
     this.#watchSelectorTracker = new SelectorTracker<Result<Unit, PullError>>(
       () => this.#scopeKeyIdentity(),
     );
-  }
-
-  async load(
-    entries: [WatchAddress, SchemaPathSelector | undefined][],
-  ): Promise<Result<Unit, PullError>> {
-    const known = entries
-      .map(([address]) =>
-        this.#getState(address.id, address.scope, undefined, address.scopeKey)
-      )
-      .filter((state): state is Revision<State> => state !== undefined);
-    this.#subscription.next({
-      type: "load",
-      space: this.#space,
-      changes: Differential.load(known, this.#scopeKeyIdentity()),
-    });
-    return await this.pull(entries);
   }
 
   async pull(
@@ -9536,10 +9518,6 @@ export class SpaceReplica
       );
       this.#noteAuthorizationStatus(result);
       batch.pending.resolve(result);
-    } catch (error) {
-      const result: Result<Unit, PullError> = { error: toPullError(error) };
-      this.#noteAuthorizationStatus(result);
-      batch.pending.resolve(result);
     } finally {
       this.#watchRefreshInFlight -= 1;
       this.#scheduleWatchRefreshFlush();
@@ -9939,14 +9917,9 @@ export class SpaceReplica
     operations: NativeCommitOperation[],
     commit: ClientCommit,
     source?: IStorageTransaction,
-    options: {
-      routeSources?: readonly IStorageTransaction[];
-      prepareIssue?: (commit: ClientCommit) => boolean;
-      commitOptions?: NativeCommitOptions;
-    } = {},
+    options: { commitOptions?: NativeCommitOptions } = {},
   ): Promise<Result<Unit, StorageTransactionRejected>> {
-    const routeSources = options.routeSources ??
-      (source === undefined ? [] : [source]);
+    const routeSources = source === undefined ? [] : [source];
     const resolveAtVerdict = options.commitOptions?.resolveAt === "verdict";
     // Rejection receipt seals the fate for EVERY contributing transaction.
     // finalizeRejection's own notify covers the cascade paths that do not
@@ -10169,12 +10142,6 @@ export class SpaceReplica
       });
       try {
         const { client, session } = await this.#activeSessionHandle();
-        if (
-          options.prepareIssue !== undefined &&
-          !options.prepareIssue(commit)
-        ) {
-          return { ok: {} };
-        }
         // Wire-compat: only a server advertising `pendingReadStacks` can
         // resolve array dependency sets — otherwise collapse each to its
         // top-of-stack element before sending.
@@ -10324,47 +10291,19 @@ export class SpaceReplica
           routeConflict.name = "ConflictError";
           cause = routeConflict;
         }
-        const schedulerDependencyRejection =
-          cause instanceof StorageTransactionRejectionError ? cause : undefined;
-        let rejection = schedulerDependencyRejection !== undefined
-          ? schedulerDependencyRejection.rejection
-          : toRejectedError(cause, commit, this.#space);
-        // Leg-C belt (speculation.md §6): a ConflictError whose commit
-        // names one of THIS replica's speculative layers can never
-        // converge — the dependency never reaches the wire.
-        // commitOperations refuses the export up front, so reaching
-        // here means a build path slipped through; upgrade to the
-        // terminal refusal rather than letting the caller spin its
-        // retry window against a dependency that is never coming.
-        if (
-          schedulerDependencyRejection === undefined &&
-          rejection.name === "ConflictError"
-        ) {
-          const speculativeLayers = this.#speculativeLayersOf(commit);
-          if (speculativeLayers.length > 0) {
-            logger.error("speculative-basis-exported", () => [
-              "a commit naming speculative overlay layer(s) reached the " +
-              "wire (the build-time refusal should have caught this); " +
-              "upgrading the rejection to the terminal refusal",
-              { localSeq, speculativeLayers },
-            ]);
-            rejection = this.#makeSpeculativeBasisRefusal(
-              commit,
-              speculativeLayers,
-            );
-          }
-        }
+        // A commit naming a speculative layer never gets this far: the
+        // layer is speculative from its seal on, and `#commitOperations()`
+        // refuses such a commit before it is pushed.
+        const rejection = toRejectedError(cause, commit, this.#space);
         telemetry?.submit({
           type: "storage.push.error",
           id: pushOpId,
           error: rejection.name ?? "TransactionError",
           ...rejectionAttribution(rejection, commit),
         });
-        if (schedulerDependencyRejection === undefined) {
-          this.#attachProviderReadyToRetry(rejection, localSeq);
-          if (admissionMode !== "off" && rejection.name === "ConflictError") {
-            this.#recordStaleFloor(commit, localSeq);
-          }
+        this.#attachProviderReadyToRetry(rejection, localSeq);
+        if (admissionMode !== "off" && rejection.name === "ConflictError") {
+          this.#recordStaleFloor(commit, localSeq);
         }
         // Counted (even while silent) so multi-writer churn can be read back via
         // getLoggerCounts(): "commit-conflict" is a stale-seq-basis rejection that
@@ -12974,18 +12913,6 @@ export class SpaceReplica
         scope,
       }),
     };
-  }
-
-  #visibleValue(
-    id: URI,
-    scope?: CellScope,
-    identity?: ScopeKeyIdentity,
-  ): FabricValue | undefined {
-    const visible = this.#visibleVersion(id, scope, identity);
-    if (!visible) {
-      return undefined;
-    }
-    return transactionValueForVersion(visible.version);
   }
 
   /**

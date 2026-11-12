@@ -257,10 +257,8 @@ export function isAllowedAuthoredImportSpecifier(specifier: string): boolean {
 }
 ```
 
-`isAllowedCompiledDependencySpecifier` (line 32) composes the same predicate —
-verify it needs no separate change (it delegates). Grep for every caller of
-both functions and read each call site; list them in the commit message with
-a one-line "unaffected because…" each. (Expected: the SES compiled-body
+Grep for every caller of the function and read each call site; list them in
+the commit message with a one-line "unaffected because…" each. (Expected: the SES compiled-body
 verifier and the authored-import check; if you find more, flag it.)
 
 ### M0.3 Tests: `runtime/runner/test/fabric-import-specifier.test.ts`

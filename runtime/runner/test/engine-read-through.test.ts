@@ -260,9 +260,7 @@ describe("engine-read-through", () => {
         `the watermark (${readWatermarkSeq(engine)}) to reach the authored ` +
         `commit (${authoredSeq})`,
     );
-    const settled = await waitForSettled(clientRuntime, space, authoredSeq, {
-      timeoutMs: 10_000,
-    });
+    const settled = await waitForSettled(clientRuntime, space, authoredSeq);
     expect(settled).toBeGreaterThanOrEqual(authoredSeq);
     await waitUntil(
       () => clientResult.key("total").get() === n + 1,
@@ -1077,9 +1075,7 @@ describe("engine-read-through", () => {
       () => readWatermarkSeq(engine) >= authoredSeq,
       "the watermark document to cover the commit authored inside the window",
     );
-    const settled = await waitForSettled(clientRuntime, space, authoredSeq, {
-      timeoutMs: 10_000,
-    });
+    const settled = await waitForSettled(clientRuntime, space, authoredSeq);
     expect(settled).toBeGreaterThanOrEqual(authoredSeq);
     expectWavesOpenedAfter(hold.commits, creation);
   });
@@ -1126,9 +1122,7 @@ describe("engine-read-through", () => {
       () => readWatermarkSeq(engine) >= authoredSeq,
       "the watermark document to cover the input authored inside the window",
     );
-    await waitForSettled(clientRuntime, space, authoredSeq, {
-      timeoutMs: 10_000,
-    });
+    await waitForSettled(clientRuntime, space, authoredSeq);
     await waitUntil(
       () => clientResult.key("total").get() === 61,
       "the client to observe the derived value 61",

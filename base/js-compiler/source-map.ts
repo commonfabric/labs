@@ -320,11 +320,11 @@ export function composeBundleSourceMap(
  * Build an IDENTITY source map for a compiled body whose authored source map
  * was not retained — every generated line maps to the same line/column of
  * `source`. Used by the warm/cached module-record load path so error stacks
- * name the module source rather than a raw bundle coordinate.
+ * name the module source rather than a raw compiled coordinate.
  *
  * Line/column coordinates are preserved verbatim (the compiled body IS the
  * eval'd text under this load), so no positional information is invented — the
- * map only re-labels the bundle coordinate with the per-module source name.
+ * map only re-labels the compiled coordinate with the per-module source name.
  */
 export function identitySourceMap(
   // The compiled body, or its precomputed line count — the map is a fixed

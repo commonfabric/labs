@@ -5,6 +5,7 @@ import { describe, it } from "@std/testing/bdd";
 
 import {
   BRIDGE_READ_REFUSED,
+  BridgeReadRefusedError,
   type FabricBridge,
   FabricBridgeHost,
   IPC,
@@ -307,6 +308,30 @@ describe("cf-iframe cell bridge", () => {
     await hidden.set!("own");
     expect(record.hidden).toBe("own");
     expect(inherited.hidden).toBe("prototype");
+  });
+
+  it("reads nothing, and refuses a write, through a plain context value that is not an object", () => {
+    const context: Record<string, unknown> = { count: 1, empty: null };
+    const { resources } = createCellContextBridge(context);
+    const nested = resources.count.cell!.key!("digits").key!("first");
+
+    expect(nested.get()).toBeUndefined();
+    expect(resources.empty.cell!.key!("digits").get()).toBeUndefined();
+    expect(() => nested.set!(2)).toThrow("non-object value");
+    expect(context).toEqual({ count: 1, empty: null });
+  });
+
+  it("resolves a plain context's path to a cell at the same path", async () => {
+    const context: Record<string, unknown> = { record: { name: "Ada" } };
+    const name = createCellContextBridge(context).resources.record.cell!.key!(
+      "name",
+    );
+
+    const resolved = await name.resolve!();
+    await resolved.set!("Grace");
+
+    expect(resolved.get()).toBe("Grace");
+    expect(context).toEqual({ record: { name: "Grace" } });
   });
 
   it("discovers context properties that materialize after bridge creation", async () => {
@@ -683,6 +708,78 @@ describe("cf-iframe cell bridge", () => {
     });
 
     expect(Object.keys(bridge.resources)).toEqual(["glaze"]);
+  });
+
+  describe("a read that fails other than by a refusal", () => {
+    // The context's schema declares one SQLite field, `database`; each read
+    // answers as a context with it, unless `failing` says it fails.
+
+    const failingRuntime = (
+      failing: (request: { type: RequestType; cell: CellRef }) => boolean,
+    ) =>
+      runtimeStub({
+        [$conn]: () => ({
+          request: (request: { type: RequestType; cell: CellRef }) => {
+            if (failing(request)) {
+              return Promise.reject(new Error("worker lost the space"));
+            }
+            switch (request.type) {
+              case RequestType.CellPull:
+                return Promise.resolve({
+                  value: request.cell.path[0] === "database"
+                    ? { id: "x" }
+                    : { database: { id: "x" } },
+                });
+              case RequestType.CellFields:
+                return Promise.resolve({ fields: {} });
+              case RequestType.CellResolveAsCell:
+                return Promise.resolve({
+                  cell: {
+                    ...request.cell,
+                    id: "of:resolved-context",
+                    schema: {
+                      type: "object",
+                      properties: {
+                        database: { type: "object", asCell: ["sqlite"] },
+                      },
+                    },
+                  },
+                });
+            }
+            return Promise.resolve({});
+          },
+          subscribe: () => Promise.resolve(),
+          unsubscribe: () => Promise.resolve(),
+          peersOf: () => [],
+          signal: { aborted: false },
+        }),
+      });
+
+    it("rejects with the error the listing of the context's fields fails with", async () => {
+      const runtime = failingRuntime((request) =>
+        request.type === RequestType.CellFields
+      );
+      const context = new CellHandle<Record<string, unknown>>(runtime, ref);
+
+      await expect(resolveCellContextBridge(context)).rejects.toThrow(
+        "worker lost the space",
+      );
+    });
+
+    it("rejects with the error the read of a SQLite source's database fails with", async () => {
+      const runtime = failingRuntime((request) => {
+        const schema = request.cell.schema;
+        return request.type === RequestType.CellPull &&
+          request.cell.path[0] === "database" &&
+          !(typeof schema === "object" && schema !== null &&
+            "asCell" in schema);
+      });
+      const context = new CellHandle<Record<string, unknown>>(runtime, ref);
+
+      await expect(
+        resolveCellContextBridge(context, { database: "sqlite" }),
+      ).rejects.toThrow("worker lost the space");
+    });
   });
 
   it("grants a SQLite source whose database's read is refused, as a database already written", async () => {
@@ -1579,6 +1676,19 @@ describe("cf-iframe cell bridge", () => {
       });
     }
 
+    it("throws a guest's `get()` the refusal's own code once a read is refused", async () => {
+      const { runtime } = refusing();
+      const context = new CellHandle(runtime, ref, { value: { count: 1 } });
+      const count = createCellContextBridge(context).resources.count.cell!;
+      expect(count.get()).toBe(1);
+
+      await expect(count.pull()).rejects.toMatchObject({
+        code: BRIDGE_READ_REFUSED,
+      });
+
+      expect(() => count.get()).toThrow(BridgeReadRefusedError);
+    });
+
     it("resolves a refused context to the resources its schema declares", async () => {
       const runtime = runtimeStub({
         [$conn]: () => ({
@@ -2025,5 +2135,8 @@ describe("cf-iframe cell bridge", () => {
     await expect(
       query({ sql: "SELECT 1", namedParams: [[1, "bad"]] }),
     ).rejects.toThrow("key-value entries");
+    await expect(
+      query({ sql: "SELECT 1", params: [], namedParams: [] }),
+    ).rejects.toThrow("both positional and named");
   });
 });

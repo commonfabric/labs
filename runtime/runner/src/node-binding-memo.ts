@@ -68,15 +68,14 @@ export type NodeBindingSubject = {
  * immutable, since the memo hands the same one to each.
  */
 export class NodeBindingMemo<Binding> {
-  #entries: LRUCache<string, Binding>;
+  /** Each binding held, with the address of its result document. */
+  #entries: LRUCache<string, { binding: Binding; result: string }>;
 
   /**
    * The keys of the bindings held for each result document, by its address,
-   * so {@link release} finds them, and the result document of each key held,
-   * so that a binding the cache drops leaves neither behind.
+   * so {@link release} finds them.
    */
   #keysByResult = new Map<string, Set<string>>();
-  #resultOfKey = new Map<string, string>();
 
   #epoch = schemaRegistryEpoch();
   #subjectIds = new WeakMap<object, number>();
@@ -91,11 +90,11 @@ export class NodeBindingMemo<Binding> {
     },
   ) {
     const weigh = options.weigh;
-    this.#entries = new LRUCache<string, Binding>({
+    this.#entries = new LRUCache({
       capacity: options.capacity,
       maxWeight: options.maxWeight,
-      weigh: (key, binding) => key.length + (weigh?.(binding) ?? 0),
-      onEvict: (key) => this.#unindex(key),
+      weigh: (key, { binding }) => key.length + (weigh?.(binding) ?? 0),
+      onEvict: (key, { result }) => this.#unindex(key, result),
     });
   }
 
@@ -108,7 +107,9 @@ export class NodeBindingMemo<Binding> {
     const outerThis = this;
     return {
       get indexedKeys() {
-        return outerThis.#resultOfKey.size;
+        let count = 0;
+        for (const keys of outerThis.#keysByResult.values()) count += keys.size;
+        return count;
       },
     };
   }
@@ -125,17 +126,16 @@ export class NodeBindingMemo<Binding> {
   bindingFor(subject: NodeBindingSubject, bind: () => Binding): Binding {
     const key = this.#currentKey(subject);
     const held = this.#entries.get(key);
-    if (held !== undefined) return held;
+    if (held !== undefined) return held.binding;
     const binding = bind();
-    this.#entries.put(key, binding);
     const result = documentKey(subject.resultLink);
+    this.#entries.put(key, { binding, result });
     let keys = this.#keysByResult.get(result);
     if (keys === undefined) {
       keys = new Set();
       this.#keysByResult.set(result, keys);
     }
     keys.add(key);
-    this.#resultOfKey.set(key, result);
     return binding;
   }
 
@@ -143,7 +143,6 @@ export class NodeBindingMemo<Binding> {
   clear(): void {
     this.#entries.clear();
     this.#keysByResult.clear();
-    this.#resultOfKey.clear();
   }
 
   /**
@@ -157,17 +156,14 @@ export class NodeBindingMemo<Binding> {
     const keys = this.#keysByResult.get(result);
     if (keys === undefined) return;
     this.#keysByResult.delete(result);
-    for (const key of keys) {
-      this.#resultOfKey.delete(key);
-      this.#entries.delete(key);
-    }
+    for (const key of keys) this.#entries.delete(key);
   }
 
-  /** Forgets `key`, a key whose binding the cache has dropped. */
-  #unindex(key: string): void {
-    const result = this.#resultOfKey.get(key);
-    if (result === undefined) return;
-    this.#resultOfKey.delete(key);
+  /**
+   * Forgets `key`, a key whose binding, held for the result document
+   * `result`, the cache has dropped.
+   */
+  #unindex(key: string, result: string): void {
     const keys = this.#keysByResult.get(result);
     keys?.delete(key);
     if (keys?.size === 0) this.#keysByResult.delete(result);

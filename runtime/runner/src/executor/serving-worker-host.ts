@@ -592,6 +592,7 @@ export class ServingWorkerPool {
   async close(): Promise<void> {
     if (this.#closed) return;
     this.#closed = true;
+    // Nothing the server reports from here on reaches the pool.
     this.#options.server.setServerExecutionObserver(undefined);
     // A pending backoff ends now, so that the teardown waiting behind it
     // settles.
@@ -699,7 +700,6 @@ export class ServingWorkerPool {
    * for a space between workers is kept for its next placement.
    */
   #onCommitAdmitted(notice: AdmittedCommitNotice): void {
-    if (this.#closed) return;
     const worker = this.#placements.get(notice.space);
     if (writesSpaceAcl(notice)) {
       // The space's own worker hears of the commit itself; the others may
@@ -738,7 +738,6 @@ export class ServingWorkerPool {
    * weigh.
    */
   #onSessionOpened(space: string): void {
-    if (this.#closed) return;
     const worker = this.#placements.get(space);
     if (worker !== undefined) {
       // A worker not yet serving is told of its spaces' sessions as it
@@ -910,6 +909,10 @@ export class ServingWorkerPool {
       route: this.#options.route?.href,
     };
     started.ready = started.bridge.init(init).then(({ lifetimeLock }) => {
+      // The worker's answer and its error event can reach this thread in one
+      // turn, and the error's handler then runs ahead of this continuation:
+      // a worker that failed that way counts toward the backoff, and is not
+      // serving.
       if (started.gone) return;
       started.lifetimeLock = lifetimeLock;
       started.serving = true;
@@ -969,7 +972,6 @@ export class ServingWorkerPool {
    * such workers. A spare's host holds nothing by design and is kept.
    */
   #onOccupancy(worker: PoolWorker, occupancy: HostOccupancy): void {
-    if (worker.gone) return;
     worker.occupancy = occupancy;
     if (occupancy === "parked") {
       this.#parks += 1;
@@ -995,7 +997,6 @@ export class ServingWorkerPool {
 
   /** A worker's heartbeat: its heap, which the heap budget adds up. */
   #onHeartbeat(worker: PoolWorker, heapUsed: number): void {
-    if (worker.gone) return;
     worker.heapUsed = heapUsed;
     this.#evictParkedWorkers();
   }
@@ -1099,11 +1100,11 @@ export class ServingWorkerPool {
   }
 
   /**
-   * Takes `worker` out of the pool: its watchdog stops, its bridge closes,
-   * which closes the loopback connections its runtimes held and fails
-   * whatever still waits on the worker, and its host's counters join those
-   * of the hosts that closed before it. Its spaces stay placed on it for the
-   * caller to move.
+   * Takes `worker` out of the pool: its watchdog stops; its bridge closes,
+   * which closes the loopback connections its runtimes held, fails whatever
+   * still waits on the worker, and drops every message the worker sends
+   * afterwards; and its host's counters join those of the hosts that closed
+   * before it. Its spaces stay placed on it for the caller to move.
    */
   #forget(worker: PoolWorker): void {
     worker.gone = true;

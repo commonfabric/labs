@@ -68,14 +68,14 @@ out is applied on the main thread, where the server sees each one land: the
 worker sends the `WaveSpaceCommit` (data throughout: operations, preconditions,
 confirmed reads, annotations, basis rows, consequence ids, delegated carriage,
 outbox appends) in the memory boundary's encoding, and the main thread applies
-it through a sink of its own per session, returning the result. The counter that
-keys the session's commits stays with the worker, because the outbox's own
-writes draw from the same counter under the same session: each commit crosses
-with the number the worker minted for it, and the main thread's sink is handed
-that number. The served-ACL-change commit crosses the same way, as the list of
-changes it applies; the main thread rebuilds the function from the list. A
-foreign batch and a change to another space's list leave the worker for that
-space's owner over the worker's own routed session
+it through a sink of its own under the sending session, returning the result.
+The counter that keys the session's commits stays with the worker, because the
+outbox's own writes draw from the same counter under the same session: each
+commit crosses with the number the worker minted for it, and the main thread's
+sink is handed that number. The served-ACL-change commit crosses the same way,
+as the list of changes it applies; the main thread rebuilds the function from
+the list. A foreign batch and a change to another space's list leave the worker
+for that space's owner over the worker's own routed session
 ([owner routing](../specs/server-side-execution/serving-loop.md#2-the-lease-single-deriver-operationally), on by default), and only the
 home batch and the home's changes cross the port; a host given no route sends
 them across the port with the home's.

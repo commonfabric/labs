@@ -101,4 +101,75 @@ describe("wish-now-interval-replacement", () => {
     await runtime.idle();
     expect(first.get()).toBe(settled);
   });
+
+  for (
+    const { destination, query, ticks } of [
+      { destination: "another interval", query: "#now/2", ticks: 2000 },
+      { destination: "the one-shot `#now`", query: "#now", ticks: undefined },
+      { destination: "a path target", query: "/", ticks: undefined },
+    ]
+  ) {
+    it(`stops the previous interval when the query moves to ${destination}`, async () => {
+      // As above, each run is one scheduler run of the wish's action. The
+      // first interval's cell is consumed by nothing once the query has
+      // moved, so it stops being written; an interval the query moved to
+      // starts ticking in its place.
+      const owner = runtime.getCell(space, `moved owner ${query}`);
+      const input = runtime.getCell(space, `moved input ${query}`);
+      const seed = runtime.edit();
+      owner.withTx(seed).set({});
+      input.withTx(seed).set({ query: "#now/1" });
+      runtime.prepareTxForCommit(seed);
+      expect((await seed.commit().settled).error).toBeUndefined();
+
+      const builtin = wish(
+        input as Cell<[unknown, unknown]>,
+        () => {},
+        (cancel) => cancels.push(cancel),
+        [owner],
+        owner,
+        runtime,
+      );
+      const run = async () => {
+        const tx = runtime.edit();
+        builtin.action(tx);
+        runtime.prepareTxForCommit(tx);
+        expect((await tx.commit().settled).error).toBeUndefined();
+        await storage.synced();
+        await runtime.idle();
+      };
+      await run();
+      await run();
+      const first = runtime.getCell<number>(space, {
+        wish: { now: true, interval: 1000 },
+      });
+      const started = first.get();
+      expect(typeof started).toBe("number");
+      await clock.tick(1000);
+      await runtime.idle();
+      expect(first.get()).toBe(started! + 1000);
+
+      const move = runtime.edit();
+      input.withTx(move).set({ query });
+      runtime.prepareTxForCommit(move);
+      expect((await move.commit().settled).error).toBeUndefined();
+      await run();
+      await run();
+
+      const stopped = first.get();
+      await clock.tick(2000);
+      await runtime.idle();
+      expect(first.get()).toBe(stopped);
+      if (ticks !== undefined) {
+        const second = runtime.getCell<number>(space, {
+          wish: { now: true, interval: ticks },
+        });
+        const before = second.get();
+        expect(typeof before).toBe("number");
+        await clock.tick(ticks);
+        await runtime.idle();
+        expect(second.get()).toBe(before! + ticks);
+      }
+    });
+  }
 });

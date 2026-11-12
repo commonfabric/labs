@@ -4,12 +4,21 @@ import {
   ProblematicValue,
   UnknownValue,
 } from "@commonfabric/data-model/codec-common";
+import {
+  BaseFabricInstance,
+  DEEP_CLONE_CORE,
+  DEEP_FREEZE,
+  IS_DEEP_FROZEN,
+  SHALLOW_UNFROZEN_CLONE,
+} from "@commonfabric/data-model/fabric-bases";
 import { FabricError } from "@commonfabric/data-model/fabric-instances";
 import {
   FabricBytes,
   FabricHash,
+  FabricKeyPair,
   FabricUnavailable,
 } from "@commonfabric/data-model/fabric-primitives";
+import type { FabricInstance, FabricValue } from "@commonfabric/data-model";
 import type { EntityDocument } from "@commonfabric/memory/v2";
 import { approximateJsonSize } from "@commonfabric/json/approximate-json-size";
 import {
@@ -21,6 +30,30 @@ import {
 } from "../../src/storage/document-sizes.ts";
 
 const document = (text: string): EntityDocument => ({ value: { text } });
+
+/**
+ * A Fabric instance of a class no codec is registered for. Measuring it
+ * calls none of the stubs.
+ */
+class UnregisteredInstance extends BaseFabricInstance {
+  [DEEP_FREEZE](_subFreeze: (value: FabricValue) => FabricValue): FabricValue {
+    throw new Error("not implemented");
+  }
+
+  [IS_DEEP_FROZEN](
+    _subIsDeepFrozen: (value: FabricValue) => boolean,
+  ): boolean {
+    throw new Error("not implemented");
+  }
+
+  [DEEP_CLONE_CORE](_frozen: boolean): FabricInstance {
+    throw new Error("not implemented");
+  }
+
+  protected [SHALLOW_UNFROZEN_CLONE](): FabricInstance {
+    throw new Error("not implemented");
+  }
+}
 
 /**
  * A space of `documents` documents, each of `nodesEach` nodes, measured the
@@ -253,6 +286,61 @@ describe("DocumentSizeEstimate", () => {
 
         expect(measured.approxBytes).toBeGreaterThan(
           JSON.stringify({ value: { hash: {} } }).length + 32,
+        );
+      });
+
+      it("walks a hash its codec refuses to encode as it walks a plain object", () => {
+        const estimate = new DocumentSizeEstimate();
+        const value: EntityDocument = {
+          value: { hash: new FabricHash(new Uint8Array(32), "not a tag") },
+        };
+
+        const measured = estimate.measure([value], { remaining: 1_000 });
+
+        expect(measured.measuredDocuments).toBe(1);
+        expect(measured.approxBytes).toBe(
+          approximateJsonSize({ value: { hash: {} } }).bytes,
+        );
+      });
+
+      it("counts a key pair by its algorithm alone, whether it holds key material or handles", async () => {
+        const estimate = new DocumentSizeEstimate();
+        const handles = await crypto.subtle.generateKey("Ed25519", false, [
+          "sign",
+          "verify",
+        ]) as CryptoKeyPair;
+        const pairs = [
+          new FabricKeyPair(
+            "Ed25519",
+            new Uint8Array(1_000_000),
+            new Uint8Array(1_000_000),
+          ),
+          new FabricKeyPair(handles),
+        ];
+        const expected = approximateJsonSize({
+          value: { pair: { algorithm: "Ed25519" } },
+        }).bytes;
+
+        for (const pair of pairs) {
+          const measured = estimate.measure([{ value: { pair } }], {
+            remaining: 1_000,
+          });
+          expect(measured.measuredDocuments).toBe(1);
+          expect(measured.approxBytes).toBe(expected);
+        }
+      });
+
+      it("walks an instance of a class no codec is registered for as it walks a plain object", () => {
+        const estimate = new DocumentSizeEstimate();
+        const value: EntityDocument = {
+          value: { held: new UnregisteredInstance() },
+        };
+
+        const measured = estimate.measure([value], { remaining: 1_000 });
+
+        expect(measured.measuredDocuments).toBe(1);
+        expect(measured.approxBytes).toBe(
+          approximateJsonSize({ value: { held: {} } }).bytes,
         );
       });
 

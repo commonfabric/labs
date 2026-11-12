@@ -1,22 +1,16 @@
-import { css, html } from "lit";
+import { css, html, type PropertyValues } from "lit";
 import { property } from "lit/decorators.js";
+import type { CellHandle } from "@commonfabric/runtime-client";
 
 import { BaseElement } from "../../core/base-element.ts";
+import { createArrayCellController } from "../../core/cell-controller.ts";
 
 import "../cf-chip/index.ts";
 
-import { isCellHandle } from "@commonfabric/runtime-client";
-
-/**
- * Attachment data structure
- */
-interface Attachment {
-  id: string;
+/** A cell pinned to a conversation, as `BuiltInLLMDialogState` lists it. */
+export interface PinnedCell {
+  path: string;
   name: string;
-  type: "file" | "clipboard" | "mention";
-  data?: any;
-  piece?: any;
-  removable?: boolean;
 }
 
 /**
@@ -26,10 +20,11 @@ interface Attachment {
  *
  * @attr {boolean} removable - Whether pinned cells can be removed (default: false)
  *
- * @prop {Attachment[]} pinnedCells - Array of pinned cells to display
+ * @prop {CellHandle<PinnedCell[]>|PinnedCell[]} pinnedCells - The pinned
+ *   cells to display, or a cell holding them
  *
- * @fires cf-remove - Fired when a pinned cell is removed. detail: { id: string }
- * @fires cf-click - Fired when a pinned cell is clicked. detail: { id: string, attachment: Attachment }
+ * @fires cf-remove - Fired when a pinned cell's remove button is clicked. detail: { path: string }
+ * @fires cf-click - Fired when a pinned cell is clicked. detail: { path: string, name: string }
  *
  * @example
  * <cf-attachments-bar .pinnedCells=${pinnedCells}></cf-attachments-bar>
@@ -60,56 +55,21 @@ export class CFAttachmentsBar extends BaseElement {
     `,
   ];
 
-  @property({ type: Array })
-  accessor pinnedCells: Attachment[] = [];
+  @property({ attribute: false })
+  accessor pinnedCells: CellHandle<PinnedCell[]> | PinnedCell[] = [];
 
   @property({ type: Boolean })
   accessor removable = false;
 
-  private _getVariant(type: string): "default" | "primary" | "accent" {
-    switch (type) {
-      case "mention":
-        return "primary";
-      case "clipboard":
-        return "accent";
-      case "file":
-      default:
-        return "default";
-    }
-  }
+  #pinned = createArrayCellController<PinnedCell>(this);
 
-  private _getIcon(type: string): string {
-    switch (type) {
-      case "mention":
-        return "@";
-      case "file":
-        return "📎";
-      case "clipboard":
-        return "📋";
-      default:
-        return "";
-    }
-  }
-
-  private _handleRemove(id: string, e?: Event): void {
-    e?.stopPropagation();
-    this.emit("cf-remove", { id });
-  }
-
-  private _handleClick(id: string, attachment: Attachment): void {
-    this.emit("cf-click", { id, attachment });
+  override willUpdate(changed: PropertyValues): void {
+    if (changed.has("pinnedCells")) this.#pinned.bind(this.pinnedCells);
   }
 
   override render() {
-    // TODO(runtime-worker-refactor): This component expects `Attachment[]`,
-    // matching jsx.d.ts, BuiltInLLMDialogState response, but is receiving
-    // a CellHandle (guessing of type Attachment[]).
-    if (isCellHandle(this.pinnedCells)) {
-      return html`
-        <div class="empty-state">TODO(runtime-worker-refactor)</div>
-      `;
-    }
-    if (!this.pinnedCells || this.pinnedCells.length === 0) {
+    const pinned = this.#pinned.getValue();
+    if (pinned.length === 0) {
       return html`
         <div class="empty-state">No pinned cells</div>
       `;
@@ -117,25 +77,35 @@ export class CFAttachmentsBar extends BaseElement {
 
     return html`
       <div class="attachments-list">
-        ${this.pinnedCells.map(
-          (attachment) =>
+        ${pinned.map(
+          (cell) =>
             html`
               <cf-chip
-                variant="${this._getVariant(attachment.type)}"
-                ?removable="${this.removable &&
-                  (attachment.removable !== false)}"
+                ?removable="${this.removable}"
                 interactive
                 @cf-remove="${(e: Event) =>
-                  this._handleRemove(attachment.id, e)}"
-                @cf-click="${() =>
-                  this._handleClick(attachment.id, attachment)}"
+                  this.#handle(e, "cf-remove", { path: cell.path })}"
+                @cf-click="${(e: Event) =>
+                  this.#handle(e, "cf-click", {
+                    path: cell.path,
+                    name: cell.name,
+                  })}"
               >
-                ${attachment.name}
-                <span slot="icon">${this._getIcon(attachment.type)}</span>
+                ${cell.name}
               </cf-chip>
             `,
         )}
       </div>
     `;
+  }
+
+  /** Replaces a chip's own event with one naming the pinned cell. */
+  #handle(
+    event: Event,
+    type: "cf-click" | "cf-remove",
+    detail: Pick<PinnedCell, "path"> & Partial<PinnedCell>,
+  ): void {
+    event.stopPropagation();
+    this.emit(type, detail);
   }
 }

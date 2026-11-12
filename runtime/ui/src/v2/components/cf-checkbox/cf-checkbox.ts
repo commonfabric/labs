@@ -364,18 +364,4 @@ export class CFCheckbox extends BaseElement {
         this._handleClick(event);
       }
     }
-
-    /**
-     * Focus the checkbox programmatically
-     */
-    override focus(): void {
-      super.focus();
-    }
-
-    /**
-     * Blur the checkbox programmatically
-     */
-    override blur(): void {
-      super.blur();
-    }
   }

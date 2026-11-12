@@ -83,7 +83,6 @@ import {
   type IsThisObject,
   type IStreamable,
   type JSONSchema,
-  type Module,
   type NodeFactory,
   type NodeRef,
   type OpaqueCell,
@@ -480,8 +479,9 @@ const valueKindOf = (value: unknown): ValueKind =>
 const schemaAdmitsLength = (schema: JSONSchema): boolean => {
   const visiting = new Set<JSONSchema>();
   const kindsOf = (schema: JSONSchema): readonly ValueKind[] => {
-    if (typeof schema === "boolean") return schema ? allValueKinds : [];
-    const resolved = ContextualFlowControl.resolveSchemaRefsOrThrow(schema);
+    const resolved = typeof schema === "boolean"
+      ? schema
+      : ContextualFlowControl.resolveSchemaRefsOrThrow(schema);
     if (typeof resolved === "boolean") return resolved ? allValueKinds : [];
     // A reference cycle reaches the schema again before deciding anything.
     if (
@@ -1626,24 +1626,11 @@ export class CellImpl<T extends FabricValue>
 
   /**
    * Get the full link for this cell, ensuring it has id and space.
-   * This will attempt to create a full link if one doesn't exist and we're in a valid context.
+   * This creates a full link if one doesn't exist, and throws as
+   * `#ensureLink()` does where it cannot.
    */
   get #link(): NormalizedFullLink {
-    // Check if we have a full entity ID and space
-    if (!this.#hasFullLink()) {
-      // Try to ensure we have a full link
-      this.#ensureLink();
-
-      // If still no full link after ensureLink, throw
-      if (!this.#hasFullLink()) {
-        throw new Error(
-          "Cell link creation failed - no cause or context\n" +
-            "help: use .for(uniqueId) to set explicit identity, or create cells within handler/pattern contexts",
-        );
-      }
-    }
-
-    // Combine causeContainer id with link's space/path/schema
+    if (!this.#hasFullLink()) this.#ensureLink();
     return this.#_link as NormalizedFullLink;
   }
 
@@ -1736,10 +1723,10 @@ export class CellImpl<T extends FabricValue>
 
   /**
    * Pins this (not-yet-linked) cell to a space, and to the id `id` when one is
-   * given, before its id would otherwise be derived, and routes any pattern
-   * nodes attached to it into that target space. Used by the pattern builder
-   * to implement `PatternFactory.inSpace(...)`. Throws if the cell has already
-   * been linked.
+   * given, before its id would otherwise be derived. Used by the pattern
+   * builder to implement `PatternFactory.inSpace(...)`, which pins the outputs
+   * of the node it is about to make, before any node is attached to them.
+   * Throws if the cell has already been linked.
    */
   setUnlinkedSpace(space: MemorySpace, id?: URI): void {
     if (this.#causeContainer.id || this.#_link.id) {
@@ -1754,9 +1741,6 @@ export class CellImpl<T extends FabricValue>
       space,
       ...(id !== undefined ? { id } : {}),
     });
-    for (const node of cellNodes.get(this.#identityCell()) ?? []) {
-      (node.module as Module).targetSpace = space;
-    }
   }
 
   /**
@@ -2489,9 +2473,7 @@ export class CellImpl<T extends FabricValue>
         const stream: StreamLinkRef = {
           id: resolvedToValueLink.id,
           path: [...resolvedToValueLink.path],
-          ...(resolvedToValueLink.scope !== undefined
-            ? { scope: resolvedToValueLink.scope }
-            : {}),
+          scope: resolvedToValueLink.scope,
         };
         const sidecarId = streamEntriesDocId(stream);
         const space = resolvedToValueLink.space;
@@ -2736,9 +2718,7 @@ export class CellImpl<T extends FabricValue>
           const stream: StreamLinkRef = {
             id: resolvedToValueLink.id,
             path: [...resolvedToValueLink.path],
-            ...(resolvedToValueLink.scope !== undefined
-              ? { scope: resolvedToValueLink.scope }
-              : {}),
+            scope: resolvedToValueLink.scope,
           };
           const sidecarId = streamEntriesDocId(stream);
           const emittedId = mintEventId(resolvedToValueLink, this.#tx);
@@ -5393,17 +5373,7 @@ export function setCellUnlinkedSpace(
   space: MemorySpace,
   id?: URI,
 ): void {
-  asCellImpl(cell)?.setUnlinkedSpace(space, id);
-}
-
-function asCellImpl(cell: unknown): CellImpl<FabricValue> | undefined {
-  if (cell === null || cell === undefined) return undefined;
-  const maybeToCell = (cell as { [toCell]?: () => Cell<unknown> })[toCell];
-  const unproxied = typeof maybeToCell === "function"
-    ? maybeToCell.call(cell)
-    : cell;
-  if (!isCell(unproxied)) return undefined;
-  return unproxied as unknown as CellImpl<FabricValue>;
+  cellImplOf(cell)?.setUnlinkedSpace(space, id);
 }
 
 function subscribeToReferencedDocs<T>(
@@ -6362,12 +6332,10 @@ function readOutView(
       if (!isObjectOrArray(stored) || stored instanceof FabricPrimitive) {
         return stored as FabricValue;
       }
-      if (stored instanceof FabricInstance) {
-        // A view over an instance reports no own keys, so what a copy of one
-        // holds is an empty record; the marker above the view construction in
-        // `query-result-proxy.ts` says what closes this.
-        return Object.freeze({});
-      }
+      // A `FabricInstance` has no own properties (`BaseFabricInstance` seals
+      // it), so the walk below copies one as the empty record a view over it
+      // reads as; the marker above the view construction in
+      // `query-result-proxy.ts` says what closes this.
       const member = (key: string, value: unknown): FabricValue => {
         stack.push(key);
         position.push(key);

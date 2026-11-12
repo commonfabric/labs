@@ -577,11 +577,6 @@ export class CFInput extends BaseElement {
     return isValid ? "" : "error";
   }
 
-  override disconnectedCallback() {
-    super.disconnectedCallback();
-    // Controllers handle cleanup automatically via ReactiveController
-  }
-
   override willUpdate(changedProperties: Map<string, any>) {
     super.willUpdate(changedProperties);
 
@@ -597,8 +592,11 @@ export class CFInput extends BaseElement {
   override updated(changedProperties: Map<string, any>) {
     super.updated(changedProperties);
 
-    // If value changed, ensure the DOM input is synchronized
-    if (changedProperties.has("value") && this.input) {
+    // If value changed, ensure the DOM input is synchronized. A script cannot
+    // set a file input's value, so render() leaves it unbound and so does this.
+    if (
+      changedProperties.has("value") && this.input && this.type !== "file"
+    ) {
       const currentValue = this.getValue();
       if (this.input.value !== currentValue) {
         this.input.value = currentValue;

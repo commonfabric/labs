@@ -115,7 +115,6 @@ export class ViewRenderWalkMemo {
 
   /** Forgets every cell whose reads the notification's changes touch. */
   notify(notification: StorageNotification): void {
-    if (this.#entries.size === 0) return;
     if (notification.type === "reset") {
       this.clear();
       return;

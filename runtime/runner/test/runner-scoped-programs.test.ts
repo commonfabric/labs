@@ -163,6 +163,29 @@ export default pattern<{ value: number }, { doubled: number }>(
     expect(runtime.runner.cancels.size).toBe(0);
   });
 
+  it("reports a scoped piece's graph installed until it stops, and keeps its restart registered when the stopped registration is cancelled again", async () => {
+    const result = await liveChild("user");
+    const access = runtime.runner.accessForTestingOnly;
+    const key = access.getDocKey(result);
+    const stopped = runtime.runner.cancels.get(key)!;
+    expect(stopped.graphIsInstalled()).toBe(true);
+
+    runtime.runner.stop(result);
+    expect(stopped.graphIsInstalled()).toBe(false);
+    expect(await runtime.runner.start(result)).toBe(true);
+    await runtime.idle();
+    const restarted = runtime.runner.cancels.get(key);
+    expect(restarted).toBeDefined();
+    expect(restarted).not.toBe(stopped);
+
+    stopped();
+    const piece = result.getAsNormalizedFullLink().id;
+    expect(access.scopedProgramCounts()).toEqual([{ piece, variants: 1 }]);
+    expect(restarted!.graphIsInstalled()).toBe(true);
+    await updateChild(result, 5);
+    expect(result.get()).toEqual({ doubled: 10 });
+  });
+
   it("keeps a space-scoped child reactive when its clear wave is withdrawn", async () => {
     const result = await liveChild();
     const wave = new WaveAccumulator({

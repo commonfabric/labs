@@ -45,7 +45,3 @@ export class InSpaceTargetUnresolved extends RetryImmediately {
     this.name = "InSpaceTargetUnresolved";
   }
 }
-
-export function isRetryImmediately(error: unknown): error is RetryImmediately {
-  return error instanceof RetryImmediately;
-}

@@ -489,10 +489,6 @@ export function isWriteDestinationRead(meta?: Metadata): boolean {
   return meta?.[writeDestinationReadMarker] === true;
 }
 
-export function isDeclaredOnwardRead(meta?: Metadata): boolean {
-  return declaredOnwardTarget(meta) !== undefined;
-}
-
 /** The document and path a read declared onward lands on, if it is one. */
 export function declaredOnwardTarget(
   meta?: Metadata,
