@@ -73,7 +73,7 @@ import {
 } from "@commonfabric/runtime-client";
 import { GFM } from "@lezer/markdown";
 import { consume } from "@lit/context";
-import { html, PropertyValues } from "lit";
+import { type CSSResult, html, PropertyValues, unsafeCSS } from "lit";
 import { property } from "lit/decorators.js";
 
 import { BaseElement } from "../../core/base-element.ts";
@@ -140,6 +140,8 @@ import {
   setRefShortNames,
   shortNameQueryAt,
 } from "./features/mention-refs.ts";
+import { mathMarkdown } from "./features/math-syntax.ts";
+import { proseMath } from "./features/prose-math.ts";
 import { createProseMarkdownPlugin } from "./features/prose-markdown.ts";
 import { styles } from "./styles.ts";
 import {
@@ -233,11 +235,18 @@ export type MimeType = (typeof MimeType)[keyof typeof MimeType];
 
 // Language registry
 const langRegistry = new Map<MimeType, LanguageSupport>();
+const markdownCodeLang = createJavaScript({ jsx: true });
 const markdownLang = createMarkdown({
-  defaultCodeLanguage: createJavaScript({ jsx: true }),
+  defaultCodeLanguage: markdownCodeLang,
   extensions: GFM,
 });
 const defaultLang = markdownLang;
+
+/** Markdown with `$…$` and `$$…$$` formulas, for prose mode's math. */
+const markdownMathLang = createMarkdown({
+  defaultCodeLanguage: markdownCodeLang,
+  extensions: [GFM, mathMarkdown],
+});
 
 langRegistry.set(MimeType.javascript, createJavaScript());
 langRegistry.set(MimeType.jsx, createJavaScript({ jsx: true }));
@@ -250,9 +259,23 @@ langRegistry.set(MimeType.html, createHtml());
 langRegistry.set(MimeType.markdown, markdownLang);
 langRegistry.set(MimeType.json, createJson());
 
-const getLangExtFromMimeType = (mime: MimeType) => {
+/**
+ * The language for `mime`. Markdown parses formulas as well when `math`, for
+ * an editor that draws them.
+ */
+const getLangExtFromMimeType = (mime: MimeType, math: boolean) => {
+  if (math && mime === MimeType.markdown) return markdownMathLang;
   return langRegistry.get(mime) ?? defaultLang;
 };
+
+// KaTeX and its layout rules, from `features/katex-render.ts`. They would be a
+// large share of the shell's bundle, and only an editor with `math` set uses
+// them, so the shell builds them as a script of their own, maps
+// `cf-katex-render` to it in its page's import map, and leaves the specifier
+// for the browser to resolve. Everywhere else, `runtime/ui`'s import map
+// resolves it to the module.
+// deno-lint-ignore cf-imports/no-inline-module-import
+const loadKatex = () => import("cf-katex-render");
 
 /** What the editor needs of a handle it computes writes from. */
 type EditorInput = Pick<CellHandle<unknown>, "lastRead" | "pull">;
@@ -304,6 +327,9 @@ function readUnlessRefused(cell: { get(): unknown }): unknown {
  *   follows the nearest `<cf-theme>`'s color scheme, light or dark; wrap the
  *   editor in its own `<cf-theme>` to give it a different scheme from the page.
  * @attr {"code"|"prose"} mode - Editor mode; "prose" enables markdown prose editing.
+ * @attr {boolean} math - In prose mode with Markdown, draw `$…$` and `$$…$$`
+ *   TeX formulas with KaTeX, showing a formula's TeX where the selection
+ *   touches it (default: false). See `docs/prose-markdown.md`.
  * @attr {CellHandle<string>} pattern - Optional pattern piece used for backlink context.
  * @attr {boolean} collaborative - Use Memory's operation protocol for concurrent editing.
  * @attr {string} presenceRoom - Optional opaque room override for ephemeral
@@ -394,6 +420,7 @@ export class CFCodeEditor extends BaseElement {
     tabIndent: { type: Boolean },
     theme: { type: String, reflect: true },
     mode: { type: String, reflect: true },
+    math: { type: Boolean },
     autofocus: { type: Boolean },
     cursorPosition: { type: String },
     collaborative: { type: Boolean },
@@ -438,6 +465,13 @@ export class CFCodeEditor extends BaseElement {
   declare tabIndent: boolean;
   declare theme: "light" | "dark";
   declare mode: "code" | "prose";
+
+  /**
+   * Whether prose mode draws `$…$` and `$$…$$` TeX formulas in Markdown with
+   * KaTeX. Ignored in code mode and for other languages.
+   */
+  declare math: boolean;
+
   declare autofocus: boolean;
   declare cursorPosition: "start" | "end";
   declare collaborative: boolean;
@@ -486,6 +520,17 @@ export class CFCodeEditor extends BaseElement {
   private _setupComp = new Compartment();
   private _modeComp = new Compartment();
   private _proseMarkdownComp = new Compartment();
+
+  /** KaTeX's layout rules, made into a sheet once and shared by every editor. */
+  static #katexStyles: CSSResult | undefined;
+
+  /**
+   * KaTeX, once loaded. It loads the first time this editor draws math.
+   */
+  #katex: Awaited<ReturnType<typeof loadKatex>> | undefined;
+
+  /** The load of `#katex`, from when it starts; it never rejects. */
+  #katexLoad: Promise<void> | undefined;
   private _collaborationComp = new Compartment();
   private _presenceComp = new Compartment();
   /**
@@ -678,6 +723,7 @@ export class CFCodeEditor extends BaseElement {
     this.tabIndent = true;
     this.theme = "light";
     this.mode = "code";
+    this.math = false;
     this.autofocus = false;
     this.cursorPosition = "start";
     this.collaborative = false;
@@ -2789,11 +2835,20 @@ export class CFCodeEditor extends BaseElement {
       this._reportHighlightFaults(this._editorView);
     }
 
-    // Update language
-    if (changedProperties.has("language") && this._editorView) {
-      const lang = getLangExtFromMimeType(this.language);
+    if (
+      (changedProperties.has("math") || changedProperties.has("mode") ||
+        changedProperties.has("language")) && this.#drawsMath
+    ) {
+      this.#loadKatex();
+    }
+
+    // Update language, which parses formulas only for an editor drawing them
+    if (
+      (changedProperties.has("language") || changedProperties.has("math") ||
+        changedProperties.has("mode")) && this._editorView
+    ) {
       this._editorView.dispatch({
-        effects: this._lang.reconfigure(lang),
+        effects: this._lang.reconfigure(this.#languageExtension()),
       });
     }
 
@@ -2895,10 +2950,15 @@ export class CFCodeEditor extends BaseElement {
         effects: [
           this._setupComp.reconfigure(this._getSetupExtensions()),
           this._modeComp.reconfigure(this._getModeExtension()),
-          this._proseMarkdownComp.reconfigure(
-            this.mode === "prose" ? createProseMarkdownPlugin() : [],
-          ),
+          this._proseMarkdownComp.reconfigure(this.#proseExtension()),
         ],
+      });
+    } else if (
+      (changedProperties.has("math") || changedProperties.has("language")) &&
+      this._editorView
+    ) {
+      this._editorView.dispatch({
+        effects: this._proseMarkdownComp.reconfigure(this.#proseExtension()),
       });
     }
 
@@ -3110,6 +3170,83 @@ export class CFCodeEditor extends BaseElement {
     );
   }
 
+  /** Whether the editor draws formulas: `math` set, in prose mode. */
+  get #drawsMath(): boolean {
+    return this.math && this.mode === "prose" &&
+      this.language === MimeType.markdown;
+  }
+
+  /** The language extension for `language`, with formulas when drawn. */
+  #languageExtension(): Extension {
+    return getLangExtFromMimeType(this.language, this.#drawsMath);
+  }
+
+  /**
+   * Prose mode's Markdown rendering, with formulas once KaTeX has loaded.
+   * Until then, formulas show as their TeX.
+   */
+  #proseExtension(): Extension {
+    if (this.mode !== "prose") return [];
+    const katex = this.#drawsMath ? this.#katex : undefined;
+    return [
+      createProseMarkdownPlugin(),
+      katex === undefined
+        ? []
+        : proseMath(this._editorView?.hasFocus ?? false, katex.renderFormula),
+    ];
+  }
+
+  /**
+   * Starts loading KaTeX, unless a load has started, and draws formulas once
+   * it arrives. A load that fails is reported as `cf-error`, and the formulas
+   * stay as their TeX: a page that maps no script to `cf-katex-render` is
+   * one where that happens.
+   */
+  #loadKatex(): void {
+    if (this.#katexLoad !== undefined) return;
+    this.#katexLoad = loadKatex().then((katex) => {
+      this.#katex = katex;
+      CFCodeEditor.#katexStyles ??= unsafeCSS(katex.KATEX_STYLES);
+      this.#adoptMathStyles(CFCodeEditor.#katexStyles);
+      if (this._editorView !== undefined && this.#drawsMath) {
+        this._editorView.dispatch({
+          effects: this._proseMarkdownComp.reconfigure(this.#proseExtension()),
+        });
+      }
+    }, (cause: unknown) => {
+      const error = cause instanceof Error ? cause : new Error(String(cause));
+      this.emit("cf-error", { error, message: error.message });
+    });
+  }
+
+  /**
+   * Adds KaTeX's layout rules to this editor's shadow root, after the sheets
+   * already there. Lit's `adoptStyles()` would replace those, CodeMirror's
+   * own among them.
+   */
+  #adoptMathStyles(mathStyles: CSSResult): void {
+    const root = this.shadowRoot;
+    if (root === null) return;
+    const sheet = mathStyles.styleSheet;
+    if (sheet === undefined) {
+      const style = document.createElement("style");
+      style.textContent = mathStyles.cssText;
+      root.append(style);
+    } else if (!root.adoptedStyleSheets.includes(sheet)) {
+      root.adoptedStyleSheets = [...root.adoptedStyleSheets, sheet];
+    }
+  }
+
+  /**
+   * Like Lit's, except that once this editor has started loading KaTeX, it
+   * also waits for that load and the drawing it brings.
+   */
+  protected override async getUpdateComplete(): Promise<boolean> {
+    const complete = await super.getUpdateComplete();
+    await this.#katexLoad;
+    return complete;
+  }
+
   private _getModeExtension(): Extension {
     if (this.mode !== "prose") return [];
 
@@ -3159,7 +3296,7 @@ export class CFCodeEditor extends BaseElement {
       refShortNameField,
       // Tab indentation keymap (toggleable)
       this._tabIndentComp.of(this.tabIndent ? keymap.of([indentWithTab]) : []),
-      this._lang.of(getLangExtFromMimeType(this.language)),
+      this._lang.of(this.#languageExtension()),
       this._readonly.of(EditorState.readOnly.of(this.readonly)),
       // Word wrapping
       this._wrap.of(this.wordWrap ? EditorView.lineWrapping : []),
@@ -3193,9 +3330,7 @@ export class CFCodeEditor extends BaseElement {
       this._themeComp.of(this._themeExtension()),
       // Prose/code mode extensions
       this._modeComp.of(this._getModeExtension()),
-      this._proseMarkdownComp.of(
-        this.mode === "prose" ? createProseMarkdownPlugin() : [],
-      ),
+      this._proseMarkdownComp.of(this.#proseExtension()),
       this._collaborationComp.of([]),
       this._presenceComp.of([]),
       highlightsExtension((id) => this.emit("cf-highlight-click", { id })),
