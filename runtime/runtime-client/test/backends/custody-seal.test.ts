@@ -794,10 +794,11 @@ describe("custody answer watch", () => {
 
       processor.disposeClient(host.client);
       const posts = host.posted.length;
-      // The room's terms change, which a standing watch would look at.
+      // The room's terms become ones the seal refuses, which a standing
+      // watch would send the client as an error.
       const tx = runtime.edit();
       runtime.getCellFromLink(refs.terms, undefined, tx).set(
-        { ...TERMS, question: "And tomorrow?" } as never,
+        "not terms" as never,
       );
       expect((await tx.commit().settled).error).toBeUndefined();
       await runtime.idle();
