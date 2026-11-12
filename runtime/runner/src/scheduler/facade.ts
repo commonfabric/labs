@@ -271,6 +271,17 @@ function isAuthorizationLoadFailure(error: unknown): boolean {
     error.failure.failureClass === "authorization";
 }
 
+/**
+ * Like `isAuthorizationLoadFailure()`, except that the failure also carries
+ * durable evidence of the refusal (`permanentEvidence`), as one naming the
+ * access list's revision does, rather than being one a remounted session may
+ * not repeat.
+ */
+function isLastingAuthorizationLoadFailure(error: unknown): boolean {
+  return isAuthorizationLoadFailure(error) &&
+    (error as ReplicaLoadFailureError).failure.permanentEvidence === true;
+}
+
 function normalizeRegistrationArgs(
   dependenciesOrOptions?: SchedulerRegistrationInput | SchedulerRegisterOptions,
   options: SchedulerRegisterOptions = {},
@@ -553,7 +564,8 @@ export class Scheduler {
    * Head event parked on in-flight document loads, keyed by event id. The
    * park ends once every load it waits on has settled: with no failure among
    * them — or none but `authorization`-class failures, for a client event or
-   * for one its own run's loading reads parked — execution is re-queued, and
+   * (lasting ones) for one its own run's loading reads parked — execution is
+   * re-queued, and
    * otherwise `#failHeadEventLoadPark()` drops a client event and defers a
    * served one.
    */
@@ -4071,10 +4083,13 @@ export class Scheduler {
    * hold what the closure reads.
    *
    * A park its own run's loading reads put the event in
-   * (`LoadingReadWithdrawal`) releases on authorization-class
-   * failures served or not, so that a run reading into a space its principal
-   * cannot read proceeds on the absence and holds no later event behind it,
-   * as it would with no load in flight. Such a park's drop of a client event
+   * (`LoadingReadWithdrawal`) releases when every failure is of the
+   * `authorization` class, and for a served event only when each also carries
+   * durable evidence of the refusal, so that a run reading into a space its
+   * principal cannot read proceeds on the absence and holds no later event
+   * behind it, as it would with no load in flight. A served event whose
+   * failure is no such evidence, as a revoked session's about to remount is
+   * not, defers as at the preflight. Such a park's drop of a client event
    * also reports the error the withdrawn run threw, which no later run will,
    * and abandons the work that run staged.
    *
@@ -4089,8 +4104,10 @@ export class Scheduler {
     if (this.#headEventLoadPark?.eventId !== event.id) return;
     const withdrawn = this.#headEventLoadPark.withdrawal;
     if (
-      (event.served === undefined || withdrawn !== undefined) &&
-      errors.every(isAuthorizationLoadFailure)
+      event.served === undefined
+        ? errors.every(isAuthorizationLoadFailure)
+        : withdrawn !== undefined &&
+          errors.every(isLastingAuthorizationLoadFailure)
     ) {
       this.#releaseHeadEventLoadPark(event.id);
       return;

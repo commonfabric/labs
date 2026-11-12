@@ -1063,6 +1063,39 @@ describe("scheduler-event-loading-read", () => {
       ]);
     });
 
+    it("defers the event when the load its run read fails by authorization with no evidence that the refusal is lasting", async () => {
+      // An authorization failure without the access list's revision is not
+      // durable evidence (`toReplicaLoadFailureError()`): it may be a serving
+      // session revoked and about to remount. The entry then waits, as one
+      // whose preflight load failed that way does, rather than committing
+      // the default.
+
+      const { holder, log, eventCell, store } = await standUp(
+        "served-authorization-transient",
+        ["a", "b", "c"],
+      );
+      const { reads, firstRun } = addAppendingHandler(holder, log, eventCell);
+      const fail = failReaderSyncFor(
+        store.getAsNormalizedFullLink().id,
+        "AuthorizationError",
+      );
+
+      const outcomes: ServedEventFailureOutcome[] = [];
+      const status = send(eventCell, outcomes);
+      await firstRun;
+      fail();
+
+      expect(await status).not.toBe("done");
+      expect(reads).toEqual([[]]);
+      expect(log.get()).toBeUndefined();
+      expect(outcomes).toMatchObject([{
+        kind: "deferred",
+        cause: "load-park",
+        role: "failed-head",
+        failure: { failureClass: "authorization", permanentEvidence: false },
+      }]);
+    });
+
     it("does not withdraw the run for a loading read in its home space", async () => {
       // The run reads a document of its home space that nothing has written,
       // while its load is in flight and with nothing of it in the replica, as

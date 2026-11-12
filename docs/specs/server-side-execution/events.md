@@ -628,9 +628,10 @@ loop's duty).
   parks it on those loads as the preflight park parks a head, and the
   copy's final callback waits for the run that follows, so it runs
   again once they settle and a load it already waited for does not
-  withdraw it again. A load that fails with an authorization-class
-  failure lets it run again on what the replica holds, and a load that
-  fails otherwise defers it as a failed preflight load does. A read in
+  withdraw it again. When every failed load failed by authorization,
+  with durable evidence of the refusal (the access list's revision), it
+  runs again on what the replica holds; any other failure, a revoked
+  session's not least, defers it as a failed preflight load does. A read in
   the home space needs none of this, since the wave holds the run's
   home-space reads to the store's head (serving-loop.md §3d) once the
   run seals a write there, as a drain's copy always does with its
