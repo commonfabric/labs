@@ -341,7 +341,10 @@ export type ComponentPropRead = {
    * a binding is decided on that read, rather than on the handle's own
    * schema. An entry whose component reads through a cell its read hands it,
    * as the code editor reads each mention's destination for its name, is not
-   * complete.
+   * complete. Each complete entry's component is mounted over a recording
+   * handle by `runtime/ui/src/v2/components/complete-read-contracts.browser.test.ts`,
+   * which fails on a read outside the entry that the test does not list with
+   * its reason.
    */
   readonly complete?: true;
 };
@@ -410,7 +413,8 @@ export const componentReadContracts: Readonly<
   "cf-profile-badge": {
     // Complete but for the seal, which the badge shows from whether its
     // space's root links the profile (`profileSpaceOf`), a read of the
-    // space's own document rather than of the binding.
+    // space's own document rather than of the binding, which the read
+    // contract test lists.
     profile: { schema: ProfileBadgeSchema, projected: true, complete: true },
   },
   "cf-markdown": { content: { schema: true } },
