@@ -2,17 +2,20 @@
  * What a fresh client of a person's Home loads in the spaces of the person's
  * FabriChat rooms while it brings Home up and lists the rooms, the way a
  * client that draws natively does: nothing, at any point, however many rooms
- * there are. The manager lists a room from its own records, and every link
- * to a room those records hold is a handle that declares nothing of the room,
- * so neither Home's sync nor a read of the list reaches a room's space. A
- * room is checked when it is opened, which is where a deleted room, or one
- * that no longer admits the person, is refused.
+ * there are, and whatever another client of the person's derived before it. The
+ * manager lists a room from its own records, and every link to a room those
+ * records hold is a handle that declares nothing of the room, so neither
+ * Home's sync nor a read of the list reaches a room's space. A client loads a
+ * room's documents when a read of its reaches the room, and its bring-up
+ * prefetches nothing across spaces, so what the manager's view or its
+ * `people` declare of the rooms is read only by whoever reads them. A room is
+ * checked when it is opened, which is where a deleted room, or one that no
+ * longer admits the person, is refused.
  *
  * Each client is a runtime of its own, beside an in-process storage server,
- * with server execution off, the posture this holds in, whichever posture the
- * suite runs under: with server execution on, the server renders Home's view,
- * and a client's sync of it reaches each room the view links. No toolshed or
- * browser required.
+ * in the posture the run resolves, as `multi-runtime-harness.ts` resolves it:
+ * with server execution on, the server is a serving one, whose loop computes
+ * and stores what the clients' Homes derive. No toolshed or browser required.
  */
 
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
@@ -21,7 +24,12 @@ import type { DID } from "@commonfabric/identity";
 import { Identity } from "@commonfabric/identity";
 import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
 import { isDeletedSpaceError } from "@commonfabric/memory/v2/client";
-import { ACLManager, type Cell, type MemorySpace } from "@commonfabric/runner";
+import {
+  ACLManager,
+  type Cell,
+  isCell,
+  type MemorySpace,
+} from "@commonfabric/runner";
 import { namesInstancesByDefault } from "@commonfabric/runner/storage/cache.deno";
 import {
   CHAT_START,
@@ -31,9 +39,20 @@ import {
   openMember,
   sendTrusted,
 } from "./fabrichat-room-fixture.ts";
-import { systemPatternsRoute } from "./multi-runtime-harness.ts";
+import {
+  type ListeningServingMemoryServer,
+  listenServingMemoryServer,
+  runsInWorker,
+} from "@commonfabric/runner/executor/serving-memory-server.deno";
+import { rendererVDOMSchema } from "@commonfabric/runner/schemas";
+import {
+  claimPatternEnvironment,
+  resolveServerExecution,
+  systemPatternsRoute,
+} from "./multi-runtime-harness.ts";
 import {
   initializePiecesController,
+  moduleByteCache,
   type PiecesController,
 } from "./pieces-controller.ts";
 
@@ -53,12 +72,6 @@ const ROW = {
     since: {},
     title: { type: "string" },
   },
-} as const;
-
-/** A room's roster, as the manager's `people` reads it. */
-const ROSTER = {
-  type: "object",
-  properties: { roster: { type: "array", items: HANDLE } },
 } as const;
 
 /** What a client that draws natively reads of the manager's chats view. */
@@ -119,7 +132,7 @@ interface Client {
 }
 
 describe("fabrichat-room-list", () => {
-  let server: StandaloneMemoryServer;
+  let server: StandaloneMemoryServer | ListeningServingMemoryServer;
   let owner: Identity;
   let bob: Identity;
 
@@ -131,6 +144,19 @@ describe("fabrichat-room-list", () => {
 
   /** A room whose space no longer admits the person. */
   let revoked: DID;
+
+  /**
+   * Waits for `controller`'s writes to reach the server, for what the serving
+   * loop does in answer, when there is one, and for `controller` to have
+   * heard of it.
+   */
+  async function settle(controller: PiecesController): Promise<void> {
+    await controller.runtime.idle();
+    await controller.synced();
+    await served?.host.host?.whenQuiescent();
+    await served?.idle();
+    await controller.synced();
+  }
 
   /** Has `member` create a group with `members`, and returns its space. */
   async function createGroup(
@@ -155,8 +181,7 @@ describe("fabrichat-room-list", () => {
     if (outcome.status !== "done") {
       throw new Error(`The manager refused ${title}: ${outcome.reason}`);
     }
-    await member.controller.runtime.idle();
-    await member.controller.synced();
+    await settle(member.controller);
     const room = await manager.key("requests").key(requestId).key("entry")
       .key("room").asSchema<Cell<unknown>>(HANDLE).pull();
     return room.space as DID;
@@ -221,8 +246,7 @@ describe("fabrichat-room-list", () => {
     }
     const home = (await controller.ensureDefaultPattern()).getCell();
     if (adopt) await controller.adoptCatalogRooms();
-    await controller.runtime.idle();
-    await controller.synced();
+    await settle(controller);
     return { controller, home, waits, arrived, refused };
   }
 
@@ -238,8 +262,7 @@ describe("fabrichat-room-list", () => {
       view,
       (value) => (value?.rooms?.length ?? 0) >= count,
     );
-    await client.controller.runtime.idle();
-    await client.controller.synced();
+    await settle(client.controller);
     return chats.rooms ?? [];
   }
 
@@ -279,16 +302,28 @@ describe("fabrichat-room-list", () => {
     );
   }
 
-  // Every client this file starts takes its posture from the environment.
-  const previousServerExecution = Deno.env.get(
-    "EXPERIMENTAL_SERVER_EXECUTION",
-  );
+  /** Whether this run's clients, and the server beside them, serve. */
+  const serving = resolveServerExecution();
+
+  /** The serving loop, when the posture serves. */
+  let served: ListeningServingMemoryServer | undefined;
+
+  /** Releases the pattern environment a served handler reads. */
+  let releasePatternEnvironment = () => {};
 
   beforeAll(async () => {
-    Deno.env.set("EXPERIMENTAL_SERVER_EXECUTION", "false");
-    server = StandaloneMemoryServer.start({
+    const serve = (request: Request) => systemPatternsRoute().serve(request);
+    if (serving) {
+      served = await listenServingMemoryServer({
+        serve,
+        aclMode: "enforce",
+        ...(runsInWorker() ? {} : { moduleByteCache }),
+      });
+      releasePatternEnvironment = claimPatternEnvironment(served.url);
+    }
+    server = served ?? StandaloneMemoryServer.start({
       namesInstances: () => namesInstancesByDefault(undefined),
-      serve: (request: Request) => systemPatternsRoute().serve(request),
+      serve,
       acl: { mode: "enforce" },
     });
     const passphrase = `fabrichat-room-list ${crypto.randomUUID()}`;
@@ -317,8 +352,7 @@ describe("fabrichat-room-list", () => {
     });
     try {
       await new ACLManager(bobs.runtime, revoked).remove(owner.did());
-      await bobs.runtime.idle();
-      await bobs.synced();
+      await settle(bobs);
     } finally {
       await bobs.dispose();
     }
@@ -326,12 +360,7 @@ describe("fabrichat-room-list", () => {
 
   afterAll(async () => {
     await server?.close();
-    if (previousServerExecution === undefined) {
-      Deno.env.delete("EXPERIMENTAL_SERVER_EXECUTION");
-    } else {Deno.env.set(
-        "EXPERIMENTAL_SERVER_EXECUTION",
-        previousServerExecution,
-      );}
+    releasePatternEnvironment();
   });
 
   //
@@ -404,8 +433,7 @@ describe("fabrichat-room-list", () => {
         >,
         (value) => value?.status !== undefined,
       );
-      await client.controller.runtime.idle();
-      await client.controller.synced();
+      await settle(client.controller);
       const others = [...kept, deleted, revoked];
       expect(outcome.status).toBe("done");
       expect(arrivedIn(client, others)).toEqual(others.map(() => 0));
@@ -518,40 +546,115 @@ describe("fabrichat-room-list", () => {
   });
 
   //
-  // A fresh client once the people list has been read
+  // A fresh client once another client has derived what reads the rooms
   //
 
-  describe("a fresh client once another has read the people list", () => {
-    // Reading `people` derives each listed room's roster, and a later
-    // client's bring-up names what those derivations read, so what it takes
-    // from a room's space is bounded by what reading the room's roster takes.
-    // A list the manager stored with its rooms typed as more than handles
-    // would be walked into each room in full. Carol keeps rooms of her own,
-    // so nothing here reaches the rooms the other tests count.
-
-    let carol: Identity;
+  /**
+   * Has a fresh person keep `count` rooms of their own, so that nothing a
+   * test does with them reaches the rooms the other tests count, and returns
+   * the person and the rooms' spaces.
+   */
+  async function personWithRooms(
+    name: string,
+    count: number,
+  ): Promise<{ person: Identity; rooms: DID[] }> {
+    const person = await Identity.fromPassphrase(
+      `fabrichat-room-list ${name} ${crypto.randomUUID()}`,
+      { implementation: "noble" },
+    );
+    const member = await openMember(server.url, person, 0);
     const rooms: DID[] = [];
+    try {
+      for (let index = 0; index < count; index++) {
+        rooms.push(
+          await createGroup(member, `${name}-${index}`, `${name}'s ${index}`),
+        );
+      }
+    } finally {
+      await closeMember(member);
+    }
+    return { person, rooms };
+  }
+
+  /**
+   * Renders the manager's view as a renderer does, holding every cell the
+   * view holds, a level at a time, and returns the spaces the view's links
+   * name: the rows link their rooms.
+   */
+  async function renderManagerView(client: Client): Promise<Set<string>> {
+    const view = client.home.key("chatManager").key("$UI").asSchema(
+      rendererVDOMSchema,
+    );
+    const linked = new Set<string>();
+    const held = new Set<string>();
+    const visit = async (value: unknown): Promise<void> => {
+      if (value === null || typeof value !== "object") return;
+      if (isCell(value)) {
+        const { space, id, path } = value.getAsNormalizedFullLink();
+        linked.add(space);
+        // A link out of Home's space is a row's room, which the view names
+        // and doesn't render.
+        if (space !== client.home.space) return;
+        const key = `${id}/${JSON.stringify(path)}`;
+        if (held.has(key)) return;
+        held.add(key);
+        value.sink(() => {});
+        await value.pull();
+        await settle(client.controller);
+        await visit(value.get());
+        return;
+      }
+      for (const each of Object.values(value)) await visit(each);
+    };
+    await visit(view);
+    return linked;
+  }
+
+  describe("a fresh client once another has rendered the manager's view", () => {
+    let rooms: DID[];
+    let linked: Set<string>;
     let client: Client;
 
-    /** What reading each of `rooms`' rosters alone delivers, by space. */
-    let rosterRead: Map<string, Set<string>>;
+    beforeAll(async () => {
+      const made = await personWithRooms("dana", 2);
+      rooms = made.rooms;
+      const renderer = await bootClient({ person: made.person });
+      try {
+        linked = await renderManagerView(renderer);
+      } finally {
+        await renderer.controller.dispose();
+      }
+      client = await bootClient({ person: made.person });
+      await listRooms(client, rooms.length);
+    });
+
+    afterAll(async () => {
+      await client?.controller.dispose();
+    });
+
+    it("finds the rendered view linking each room", () => {
+      expect(rooms.filter((space) => linked.has(space))).toEqual(rooms);
+    });
+
+    it("receives no document from any room's space, from bring-up on", () => {
+      expect(arrivedIn(client, rooms)).toEqual(rooms.map(() => 0));
+      expect(heldIn(client, rooms)).toEqual(rooms.map(() => 0));
+    });
+
+    it("opens no session to any room's space, from bring-up on", () => {
+      expect(openedOf(client, rooms)).toEqual([]);
+    });
+  });
+
+  describe("a fresh client once another has read the people list", () => {
+    let rooms: DID[];
+    let reader: Client;
+    let client: Client;
 
     beforeAll(async () => {
-      carol = await Identity.fromPassphrase(
-        `fabrichat-room-list carol ${crypto.randomUUID()}`,
-        { implementation: "noble" },
-      );
-      const member = await openMember(server.url, carol, 0);
-      try {
-        for (let index = 0; index < 2; index++) {
-          rooms.push(
-            await createGroup(member, `carol-${index}`, `Carol's ${index}`),
-          );
-        }
-      } finally {
-        await closeMember(member);
-      }
-      const reader = await bootClient({ person: carol });
+      const made = await personWithRooms("carol", 2);
+      rooms = made.rooms;
+      reader = await bootClient({ person: made.person });
       try {
         const people = reader.home.key("chatManager").key("people").asSchema({
           type: "object",
@@ -559,39 +662,35 @@ describe("fabrichat-room-list", () => {
         });
         people.sink(() => {});
         await people.pull();
-        await reader.controller.runtime.idle();
-        await reader.controller.synced();
+        await settle(reader.controller);
       } finally {
         await reader.controller.dispose();
       }
-      client = await bootClient({ person: carol });
-      const rows = await listRooms(client, rooms.length);
-      const control = await startRecording(carol);
-      try {
-        for (const row of rows) {
-          await control.controller.runtime.getCellFromLink(
-            row.room.getAsNormalizedFullLink(),
-          ).asSchema(ROSTER).pull();
-        }
-        await control.controller.runtime.idle();
-        await control.controller.synced();
-        rosterRead = control.arrived;
-      } finally {
-        await control.controller.dispose();
-      }
+      client = await bootClient({ person: made.person });
+      await listRooms(client, rooms.length);
     });
 
     afterAll(async () => {
       await client?.controller.dispose();
     });
 
-    it("receives from a room's space no document that reading its roster doesn't", () => {
-      for (const space of rooms) {
-        const read = rosterRead.get(space) ?? new Set<string>();
-        const beyond = [...client.arrived.get(space) ?? []]
-          .filter((id) => !read.has(id));
-        expect({ space, beyond }).toEqual({ space, beyond: [] });
-      }
+    it("finds the people list reading each room's roster", () => {
+      // Under server execution the serving loop reads the rosters, and the
+      // reader holds what it derived from them.
+      if (serving) return;
+      expect(
+        rooms.filter((space) => (reader.arrived.get(space)?.size ?? 0) > 0),
+      )
+        .toEqual(rooms);
+    });
+
+    it("receives no document from any room's space, from bring-up on", () => {
+      expect(arrivedIn(client, rooms)).toEqual(rooms.map(() => 0));
+      expect(heldIn(client, rooms)).toEqual(rooms.map(() => 0));
+    });
+
+    it("opens no session to any room's space, from bring-up on", () => {
+      expect(openedOf(client, rooms)).toEqual([]);
     });
   });
 
