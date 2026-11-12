@@ -1107,6 +1107,10 @@ Deno.test("main refuses arguments it cannot act on", async () => {
     ],
     [["--lcov=a.lcov", "--under=runtime"], "--under needs --by-file"],
     [["--lcov=a.lcov", "--by-files"], "unknown argument --by-files"],
+    [
+      ["--lcov=a.lcov", "--by-file", "runtime/memory"],
+      "unknown argument runtime/memory",
+    ],
     [["--lcov=a.lcov", "--by-file", "--under="], "--under needs a value"],
     [["--lcov="], "--lcov needs a value"],
     [["--root=", "--lcov=a.lcov"], "--root needs a value"],
