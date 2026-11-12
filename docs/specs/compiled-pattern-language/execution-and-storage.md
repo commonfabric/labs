@@ -195,14 +195,24 @@ A read through a handle listed in `Body.handles` is not known before the
 body runs. Section 1.4 says what happens when it is made. Where the bound
 address of one of the handler's slots, or such a read, lies inside the
 envelope of an invalid materializer, `scheduler-and-serving-loop.md` §5.2 and
-§5.3 govern: the materializer runs first, in its own transaction.
+§5.3 govern. For a slot the materializer runs first, in its own
+transaction. For such a read the attempt is withdrawn, the materializer
+runs, and the event is dispatched again (section 1.4).
 
 ### 1.4 The body
 
 The runtime builds the handler's argument from the slots in `Body.reads`
 and the entries of `Body.computed`, each validated against its schema and
 narrowed to its class (section 2.4), hands the body the handles its record
-names, and calls it once. During the call:
+names, and calls it once.
+
+Before the argument is built, every derived write that this transaction
+staged at an address a slot of `Body.reads` is bound to is instantiated,
+and its constraints are checked (section 1.6, "What is instantiated
+early"). The slot is then materialized from what is staged there, or from
+what is stored where the check dropped the write.
+
+During the call:
 
 - A **write through a handle** is staged in the transaction. The runtime
   refuses a write that neither a `WriteEdge` in `Body.writes` nor a
@@ -220,7 +230,19 @@ names, and calls it once. During the call:
   runtime looks up the address in the writer map. When a stale cone instance
   of a loaded instance of the same space writes it, that cone instance is
   evaluated first, inside the transaction and under the bound of section
-  2.7. The read then returns what is stored or staged.
+  2.7. A derived write that this transaction staged at the address, by
+  that evaluation or by an earlier one, is instantiated and checked before
+  the read returns (section 1.6). The read then returns what is staged, or
+  what is stored where no write is staged or the check dropped the write.
+  Where the writer is in an instance of the same space that is not loaded,
+  the read does not settle on the stored value: the attempt is withdrawn
+  whole, the instance is loaded, and the event is dispatched again under
+  the same handling, so that it names the same things
+  (`scheduler-and-serving-loop.md` §5.3). The same happens where the
+  address lies inside the envelope of an invalid materializer, which runs
+  before the event is dispatched again. Where the writer is in an instance
+  that is marked as torn down, or in another space, the read returns what
+  is stored.
 - A **request** (`Body.calls`) is recorded and returns at once: a link to an
   instance, a handle to a cell, a link to an effect's result, or a stream.
   The identifier in what is returned is computed from the request and the
@@ -293,7 +315,51 @@ evaluation, and what is written.
 - **Values are staged at evaluation, labels in the preparation.** The value
   of a kept output and of a side-write is staged when its cone instance is
   evaluated, so that a consumer in another instance reads it inside the
-  transaction. Its label is instantiated in the preparation.
+  transaction. Its label is instantiated in the preparation, with the one
+  exception of the next item.
+- **What is instantiated early.** In an event's transaction, a derived
+  write whose target the handler body reads by address is instantiated,
+  and its constraints are checked, before that read returns
+  (`plan-and-label-templates.md` §4.6). A handler body is not run again
+  when a constraint drops a write, so it must not read a value that a
+  later check drops. The body reads by address in two ways.
+  - *Through a slot of `Body.reads`.* The writes concerned are the derived
+    writes this transaction staged at an address such a slot is bound to:
+    a side-write to a state cell or to a cell reached through a handle,
+    and a kept output that the slot's path reaches through a link. They
+    are instantiated and checked after the cone instances of section 1.3
+    were evaluated and before the handler's argument is built.
+  - *Through a journaled read:* a read through a handle of `Body.handles`,
+    or through a link the body follows. A derived write this transaction
+    staged at the address read, by a cone instance evaluated before the
+    body or by one the read made current (section 1.4), is instantiated
+    and checked before the read returns.
+
+  Such a write is instantiated after the staged writes it uses
+  (`plan-and-label-templates.md` §4.5), which are instantiated and checked
+  first. A write the check drops is unstaged at once: the body reads what
+  is stored, and the slot or the journaled read resolves to the stored
+  label. A cone instance that had read the dropped value through a slot is
+  stale again, and where the read depends on it, it is evaluated again
+  before the read returns, against what is stored (section 1.7).
+
+  The early step is a step of the preparation, made ahead of the rest: the
+  same instantiation of the same template, from the labels stored or
+  staged when the read is made. The preparation keeps the instantiation
+  key and the verdict in the write's unit (section 1.9) and does not
+  instantiate the write again. A label the body stages afterward does not
+  enter it, because the value was computed from what was there before
+  (section 11, request 50).
+
+  Everything else is instantiated in the preparation: the handler's own
+  write edges, the derived writes of the event's transaction that the body
+  does not read by address, and every write of a derivation transaction. A
+  value a handler receives for a state path that names an output of its
+  instance is not read by address (section 1.3): the handler's template
+  holds the output's template, and the handler receives the computed value
+  whether or not the output's write is stored. A body that runs inside a
+  cone needs no early step, because a cone instance that read a dropped
+  value is evaluated again (section 1.7).
 - **What is instantiated.** The templates of what the transaction stores or
   checks, as `plan-and-label-templates.md` §4.1 lists them: a kept output;
   a write edge, which is a side-write, a write through a handle, a path of
@@ -308,11 +374,13 @@ evaluation, and what is written.
   has a new label and an unchanged value; or it is unstored and something
   demands it.
 - **Order, and labels staged in the transaction.** A write is instantiated
-  before every template that has a slot bound to its target: a handler's
-  write edges first, then producers before consumers, in the order the cone
-  instances were evaluated. A slot bound to an address this transaction, or
-  an earlier transaction of the batch, wrote resolves to the label staged
-  there and not to the stored one (`plan-and-label-templates.md` §4.5).
+  before every template that has a slot bound to its target: the derived
+  writes instantiated early first, each before the read that needs it,
+  then a handler's write edges, then producers before consumers, in the
+  order the cone instances were evaluated. A slot bound to an address this
+  transaction, or an earlier transaction of the batch, wrote resolves to
+  the label staged there and not to the stored one
+  (`plan-and-label-templates.md` §4.5).
 - **A kept output evaluated before a handler body** is a derived write of
   the event's transaction. Its value was staged when it was evaluated. If
   the body then wrote something its cone instance had read, the staged
@@ -320,7 +388,14 @@ evaluation, and what is written.
   instantiated from the label the body staged, for a value computed from
   what was there before. The cone instance is stale, the handler keeps the
   value it read, and the derivation transaction behind the batch evaluates
-  and stores the output.
+  and stores the output. A write that was instantiated early is not
+  withdrawn this way. Its label was instantiated before the body wrote,
+  from the labels its value was computed under, and the handler's own
+  writes use it (section 1.9), so a withdrawal would leave out the
+  handler's unit with it. It commits with the event's transaction under
+  that label. Its cone instance is stale all the same, and the derivation
+  transaction behind the batch evaluates it again and stores the result
+  (`scheduler-and-serving-loop.md` §5.2 has the same rule).
 - **What is written.** For each kept output: its value, when the value
   changed; its label entries, when the instantiation key changed; its
   provenance record, when the key or the template changed (section 7). For
@@ -464,25 +539,75 @@ Five things differ.
    selections and the children a `pick` chose, the label identifiers of the
    slots, the staged ones among them, and the labels of the `dynamic` nodes
    with their trigger reads; and which derived writes a failed constraint
-   dropped, so that the digest is over the writes that commit. A read, a
-   write or a new decision input after the preparation invalidates it, as
-   it does today.
-4. **Units, so that a conflict can withdraw one derived write.** *Assumed:*
-   the preparation records what it verified per **unit**. The handler's
-   writes of an event are one unit. Each derived write is a unit of its
-   own. A unit holds the write, the decision inputs of its template, and
-   its reads: the reads of the cone instance that computed it and of the
-   cone instances it pulled from, and the addresses in the transaction
-   whose staged value or staged label it used. The digest is computed over
-   the list of unit digests. When the commit withdraws a derived write, it
-   withdraws with it every unit that used a value or a label that write
-   staged, and the digest is computed again over the units that remain.
-   Nothing is instantiated or checked again, because no remaining unit's
-   verification used anything a withdrawn unit staged. The withdrawal is
-   recorded as a decision input, as a dropped write is. This is a host
-   arrangement of the preparation. It is listed under section 11 (request
-   41) because `plan-and-label-templates.md` §4.6 names dropped writes and
-   not withdrawn ones.
+   dropped, and which a conflict withdrew, so that the digest is over the
+   writes that commit. A read, a write or a new decision input after the
+   preparation invalidates it, as it does today. The withdrawal of a
+   derived write at the commit is the one exception, and item 4 says why
+   it needs no second verification.
+4. **Units, so that a conflict can withdraw one derived write.** The
+   preparation records what it verified per **unit**, as
+   `plan-and-label-templates.md` §4.6 ("Units") rules.
+   - **What a unit is.** Everything a handler itself stages for one event
+     is one unit (§4.4 there lists it). Each derived write is a unit of
+     its own, together with the runtime-stored state that describes that
+     write alone (§2.6 there): its provenance record (section 7.2), and
+     for a cached output the other members of its cache entry (section
+     8.4). Runtime-stored state that describes several writes is a unit
+     of its own: the bookkeeping of an operation (section 6.5), the origin
+     facts of a kept derived collection (section 7.3), and the record of
+     the instances one cone instance made (section 2.8). The writes
+     computed from such state use that unit. A derived write that a failed
+     constraint dropped is a unit that holds the verdict and no write.
+     Every write the transaction stages is in exactly one unit. Which
+     document stores a kept path is not a write in this sense: the
+     arrangement of part documents (section 4.10) follows the paths that
+     commit.
+   - **What a unit holds.** Its writes, the instantiation keys of their
+     templates, the verdicts of their constraints, what it read from
+     storage, and the units it uses. What a derived write read from
+     storage is the reads of the cone instance that computed it and of the
+     cone instances it pulled from through `output` edges, the reads a
+     memo entry records for them included (section 3.5).
+   - **What a unit uses** is as §4.5 there lists it ("What a write uses").
+     A unit uses another unit when a slot of one of its templates, of one
+     of its constraints, or of an egress check on it resolved to a label
+     the other staged; when its value was computed from a value read at an
+     address the other staged, by a slot, by a journaled read, or by the
+     following of a reference; when a label-metadata observation that
+     joins its label read a label the other staged; or when its target
+     exists only through a write of the other. The relation is taken
+     transitively, and it crosses the transactions of a batch: a unit uses
+     a unit of an earlier transaction of the batch whose staged value or
+     label it read. A value a cone receives through an `output` edge, and
+     a value a handler receives for a state path that names an output of
+     its instance, are not uses. The reads of the producing cone instance
+     are reads of the receiving unit in their place.
+   - **The digest** is computed over the digests of the units that commit,
+     with the identities of the compiled patterns and the list of the
+     units that were dropped or withdrawn.
+   - **The commit leaves out every unit that uses a unit it leaves out.**
+     When the commit withdraws a derived write on a conflict, it withdraws
+     every unit that uses that write's unit, in the same transaction and
+     in the later transactions of the batch, and computes each digest
+     again over the units that remain. Nothing is instantiated or checked
+     again, because the value, the labels and the verdicts of a unit that
+     remains were computed from what is stored and from what the units it
+     uses staged, and each of those commits with it (§4.6 there, "Why
+     nothing is verified again"). The withdrawal is recorded as a decision
+     input, as a dropped write is. A dropped write among the units
+     withdrawn loses its verdict with them, and its refusal is not
+     recorded with the instance. A withdrawal that reaches the unit of a
+     handler's own writes withdraws the event's transaction whole
+     (`scheduler-and-serving-loop.md` §5.5).
+   - **A dropped write is used by no unit.** It is unstaged when the check
+     drops it. A cone instance that had read its value is evaluated again,
+     and a derived write a handler body reads by address is checked before
+     that read returns (section 1.6).
+
+   The units are a host arrangement of the preparation. The property that
+   §4.6 there requires of it is that no write commits whose value, label
+   or verdict was computed from a value or a label staged by a write that
+   does not commit.
 5. **What the journal is still for.** Reads made to materialize slots, reads
    through handles and reads through links are journaled as today. The
    journal remains the commit's read set for conflict detection, attributed
@@ -490,8 +615,11 @@ Five things differ.
    templates. The trigger reads of a `dynamic` node are not in the journal
    of the evaluation: the scheduler holds them with the instance record,
    and the preparation takes them from there
-   (`scheduler-and-serving-loop.md` §3.4). The journal is not the source of
-   the label of a plan-covered path.
+   (`scheduler-and-serving-loop.md` §3.4). They stay in the instance record
+   until every write of the evaluation that consumed them is stored, so
+   that a transaction that later stores an unstored write from the memo
+   forms the same instantiation key. The journal is not the source of the
+   label of a plan-covered path.
 
 A write the plan does not cover is not part of a cause's transaction for a
 compiled instance. A materializer keeps its own transactions and today's
@@ -726,6 +854,27 @@ For a slot with `resolved` the handle is the resolved reference.
   `WriteEnvelope` of the body covers it. A target with `resolved` is
   resolved when the write is made, as section 1.4 says.
 
+**A handle or a reference from a computed input.** A handle or a container
+can reach a body in a value the instance computed, such as one another
+body returned or one a `pick` chose. It has no slot, and the body's record
+names it by its `identity` entry of `Body.computed`: a `GivenReference`
+with `computed`, the `computed` variant of a `handle` target or envelope,
+and an entry of `handles` (`plan-and-label-templates.md` §3.9 and §3.11).
+The runtime takes the reference from the computed value it was passed, at
+the entry's path, and hands the body what the table above gives an
+`identity` entry: a cell handle at a position of handle type, and a
+reference stand-in at a position of data type. That reference is the one
+the runtime compares with, by identity, where the record says the body
+passes it on. A write through such a handle lands in the cell the
+reference links to, at the target's path, and with `resolved` at the
+address where the resolution of that reference ends. The runtime resolves
+the target when the write is made, and a resolution is journaled. The plan
+has no edge from such a write to the cones that read the cell, so the
+cone instances it makes stale are found from the bound addresses, as
+section 2.3 says of two places that link to one cell. A read through such
+a handle is journaled where an entry of `handles` names the entry, and is
+refused otherwise.
+
 **Sampled reads.** A slot with `sampled` is materialized like any slot, and
 its label joins the template. A change at its address does not make the
 cone instance stale (section 3.3). A `sample()` through a handle of
@@ -766,6 +915,25 @@ holds two things.
   values at two addresses can carry different labels, and the instantiation
   key of a position is formed from the labels at that position's addresses.
 
+**What is stored once per key.** A kept output of an element cone is
+stored per position, under the label of that position. Everything else an
+element cone stores is stored once per key, and the positions that hold
+the key share it: the state of an operation declared in the body (section
+6), the stored request and the result of an effect (section 6.4), a path
+of the argument of a child or of an instance the cone makes (sections 4.6
+and 2.8), a side-write, a copied path of a binding or of an inline
+pattern's parameters (sections 4.7 and 4.6), and an entry of the cache
+document (section 8.4). The element slots of those positions can resolve
+to different labels. *Assumed*, as open question 27 of
+`plan-and-label-templates.md` states it for the first three: what is
+stored once per key carries the join over the positions that hold the key
+(§2.6 there), formed from the label identifiers the table holds per
+position. This document applies the same assumption to the others
+(section 11, request 51). An output at one position that reads such a
+result through a slot then carries the labels of the other positions that
+hold an equal element, which is looser than today, so the question is the
+project owner's.
+
 The runtime evaluates a `map` over the collection as follows.
 
 1. Read the collection's `enumeration` slot and each position's reference
@@ -796,7 +964,7 @@ loaded: a plain value's key is a hash of the value, and a collection
 derived by `map` or `flatMap` has positions only once it was evaluated. The
 scheduler registers its per-position entries for element slots from the
 table, after the collection's first evaluation and after each change of
-membership (section 11, request 38).
+membership (`scheduler-and-serving-loop.md` §3.2).
 
 `filter`, `flatMap`, the aggregates, the collection index and the prefix
 operations use the same table for their per-element cones. The structural
@@ -957,9 +1125,10 @@ at a `BodyCall` site of kind `instantiate`.
   `pattern(...)` written at the call, the values it captures from the body
   are its private parameters. They are stored with the instance, in its
   parameters document (section 4.6), each path bound as a path of a
-  handler's state is bound in a function body (section 4.7). Each
-  evaluation that makes the instance writes them as it writes the
-  argument.
+  handler's state is bound in a function body (section 4.7). A copied
+  path holds what the inline pattern's plan reads below its `params` root
+  and no more (section 4.6). Each evaluation that makes the instance
+  writes them as it writes the argument.
 - **When the instance's own cones are evaluated.** After the invocation
   that made it ended, inside the same transaction, when something demanded
   reads the instance's result: by the pull that extends through that
@@ -985,15 +1154,28 @@ at a `BodyCall` site of kind `instantiate`.
   an evaluation stops making can be found after a restart, when the memo is
   empty. Its label is the confidentiality of the making body's template,
   instantiated, with no integrity (`plan-and-label-templates.md` §2.6),
-  and it is a store the runtime owns.
+  and it is a store the runtime owns. Where the making cone is an element
+  cone, the document holds one record per element key, under the key, and
+  a key derived from a value is the salted one (section 5.3). The record
+  of one key carries the join of section 2.5 ("What is stored once per
+  key"). The set of keys says which elements the collection has.
+  *Assumed:* it carries the collection's instantiated membership label, as
+  §2.6 there rules for an operation's state document that holds several
+  keys (section 11, request 49).
 - **Teardown.** An instance that the last committed evaluation made and
   this evaluation does not make is torn down in this transaction. The
   transaction removes it from the instances document and writes a mark
-  into the setup record of its result document. A marked instance is not
-  loaded: demand that reaches it through a link some other document holds
-  evaluates nothing, an event sent to one of its streams is not handled,
-  and its effect operations request nothing. A reader of such a link reads
-  the values last stored. The instance's documents, its parts, its state
+  into the setup record of its result document. The same transaction
+  writes the mark for every instance that belongs to the torn-down one:
+  its children of the reactive tier, the instances its own computations
+  made, and the instances that belong to those in turn. A child of a
+  torn-down instance that is reached later through a link some document
+  holds is then found marked (`scheduler-and-serving-loop.md` §2.7). A
+  marked instance is not loaded: demand that reaches it through a link
+  some other document holds evaluates nothing, an event sent to one of
+  its streams is not handled, and its effect operations request nothing.
+  A reader of such a link reads the values last stored. The documents of
+  each marked instance, its parts, its state
   cells and its operation state among them, are retired and are deleted
   under the rule of section 9.6: after the retention period, when nothing
   read them. An evaluation that fails makes no instance and tears none
@@ -1027,9 +1209,13 @@ identity holds nothing a client cannot derive, unless an enclosing element
 key is a salted plain value (section 5.3).
 
 The modifiers `asScope` and `inSpace` apply at such a site as in a handler
-(sections 4.6 and 5.6). Which principal the step in the other space acts
-as, when the transaction is a derivation transaction, belongs to
-`scheduler-and-serving-loop.md` (section 11, request 39).
+(sections 4.6 and 5.6). The step in the other space of an `inSpace`
+instantiation that a derivation transaction stages acts as the principal
+of the scope key the making cone instance is evaluated for. A cone
+instance of space scope is evaluated for no principal, so an `inSpace`
+request it makes is refused when it is made, and the cone instance fails.
+Both are `scheduler-and-serving-loop.md`'s (§9.3 and §10.3). The second
+is an assumption there, and its open question 34.
 
 ## 3. The in-memory memo
 
@@ -1311,7 +1497,7 @@ says how many scope instances exist.
 | Cache document | The entries of cones the runtime promoted | Section 8.4 | One per scope the promoted cones have |
 | Binding state document | The state of a binding made in a function body: the copied paths, and a link for each cell and each container bound by reference | Section 5.5 | The body's |
 | Instances document | Which instances the evaluations of the instance's computations made | Section 2.8 | One per scope the making cone instances have |
-| Stream document | The entries of the events appended to one stream | The stream's identifier (sections 5.2 and 5.5) | As today |
+| Stream document | The entries of the events appended to one stream, and the stream's `eventWatermark`. It exists once the stream received an event (section 4.7) | The stream's identifier (sections 5.2 and 5.5) | As today |
 
 A cell or a child instance that a handler of the instance created is not
 one of the instance's documents. It is reached through whatever link the
@@ -1495,11 +1681,16 @@ body instantiates (`plan-and-label-templates.md` §3.15).
   path of a handler's state in a function body: a cell handle and a
   container the body passes on unchanged are links, and a scalar and a
   container the body computed are copied, with the making body's
-  template. The body that makes the instance writes the document with the
-  argument, and the child's `params` slots resolve to it
-  (`plan-and-label-templates.md` §3.15). A caller cannot read or supply
-  it. A pattern closure used as a value is different: its copied captures
-  are stored with the factory value, wherever that is stored.
+  template. A copied path holds what the inline pattern's plan reads below
+  its `params` root and no more: the paths at which that plan has a slot
+  with root `params`, each narrowed to the slot's class by the rule of
+  section 4.7 ("What a copied path holds"), with the `params` slots in the
+  place of the handler's `binding` slots (`plan-and-label-templates.md`
+  §3.15). The body that makes the instance writes the document with the
+  argument, and the child's `params` slots resolve to it. A caller cannot
+  read or supply it. A pattern closure used as a value is different: its
+  copied captures are stored with the factory value, wherever that is
+  stored, narrowed in the same way.
 - **A child in another space** (`inSpace`) has its documents in that space.
   The requesting transaction writes only what belongs to its own space. The
   sequence of commits that spans both spaces belongs to
@@ -1528,8 +1719,8 @@ the binding was made.
   | What the body bound at the path | `capture` | What the document holds |
   | --- | --- | --- |
   | A cell handle | `link` | A link to the cell |
-  | A scalar | `copy` | The value |
-  | A container the body computed | `copy` | The paths of it that the bound handler reads (below). A reference inside it stays a reference, by the rule for values passed on unchanged (section 2.4) |
+  | A scalar | `copy` | The value, as the bound handler observes it (below) |
+  | A container the body computed | `copy` | The paths of it that the bound handler observes, each as its class observes it (below). A reference inside it stays a reference, by the rule for values passed on unchanged (section 2.4) |
   | A container the body read from an input or a cell and passes on unchanged, or a reference at a position typed `unknown` | `link` | A link to the address the container was read from. The body records `identity` there and does not read the content |
   | A path that holds a reference on some runs and a computed value on others | `copy` | Decided per run from the value the runtime is handed: a link where the value carries a stored address, and the copy otherwise |
 
@@ -1543,21 +1734,37 @@ the binding was made.
   and the stream's, derive from the enclosing instance, the handler and
   what is bound (section 5.5).
 
-**What the copy of a computed container holds.** The paths the bound
-handler's footprint names below its `binding` root, each as its class
-observes it, and no others (`footprint-analysis.md` §8.5;
-`plan-and-label-templates.md` §3.14; `language-subset.md` §5.2). The
-runtime takes the class from the handler's slots with root `binding`, as
-it does for the handler's argument, and stores at each path what section
-2.4 puts into an argument for an entry of that class: the value for `value`, a
-stand-in of the same kind for `shape`, a container with the same keys or
-the same length for `enumeration`, and the subtree for `identity`, since a
-handler that passes the container on passes on a link to this document.
-Where the handler has no entry at or below a path, nothing is stored. For
-a handler received as a factory value the runtime stores the subtree the
-handler's declared state type covers. A scalar is stored as it is. When an
-event arrives, the handler's argument is built from its `binding` slots,
-which resolve through this document, as any argument is built.
+**What a copied path holds.** What the bound handler observes of it and no
+more, by the rule of `plan-and-label-templates.md` §3.14 ("How much a copy
+holds"). `Binding.state` records no class for a copied path. The runtime
+narrows the copy by the handler's slots with root `binding` at or below
+the path, as it narrows the handler's argument, and stores at each slot's
+path what section 2.4 puts into an argument for an entry of that class.
+
+| The handler's `binding` slot | What the document holds at the slot's path |
+| --- | --- |
+| `value` | The value |
+| `shape` | A stand-in of the same kind |
+| `enumeration` | A container with the same keys, or the same length |
+| `identity` | The subtree. The reference the handler observes is the reference to the copy, so a handler that passes the container on passes on a link to this document |
+| `labelMetadata` | Nothing on its own account. The handler observes the label stored for the copy |
+| No slot at or below a path | Nothing |
+
+The table holds for a scalar as for a container: a scalar that the handler
+observes for `shape` alone is stored as the stand-in of its kind, and a
+path the handler does not observe is not stored. Every copied path carries
+the making body's template, whatever the class. `footprint-analysis.md`
+§8.5 has what the body that makes the binding records for each row, and
+`language-subset.md` §5.2 has the source forms.
+
+For a handler received as a factory value the compiler does not have the
+handler's record. The copy then holds the subtree that the handler's
+declared state type covers (`Binding.stateSchema`), as `value`. The record
+the runtime resolves when the binding is made narrows what the handler's
+argument takes from the copy when an event arrives, and does not narrow
+the copy. When an event arrives, the handler's argument is built from its
+`binding` slots, which resolve through this document, as any argument is
+built.
 
 **The stream document.** Under server execution an event is an entry
 appended to a stream document
@@ -1566,14 +1773,19 @@ received an event has a document. Today a stream document also exists from
 setup and holds a back-link to its owner, and a bound handler has an
 argument document
 ([row-instance investigation](../../history/development/performance/2026-10-16-fabrichat-row-instances.md),
-"Its handlers"). *Assumed:* in the compiled layout a stream document is
-created by the first event appended to the stream and not at setup, and the
-event queue finds the instance and the binding of a stream identifier
-without a document written at setup. A stream identifier is a hash and
-cannot be inverted, so how the queue finds them is for
-`scheduler-and-serving-loop.md` to state (section 11, question 6). If it
-needs an owner record written at setup, each binding of the reactive tier
-costs one small document per element, written once and never rewritten.
+"Its handlers"). In the compiled layout a stream document holds the
+entries of the events appended to the stream and the stream's
+`eventWatermark`, and nothing else. It is created by the first event
+appended to the stream, and no transaction writes one when a binding comes
+to exist. A stream identifier is a hash and cannot be inverted, and the
+document it names does not exist before the first append, so an event is
+not routed by a document. It is routed by a row of the stream index that
+`scheduler-and-serving-loop.md` §5.1 proposes: one row per stream of a
+compiled instance, in the space's store beside the basis index, from the
+stream's identifier to the instance and the binding. A binding therefore
+costs one row of that index, written in the store transaction of the wave
+whose transaction first computed the stream's identifier, and no document
+until its stream receives an event.
 
 ### 4.8 What the runtime stores today, from source
 
@@ -1646,13 +1858,13 @@ streams, each stream stored as a link, but the size has not been measured.
 | Per message row | Today | Compiled |
 | --- | --- | --- |
 | Instances | One list child with a result slot, and a `FabriChatMessageRow` instance inside it | None |
-| Documents the row owns | A result slot and about forty owned cells: 16 computeds, 7 conditionals, 5 actions and at least 11 handler bindings with a stream document and an argument document each, 1 writable, 1 reactive list | One part document, for the row's rendered subtree. One session state cell, `pickerOpen`, once a session first assigns it. One stream document per stream of the row that received an event |
+| Documents the row owns | A result slot and about forty owned cells: 16 computeds, 7 conditionals, 5 actions and at least 11 handler bindings with a stream document and an argument document each, 1 writable, 1 reactive list | One part document, for the row's rendered subtree. One session state cell, `pickerOpen`, once a session first assigns it. One stream document per stream of the row that received an event, and none for a stream that received none. Each of the row's streams, about a dozen, has one row of the stream index, which is not a document (section 4.7) |
 | Values a reader binds | About 25 bound props, each a link to a document of the row | The same values as paths of the row's part document: the space's scope instance for most, the session's for the 4 or 5 the record counts as session-scoped |
 | Label envelopes | One per document of the row | One, in the row's part document, with an entry per labeled path |
 
 | Per room of thirty messages | Today | Compiled |
 | --- | --- | --- |
-| Documents for the rows | About 1,230 (thirty families of about forty-one) | 30 part documents, each with a scope instance per session that rendered the row, and 0 to 30 state cells per session that opened a picker |
+| Documents for the rows | About 1,230 (thirty families of about forty-one) | 30 part documents, each with a scope instance per session that rendered the row, 0 to 30 state cells per session that opened a picker, and a stream document for each stream that received an event. The rows' streams have about 360 rows of the stream index, a dozen per message row |
 | What a resume synchronizes | 1,663 list-child syncs and 285 cell syncs, the twelve participant chips included | The result document, the part documents the session's reads reach, the argument document, and the state cells that exist |
 | Commits a load stores | 190, of which 167 are session-scoped derivations of the rows | One per cause that changed a kept output. A second load that finds every cone instance current commits nothing (section 3.4) |
 | CFC preparations a load makes | 615 | One per cause |
@@ -1762,9 +1974,10 @@ gives a row no cell identity on its account
 
 **How a part document is identified.** By the instance and the kept path of
 its split point, with every position of a kept collection on the path
-replaced by the key of the element at that position. This is the naming
-rule of `plan-and-label-templates.md` §1.3, with a path where a declaration
-has a name.
+replaced by the key of the element at that position, hashed under the
+secret of the space. This is the naming rule of
+`plan-and-label-templates.md` §1.3, with a path where a declaration has a
+name and with every key hashed.
 
 ```text
 createRef({}, {
@@ -1774,22 +1987,35 @@ createRef({}, {
   cause:  <path>,
 })
 
-step = { element: <collection name>, key: <element key>, nth: <ordinal> }
+step = { element: <collection name>, key: <hashed key>, nth: <ordinal> }
 ```
 
 - `within` has one step per kept collection whose position the path passes
-  through. `key` is the element key of section 5.3, salted where the
-  element is a plain value. `nth` is present where several positions of
-  the collection hold the same key, and is the ordinal of the position
-  among them. Two rows that show equal plain values share a cone and not a
-  part document, because their labels are per position.
+  through. `key` is the hash of the secret of the space and the element
+  key of section 5.3, for every key: a cell's identity is hashed under the
+  secret as a plain value is, and so is the pair with the index
+  (`plan-and-label-templates.md` §2.3). A storage link is part of what is
+  stored, and a reader of the document that holds it can see the
+  identifier it names: for a row, a reader of the collection's membership.
+  An identifier derived from a cell's identity alone could be compared
+  with one derived from a guessed cell. Hashed under the secret, the
+  identifier tells such a reader which positions hold the same row before
+  and after a change of membership, which the membership label covers,
+  and nothing of the cell or the value the row was computed from. `nth` is
+  present where several positions of the collection hold the same key,
+  and is the ordinal of the position among them. Two rows that show equal
+  plain values share a cone and not a part document, because their labels
+  are per position.
 - `cause` is the path from the innermost row on it, or from the result
   root where there is none, down to the split point. Its segments are
   property names and the indexes of arrays that are not kept collections,
   such as the children written in one JSX element.
 - The identifier does not hold a position, so a reorder, an insertion or a
   removal elsewhere in a collection renames no part. A reorder moves
-  storage links in the stored array and rewrites no part document.
+  storage links in the stored array. It rewrites a part document only
+  where the move changes a label that the row's slots resolve to (below).
+- No client derives the identifier, since a client cannot read the secret
+  (section 5.3). A reader names the result cell and a path.
 - A part document is derived state and takes the `computed:` scheme, like
   an operation's state document (section 6). It has a scope instance per
   scope key that a path inside it was evaluated for, as the result document
@@ -1823,8 +2049,8 @@ Nothing but the storage link in its parent names a part document.
   instances that compute them: for a row, that row's element cones and no
   other row's. Where a session watches a part document by its own
   address, the `result` link and the path at the part's root give the
-  scheduler the instance and the kept paths the watch reaches (section 11,
-  request 40).
+  scheduler the instance and the kept paths the watch reaches, as that
+  section has it.
 
 **Writing.** One evaluation writes every document it changed in one
 transaction: the result document, each part document a changed path is
@@ -1872,15 +2098,22 @@ any kept path (section 1.6).
   that path, the `enumerate` entry of a collection whose rows are parts
   included. Which rows a collection has is labeled there, by the
   collection's membership template.
-- **A part's envelope is complete for its paths.** *Assumed:* where a
-  `*`-child entry of the collection's document covers a path inside a row,
-  the row's part document holds an entry for that path all the same. A
-  read of the part document by its own address then consumes what a read
-  of the same paths through the result consumes, and a join absorbs the
-  repetition when both are consumed. Without it, a session that is served
-  the part document by its address would be served paths whose label is
-  held in another document. `plan-and-label-templates.md` §2.3 does not
-  state this (section 11, request 42).
+- **A part's envelope is complete for its paths**, by the rule of
+  `plan-and-label-templates.md` §2.3. Where a `*`-child entry of the
+  collection's document covers a path inside a row, the row's part
+  document holds an entry at that path with that entry's label all the
+  same. A read of the part document by its own address then consumes what
+  a read of the same paths through the result consumes, and no path is
+  served under a label that only another document holds.
+- **The repeated entry and the `*`-child entry agree.** The `*`-child
+  entry stays in the collection's document, where it covers the positions
+  stored in place. It is stored only while every position instantiates to
+  its label, the positions that are parts included, and one transaction
+  writes it and the entries of the parts. A read through the result that
+  consumes both consumes one label twice, which a join absorbs. The
+  entries of a part are those of the position its row has: a move that
+  changes a label the row's slots resolve to rewrites them in the
+  transaction that moves the row.
 - The constraints are evaluated per output path and per write edge and do
   not depend on which document stores the path.
 
@@ -1990,8 +2223,9 @@ Three consequences of the naming rule for what is stored.
 - **A binding** of a named handler that is bound to nothing takes the
   handler's name, and an inline event handler the attribute's name.
 
-A part document is named by the same record with type `part` and a path in
-place of the name (section 4.10).
+A part document is named by the same record with type `part`, a path in
+place of the name, and every element key hashed under the secret of the
+space (section 4.10).
 
 ### 5.3 Element keys and the salt
 
@@ -2010,6 +2244,12 @@ alone (`ensureRuntimeSecret`, described in
 is not the salt `sqliteQuery` uses for row documents. Executed code cannot
 read it, and it is stored under a label no reader's ceiling admits.
 
+The identifier of a part document is the one identifier in which every
+key is hashed under the secret, a cell's identity included (section
+4.10): it is stored in a storage link, which carries no label, where a
+reader of the collection's membership can see it. In every other
+identifier a key that is a cell's identity enters as it is.
+
 Two consequences.
 
 - **The memo needs no salt.** A key that only indexes the element table in
@@ -2018,12 +2258,14 @@ Two consequences.
 - **A client cannot read the secret**, by ruling. A reader who could would
   be able to confirm a guess at a confidential value from an identifier,
   which is what the salt prevents. A client therefore cannot name
-  per-element state over plain values, a part document of a row keyed by a
-  plain value, or a binding with copied paths, before the server stores a
-  link to it. It learns such an identifier from the stored link. A
-  speculative handler that makes a binding with copied paths cannot name
-  the stream the server will name. What a client shows for such state
-  before the server's result arrives belongs to
+  per-element state over plain values or a binding with copied paths
+  before the server stores a link to it, and it learns such an identifier
+  from the stored link. It cannot derive the identifier of a part document
+  at or below a row of a kept collection, and does not need to: it names
+  the result cell and a path, and reaches the part through the storage
+  link (section 4.10). A speculative handler that makes a binding with
+  copied paths cannot name the stream the server will name. What a client
+  shows for such state before the server's result arrives belongs to
   `scheduler-and-serving-loop.md`.
 
 State and handlers over plain values exist only where the index is in the
@@ -2175,7 +2417,11 @@ authoritatively.
 4. When the transaction commits, its steps are applied in this order: the
    genesis commit of the new space, which makes the acting principal its
    owner; the allocation record, by itself; the step that writes the
-   instance's documents in the other space; and the home step.
+   instance's documents in the other space; and the home step. Where the
+   transaction also staged changes to access lists, they are applied
+   after the allocation record and before every batch of writes to
+   another space: genesis, allocation record, access changes, the
+   batches for other spaces, home (`scheduler-and-serving-loop.md` §9.4).
 
 A transaction that is rejected or aborted applies no step, and the key pair
 is discarded. A failure after the genesis commit and before the allocation
@@ -2238,6 +2484,33 @@ cannot and takes `of:`.
 An operation's state document is a store the runtime owns: the runtime
 alone writes it, and no authored schema declares a label for it
 (`plan-and-label-templates.md` §2.6).
+
+**An operation inside an element body** has one state document per element
+key. `plan-and-label-templates.md` §2.6 leaves to this document whether
+that is one document per key, or one document per operation with the
+state of each key at a path of its own, and the choice changes no label.
+This document chooses one document per key. The element key is a step of
+`within` in the identifier (section 5.2), a key derived from a value is
+the salted one (section 5.3), and the state of one key is labeled by the
+table of §2.6 there, instantiated for that element. A change to one
+element then writes that element's state document and no other, a
+document is created when its key is first evaluated, and the state of a
+key that left its collection is retired by itself (section 9.6). No
+document holds the state of several keys of the enclosing collection, so
+there is no key set that would need the collection's membership label.
+The cost is that the number of documents grows with the number of
+elements.
+
+The state of one key is stored once for the positions that hold the key.
+Where those positions resolve to different labels, it carries the join
+over them, as open question 27 of that document assumes (section 2.5,
+"What is stored once per key").
+
+The keys an aggregate or an index holds contributions for are those of
+the collection the operation folds, and they are paths of the operation's
+own state document (sections 6.1 and 6.3). They are bookkeeping, and
+their label is the confidentiality of `Operation.input`, which joins the
+membership of that collection (section 6.5).
 
 ### 6.1 Aggregates
 
@@ -2646,6 +2919,17 @@ reads, carries the confidentiality of the cone-level join and no integrity.
 The entries are in the envelope of the cache document, or of the forced
 cache's state document.
 
+For an element cone the cache document holds one entry per element key,
+under the key (section 8.4), and a key derived from a value is the salted
+one (section 5.3). An entry is stored once for the positions that hold
+its key, so a cached output carries the join of section 2.5 ("What is
+stored once per key") where those positions resolve to different labels.
+The set of keys says which elements the collection has. *Assumed:* it
+carries the collection's instantiated membership label, as §2.6 there
+rules for an operation's state document that holds several keys (section
+11, request 49). A forced cache in an element body is an operation and
+has one state document per key (section 6).
+
 ### 8.7 Why promotion does not change what a pattern means
 
 - **Values.** A cone without side-writes is a function of its slots, its
@@ -3044,7 +3328,7 @@ evaluated, in this transaction if the scheduler includes it (section 1.8).
 | CFC preparations | One per commit that touched labeled documents | Two |
 | Documents created | The message, the reactions list, the receipt, and the new row's family: a result slot and about forty owned cells | The message, the reactions list, the receipt, and the new row's part document |
 | Label instantiations | One join per transaction | `T_send` once; the row templates once for the new row; none for unchanged rows |
-| Round trips for the renderer to read the new row's cells | 26 | For the scheduler document. The new row's values arrive in one part document |
+| Round trips for the renderer to read the new row's cells | 26 | Not a measured count. A reader loads the documents on its paths (section 4.10): for the new row, its part document, in the space's scope instance and the session's, and a part below it where the row's subtree is split further |
 
 The figures for today are from two measurement records:
 [posting the thirtieth message](../../history/development/performance/2026-10-fabrichat-room-send-30-profile.md)
@@ -3116,12 +3400,10 @@ computation makes:
     collection, or at a node of the rendered tree; a split point becomes a
     part at 1,024 bytes and returns in place at 512; and a document over
     65,536 bytes makes parts of the split points directly below it. The
-    three numbers are placeholders for stage 4 to measure. Two choices in
-    the rule are not about numbers: that the `props` of a node are stored
+    three numbers are placeholders for stage 4 to measure. One choice in
+    the rule is not about numbers: that the `props` of a node are stored
     with the node and are not a part of their own, although the renderer
-    subscribes to them separately today, and that a part's envelope repeats
-    the entries a `*`-child entry of the collection would cover (request
-    42).
+    subscribes to them separately today.
 33. **An instance made again under the identity of one that was torn down**
     (section 2.8). With an ordinal as the identity, a list that shrinks and
     grows makes instance number 2 again for another item. *Assumed:* the
@@ -3158,13 +3440,13 @@ To `scheduler-and-serving-loop.md`:
 
 5. **Dirty slots since a commit.** Withdrawn. The scheduler marks the stale
    cone instances from the basis rows of its §10.4 (section 3.4 here).
-6. **Routing an event to a binding.** Not met. Section 4.7 stores no
-   document for a stream of the reactive tier until an event is appended to
-   it. *Assumed:* the stream document is created by the first append, and
-   the event queue finds the instance and the binding from the stream's
-   identifier without a document written at setup. That document has to
-   say what a stream document holds, who creates it, and how the
-   identifier leads to an instance that is not loaded.
+6. **Routing an event to a binding.** Met by its §5.1. A stream document
+   holds the entries and the `eventWatermark` and is created by the first
+   append. An event is routed by a row of the stream index, one row per
+   stream beside the basis index, from the stream's identifier to the
+   instance and the binding, which also leads to an instance that is not
+   loaded (section 4.7 here). That document proposes the index and lists
+   it as its open question 26.
 7. **Several scope keys in one transaction.** Met by its §10.3.
 8. **The first evaluation as a cause.** Ruled: a change of demand is the
    fourth kind of cause (section 1.1), as its §4.5 has it.
@@ -3176,48 +3458,60 @@ To `scheduler-and-serving-loop.md`:
 10. **A client and the element-key salt.** Ruled (section 5.3). What a
     client shows for state it cannot name is that document's to state.
 11. **The identifier of a space an `inSpace` request creates.** Ruled
-    (section 5.6). That document has to place the genesis commit of the
-    space and the step that records the allocation ahead of the step that
-    writes the instance's documents in the other space (its §9.4).
+    (section 5.6), and met by its §9.4: the genesis commit of the space
+    and the step that records the allocation come ahead of the staged
+    access changes, the batch that writes the instance's documents in the
+    other space, and the home writes.
 12. **Staged events and effect requests.** Met by its §5.1, §6.2 and §9.3.
 
 <!-- The list restarts so that the numbers stay as cited. -->
 
-35. **The evaluation count, and gates** (sections 1.5 and 2.7). Cone
-    evaluation keeps the count of evaluations per cone instance and
-    transaction, and checks no time gate before it evaluates a cone
-    instance. *Assumed:* the instance record keeps no second count, and no
-    gate holds a cone instance.
-36. **Stale, and unstored** (sections 1.7 and 3.3). After a rejection, an
-    abort, a dropped write or a withdrawn write, the memo holds values that
-    storage does not. *Assumed:* the scheduler does not advance the basis
-    rows of such a cone instance, records the refusal of a dropped write,
-    and asks for an unstored output to be stored when something demands
-    it, without treating the cone instance as one that needs an
-    evaluation.
-37. **A read made current at the read** (sections 1.4 and 2.4). Its open
-    question 11 is met: a stale cone instance of a loaded instance of the
-    same space that writes the address is evaluated before a journaled
-    read returns. *Assumed:* where the writer is in an instance that is not
-    loaded, the read returns what is stored, and that document decides
-    whether the instance is then loaded and the event runs again.
-38. **Element entries come from the element table** (section 2.5).
-    *Assumed:* the scheduler registers the per-position entries of element
+35. **The evaluation count, and gates** (sections 1.5 and 2.7). Met by its
+    §8.1 and §5.3: cone evaluation keeps the count of evaluations per cone
+    instance and transaction, the instance record keeps no second count,
+    and no gate holds a cone instance.
+36. **Stale, and unstored** (sections 1.7 and 3.3). Met by its §3.5, §5.6
+    and §10.4: after a rejection, an abort, a dropped write or a withdrawn
+    write, the scheduler does not advance the basis rows of the cone
+    instance, records the refusal of a dropped write, and has an unstored
+    output stored when something demands it, without treating the cone
+    instance as one that needs an evaluation.
+37. **A read made current at the read** (sections 1.4 and 2.4). Met by its
+    §5.3: a stale cone instance of a loaded instance of the same space
+    that writes the address is evaluated before a journaled read returns.
+    Where the writer is in an instance that is not loaded, the attempt is
+    withdrawn whole, the instance is loaded, and the event is dispatched
+    again under the same handling.
+38. **Element entries come from the element table** (section 2.5). Met by
+    its §3.2: the scheduler registers the per-position entries of element
     slots after the collection's first evaluation and after each change of
     membership, from the table cone evaluation holds, and does not build
     them when the instance is loaded.
-39. **Instances a computation makes** (section 2.8). *Assumed:* an instance
-    made in a transaction gets its record in that transaction when
-    something demanded reads it; an instance marked as torn down is not
-    loaded, its queued events are not handled, and a completion that
-    arrives for one of its effect operations writes nothing; and an
-    `inSpace` instantiation by a computation is a step in another space of
-    a derivation transaction, for which that document names the acting
-    principal.
-40. **Demand over several documents** (section 4.10). *Assumed:* demand is
-    per kept output path whichever document stores the path, and a watch on
-    a part document by its own address is mapped to kept paths through the
-    `result` link and the path at the part's root.
+39. **Instances a computation makes** (section 2.8). Met by its §2.7, §9.3
+    and §10.3: an instance made in a transaction gets its record in that
+    transaction when something demanded reads it; an instance marked as
+    torn down is not loaded, its queued events are not handled, and a
+    completion that arrives for one of its effect operations writes
+    nothing; the transaction that tears an instance down marks the
+    instances that belong to it; and the step in another space of an
+    `inSpace` instantiation by a computation acts as the principal of the
+    scope key the making cone instance is evaluated for. That a cone
+    instance of space scope cannot instantiate with `inSpace` is an
+    assumption there (its open question 34).
+40. **Demand over several documents** (section 4.10). Met by its §4.2:
+    demand is per kept output path whichever document stores the path, and
+    a watch on a part document by its own address is mapped to kept paths
+    through the `result` link and the path at the part's root.
+
+<!-- The list restarts so that the numbers stay as cited. -->
+
+48. **A derived write that was instantiated early is not withdrawn**
+    (section 1.6). Met by its §3.5 and §5.2: a kept output computed before
+    a handler body is withdrawn before the preparation when the body wrote
+    something its cone instance had read, unless the body read the write
+    by address. Such a write was instantiated before the body wrote, the
+    handler's own writes use it, and it commits with the event's
+    transaction.
 
 To `plan-and-label-templates.md`, with the specification change where a
 label is concerned:
@@ -3232,8 +3526,8 @@ label is concerned:
     carries the confidentiality of the output's instantiated label joined
     with the label of the label-metadata observation at the path (section
     7.4 here).
-16. **What the prepared digest binds.** Met by its §4.6 (section 1.9 here).
-    Request 41 is what remains.
+16. **What the prepared digest binds.** Met by its §4.6 (section 1.9 here),
+    request 41 included.
 17. **The `shape` entry of a migrated path.** Met by its §2.6, "A stored
     link that becomes a value" (section 9.2 here).
 18. **Cache promotion as a channel.** Met by its §5.5.
@@ -3248,37 +3542,41 @@ label is concerned:
     1.8 here).
 23. **A promotion directive per cone.** Met by `Cone.cache` (section 8.5
     here).
-24. **State of an operation inside an element body.** That document names
-    it per element key, so an aggregate declared in a row has one state
-    document per row. *Assumed:* as that document says. The alternative,
-    one document per operation with an entry per element key, would keep
-    the number of documents independent of the number of elements.
+24. **State of an operation inside an element body.** Met by its §2.6: the
+    state is per element key, the layout is this document's choice and
+    changes no label, and in a document that held several keys the key set
+    would carry the collection's membership label. This document chooses
+    one state document per key (section 6 here). What is stored once per
+    key where positions differ in label is its open question 27 (section
+    2.5 here).
 25. **The back-link of a state cell.** Met: a state cell document keeps the
     `result` back-link, which its §3.16 has `resultOwnerOf` read, and
     carries no pattern reference, manifest or setup record.
 
 <!-- The list restarts so that the numbers stay as cited. -->
 
-41. **Units of the preparation, and a withdrawn write** (section 1.9). Its
-    §4.6 binds which derived writes a failed constraint dropped. A conflict
-    withdraws a derived write after the preparation. *Assumed:* the
-    preparation records what it verified per unit, the digest is over the
-    units that commit, a withdrawal takes with it the units that used what
-    the withdrawn write staged, and nothing is verified again. The third
-    condition of its §4.1 then also covers an output whose write a conflict
-    withdrew.
-42. **A part's envelope is complete for its paths** (section 4.10).
-    *Assumed:* a part document repeats, for its own paths, the entries a
-    `*`-child entry in the collection's document covers, so that a read of
-    the part by its own address consumes what a read through the result
-    consumes. Its §2.3 keeps `*`-child entries with the collection's
-    document and does not say this. Its open question 19 is otherwise
-    answered here: section 4.10 has which subtrees get a part document,
-    how one is identified, how a storage link is told from a reference,
-    and what a reader demands; section 1.6 has which transaction stores a
-    kept output computed before a handler body; sections 1.4 and 2.4 have
-    the read through a handle; and section 6.7 has the computed inputs of
-    a materializer.
+41. **Units of the preparation, and a withdrawn write** (section 1.9). Met
+    by its §4.5 ("What a write uses") and §4.6 ("Units"): the preparation
+    records what it verified per unit, the digest binds the dropped and
+    the withdrawn writes and is over the units that commit, the commit
+    leaves out every unit that uses a unit it leaves out, and nothing is
+    verified again. The third condition of its §4.1 covers an output whose
+    write a conflict withdrew. That a withdrawal takes the using units
+    with it is its open question 28, for the project owner.
+42. **A part's envelope is complete for its paths** (section 4.10). Met by
+    its §2.3: a part document repeats, for its own paths, the entries a
+    `*`-child entry in the collection's document covers, and the two
+    agree. Its §2.3 also has the identifier of a part document derived
+    under the secret of the space for every key, which section 4.10 here
+    follows. Its open question 19 is answered here: section 4.10 has
+    which subtrees get a part document, how one is identified, how a
+    storage link is told from a reference, and what a reader demands;
+    section 1.6 has which transaction stores a kept output computed
+    before a handler body, and which derived writes are instantiated
+    before a handler body reads them; sections 1.4 and 2.4 have the read
+    through a handle; section 1.9 has the units; section 6 has the layout
+    of an operation's state in an element body; and section 6.7 has the
+    computed inputs of a materializer.
 43. **An instance a computation makes** (section 2.8). Met by its §1.3,
     §2.6 and §3.14: the identity, the argument's write edges as the
     cone's, what a failed evaluation leaves, and the label of the record of
@@ -3292,6 +3590,31 @@ label is concerned:
     among the events that invocation sends, and the identifier of a space
     a request creates is obtained and recorded by a write the body stages.
     Question 47 is what remains.
+
+<!-- The list restarts so that the numbers stay as cited. -->
+
+49. **The key set of a document that holds several element keys**
+    (sections 2.8 and 8.6). Its §2.6 gives the key set of an operation's
+    state document that holds several keys the collection's membership
+    label. This document stores an operation's state per key, and holds
+    several element keys in two other documents: the cache document and
+    the instances document. *Assumed:* the set of keys in each carries the
+    collection's instantiated membership label, and a key derived from a
+    value is the salted one.
+50. **The order of an early instantiation** (section 1.6). Its §4.5
+    instantiates a handler's write edges first, and its §4.6 has a derived
+    write that a handler body reads by address instantiated before that
+    read returns. *Assumed:* such a write is instantiated ahead of the
+    handler's write edges, with the staged writes it uses, and the
+    preparation does not instantiate it again from a label the body
+    staged afterward.
+51. **What is stored once per key** (section 2.5). Its open question 27
+    assumes the join over the positions that hold a key for the state of
+    an operation, the stored request and the result of an effect, and a
+    path of a child's argument. An element cone stores further things
+    once per key: a side-write, a copied path of a binding or of an
+    inline pattern's parameters, an entry of the cache document, and its
+    record in the instances document. *Assumed:* the same join for each.
 
 To `language-subset.md`:
 
