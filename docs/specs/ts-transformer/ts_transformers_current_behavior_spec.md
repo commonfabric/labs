@@ -2737,9 +2737,11 @@ reads/writes so equality and navigation do not force full values into a
 computation's input schema:
 
 - Trusted Common Fabric `equals(...)` / `equalLinks(...)` calls record their
-  arguments as comparable identity paths. Their cell-like receiver-method forms
-  do the same; an arbitrary user object's method merely named `equals` is an
-  ordinary read. `navigateTo(...)` records identity (not comparable) argument
+  arguments as comparable identity paths, and so do `equalsKey(...)` calls,
+  whose key is what `equals` matches by (fixture
+  `handler-schema/identity-key-argument`). The cell-like receiver-method forms
+  of `equals` and `equalLinks` do the same; an arbitrary user object's method
+  merely named `equals` is an ordinary read. `navigateTo(...)` records identity (not comparable) argument
   use. Bare helpers are accepted only when symbol resolution proves Common
   Fabric provenance; receiver methods require a cell-like receiver when a
   checker is available (`policy/capability-analysis.ts`,

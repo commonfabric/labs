@@ -75,6 +75,7 @@ import {
 import { tagCollectionKey } from "./collection-key.ts";
 import { currentPrincipal } from "./current-principal.ts";
 import { getPatternEnvironment } from "./env.ts";
+import { equalsKey } from "./equals-key.ts";
 import { eventKey } from "./event-key.ts";
 import { h, UiAction, UiDisclosure, UiPromptSlot } from "./h.ts";
 import { nameInstance } from "./instance-name.ts";
@@ -320,6 +321,7 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
     // Cell creation
     cell: cellConstructorFactory<AsCell>("cell").of,
     equals: cellConstructorFactory<AsCell>("cell").equals,
+    equalsKey,
 
     // Cell constructors with static methods
     Cell: cellConstructorFactory<AsCell>("cell"),
