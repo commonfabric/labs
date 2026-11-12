@@ -2,7 +2,12 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { ReactiveControllerHost } from "lit";
 import { NAME } from "@commonfabric/runner/shared";
-import { createMockCellHandle } from "../test-utils/mock-cell-handle.ts";
+import {
+  createMockCellHandle,
+  failResolutions,
+  pushRefusal,
+  pushUpdate,
+} from "../test-utils/mock-cell-handle.ts";
 import { MentionController } from "./mention-controller.ts";
 import type { MentionableArray } from "./mentionable.ts";
 
@@ -73,14 +78,25 @@ describe("MentionController — trigger detection", () => {
   });
 
   it("hides when no trigger is present", () => {
-    const content = "hello";
-    const cursor = 5;
+    let content = "@";
     const ctrl = new MentionController(createMockHost(), {
       getContent: () => content,
-      getCursorPosition: () => cursor,
+      getCursorPosition: () => content.length,
+    });
+    ctrl.handleInput(new Event("input"));
+    expect(ctrl.isShowing).toBe(true);
+
+    content = "hello";
+    ctrl.handleInput(new Event("input"));
+    expect(ctrl.isShowing).toBe(false);
+  });
+
+  it("stays hidden when no trigger is present", () => {
+    const ctrl = new MentionController(createMockHost(), {
+      getContent: () => "hello",
+      getCursorPosition: () => 5,
     });
 
-    // First show it
     ctrl.handleInput(new Event("input"));
     expect(ctrl.isShowing).toBe(false);
   });
@@ -132,6 +148,22 @@ describe("MentionController — filtering", () => {
 
   it("returns empty when no mentionable is set", () => {
     const ctrl = new MentionController(createMockHost());
+    expect(ctrl.getFilteredMentions()).toEqual([]);
+  });
+
+  it("returns empty for an empty list", () => {
+    const ctrl = new MentionController(createMockHost());
+    ctrl.setMentionable(createMentionableCell([]));
+    expect(ctrl.getFilteredMentions()).toEqual([]);
+  });
+
+  it("returns empty while the list's read is refused", () => {
+    const ctrl = new MentionController(createMockHost());
+    const cell = createMentionableCell(["Alice"]);
+    ctrl.setMentionable(cell);
+    expect(ctrl.getFilteredMentions()).toHaveLength(1);
+
+    pushRefusal(cell);
     expect(ctrl.getFilteredMentions()).toEqual([]);
   });
 });
@@ -214,6 +246,14 @@ describe("MentionController — keyboard navigation", () => {
     expect(inserts.length).toBe(1);
     expect(inserts[0]).toContain("[Alice]");
     expect(ctrl.isShowing).toBe(false);
+  });
+
+  it("returns false for any other key, leaving the selection as it was", () => {
+    const ctrl = createShowingController();
+    ctrl.handleKeyDown(fakeKeyEvent("ArrowDown"));
+    expect(ctrl.handleKeyDown(fakeKeyEvent("a"))).toBe(false);
+    expect(ctrl.isShowing).toBe(true);
+    expect(ctrl.state.selectedIndex).toBe(1);
   });
 
   it("returns false when not showing", () => {
@@ -350,18 +390,22 @@ describe("MentionController — indexed rows", () => {
     ctrl.setMentionable(cell);
     ctrl.handleInput(new Event("input"));
     const row = ctrl.getFilteredMentions()[0];
-    Object.defineProperty(row, "key", {
-      value: () => ({
-        asSchema: () => ({
-          resolveAsCell: () => Promise.reject(new Error("unavailable")),
-        }),
-      }),
-    });
+    failResolutions(cell);
 
     await ctrl.insertMention(row);
 
     expect(inserts).toEqual([]);
     expect(ctrl.isShowing).toBe(true);
+  });
+
+  it("decodes no href to nothing", async () => {
+    const ctrl = new MentionController(createMockHost());
+    const { cell } = createIndexedCell([
+      { name: "Indexed Topic", pieceId: "of:target-piece" },
+    ]);
+    ctrl.setMentionable(cell);
+
+    expect(await ctrl.decodePieceFromHref(null)).toBe(null);
   });
 
   it("decodes a piece href back to its index row", async () => {
@@ -414,6 +458,18 @@ describe("MentionController — extractMentionsFromText", () => {
     expect(extracted).toEqual([]);
   });
 
+  it("ignores links to entries that cannot be resolved", async () => {
+    const ctrl = new MentionController(createMockHost());
+    const cell = createMentionableCell(["Alice"]);
+    ctrl.setMentionable(cell);
+    failResolutions(cell);
+
+    const extracted = await ctrl.extractMentionsFromText(
+      "[Alice](/of:elsewhere)",
+    );
+    expect(extracted).toEqual([]);
+  });
+
   it("ignores links that don't match any mentionable", async () => {
     const ctrl = new MentionController(createMockHost());
     const cell = createMentionableCell(["Alice"]);
@@ -451,6 +507,31 @@ describe("MentionController — lifecycle", () => {
     const ctrl = new MentionController(createMockHost());
     ctrl.selectMention(3);
     expect(ctrl.state.selectedIndex).toBe(3);
+  });
+
+  it("asks the host to update when the list changes, only while the host is connected", () => {
+    let updates = 0;
+    const host = {
+      ...createMockHost(),
+      requestUpdate: () => updates++,
+    };
+    const ctrl = new MentionController(host);
+    const cell = createMentionableCell(["Alice"]);
+    ctrl.setMentionable(cell);
+    ctrl.hostConnected();
+    updates = 0;
+
+    pushUpdate(cell, [{ [NAME]: "Bob" }]);
+    expect(updates).toBe(1);
+
+    ctrl.hostDisconnected();
+    pushUpdate(cell, [{ [NAME]: "Carol" }]);
+    expect(updates).toBe(1);
+
+    ctrl.hostConnected();
+    updates = 0;
+    pushUpdate(cell, [{ [NAME]: "Dan" }]);
+    expect(updates).toBe(1);
   });
 
   it("setMentionable(null) clears mentionable", () => {

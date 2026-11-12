@@ -20,7 +20,11 @@ import {
   type WritableModuleTransform,
   writeModuleTransformField,
 } from "./model.ts";
-import type { ModuleSnapClaim, ModuleTransform } from "./contract.ts";
+import type {
+  ModuleSnapClaim,
+  ModuleTransform,
+  StationModule,
+} from "./contract.ts";
 import {
   connectorIdentityKey,
   findBestSnap,
@@ -40,16 +44,13 @@ describe("model", () => {
       expect(ownsDrag(active, 17)).toBe(true);
       expect(ownsDrag(active, 23)).toBe(false);
       expect(ownsDrag(undefined, 17)).toBe(false);
-      expect(dragDisposition({ pointerId: 17, moved: true }, 23, false)).toBe(
-        "ignore",
-      );
-      expect(dragDisposition({ pointerId: 17, moved: false }, 17, false)).toBe(
+      expect(dragDisposition({ pointerId: 17, moved: false }, false)).toBe(
         "restore",
       );
-      expect(dragDisposition({ pointerId: 17, moved: true }, 17, true)).toBe(
+      expect(dragDisposition({ pointerId: 17, moved: true }, true)).toBe(
         "restore",
       );
-      expect(dragDisposition({ pointerId: 17, moved: true }, 17, false)).toBe(
+      expect(dragDisposition({ pointerId: 17, moved: true }, false)).toBe(
         "commit",
       );
     });
@@ -62,11 +63,7 @@ describe("model", () => {
 
       expect(pointerWasCancelled(cancelledPointers, 17)).toBe(true);
       expect(
-        dragDisposition(
-          active,
-          17,
-          pointerWasCancelled(cancelledPointers, 17),
-        ),
+        dragDisposition(active, pointerWasCancelled(cancelledPointers, 17)),
       ).toBe("restore");
     });
   });
@@ -388,8 +385,141 @@ describe("model", () => {
       ]);
       expect(findConnections(resolved)).toEqual([]);
     });
+
+    it("leaves a module where it stands for a claim naming a module or connector that is not there", () => {
+      const anchor = createSalvageModule("hub", "anchor");
+      anchor.transform.position = [0, 1.2, 0];
+      const mover = createSalvageModule("cargo", "mover");
+      mover.transform.position = [8, 1.2, 0];
+      const valid: ModuleSnapClaim = {
+        id: "claim",
+        movingConnectorId: "port-lock",
+        targetModuleId: anchor.id,
+        targetConnectorId: "east-lock",
+        rotationQuarterTurns: 0,
+      };
+      const claims: Record<string, ModuleSnapClaim | null>[] = [
+        { [mover.id]: null },
+        { ghost: valid },
+        { [mover.id]: { ...valid, targetModuleId: "ghost" } },
+        { [mover.id]: { ...valid, targetModuleId: mover.id } },
+        { [mover.id]: { ...valid, movingConnectorId: "aft-lock" } },
+        { [mover.id]: { ...valid, targetConnectorId: "aft-lock" } },
+      ];
+
+      for (const claim of claims) {
+        expect(resolveSnapClaims([anchor, mover], claim)).toEqual([
+          anchor,
+          mover,
+        ]);
+      }
+      expect(
+        resolveSnapClaims([anchor, mover], { [mover.id]: valid })[1].transform
+          .position,
+      ).toEqual([5, 1.2, 0]);
+    });
+
+    it("leaves a module where it stands for a claim on a lock another module already holds", () => {
+      const anchor = createSalvageModule("hub", "anchor");
+      anchor.transform.position = [0, 1.2, 0];
+      const holder = createSalvageModule("cargo", "holder");
+      holder.transform.position = [5, 1.2, 0];
+      const mover = createSalvageModule("cargo", "mover");
+      mover.transform.position = [0, 1.2, 9];
+
+      const resolved = resolveSnapClaims([anchor, holder, mover], {
+        [mover.id]: {
+          id: "claim",
+          movingConnectorId: "port-lock",
+          targetModuleId: anchor.id,
+          targetConnectorId: "east-lock",
+          rotationQuarterTurns: 0,
+        },
+      });
+
+      expect(resolved[2]).toEqual(mover);
+      expect(findConnections(resolved).map(({ id }) => id)).toEqual([
+        "anchor:east-lock--holder:port-lock",
+      ]);
+    });
+
+    it("turns a module docking on a vertical lock to the quarter turn nearest its claim's", () => {
+      const anchor = withConnector("anchor", [0, 1.2, 0], [0, 1, 0]);
+      const mover = withConnector("mover", [6, 1.2, 6], [0, -1, 0]);
+
+      const resolved = resolveSnapClaims([anchor, mover], {
+        mover: {
+          id: "claim",
+          movingConnectorId: "lock",
+          targetModuleId: "anchor",
+          targetConnectorId: "lock",
+          rotationQuarterTurns: 3,
+        },
+      });
+
+      expect(resolved[1].transform).toEqual({
+        position: [0, 3.2, 0],
+        rotationQuarterTurns: 3,
+      });
+    });
+
+    it("leaves a module where it stands when no quarter turn faces its lock against the target's", () => {
+      const anchor = withConnector("anchor", [0, 1.2, 0], [0, 1, 0]);
+      const mover = withConnector("mover", [6, 1.2, 6], [0, 1, 0]);
+
+      const resolved = resolveSnapClaims([anchor, mover], {
+        mover: {
+          id: "claim",
+          movingConnectorId: "lock",
+          targetModuleId: "anchor",
+          targetConnectorId: "lock",
+          rotationQuarterTurns: 0,
+        },
+      });
+
+      expect(resolved[1]).toEqual(mover);
+    });
+
+    it("leaves a module where it stands where rounding keeps the snapped locks apart", () => {
+      // At 2⁵³ m adjacent doubles are 2 m apart, so the snapped lock lands
+      // 2 m from the target's.
+      const far = 2 ** 53;
+      const anchor = createSalvageModule("hub", "anchor");
+      anchor.transform.position = [far, 1.2, 0];
+      const mover = withConnector("mover", [far + 20, 1.2, 0], [-1, 0, 0]);
+      mover.connectors[0].offset = [-3, 0, 0];
+
+      const resolved = resolveSnapClaims([anchor, mover], {
+        mover: {
+          id: "claim",
+          movingConnectorId: "lock",
+          targetModuleId: "anchor",
+          targetConnectorId: "east-lock",
+          rotationQuarterTurns: 0,
+        },
+      });
+
+      expect(resolved[1]).toEqual(mover);
+      expect(findConnections(resolved)).toEqual([]);
+    });
   });
 });
+
+/**
+ * A relay at `position` whose one connector, `lock`, sits 1 m along `normal`
+ * and faces it.
+ */
+function withConnector(
+  id: string,
+  position: [number, number, number],
+  normal: [number, number, number],
+): StationModule {
+  return {
+    ...createSalvageModule("relay", id),
+    transform: { position, rotationQuarterTurns: 0 },
+    connectors: [{ id: "lock", label: "Lock", offset: normal, normal }],
+  };
+}
 
 function claimFromSnap(
   id: string,

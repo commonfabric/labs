@@ -11,6 +11,10 @@ import { Runtime } from "../src/runtime.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
 import type { CfcLabelView } from "../src/cfc/label-view.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
+import {
+  markUiInputBlindWriteTx,
+  unmarkUiInputBlindWriteTx,
+} from "../src/storage/reactivity-log.ts";
 
 const signer = await Identity.fromPassphrase("cell-get-cache test");
 const space = signer.did();
@@ -309,5 +313,48 @@ describe("Cell.get() per-transaction cache", () => {
     // The real read path performed the read-after-prepare invalidation that a
     // cache hit would have skipped.
     expect(tx.getCfcState().prepare.status).toBe("invalidated");
+    // The read that invalidated the prepared state is itself cached.
+    expect(c.get()).toBe(after);
+  });
+
+  it("neither serves nor stores a read made during a UI-input blind write", () => {
+    // A read made in this mode carries no commit precondition, so a read
+    // after it must make its own.
+
+    const c = runtime.getCell(space, "blind-write", OBJECT_SCHEMA, tx);
+    c.set({ x: 4 });
+    const before = c.get();
+
+    markUiInputBlindWriteTx(tx);
+    const during = c.get();
+    unmarkUiInputBlindWriteTx(tx);
+    expect(during).toEqual({ x: 4 });
+    expect(during).not.toBe(before);
+    expect(cacheStats()).toEqual({
+      hits: 0,
+      misses: 1,
+      sets: 1,
+      entries: 1,
+    });
+
+    expect(c.get()).toBe(before);
+  });
+
+  it("neither serves nor stores a read once its transaction is committing", async () => {
+    const committing = runtime.edit();
+    const c = runtime.getCell(space, "committing", OBJECT_SCHEMA, committing);
+    c.set({ x: 3 });
+    const before = c.get();
+    const stats = { hits: 0, misses: 1, sets: 1, entries: 1 };
+    expect(committing.getReadResultCacheStats?.()).toEqual(stats);
+
+    const commit = committing.commit();
+    expect(committing.status().status).toBe("pending");
+    const during = c.get();
+    expect(during).toEqual({ x: 3 });
+    expect(during).not.toBe(before);
+    expect(c.get()).not.toBe(during);
+    expect(committing.getReadResultCacheStats?.()).toEqual(stats);
+    await commit.settled;
   });
 });

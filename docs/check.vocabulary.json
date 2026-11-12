@@ -61,6 +61,7 @@
     "spaceDeleted",
     "spaceMembers",
     "spaceOf",
+    "spaceOfLink",
     "sqliteDatabase",
     "str",
     "table",

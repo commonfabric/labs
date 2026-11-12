@@ -298,6 +298,21 @@ describe("droppedStoredClaim()", () => {
     ).toBe("the merged schema drops the stored uiContract at /*");
   });
 
+  it("returns a claim on every item that the merged schema drops", () => {
+    expect(
+      droppedStoredClaim(
+        { type: "array", items: PIN },
+        { type: "array", items: LABELED },
+      ),
+    ).toBe("the merged schema drops the stored uiContract at /*");
+    expect(
+      droppedStoredClaim(
+        { type: "array", items: PIN },
+        { type: "array", items: PIN },
+      ),
+    ).toBeUndefined();
+  });
+
   it("returns a writer claim of another form the merged schema changes", () => {
     const at = (writeAuthorizedBy: unknown): JSONSchema => ({
       type: "object",

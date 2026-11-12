@@ -488,15 +488,10 @@ function cellContextResources(
       ...(current && typeof current === "object" ? Object.keys(current) : []),
     ]);
   };
-  const resource = (name: string): BridgeResource | undefined => {
+  /** The resource for `name`, which `names()` has returned. */
+  const resource = (name: string): BridgeResource => {
     const properties = schemaProperties(root.ref().schema);
     const current = valueForDisplay(root);
-    if (
-      !Object.hasOwn(properties, name) &&
-      !(current && Object.hasOwn(current, name))
-    ) {
-      return undefined;
-    }
     const propertySchema = properties[name];
     const value = current?.[name];
     const cell = isCellHandle(value)

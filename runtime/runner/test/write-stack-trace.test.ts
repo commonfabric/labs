@@ -207,6 +207,52 @@ describe("write stack trace", () => {
     ]);
   });
 
+  it("keeps the enclosing write debug context for work given no label", () => {
+    runtime.setWriteStackTraceMatchers([{
+      space,
+      entityId: "doc:unlabeled",
+      path: [],
+      match: "exact",
+      label: "unlabeled write",
+    }]);
+
+    const returned = runtime.withWriteDebugContext(
+      "raw:outer",
+      () =>
+        runtime.withWriteDebugContext(undefined, () => {
+          const tx = runtime.edit();
+          try {
+            tx.writeValueOrThrow(
+              {
+                space,
+                scope: "space",
+                id: "doc:unlabeled",
+                path: [],
+              },
+              { title: "Inner" },
+            );
+          } finally {
+            tx.abort();
+          }
+          return "inner result";
+        }),
+    );
+
+    expect(returned).toBe("inner result");
+    expect(runtime.getWriteStackTrace()).toEqual([{
+      recordedAt: expect.any(Number),
+      space,
+      entityId: "doc:unlabeled",
+      path: [],
+      writerActionId: "raw:outer",
+      match: "exact",
+      label: "unlabeled write",
+      result: "ok",
+      valueKind: "object",
+      stack: expect.stringContaining("writeValueOrThrow"),
+    }]);
+  });
+
   it("keeps write trace state isolated per runtime", async () => {
     const secondStorageManager = StorageManager.emulate({ as: signer });
     const secondRuntime = new Runtime({

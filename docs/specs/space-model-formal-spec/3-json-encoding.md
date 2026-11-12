@@ -174,6 +174,10 @@ See `1-fabric-values.md` Section 1.4.11.
 
 ### `RegExp@1` — regular expressions
 
+> **Disabled.** This type is disabled for codecs, and likely to be removed
+> entirely. No codec recognizes `RegExp@1`, so a decoder treats it as any
+> unrecognized tag (Section 8).
+
 State is `{ source: string, flags: string, flavor: string }`, and all three
 fields are required. `source` is the pattern string and `flags` the flag string
 (for example `gi`). `flavor` names the regular-expression dialect the pattern

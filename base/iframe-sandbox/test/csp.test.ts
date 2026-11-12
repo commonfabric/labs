@@ -42,6 +42,12 @@ describe("csp", () => {
     expect(directive("connect-src")).toBe("'self'");
   });
 
+  it("allows fonts from the host origin, data: URLs and Google Fonts only", () => {
+    expect(directive("font-src")).toBe(
+      `${HOST_ORIGIN} data: https://fonts.gstatic.com`,
+    );
+  });
+
   it("names an origin for the host", () => {
     expect(HOST_ORIGIN).toMatch(/^[a-z]+:\/\//);
   });

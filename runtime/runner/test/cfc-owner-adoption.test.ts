@@ -166,6 +166,34 @@ describe("explicit owner policy adoption", () => {
     tx.abort();
   });
 
+  it("throws for a value other than the one the owner inspected, and stages nothing", () => {
+    const tx = runtime.edit();
+    const source = runtime.getCell(owner.did(), "profile", undefined, tx).key(
+      "name",
+    ).getAsNormalizedFullLink();
+    const target = runtime.getCell(owner.did(), "legacy", undefined, tx)
+      .getAsNormalizedFullLink();
+    expect(() => stageOwnerPolicyAdoption(tx, source, target, "Inspected"))
+      .toThrow("Policy adoption target changed after inspection");
+    expect(
+      tx.getCfcState().writePolicyInputs.some((input) =>
+        input.kind === "owner-adoption"
+      ),
+    ).toBe(false);
+    tx.abort();
+  });
+
+  it("throws for a source field with no stored policy", () => {
+    const tx = runtime.edit();
+    const source = runtime.getCell(owner.did(), "legacy", undefined, tx)
+      .getAsNormalizedFullLink();
+    const target = runtime.getCell(owner.did(), "profile", undefined, tx)
+      .getAsNormalizedFullLink();
+    expect(() => stageOwnerPolicyAdoption(tx, source, target, "Saved name"))
+      .toThrow("The owner's stored policy is unavailable");
+    tx.abort();
+  });
+
   it("rejects a later value overwrite in the adoption transaction", async () => {
     const tx = runtime.edit();
     const source = runtime.getCell(owner.did(), "profile", undefined, tx).key(

@@ -1,59 +1,43 @@
-import { ENTITY_URI_SCHEMES } from "@commonfabric/runner/entity-kind";
-import type { SchedulerGraphNode } from "@commonfabric/runtime-client";
-import dagre from "dagre";
 // Note: deno fmt can crash on deeply nested ternaries in html/svg templates - see renderBaselineStats
 import { css, html, LitElement, svg as svgTag, TemplateResult } from "lit";
 import { property, query, state } from "lit/decorators.js";
 
-import type { DebuggerController } from "../lib/debugger-controller.ts";
-
-import { entityUriFromActionId } from "../lib/scheduler-graph-identity.ts";
-// Loading this module defines the `x-scheduler-source` element that this
-// view renders.
+import type {
+  DebuggerController,
+  GraphEdgeWithHistory,
+} from "../lib/debugger-controller.ts";
+import {
+  adjacentNodes,
+  centerOn,
+  computeParentGroups,
+  fitZoom,
+  type GraphNodeInfo,
+  type LayoutEdge,
+  type LayoutNode,
+  layoutSchedulerGraph,
+  nodeTooltip,
+  truncateLabel,
+  zoomAroundCenter,
+  zoomAtPointer,
+} from "../lib/scheduler-graph-layout.ts";
+import {
+  captureBaseline,
+  formatDelta,
+  formatDuration,
+  graphTotals,
+  type RunBaseline,
+  type TableGroup,
+  tableGroups,
+  type TableRow,
+  type TableSortColumn,
+} from "../lib/scheduler-graph-stats.ts";
 import {
   parseActionLocation,
   type SourceViewNode,
-} from "./SchedulerSourceView.ts";
-
-interface LayoutNode {
-  id: string;
-  label: string;
-  fullId: string; // Full ID for tooltip
-  type: "effect" | "computation" | "input";
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  stats?: SchedulerGraphNode["stats"];
-  isDirty: boolean;
-  isPending: boolean;
-  parentId?: string;
-  childCount?: number;
-  collapsedChildCount?: number; // Number of hidden children when collapsed
-  preview?: string; // Function body preview for hover tooltip
-  reads?: string[]; // Diagnostic: cell paths this action reads
-  writes?: string[]; // Diagnostic: cell paths this action writes
-  debounceMs?: number; // Current debounce delay in ms
-  throttleMs?: number; // Current throttle period in ms
-  patternIdentity?: string; // Content identity of the pattern this action belongs to
-}
-
-interface LayoutEdge {
-  id: string;
-  from: string;
-  to: string;
-  cells: string[];
-  isHistorical: boolean;
-  edgeType?: "data" | "parent";
-}
-
-const NODE_WIDTH = 140;
-const NODE_HEIGHT = 36;
-
-// Entity-scheme parsers derived from the canonical scheme set, so a new
-// entity kind cannot leave a stale `of|computed` alternation here.
-const ENTITY_SCHEME_ALT = ENTITY_URI_SCHEMES.join("|");
-const ENTITY_SCHEME_PART_RE = new RegExp(`^(?:${ENTITY_SCHEME_ALT}):(.*)$`);
+} from "../lib/scheduler-source.ts";
+// Loading this module defines the `x-scheduler-source` element that this
+// view renders.
+import "./SchedulerSourceView.ts";
 
 /**
  * Scheduler Graph visualization component.
@@ -448,50 +432,9 @@ export class XSchedulerGraph extends LitElement {
       word-break: break-all;
     }
 
-    /* Glow animation */
-    @keyframes node-glow {
-      0% {
-        filter: drop-shadow(0 0 8px currentColor);
-      }
-      100% {
-        filter: drop-shadow(0 0 0 transparent);
-      }
-    }
-
-    .node-triggered .node-rect {
-      animation: node-glow 2s ease-out;
-    }
-
-    .node-effect.node-triggered {
-      color: #3b82f6;
-    }
-
-    .node-computation.node-triggered {
-      color: #8b5cf6;
-    }
-
     .node-selected .node-rect {
       stroke: #f59e0b;
       stroke-width: 3;
-    }
-
-    /* Size boost animation for triggered nodes when zoomed out */
-    @keyframes node-size-boost {
-      0%,
-      100% {
-        transform: scale(1);
-      }
-      15% {
-        transform: scale(2.5);
-      }
-      85% {
-        transform: scale(2.5);
-      }
-    }
-
-    .node-boosted {
-      transform-origin: center center;
-      animation: node-size-boost 2s ease-out;
     }
 
     /* Table view styles */
@@ -1080,6 +1023,14 @@ export class XSchedulerGraph extends LitElement {
   @property({ type: Number })
   accessor patternSourcesVersion = 0;
 
+  /** Every node of the graph, whether the layout draws it or not. */
+  @state()
+  private accessor graphNodes = new Map<string, GraphNodeInfo>();
+
+  /** Every edge of the graph, whether the layout draws it or not. */
+  @state()
+  private accessor graphEdges: readonly GraphEdgeWithHistory[] = [];
+
   @state()
   private accessor layoutNodes = new Map<string, LayoutNode>();
 
@@ -1096,29 +1047,22 @@ export class XSchedulerGraph extends LitElement {
   private accessor selectedEdge: LayoutEdge | null = null;
 
   @state()
-  private accessor selectedNode: LayoutNode | null = null;
+  private accessor selectedNode: GraphNodeInfo | null = null;
 
   @state()
   private accessor tooltipPosition = { x: 0, y: 0 };
 
   @state()
-  private accessor triggeredNodes = new Map<string, number>(); // id -> timestamp
-
-  @state()
   private accessor zoomLevel = 1.0;
 
   @state()
-  private accessor collapsedParents = new Set<string>();
+  private accessor expandedParents: ReadonlySet<string> = new Set<string>();
 
   @state()
   private accessor viewMode: "graph" | "table" | "flags" | "source" = "table";
 
   @state()
-  private accessor tableSortColumn:
-    | "totalTime"
-    | "runCount"
-    | "avgTime"
-    | "lastTime" = "totalTime";
+  private accessor tableSortColumn: TableSortColumn = "totalTime";
 
   @state()
   private accessor tableSortAscending = false;
@@ -1137,13 +1081,9 @@ export class XSchedulerGraph extends LitElement {
   #lastPatternSourcesVersion = -1;
   #hasInitialZoom = false;
 
-  /**
-   * The laid-out nodes and the parent-group rendering step, which a test
-   * drives directly.
-   */
+  /** The laid-out nodes, whose positions a test reads. */
   get accessForTestingOnly(): {
-    layoutNodes: Map<string, LayoutNode>;
-    renderParentGroups(): TemplateResult[];
+    readonly layoutNodes: Map<string, LayoutNode>;
   } {
     // deno-lint-ignore no-this-alias
     const outerThis = this;
@@ -1151,39 +1091,14 @@ export class XSchedulerGraph extends LitElement {
       get layoutNodes() {
         return outerThis.layoutNodes;
       },
-      set layoutNodes(value) {
-        outerThis.layoutNodes = value;
-      },
-      renderParentGroups: () => this.#renderParentGroups(),
     };
   }
 
   /**
    * Get baseline stats from the controller (persists across tab switches)
    */
-  get #baselineStats(): Map<
-    string,
-    { runCount: number; totalTime: number }
-  > {
-    return (
-      this.debuggerController?.getSchedulerBaselineStats() ??
-        new Map<string, { runCount: number; totalTime: number }>()
-    );
-  }
-
-  /** Minimum effective node size before we boost triggered nodes. */
-  static readonly #READABLE_THRESHOLD = 50;
-
-  /** The two action-id label helpers, which a test drives directly. */
-  static get accessForTestingOnly(): {
-    extractEntityId(actionId: string): string | undefined;
-    truncateLabel(label: string, maxLen?: number): string;
-  } {
-    return {
-      extractEntityId: (actionId) => XSchedulerGraph.#extractEntityId(actionId),
-      truncateLabel: (label, maxLen) =>
-        XSchedulerGraph.#truncateLabel(label, maxLen),
-    };
+  get #baselineStats(): RunBaseline {
+    return this.debuggerController?.getSchedulerBaselineStats() ?? new Map();
   }
 
   override connectedCallback() {
@@ -1222,325 +1137,20 @@ export class XSchedulerGraph extends LitElement {
 
     const graphData = this.debuggerController.getGraphWithHistory();
     if (!graphData) {
+      this.graphNodes = new Map();
+      this.graphEdges = [];
       this.layoutNodes = new Map();
       this.layoutEdges = [];
       return;
     }
 
-    // Build a map of all nodes and identify which are hidden due to collapsed parents
-    const nodeMap = new Map(graphData.nodes.map((n) => [n.id, n]));
-
-    // Infer parent relationships for sinks without parents by matching entity IDs
-    // This handles the case where sinks are created outside of action execution
-    // but logically belong to a pattern/module action
-    const inferredParents = this.#inferParentsByEntity(graphData.nodes);
-
-    // Create a combined view with both explicit and inferred parents
-    const effectiveParentId = (node: SchedulerGraphNode): string | undefined =>
-      node.parentId || inferredParents.get(node.id);
-
-    // Count children (explicit + inferred)
-    const effectiveChildCounts = new Map<string, number>();
-    for (const node of graphData.nodes) {
-      const parent = effectiveParentId(node);
-      if (parent) {
-        effectiveChildCounts.set(
-          parent,
-          (effectiveChildCounts.get(parent) ?? 0) + 1,
-        );
-      }
-    }
-
-    // Auto-collapse all parents with children (always add new ones)
-    const newCollapsed = new Set(this.collapsedParents);
-    let hasNewCollapsed = false;
-    for (const node of graphData.nodes) {
-      const childCount = effectiveChildCounts.get(node.id) ?? 0;
-      if (childCount > 0 && !newCollapsed.has(node.id)) {
-        newCollapsed.add(node.id);
-        hasNewCollapsed = true;
-      }
-    }
-    if (hasNewCollapsed) {
-      this.collapsedParents = newCollapsed;
-    }
-
-    const hiddenNodes = new Set<string>();
-    const collapsedChildCounts = new Map<string, number>();
-
-    // Find all nodes that should be hidden (their parent is collapsed)
-    for (const node of graphData.nodes) {
-      const parent = effectiveParentId(node);
-      if (parent && this.collapsedParents.has(parent)) {
-        hiddenNodes.add(node.id);
-        // Count hidden children for the collapsed parent
-        collapsedChildCounts.set(
-          parent,
-          (collapsedChildCounts.get(parent) ?? 0) + 1,
-        );
-      }
-    }
-
-    const g = new dagre.graphlib.Graph();
-    g.setGraph({
-      rankdir: "TB",
-      nodesep: 50,
-      ranksep: 70,
-      marginx: 20,
-      marginy: 20,
-    });
-    g.setDefaultEdgeLabel(() => ({}));
-
-    // Add nodes (excluding hidden ones)
-    for (const node of graphData.nodes) {
-      if (hiddenNodes.has(node.id)) continue;
-
-      g.setNode(node.id, {
-        label: XSchedulerGraph.#truncateLabel(node.id),
-        width: NODE_WIDTH,
-        height: NODE_HEIGHT,
-        type: node.type,
-        stats: node.stats,
-        isDirty: node.isDirty,
-        isPending: node.isPending,
-        parentId: effectiveParentId(node),
-        childCount: effectiveChildCounts.get(node.id) ?? 0,
-      });
-    }
-
-    // Add edges (excluding edges to/from hidden nodes)
-    for (const edge of graphData.edges) {
-      if (hiddenNodes.has(edge.from) || hiddenNodes.has(edge.to)) continue;
-      g.setEdge(edge.from, edge.to, { cells: edge.cells });
-    }
-
-    // Run layout
-    dagre.layout(g);
-
-    // Extract positioned nodes
-    const nodes = new Map<string, LayoutNode>();
-    for (const nodeId of g.nodes()) {
-      const node = g.node(nodeId);
-      if (node) {
-        const originalNode = nodeMap.get(nodeId);
-        const effParent = originalNode
-          ? effectiveParentId(originalNode)
-          : undefined;
-        const effChildCount = effectiveChildCounts.get(nodeId) ?? 0;
-        nodes.set(nodeId, {
-          id: nodeId,
-          label: node.label,
-          fullId: nodeId, // Store full ID for tooltip
-          type: node.type as "effect" | "computation",
-          x: node.x,
-          y: node.y,
-          width: node.width,
-          height: node.height,
-          stats: originalNode?.stats,
-          isDirty: originalNode?.isDirty ?? false,
-          isPending: originalNode?.isPending ?? false,
-          parentId: effParent,
-          childCount: effChildCount > 0 ? effChildCount : undefined,
-          collapsedChildCount: collapsedChildCounts.get(nodeId),
-          preview: originalNode?.preview,
-          reads: originalNode?.reads,
-          writes: originalNode?.writes,
-          debounceMs: originalNode?.debounceMs,
-          throttleMs: originalNode?.throttleMs,
-          patternIdentity: originalNode?.patternIdentity?.identity,
-        });
-      }
-    }
-
-    // Extract positioned edges
-    const edges: LayoutEdge[] = [];
-    for (const e of g.edges()) {
-      const edgeData = g.edge(e);
-      const originalEdge = graphData.edges.find(
-        (edge) => edge.from === e.v && edge.to === e.w,
-      );
-      edges.push({
-        id: `${e.v}->${e.w}`,
-        from: e.v,
-        to: e.w,
-        cells: edgeData?.cells ?? [],
-        isHistorical: originalEdge?.isHistorical ?? false,
-        edgeType: originalEdge?.edgeType,
-      });
-    }
-
-    // Calculate SVG dimensions
-    const graphInfo = g.graph();
-    this.svgWidth = Math.max(800, (graphInfo.width ?? 0) + 40);
-    this.svgHeight = Math.max(400, (graphInfo.height ?? 0) + 40);
-
-    this.layoutNodes = nodes;
-    this.layoutEdges = edges;
-  }
-
-  /**
-   * Creates a short, readable label from an action ID. A label no longer than
-   * `maxLen` is returned unchanged, and a longer one in which an entity can be
-   * found is returned in the form `prefix:...last4/path`.
-   *
-   * In that form the prefix and the `...last4` of the entity are never cut,
-   * and the path takes the whole cut: it is cut to the room those two leave
-   * and ends in `...`, and is left out when that room holds less than `/...`.
-   * The result is therefore longer than `maxLen` when the prefix and the
-   * `...last4` alone are, and only then. A label in which no entity can be
-   * found, which includes every label with no `/` in it, is cut from its end
-   * instead, to `maxLen` including the `...`. `maxLen` must be at least 3, the
-   * length of that `...`.
-   *
-   * Examples:
-   * - `sink:did:key:z6Mkk/of:fid1:abcdwxyz/value` → `sink:...wxyz/value`
-   * - the same label when `maxLen === 12` → `sink:...wxyz`
-   * - `computation:did:key:z6Mkk/of:fid1:abcdwxyz/value` →
-   *   `computation:...wxyz`
-   * - `parentAction` → `parentAction`
-   */
-  static #truncateLabel(label: string, maxLen = 20): string {
-    // Simple case - short enough already
-    if (label.length <= maxLen) return label;
-
-    // Try to parse structured IDs like "sink:did:key:.../of:fid1:abc.../path"
-    // or "action:space/entity/path"
-
-    // Check for sink: or other prefix
-    const prefixMatch = label.match(
-      /^(sink|action|handler|effect|computation):/i,
-    );
-    const prefix = prefixMatch ? prefixMatch[1] + ":" : "";
-    const rest = prefix ? label.slice(prefix.length) : label;
-
-    // Look for entity ID pattern (of:xxx / computed:xxx or just the entity
-    // part after space/). Common patterns:
-    // - did:key:z6Mkk.../of:fid1:abc123/path
-    // - did:key:z6Mkk.../computed:fid1:abc123/path
-    // - space/entityid/path
-
-    // Try to find the last path segment(s) which are most meaningful
-    const parts = rest.split("/");
-
-    if (parts.length >= 2) {
-      // Get the entity ID (usually the second-to-last non-empty part before path)
-      // and the path (last parts)
-      let entityPart = "";
-      let pathParts: string[] = [];
-
-      // Find entity ID - look for an entity URI scheme or use second part
-      for (let i = 0; i < parts.length; i++) {
-        const part = parts[i];
-        const schemeMatch = part.match(ENTITY_SCHEME_PART_RE);
-        if (schemeMatch) {
-          entityPart = schemeMatch[1]; // Remove the URI scheme
-          pathParts = parts.slice(i + 1).filter((p) => p.length > 0);
-          break;
-        }
-      }
-
-      // If no entity scheme found, try to identify entity from structure
-      if (!entityPart && parts.length >= 2) {
-        // Assume last non-empty parts are the path, entity is before that
-        const nonEmpty = parts.filter((p) => p.length > 0);
-        if (nonEmpty.length >= 2) {
-          // Take last 4 chars of entity-like part
-          const potentialEntity = nonEmpty.find((p) => p.length > 20) ||
-            nonEmpty[0];
-          entityPart = potentialEntity;
-          const entityIdx = nonEmpty.indexOf(potentialEntity);
-          pathParts = nonEmpty.slice(entityIdx + 1);
-        }
-      }
-
-      // Build short label: prefix + ...last4 + /path
-      if (entityPart) {
-        const shortEntity = entityPart.length > 4
-          ? "..." + entityPart.slice(-4)
-          : entityPart;
-        const path = pathParts.length > 0 ? "/" + pathParts.join("/") : "";
-        const head = prefix + shortEntity;
-        if (head.length + path.length <= maxLen) return head + path;
-
-        // The path takes the whole cut. What is left of it keeps at least its
-        // `/` in front of the `...`, so that the `...` cannot be read as
-        // belonging to the entity.
-        const room = maxLen - head.length;
-        return room >= 4 ? head + path.slice(0, room - 3) + "..." : head;
-      }
-    }
-
-    // Fallback: simple truncation from end
-    return label.slice(0, maxLen - 3) + "...";
-  }
-
-  /**
-   * Extract the entity ID from an action name.
-   * Handles formats like:
-   * - sink:did:key:.../of:entityId/path
-   * - action:pattern:did:key:.../computed:entityId/path
-   */
-  static #extractEntityId(actionId: string): string | undefined {
-    const entityUri = entityUriFromActionId(actionId);
-    if (entityUri) return entityUri;
-
-    // Fallback: look for entity ID pattern after space identifier
-    // Pattern: did:key:.../entityId/...
-    const parts = actionId.split("/");
-    for (let i = 0; i < parts.length; i++) {
-      const part = parts[i];
-      // Entity IDs are typically long base32/base58 strings
-      if (part.length > 40 && !part.includes(":")) {
-        return part;
-      }
-    }
-
-    return undefined;
-  }
-
-  /**
-   * Infer parent relationships for sinks that don't have explicit parents.
-   * Groups sinks with non-sink actions that share the same entity ID.
-   */
-  #inferParentsByEntity(
-    nodes: SchedulerGraphNode[],
-  ): Map<string, string> {
-    const inferredParents = new Map<string, string>();
-
-    // Group nodes by entity ID
-    const nodesByEntity = new Map<string, SchedulerGraphNode[]>();
-    for (const node of nodes) {
-      const entityId = XSchedulerGraph.#extractEntityId(node.id);
-      if (entityId) {
-        if (!nodesByEntity.has(entityId)) {
-          nodesByEntity.set(entityId, []);
-        }
-        nodesByEntity.get(entityId)!.push(node);
-      }
-    }
-
-    // For each entity group, find sinks without parents and assign them
-    // to a non-sink action in the same group
-    for (const [_entityId, groupNodes] of nodesByEntity) {
-      // Find sink nodes without parents
-      const orphanSinks = groupNodes.filter(
-        (n) => n.id.startsWith("sink:") && !n.parentId,
-      );
-
-      // Find the first non-sink action to use as parent
-      // Prefer computations over effects as they're usually the "producer"
-      const potentialParent = groupNodes.find(
-        (n) => !n.id.startsWith("sink:") && n.type === "computation",
-      ) || groupNodes.find((n) => !n.id.startsWith("sink:"));
-
-      if (potentialParent && orphanSinks.length > 0) {
-        for (const sink of orphanSinks) {
-          inferredParents.set(sink.id, potentialParent.id);
-        }
-      }
-    }
-
-    return inferredParents;
+    const layout = layoutSchedulerGraph(graphData, this.expandedParents);
+    this.svgWidth = layout.width;
+    this.svgHeight = layout.height;
+    this.graphNodes = layout.allNodes;
+    this.graphEdges = graphData.edges;
+    this.layoutNodes = layout.nodes;
+    this.layoutEdges = layout.edges;
   }
 
   async #handleSnapshot(): Promise<void> {
@@ -1549,21 +1159,10 @@ export class XSchedulerGraph extends LitElement {
   }
 
   #handleResetBaseline(): void {
-    // Capture current stats as the baseline
-    const newBaseline = new Map<
-      string,
-      { runCount: number; totalTime: number }
-    >();
-    for (const node of this.layoutNodes.values()) {
-      if (node.stats) {
-        newBaseline.set(node.id, {
-          runCount: node.stats.runCount,
-          totalTime: node.stats.totalTime,
-        });
-      }
-    }
     // Store in controller so it persists across tab switches
-    this.debuggerController?.setSchedulerBaselineStats(newBaseline);
+    this.debuggerController?.setSchedulerBaselineStats(
+      captureBaseline(this.graphNodes.values()),
+    );
   }
 
   #handleEdgeClick(e: MouseEvent, edge: LayoutEdge): void {
@@ -1594,34 +1193,9 @@ export class XSchedulerGraph extends LitElement {
     this.selectedNode = null;
   }
 
-  #selectNodeById(nodeId: string): void {
-    const node = this.layoutNodes.get(nodeId);
-    if (node) {
-      this.selectedEdge = null;
-      this.selectedNode = node;
-    }
-  }
-
-  #getInboundNodes(nodeId: string): LayoutNode[] {
-    // Find edges where this node is the target (other nodes depend on this)
-    const inboundEdges = this.layoutEdges.filter(
-      (e) => e.to === nodeId && e.edgeType !== "parent",
-    );
-    const nodeIds = [...new Set(inboundEdges.map((e) => e.from))];
-    return nodeIds
-      .map((id) => this.layoutNodes.get(id))
-      .filter((n): n is LayoutNode => n !== undefined);
-  }
-
-  #getOutboundNodes(nodeId: string): LayoutNode[] {
-    // Find edges where this node is the source (this node depends on others)
-    const outboundEdges = this.layoutEdges.filter(
-      (e) => e.from === nodeId && e.edgeType !== "parent",
-    );
-    const nodeIds = [...new Set(outboundEdges.map((e) => e.to))];
-    return nodeIds
-      .map((id) => this.layoutNodes.get(id))
-      .filter((n): n is LayoutNode => n !== undefined);
+  #selectNode(node: GraphNodeInfo): void {
+    this.selectedEdge = null;
+    this.selectedNode = node;
   }
 
   #handleZoomIn(): void {
@@ -1638,47 +1212,35 @@ export class XSchedulerGraph extends LitElement {
 
   #centerOnNode(nodeId: string): void {
     const node = this.layoutNodes.get(nodeId);
-    if (!node) return;
-
-    const container = this.graphContainer;
-    if (!container) return;
-
-    // Set zoom to 50%
-    const targetZoom = 0.5;
-    this.zoomLevel = targetZoom;
-
-    // After render, center on the node
-    requestAnimationFrame(() => {
-      const containerWidth = container.clientWidth;
-      const containerHeight = container.clientHeight;
-
-      // Calculate scroll position to center the node
-      const nodeCenterX = node.x + node.width / 2;
-      const nodeCenterY = node.y + node.height / 2;
-
-      const scrollLeft = nodeCenterX * targetZoom - containerWidth / 2;
-      const scrollTop = nodeCenterY * targetZoom - containerHeight / 2;
-
-      container.scrollLeft = Math.max(0, scrollLeft);
-      container.scrollTop = Math.max(0, scrollTop);
-    });
+    if (node) {
+      this.zoomLevel = centerOn(
+        this.graphContainer,
+        node.x,
+        node.y,
+        this.zoomLevel,
+        requestAnimationFrame,
+      );
+    }
   }
 
   #switchToGraphView(): void {
-    const hadSelection = this.selectedNode !== null;
     const selectedId = this.selectedNode?.id;
 
     this.viewMode = "graph";
 
-    // If there was a selection, center on it after the graph renders
-    if (hadSelection && selectedId) {
-      // Wait for layout to complete before centering
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          this.#centerOnNode(selectedId);
-        });
-      });
+    // If there was a selection, center on it once the graph has rendered and
+    // been laid out.
+    if (selectedId) {
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => this.#centerOnNode(selectedId))
+      );
     }
+  }
+
+  async #switchToSourceView(): Promise<void> {
+    this.viewMode = "source";
+    await this.debuggerController?.requestPatternSources();
+    this.requestUpdate();
   }
 
   #handleWheel(e: WheelEvent): void {
@@ -1686,118 +1248,38 @@ export class XSchedulerGraph extends LitElement {
     if (!e.ctrlKey && !e.metaKey) return;
 
     e.preventDefault();
-
-    const container = this.graphContainer;
-    if (!container) return;
-
-    // Calculate zoom factor based on wheel delta
-    const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
-    const newZoom = Math.max(0.1, Math.min(5.0, this.zoomLevel * zoomFactor));
-
-    // Zoom around mouse position
-    const rect = container.getBoundingClientRect();
-    const mouseX = e.clientX - rect.left + container.scrollLeft;
-    const mouseY = e.clientY - rect.top + container.scrollTop;
-
-    this.#zoomAroundPoint(newZoom, mouseX, mouseY);
-  }
-
-  #zoomAroundPoint(
-    newZoom: number,
-    pointX: number,
-    pointY: number,
-  ): void {
-    const container = this.graphContainer;
-    if (!container) {
-      this.zoomLevel = newZoom;
-      return;
-    }
-
-    const oldZoom = this.zoomLevel;
-    if (oldZoom === newZoom) return;
-
-    // Convert point to content coordinates
-    const contentX = pointX / oldZoom;
-    const contentY = pointY / oldZoom;
-
-    // Update zoom
-    this.zoomLevel = newZoom;
-
-    // After render, adjust scroll to keep point under cursor
-    requestAnimationFrame(() => {
-      const newScrollLeft = contentX * newZoom -
-        (pointX - container.scrollLeft);
-      const newScrollTop = contentY * newZoom - (pointY - container.scrollTop);
-      container.scrollLeft = Math.max(0, newScrollLeft);
-      container.scrollTop = Math.max(0, newScrollTop);
-    });
+    this.zoomLevel = zoomAtPointer(
+      this.graphContainer,
+      this.zoomLevel,
+      e,
+      requestAnimationFrame,
+    );
   }
 
   #zoomAroundCenter(newZoom: number): void {
-    const container = this.graphContainer;
-    if (!container) {
-      this.zoomLevel = newZoom;
-      return;
-    }
-
-    const oldZoom = this.zoomLevel;
-    if (oldZoom === newZoom) return;
-
-    // Get current scroll position and container dimensions
-    const scrollLeft = container.scrollLeft;
-    const scrollTop = container.scrollTop;
-    const containerWidth = container.clientWidth;
-    const containerHeight = container.clientHeight;
-
-    // Calculate the center point in content coordinates (at old zoom)
-    const centerX = (scrollLeft + containerWidth / 2) / oldZoom;
-    const centerY = (scrollTop + containerHeight / 2) / oldZoom;
-
-    // Update zoom
+    zoomAroundCenter(
+      this.graphContainer,
+      this.zoomLevel,
+      newZoom,
+      requestAnimationFrame,
+    );
     this.zoomLevel = newZoom;
-
-    // After render, adjust scroll to keep center point centered
-    requestAnimationFrame(() => {
-      const newScrollLeft = centerX * newZoom - containerWidth / 2;
-      const newScrollTop = centerY * newZoom - containerHeight / 2;
-      container.scrollLeft = Math.max(0, newScrollLeft);
-      container.scrollTop = Math.max(0, newScrollTop);
-    });
   }
 
   #zoomToFit(): void {
-    const container = this.graphContainer;
-    if (!container) return;
-
-    const containerWidth = container.clientWidth;
-    const containerHeight = container.clientHeight;
-
-    // Calculate zoom to fit with some padding
-    const padding = 40;
-    const zoomX = (containerWidth - padding) / this.svgWidth;
-    const zoomY = (containerHeight - padding) / this.svgHeight;
-    const fitZoom = Math.min(zoomX, zoomY, 1.0); // Don't zoom in beyond 100%
-
-    this.zoomLevel = Math.max(0.1, fitZoom);
-  }
-
-  get #effectiveNodeWidth(): number {
-    return NODE_WIDTH * this.zoomLevel;
-  }
-
-  get #shouldBoostTriggeredNodes(): boolean {
-    return this.#effectiveNodeWidth < XSchedulerGraph.#READABLE_THRESHOLD;
+    this.zoomLevel = fitZoom(
+      this.graphContainer,
+      this.svgWidth,
+      this.svgHeight,
+      this.zoomLevel,
+    );
   }
 
   #handleToggleCollapse(nodeId: string, e: Event): void {
     e.stopPropagation();
-    const newCollapsed = new Set(this.collapsedParents);
-    if (newCollapsed.has(nodeId)) {
-      newCollapsed.delete(nodeId);
-    } else {
-      newCollapsed.add(nodeId);
-    }
-    this.collapsedParents = newCollapsed;
+    const expanded = new Set(this.expandedParents);
+    if (!expanded.delete(nodeId)) expanded.add(nodeId);
+    this.expandedParents = expanded;
     this.#updateLayout();
   }
 
@@ -1806,40 +1288,7 @@ export class XSchedulerGraph extends LitElement {
     const edgeCount = this.layoutEdges.filter((e) => !e.isHistorical).length;
     const historicalCount = this.layoutEdges.filter((e) => e.isHistorical)
       .length;
-
-    // Calculate lifetime totals (all runs since app start)
-    let totalRuns = 0;
-    let totalTime = 0;
-    for (const node of this.layoutNodes.values()) {
-      if (node.stats) {
-        totalRuns += node.stats.runCount;
-        totalTime += node.stats.totalTime;
-      }
-    }
-
-    // Calculate delta since baseline (if baseline exists)
-    const hasBaseline = this.#baselineStats.size > 0;
-    let totalRunsSinceBaseline = 0;
-    let totalTimeSinceBaseline = 0;
-
-    if (hasBaseline) {
-      for (const node of this.layoutNodes.values()) {
-        if (node.stats) {
-          const baseline = this.#baselineStats.get(node.id);
-          totalRunsSinceBaseline += node.stats.runCount -
-            (baseline?.runCount ?? 0);
-          totalTimeSinceBaseline += node.stats.totalTime -
-            (baseline?.totalTime ?? 0);
-        }
-      }
-    }
-
-    const formatTime = (ms: number) => {
-      if (ms === 0) return "-";
-      if (ms < 1) return `${(ms * 1000).toFixed(0)}µs`;
-      if (ms < 1000) return `${ms.toFixed(1)}ms`;
-      return `${(ms / 1000).toFixed(2)}s`;
-    };
+    const totals = graphTotals(this.graphNodes.values(), this.#baselineStats);
 
     return html`
       <div class="toolbar">
@@ -1874,11 +1323,7 @@ export class XSchedulerGraph extends LitElement {
           <button
             type="button"
             class="toggle-button ${this.viewMode === "source" ? "active" : ""}"
-            @click="${async () => {
-              this.viewMode = "source";
-              await this.debuggerController?.requestPatternSources();
-              this.requestUpdate();
-            }}"
+            @click="${() => this.#switchToSourceView()}"
             title="View pattern source code with action heat map"
           >
             Source
@@ -1942,14 +1387,12 @@ export class XSchedulerGraph extends LitElement {
               <span>Historical: <span class="stat-value">${historicalCount}</span></span>
             `
             : ""}
-          <span>Total: <span class="stat-value">${totalRuns} runs</span>
-            <span class="stat-value">${formatTime(totalTime)}</span></span>
-          ${hasBaseline
-            ? this.#renderBaselineStats(
-              totalRunsSinceBaseline,
-              totalTimeSinceBaseline,
-              formatTime,
-            )
+          <span>Total: <span class="stat-value">${totals.runCount} runs</span>
+            <span class="stat-value">${formatDuration(
+              totals.totalTime,
+            )}</span></span>
+          ${this.#baselineStats.size > 0
+            ? this.#renderBaselineStats(totals.runDelta, totals.timeDelta)
             : ""}
         </div>
       </div>
@@ -1961,36 +1404,24 @@ export class XSchedulerGraph extends LitElement {
    * The crash occurs with deeply nested ternaries in class attributes
    * combined with multiline function calls in adjacent template expressions.
    */
-  #renderBaselineStats(
-    runsDelta: number,
-    timeDelta: number,
-    formatTime: (ms: number) => string,
-  ): TemplateResult {
+  #renderBaselineStats(runsDelta: number, timeDelta: number): TemplateResult {
     const runsClass = runsDelta > 0
       ? "stat-value delta positive"
       : "stat-value delta";
     const timeClass = timeDelta > 0
       ? "stat-value delta positive"
       : "stat-value delta";
-    const runsPrefix = runsDelta > 0 ? "+" : "";
-    const timePrefix = timeDelta > 0 ? "+" : "";
 
     return html`
       <span class="baseline-stats">
         Δ:
-        <span class="${runsClass}">${runsPrefix}${runsDelta} runs</span>
-        <span class="${timeClass}">${timePrefix}${formatTime(timeDelta)}</span>
+        <span class="${runsClass}">${formatDelta(runsDelta) || 0} runs</span>
+        <span class="${timeClass}">${formatDelta(timeDelta, true) || "-"}</span>
       </span>
     `;
   }
 
   #renderNode(node: LayoutNode): TemplateResult {
-    const isTriggered = this.triggeredNodes.has(node.id) &&
-      Date.now() - (this.triggeredNodes.get(node.id) ?? 0) < 2000;
-
-    // Boost triggered nodes when zoomed out below readable threshold
-    const shouldBoost = isTriggered && this.#shouldBoostTriggeredNodes;
-
     const isSelected = this.selectedNode?.id === node.id;
 
     const nodeClass = [
@@ -1998,8 +1429,6 @@ export class XSchedulerGraph extends LitElement {
       `node-${node.type}`,
       node.isDirty ? "node-dirty" : "",
       node.isPending ? "node-pending" : "",
-      isTriggered ? "node-triggered" : "",
-      shouldBoost ? "node-boosted" : "",
       isSelected ? "node-selected" : "",
     ]
       .filter(Boolean)
@@ -2008,25 +1437,6 @@ export class XSchedulerGraph extends LitElement {
     const x = node.x - node.width / 2;
     const y = node.y - node.height / 2;
 
-    // Build tooltip with preview and reads/writes diagnostic info
-    let tooltip: string;
-    if (node.type === "input") {
-      tooltip = `${node.fullId}\n(Source cell - no writer)`;
-    } else {
-      const previewInfo = node.preview ? `\n\n${node.preview}` : "";
-      const readsInfo = node.reads?.length
-        ? `\nReads (${node.reads.length}): ${
-          node.reads.slice(0, 5).join(", ")
-        }${node.reads.length > 5 ? "..." : ""}`
-        : "\nReads: none";
-      const writesInfo = node.writes?.length
-        ? `\nWrites (${node.writes.length}): ${
-          node.writes.slice(0, 5).join(", ")
-        }${node.writes.length > 5 ? "..." : ""}`
-        : "\nWrites: none";
-      tooltip = `${node.fullId}${previewInfo}${readsInfo}${writesInfo}`;
-    }
-
     return svgTag`
       <g
         class="${nodeClass}"
@@ -2034,7 +1444,7 @@ export class XSchedulerGraph extends LitElement {
         @click="${(e: MouseEvent) => this.#handleNodeClick(e, node)}"
         style="cursor: pointer;"
       >
-        <title>${tooltip}</title>
+        <title>${nodeTooltip(node)}</title>
         <rect
           class="node-rect"
           width="${node.width}"
@@ -2077,9 +1487,9 @@ export class XSchedulerGraph extends LitElement {
 
   #renderCollapseToggle(node: LayoutNode): TemplateResult | null {
     // Only show toggle if node has children
-    if (!node.childCount || node.childCount === 0) return null;
+    if (!node.childCount) return null;
 
-    const isCollapsed = this.collapsedParents.has(node.id);
+    const isCollapsed = !this.expandedParents.has(node.id);
     const symbol = isCollapsed ? "+" : "-";
 
     return svgTag`
@@ -2097,9 +1507,7 @@ export class XSchedulerGraph extends LitElement {
 
   #renderChildCountBadge(node: LayoutNode): TemplateResult | null {
     // Only show badge if this node has collapsed children
-    if (!node.collapsedChildCount || node.collapsedChildCount === 0) {
-      return null;
-    }
+    if (!node.collapsedChildCount) return null;
 
     return svgTag`
       <text
@@ -2113,77 +1521,10 @@ export class XSchedulerGraph extends LitElement {
     `;
   }
 
-  #computeParentGroups(): Map<
-    string,
-    { parent: LayoutNode; children: LayoutNode[]; bounds: DOMRect }
-  > {
-    const groups = new Map<
-      string,
-      { parent: LayoutNode; children: LayoutNode[]; bounds: DOMRect }
-    >();
-
-    // Find all parents that have visible children
-    for (const node of this.layoutNodes.values()) {
-      if (node.parentId) {
-        const parent = this.layoutNodes.get(node.parentId);
-        if (parent) {
-          if (!groups.has(node.parentId)) {
-            groups.set(node.parentId, {
-              parent,
-              children: [],
-              bounds: new DOMRect(0, 0, 0, 0),
-            });
-          }
-          groups.get(node.parentId)!.children.push(node);
-        }
-      }
-    }
-
-    // Calculate bounding boxes for each group
-    const padding = 15;
-    for (const group of groups.values()) {
-      const allNodes = [group.parent, ...group.children];
-
-      let minX = Infinity;
-      let minY = Infinity;
-      let maxX = -Infinity;
-      let maxY = -Infinity;
-
-      for (const node of allNodes) {
-        const left = node.x - node.width / 2;
-        const top = node.y - node.height / 2;
-        const right = node.x + node.width / 2;
-        const bottom = node.y + node.height / 2;
-
-        minX = Math.min(minX, left);
-        minY = Math.min(minY, top);
-        maxX = Math.max(maxX, right);
-        maxY = Math.max(maxY, bottom);
-      }
-
-      group.bounds = new DOMRect(
-        minX - padding,
-        minY - padding,
-        maxX - minX + padding * 2,
-        maxY - minY + padding * 2,
-      );
-    }
-
-    return groups;
-  }
-
   #renderParentGroups(): TemplateResult[] {
-    const groups = this.#computeParentGroups();
-    const results: TemplateResult[] = [];
-
-    for (const group of groups.values()) {
-      // Only render groups with at least one visible child
-      if (group.children.length === 0) continue;
-
-      const { bounds, parent } = group;
-      const label = XSchedulerGraph.#truncateLabel(parent.fullId, 12);
-
-      results.push(svgTag`
+    return [...computeParentGroups(this.layoutNodes).values()].map(
+      ({ bounds, parent }) =>
+        svgTag`
         <g class="parent-group">
           <rect
             class="parent-group-rect"
@@ -2197,13 +1538,11 @@ export class XSchedulerGraph extends LitElement {
             x="${bounds.x + 6}"
             y="${bounds.y + 12}"
           >
-            ${label}
+            ${truncateLabel(parent.fullId, 12)}
           </text>
         </g>
-      `);
-    }
-
-    return results;
+      `,
+    );
   }
 
   #renderEdge(edge: LayoutEdge): TemplateResult | null {
@@ -2211,14 +1550,10 @@ export class XSchedulerGraph extends LitElement {
     const target = this.layoutNodes.get(edge.to);
     if (!source || !target) return null;
 
-    // Calculate edge path (from bottom of source to top of target)
-    const x1 = source.x;
-    const y1 = source.y + source.height / 2;
-    const x2 = target.x;
-    const y2 = target.y - target.height / 2;
-
-    // Simple straight line (could add bezier curves later)
-    const path = `M ${x1} ${y1} L ${x2} ${y2}`;
+    // A straight line from the bottom of the source to the top of the target.
+    const path = `M ${source.x} ${source.y + source.height / 2} L ${target.x} ${
+      target.y - target.height / 2
+    }`;
 
     const edgeClasses = [
       "edge-path",
@@ -2332,327 +1667,279 @@ export class XSchedulerGraph extends LitElement {
   }
 
   #renderDetailPane(): TemplateResult | null {
-    if (!this.selectedNode && !this.selectedEdge) return null;
+    if (this.selectedNode) return this.#renderNodeDetail(this.selectedNode);
+    if (this.selectedEdge) return this.#renderEdgeDetail(this.selectedEdge);
+    return null;
+  }
 
-    const formatTime = (ms: number) => {
-      if (ms === 0) return "-";
-      if (ms < 1) return `${(ms * 1000).toFixed(0)}µs`;
-      if (ms < 1000) return `${ms.toFixed(1)}ms`;
-      return `${(ms / 1000).toFixed(2)}s`;
-    };
+  #renderNodeDetail(node: GraphNodeInfo): TemplateResult {
+    const baseline = this.#baselineStats.get(node.id);
+    const hasBaseline = this.#baselineStats.size > 0;
 
-    const formatDelta = (delta: number, isTime: boolean = false): string => {
-      if (delta === 0) return "";
-      const sign = delta > 0 ? "+" : "";
-      if (isTime) {
-        if (Math.abs(delta) < 1) return `${sign}${(delta * 1000).toFixed(0)}µs`;
-        if (Math.abs(delta) < 1000) return `${sign}${delta.toFixed(1)}ms`;
-        return `${sign}${(delta / 1000).toFixed(2)}s`;
-      }
-      return `${sign}${delta}`;
-    };
-
-    if (this.selectedNode) {
-      const node = this.selectedNode;
-      const baseline = this.#baselineStats.get(node.id);
-      const hasBaseline = this.#baselineStats.size > 0;
-
-      const renderStatWithDelta = (
-        label: string,
-        value: number,
-        baselineValue: number | undefined,
-        isTime: boolean = false,
-      ) => {
-        const delta = value - (baselineValue ?? 0);
-        const deltaStr = formatDelta(delta, isTime);
-        return html`
-          <div class="detail-stat">
-            <div class="detail-stat-label">${label}</div>
-            <div class="detail-stat-value">
-              ${isTime ? formatTime(value) : value}
-            </div>
-            ${hasBaseline && deltaStr
-              ? html`
-                <div class="detail-stat-delta ${delta > 0 ? "positive" : ""}">
-                  ${deltaStr}
-                </div>
-              `
-              : ""}
-          </div>
-        `;
-      };
-
+    const renderStatWithDelta = (
+      label: string,
+      value: number,
+      baselineValue: number | undefined,
+      isTime: boolean = false,
+    ) => {
+      const delta = value - (baselineValue ?? 0);
+      const deltaStr = formatDelta(delta, isTime);
       return html`
-        <div class="detail-pane">
-          <div class="detail-pane-header">
-            <span class="detail-pane-title">
-              <span class="type-badge ${node.type}">${node.type}</span>
-              ${node.label}
-            </span>
-            <button
-              class="detail-pane-close"
-              @click="${() => (this.selectedNode = null)}"
-            >
-              ×
-            </button>
+        <div class="detail-stat">
+          <div class="detail-stat-label">${label}</div>
+          <div class="detail-stat-value">
+            ${isTime ? formatDuration(value) : value}
           </div>
-
-          <div class="detail-section">
-            <div class="detail-section-title">ID</div>
-            <div class="detail-section-content">${node.fullId}</div>
-          </div>
-
-          ${node.stats
+          ${hasBaseline && deltaStr
             ? html`
-              <div class="detail-section">
-                <div class="detail-section-title">Stats</div>
-                <div class="detail-stats">
-                  ${renderStatWithDelta(
-                    "Runs",
-                    node.stats.runCount,
-                    baseline?.runCount,
-                  )} ${renderStatWithDelta(
-                    "Total",
-                    node.stats.totalTime,
-                    baseline?.totalTime,
-                    true,
-                  )}
-                  <div class="detail-stat">
-                    <div class="detail-stat-label">Average</div>
-                    <div class="detail-stat-value">
-                      ${formatTime(node.stats.averageTime)}
-                    </div>
-                  </div>
-                  <div class="detail-stat">
-                    <div class="detail-stat-label">Last</div>
-                    <div class="detail-stat-value">
-                      ${formatTime(node.stats.lastRunTime)}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            `
-            : ""} ${node.preview || this.#hasSourceLocation(node.id)
-            ? html`
-              <div class="detail-section">
-                ${node.preview
-                  ? html`
-                    <div class="detail-section-title">Code Preview</div>
-                    <div class="detail-preview">${node.preview}</div>
-                  `
-                  : ""} ${this.#hasSourceLocation(node.id)
-                  ? html`
-                    <button
-                      type="button"
-                      class="source-jump-button"
-                      @click="${async () => {
-                        this.viewMode = "source";
-                        await this.debuggerController
-                          ?.requestPatternSources();
-                        this.requestUpdate();
-                      }}"
-                      title="View in source with context"
-                    >
-                      View in Source
-                    </button>
-                  `
-                  : ""}
-              </div>
-            `
-            : ""} ${node.reads && node.reads.length > 0
-            ? html`
-              <div class="detail-section">
-                <div class="detail-section-title">
-                  Reads (${node.reads.length})
-                </div>
-                <div class="detail-cell-list">
-                  ${node.reads.map(
-                    (r) =>
-                      html`
-                        <div class="detail-cell">${r}</div>
-                      `,
-                  )}
-                </div>
-              </div>
-            `
-            : ""} ${node.writes && node.writes.length > 0
-            ? html`
-              <div class="detail-section">
-                <div class="detail-section-title">
-                  Writes (${node.writes.length})
-                </div>
-                <div class="detail-cell-list">
-                  ${node.writes.map(
-                    (w) =>
-                      html`
-                        <div class="detail-cell">${w}</div>
-                      `,
-                  )}
-                </div>
-              </div>
-            `
-            : ""} ${(() => {
-              const inbound = this.#getInboundNodes(node.id);
-              return inbound.length > 0
-                ? html`
-                  <div class="detail-section">
-                    <div class="detail-section-title">
-                      Dependents (${inbound.length})
-                    </div>
-                    <div class="adjacent-nodes">
-                      ${inbound.map(
-                        (n) =>
-                          html`
-                            <div
-                              class="adjacent-node"
-                              @click="${() => this.#selectNodeById(n.id)}"
-                              title="${n.fullId}"
-                            >
-                              <span class="type-badge ${n.type}">${n
-                                .type}</span>
-                              <span class="adjacent-node-label">${n
-                                .label}</span>
-                            </div>
-                          `,
-                      )}
-                    </div>
-                  </div>
-                `
-                : "";
-            })()} ${(() => {
-              const outbound = this.#getOutboundNodes(node.id);
-              return outbound.length > 0
-                ? html`
-                  <div class="detail-section">
-                    <div class="detail-section-title">
-                      Dependencies (${outbound.length})
-                    </div>
-                    <div class="adjacent-nodes">
-                      ${outbound.map(
-                        (n) =>
-                          html`
-                            <div
-                              class="adjacent-node"
-                              @click="${() => this.#selectNodeById(n.id)}"
-                              title="${n.fullId}"
-                            >
-                              <span class="type-badge ${n.type}">${n
-                                .type}</span>
-                              <span class="adjacent-node-label">${n
-                                .label}</span>
-                            </div>
-                          `,
-                      )}
-                    </div>
-                  </div>
-                `
-                : "";
-            })()}
-          ${(() => {
-            const flagMeta = this.debuggerController?.getFlagMetadata(
-              "action invalid input",
-              node.id,
-            );
-            return flagMeta
-              ? html`
-                <div class="detail-section">
-                  <div class="detail-section-title flag-meta-title">
-                    <span class="flag-warning">&#x26a0;</span> Invalid Input Diagnostics
-                  </div>
-                  ${flagMeta.schema !== undefined
-                    ? html`
-                      <div class="flag-meta-field">
-                        <div class="flag-meta-label">Schema</div>
-                        <pre class="flag-meta-value">${JSON.stringify(
-                          flagMeta.schema,
-                          null,
-                          2,
-                        )}</pre>
-                      </div>
-                    `
-                    : ""} ${flagMeta.raw !== undefined
-                    ? html`
-                      <div class="flag-meta-field">
-                        <div class="flag-meta-label">Raw Value</div>
-                        <pre class="flag-meta-value">${JSON.stringify(
-                          flagMeta.raw,
-                          null,
-                          2,
-                        )}</pre>
-                      </div>
-                    `
-                    : ""}
-                </div>
-              `
-              : "";
-          })()}
-        </div>
-      `;
-    }
-
-    if (this.selectedEdge) {
-      const fromNode = this.layoutNodes.get(this.selectedEdge.from);
-      const toNode = this.layoutNodes.get(this.selectedEdge.to);
-
-      return html`
-        <div class="detail-pane">
-          <div class="detail-pane-header">
-            <span class="detail-pane-title">Edge</span>
-            <button
-              class="detail-pane-close"
-              @click="${() => (this.selectedEdge = null)}"
-            >
-              ×
-            </button>
-          </div>
-
-          <div class="detail-section">
-            <div class="detail-section-title">From</div>
-            <div class="detail-section-content">
-              ${fromNode?.label ?? this.selectedEdge.from}
-            </div>
-          </div>
-
-          <div class="detail-section">
-            <div class="detail-section-title">To</div>
-            <div class="detail-section-content">
-              ${toNode?.label ?? this.selectedEdge.to}
-            </div>
-          </div>
-
-          <div class="detail-section">
-            <div class="detail-section-title">
-              Cells (${this.selectedEdge.cells.length})
-            </div>
-            <div class="detail-cell-list">
-              ${this.selectedEdge.cells.length > 0
-                ? this.selectedEdge.cells.map(
-                  (c) =>
-                    html`
-                      <div class="detail-cell">${c}</div>
-                    `,
-                )
-                : html`
-                  <div class="detail-cell">(no cells tracked)</div>
-                `}
-            </div>
-          </div>
-
-          ${this.selectedEdge.isHistorical
-            ? html`
-              <div
-                class="detail-section"
-                style="color: #f59e0b; font-style: italic;"
-              >
-                This edge is historical (no longer active)
+              <div class="detail-stat-delta ${delta > 0 ? "positive" : ""}">
+                ${deltaStr}
               </div>
             `
             : ""}
         </div>
       `;
-    }
+    };
 
-    return null;
+    const renderAdjacent = (title: string, nodes: GraphNodeInfo[]) =>
+      nodes.length > 0
+        ? html`
+          <div class="detail-section">
+            <div class="detail-section-title">
+              ${title} (${nodes.length})
+            </div>
+            <div class="adjacent-nodes">
+              ${nodes.map(
+                (n) =>
+                  html`
+                    <div
+                      class="adjacent-node"
+                      @click="${() => this.#selectNode(n)}"
+                      title="${n.fullId}"
+                    >
+                      <span class="type-badge ${n.type}">${n.type}</span>
+                      <span class="adjacent-node-label">${n.label}</span>
+                    </div>
+                  `,
+              )}
+            </div>
+          </div>
+        `
+        : "";
+
+    const renderCellList = (title: string, cells: string[] | undefined) =>
+      cells && cells.length > 0
+        ? html`
+          <div class="detail-section">
+            <div class="detail-section-title">
+              ${title} (${cells.length})
+            </div>
+            <div class="detail-cell-list">
+              ${cells.map(
+                (cell) =>
+                  html`
+                    <div class="detail-cell">${cell}</div>
+                  `,
+              )}
+            </div>
+          </div>
+        `
+        : "";
+
+    const hasSourceLocation = parseActionLocation(node.id) !== null;
+    const flagMeta = this.debuggerController?.getFlagMetadata(
+      "action invalid input",
+      node.id,
+    );
+
+    return html`
+      <div class="detail-pane">
+        <div class="detail-pane-header">
+          <span class="detail-pane-title">
+            <span class="type-badge ${node.type}">${node.type}</span>
+            ${node.label}
+          </span>
+          <button
+            class="detail-pane-close"
+            @click="${() => (this.selectedNode = null)}"
+          >
+            ×
+          </button>
+        </div>
+
+        <div class="detail-section">
+          <div class="detail-section-title">ID</div>
+          <div class="detail-section-content">${node.fullId}</div>
+        </div>
+
+        ${node.stats
+          ? html`
+            <div class="detail-section">
+              <div class="detail-section-title">Stats</div>
+              <div class="detail-stats">
+                ${renderStatWithDelta(
+                  "Runs",
+                  node.stats.runCount,
+                  baseline?.runCount,
+                )} ${renderStatWithDelta(
+                  "Total",
+                  node.stats.totalTime,
+                  baseline?.totalTime,
+                  true,
+                )}
+                <div class="detail-stat">
+                  <div class="detail-stat-label">Average</div>
+                  <div class="detail-stat-value">
+                    ${formatDuration(node.stats.averageTime)}
+                  </div>
+                </div>
+                <div class="detail-stat">
+                  <div class="detail-stat-label">Last</div>
+                  <div class="detail-stat-value">
+                    ${formatDuration(node.stats.lastRunTime)}
+                  </div>
+                </div>
+              </div>
+            </div>
+          `
+          : ""} ${node.preview || hasSourceLocation
+          ? html`
+            <div class="detail-section">
+              ${node.preview
+                ? html`
+                  <div class="detail-section-title">Code Preview</div>
+                  <div class="detail-preview">${node.preview}</div>
+                `
+                : ""} ${hasSourceLocation
+                ? html`
+                  <button
+                    type="button"
+                    class="source-jump-button"
+                    @click="${() => this.#switchToSourceView()}"
+                    title="View in source with context"
+                  >
+                    View in Source
+                  </button>
+                `
+                : ""}
+            </div>
+          `
+          : ""} ${renderCellList("Reads", node.reads)} ${renderCellList(
+            "Writes",
+            node.writes,
+          )} ${renderAdjacent(
+            "Dependents",
+            adjacentNodes(
+              this.graphNodes,
+              this.graphEdges,
+              node.id,
+              "inbound",
+            ),
+          )} ${renderAdjacent(
+            "Dependencies",
+            adjacentNodes(
+              this.graphNodes,
+              this.graphEdges,
+              node.id,
+              "outbound",
+            ),
+          )}
+        ${flagMeta
+          ? html`
+            <div class="detail-section">
+              <div class="detail-section-title flag-meta-title">
+                <span class="flag-warning">&#x26a0;</span> Invalid Input Diagnostics
+              </div>
+              ${flagMeta.schema !== undefined
+                ? html`
+                  <div class="flag-meta-field">
+                    <div class="flag-meta-label">Schema</div>
+                    <pre class="flag-meta-value">${JSON.stringify(
+                      flagMeta.schema,
+                      null,
+                      2,
+                    )}</pre>
+                  </div>
+                `
+                : ""} ${flagMeta.raw !== undefined
+                ? html`
+                  <div class="flag-meta-field">
+                    <div class="flag-meta-label">Raw Value</div>
+                    <pre class="flag-meta-value">${JSON.stringify(
+                      flagMeta.raw,
+                      null,
+                      2,
+                    )}</pre>
+                  </div>
+                `
+                : ""}
+            </div>
+          `
+          : ""}
+      </div>
+    `;
+  }
+
+  #renderEdgeDetail(edge: LayoutEdge): TemplateResult {
+    const fromNode = this.layoutNodes.get(edge.from);
+    const toNode = this.layoutNodes.get(edge.to);
+
+    return html`
+      <div class="detail-pane">
+        <div class="detail-pane-header">
+          <span class="detail-pane-title">Edge</span>
+          <button
+            class="detail-pane-close"
+            @click="${() => (this.selectedEdge = null)}"
+          >
+            ×
+          </button>
+        </div>
+
+        <div class="detail-section">
+          <div class="detail-section-title">From</div>
+          <div class="detail-section-content">
+            ${fromNode?.label ?? edge.from}
+          </div>
+        </div>
+
+        <div class="detail-section">
+          <div class="detail-section-title">To</div>
+          <div class="detail-section-content">
+            ${toNode?.label ?? edge.to}
+          </div>
+        </div>
+
+        <div class="detail-section">
+          <div class="detail-section-title">
+            Cells (${edge.cells.length})
+          </div>
+          <div class="detail-cell-list">
+            ${edge.cells.length > 0
+              ? edge.cells.map(
+                (c) =>
+                  html`
+                    <div class="detail-cell">${c}</div>
+                  `,
+              )
+              : html`
+                <div class="detail-cell">(no cells tracked)</div>
+              `}
+          </div>
+        </div>
+
+        ${edge.isHistorical
+          ? html`
+            <div
+              class="detail-section"
+              style="color: #f59e0b; font-style: italic;"
+            >
+              This edge is historical (no longer active)
+            </div>
+          `
+          : ""}
+      </div>
+    `;
   }
 
   #renderLegend(): TemplateResult {
@@ -2706,15 +1993,10 @@ export class XSchedulerGraph extends LitElement {
     `;
   }
 
-  #hasSourceLocation(nodeId: string): boolean {
-    return parseActionLocation(nodeId) !== null;
-  }
-
   #renderSourceView(): TemplateResult {
     const sources = this.debuggerController?.getPatternSources() ?? [];
-    // Build SourceViewNode map from layoutNodes
     const sourceNodes = new Map<string, SourceViewNode>();
-    for (const [id, node] of this.layoutNodes) {
+    for (const [id, node] of this.graphNodes) {
       sourceNodes.set(id, {
         id,
         type: node.type,
@@ -2739,11 +2021,8 @@ export class XSchedulerGraph extends LitElement {
           .breakpoints="${this.debuggerController?.getBreakpoints() ??
             new Set()}"
           @node-selected="${(e: CustomEvent) => {
-            const node = this.layoutNodes.get(e.detail.nodeId);
-            if (node) {
-              this.selectedNode = node;
-              this.selectedEdge = null;
-            }
+            const node = this.graphNodes.get(e.detail.nodeId);
+            if (node) this.#selectNode(node);
           }}"
           @breakpoint-toggle="${async (e: CustomEvent) => {
             const { actionIds, enabled } = e.detail;
@@ -2761,8 +2040,9 @@ export class XSchedulerGraph extends LitElement {
 
   #renderFlagsView(): TemplateResult {
     const flags = this.debuggerController?.getActiveFlags() ?? {};
-    const invalidInputMap = flags["runner"]?.["action invalid input"] ?? {};
-    const invalidInputIds = Object.keys(invalidInputMap);
+    const invalidInputIds = Object.keys(
+      flags["runner"]?.["action invalid input"] ?? {},
+    );
 
     if (invalidInputIds.length === 0) {
       return html`
@@ -2776,26 +2056,10 @@ export class XSchedulerGraph extends LitElement {
       `;
     }
 
-    // Split into matched (in graph) and unmatched IDs
-    const matched: {
-      id: string;
-      node: LayoutNode;
-      metadata: Record<string, unknown> | null;
-    }[] = [];
-    const unmatched: {
-      id: string;
-      metadata: Record<string, unknown> | null;
-    }[] = [];
-
-    for (const id of invalidInputIds) {
-      const node = this.layoutNodes.get(id);
-      const metadata = invalidInputMap[id] ?? null;
-      if (node) {
-        matched.push({ id, node, metadata });
-      } else {
-        unmatched.push({ id, metadata });
-      }
-    }
+    const matched = invalidInputIds.flatMap((id) =>
+      this.graphNodes.get(id) ?? []
+    );
+    const unmatched = invalidInputIds.filter((id) => !this.graphNodes.has(id));
 
     return html`
       <div class="flags-container">
@@ -2803,15 +2067,12 @@ export class XSchedulerGraph extends LitElement {
           <div class="flags-section-title">
             Actions with invalid inputs (${invalidInputIds.length})
           </div>
-          ${matched.map(({ id, node }) => {
-            const isSelected = this.selectedNode?.id === id;
+          ${matched.map((node) => {
+            const isSelected = this.selectedNode?.id === node.id;
             return html`
               <div
                 class="flag-item ${isSelected ? "selected" : ""}"
-                @click="${() => {
-                  this.selectedNode = node;
-                  this.selectedEdge = null;
-                }}"
+                @click="${() => this.#selectNode(node)}"
                 title="${node.fullId}"
               >
                 <span class="flag-warning">&#x26a0;</span>
@@ -2825,7 +2086,7 @@ export class XSchedulerGraph extends LitElement {
               <div class="flags-section-title">
                 Not in graph (${unmatched.length})
               </div>
-              ${unmatched.map(({ id }) =>
+              ${unmatched.map((id) =>
                 html`
                   <div
                     class="flag-item"
@@ -2847,135 +2108,14 @@ export class XSchedulerGraph extends LitElement {
   }
 
   #renderTable(): TemplateResult {
-    // Get all nodes with stats
-    const allNodesWithStats = Array.from(this.layoutNodes.values())
-      .filter((n) => n.type !== "input" && n.stats)
-      .map((n) => ({
-        id: n.id,
-        fullId: n.fullId,
-        label: n.label,
-        type: n.type,
-        preview: n.preview,
-        parentId: n.parentId,
-        runCount: n.stats?.runCount ?? 0,
-        totalTime: n.stats?.totalTime ?? 0,
-        avgTime: n.stats?.averageTime ?? 0,
-        lastTime: n.stats?.lastRunTime ?? 0,
-        lastTimestamp: n.stats?.lastRunTimestamp ?? 0,
-        reads: n.reads,
-        writes: n.writes,
-        debounceMs: n.debounceMs,
-        throttleMs: n.throttleMs,
-      }));
+    const hasBaseline = this.#baselineStats.size > 0;
+    const groups = tableGroups(this.graphNodes.values(), this.#baselineStats, {
+      column: this.tableSortColumn,
+      ascending: this.tableSortAscending,
+      byDelta: this.sortByDelta,
+    });
 
-    // Build parent-child hierarchy with aggregated stats
-    type NodeWithStats = (typeof allNodesWithStats)[0];
-    interface GroupedNode extends NodeWithStats {
-      children: NodeWithStats[];
-      aggregatedTotalTime: number;
-      aggregatedRunCount: number;
-      // Delta values (since baseline)
-      deltaRunCount: number;
-      deltaTotalTime: number;
-      aggregatedDeltaRunCount: number;
-      aggregatedDeltaTotalTime: number;
-      isParent: boolean;
-    }
-
-    const nodeById = new Map(allNodesWithStats.map((n) => [n.id, n]));
-    const childrenByParent = new Map<string, NodeWithStats[]>();
-
-    // Helper to get delta for a node
-    const getNodeDelta = (id: string, runCount: number, totalTime: number) => {
-      const baseline = this.#baselineStats.get(id);
-      return {
-        deltaRunCount: runCount - (baseline?.runCount ?? 0),
-        deltaTotalTime: totalTime - (baseline?.totalTime ?? 0),
-      };
-    };
-
-    // Group children by parent
-    for (const node of allNodesWithStats) {
-      if (node.parentId && nodeById.has(node.parentId)) {
-        if (!childrenByParent.has(node.parentId)) {
-          childrenByParent.set(node.parentId, []);
-        }
-        childrenByParent.get(node.parentId)!.push(node);
-      }
-    }
-
-    // Create grouped nodes (top-level = no parent or parent not in our list)
-    const groupedNodes: GroupedNode[] = [];
-    const processedChildren = new Set<string>();
-
-    for (const node of allNodesWithStats) {
-      // Skip if this is a child of a visible parent
-      if (node.parentId && nodeById.has(node.parentId)) {
-        processedChildren.add(node.id);
-        continue;
-      }
-
-      const children = childrenByParent.get(node.id) ?? [];
-      const aggregatedTotalTime = node.totalTime +
-        children.reduce((sum, c) => sum + c.totalTime, 0);
-      const aggregatedRunCount = node.runCount +
-        children.reduce((sum, c) => sum + c.runCount, 0);
-
-      // Calculate deltas
-      const nodeDelta = getNodeDelta(node.id, node.runCount, node.totalTime);
-      const childrenDeltaRunCount = children.reduce((sum, c) => {
-        const d = getNodeDelta(c.id, c.runCount, c.totalTime);
-        return sum + d.deltaRunCount;
-      }, 0);
-      const childrenDeltaTotalTime = children.reduce((sum, c) => {
-        const d = getNodeDelta(c.id, c.runCount, c.totalTime);
-        return sum + d.deltaTotalTime;
-      }, 0);
-
-      groupedNodes.push({
-        ...node,
-        children,
-        aggregatedTotalTime,
-        aggregatedRunCount,
-        deltaRunCount: nodeDelta.deltaRunCount,
-        deltaTotalTime: nodeDelta.deltaTotalTime,
-        aggregatedDeltaRunCount: nodeDelta.deltaRunCount +
-          childrenDeltaRunCount,
-        aggregatedDeltaTotalTime: nodeDelta.deltaTotalTime +
-          childrenDeltaTotalTime,
-        isParent: children.length > 0,
-      });
-    }
-
-    // Sort based on current column (and whether we're sorting by delta)
-    const useDelta = this.sortByDelta && this.#baselineStats.size > 0;
-    const sortNodes = (nodes: GroupedNode[]) => {
-      nodes.sort((a, b) => {
-        let cmp = 0;
-        switch (this.tableSortColumn) {
-          case "totalTime":
-            cmp = useDelta
-              ? b.aggregatedDeltaTotalTime - a.aggregatedDeltaTotalTime
-              : b.aggregatedTotalTime - a.aggregatedTotalTime;
-            break;
-          case "runCount":
-            cmp = useDelta
-              ? b.aggregatedDeltaRunCount - a.aggregatedDeltaRunCount
-              : b.aggregatedRunCount - a.aggregatedRunCount;
-            break;
-          case "avgTime":
-            cmp = b.avgTime - a.avgTime;
-            break;
-          case "lastTime":
-            cmp = b.lastTime - a.lastTime;
-            break;
-        }
-        return this.tableSortAscending ? -cmp : cmp;
-      });
-    };
-    sortNodes(groupedNodes);
-
-    const sortIndicator = (col: typeof this.tableSortColumn) => {
+    const sortIndicator = (col: TableSortColumn) => {
       const isSorted = this.tableSortColumn === col;
       const arrow = this.tableSortAscending ? "▲" : "▼";
       return html`
@@ -2983,7 +2123,7 @@ export class XSchedulerGraph extends LitElement {
       `;
     };
 
-    const handleSort = (col: typeof this.tableSortColumn) => {
+    const handleSort = (col: TableSortColumn) => {
       if (this.tableSortColumn === col) {
         this.tableSortAscending = !this.tableSortAscending;
       } else {
@@ -2992,42 +2132,12 @@ export class XSchedulerGraph extends LitElement {
       }
     };
 
-    const formatTime = (ms: number) => {
-      if (ms === 0) return "-";
-      if (ms < 1) return `${(ms * 1000).toFixed(0)}µs`;
-      if (ms < 1000) return `${ms.toFixed(1)}ms`;
-      return `${(ms / 1000).toFixed(2)}s`;
-    };
-
-    const hasBaseline = this.#baselineStats.size > 0;
-
-    const getBaseline = (id: string) => this.#baselineStats.get(id);
-
-    const getDelta = (
-      current: number,
-      baseline: number | undefined,
-    ): number => {
-      return current - (baseline ?? 0);
-    };
-
-    const formatDelta = (delta: number, isTime: boolean = false): string => {
-      if (delta === 0) return "";
-      const sign = delta > 0 ? "+" : "";
-      if (isTime) {
-        if (Math.abs(delta) < 1) return `${sign}${(delta * 1000).toFixed(0)}µs`;
-        if (Math.abs(delta) < 1000) return `${sign}${delta.toFixed(1)}ms`;
-        return `${sign}${(delta / 1000).toFixed(2)}s`;
-      }
-      return `${sign}${delta}`;
-    };
-
     const renderStatWithDelta = (
       value: number,
-      baselineValue: number | undefined,
+      delta: number,
       isTime: boolean = false,
     ) => {
-      const delta = getDelta(value, baselineValue);
-      const formatted = isTime ? formatTime(value) : String(value);
+      const formatted = isTime ? formatDuration(value) : String(value);
       if (!hasBaseline) {
         return formatted;
       }
@@ -3056,94 +2166,76 @@ export class XSchedulerGraph extends LitElement {
       this.requestUpdate();
     };
 
-    const handleRowClick = (node: NodeWithStats) => {
-      // Find the layout node and select it
-      const layoutNode = this.layoutNodes.get(node.id);
-      if (layoutNode) {
-        this.selectedNode = layoutNode;
-        this.selectedEdge = null;
-      }
-    };
+    const renderTimingBadges = (n: GraphNodeInfo) =>
+      html`
+        ${n.debounceMs
+          ? html`
+            <span
+              class="timing-badge debounce"
+              title="Debounced: waits ${n.debounceMs}ms before running"
+            >D:${n.debounceMs}ms</span>
+          `
+          : ""} ${n.throttleMs
+          ? html`
+            <span
+              class="timing-badge throttle"
+              title="Throttled: runs at most once every ${n.throttleMs}ms"
+            >T:${n.throttleMs}ms</span>
+          `
+          : ""}
+      `;
 
-    const renderRow = (
-      n: NodeWithStats,
-      isChild: boolean = false,
-      _parentNode?: GroupedNode,
-    ) => {
+    const renderRow = (row: TableRow) => {
+      const n = row.node;
       const isSelected = this.selectedNode?.id === n.id;
-      const baseline = getBaseline(n.id);
       return html`
         <tr
-          class="${isChild ? "child-row" : ""} ${isSelected ? "selected" : ""}"
+          class="child-row ${isSelected ? "selected" : ""}"
           title="${n.fullId}${n.preview ? `\n\n${n.preview}` : ""}"
-          @click="${() => handleRowClick(n)}"
+          @click="${() => this.#selectNode(n)}"
         >
           <td class="col-type">
             <span class="type-badge ${n.type}">${n.type}</span>
           </td>
           <td class="col-name">
-            ${isChild
-              ? html`
-                <span class="child-indent">└─</span>
-              `
-              : ""} ${n.label} ${n.debounceMs
-              ? html`
-                <span
-                  class="timing-badge debounce"
-                  title="Debounced: waits ${n.debounceMs}ms before running"
-                >D:${n.debounceMs}ms</span>
-              `
-              : ""} ${n.throttleMs
-              ? html`
-                <span
-                  class="timing-badge throttle"
-                  title="Throttled: runs at most once every ${n.throttleMs}ms"
-                >T:${n.throttleMs}ms</span>
-              `
-              : ""}
+            <span class="child-indent">└─</span>
+            ${n.label} ${renderTimingBadges(n)}
           </td>
           <td class="col-number">
-            ${renderStatWithDelta(n.runCount, baseline?.runCount)}
+            ${renderStatWithDelta(row.runCount, row.runDelta)}
           </td>
           <td class="col-number">
-            ${renderStatWithDelta(n.totalTime, baseline?.totalTime, true)}
+            ${renderStatWithDelta(row.totalTime, row.timeDelta, true)}
           </td>
-          <td class="col-number">${formatTime(n.avgTime)}</td>
-          <td class="col-number">${formatTime(n.lastTime)}</td>
+          <td class="col-number">${formatDuration(row.avgTime)}</td>
+          <td class="col-number">${formatDuration(row.lastTime)}</td>
         </tr>
       `;
     };
 
-    const renderGroupedRow = (n: GroupedNode) => {
+    const renderGroupedRow = (group: TableGroup) => {
+      const n = group.node;
+      const isParent = group.children.length > 0;
       const isExpanded = this.tableExpandedParents.has(n.id);
       const isSelected = this.selectedNode?.id === n.id;
-      const rows: TemplateResult[] = [];
+      // A collapsed row shows its descendants' figures summed in.
+      const figures = isParent && !isExpanded ? group.aggregate : group;
+      const renderFigure = (figure: TemplateResult | string) =>
+        figures === group ? figure : html`
+          <span class="aggregated">${figure}</span>
+        `;
 
-      // Get baseline for this node and calculate aggregated baseline
-      const baseline = getBaseline(n.id);
-      const aggregatedBaselineRunCount = (baseline?.runCount ?? 0) +
-        n.children.reduce(
-          (sum, c) => sum + (getBaseline(c.id)?.runCount ?? 0),
-          0,
-        );
-      const aggregatedBaselineTotalTime = (baseline?.totalTime ?? 0) +
-        n.children.reduce(
-          (sum, c) => sum + (getBaseline(c.id)?.totalTime ?? 0),
-          0,
-        );
-
-      // Parent row with aggregated stats
-      rows.push(html`
+      return html`
         <tr
           class="parent-row ${isSelected ? "selected" : ""}"
           title="${n.fullId}${n.preview ? `\n\n${n.preview}` : ""}"
-          @click="${() => handleRowClick(n)}"
+          @click="${() => this.#selectNode(n)}"
         >
           <td class="col-type">
             <span class="type-badge ${n.type}">${n.type}</span>
           </td>
           <td class="col-name">
-            ${n.isParent
+            ${isParent
               ? html`
                 <button
                   class="expand-toggle"
@@ -3152,89 +2244,27 @@ export class XSchedulerGraph extends LitElement {
                   ${isExpanded ? "▼" : "▶"}
                 </button>
               `
-              : ""} ${n.label} ${n.isParent
+              : ""} ${n.label} ${isParent
               ? html`
-                <span class="child-count">(${n.children.length})</span>
+                <span class="child-count">(${group.children.length})</span>
               `
-              : ""} ${n.debounceMs
-              ? html`
-                <span
-                  class="timing-badge debounce"
-                  title="Debounced: waits ${n.debounceMs}ms before running"
-                >D:${n.debounceMs}ms</span>
-              `
-              : ""} ${n.throttleMs
-              ? html`
-                <span
-                  class="timing-badge throttle"
-                  title="Throttled: runs at most once every ${n.throttleMs}ms"
-                >T:${n.throttleMs}ms</span>
-              `
-              : ""}
+              : ""} ${renderTimingBadges(n)}
           </td>
           <td class="col-number">
-            ${n.isParent && !isExpanded
-              ? html`
-                <span class="aggregated">
-                  ${renderStatWithDelta(
-                    n.aggregatedRunCount,
-                    hasBaseline ? aggregatedBaselineRunCount : undefined,
-                  )}
-                </span>
-              `
-              : renderStatWithDelta(n.runCount, baseline?.runCount)}
+            ${renderFigure(
+              renderStatWithDelta(figures.runCount, figures.runDelta),
+            )}
           </td>
           <td class="col-number">
-            ${n.isParent && !isExpanded
-              ? html`
-                <span class="aggregated">
-                  ${renderStatWithDelta(
-                    n.aggregatedTotalTime,
-                    hasBaseline ? aggregatedBaselineTotalTime : undefined,
-                    true,
-                  )}
-                </span>
-              `
-              : renderStatWithDelta(n.totalTime, baseline?.totalTime, true)}
+            ${renderFigure(
+              renderStatWithDelta(figures.totalTime, figures.timeDelta, true),
+            )}
           </td>
-          <td class="col-number">${formatTime(n.avgTime)}</td>
-          <td class="col-number">${formatTime(n.lastTime)}</td>
+          <td class="col-number">${formatDuration(group.avgTime)}</td>
+          <td class="col-number">${formatDuration(group.lastTime)}</td>
         </tr>
-      `);
-
-      // Child rows (if expanded)
-      if (isExpanded && n.children.length > 0) {
-        // Sort children too (using delta if enabled)
-        const sortedChildren = [...n.children].sort((a, b) => {
-          let cmp = 0;
-          const aDelta = getNodeDelta(a.id, a.runCount, a.totalTime);
-          const bDelta = getNodeDelta(b.id, b.runCount, b.totalTime);
-          switch (this.tableSortColumn) {
-            case "totalTime":
-              cmp = useDelta
-                ? bDelta.deltaTotalTime - aDelta.deltaTotalTime
-                : b.totalTime - a.totalTime;
-              break;
-            case "runCount":
-              cmp = useDelta
-                ? bDelta.deltaRunCount - aDelta.deltaRunCount
-                : b.runCount - a.runCount;
-              break;
-            case "avgTime":
-              cmp = b.avgTime - a.avgTime;
-              break;
-            case "lastTime":
-              cmp = b.lastTime - a.lastTime;
-              break;
-          }
-          return this.tableSortAscending ? -cmp : cmp;
-        });
-        for (const child of sortedChildren) {
-          rows.push(renderRow(child, true, n));
-        }
-      }
-
-      return rows;
+        ${isExpanded ? group.children.map(renderRow) : ""}
+      `;
     };
 
     return html`
@@ -3307,7 +2337,7 @@ export class XSchedulerGraph extends LitElement {
               </tr>
             </thead>
             <tbody>
-              ${groupedNodes.map((n) => renderGroupedRow(n))}
+              ${groups.map(renderGroupedRow)}
             </tbody>
           </table>
         </div>

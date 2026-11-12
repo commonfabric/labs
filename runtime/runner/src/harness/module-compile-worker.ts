@@ -43,7 +43,7 @@ import type { ModuleCompiler, ModuleCompileRequest } from "./module-compile.ts";
  * reporting on its loggers can include them without waiting on the worker.
  */
 export class ModuleCompileWorker implements ModuleCompiler {
-  readonly #workerModule: URL;
+  readonly #startWorker: () => Worker;
   #generation: WorkerGeneration | undefined;
   #nextId = 0;
   #closed = false;
@@ -53,13 +53,16 @@ export class ModuleCompileWorker implements ModuleCompiler {
   };
 
   /**
-   * Constructs an instance whose worker runs `workerModule`, by default this
-   * package's `compile-worker.ts`.
+   * Constructs an instance whose workers `startWorker` starts, by default each
+   * a module worker running this package's `compile-worker.ts`.
    */
   constructor(
-    workerModule: URL = new URL("./compile-worker.ts", import.meta.url),
+    startWorker: () => Worker = () =>
+      new Worker(new URL("./compile-worker.ts", import.meta.url), {
+        type: "module",
+      }),
   ) {
-    this.#workerModule = workerModule;
+    this.#startWorker = startWorker;
   }
 
   /**
@@ -124,7 +127,7 @@ export class ModuleCompileWorker implements ModuleCompiler {
 
   /** Helper for `compile()`, which starts a worker. */
   #start(): WorkerGeneration {
-    const worker = new Worker(this.#workerModule, { type: "module" });
+    const worker = this.#startWorker();
     const generation: WorkerGeneration = {
       worker,
       ready: false,

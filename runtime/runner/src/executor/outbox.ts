@@ -245,10 +245,9 @@ export class SpaceOutbox {
     return Math.max(1, Math.floor(rate));
   }
 
-  /** Continuous refill up to the burst capacity. */
-  #refillEgressTokens(): void {
-    const rate = this.#budget?.egressRatePerSecond;
-    if (rate === undefined || rate <= 0) return;
+  /** Continuous refill at `rate` tokens per second, up to the burst
+   * capacity. */
+  #refillEgressTokens(rate: number): void {
     const now = this.#now();
     const elapsed = Math.max(0, now - this.#egressRefilledAt);
     if (elapsed <= 0) return;
@@ -263,7 +262,7 @@ export class SpaceOutbox {
   #msUntilEgressToken(): number {
     const rate = this.#budget?.egressRatePerSecond;
     if (rate === undefined || rate <= 0) return 0;
-    this.#refillEgressTokens();
+    this.#refillEgressTokens(rate);
     if (this.#egressTokens >= 1) return 0;
     return Math.ceil(((1 - this.#egressTokens) / rate) * 1000);
   }
@@ -335,7 +334,6 @@ export class SpaceOutbox {
    * No gate binds that identity; the drop is the sanctioned
    * crash-equivalent posture (memo re-miss re-fires on re-activation). */
   close(): void {
-    if (this.#closed) return;
     this.#closed = true;
     while (this.#dispatchWaiters.length > 0) {
       this.#dispatchWaiters.shift()?.();

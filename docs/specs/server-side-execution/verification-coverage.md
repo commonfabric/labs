@@ -12,10 +12,10 @@ mapping pass is due.
 
 ## Current status
 
-The first-party default is OFF and the ON soak is paused. The
+The first-party default is ON (re-flipped 2026-11-11) and the ON soak runs
+on main. The
 [`serverExecution` registry](../../development/EXPERIMENTAL_OPTIONS.md#serverexecution)
-owns the current default and flip records. A renewed ON rollout must satisfy
-the plan's ordered gates. OW28 tracks served compilation and its scoped child
+owns the current default and flip records. OW28 tracks served compilation and its scoped child
 execution coverage; implementing that path does not discharge the other gates.
 
 The status corrections in this register are bounded to the rows below:
@@ -1890,11 +1890,9 @@ blockquote; this PR):
   the sandbox globalThis is isolated); pre-fix the backoff loop
   re-ran the handler throughout the observation window (17 runs / 5s
   observed; production shape ~43 attempts / 30.5s to
-  CommitConvergenceError). The push-boundary belt (a ConflictError
-  naming a known-speculative layer upgrades to the terminal refusal)
-  is unreachable-by-construction behind the build-time refusal and
-  carries no separate pin — `speculative-basis-exported` in the log
-  names any future reach.
+  CommitConvergenceError). The build-time refusal is the only check:
+  a layer is speculative from its seal on, so a commit that passes it
+  names no speculative layer when its verdict comes back.
 - The origin-ack retirement wake (speculation.md §6's closing
   paragraph; the verdict-lifetime sub-defect): → COVERED, impl-gate,
   red-first. The same file's "an entry whose origin's accept verdict
@@ -3679,9 +3677,9 @@ findings; the OWNER RULING — the flip lands DARK):
 
 The current rollout posture is the
 [`serverExecution` registry](../../development/EXPERIMENTAL_OPTIONS.md#serverexecution):
-first-party default OFF, ON soak paused. The following flip record describes
-#6535's changes, not a current gate verdict. OW28's direct acceptance coverage
-is recorded above; the plan's gate dispositions govern a renewed ON rollout.
+first-party default ON since the 2026-11-11 re-flip, with the ON soak running
+on main. The following flip record describes #6535's changes, not a current
+gate verdict. OW28's direct acceptance coverage is recorded above.
 
 **Flip record — PR #6535.** Its ON-skip registry and topology checks do not
 exercise fresh served `compileAndRun` completion. Its merge therefore does not
@@ -5413,10 +5411,8 @@ supply; OW29/OW32/OW34 closed):
     non-zero count coexists with every fire resolved by its mark — the chat
     witness below reads 2 beside 25/25), `intent-listener-installed` /
     `-released`, `intent-watch-failed` / `intent-listener-failed` /
-    `intent-check-read-failed` / `intent-apply-failed` (the loud
-    fail-soft arms; the last is the fix pass's per-entry guard, N-2 —
-    nothing in the arms throws today); the effects channel's
-    `effects-reconcile`; the overlay's diagnostic getters
+    `intent-check-read-failed` (the loud fail-soft arms); the effects
+    channel's `effects-reconcile`; the overlay's diagnostic getters
     `pendingIntentCount`, `intentListenerInstalled`, `intentCheckCount`,
     `intentCheckVisits` (the `sidecarEntriesRead` witness),
     `intentCheckMaxVisits`; the browser churn line

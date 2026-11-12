@@ -33,8 +33,12 @@ const schemas = {
       name: z.string(),
       picture: z.string().optional(),
     }).strict().optional(),
+    // The service judges the names' values too.
+    spaceName: z.string().optional(),
+    issuerName: z.string().optional(),
   }).strict(),
   redeem: z.object({ inviteId, code: secret }).strict(),
+  preview: z.object({ inviteId, code: secret }).strict(),
   revoke: z.object({ inviteId }).strict(),
   list: z.object({}).strict(),
   receipts: z.object({ inviteId: inviteId.optional() }).strict(),
@@ -98,6 +102,7 @@ export function createSpaceInviteRouter(
     const operation of [
       "create",
       "redeem",
+      "preview",
       "revoke",
       "list",
       "receipts",
@@ -181,6 +186,14 @@ export function createSpaceInviteRouter(
                 ...envelope,
                 operation,
                 body: schemas.redeem.parse(body),
+              }),
+            );
+          case "preview":
+            return c.json(
+              await options.server.invite({
+                ...envelope,
+                operation,
+                body: schemas.preview.parse(body),
               }),
             );
           case "revoke":

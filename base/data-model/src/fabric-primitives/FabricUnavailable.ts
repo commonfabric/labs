@@ -407,10 +407,9 @@ export class FabricUnavailable extends BaseFabricPrimitive
    * The codec for instances of this class in the realm-crossing format.
    *
    * Terminal, where JSON's is nonterminal, and the state is the same record
-   * either way. As with `FabricRegExp`, a record of strings sits in both
-   * domains at once, and terminal is what this format has to gain by: the walk
-   * hands the record to the transport rather than descending into fields
-   * whose shape it already knows.
+   * either way. A record of strings sits in both domains at once, and terminal
+   * is what this format has to gain by: the walk hands the record to the
+   * transport rather than descending into fields whose shape it already knows.
    */
   static get [REALM_CODEC](): TerminalCodec<RealmCodecValue> {
     return this.#realmCodec;

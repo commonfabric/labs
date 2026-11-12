@@ -191,3 +191,9 @@ export class CFTabList extends BaseElement {
     `;
   }
 }
+
+declare global {
+  interface HTMLElementTagNameMap {
+    "cf-tab-list": CFTabList;
+  }
+}

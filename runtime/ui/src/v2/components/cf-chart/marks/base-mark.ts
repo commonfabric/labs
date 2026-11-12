@@ -38,12 +38,12 @@ export abstract class MarkElement extends LitElement {
   declare color: string | undefined;
   declare label: string | undefined;
 
-  private _dataController = new CellController<
+  #dataController = new CellController<
     number[] | Record<string, unknown>[]
   >(this, {
     timing: { strategy: "immediate" },
     onChange: () => {
-      this._notifyChart();
+      this.#notifyChart();
     },
   });
 
@@ -57,26 +57,19 @@ export abstract class MarkElement extends LitElement {
 
   /** Get resolved data array (handles both Cell and plain values) */
   getData(): readonly (number | Record<string, unknown>)[] {
-    return this._dataController.getValue() || [];
-  }
-
-  protected override firstUpdated(_changedProperties: PropertyValues): void {
-    super.firstUpdated(_changedProperties);
-    if (this.data !== undefined) {
-      this._dataController.bind(this.data);
-    }
+    return this.#dataController.getValue() || [];
   }
 
   protected override updated(changedProperties: PropertyValues): void {
     super.updated(changedProperties);
     if (changedProperties.has("data") && this.data !== undefined) {
-      this._dataController.bind(this.data);
+      this.#dataController.bind(this.data);
     }
-    this._notifyChart();
+    this.#notifyChart();
   }
 
   /** Dispatch event to notify parent cf-chart of config changes */
-  protected _notifyChart(): void {
+  #notifyChart(): void {
     this.dispatchEvent(
       new CustomEvent("mark-update", {
         bubbles: true,

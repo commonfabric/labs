@@ -80,14 +80,10 @@ export const atomicBacklinkRanges = EditorView.atomicRanges.of((view) => {
     if (startLine !== endLine) continue; // Skip multi-line backlinks
 
     // Make [[ atomic (cursor skips from before [[ to after [[)
-    if (bl.from < bl.nameFrom) {
-      decorations.push(Decoration.mark({}).range(bl.from, bl.nameFrom));
-    }
+    decorations.push(Decoration.mark({}).range(bl.from, bl.nameFrom));
 
     // Make " (id)]]" atomic (cursor skips from end of name to after ]])
-    if (bl.nameTo < bl.to) {
-      decorations.push(Decoration.mark({}).range(bl.nameTo, bl.to));
-    }
+    decorations.push(Decoration.mark({}).range(bl.nameTo, bl.to));
   }
 
   decorations.sort((a, b) => a.from - b.from);
@@ -240,17 +236,10 @@ export function createBacklinkDecorationPlugin() {
           if (hasId && (cursorInBacklink || selectionOverlaps)) {
             // EDITING MODE: Show plain [[Name]] text, hide only the " (id)" portion
             // The closing ]] stays visible so user sees [[Name]]
-            // Safety check: only hide if there's actually content between nameTo and end-2
-            const idStart = nameTo;
-            const idEnd = end - 2; // Position before ]]
-            if (idEnd > idStart) {
-              decorations.push(hiddenReplace.range(idStart, idEnd)); // Hide " (id)"
-            }
+            decorations.push(hiddenReplace.range(nameTo, end - 2)); // Hide " (id)"
           } else if (!hasId) {
             // Incomplete backlink - show as pending pill or full text when editing
-            const cursorInside = hasFocus && cursorPos >= start &&
-              cursorPos <= end;
-            if (cursorInside || selectionOverlaps) {
+            if (cursorInBacklink || selectionOverlaps) {
               // Cursor inside or adjacent - show full [[mention]] with editing style
               decorations.push(editingMark.range(start, end));
             } else {

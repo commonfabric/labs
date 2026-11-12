@@ -59,6 +59,11 @@ describe("scheduler rejection taxonomy", () => {
       .toBe(true);
   });
 
+  it("does not classify an absent error as retryable", () => {
+    expect(isRetryableCommitRejection(undefined)).toBe(false);
+    expect(isRetryableCommitRejection(null)).toBe(false);
+  });
+
   it("classifies the server's oversized-message refusal as terminal", () => {
     // The refusal is decided by what the frame stands for, so the same
     // writes sent again are refused again.

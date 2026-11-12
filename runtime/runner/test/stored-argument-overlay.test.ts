@@ -74,6 +74,32 @@ describe("runner", () => {
     }
   });
 
+  it("accepts a piece with no argument link, and refuses one whose linked argument is invalid", () => {
+    const piece = runtime.getCell(signer.did(), "piece-without-argument");
+    const schema = candidate({
+      type: "object",
+      properties: { count: { type: "number" } },
+      required: ["count"],
+    });
+    const tx = runtime.edit();
+    try {
+      expect(() => runtime.runner.validateStoredArgument(tx, piece, schema))
+        .not.toThrow();
+
+      const argument = runtime.getCell(signer.did(), "invalid-argument");
+      argument.withTx(tx).set({ count: "wrong" });
+      piece.withTx(tx).setMetaRaw(
+        "argument",
+        argument.getAsLink(),
+        rawMetaWriteAuthorization,
+      );
+      expect(() => runtime.runner.validateStoredArgument(tx, piece, schema))
+        .toThrow("count: value does not match type number");
+    } finally {
+      tx.abort();
+    }
+  });
+
   it("bounds shared-graph reads while refusing a readable invalid argument", async () => {
     const graphIds = new Set<string>();
     const argument = runtime.getCell(signer.did(), "argument");

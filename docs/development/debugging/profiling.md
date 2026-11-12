@@ -232,7 +232,8 @@ one read of one plan's inputs by the cross-space pass, which runs only
 against a server that does not report the links its walk follows out of the
 space (`syncCrossingsV1`); against one that does, the row is absent, and
 `runner/start/resumeCrossSpaceSettle` alone remains: the pre-sync's wait on
-the loads the frames' crossings kicked. Where the pass runs, its count is
+the loads the frames' crossings kicked. Both rows come from a serving runtime
+alone: a client that isn't serving neither runs the pass nor loads crossings. Where the pass runs, its count is
 the reads
 the pass made in all, so what it holds beyond the plans a family has is the
 plans read again after a load they kicked landed, without saying which plans

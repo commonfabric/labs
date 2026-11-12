@@ -38,7 +38,6 @@ import {
   FabricEpochNsec,
   FabricHash,
   type FabricPrimitiveClassesByName,
-  FabricRegExp,
   FabricUnavailable,
 } from "@/fabric-primitives";
 import { jsonFromFabricValue, newDefaultJsonCodecEngine } from "./codecs.ts";
@@ -51,6 +50,7 @@ import {
   type FixtureJson,
   type FixtureRequirements,
   fixtureTextOf,
+  NO_CODEC_EXCLUSION,
   plainJsonTextOf,
   probedPathsOf,
   probesOf,
@@ -604,11 +604,6 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     make: () => new FabricUnavailable("error", "network"),
   },
   {
-    name: "regular expression of another flavor",
-    section: "3-json-encoding.md section 3, `RegExp@1`",
-    make: () => new FabricRegExp("other", "(?<", ""),
-  },
-  {
     name: "problematic value whose tag is not a tag",
     section: "3-json-encoding.md section 3, `Problematic@1`",
     text: 'fvj1:{"/Problematic@1":{"error":"e","state":{"/Undefined@1":null},' +
@@ -792,12 +787,6 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     section: "3-json-encoding.md section 3, `KeyPair@1`",
     text: 'fvj1:{"/KeyPair@1":{"algorithm":"A","privateKey":"AA",' +
       '"publicKey":"+"}}',
-  },
-  {
-    name: "regular expression that does not construct",
-    section: "3-json-encoding.md section 3, `RegExp@1`",
-    text: 'fvj1:{"/RegExp@1":{"flags":"","flavor":"es2025","source":"("}}',
-    requires: { flavors: ["es2025"] },
   },
   {
     name: "unavailable pairing an error kind with a transient reason",
@@ -1063,45 +1052,9 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     text: 'fvj1:{"/Unavailable@1":{"errorMessage":"m","reason":"pending"}}',
   },
   {
-    name: "regular expression with a string state",
+    name: "regular expression, its type disabled for codecs",
     section: SECTION_REGEXP,
-    text: 'fvj1:{"/RegExp@1":"a"}',
-  },
-  {
-    name: "regular expression with a numeric source",
-    section: SECTION_REGEXP,
-    text: 'fvj1:{"/RegExp@1":{"flags":"","flavor":"es2025","source":1}}',
-  },
-  {
-    name: "regular expression with a numeric flavor",
-    section: SECTION_REGEXP,
-    text: 'fvj1:{"/RegExp@1":{"flags":"","flavor":1,"source":"a"}}',
-  },
-  {
-    name: "regular expression with a flag es2025 lacks",
-    section: SECTION_REGEXP,
-    text: 'fvj1:{"/RegExp@1":{"flags":"z","flavor":"es2025","source":"a"}}',
-    requires: { flavors: ["es2025"] },
-  },
-  {
-    name: "regular expression with no flags",
-    section: SECTION_REGEXP,
-    text: 'fvj1:{"/RegExp@1":{"flavor":"es2025","source":"a"}}',
-  },
-  {
-    name: "regular expression with no flavor",
-    section: SECTION_REGEXP,
-    text: 'fvj1:{"/RegExp@1":{"flags":"","source":"a"}}',
-  },
-  {
-    name: "regular expression with no source",
-    section: SECTION_REGEXP,
-    text: 'fvj1:{"/RegExp@1":{"flags":"","flavor":"es2025"}}',
-  },
-  {
-    name: "regular expression with the empty state",
-    section: SECTION_REGEXP,
-    text: 'fvj1:{"/RegExp@1":{}}',
+    text: 'fvj1:{"/RegExp@1":{"flags":"g","flavor":"es2025","source":"a"}}',
   },
   {
     name: "tag with no version",
@@ -1134,7 +1087,7 @@ const PRIMITIVE_CLASS_NOTES: {
   },
   FabricHash: { section: "3-json-encoding.md section 3, `Hash@1`" },
   FabricKeyPair: { section: "3-json-encoding.md section 3, `KeyPair@1`" },
-  FabricRegExp: { section: "3-json-encoding.md section 3, `RegExp@1`" },
+  FabricRegExp: { excluded: NO_CODEC_EXCLUSION },
   FabricUnavailable: {
     section: "3-json-encoding.md section 3, `Unavailable@1`",
   },

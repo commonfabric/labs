@@ -47,6 +47,7 @@ const TAGS: readonly (HarnessTaskTag | "fallback")[] = [
 
 const ADDITIONAL = "\nAdditional instructions:\n";
 const SCHEMA = "Result schema (JSON):\n";
+const CONTRACT = "\n\nStructured result contract:\n";
 
 const bytes = (text: string): number =>
   new TextEncoder().encode(text).byteLength;
@@ -131,11 +132,28 @@ export const measureRequest = async (
     content: string;
   }[];
   const system = recorded[0].content;
+  // The result contract follows the caller's instructions and its schema line
+  // ends the prompt, so the real schema is the one the prompt ends on and the
+  // instructions end at the contract before it. A run recorded before that
+  // order put its schema ahead of the instructions, which run to the end:
+  // there the first schema heading is the real one. Either way a heading the
+  // instructions quote is not taken for the real one.
   const additionalAt = system.indexOf(ADDITIONAL);
-  const additional = additionalAt === -1
-    ? undefined
-    : system.slice(additionalAt + ADDITIONAL.length);
-  const schemaAt = system.indexOf(SCHEMA);
+  const firstSchemaAt = system.indexOf(SCHEMA);
+  const lastSchemaAt = system.lastIndexOf(SCHEMA);
+  const schemaFirst = additionalAt === -1 ||
+    (firstSchemaAt !== -1 && firstSchemaAt < additionalAt);
+  const schemaAt = schemaFirst ? firstSchemaAt : lastSchemaAt !== -1 &&
+      !system.slice(lastSchemaAt + SCHEMA.length).includes("\n")
+    ? lastSchemaAt
+    : -1;
+  const contractAt = schemaFirst || schemaAt === -1
+    ? -1
+    : system.lastIndexOf(CONTRACT, schemaAt);
+  const additional = additionalAt === -1 ? undefined : system.slice(
+    additionalAt + ADDITIONAL.length,
+    contractAt > additionalAt ? contractAt : undefined,
+  );
   const schema = schemaAt === -1
     ? undefined
     : JSON.parse(system.slice(schemaAt + SCHEMA.length).split("\n")[0]);

@@ -25,4 +25,5 @@ export function applyLocalExperimentalDefaults(
   // of a deployment whose posture names none (INV-16).
   experimental.instanceNames ??= false;
   experimental.localSessionDocuments ??= false;
+  experimental.syncCidReferences ??= false;
 }

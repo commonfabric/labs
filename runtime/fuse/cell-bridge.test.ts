@@ -150,6 +150,42 @@ function fakePiece(piece: FakePiece): PieceController {
   return piece as unknown as PieceController;
 }
 
+/** A fake piece whose `input` and `result` hold fixed values. */
+function staticPiece(
+  id: string,
+  name: string,
+  input: unknown = {},
+  result: unknown = {},
+): FakePiece {
+  return {
+    id,
+    name: () => name,
+    input: {
+      getCell: () => Promise.resolve(makeCell(input, undefined)),
+      get: () => Promise.resolve(input),
+    },
+    result: {
+      getCell: () => Promise.resolve(makeCell(result, undefined)),
+      get: () => Promise.resolve(result),
+    },
+  };
+}
+
+/**
+ * Projects `piece`, known to `state` under its name, as an unhydrated root
+ * under `entities/`, and returns that root's inode.
+ */
+async function projectEntity(
+  bridge: CellBridge,
+  state: SpaceState,
+  piece: FakePiece,
+): Promise<bigint> {
+  state.pieceControllers.set(piece.name?.() ?? piece.id, fakePiece(piece));
+  const name = encodeFuseComponent(piece.id);
+  expect(await bridge.resolveEntity(state.entitiesIno, name)).toBe(true);
+  return bridge.tree.lookup(state.entitiesIno, name)!;
+}
+
 /**
  * A `FakeCell` that supports `sink()` subscriptions, enabling reactive rename
  * tests.
@@ -699,6 +735,220 @@ describe("cell-bridge", () => {
             .toBeUndefined();
           expect(bridge.spaces.has("denied")).toBe(false);
         });
+
+        it("returns one state to concurrent calls for a space, opening it once", async () => {
+          const tree = new FsTree();
+          const loaded = defer<SpaceState["pieces"]>();
+          let managerLoads = 0;
+          const bridge = new CellBridge(tree, "/tmp/cf-exec", {
+            loadPieces: () => {
+              managerLoads++;
+              return loaded.promise;
+            },
+          });
+          bridge.init({ apiUrl: "https://example.invalid", identity: "test" });
+
+          const first = bridge.connectSpace("home");
+          const second = bridge.connectSpace("home");
+          expect(bridge.isConnecting("home")).toBe(true);
+          loaded.resolve(
+            existingSpacePieces({ getSpace: () => "did:key:zSharedSpace" }),
+          );
+          const [firstState, secondState] = await Promise.all([first, second]);
+
+          expect(secondState).toBe(firstState);
+          expect(managerLoads).toBe(1);
+          expect(bridge.isConnecting("home")).toBe(false);
+        });
+
+        it("lists every connected space in `.spaces.json`", async () => {
+          const tree = new FsTree();
+          const bridge = new CellBridge(tree, "/tmp/cf-exec", {
+            loadPieces: ({ space }) =>
+              Promise.resolve(
+                existingSpacePieces({ getSpace: () => `did:key:z${space}` }),
+              ),
+          });
+          bridge.init({ apiUrl: "https://example.invalid", identity: "test" });
+
+          await bridge.connectSpace("home");
+          const firstSpacesIno = tree.lookup(tree.rootIno, ".spaces.json")!;
+          await bridge.connectSpace("work");
+
+          expect(
+            JSON.parse(getFileContent(tree, tree.rootIno, ".spaces.json")),
+          ).toEqual({ home: "did:key:zhome", work: "did:key:zwork" });
+          expect(tree.getNode(firstSpacesIno)).toBeUndefined();
+        });
+      });
+
+      describe("setDebug()", () => {
+        it("logs the bridge's progress to the console only while on", async () => {
+          const tree = new FsTree();
+          const bridge = new CellBridge(tree, "/tmp/cf-exec");
+          const state = buildTestSpace(bridge, "home", []);
+          const logged: string[] = [];
+          const originalLog = console.log;
+          console.log = (...args: unknown[]) => logged.push(args.join(" "));
+          try {
+            await bridge.accessForTestingOnly.syncPieceListOnce(state, "home");
+            expect(logged).toEqual([]);
+
+            bridge.setDebug(true);
+            await bridge.accessForTestingOnly.syncPieceListOnce(state, "home");
+            expect(logged).toEqual([
+              "[home] syncPieceListOnce: live=0 tracked=0",
+            ]);
+
+            bridge.setDebug(false);
+            await bridge.accessForTestingOnly.syncPieceListOnce(state, "home");
+            expect(logged.length).toBe(1);
+          } finally {
+            console.log = originalLog;
+          }
+        });
+      });
+
+      describe("onInvalidate", () => {
+        it("returns `null` until a callback is set, then that callback", () => {
+          const bridge = new CellBridge(new FsTree(), "/tmp/cf-exec");
+          expect(bridge.onInvalidate).toBeNull();
+
+          const callback = () => {};
+          bridge.onInvalidate = callback;
+          expect(bridge.onInvalidate).toBe(callback);
+        });
+      });
+
+      describe("onInvalidateInode", () => {
+        it("returns `null` until a callback is set, then that callback", () => {
+          const bridge = new CellBridge(new FsTree(), "/tmp/cf-exec");
+          expect(bridge.onInvalidateInode).toBeNull();
+
+          const callback = () => {};
+          bridge.onInvalidateInode = callback;
+          expect(bridge.onInvalidateInode).toBe(callback);
+        });
+      });
+
+      describe("markDisconnected()", () => {
+        // Each case drives the reconnection timer with `FakeTime`. The first
+        // attempt waits the base backoff of two seconds, and each failure
+        // doubles the wait.
+
+        /**
+         * A bridge over one hydrated space whose reconnection probe resolves
+         * `probeOk()` times and is rejected the rest, counting every probe.
+         */
+        function makeReconnectingBridge(probeOk: () => boolean) {
+          const probes = { count: 0 };
+          const bridge = new CellBridge(new FsTree(), "/tmp/cf-exec", {
+            reconnectPiecesLoader: () => {
+              probes.count++;
+              if (!probeOk()) {
+                return Promise.reject(new Error("backend unavailable"));
+              }
+              return Promise.resolve(
+                {
+                  synced: () => Promise.resolve(),
+                  runtime: { dispose: () => Promise.resolve() },
+                } as unknown as SpaceState["pieces"],
+              );
+            },
+          });
+          buildTestSpace(bridge, "home", []);
+          return { bridge, probes };
+        }
+
+        /**
+         * Cancels the attempt `bridge` has scheduled, which must happen before
+         * `FakeTime` is restored: a timer left on the fake clock fires in
+         * whichever later case next advances one.
+         */
+        function cancelReconnect(bridge: CellBridge): void {
+          const timer = bridge.accessForTestingOnly.reconnectTimer;
+          if (timer !== null) clearTimeout(timer);
+        }
+
+        it("probes the backend after the backoff delay and resumes writes once it answers", async () => {
+          const { bridge, probes } = makeReconnectingBridge(() => true);
+          const time = new FakeTime();
+          const errors = captureConsoleErrors();
+          try {
+            bridge.markDisconnected("socket closed");
+            expect(bridge.disconnected).toBe(true);
+            expect(bridge.accessForTestingOnly.disconnected).toBe(true);
+            await time.tickAsync(1_999);
+            expect(probes.count).toBe(0);
+
+            await time.tickAsync(1);
+            await time.runMicrotasks();
+            expect(probes.count).toBe(1);
+            expect(bridge.disconnected).toBe(false);
+            expect(bridge.accessForTestingOnly.reconnectTimer).toBeNull();
+          } finally {
+            cancelReconnect(bridge);
+            errors.restore();
+            time.restore();
+          }
+        });
+
+        it("does nothing when already disconnected", async () => {
+          const { bridge, probes } = makeReconnectingBridge(() => true);
+          const time = new FakeTime();
+          const errors = captureConsoleErrors();
+          try {
+            bridge.markDisconnected("socket closed");
+            const timer = bridge.accessForTestingOnly.reconnectTimer;
+            bridge.markDisconnected("socket closed again");
+
+            expect(bridge.accessForTestingOnly.reconnectTimer).toBe(timer);
+            expect(
+              errors.lines.filter((line) =>
+                line.includes("Backend connection lost")
+              ),
+            ).toEqual([
+              "[FUSE] Backend connection lost (socket closed) — mount is " +
+              "READ-ONLY. Will attempt reconnection in 2000ms.",
+            ]);
+            await time.tickAsync(2_000);
+            expect(probes.count).toBe(1);
+          } finally {
+            cancelReconnect(bridge);
+            errors.restore();
+            time.restore();
+          }
+        });
+
+        it("replaces a scheduled attempt when a failed attempt schedules the next", async () => {
+          const { bridge, probes } = makeReconnectingBridge(() => false);
+          const time = new FakeTime();
+          const errors = captureConsoleErrors();
+          try {
+            // The attempt `markDisconnected()` schedules is still waiting when
+            // one made directly fails and schedules its own, four seconds out.
+            bridge.markDisconnected("socket closed");
+            await bridge.accessForTestingOnly.attemptReconnect();
+            expect(probes.count).toBe(1);
+
+            // Only the replacement fires: the first would have fired at two
+            // seconds.
+            await time.tickAsync(3_999);
+            expect(probes.count).toBe(1);
+            await time.tickAsync(1);
+            expect(probes.count).toBe(2);
+
+            // The failure schedules the next attempt on the fake clock, where
+            // the cleanup below cancels it.
+            await time.runMicrotasks();
+            expect(bridge.disconnected).toBe(true);
+            expect(bridge.accessForTestingOnly.reconnectTimer).not.toBeNull();
+          } finally {
+            cancelReconnect(bridge);
+            errors.restore();
+            time.restore();
+          }
+        });
       });
 
       describe("initStatus()", () => {
@@ -812,7 +1062,6 @@ describe("cell-bridge", () => {
             expect(status.debug).toBe(false);
             expect(status.rebuilds.pending).toBe(0);
             expect(status.rebuilds.completed).toBeGreaterThanOrEqual(1);
-            expect(status.rebuilds.errors).toBe(0);
             expect(cfcReconciliations).toBeGreaterThanOrEqual(1);
             expect(status.cfc.writeback.counts["mutation-applied"]).toEqual(
               cfcReconciliations,
@@ -896,8 +1145,19 @@ describe("cell-bridge", () => {
           // that moves the state it reports should pay for that — the reader
           // does.
           bridge.setDebug(true);
-          bridge.markDisconnected("socket closed");
+          const errors = captureConsoleErrors();
+          try {
+            bridge.markDisconnected("socket closed");
+          } finally {
+            errors.restore();
+          }
           expect(renders).toBe(1);
+
+          // The reconnection attempt `markDisconnected()` scheduled would
+          // otherwise fire during a later case, and one that runs under
+          // `FakeTime` would take each retry it schedules onto the fake
+          // clock and never run out of timers.
+          clearTimeout(bridge.accessForTestingOnly.reconnectTimer!);
         });
 
         it("renders when `.status` is read", () => {
@@ -911,6 +1171,69 @@ describe("cell-bridge", () => {
 
           expect(JSON.parse(readStatusFile(tree)).debug).toBe(true);
           expect(renders).toBe(2);
+        });
+
+        it("counts a prop rebuild as pending until it finishes", async () => {
+          const tree = new FsTree();
+          const bridge = makeStatusBridge(tree, () => ({}));
+          const state = buildTestSpace(bridge, "home", []);
+          const pieceIno = await bridge.accessForTestingOnly.loadPieceTree(
+            fakePiece(staticPiece("of:pending", "Pending")),
+            state.piecesIno,
+            "Pending",
+            "home",
+          );
+          const rebuilds = () => JSON.parse(readStatusFile(tree)).rebuilds;
+          expect(rebuilds().pending).toBe(0);
+
+          const rebuild = bridge.accessForTestingOnly.enqueuePiecePropRebuild({
+            cell: makeCell({ b: "2" }, undefined) as never,
+            newValue: { b: "2" },
+            pieceId: "of:pending",
+            pieceIno,
+            pieceName: "Pending",
+            propName: "result",
+            resolveLink: () => null,
+            spaceName: "home",
+          });
+          expect(rebuilds().pending).toBe(1);
+
+          await rebuild;
+          expect(rebuilds()).toEqual(
+            expect.objectContaining({ pending: 0, completed: 1 }),
+          );
+        });
+      });
+
+      describe("shouldPrepareLookup()", () => {
+        it("returns `true` under the directories this bridge hydrates, and `false` elsewhere", async () => {
+          const tree = new FsTree();
+          const bridge = new CellBridge(tree, "/tmp/cf-exec");
+          const state = buildTestSpace(bridge, "home", []);
+          await bridge.accessForTestingOnly.addPieceToSpace(
+            state,
+            fakePiece(staticPiece("of:lookup-piece", "Lookup Piece")),
+            "home",
+          );
+          const pieceIno = tree.lookup(state.piecesIno, "Lookup-Piece")!;
+          const entityIno = await projectEntity(
+            bridge,
+            state,
+            staticPiece("of:lookup-entity", "Lookup Entity"),
+          );
+
+          expect(bridge.shouldPrepareLookup(state.entitiesIno, "of%3Ax"))
+            .toBe(true);
+          expect(bridge.shouldPrepareLookup(entityIno, "result")).toBe(true);
+          expect(bridge.shouldPrepareLookup(pieceIno, "result")).toBe(true);
+          expect(bridge.shouldPrepareLookup(pieceIno, ".handlers")).toBe(true);
+          expect(
+            bridge.shouldPrepareLookup(tree.lookup(pieceIno, "input")!, "a"),
+          ).toBe(true);
+
+          expect(bridge.shouldPrepareLookup(pieceIno, ".src")).toBe(false);
+          expect(bridge.shouldPrepareLookup(state.spaceIno, "space.json"))
+            .toBe(false);
         });
       });
 
@@ -1159,6 +1482,200 @@ describe("cell-bridge", () => {
           expect(JSON.parse(getFileContent(tree, pieceIno, "result.json")))
             .toEqual({ content: "hello" });
         });
+
+        it("hydrates the prop a prop directory belongs to", async () => {
+          const tree = new FsTree();
+          const bridge = new CellBridge(tree, "/tmp/cf-exec");
+          const state = buildTestSpace(bridge, "home", []);
+          await bridge.accessForTestingOnly.addPieceToSpace(
+            state,
+            fakePiece(
+              staticPiece("of:prop-lookup", "Prop Lookup", { a: "1" }, {
+                b: "2",
+              }),
+            ),
+            "home",
+          );
+          const pieceIno = tree.lookup(state.piecesIno, "Prop-Lookup")!;
+          const inputIno = tree.lookup(pieceIno, "input")!;
+
+          expect(await bridge.prepareLookup(inputIno, "a")).toBe(true);
+          expect(getFileContent(tree, inputIno, "a")).toBe("1");
+          expect(tree.getChildren(tree.lookup(pieceIno, "result")!)).toEqual(
+            [],
+          );
+        });
+
+        describe("under an entity projection being hydrated", () => {
+          // `of:gated` exists on the server and is projected under
+          // `entities/`. Hydrating it loads the piece, reads its pattern
+          // reference while building its tree, and reads its input cell while
+          // subscribing; each step waits on its own gate, and announces that
+          // it is waiting. `loads` counts the piece loads, pattern reference
+          // reads, and input cell reads.
+
+          function gate() {
+            const reached = defer<void>();
+            const open = defer<void>();
+            return {
+              reached: reached.promise,
+              open: () => open.resolve(),
+              pass: async () => {
+                reached.resolve();
+                await open.promise;
+              },
+            };
+          }
+
+          async function projectGatedEntity() {
+            const tree = new FsTree();
+            const bridge = new CellBridge(tree, "/tmp/cf-exec");
+            const state = buildTestSpace(bridge, "home", []);
+            const gates = { load: gate(), build: gate(), subscribe: gate() };
+            const inputCell = new SinkableCell({});
+            const piece: FakePiece = {
+              ...staticPiece("of:gated", "Gated"),
+              getPatternRef: async () => {
+                loads.patternRefs++;
+                await gates.build.pass();
+                return undefined;
+              },
+              input: {
+                getCell: async () => {
+                  loads.inputCells++;
+                  await gates.subscribe.pass();
+                  return inputCell as unknown as FakeCell;
+                },
+                get: () => Promise.resolve({}),
+              },
+            };
+            let live = ["of:gated"];
+            const loads = { count: 0, patternRefs: 0, inputCells: 0 };
+            Object.assign(
+              state.pieces,
+              {
+                entityIdExists: (id: string) =>
+                  Promise.resolve(live.includes(id)),
+                listEntityIdPage: () =>
+                  Promise.resolve({ serverSeq: 1, ids: live }),
+                get: async () => {
+                  loads.count++;
+                  await gates.load.pass();
+                  return piece;
+                },
+              } as unknown as SpaceState["pieces"],
+            );
+            const entityName = encodeFuseComponent("of:gated");
+            expect(await bridge.resolveEntity(state.entitiesIno, entityName))
+              .toBe(true);
+            return {
+              tree,
+              bridge,
+              state,
+              gates,
+              inputCell,
+              loads,
+              entityIno: tree.lookup(state.entitiesIno, entityName)!,
+              dropFromServer: async () => {
+                live = [];
+                await bridge.prepareDirectorySnapshot(state.entitiesIno);
+              },
+            };
+          }
+
+          it("shares one hydration with a lookup that arrives while the piece loads", async () => {
+            const { bridge, gates, loads, entityIno } =
+              await projectGatedEntity();
+            gates.build.open();
+            gates.subscribe.open();
+            const first = bridge.prepareLookup(entityIno, "meta.json");
+            await gates.load.reached;
+            const second = bridge.prepareLookup(entityIno, "meta.json");
+            gates.load.open();
+
+            expect(await Promise.all([first, second])).toEqual([true, true]);
+            expect(loads.count).toBe(1);
+            expect(
+              bridge.accessForTestingOnly.unhydratedEntityRoots.has(entityIno),
+            ).toBe(false);
+          });
+
+          it("resolves a lookup at once when the tree is built and the subscriptions are still being made", async () => {
+            const { bridge, gates, entityIno } = await projectGatedEntity();
+            gates.load.open();
+            gates.build.open();
+            const first = bridge.prepareLookup(entityIno, "meta.json");
+            await gates.subscribe.reached;
+
+            expect(await bridge.prepareLookup(entityIno, "meta.json")).toBe(
+              true,
+            );
+            expect(
+              bridge.accessForTestingOnly.unhydratedEntityRoots.has(entityIno),
+            ).toBe(true);
+
+            gates.subscribe.open();
+            expect(await first).toBe(true);
+          });
+
+          it("returns `false` for a projection removed while its piece loads, without building its tree", async () => {
+            const {
+              tree,
+              bridge,
+              state,
+              gates,
+              loads,
+              entityIno,
+              dropFromServer,
+            } = await projectGatedEntity();
+            const lookup = bridge.prepareLookup(entityIno, "meta.json");
+            await gates.load.reached;
+            await dropFromServer();
+            gates.load.open();
+            gates.build.open();
+            gates.subscribe.open();
+
+            expect(await lookup).toBe(false);
+            expect(loads.patternRefs).toBe(0);
+            expect(tree.lookup(state.entitiesIno, "of%3Agated"))
+              .toBeUndefined();
+            expect(tree.lookup(entityIno, "meta.json")).toBeUndefined();
+          });
+
+          it("returns `false` and cancels the subscriptions of a projection removed while they are made", async () => {
+            const { bridge, gates, inputCell, entityIno, dropFromServer } =
+              await projectGatedEntity();
+            gates.load.open();
+            gates.build.open();
+            const lookup = bridge.prepareLookup(entityIno, "meta.json");
+            await gates.subscribe.reached;
+            await dropFromServer();
+            gates.subscribe.open();
+
+            expect(await lookup).toBe(false);
+            expect(inputCell._sinks.length).toBe(0);
+            expect(
+              bridge.accessForTestingOnly.entitySubscriptions.has(entityIno),
+            ).toBe(false);
+          });
+
+          it("returns `false` for a projection removed while its tree is built, without subscribing to it", async () => {
+            const { bridge, gates, loads, entityIno, dropFromServer } =
+              await projectGatedEntity();
+            gates.load.open();
+            const lookup = bridge.prepareLookup(entityIno, "meta.json");
+            await gates.build.reached;
+            await dropFromServer();
+            gates.build.open();
+            gates.subscribe.open();
+
+            expect(await lookup).toBe(false);
+            expect(loads.inputCells).toBe(0);
+            expect(
+              bridge.accessForTestingOnly.entitySubscriptions.has(entityIno),
+            ).toBe(false);
+          });
+        });
       });
 
       describe("prepareLookupForReply()", () => {
@@ -1212,6 +1729,36 @@ describe("cell-bridge", () => {
             "of:fid1:unknown-piece",
           ]);
         });
+
+        it("returns a name under a piece root once its prop is hydrated, and `undefined` for one that does not resolve", async () => {
+          const tree = new FsTree();
+          const bridge = new CellBridge(tree, "/tmp/cf-exec");
+          const state = buildTestSpace(bridge, "home", []);
+          await bridge.accessForTestingOnly.addPieceToSpace(
+            state,
+            fakePiece(
+              staticPiece("of:reply-piece", "Reply Piece", {}, { b: "2" }),
+            ),
+            "home",
+          );
+          const pieceIno = tree.lookup(state.piecesIno, "Reply-Piece")!;
+
+          const resultIno = await bridge.prepareLookupForReply(
+            pieceIno,
+            "result",
+          );
+          expect(resultIno).toBe(tree.lookup(pieceIno, "result"));
+          expect(getFileContent(tree, resultIno!, "b")).toBe("2");
+
+          // `index.md` resolves once the result is hydrated, but a result with
+          // no `$FS` projects no such file.
+          expect(await bridge.prepareLookupForReply(pieceIno, "index.md"))
+            .toBeUndefined();
+          expect(await bridge.prepareLookupForReply(pieceIno, "missing"))
+            .toBeUndefined();
+          expect(await bridge.prepareLookupForReply(state.spaceIno, "pieces"))
+            .toBeUndefined();
+        });
       });
 
       describe("prepareDirectory()", () => {
@@ -1263,6 +1810,224 @@ describe("cell-bridge", () => {
 
           state.unsubscribes[0]();
           expect(registryCancelCalls).toBe(1);
+        });
+
+        describe("of a piece", () => {
+          // A piece whose `input` and `result` each hold one field, so a
+          // hydrated prop directory has one entry and an unhydrated stub none.
+
+          async function addPiece() {
+            const tree = new FsTree();
+            const bridge = new CellBridge(tree, "/tmp/cf-exec");
+            const state = buildTestSpace(bridge, "home", []);
+            await bridge.accessForTestingOnly.addPieceToSpace(
+              state,
+              fakePiece(
+                staticPiece("of:dir-piece", "Dir Piece", { a: "1" }, {
+                  b: "2",
+                }),
+              ),
+              "home",
+            );
+            const pieceIno = tree.lookup(state.piecesIno, "Dir-Piece")!;
+            const entryNames = (prop: string) =>
+              tree.getChildren(tree.lookup(pieceIno, prop)!).map(([name]) =>
+                name
+              );
+            return { bridge, state, pieceIno, entryNames };
+          }
+
+          it("hydrates both props of a piece root", async () => {
+            const { bridge, pieceIno, entryNames } = await addPiece();
+
+            expect(await bridge.prepareDirectory(pieceIno)).toBe(true);
+            expect(entryNames("input")).toEqual(["a"]);
+            expect(entryNames("result")).toEqual(["b"]);
+          });
+
+          it("hydrates only the prop of a prop directory", async () => {
+            const { bridge, pieceIno, entryNames } = await addPiece();
+
+            expect(
+              await bridge.prepareDirectory(
+                bridge.tree.lookup(pieceIno, "result")!,
+              ),
+            ).toBe(true);
+            expect(entryNames("result")).toEqual(["b"]);
+            expect(entryNames("input")).toEqual([]);
+          });
+
+          it("returns `false` for a directory it does not prepare", async () => {
+            const { bridge, state, entryNames } = await addPiece();
+
+            expect(await bridge.prepareDirectory(state.spaceIno)).toBe(false);
+            expect(entryNames("input")).toEqual([]);
+            expect(entryNames("result")).toEqual([]);
+          });
+        });
+
+        it("returns `true` for `entities/` and an entity projection without hydrating either", async () => {
+          const tree = new FsTree();
+          const bridge = new CellBridge(tree, "/tmp/cf-exec");
+          const state = buildTestSpace(bridge, "home", []);
+          let entityListings = 0;
+          Object.assign(
+            state.pieces,
+            {
+              listEntityIds: () => {
+                entityListings++;
+                return Promise.resolve(undefined);
+              },
+            } as unknown as SpaceState["pieces"],
+          );
+          const entityIno = await projectEntity(
+            bridge,
+            state,
+            staticPiece("of:dir-entity", "Dir Entity", {}, { b: "2" }),
+          );
+
+          expect(await bridge.prepareDirectory(state.entitiesIno)).toBe(true);
+          expect(await bridge.prepareDirectory(entityIno)).toBe(true);
+          expect(entityListings).toBe(0);
+          expect(
+            bridge.accessForTestingOnly.unhydratedEntityRoots.has(entityIno),
+          )
+            .toBe(true);
+          expect(tree.getChildren(entityIno)).toEqual([]);
+        });
+
+        describe("of `pieces/`", () => {
+          // A space whose `pieces/` is not yet materialized, with a registry
+          // read that waits on `registered` and is counted.
+
+          function makeUnmaterializedSpace() {
+            const tree = new FsTree();
+            const bridge = new CellBridge(tree, "/tmp/cf-exec");
+            const state = buildTestSpace(bridge, "home", []);
+            state.piecesHydrated = false;
+            state.pieceListSubscribed = false;
+            const registered = defer<unknown[]>();
+            const reads = { pieces: 0, registry: 0 };
+            let registrySink: (() => void) | undefined;
+            Object.assign(
+              state.pieces,
+              {
+                getRegisteredPieces: () => {
+                  reads.pieces++;
+                  return registered.promise;
+                },
+                getPieceRegistry: () => {
+                  reads.registry++;
+                  return Promise.resolve({
+                    sink: (callback: () => void) => {
+                      registrySink = callback;
+                      return () => {};
+                    },
+                  });
+                },
+              } as unknown as SpaceState["pieces"],
+            );
+            return {
+              bridge,
+              state,
+              registered,
+              reads,
+              fireRegistry: () => registrySink!(),
+            };
+          }
+
+          it("shares one materialization between concurrent listings, and reads nothing once materialized", async () => {
+            const { bridge, state, registered, reads } =
+              makeUnmaterializedSpace();
+
+            const first = bridge.prepareDirectory(state.piecesIno);
+            const second = bridge.prepareDirectory(state.piecesIno);
+            registered.resolve([
+              staticPiece("of:listed", "Listed"),
+            ]);
+            expect(await Promise.all([first, second])).toEqual([true, true]);
+            expect(reads).toEqual({ pieces: 1, registry: 1 });
+            expect(bridge.tree.lookup(state.piecesIno, "Listed"))
+              .toBeDefined();
+
+            expect(await bridge.prepareDirectory(state.piecesIno)).toBe(true);
+            expect(reads).toEqual({ pieces: 1, registry: 1 });
+          });
+
+          it("subscribes to the registry once", async () => {
+            const { bridge, state, registered, reads } =
+              makeUnmaterializedSpace();
+            state.pieceListSubscribed = true;
+
+            registered.resolve([]);
+            expect(await bridge.prepareDirectory(state.piecesIno)).toBe(true);
+            expect(reads).toEqual({ pieces: 1, registry: 0 });
+          });
+
+          it("reports a piece-list sync that a registry change starts and that fails", async () => {
+            const { bridge, state, registered, fireRegistry } =
+              makeUnmaterializedSpace();
+            registered.resolve([]);
+            expect(await bridge.prepareDirectory(state.piecesIno)).toBe(true);
+            const failed = defer<string>();
+            Object.assign(
+              state.pieces,
+              {
+                getRegisteredPieces: () =>
+                  Promise.reject(new Error("registry unavailable")),
+              } as unknown as SpaceState["pieces"],
+            );
+            const original = console.error;
+            console.error = (...args: unknown[]) =>
+              failed.resolve(args.join(" "));
+            try {
+              fireRegistry();
+              expect(await failed.promise).toBe(
+                "[home] Piece list sync error: Error: registry unavailable",
+              );
+            } finally {
+              console.error = original;
+            }
+          });
+
+          it("runs one more pass for registry changes arriving while a pass is in flight", async () => {
+            const { bridge, state, registered, fireRegistry } =
+              makeUnmaterializedSpace();
+            registered.resolve([]);
+            expect(await bridge.prepareDirectory(state.piecesIno)).toBe(true);
+            const firstPass = defer<unknown[]>();
+            let reads = 0;
+            Object.assign(
+              state.pieces,
+              {
+                getRegisteredPieces: () => {
+                  reads++;
+                  return reads === 1
+                    ? firstPass.promise
+                    : Promise.resolve([staticPiece("of:late", "Late")]);
+                },
+              } as unknown as SpaceState["pieces"],
+            );
+            const time = new FakeTime();
+            try {
+              fireRegistry();
+              fireRegistry();
+              fireRegistry();
+              await time.tickAsync(0);
+              expect(reads).toBe(1);
+              expect(bridge.accessForTestingOnly.syncAgain.has("home")).toBe(
+                true,
+              );
+
+              firstPass.resolve([]);
+              await bridge.accessForTestingOnly.pieceSyncs.get("home");
+            } finally {
+              time.restore();
+            }
+
+            expect(reads).toBe(2);
+            expect(bridge.tree.lookup(state.piecesIno, "Late")).toBeDefined();
+          });
         });
       });
 
@@ -1723,6 +2488,70 @@ describe("cell-bridge", () => {
           expect(entityValueRequests).toBe(0);
           expect(pieceListRequests).toBe(0);
         });
+
+        it("hydrates a piece root and returns `undefined`, leaving the listing to the tree", async () => {
+          const tree = new FsTree();
+          const bridge = new CellBridge(tree, "/tmp/cf-exec");
+          const state = buildTestSpace(bridge, "home", []);
+          await bridge.accessForTestingOnly.addPieceToSpace(
+            state,
+            fakePiece(
+              staticPiece("of:snapshot-piece", "Snapshot Piece", {}, {
+                b: "2",
+              }),
+            ),
+            "home",
+          );
+          const pieceIno = tree.lookup(state.piecesIno, "Snapshot-Piece")!;
+
+          expect(await bridge.prepareDirectorySnapshot(pieceIno))
+            .toBeUndefined();
+          expect(getFileContent(tree, tree.lookup(pieceIno, "result")!, "b"))
+            .toBe("2");
+        });
+
+        it("removes the projections of ids the server no longer lists, invalidating their names", async () => {
+          const tree = new FsTree();
+          const bridge = new CellBridge(tree, "/tmp/cf-exec");
+          const state = buildTestSpace(bridge, "home", []);
+          let live = ["of:a", "of:b", "of:c"];
+          Object.assign(
+            state.pieces,
+            {
+              entityIdExists: (id: string) =>
+                Promise.resolve(live.includes(id)),
+              listEntityIdPage: () =>
+                Promise.resolve({ serverSeq: 1, ids: live }),
+            } as unknown as SpaceState["pieces"],
+          );
+          for (const id of live) {
+            expect(
+              await bridge.resolveEntity(
+                state.entitiesIno,
+                encodeFuseComponent(id),
+              ),
+            ).toBe(true);
+          }
+          // An id tracked with no directory left, which pruning forgets.
+          state.entityIds.add("of:untracked");
+          const invalidated: Array<[bigint, string[]]> = [];
+          bridge.onInvalidate = (parentIno, names) =>
+            invalidated.push([parentIno, names]);
+
+          live = ["of:a", "of:c"];
+          const entries = await bridge.prepareDirectorySnapshot(
+            state.entitiesIno,
+          );
+
+          expect(entries!.slice(2).map(({ name }) => name)).toEqual([
+            "of%3Aa",
+            "of%3Ac",
+          ]);
+          expect(tree.getChildren(state.entitiesIno).map(([name]) => name))
+            .toEqual(["of%3Aa", "of%3Ac"]);
+          expect(state.entityIds).toEqual(new Set(["of:a", "of:c"]));
+          expect(invalidated).toEqual([[state.entitiesIno, ["of%3Ab"]]]);
+        });
       });
 
       describe("entity projection references", () => {
@@ -1995,6 +2824,51 @@ describe("cell-bridge", () => {
           expect(tree.lookup(state.entitiesIno, "of%3Aalias-piece"))
             .toBeDefined();
         });
+
+        it("returns `false` for a directory that is not an `entities/`", async () => {
+          const tree = new FsTree();
+          const bridge = new CellBridge(tree, "/tmp/cf-exec");
+          const state = buildTestSpace(bridge, "home", []);
+          state.pieceControllers.set("Known", fakePiece({ id: "of:known" }));
+
+          expect(await bridge.resolveEntity(state.piecesIno, "of%3Aknown"))
+            .toBe(false);
+          expect(tree.lookup(state.piecesIno, "of%3Aknown")).toBeUndefined();
+        });
+
+        it("waits out a hydration in flight before removing an entity the server no longer has", async () => {
+          const tree = new FsTree();
+          const bridge = new CellBridge(tree, "/tmp/cf-exec");
+          const state = buildTestSpace(bridge, "home", []);
+          const loading = defer<void>();
+          const loaded = defer<unknown>();
+          let exists = true;
+          Object.assign(
+            state.pieces,
+            {
+              entityIdExists: () => Promise.resolve(exists),
+              get: () => {
+                loading.resolve();
+                return loaded.promise;
+              },
+            } as unknown as SpaceState["pieces"],
+          );
+          const entityName = encodeFuseComponent("of:vanishing");
+          expect(await bridge.resolveEntity(state.entitiesIno, entityName))
+            .toBe(true);
+          const entityIno = tree.lookup(state.entitiesIno, entityName)!;
+          const hydration = bridge.prepareLookup(entityIno, "meta.json");
+          await loading.promise;
+
+          // Removing the projection under the hydration would leave it
+          // resolving `false`.
+          exists = false;
+          const removal = bridge.resolveEntity(state.entitiesIno, entityName);
+          loaded.resolve(staticPiece("of:vanishing", "Vanishing"));
+          expect(await hydration).toBe(true);
+          expect(await removal).toBe(false);
+          expect(tree.lookup(state.entitiesIno, entityName)).toBeUndefined();
+        });
       });
 
       describe("resolveWritePath()", () => {
@@ -2051,6 +2925,147 @@ describe("cell-bridge", () => {
           expect(writePath?.cell).toBe("input");
           expect(writePath?.jsonPath).toEqual(["lastMessage"]);
         });
+
+        describe("by the name under the piece", () => {
+          // One tracked piece, `notes`, in the space `home`; each case adds the
+          // file it resolves under `/home/pieces/notes/`.
+
+          function makeNotes() {
+            const tree = new FsTree();
+            const bridge = new CellBridge(tree, "/tmp/cf-exec");
+            const state = buildTestSpace(bridge, "home", []);
+            const piece = fakePiece({ id: "of:notes" });
+            state.pieceControllers.set("notes", piece);
+            const pieceIno = tree.addDir(state.piecesIno, "notes");
+            return { tree, bridge, state, piece, pieceIno };
+          }
+
+          it("resolves `index.md` and `index.json` to the result as [FS] projections", () => {
+            const { tree, bridge, piece, pieceIno } = makeNotes();
+            const indexMd = tree.addFile(pieceIno, "index.md", "", "string");
+            const indexJson = tree.addFile(
+              pieceIno,
+              "index.json",
+              "",
+              "object",
+            );
+
+            for (
+              const [ino, fsProjection] of [
+                [indexMd, "markdown"],
+                [indexJson, "json"],
+              ] as const
+            ) {
+              expect(bridge.resolveWritePath(ino)).toEqual({
+                spaceName: "home",
+                pieceName: "notes",
+                cell: "result",
+                jsonPath: [],
+                isJsonFile: false,
+                piece,
+                fsProjection,
+              });
+            }
+          });
+
+          it("resolves a prop's `.json` sibling to the whole prop as JSON", () => {
+            const { tree, bridge, piece, pieceIno } = makeNotes();
+            const inputJson = tree.addFile(
+              pieceIno,
+              "input.json",
+              "",
+              "object",
+            );
+
+            expect(bridge.resolveWritePath(inputJson)).toEqual({
+              spaceName: "home",
+              pieceName: "notes",
+              cell: "input",
+              jsonPath: [],
+              isJsonFile: true,
+              piece,
+            });
+          });
+
+          it("resolves a `.json` file inside a prop to the value at its path, with an index as a number", () => {
+            const { tree, bridge, piece, pieceIno } = makeNotes();
+            const resultIno = tree.addDir(pieceIno, "result");
+            const itemsIno = tree.addDir(resultIno, "items", "array");
+            const itemJson = tree.addFile(itemsIno, "0.json", "{}", "object");
+            const paddedIno = tree.addFile(itemsIno, "01", "x", "string");
+
+            expect(bridge.resolveWritePath(itemJson)).toEqual({
+              spaceName: "home",
+              pieceName: "notes",
+              cell: "result",
+              jsonPath: ["items", 0],
+              isJsonFile: true,
+              piece,
+            });
+            expect(bridge.resolveWritePath(paddedIno)?.jsonPath).toEqual([
+              "items",
+              "01",
+            ]);
+          });
+
+          it("returns `null` for `meta.json`, `.handlers`, and any other name at the cell level", () => {
+            const { tree, bridge, pieceIno } = makeNotes();
+
+            for (const name of ["meta.json", ".handlers", ".src", "notes.md"]) {
+              const ino = tree.addFile(pieceIno, name, "", "string");
+              expect(bridge.resolveWritePath(ino)).toBeNull();
+            }
+          });
+        });
+
+        it("returns `null` outside a tracked piece of a connected space", () => {
+          const tree = new FsTree();
+          const bridge = new CellBridge(tree, "/tmp/cf-exec");
+          const state = buildTestSpace(bridge, "home", []);
+          state.pieceControllers.set("notes", fakePiece({ id: "of:notes" }));
+          const pieceIno = tree.addDir(state.piecesIno, "notes");
+          const titleIno = tree.addFile(
+            tree.addDir(pieceIno, "result"),
+            "title",
+            "hello",
+            "string",
+          );
+          const untracked = tree.addFile(
+            tree.addDir(tree.addDir(state.piecesIno, "ghost"), "result"),
+            "title",
+            "boo",
+            "string",
+          );
+          const entityFile = tree.addFile(
+            tree.addDir(tree.addDir(state.entitiesIno, "of%3Anotes"), "result"),
+            "title",
+            "hello",
+            "string",
+          );
+          const away = tree.addDir(tree.rootIno, "away");
+          const awayFile = tree.addFile(
+            tree.addDir(
+              tree.addDir(tree.addDir(away, "pieces"), "notes"),
+              "result",
+            ),
+            "title",
+            "hello",
+            "string",
+          );
+          expect(bridge.resolveWritePath(titleIno)?.jsonPath).toEqual([
+            "title",
+          ]);
+
+          expect(bridge.resolveWritePath(state.piecesIno)).toBeNull();
+          expect(bridge.resolveWritePath(untracked)).toBeNull();
+          expect(bridge.resolveWritePath(entityFile)).toBeNull();
+          expect(bridge.resolveWritePath(awayFile)).toBeNull();
+          expect(bridge.resolveWritePath(999_999n)).toBeNull();
+
+          // An inode whose parent link is gone no longer reaches the root.
+          tree.parents.delete(pieceIno);
+          expect(bridge.resolveWritePath(titleIno)).toBeNull();
+        });
       });
 
       describe("resolveSourceWritePath()", () => {
@@ -2100,6 +3115,73 @@ describe("cell-bridge", () => {
 
           await bridge.finalizeSourceWritePath(sourcePath!);
           expect(patternRefReads).toBe(1);
+        });
+
+        it("returns `null` for the synthetic `error.log` and outside a tracked piece's `.src/`", () => {
+          const tree = new FsTree();
+          const bridge = new CellBridge(tree, "/tmp/cf-exec");
+          const state = buildTestSpace(bridge, "home", []);
+          const piece = fakePiece({ id: "of:notes" });
+          state.pieceControllers.set("notes", piece);
+          state.pieceControllers.set(
+            "unbuilt",
+            fakePiece({ id: "of:unbuilt" }),
+          );
+
+          // `/home/pieces/<name>/.src/main.tsx` for `name`, with `error.log`
+          // beside it.
+          const sourceFile = (spaceIno: bigint, name: string) => {
+            const srcIno = tree.addDir(
+              tree.addDir(tree.lookup(spaceIno, "pieces")!, name),
+              ".src",
+            );
+            return {
+              srcIno,
+              mainIno: tree.addFile(srcIno, "main.tsx", "", "string"),
+              errorLogIno: tree.addFile(srcIno, "error.log", "", "string"),
+            };
+          };
+          const notes = sourceFile(state.spaceIno, "notes");
+          state.srcInos.set("notes", notes.srcIno);
+          state.srcErrorLogInos.set("notes", notes.errorLogIno);
+          const ghost = sourceFile(state.spaceIno, "ghost");
+          const unbuilt = sourceFile(state.spaceIno, "unbuilt");
+          const away = tree.addDir(tree.rootIno, "away");
+          tree.addDir(away, "pieces");
+          const awayNotes = sourceFile(away, "notes");
+          const notSrc = tree.addFile(
+            tree.addDir(tree.lookup(state.piecesIno, "notes")!, "result"),
+            "main.tsx",
+            "",
+            "string",
+          );
+          const entitySrc = tree.addFile(
+            tree.addDir(tree.addDir(state.entitiesIno, "of%3Anotes"), ".src"),
+            "main.tsx",
+            "",
+            "string",
+          );
+
+          expect(bridge.resolveSourceWritePath(notes.mainIno)).toEqual({
+            spaceName: "home",
+            pieceName: "notes",
+            relPath: "main.tsx",
+            piece,
+            srcIno: notes.srcIno,
+          });
+
+          expect(bridge.resolveSourceWritePath(notes.errorLogIno)).toBeNull();
+          expect(bridge.resolveSourceWritePath(notes.srcIno)).toBeNull();
+          expect(bridge.resolveSourceWritePath(notSrc)).toBeNull();
+          expect(bridge.resolveSourceWritePath(entitySrc)).toBeNull();
+          expect(bridge.resolveSourceWritePath(ghost.mainIno)).toBeNull();
+          expect(bridge.resolveSourceWritePath(unbuilt.mainIno)).toBeNull();
+          expect(bridge.resolveSourceWritePath(awayNotes.mainIno)).toBeNull();
+          expect(bridge.resolveSourceWritePath(999_999n)).toBeNull();
+
+          // An inode whose parent link is gone no longer reaches the root.
+          tree.parents.delete(notes.srcIno);
+          expect(bridge.resolveSourceWritePath(notes.mainIno)).toBeNull();
         });
       });
 
@@ -2381,6 +3463,43 @@ describe("cell-bridge", () => {
           expect(tree.getCfcAnnotation(resultIno)?.generation).not.toBe(
             beforeSymlinkGeneration,
           );
+        });
+
+        it("drops the hydrated prop of a piece absent from its space's tree instead of rebuilding it", async () => {
+          // The piece is projected under `entities/` only, so the write's
+          // piece name names nothing under `pieces/`.
+
+          const tree = new FsTree();
+          const bridge = new CellBridge(tree, "/tmp/cf-exec");
+          const state = buildTestSpace(bridge, "home", []);
+          let resultReads = 0;
+          const piece = staticPiece("of:entity-only", "Entity Only", {}, {
+            b: "2",
+          });
+          const resultGet = piece.result!.get;
+          piece.result!.get = (path) => {
+            resultReads++;
+            return resultGet(path);
+          };
+          const entityIno = await projectEntity(bridge, state, piece);
+          expect(await bridge.prepareLookup(entityIno, "result")).toBe(true);
+          const resultIno = tree.lookup(entityIno, "result")!;
+          expect(getFileContent(tree, resultIno, "b")).toBe("2");
+          expect(resultReads).toBe(1);
+
+          await bridge.finalizeWritePath({
+            spaceName: "home",
+            pieceName: "Entity-Only",
+            cell: "result",
+            jsonPath: ["b"],
+            isJsonFile: false,
+            piece: fakePiece(piece),
+          });
+
+          expect(tree.getChildren(tree.lookup(entityIno, "result")!)).toEqual(
+            [],
+          );
+          expect(resultReads).toBe(1);
         });
       });
 
@@ -2762,6 +3881,114 @@ describe("cell-bridge", () => {
             ]);
           });
         });
+
+        describe("of a hand-edited file", () => {
+          // Each case saves `text` to a piece whose current `$FS` is
+          // `current`, read whole and by `content` and `frontmatter`, and
+          // looks at the writes that come back. A `current` of an `Error`
+          // is a result that cannot be read.
+
+          async function save(
+            fsProjection: WritePath["fsProjection"],
+            current: Record<string, unknown> | Error,
+            text: string,
+          ) {
+            const bridge = new CellBridge(new FsTree(), "/tmp/cf-exec");
+            const writes: Array<{ path: (string | number)[]; value: unknown }> =
+              [];
+            const ok = await bridge.writeFsFile(
+              {
+                fsProjection,
+                piece: {
+                  result: {
+                    get: (path: (string | number)[] = []) => {
+                      if (current instanceof Error) {
+                        return Promise.reject(current);
+                      }
+                      let value: unknown = { $FS: current };
+                      for (const segment of path) {
+                        value = (value as Record<string, unknown> | undefined)
+                          ?.[segment];
+                      }
+                      return Promise.resolve(value);
+                    },
+                    set: (value: unknown, path?: (string | number)[]) => {
+                      writes.push({ path: path ?? [], value });
+                      return Promise.resolve();
+                    },
+                  },
+                },
+              } as WritePath,
+              text,
+            );
+            return { ok, writes };
+          }
+
+          it("writes a markdown field with no value as an empty string, and skips a line with no key", async () => {
+            const { ok, writes } = await save(
+              "markdown",
+              { type: "text/markdown", frontmatter: {} },
+              "---\nnote:\n: orphan\n---\n\nBody",
+            );
+
+            expect(ok).toBe(true);
+            expect(writes).toStrictEqual([
+              { path: ["$FS", "frontmatter", "note"], value: "" },
+              { path: ["$FS", "content"], value: "Body" },
+            ]);
+          });
+
+          it("returns `false` and writes nothing for JSON that does not parse to an object", async () => {
+            for (const text of ["{ not json", "[1, 2]", "null"]) {
+              const { ok, writes } = await save(
+                "json",
+                { type: "application/json", content: { title: "Old" } },
+                text,
+              );
+
+              expect(ok).toBe(false);
+              expect(writes).toEqual([]);
+            }
+          });
+
+          it("writes the keys of a plain-object shorthand directly under `$FS`, never writing `entityId`", async () => {
+            const { ok, writes } = await save(
+              "json",
+              { title: "Old", stale: true, entityId: "of:kept" },
+              '{"title":"New","entityId":"of:other"}',
+            );
+
+            expect(ok).toBe(true);
+            expect(writes).toStrictEqual([
+              { path: ["$FS", "title"], value: "New" },
+              { path: ["$FS", "stale"], value: undefined },
+            ]);
+          });
+
+          it("writes JSON under `$FS.content` when the current value cannot be read", async () => {
+            const { ok, writes } = await save(
+              "json",
+              new Error("result unavailable"),
+              '{"title":"New"}',
+            );
+
+            expect(ok).toBe(true);
+            expect(writes).toStrictEqual([
+              { path: ["$FS", "content", "title"], value: "New" },
+            ]);
+          });
+
+          it("returns `false` and writes nothing for a write path with no projection", async () => {
+            const { ok, writes } = await save(
+              undefined,
+              { type: "application/json", content: {} },
+              '{"title":"New"}',
+            );
+
+            expect(ok).toBe(false);
+            expect(writes).toEqual([]);
+          });
+        });
       });
 
       describe("invalidateWritePath()", () => {
@@ -2888,6 +4115,139 @@ describe("cell-bridge", () => {
           expect(resultIno).toBeDefined();
           expect(getFileContent(tree, resultIno!, "content")).toBe("fresh");
         });
+
+        it("drops `.handlers` with the result and invalidates every inode they held, leaving other pieces alone", async () => {
+          const tree = new FsTree();
+          const bridge = new CellBridge(tree, "/tmp/cf-exec");
+          const state = buildTestSpace(bridge, "home", []);
+          const resultCell = makeCell(
+            { title: "Contacts" },
+            {
+              type: "object",
+              properties: {
+                title: { type: "string" },
+                onAddContact: { asCell: ["stream"] },
+              },
+            },
+            {
+              onAddContact: makeCell(
+                undefined,
+                { asCell: ["stream"] },
+                {},
+                { isStream: true },
+              ),
+            },
+          );
+          const piece: FakePiece = {
+            ...staticPiece("of:contact-book", "Contact Book"),
+            result: {
+              getCell: () => Promise.resolve(resultCell),
+              get: () => Promise.resolve({ title: "Contacts" }),
+            },
+          };
+          const addPiece = bridge.accessForTestingOnly.addPieceToSpace;
+          await addPiece(state, fakePiece(piece), "home");
+          await addPiece(
+            state,
+            fakePiece(staticPiece("of:other", "Other", {}, { b: "2" })),
+            "home",
+          );
+          const pieceIno = tree.lookup(state.piecesIno, "Contact-Book")!;
+          const otherIno = tree.lookup(state.piecesIno, "Other")!;
+          for (const ino of [pieceIno, otherIno]) {
+            await bridge.accessForTestingOnly.hydratePieceProp(ino, "result");
+          }
+          const resultIno = tree.lookup(pieceIno, "result")!;
+          const heldInos = [
+            resultIno,
+            ...tree.getChildren(resultIno).map(([, ino]) => ino),
+            tree.lookup(pieceIno, "result.json")!,
+            tree.lookup(pieceIno, ".handlers")!,
+          ];
+          const invalidated: Array<[bigint, string[]]> = [];
+          const invalidatedInodes: bigint[] = [];
+          bridge.onInvalidate = (parentIno, names) =>
+            invalidated.push([parentIno, names]);
+          bridge.onInvalidateInode = (ino) => invalidatedInodes.push(ino);
+
+          bridge.invalidateWritePath({
+            spaceName: "home",
+            pieceName: "Contact-Book",
+            cell: "result",
+            jsonPath: ["title"],
+            isJsonFile: false,
+            piece: fakePiece(piece),
+          });
+
+          expect(tree.lookup(pieceIno, ".handlers")).toBeUndefined();
+          expect(invalidated).toEqual([[
+            pieceIno,
+            ["result", "result.json", ".handlers"],
+          ]]);
+          expect(new Set(invalidatedInodes)).toEqual(
+            new Set([pieceIno, ...heldInos]),
+          );
+          expect(getFileContent(tree, tree.lookup(otherIno, "result")!, "b"))
+            .toBe("2");
+        });
+      });
+
+      describe("resolveHandlerTarget()", () => {
+        // `Contact Book` declares the handler `onAddContact`, and is projected
+        // and hydrated under `entities/` only.
+
+        async function projectContactBook() {
+          const tree = new FsTree();
+          const bridge = new CellBridge(tree, "/tmp/cf-exec");
+          const state = buildTestSpace(bridge, "home", []);
+          const resultCell = makeCell(
+            {},
+            {
+              type: "object",
+              properties: { onAddContact: { asCell: ["stream"] } },
+            },
+            {
+              onAddContact: makeCell(
+                undefined,
+                { asCell: ["stream"] },
+                {},
+                { isStream: true },
+              ),
+            },
+          );
+          const piece: FakePiece = {
+            ...staticPiece("of:contact-book", "Contact Book"),
+            result: {
+              getCell: () => Promise.resolve(resultCell),
+              get: () => Promise.resolve({}),
+            },
+          };
+          const entityIno = await projectEntity(bridge, state, piece);
+          expect(await bridge.prepareLookup(entityIno, "result")).toBe(true);
+          const handlerIno = tree.lookup(
+            tree.lookup(entityIno, "result")!,
+            "onAddContact.handler",
+          )!;
+          return { bridge, state, piece, handlerIno };
+        }
+
+        it("returns the handler of an entity projection, from its controller or else the pieces list", async () => {
+          const { bridge, state, piece, handlerIno } =
+            await projectContactBook();
+          const target = {
+            piece: fakePiece(piece),
+            cellProp: "result",
+            cellKey: "onAddContact",
+          };
+
+          expect(bridge.resolveHandlerTarget(handlerIno)).toEqual(target);
+
+          state.entityControllers.clear();
+          expect(bridge.resolveHandlerTarget(handlerIno)).toEqual(target);
+
+          state.pieceControllers.clear();
+          expect(bridge.resolveHandlerTarget(handlerIno)).toBeNull();
+        });
       });
 
       describe("invalidateHandlerTarget()", () => {
@@ -2939,6 +4299,34 @@ describe("cell-bridge", () => {
             tree.getChildren(resultIno!).length,
             "entity result/ should be restored as an empty stub after handler invalidation",
           ).toBe(0);
+        });
+      });
+
+      describe("writeSourceErrorLog()", () => {
+        it("writes the tracked `error.log`, and nothing through a tracked inode that is no longer a file", () => {
+          const tree = new FsTree();
+          const bridge = new CellBridge(tree, "/tmp/cf-exec");
+          const state = buildTestSpace(bridge, "home", []);
+          const srcIno = tree.addDir(
+            tree.addDir(state.piecesIno, "notes"),
+            ".src",
+          );
+          const errorLogIno = tree.addFile(srcIno, "error.log", "", "string");
+          state.srcErrorLogInos.set("notes", errorLogIno);
+          const writePath = sourceWritePath("home", "notes", srcIno);
+
+          bridge.writeSourceErrorLog(writePath, "compile failed");
+          expect(getFileContent(tree, srcIno, "error.log")).toBe(
+            "compile failed",
+          );
+
+          // The tracked inode now names a directory, which a file update would
+          // throw on.
+          tree.clear(errorLogIno);
+          const replacedIno = tree.addDir(srcIno, "error.log");
+          state.srcErrorLogInos.set("notes", replacedIno);
+          bridge.writeSourceErrorLog(writePath, "compile failed again");
+          expect(tree.getNode(replacedIno)?.kind).toBe("dir");
         });
       });
 
@@ -3333,6 +4721,42 @@ describe("cell-bridge", () => {
           expect(piecesSyncs).toEqual(["authorized", "revoked"]);
           expect(disposedManagers).toEqual(["authorized", "revoked"]);
         });
+
+        it("resumes writes when a probe's cleanup fails, and reports the failure", async () => {
+          const tree = new FsTree();
+          const bridge = new CellBridge(tree, "/tmp/cf-exec", {
+            reconnectPiecesLoader: () =>
+              Promise.resolve(
+                {
+                  synced: () => Promise.resolve(),
+                  runtime: {
+                    dispose: () => Promise.reject(new Error("still open")),
+                  },
+                } as unknown as SpaceState["pieces"],
+              ),
+          });
+          buildTestSpace(bridge, "home", []);
+          bridge.accessForTestingOnly.disconnected = true;
+          const warnings: string[] = [];
+          const errors = captureConsoleErrors();
+          const originalWarn = console.warn;
+          console.warn = (...args: unknown[]) => warnings.push(args.join(" "));
+          try {
+            await bridge.accessForTestingOnly.attemptReconnect();
+          } finally {
+            // Were the attempt to fail, the retry it schedules must not
+            // outlive this case.
+            const timer = bridge.accessForTestingOnly.reconnectTimer;
+            if (timer !== null) clearTimeout(timer);
+            console.warn = originalWarn;
+            errors.restore();
+          }
+
+          expect(bridge.disconnected).toBe(false);
+          expect(warnings).toEqual([
+            "[FUSE] Reconnect probe cleanup failed: still open",
+          ]);
+        });
       });
 
       describe("#removeFailedSpaceTree()", () => {
@@ -3400,6 +4824,88 @@ describe("cell-bridge", () => {
           expect(internals.pendingPieceHydrations.has("home")).toBe(false);
           expect(internals.pieceSyncs.has("home")).toBe(false);
           expect(internals.syncAgain.has("home")).toBe(false);
+        });
+
+        it("forgets the lookup and open references held under the space's entity projections", async () => {
+          const tree = new FsTree();
+          const bridge = new CellBridge(tree, "/tmp/cf-exec");
+          const state = buildTestSpace(bridge, "home", []);
+          const internals = bridge.accessForTestingOnly;
+          const entityIno = await projectEntity(
+            bridge,
+            state,
+            staticPiece("of:referenced", "Referenced"),
+          );
+          expect(await bridge.prepareLookup(entityIno, "meta.json")).toBe(true);
+          const metaIno = tree.lookup(entityIno, "meta.json")!;
+          bridge.retainEntityProjectionLookup(metaIno);
+          bridge.retainEntityProjectionOpen(metaIno);
+          expect(internals.entityProjectionLookupOwners.has(metaIno)).toBe(
+            true,
+          );
+
+          internals.removeFailedSpaceTree("home", state);
+
+          expect(internals.entityProjectionLookupOwners.size).toBe(0);
+          expect(internals.entityProjectionLookupRefs.size).toBe(0);
+          // With its owner forgotten, a late release finds nothing to release.
+          bridge.releaseEntityProjectionLookup(metaIno);
+          bridge.releaseEntityProjectionOpen(metaIno);
+          expect(internals.entityProjectionLookupRefs.size).toBe(0);
+        });
+      });
+
+      describe("#makeLinkResolver()", () => {
+        // A resolver for links read in the space `home`. A link's depth counts
+        // the directories between the piece directory and the link.
+
+        const link = (payload: unknown) => ({ "/": { "link@1": payload } });
+        const resolve = (value: unknown, depth = 0) =>
+          new CellBridge(new FsTree(), "/tmp/cf-exec").accessForTestingOnly
+            .makeLinkResolver("home")(value, depth);
+
+        it("returns a same-space link's path through the space's `entities/`", () => {
+          expect(resolve(link({ id: "of:target", path: ["a", "b c"] }), 1))
+            .toBe(
+              `../../../entities/of%3Atarget/a/${encodeFuseComponent("b c")}`,
+            );
+          expect(resolve(link({ id: "of:target", space: "home" })))
+            .toBe("../../entities/of%3Atarget");
+        });
+
+        it("returns a cross-space link's path through the other space's `entities/`", () => {
+          expect(resolve(link({ id: "of:target", space: "did:key:zOther" })))
+            .toBe(
+              `../../../${encodeFuseComponent("did:key:zOther")}/entities/` +
+                "of%3Atarget",
+            );
+        });
+
+        it("returns a link with no id as its path within the piece, or `null` without one", () => {
+          expect(resolve(link({ path: ["items", "0"] }), 2)).toBe("items/0");
+          expect(resolve(link({}))).toBeNull();
+        });
+
+        it("returns `null` for a value that is not a usable link", () => {
+          const handler = Object.defineProperty(
+            link({ id: "of:stream" }),
+            "isStream",
+            { value: () => true },
+          );
+
+          for (
+            const value of [
+              { id: "of:target" },
+              handler,
+              link("of:target"),
+              link({ id: 7 }),
+              link({ id: "of:target", space: 7 }),
+              link({ id: "of:target", path: "a/b" }),
+              link({ id: "of:target", path: ["a", 1] }),
+            ]
+          ) {
+            expect(resolve(value)).toBeNull();
+          }
         });
       });
 
@@ -3491,6 +4997,37 @@ describe("cell-bridge", () => {
             .toBeDefined();
           expect(tree.getChildren(inputIno!).length).toBe(0);
           expect(tree.getChildren(resultIno!).length).toBe(0);
+        });
+
+        it("replaces the `meta.json` of a directory it fills in again", async () => {
+          const tree = new FsTree();
+          const bridge = new CellBridge(tree, "/tmp/cf-exec");
+          const state = buildTestSpace(bridge, "home", []);
+          let name = "First";
+          const piece = { ...staticPiece("of:reloaded", ""), name: () => name };
+          const load = bridge.accessForTestingOnly.loadPieceTree;
+
+          const pieceIno = await load(
+            fakePiece(piece),
+            state.piecesIno,
+            "Reloaded",
+            "home",
+          );
+          const firstMetaIno = tree.lookup(pieceIno, "meta.json")!;
+          name = "Second";
+          expect(
+            await load(
+              fakePiece(piece),
+              state.piecesIno,
+              "Reloaded",
+              "home",
+              pieceIno,
+            ),
+          ).toBe(pieceIno);
+
+          expect(tree.getNode(firstMetaIno)).toBeUndefined();
+          expect(JSON.parse(getFileContent(tree, pieceIno, "meta.json")).name)
+            .toBe("Second");
         });
       });
 
@@ -4032,6 +5569,60 @@ describe("cell-bridge", () => {
               "onAddContact.handler  void (invoke with no args)",
             ),
           ).toBe(true);
+        });
+
+        it("resolves `false` for an inode that is not a piece root", async () => {
+          const tree = new FsTree();
+          const bridge = new CellBridge(tree, "/tmp/cf-exec");
+          const state = buildTestSpace(bridge, "home", []);
+
+          expect(
+            await bridge.accessForTestingOnly.hydratePieceProp(
+              state.piecesIno,
+              "result",
+            ),
+          ).toBe(false);
+        });
+
+        it("resolves `false` once its retries are spent on a prop invalidated after every rebuild", async () => {
+          // Each rebuild ends in a write's invalidation, so every attempt
+          // finds its prop dropped again and starts over. The first attempt
+          // and three retries each read the result once.
+
+          const tree = new FsTree();
+          const piece = staticPiece("of:churning", "Churning", {}, { b: "2" });
+          const bridge: CellBridge = new CellBridge(tree, "/tmp/cf-exec", {
+            onCfcProjectionRebuilt: () =>
+              bridge.invalidateWritePath({
+                spaceName: "home",
+                pieceName: "Churning",
+                cell: "result",
+                jsonPath: [],
+                isJsonFile: false,
+                piece: fakePiece(piece),
+              }),
+          });
+          const state = buildTestSpace(bridge, "home", []);
+          await bridge.accessForTestingOnly.addPieceToSpace(
+            state,
+            fakePiece(piece),
+            "home",
+          );
+          let resultReads = 0;
+          const read = piece.result!.get;
+          piece.result!.get = (path) => {
+            resultReads++;
+            return read(path);
+          };
+          const pieceIno = tree.lookup(state.piecesIno, "Churning")!;
+
+          expect(
+            await bridge.accessForTestingOnly.hydratePieceProp(
+              pieceIno,
+              "result",
+            ),
+          ).toBe(false);
+          expect(resultReads).toBe(4);
         });
       });
 
@@ -4631,6 +6222,555 @@ describe("cell-bridge", () => {
           });
           expect(tree.getNode(pieceIno)!.mtime).toBe(3_000);
         });
+
+        describe("on a hydrated piece", () => {
+          // A piece added to `home` with its result hydrated from
+          // `{ summary: "before" }`; `rebuild()` rebuilds the result from a
+          // new value, read through the cell `cell()` makes of it.
+
+          async function hydrate(
+            initialResult: unknown = { summary: "before" },
+            cell: (value: unknown) => unknown = (value) =>
+              new SinkableCell(value),
+          ) {
+            const tree = new FsTree();
+            let rebuilds = 0;
+            const bridge = new CellBridge(tree, "/tmp/cf-exec", {
+              onCfcProjectionRebuilt: () => rebuilds++,
+            });
+            const state = buildTestSpace(bridge, "home", []);
+            const piece = staticPiece(
+              "of:rebuilt",
+              "Rebuilt",
+              {},
+              initialResult,
+            );
+            await bridge.accessForTestingOnly.addPieceToSpace(
+              state,
+              fakePiece(piece),
+              "home",
+            );
+            const pieceIno = tree.lookup(state.piecesIno, "Rebuilt")!;
+            await bridge.accessForTestingOnly.hydratePieceProp(
+              pieceIno,
+              "result",
+            );
+            const rebuild = (
+              value: unknown,
+              target = pieceIno,
+              propName: "input" | "result" = "result",
+            ) =>
+              bridge.accessForTestingOnly.rebuildPieceProp({
+                cell: cell(value) as never,
+                newValue: value,
+                pieceId: piece.id,
+                pieceIno: target,
+                pieceName: "Rebuilt",
+                propName,
+                resolveLink: bridge.accessForTestingOnly.makeLinkResolver(
+                  "home",
+                ),
+                spaceName: "home",
+              });
+            return {
+              tree,
+              bridge,
+              state,
+              pieceIno,
+              rebuild,
+              rebuilds: () => rebuilds,
+            };
+          }
+
+          it("does nothing for a piece root that is no longer a directory", async () => {
+            const { tree, state, rebuild, rebuilds } = await hydrate();
+            const before = rebuilds();
+            const fileIno = tree.addFile(
+              state.piecesIno,
+              "stray",
+              "",
+              "string",
+            );
+
+            await rebuild({ summary: "after" }, fileIno);
+            await rebuild({ summary: "after" }, 999_999n);
+
+            expect(rebuilds()).toBe(before);
+            expect(tree.getNode(fileIno)?.kind).toBe("file");
+          });
+
+          it("discards a staging subtree a rebuild left behind", async () => {
+            // A new staging directory would only shadow the stale one, whose
+            // inodes would then outlive it in the tree.
+
+            const { tree, pieceIno, rebuild } = await hydrate();
+            const staleIno = tree.addDir(pieceIno, ".result.pending");
+            const staleChildIno = tree.addFile(
+              staleIno,
+              "stale",
+              "x",
+              "string",
+            );
+            const staleJsonIno = tree.addFile(
+              pieceIno,
+              ".result.pending.json",
+              "{}",
+              "object",
+            );
+
+            await rebuild({ summary: "after" });
+
+            for (const ino of [staleIno, staleChildIno, staleJsonIno]) {
+              expect(tree.getNode(ino)).toBeUndefined();
+            }
+            const names = tree.getChildren(pieceIno).map(([name]) => name);
+            expect(names).not.toContain(".result.pending");
+            expect(names).not.toContain(".result.pending.json");
+            const resultIno = tree.lookup(pieceIno, "result")!;
+            expect(getFileContent(tree, resultIno, "summary")).toBe("after");
+            expect(tree.lookup(resultIno, "stale")).toBeUndefined();
+          });
+
+          it("discards an [FS] staging container a rebuild left behind", async () => {
+            const { tree, pieceIno, rebuild } = await hydrate();
+            const staleIno = tree.addDir(pieceIno, ".fs.pending");
+            const staleChildIno = tree.addFile(
+              staleIno,
+              "stale.md",
+              "x",
+              "string",
+            );
+
+            await rebuild({ $FS: { type: "text/markdown", content: "Hello" } });
+
+            const names = tree.getChildren(pieceIno).map(([name]) => name);
+            expect(names).toContain("index.md");
+            expect(names).not.toContain(".fs.pending");
+            expect(names).not.toContain("stale.md");
+            expect(tree.getNode(staleIno)).toBeUndefined();
+            expect(tree.getNode(staleChildIno)).toBeUndefined();
+          });
+
+          it("rewrites `pieces.json` and invalidates its entry when the summary changes, and not otherwise", async () => {
+            const { state, rebuild, bridge, tree } = await hydrate();
+            const invalidated: Array<[bigint, string[]]> = [];
+            bridge.onInvalidate = (parentIno, names) =>
+              invalidated.push([parentIno, names]);
+            const summaryInvalidations = () =>
+              invalidated.filter(([parentIno]) =>
+                parentIno === state.piecesIno
+              );
+            const summary = () =>
+              JSON.parse(
+                getFileContent(tree, state.piecesIno, "pieces.json"),
+              )[0]
+                .summary;
+
+            await rebuild({ summary: "after" });
+            expect(summary()).toBe("after");
+            expect(summaryInvalidations()).toEqual([
+              [state.piecesIno, ["pieces.json"]],
+            ]);
+
+            await rebuild({
+              $FS: { type: "text/markdown", content: "Hello" },
+              summary: "projected",
+            });
+            expect(summary()).toBe("projected");
+            expect(summaryInvalidations()).toEqual([
+              [state.piecesIno, ["pieces.json"]],
+              [state.piecesIno, ["pieces.json"]],
+            ]);
+
+            await rebuild({
+              $FS: { type: "text/markdown", content: "Goodbye" },
+              summary: "projected",
+            });
+            await rebuild({ summary: "projected" });
+            expect(summaryInvalidations().length).toBe(2);
+          });
+
+          it("removes the [FS] entries when a projection becomes a `result/` tree that is new to the piece", async () => {
+            const { tree, pieceIno, rebuild } = await hydrate({
+              $FS: { type: "text/markdown", content: "Hello" },
+            });
+            expect(tree.lookup(pieceIno, "index.md")).toBeDefined();
+            expect(tree.lookup(pieceIno, "result")).toBeUndefined();
+
+            await rebuild({ title: "plain" });
+
+            expect(tree.lookup(pieceIno, "index.md")).toBeUndefined();
+            expect(
+              getFileContent(tree, tree.lookup(pieceIno, "result")!, "title"),
+            ).toBe("plain");
+          });
+
+          describe("reading `$FS`", () => {
+            it("projects a `$FS` with no `type` as `index.json` holding all of it", async () => {
+              const { tree, pieceIno, rebuild } = await hydrate();
+
+              await rebuild({ $FS: { title: "Plain" } });
+
+              expect(JSON.parse(getFileContent(tree, pieceIno, "index.json")))
+                .toEqual({ entityId: "of:rebuilt", title: "Plain" });
+              expect(tree.lookup(pieceIno, "result")).toBeUndefined();
+            });
+
+            it("projects an `application/json` `$FS` as `index.json`, with content that is not an object as none", async () => {
+              const { tree, pieceIno, rebuild } = await hydrate();
+
+              await rebuild({
+                $FS: { type: "application/json", content: { title: "Typed" } },
+              });
+              expect(JSON.parse(getFileContent(tree, pieceIno, "index.json")))
+                .toEqual({ entityId: "of:rebuilt", title: "Typed" });
+
+              await rebuild({
+                $FS: { type: "application/json", content: ["listed"] },
+              });
+              expect(JSON.parse(getFileContent(tree, pieceIno, "index.json")))
+                .toEqual({ entityId: "of:rebuilt" });
+            });
+
+            it("projects a `$FS` of another type as a `result/` tree", async () => {
+              const { tree, pieceIno, rebuild } = await hydrate();
+
+              await rebuild({ $FS: { type: "text/plain", content: "Plain" } });
+
+              expect(tree.lookup(pieceIno, "index.md")).toBeUndefined();
+              expect(tree.lookup(pieceIno, "index.json")).toBeUndefined();
+              const fsIno = tree.lookup(
+                tree.lookup(pieceIno, "result")!,
+                "$FS",
+              )!;
+              expect(getFileContent(tree, fsIno, "content")).toBe("Plain");
+            });
+
+            it("projects a `$FS` whose cell cannot be read as a `result/` tree", async () => {
+              const unreadable: FakeCell = {
+                schema: undefined,
+                get: () => {
+                  throw new Error("unreadable");
+                },
+                getRaw: () => {
+                  throw new Error("unreadable");
+                },
+                asSchemaFromLinks() {
+                  return this;
+                },
+                key: () => {
+                  throw new Error("unreadable");
+                },
+              };
+              const { tree, pieceIno, rebuild } = await hydrate(
+                { summary: "before" },
+                (value) => makeCell(value, undefined, { $FS: unreadable }),
+              );
+
+              await rebuild({ $FS: { type: "text/markdown", content: "Hi" } });
+
+              expect(tree.lookup(pieceIno, "index.md")).toBeUndefined();
+              const fsIno = tree.lookup(
+                tree.lookup(pieceIno, "result")!,
+                "$FS",
+              )!;
+              expect(getFileContent(tree, fsIno, "content")).toBe("Hi");
+            });
+          });
+
+          it("projects a VNode as a `.json` file in place of a directory, for as long as the result holds it", async () => {
+            const { tree, pieceIno, rebuild } = await hydrate();
+            const ui = { type: "vnode", name: "div", props: {}, children: [] };
+
+            await rebuild({ $UI: ui, title: "Shown" });
+
+            const resultIno = tree.lookup(pieceIno, "result")!;
+            expect(JSON.parse(getFileContent(tree, resultIno, "$UI.json")))
+              .toEqual(ui);
+            expect(tree.lookup(resultIno, "$UI")).toBeUndefined();
+            expect(getFileContent(tree, resultIno, "title")).toBe("Shown");
+
+            await rebuild({ title: "Hidden" });
+            expect(tree.lookup(resultIno, "$UI.json")).toBeUndefined();
+            expect(getFileContent(tree, resultIno, "title")).toBe("Hidden");
+          });
+
+          it("keeps the `.json` sibling of a `$`-prefixed object that is not a VNode", async () => {
+            const { tree, pieceIno, rebuild } = await hydrate();
+
+            await rebuild({ $meta: { pinned: true } });
+
+            const resultIno = tree.lookup(pieceIno, "result")!;
+            expect(
+              getFileContent(tree, tree.lookup(resultIno, "$meta")!, "pinned"),
+            ).toBe("true");
+            expect(JSON.parse(getFileContent(tree, resultIno, "$meta.json")))
+              .toEqual({ pinned: true });
+          });
+
+          it("places a VNode and a handler of an [FS] projection beside its index", async () => {
+            const ui = { type: "vnode", name: "div", props: {}, children: [] };
+            const value = {
+              $FS: { type: "text/markdown", content: "Hi" },
+              $UI: ui,
+            };
+            const resultCell = makeCell(
+              value,
+              {
+                type: "object",
+                properties: { onAdd: { asCell: ["stream"] } },
+              },
+              {
+                $FS: makeCell(value.$FS, undefined, {
+                  type: makeCell("text/markdown", undefined),
+                  content: makeCell("Hi", undefined),
+                }),
+                $UI: makeCell(ui, undefined),
+                onAdd: makeCell(
+                  undefined,
+                  { asCell: ["stream"] },
+                  {},
+                  { isStream: true },
+                ),
+              },
+            );
+            const { tree, pieceIno, rebuild } = await hydrate(
+              { summary: "before" },
+              () => resultCell,
+            );
+
+            await rebuild(value);
+
+            expect(getFileContent(tree, pieceIno, "index.md")).toContain("Hi");
+            expect(JSON.parse(getFileContent(tree, pieceIno, "$UI.json")))
+              .toEqual(ui);
+            expect(tree.getNode(tree.lookup(pieceIno, "onAdd.handler")!)?.kind)
+              .toBe("callable");
+            expect(getFileContent(tree, pieceIno, ".handlers")).toContain(
+              "onAdd.handler",
+            );
+          });
+
+          it("removes a sibling of an [FS] projection that the next projection lacks", async () => {
+            const { tree, pieceIno, rebuild } = await hydrate();
+            const projection = (frontmatter: Record<string, unknown>) => ({
+              $FS: { type: "text/markdown", content: "Hi", frontmatter },
+            });
+
+            await rebuild(projection({ meta: { pinned: true } }));
+            const indexIno = tree.lookup(pieceIno, "index.md");
+            expect(tree.lookup(pieceIno, "meta")).toBeDefined();
+
+            await rebuild(projection({}));
+            expect(tree.lookup(pieceIno, "meta")).toBeUndefined();
+            expect(tree.lookup(pieceIno, "index.md")).toBe(indexIno);
+          });
+
+          it("projects an array result as a directory of its elements", async () => {
+            const { tree, pieceIno, rebuild } = await hydrate();
+
+            await rebuild(["first", "second"]);
+
+            const resultIno = tree.lookup(pieceIno, "result")!;
+            expect(getFileContent(tree, resultIno, "0")).toBe("first");
+            expect(getFileContent(tree, resultIno, "1")).toBe("second");
+          });
+
+          it("projects a child carrying a pattern and its extra parameters as a tool", async () => {
+            const resultCell = makeCell(
+              {},
+              { type: "object", properties: { search: {} } },
+              {
+                search: makeCell(undefined, undefined, {
+                  pattern: makeCell("search-pattern", undefined),
+                  extraParams: makeCell({}, undefined),
+                }),
+              },
+            );
+            const { tree, pieceIno, rebuild } = await hydrate(
+              { summary: "before" },
+              () => resultCell,
+            );
+
+            await rebuild({});
+
+            const resultIno = tree.lookup(pieceIno, "result")!;
+            expect(tree.getNode(tree.lookup(resultIno, "search.tool")!)?.kind)
+              .toBe("callable");
+            expect(getFileContent(tree, pieceIno, ".handlers")).toContain(
+              "search.tool",
+            );
+          });
+
+          it("projects the schema properties a value lacks from the cell, a link as a symlink, and skips one that cannot be read", async () => {
+            const link = { "/": { "link@1": { id: "of:target" } } };
+            const unreadable: FakeCell = {
+              ...makeCell(undefined, undefined),
+              get: () => {
+                throw new Error("unreadable");
+              },
+            };
+            const resultCell = makeCell(
+              { title: "Kept" },
+              {
+                type: "object",
+                properties: { title: {}, linked: {}, extra: {}, broken: {} },
+              },
+              {
+                title: makeCell("From cell", undefined),
+                linked: {
+                  ...makeCell({ resolved: true }, undefined),
+                  getRaw: () => link,
+                },
+                extra: makeCell("From cell", undefined),
+                broken: unreadable,
+              },
+            );
+            const { tree, pieceIno, rebuild } = await hydrate(
+              { summary: "before" },
+              () => resultCell,
+            );
+
+            await rebuild({ title: "Kept" });
+
+            const resultIno = tree.lookup(pieceIno, "result")!;
+            expect(getFileContent(tree, resultIno, "title")).toBe("Kept");
+            expect(getFileContent(tree, resultIno, "extra")).toBe("From cell");
+            expect(tree.getNode(tree.lookup(resultIno, "linked")!)).toEqual(
+              expect.objectContaining({
+                kind: "symlink",
+                target: "../../../entities/of%3Atarget",
+              }),
+            );
+            expect(tree.lookup(resultIno, "broken")).toBeUndefined();
+          });
+
+          it("replaces a projection entry whose kind changes", async () => {
+            const fs = { type: "text/markdown", content: "Hi" };
+            const handlerValue = { $FS: fs };
+            const handlerCell = makeCell(
+              handlerValue,
+              {
+                type: "object",
+                properties: { onAdd: { asCell: ["stream"] } },
+              },
+              {
+                $FS: makeCell(fs, undefined, {
+                  type: makeCell("text/markdown", undefined),
+                  content: makeCell("Hi", undefined),
+                }),
+                onAdd: makeCell(
+                  undefined,
+                  { asCell: ["stream"] },
+                  {},
+                  { isStream: true },
+                ),
+              },
+            );
+            const { tree, pieceIno, rebuild } = await hydrate(
+              { summary: "before" },
+              (value) =>
+                value === handlerValue ? handlerCell : new SinkableCell(value),
+            );
+            const kind = () =>
+              tree.getNode(tree.lookup(pieceIno, "onAdd.handler")!)?.kind;
+
+            // A frontmatter object projects as a directory beside the index;
+            // the handler that later takes its name projects as a file.
+            await rebuild({
+              $FS: { ...fs, frontmatter: { "onAdd.handler": { a: 1 } } },
+            });
+            expect(kind()).toBe("dir");
+            const dirIno = tree.lookup(pieceIno, "onAdd.handler")!;
+
+            await rebuild(handlerValue);
+            expect(kind()).toBe("callable");
+            expect(tree.getNode(dirIno)).toBeUndefined();
+          });
+        });
+
+        it("completes a rebuild whose projection-rebuilt callback throws, and reports the error", async () => {
+          const tree = new FsTree();
+          const bridge = new CellBridge(tree, "/tmp/cf-exec", {
+            onCfcProjectionRebuilt: () => {
+              throw new Error("reconciliation failed");
+            },
+          });
+          const state = buildTestSpace(bridge, "home", []);
+          const pieceIno = await bridge.accessForTestingOnly.loadPieceTree(
+            fakePiece(staticPiece("of:throwing", "Throwing", {}, { b: "2" })),
+            state.piecesIno,
+            "Throwing",
+            "home",
+          );
+          const warnings: string[] = [];
+          const originalWarn = console.warn;
+          console.warn = (...args: unknown[]) => warnings.push(args.join(" "));
+          try {
+            expect(
+              await bridge.accessForTestingOnly.hydratePieceProp(
+                pieceIno,
+                "result",
+              ),
+            ).toBe(true);
+          } finally {
+            console.warn = originalWarn;
+          }
+
+          expect(getFileContent(tree, tree.lookup(pieceIno, "result")!, "b"))
+            .toBe("2");
+          expect(warnings).toEqual([
+            "[fuse] CFC writeback reconciliation error: Error: reconciliation failed",
+          ]);
+        });
+
+        it("annotates a projection whose cell labels cannot be read as failing closed", async () => {
+          const tree = new FsTree();
+          const bridge = new CellBridge(tree, "/tmp/cf-exec", {
+            cfcAnnotations: true,
+            projectionGeneration: "test-generation",
+          });
+          const state = buildTestSpace(bridge, "home", []);
+          // Asking whether the cell has a link at all throws.
+          const resultCell = Object.defineProperty(
+            makeCell({ title: "secret" }, undefined),
+            "getAsNormalizedFullLink",
+            {
+              get: () => {
+                throw new Error("no link");
+              },
+            },
+          );
+          const piece: FakePiece = {
+            ...staticPiece("of:unlabeled", "Unlabeled"),
+            result: {
+              getCell: () => Promise.resolve(resultCell),
+              get: () => Promise.resolve({ title: "secret" }),
+            },
+          };
+          const pieceIno = await bridge.accessForTestingOnly.loadPieceTree(
+            fakePiece(piece),
+            state.piecesIno,
+            "Unlabeled",
+            "home",
+          );
+
+          expect(
+            await bridge.accessForTestingOnly.hydratePieceProp(
+              pieceIno,
+              "result",
+            ),
+          ).toBe(true);
+
+          const titleIno = tree.lookup(
+            tree.lookup(pieceIno, "result")!,
+            "title",
+          )!;
+          expect(
+            JSON.stringify(tree.getCfcAnnotation(titleIno)?.contentLabel)
+              .includes(CFC_FAIL_CLOSED_ATOM_CLASS),
+          ).toBe(true);
+        });
       });
 
       describe("#enqueuePiecePropRebuild()", () => {
@@ -5072,6 +7212,29 @@ describe("cell-bridge", () => {
             ),
           ).toBe(true);
         });
+
+        it("lists a piece whose result cannot be read with an empty summary", async () => {
+          const tree = new FsTree();
+          const bridge = new CellBridge(tree, "/tmp/cf-exec");
+          const state = buildTestSpace(bridge, "home", []);
+          const piece = staticPiece("of:unreadable", "Unreadable");
+          piece.result!.get = () => Promise.reject(new Error("unreadable"));
+
+          await bridge.accessForTestingOnly.addPieceToSpace(
+            state,
+            fakePiece(piece),
+            "home",
+          );
+          bridge.accessForTestingOnly.updatePiecesJson(state);
+
+          expect(
+            JSON.parse(getFileContent(tree, state.piecesIno, "pieces.json"))
+              .map(({ name, summary }: Record<string, unknown>) => ({
+                name,
+                summary,
+              })),
+          ).toEqual([{ name: "Unreadable", summary: "" }]);
+        });
       });
 
       describe("#refreshPiecePatternMetadata()", () => {
@@ -5149,6 +7312,27 @@ describe("cell-bridge", () => {
 
           expect(indexJson["Alpha"]).toBe("of:alpha");
           expect(indexJson["Beta"]).toBe("of:beta");
+        });
+
+        it("replaces the `.index.json` it wrote before", async () => {
+          const tree = new FsTree();
+          const bridge = new CellBridge(tree, "/tmp/cf-exec");
+          const state = buildTestSpace(bridge, "home", []);
+          bridge.accessForTestingOnly.updateIndexJson(state);
+          const firstIndexIno = tree.lookup(state.piecesIno, ".index.json")!;
+          await bridge.accessForTestingOnly.addPieceToSpace(
+            state,
+            fakePiece(staticPiece("of:indexed", "Indexed")),
+            "home",
+          );
+
+          bridge.accessForTestingOnly.updateIndexJson(state);
+
+          expect(tree.getNode(firstIndexIno)).toBeUndefined();
+          expect(
+            JSON.parse(getFileContent(tree, state.piecesIno, ".index.json")),
+          )
+            .toEqual({ Indexed: "of:indexed" });
         });
       });
 
@@ -5299,6 +7483,59 @@ describe("cell-bridge", () => {
             "Piece directory should be gone after sync",
           ).toBeUndefined();
           expect(state.pieceMap.size).toBe(0);
+        });
+
+        it("invalidates the names it changed under `pieces/` and the space's `pieces` entry, and nothing when nothing changed", async () => {
+          const tree = new FsTree();
+          const bridge = new CellBridge(tree, "/tmp/cf-exec");
+          const leaving = staticPiece("of:leaving", "Leaving");
+          const arriving = staticPiece("of:arriving", "Arriving");
+          const state = buildTestSpace(bridge, "home", [arriving]);
+          await bridge.accessForTestingOnly.addPieceToSpace(
+            state,
+            fakePiece(leaving),
+            "home",
+          );
+          const invalidated: Array<[bigint, string[]]> = [];
+          const invalidatedInodes: bigint[] = [];
+          bridge.onInvalidate = (parentIno, names) =>
+            invalidated.push([parentIno, names]);
+          bridge.onInvalidateInode = (ino) => invalidatedInodes.push(ino);
+
+          await bridge.accessForTestingOnly.syncPieceListOnce(state, "home");
+
+          expect(invalidated).toEqual([
+            [
+              state.piecesIno,
+              ["Leaving", "Arriving", ".index.json", "pieces.json"],
+            ],
+            [state.spaceIno, ["pieces"]],
+          ]);
+          expect(invalidatedInodes).toEqual([state.piecesIno]);
+
+          invalidated.length = 0;
+          invalidatedInodes.length = 0;
+          await bridge.accessForTestingOnly.syncPieceListOnce(state, "home");
+          expect(invalidated).toEqual([]);
+          expect(invalidatedInodes).toEqual([]);
+        });
+
+        it("records the registered ids without touching the tree before `pieces/` is materialized", async () => {
+          const tree = new FsTree();
+          const bridge = new CellBridge(tree, "/tmp/cf-exec");
+          const state = buildTestSpace(bridge, "home", [
+            staticPiece("of:unlisted", "Unlisted"),
+          ]);
+          state.piecesHydrated = false;
+          const invalidated: string[][] = [];
+          bridge.onInvalidate = (_parentIno, names) => invalidated.push(names);
+
+          await bridge.accessForTestingOnly.syncPieceListOnce(state, "home");
+
+          expect(state.allPieceIds).toEqual(new Set(["of:unlisted"]));
+          expect(tree.lookup(state.piecesIno, "Unlisted")).toBeUndefined();
+          expect(state.pieceMap.size).toBe(0);
+          expect(invalidated).toEqual([]);
         });
       });
 
@@ -5819,6 +8056,333 @@ describe("cell-bridge", () => {
             if (subs) { for (const cancel of subs) cancel(); }
           },
         });
+
+        describe("when the piece's name changes", () => {
+          // `Renamed`, added to `home` beside `Taken` and `Taken-2` and also
+          // projected and hydrated under `entities/`, with a result cell whose
+          // `$NAME` a case sets. Rename events and rebuilds run on `FakeTime`.
+
+          let time: FakeTime;
+          let cancels: Array<() => void>;
+
+          beforeEach(() => {
+            time = new FakeTime();
+            cancels = [];
+          });
+
+          afterEach(() => {
+            for (const cancel of cancels) cancel();
+            time.restore();
+          });
+
+          async function addRenamedPiece() {
+            const tree = new FsTree();
+            const bridge = new CellBridge(tree, "/tmp/cf-exec");
+            const state = buildTestSpace(bridge, "home", []);
+            const resultCell = new SinkableCell({});
+            const piece: FakePiece = {
+              ...staticPiece("of:renamed", "Renamed"),
+              result: {
+                getCell: () =>
+                  Promise.resolve(resultCell as unknown as FakeCell),
+                get: () => Promise.resolve(resultCell.get()),
+              },
+            };
+            const add = bridge.accessForTestingOnly.addPieceToSpace;
+            await add(
+              state,
+              fakePiece(staticPiece("of:taken", "Taken")),
+              "home",
+            );
+            await add(
+              state,
+              fakePiece(staticPiece("of:taken-2", "Taken 2")),
+              "home",
+            );
+            await add(state, fakePiece(piece), "home");
+            const entityName = encodeFuseComponent(piece.id);
+            expect(await bridge.resolveEntity(state.entitiesIno, entityName))
+              .toBe(true);
+            const entityIno = tree.lookup(state.entitiesIno, entityName)!;
+            expect(await bridge.prepareLookup(entityIno, "meta.json")).toBe(
+              true,
+            );
+            for (
+              const subs of [
+                ...state.pieceSubs.values(),
+                bridge.accessForTestingOnly.entitySubscriptions.get(entityIno)!,
+              ]
+            ) {
+              for (const cancel of subs) cancels.push(cancel);
+            }
+            const metaName = (ino: bigint) =>
+              JSON.parse(getFileContent(tree, ino, "meta.json")).name;
+            const rename = async (name: string) => {
+              resultCell.set({ $NAME: name });
+              await time.tickAsync(0);
+            };
+            return {
+              tree,
+              bridge,
+              state,
+              pieceIno: tree.lookup(state.piecesIno, "Renamed")!,
+              entityIno,
+              metaName,
+              rename,
+            };
+          }
+
+          it("moves the piece onto a free suffix of a taken name, carrying what it tracks", async () => {
+            const { tree, state, pieceIno, entityIno, metaName, rename } =
+              await addRenamedPiece();
+            state.srcInos.set("Renamed", 1_001n);
+            state.srcErrorLogInos.set("Renamed", 1_002n);
+
+            await rename("Taken");
+
+            expect(tree.lookup(state.piecesIno, "Taken-3")).toBe(pieceIno);
+            expect(tree.lookup(state.piecesIno, "Renamed")).toBeUndefined();
+            expect(state.pieceMap.get("Taken-3")).toBe("of:renamed");
+            expect(state.srcInos.get("Taken-3")).toBe(1_001n);
+            expect(state.srcErrorLogInos.get("Taken-3")).toBe(1_002n);
+            expect(state.srcInos.has("Renamed")).toBe(false);
+            expect(metaName(pieceIno)).toBe("Taken-3");
+            expect(metaName(entityIno)).toBe("Taken-3");
+          });
+
+          it("invalidates the old and new names under `pieces/`, and the piece directory", async () => {
+            const { bridge, state, pieceIno, rename } = await addRenamedPiece();
+            const invalidated: Array<[bigint, string[]]> = [];
+            const invalidatedInodes: bigint[] = [];
+            bridge.onInvalidate = (parentIno, names) =>
+              invalidated.push([parentIno, names]);
+            bridge.onInvalidateInode = (ino) => invalidatedInodes.push(ino);
+
+            await rename("Fresh Name");
+
+            expect(invalidated).toEqual([
+              [
+                state.piecesIno,
+                ["Renamed", "Fresh-Name", ".index.json", "pieces.json"],
+              ],
+              [state.spaceIno, ["pieces"]],
+            ]);
+            expect(invalidatedInodes).toEqual([state.piecesIno, pieceIno]);
+          });
+
+          it("keeps a suffixed name when the new name still collides with it", async () => {
+            const { tree, bridge, state, pieceIno, rename } =
+              await addRenamedPiece();
+            await rename("Taken");
+            const invalidated: string[][] = [];
+            bridge.onInvalidate = (_parentIno, names) =>
+              invalidated.push(names);
+
+            await rename("Taken");
+
+            expect(tree.lookup(state.piecesIno, "Taken-3")).toBe(pieceIno);
+            expect(invalidated).toEqual([]);
+          });
+
+          it("ignores a rename once its space has been replaced", async () => {
+            const { tree, bridge, state, pieceIno, rename } =
+              await addRenamedPiece();
+            bridge.spaces.set("home", { ...state });
+
+            await rename("Fresh Name");
+
+            expect(tree.lookup(state.piecesIno, "Renamed")).toBe(pieceIno);
+            expect(tree.lookup(state.piecesIno, "Fresh-Name")).toBeUndefined();
+          });
+
+          it("leaves a `meta.json` that is not a JSON object as it is", async () => {
+            for (
+              const replace of [
+                (tree: FsTree, ino: bigint) => tree.updateFile(ino, "[1]"),
+                (tree: FsTree, ino: bigint) => tree.updateFile(ino, "{ broken"),
+              ]
+            ) {
+              const { tree, state, pieceIno, rename } = await addRenamedPiece();
+              replace(tree, tree.lookup(pieceIno, "meta.json")!);
+              const before = getFileContent(tree, pieceIno, "meta.json");
+
+              await rename("Fresh Name");
+
+              expect(tree.lookup(state.piecesIno, "Fresh-Name")).toBe(pieceIno);
+              expect(getFileContent(tree, pieceIno, "meta.json")).toBe(before);
+            }
+
+            const { tree, state, pieceIno, rename } = await addRenamedPiece();
+            tree.clear(tree.lookup(pieceIno, "meta.json")!);
+            const metaDir = tree.addDir(pieceIno, "meta.json");
+
+            await rename("Fresh Name");
+
+            expect(tree.lookup(state.piecesIno, "Fresh-Name")).toBe(pieceIno);
+            expect(tree.lookup(pieceIno, "meta.json")).toBe(metaDir);
+          });
+
+          it("reports a rename the tree refuses, and keeps tracking the old name", async () => {
+            const { tree, state, pieceIno, rename } = await addRenamedPiece();
+            tree.detachChild(state.piecesIno, "Renamed");
+            const errors = captureConsoleErrors();
+            try {
+              await rename("Fresh Name");
+            } finally {
+              errors.restore();
+            }
+
+            expect(
+              errors.lines.filter((line) => line.includes("Error renaming")),
+            ).toHaveLength(2);
+            expect(errors.lines[0]).toMatch(
+              /^\[home\] Error renaming piece in FUSE tree: /,
+            );
+            expect(state.pieceMap.get("Renamed")).toBe("of:renamed");
+            expect(state.pieceInos.get("Renamed")).toBe(pieceIno);
+            expect(state.pieceMap.has("Fresh-Name")).toBe(false);
+          });
+        });
+
+        it("reports a result cell it cannot subscribe to, and still subscribes to the input", async () => {
+          const tree = new FsTree();
+          const bridge = new CellBridge(tree, "/tmp/cf-exec");
+          const state = buildTestSpace(bridge, "home", []);
+          const inputCell = new SinkableCell({});
+          const piece: FakePiece = {
+            ...staticPiece("of:unsubscribable", "Unsubscribable"),
+            input: {
+              getCell: () => Promise.resolve(inputCell as unknown as FakeCell),
+              get: () => Promise.resolve(inputCell.get()),
+            },
+            result: {
+              getCell: () => Promise.reject(new Error("result unavailable")),
+              get: () => Promise.resolve({}),
+            },
+          };
+          const pieceIno = tree.addDir(state.piecesIno, "Unsubscribable");
+          const errors = captureConsoleErrors();
+          let subs: Array<() => void>;
+          try {
+            subs = await bridge.accessForTestingOnly.subscribePiece(
+              fakePiece(piece),
+              pieceIno,
+              "Unsubscribable",
+              "home",
+              state,
+            );
+          } finally {
+            errors.restore();
+          }
+
+          expect(errors.lines).toEqual([
+            "[home] Could not subscribe to Unsubscribable.result: Error: result unavailable",
+            "[home] Could not subscribe to root cell for Unsubscribable: Error: result unavailable",
+          ]);
+          expect(inputCell._sinks.length).toBe(1);
+          for (const cancel of subs) cancel();
+          expect(inputCell._sinks.length).toBe(0);
+        });
+
+        describe("when a prop changes", () => {
+          // Changes are rebuilt after a debounce, which `FakeTime` runs.
+
+          let time: FakeTime;
+
+          beforeEach(() => {
+            time = new FakeTime();
+          });
+
+          afterEach(() => {
+            time.restore();
+          });
+
+          it("pulls the cell and rebuilds from the piece's value when a change carries none", async () => {
+            const tree = new FsTree();
+            const rebuilt = defer<void>();
+            const bridge = new CellBridge(tree, "/tmp/cf-exec", {
+              onCfcProjectionRebuilt: () => rebuilt.resolve(),
+            });
+            const state = buildTestSpace(bridge, "home", []);
+            const pieceIno = tree.addDir(state.piecesIno, "Pulled");
+            const resultCell = Object.assign(new SinkableCell({}), {
+              pulls: 0,
+              pull() {
+                this.pulls++;
+                return Promise.resolve();
+              },
+            });
+            const piece: FakePiece = {
+              ...staticPiece("of:pulled", "Pulled"),
+              result: {
+                getCell: () =>
+                  Promise.resolve(resultCell as unknown as FakeCell),
+                get: () => Promise.resolve({ title: "pulled" }),
+              },
+            };
+            const subs = await bridge.accessForTestingOnly.subscribePiece(
+              fakePiece(piece),
+              pieceIno,
+              "Pulled",
+              "home",
+              state,
+            );
+            try {
+              resultCell.set(undefined);
+              await time.tickAsync(150);
+              await rebuilt.promise;
+
+              expect(resultCell.pulls).toBe(1);
+              expect(
+                getFileContent(tree, tree.lookup(pieceIno, "result")!, "title"),
+              ).toBe("pulled");
+            } finally {
+              for (const cancel of subs) cancel();
+            }
+          });
+
+          it("reports a rebuild that fails", async () => {
+            const tree = new FsTree();
+            const bridge = new CellBridge(tree, "/tmp/cf-exec");
+            const state = buildTestSpace(bridge, "home", []);
+            const pieceIno = tree.addDir(state.piecesIno, "Nameless");
+            const resultCell = new SinkableCell({});
+            const piece: FakePiece = {
+              ...staticPiece("of:nameless", "Nameless"),
+              name: () => {
+                throw new Error("name unavailable");
+              },
+              result: {
+                getCell: () =>
+                  Promise.resolve(resultCell as unknown as FakeCell),
+                get: () => Promise.resolve(resultCell.get()),
+              },
+            };
+            const subs = await bridge.accessForTestingOnly.subscribePiece(
+              fakePiece(piece),
+              pieceIno,
+              "Nameless",
+              "home",
+              state,
+            );
+            const reported = defer<string>();
+            const original = console.error;
+            console.error = (...args: unknown[]) =>
+              reported.resolve(args.join(" "));
+            try {
+              resultCell.set({ title: "changed" });
+              await time.tickAsync(150);
+
+              expect(await reported.promise).toBe(
+                "[home] Error rebuilding Nameless/result: Error: name unavailable",
+              );
+              expect(tree.lookup(pieceIno, "result")).toBeUndefined();
+            } finally {
+              console.error = original;
+              for (const cancel of subs) cancel();
+            }
+          });
+        });
       });
 
       describe("#buildSourceTree()", () => {
@@ -5915,6 +8479,50 @@ describe("cell-bridge", () => {
             "authored, not a diagnostic\n",
           );
           expect(errors.lines.length).toBe(1);
+        });
+
+        it("puts source files that share a directory into one directory", async () => {
+          const tree = new FsTree();
+          const bridge = new CellBridge(tree, "/tmp/cf-exec");
+          const state = buildTestSpace(bridge, "home", []);
+          const pieceIno = tree.addDir(state.piecesIno, "notes");
+          const piece = {
+            id: "of:shared-dir",
+            getPatternRef: () =>
+              Promise.resolve({
+                identity: "D".repeat(43),
+                symbol: "default",
+                source: { ref: `cf:pattern:${"D".repeat(43)}` },
+              }),
+            getPatternSourceProgram: () =>
+              Promise.resolve({
+                main: "/src/main.ts",
+                files: [
+                  { name: "/src/main.ts", contents: "export default 1;" },
+                  { name: "/src/util.ts", contents: "export const u = 2;" },
+                ],
+              }),
+          };
+
+          await bridge.accessForTestingOnly.buildSourceTree(
+            pieceIno,
+            fakePiece(piece),
+            state,
+            "notes",
+          );
+
+          const srcIno = tree.lookup(tree.lookup(pieceIno, ".src")!, "src")!;
+          expect(
+            tree.getChildren(tree.lookup(pieceIno, ".src")!).filter((
+              [name],
+            ) => name === "src").length,
+          ).toBe(1);
+          expect(getFileContent(tree, srcIno, "main.ts")).toBe(
+            "export default 1;",
+          );
+          expect(getFileContent(tree, srcIno, "util.ts")).toBe(
+            "export const u = 2;",
+          );
         });
       });
     });

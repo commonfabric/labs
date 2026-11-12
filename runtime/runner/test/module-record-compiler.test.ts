@@ -323,6 +323,68 @@ export const ok = (): number => 7;`,
     }
   });
 
+  it("unions a runtime module's names, without its default, into `export *`", () => {
+    const { records, specifierByPath } = compileSourcesToRecords(
+      files({
+        "/main.ts": `export * from "commonfabric";\nexport const own = 1;`,
+      }),
+      { runtimeModules: { commonfabric: ["pattern", "default"] } },
+    );
+
+    const record = records.get(specifierByPath.get("/main.ts")!)!;
+    expect(new Set(record.exports)).toEqual(
+      new Set(["pattern", "own", "__esModule"]),
+    );
+  });
+
+  it("throws for a specifier alias that names no program file", () => {
+    const fabricSpecifier = `cf:pattern:${FABRIC_HASH}`;
+    const compileWith = (contents: string) => () =>
+      compileSourcesToRecords(files({ "/a.tsx": contents }), {
+        specifierAliases: new Map([[fabricSpecifier, "/missing.tsx"]]),
+      });
+
+    expect(compileWith(`export * from "${fabricSpecifier}";`)).toThrow(
+      `specifier alias '${fabricSpecifier}' -> '/missing.tsx' does not name a program file`,
+    );
+    expect(
+      compileWith(
+        `import { x } from "${fabricSpecifier}";\nexport const y = x;`,
+      ),
+    ).toThrow(
+      `specifier alias '${fabricSpecifier}' -> '/missing.tsx' does not name a program file`,
+    );
+  });
+
+  it("leaves an import of an unknown external specifier unresolved", () => {
+    const { records, specifierByPath } = compileSourcesToRecords(
+      files({
+        "/main.ts":
+          `import { readFile } from "node:fs";\nexport const f = readFile;`,
+      }),
+    );
+
+    const record = records.get(specifierByPath.get("/main.ts")!)!;
+    expect(record.imports).toEqual(["node:fs"]);
+    expect(record.resolutions).toEqual({ "node:fs": "node:fs" });
+  });
+
+  it("names a namespace re-export, and throws for `export =`", () => {
+    const { records, specifierByPath } = compileSourcesToRecords(
+      files({
+        "/leaf.ts": `export const a = 1;`,
+        "/main.ts": `export * as leaf from "./leaf.ts";`,
+      }),
+    );
+
+    expect(new Set(records.get(specifierByPath.get("/main.ts")!)!.exports))
+      .toEqual(new Set(["leaf", "__esModule"]));
+    expect(() => compileSourcesToRecords(files({ "/main.ts": `export = 1;` })))
+      .toThrow(
+        "/main.ts: 'export =' is not supported by the ESM module-record adapter",
+      );
+  });
+
   it("assigns content-addressed specifiers (cf:module/<hash>)", () => {
     const { specifierByPath } = compileSourcesToRecords(
       files({ "/main.ts": `export const x = 1;` }),

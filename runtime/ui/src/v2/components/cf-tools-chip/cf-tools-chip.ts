@@ -53,6 +53,60 @@ export type ToolsRecord = Record<
 // Union type for tools input
 type ToolsInput = ToolsChipTool[] | ToolsRecord;
 
+/** The members of a tool entry or a JSON schema that the chip reads. */
+interface ToolMembers {
+  readonly type?: unknown;
+  readonly description?: unknown;
+  readonly desc?: unknown;
+  readonly properties?: unknown;
+  readonly required?: unknown;
+  readonly parameters?: unknown;
+  readonly schema?: unknown;
+  readonly inputSchema?: unknown;
+  readonly input_schema?: unknown;
+  readonly argsSchema?: unknown;
+  readonly args_schema?: unknown;
+  readonly argumentSchema?: unknown;
+  readonly meta?: unknown;
+  readonly docs?: unknown;
+  readonly doc?: unknown;
+  readonly pattern?: unknown;
+}
+
+/** The members of `value` the chip reads, or none where it is no object. */
+function members(value: unknown): ToolMembers {
+  return typeof value === "object" && value !== null ? value : {};
+}
+
+/**
+ * The description a tool entry, or the pattern a tool entry holds, gives
+ * itself or its argument schema, under one of the names tools use for it.
+ */
+function descriptionIn(entry: ToolMembers): unknown {
+  return entry.description ??
+    members(entry.meta).description ??
+    members(entry.parameters).description ??
+    members(entry.schema).description ??
+    members(entry.inputSchema).description ??
+    members(entry.input_schema).description ??
+    members(entry.argumentSchema).description ??
+    members(entry.docs).description ??
+    members(entry.doc).description ??
+    entry.desc;
+}
+
+/**
+ * The argument schema a tool entry, or the pattern a tool entry holds, keeps
+ * under one of the names tools use for it, or the entry itself where it is a
+ * schema.
+ */
+function schemaIn(entry: ToolMembers): unknown {
+  return entry.parameters ?? entry.schema ?? entry.inputSchema ??
+    entry.input_schema ?? entry.argsSchema ?? entry.args_schema ??
+    entry.argumentSchema ??
+    (entry.type || entry.properties || entry.required ? entry : undefined);
+}
+
 export class CFToolsChip extends BaseElement {
   /** Cell controller for tools binding */
   private _cellController = createCellController<ToolsInput>(this, {
@@ -127,102 +181,6 @@ export class CFToolsChip extends BaseElement {
       .count {
         color: var(--cf-theme-color-text-muted, #6b7280);
         font-variant-numeric: tabular-nums;
-      }
-
-      .panel {
-        position: absolute;
-        top: calc(100% + 6px);
-        left: 0;
-        min-width: 260px;
-        max-width: 420px;
-        max-height: 60vh;
-        overflow: auto;
-        background: var(
-          --cf-theme-color-surface,
-          var(--cf-colors-gray-50, #ffffff)
-        );
-        color: var(
-          --cf-theme-color-text,
-          var(--cf-colors-gray-900, #16181d)
-        );
-        border: 1px solid
-          var(--cf-theme-color-border, var(--cf-colors-gray-300, #d5d7dd));
-        border-radius: var(
-          --cf-theme-border-radius,
-          var(--cf-border-radius-lg, 0.5rem)
-        );
-        box-shadow: var(
-          --cf-shadow-md,
-          0 4px 6px -1px rgba(0, 0, 0, 0.1),
-          0 2px 4px -1px rgba(0, 0, 0, 0.06)
-        );
-        padding: var(--cf-size-md-spacing, 8px);
-        z-index: 50;
-        opacity: 0;
-        transform: translateY(-4px);
-        pointer-events: none;
-        transition:
-          opacity var(--cf-theme-animation-duration, 200ms) ease,
-          transform var(--cf-theme-animation-duration, 200ms) ease;
-      }
-
-      :host([open]) .panel,
-      .panel[data-open="true"] {
-        opacity: 1;
-        transform: translateY(0);
-        pointer-events: auto;
-      }
-
-      .panel-header {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: var(--cf-size-md-spacing, 8px);
-        padding: 0.25rem 0.25rem var(--cf-size-md-spacing, 8px) 0.25rem;
-        border-bottom: 1px solid
-          var(--cf-theme-color-border, var(--cf-colors-gray-300, #d5d7dd));
-        margin-bottom: var(--cf-size-md-spacing, 8px);
-      }
-
-      .panel-title {
-        font-size: 0.875rem;
-        font-weight: 600;
-      }
-
-      .tool-list {
-        display: grid;
-        gap: var(--cf-size-md-spacing, 8px);
-      }
-
-      .tool-item {
-        display: grid;
-        gap: var(--cf-size-sm-spacing, 4px);
-        padding: var(--cf-size-sm-padding-v, 4px) var(--cf-size-md-padding-h, 8px);
-        border-radius: var(
-          --cf-theme-border-radius,
-          var(--cf-border-radius-md, 0.375rem)
-        );
-        background: transparent;
-      }
-
-      .tool-name {
-        font-size: 0.8125rem;
-        font-weight: 600;
-      }
-
-      .tool-desc {
-        font-size: var(--cf-size-md-font-size, 12px);
-        color: var(--cf-theme-color-text-muted, #6b7280);
-      }
-
-      .schema {
-        font-family: var(--cf-theme-mono-font-family, monospace);
-        font-size: 0.72rem;
-        color: var(--cf-theme-color-text-muted, #6b7280);
-        border-left: 2px solid
-          var(--cf-theme-color-border-muted, var(--cf-colors-gray-300));
-        padding-left: 0.5rem;
-        white-space: pre-wrap;
       }
     `,
   ];
@@ -306,39 +264,41 @@ export class CFToolsChip extends BaseElement {
     super.connectedCallback();
     this.addEventListener("keydown", this.#onKeyDown);
     globalThis.addEventListener("click", this.#onGlobalClick, true);
-    this.#resizeObs = new ResizeObserver(() => this.#repositionActive());
-    this.#resizeObs.observe(this);
     globalThis.addEventListener("resize", this.#onWindowChange, {
       passive: true,
     });
     globalThis.addEventListener("scroll", this.#onWindowChange, true);
+    this.#resizeObs = new ResizeObserver(() => this.#positionOverlay());
+    this.#resizeObs.observe(this);
+    // A chip added again while open shows its panel again.
+    if (this.open) this.requestUpdate();
   }
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
     this.removeEventListener("keydown", this.#onKeyDown);
     globalThis.removeEventListener("click", this.#onGlobalClick, true);
-    this.#resizeObs?.disconnect();
-    this.#resizeObs = undefined;
     globalThis.removeEventListener("resize", this.#onWindowChange);
     globalThis.removeEventListener("scroll", this.#onWindowChange, true);
+    this.#resizeObs?.disconnect();
+    this.#resizeObs = undefined;
     this.#unmountOverlay();
+    // A removed chip is out from under the pointer, so a panel the pointer
+    // holds open, or is about to close by leaving, closes now; an `open` the
+    // page set or a click toggled is kept.
+    if (
+      this.openOnHover && !this._toggledOpen &&
+      (this._hovering || this.#closeTimer)
+    ) this.open = false;
     if (this.#closeTimer) globalThis.clearTimeout(this.#closeTimer);
-  }
-
-  override firstUpdated(changedProperties: Map<string, unknown>): void {
-    super.firstUpdated(changedProperties);
-    // Initialize cell controller binding
-    if (this.tools !== undefined) {
-      this._cellController.bind(this.tools, ToolsArraySchema);
-    }
+    this.#closeTimer = undefined;
+    this._hovering = this._toggledOpen = false;
   }
 
   override willUpdate(changedProperties: Map<string, unknown>): void {
     super.willUpdate(changedProperties);
-    // If the tools property itself changed (e.g., switched to a different cell)
-    if (changedProperties.has("tools") && this.tools !== undefined) {
-      this._cellController.bind(this.tools, ToolsArraySchema);
+    if (changedProperties.has("tools")) {
+      this._cellController.bind(this.tools ?? [], ToolsArraySchema);
     }
   }
 
@@ -369,7 +329,7 @@ export class CFToolsChip extends BaseElement {
 
   #onWindowChange = () => {
     if (!this.open) return;
-    this.#repositionActive();
+    this.#positionOverlay();
   };
 
   private _onMouseEnter = () => {
@@ -394,46 +354,33 @@ export class CFToolsChip extends BaseElement {
     }, this.closeDelay);
   };
 
-  private _onClick = (e: MouseEvent) => {
+  private _onClick = () => {
     if (!this.toggleOnClick) return;
-    // Avoid toggling when clicking inside the panel content area.
-    const target = e.composedPath()[0] as HTMLElement;
-    if (target && target.closest && target.closest(".panel")) return;
     this._toggledOpen = !this._toggledOpen;
     this.open = this._toggledOpen || this._hovering;
   };
 
   private _renderSchema(schema: unknown): unknown {
-    try {
-      // Try to extract properties from common shapes:
-      // 1) OpenAI-style: { parameters: { properties, required } }
-      // 2) Direct JSON Schema: { properties, required }
-      const s = schema as any;
-      const params = s?.parameters ?? s;
-      const props = params?.properties ?? {};
-      const required: string[] = Array.isArray(params?.required)
-        ? params.required
-        : [];
-      const entries = Object.entries(props) as Array<[
-        string,
-        Record<string, unknown>,
-      ]>;
+    // Reads the properties of an OpenAI-style `{ parameters: { properties,
+    // required } }` or of a JSON Schema `{ properties, required }`.
+    const params = members(members(schema).parameters ?? schema);
+    const required: unknown[] = Array.isArray(params.required)
+      ? params.required
+      : [];
+    const entries = Object.entries(members(params.properties));
 
-      if (!entries.length) return nothing;
+    if (!entries.length) return nothing;
 
-      const lines = entries.map(([key, def]) => {
-        const t = (def as any)?.type ?? "unknown";
-        const desc = (def as any)?.description ?? "";
-        const req = required.includes(key) ? " (required)" : "";
-        return `• ${key}: ${t}${req}${desc ? ` — ${desc}` : ""}`;
-      });
+    const lines = entries.map(([key, def]) => {
+      const { type, description } = members(def);
+      const req = required.includes(key) ? " (required)" : "";
+      const desc = description ? ` — ${description}` : "";
+      return `• ${key}: ${type ?? "unknown"}${req}${desc}`;
+    });
 
-      return html`
-        <div class="schema">${lines.join("\n")}</div>
-      `;
-    } catch (_) {
-      return nothing;
-    }
+    return html`
+      <div class="schema">${lines.join("\n")}</div>
+    `;
   }
 
   /** The resolved tools value, from either a `CellHandle` or a plain value. */
@@ -449,74 +396,35 @@ export class CFToolsChip extends BaseElement {
     const t = this._toolsValue;
     if (!t) return [];
     if (Array.isArray(t)) return t;
-    const rec = t as ToolsRecord;
-    const out: ToolsChipTool[] = [];
-    for (const name of Object.keys(rec)) {
-      const value = rec[name] as any;
-
-      // Read from top-level tool object first
-      const topDescription = value?.description ??
-        value?.meta?.description ??
-        value?.parameters?.description ?? value?.schema?.description ??
-        value?.inputSchema?.description ??
-        value?.input_schema?.description ??
-        value?.docs?.description ?? value?.doc?.description ??
-        value?.desc ??
-        (value && (value.type || value.properties)
-          ? value.description
-          : undefined);
-
-      let topSchema = value?.parameters ?? value?.schema ??
-        value?.inputSchema ??
-        value?.input_schema ?? value?.argsSchema ?? value?.args_schema;
-      if (
-        !topSchema && value &&
-        (value.type || value.properties || value.required)
-      ) {
-        topSchema = value;
-      }
-
-      // Also support nested pattern.* containers (e.g., pattern.argumentSchema)
-      const p = value?.pattern ?? {};
-      const patternDescription = p?.description ?? p?.meta?.description ??
-        p?.parameters?.description ?? p?.schema?.description ??
-        p?.inputSchema?.description ?? p?.input_schema?.description ??
-        p?.argumentSchema?.description ?? p?.docs?.description ??
-        p?.doc?.description;
-
-      let patternSchema = p?.parameters ?? p?.schema ?? p?.inputSchema ??
-        p?.input_schema ?? p?.argsSchema ?? p?.args_schema ??
-        p?.argumentSchema;
-      if (!patternSchema && (p?.type || p?.properties || p?.required)) {
-        patternSchema = p;
-      }
-
-      const description = topDescription ?? patternDescription;
-      const schema = topSchema ?? patternSchema;
-
-      out.push({ name, description, schema });
-    }
-    return out;
+    return Object.entries(t).map(([name, entry]) => {
+      const value = members(entry);
+      const pattern = members(value.pattern);
+      const description = descriptionIn(value) ?? descriptionIn(pattern);
+      return {
+        name,
+        description: typeof description === "string" ? description : undefined,
+        schema: schemaIn(value) ?? schemaIn(pattern),
+      };
+    });
   }
 
   override updated(changed: Map<string | number | symbol, unknown>) {
     super.updated(changed);
     if (changed.has("theme")) applyThemeToElement(this, this.theme);
-    if (changed.has("open") || changed.has("tools")) {
-      if (this.open) {
-        this.#mountOverlay();
-        this.#renderOverlay();
-        this.#positionOverlay();
-      } else {
-        this.#unmountOverlay();
-      }
-    } else if (this.#overlay && changed.has("theme")) {
-      copyThemeProperties(this, this.#overlay);
+    if (!this.open || !this.isConnected) {
+      this.#unmountOverlay();
+      return;
     }
+    // An update while open redraws the panel, since the tools a bound cell
+    // holds change without `tools` changing.
+    let overlay = this.#overlay;
+    if (!overlay) overlay = this.#mountOverlay();
+    else if (changed.has("theme")) copyThemeProperties(this, overlay);
+    this.#renderOverlay(overlay);
+    this.#positionOverlay();
   }
 
-  #mountOverlay() {
-    if (this.#overlay) return;
+  #mountOverlay(): HTMLDivElement {
     const el = document.createElement("div");
     el.style.position = "fixed";
     el.style.inset = "0 auto auto 0";
@@ -526,6 +434,7 @@ export class CFToolsChip extends BaseElement {
     document.body.appendChild(el);
     this.#overlay = el;
     copyThemeProperties(this, el);
+    return el;
   }
 
   #unmountOverlay() {
@@ -538,14 +447,15 @@ export class CFToolsChip extends BaseElement {
     this.#raf = undefined;
   }
 
-  #renderOverlay() {
-    if (!this.#overlay) return;
+  #renderOverlay(overlay: HTMLDivElement) {
     const label = this.label || "Tools";
     const items = this._normalizedTools();
     const count = items.length;
-    // Inline style block so overlay has its own styling.
+    // The overlay's own styles, scoped to the overlay since it sits in the
+    // document.
     const tpl = html`
       <style>
+      @scope ([data-cf-tools-chip-overlay]) {
       .panel {
         position: absolute;
         min-width: 260px;
@@ -581,6 +491,7 @@ export class CFToolsChip extends BaseElement {
         font-size: .72rem; color: var(--cf-theme-color-text-muted, #6b7280);
         border-left: 2px solid var(--cf-theme-color-border-muted,#e5e7eb);
         padding-left: .5rem; white-space: pre-wrap; }
+      }
       </style>
       <div
         class="panel"
@@ -621,14 +532,11 @@ export class CFToolsChip extends BaseElement {
         </div>
       </div>
     `;
-    render(tpl, this.#overlay);
+    render(tpl, overlay);
   }
 
   #positionOverlay() {
-    if (!this.#overlay) return;
-    const panel = this.#overlay.querySelector(
-      ".panel",
-    ) as HTMLElement | null;
+    const panel = this.#overlay?.querySelector<HTMLElement>(".panel");
     if (!panel) return;
 
     const rect = this.getBoundingClientRect();
@@ -667,16 +575,9 @@ export class CFToolsChip extends BaseElement {
     });
   }
 
-  #repositionActive() {
-    this.#positionOverlay();
-  }
-
   override render() {
     const label = this.label || "Tools";
-    const tools = this._toolsValue;
-    const count = Array.isArray(tools)
-      ? (tools?.length ?? 0)
-      : (tools ? Object.keys(tools as object).length : 0);
+    const count = this._normalizedTools().length;
 
     return html`
       <div
@@ -697,8 +598,6 @@ export class CFToolsChip extends BaseElement {
           `
           : nothing}
       </div>
-
-      ${nothing}
     `;
   }
 }

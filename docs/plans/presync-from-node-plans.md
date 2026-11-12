@@ -76,8 +76,8 @@ plans' reads reach in other spaces (`#syncCrossSpaceReads`), the list
 coordinators' children and the cells those children own
 (`#syncResumeListChildren`), and what the nested instances' nodes read
 (`#syncResumeInstanceNodes`). Last, it names root-only the documents the
-stored argument links to directly and the result document owning each
-(`#syncStoredArgumentLinkTargets`).
+stored argument links to directly in its own space and scope, and the result
+document owning each (`#syncStoredArgumentLinkTargets`).
 
 `#syncResumeInstanceNodes` works level by level. Each round plans every
 nested instance whose `argument` meta link has become readable and syncs
@@ -212,7 +212,11 @@ are named root-only (`#syncStoredArgumentLinkTargets`), because setup's
 supplied-link proof reads them and that read is no node's. A nested instance
 that its parent's start sets up again under another pattern has the same
 walk over its own stored argument, because that setup reads each stored slot
-through the link it holds, and that read is no node's either. The root's walk
+through the link it holds, and that read is no node's either. Neither walk
+names a target in another space or scope than the argument document's own:
+setup judges a link there as a link without reading what it reaches, so
+naming it would load a document no read of the setup's asks for, such as
+each room a Home's chat manager links. The root's walk
 runs last in the pre-sync, after every plan sync and coordinator sync has
 been issued, so
 a document a plan reads is asked for under that plan's schema before the
@@ -257,7 +261,16 @@ pending after those reads by document (`loadsSettled` over
 load pending — until a round leaves no load pending that an earlier round
 did not await (`#syncCrossSpaceReads`). A read that dead-ends on a link into
 another space kicks a load there (`ensureLinkedDocLoaded`), and that load is
-the subscription. The pass awaits loads, never the storage manager's settled
+the subscription. Only a serving runtime does either: a client that isn't
+serving kicks no crossing load and runs no cross-space pass, so its pre-sync
+loads nothing a plan reads past a link into another space, and a run of its
+that reads through such a link loads the target then. Setup's own reads are
+another matter: the pre-sync still syncs, root-only, each document a stored
+argument links to directly (`#syncStoredArgumentLinkTargets`), in whatever
+space it is. A piece that links many spaces,
+as a FabriChat manager links each of a person's rooms, would otherwise be
+loaded across all of them by every client's resume, whatever the client went
+on to read. The pass awaits loads, never the storage manager's settled
 pool: on a client that pool holds the runtime's other work, and a resume
 that waited for it would wait behind sinks and coordinators that never go
 quiet. Awaiting each document once is also what ends the pass for a link

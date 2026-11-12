@@ -42,8 +42,10 @@ import {
 import {
   type CfcLabelView,
   cfcLabelViewForResolvedCell,
+  type CfcModulePolicySource,
   redactCaveatSourcesForDisplay,
   reportCfcDenial,
+  type SpaceMembershipProvider,
 } from "@commonfabric/runner/cfc";
 
 import {
@@ -111,6 +113,21 @@ function displayLabel(
 }
 
 /**
+ * What a host read gate's decisions consult beyond the labels, as a render's
+ * do (`DisplayFitSources`), with access lists and module policy manifests it
+ * can also load, as a decision made once loads what it consults first.
+ */
+export type HostReadSources =
+  & Omit<DisplayFitSources, "membership" | "modulePolicies">
+  & {
+    readonly membership?: SpaceMembershipProvider;
+    readonly modulePolicies?: Pick<
+      CfcModulePolicySource,
+      "resolve" | "subscribe" | "load"
+    >;
+  };
+
+/**
  * Decides a host's reads of cells under one display policy.
  *
  * A gate built with no policy returns every read as read, the plain read
@@ -119,7 +136,7 @@ function displayLabel(
  */
 export class HostReadGate {
   readonly #policy: RenderPolicy | undefined;
-  readonly #sources: DisplayFitSources;
+  readonly #sources: HostReadSources;
 
   /**
    * @param policy The root render policy every mount starts from, or
@@ -128,9 +145,102 @@ export class HostReadGate {
    *   exchange-rule resolver and the providers a subscription watches, the
    *   ones every mount is given.
    */
-  constructor(policy: RenderPolicy | undefined, sources: DisplayFitSources) {
+  constructor(policy: RenderPolicy | undefined, sources: HostReadSources) {
     this.#policy = policy;
     this.#sources = sources;
+  }
+
+  /**
+   * Loads what a decision on a read of `cell` consults, so that {@link read}
+   * decides on the access lists and module policy manifests the space last
+   * sent rather than refusing on one not yet synced: a read made once has no
+   * subscription to decide it again when one arrives. Each round decides the
+   * read as {@link read} does and loads what that decision would watch and
+   * does not already admit: an access list granting no role, or a manifest
+   * that does not verify. A refusal stops a decision before it reaches the
+   * labels behind it, so a load can bring more labels into the next round,
+   * and the rounds end once one finds nothing new. A load that fails is
+   * taken as loaded, and the read is decided on what the replica holds,
+   * which refuses what it cannot admit. A load waits on the space that
+   * holds the document, so a read whose labels name a space that never
+   * answers waits as a read of that space would.
+   */
+  async settle(cell: Cell<unknown>): Promise<void> {
+    await this.#settle((policy, sources, watch) => {
+      readRefusal(
+        cell,
+        [readProjected(cell, hostValueOf).consumed],
+        policy,
+        sources,
+        watch,
+      );
+    });
+  }
+
+  /**
+   * Loads what a decision on a read of `root`'s metadata consults, as
+   * {@link settle} does for a read of its value.
+   */
+  async settleMetadata(root: Cell<unknown>): Promise<void> {
+    await this.#settle((policy, sources, watch) => {
+      cellLabelRefusal(root, cellLabelSources(root), policy, sources, watch);
+    });
+  }
+
+  /**
+   * Runs `decide` with sources whose subscriptions load what they would
+   * watch, and waits for those loads, until a round loads nothing new.
+   */
+  async #settle(
+    decide: (
+      policy: RenderPolicy,
+      sources: DisplayFitSources,
+      watch: FitWatch,
+    ) => void,
+  ): Promise<void> {
+    const policy = this.#policy;
+    if (policy === undefined) return;
+    const { membership, modulePolicies } = this.#sources;
+    // What failed to load reads as what the replica holds, which a decision
+    // refuses when it cannot admit it.
+    const quietly = (load: Promise<void>) => load.catch(() => {});
+    const loaded = new Set<string>();
+    let loads: Promise<void>[];
+    do {
+      const round: Promise<void>[] = [];
+      loads = round;
+      const loading: DisplayFitSources = {
+        ...this.#sources,
+        membership: membership && {
+          readerRole: (space) => membership.readerRole(space),
+          subscribe: (space) => {
+            if (membership.readerRole(space) === null) {
+              round.push(quietly(membership.load(space)));
+            }
+            return () => {};
+          },
+        },
+        modulePolicies: modulePolicies && {
+          subscribe: (reference, space) => {
+            if (modulePolicies.resolve(reference, [space]) === undefined) {
+              round.push(quietly(modulePolicies.load(reference, space)));
+            }
+            return () => {};
+          },
+        },
+      };
+      // A settled read is decided once, so nothing is kept to cancel and no
+      // change decides it again.
+      const ignore = () => {};
+      const watch: FitWatch = {
+        watched: new Set(loaded),
+        addCancel: ignore,
+        reeval: ignore,
+      };
+      decide(policy, loading, watch);
+      for (const key of watch.watched) loaded.add(key);
+      await Promise.all(round);
+    } while (loads.length > 0);
   }
 
   /**
@@ -376,8 +486,17 @@ export class HostReadGate {
    * record, nothing at all, a list or a single value, is answered with no
    * list, which is not the empty list of a record that holds no fields.
    */
-  fields(cell: Cell<unknown>): CellFieldsResponse {
+  async fields(cell: Cell<unknown>): Promise<CellFieldsResponse> {
     const listed = cell.asSchema(FIELDS_SCHEMA);
+    await this.#settle((policy, sources, watch) => {
+      readRefusal(
+        cell,
+        [readProjected(listed, fieldNamesOf).consumed],
+        policy,
+        sources,
+        watch,
+      );
+    });
     const policy = this.#policy;
     let names: string[] | undefined;
     if (policy === undefined) {

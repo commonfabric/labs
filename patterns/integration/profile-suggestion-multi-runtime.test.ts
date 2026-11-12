@@ -106,14 +106,54 @@ describe("profile-suggestion-multi-runtime", () => {
                 piece: surface,
               }) === "Sam Lee";
         });
-        // The surface's first child is the picture's `ifElse`, a cell of its
-        // own, which shows the picture's region while the suggestion holds one.
-        const shown = await session.readRaw(["$UI", "children", 0], {
-          piece: surface,
-        }) as { props?: Record<string, FabricValue> } | undefined;
+        // The surface's first child is the picture row, whose first child is
+        // the picture's `ifElse`, a cell of its own, which shows the
+        // picture's region while the suggestion holds one.
+        const shown = await session.readRaw(
+          ["$UI", "children", 0, "children", 0],
+          { piece: surface },
+        ) as { props?: Record<string, FabricValue> } | undefined;
         expect(shown?.props?.["data-ui-region"]).toBe(
-          "profile-create-suggested-picture",
+          "profile-create-picture-preview",
         );
+      });
+
+      // For a guest no host made a suggestion for, the wish still hands the
+      // surface a link to the suggestion's document, which nobody wrote. The
+      // surface reads it as no suggestion, rather than waiting for a document
+      // that will never arrive, so the name field starts empty.
+      it("starts the create surface's name field empty for a guest with no suggestion", async () => {
+        const guest = await Identity.fromPassphrase(
+          `profile-suggestion-none-${serverExecution}`,
+          { implementation: "noble" },
+        );
+        harness = await MultiRuntimeHarness.create({
+          programPath: PROGRAM_PATH,
+          rootPath: ROOT_PATH,
+          sessions: [{
+            label: "profile-suggestion-none",
+            identity: guest,
+            cfc: { experimental: { serverExecution } },
+          }],
+        });
+        const [session] = harness.sessions;
+        expect(await session.profileSuggestion()).toBeUndefined();
+
+        await harness.settleUntil(async () =>
+          await session.readRaw([...SURFACE_PIECE, "$NAME"]) !== undefined
+        );
+        const surface = await session.link(SURFACE_PIECE);
+        await harness.settleUntil(async () => {
+          const field = pathTo(
+            await session.readRaw(["$UI"], { piece: surface }),
+            (node) => node.name === "cf-submit-input",
+            ["$UI"],
+          );
+          return field !== undefined &&
+            await session.read([...field, "props", "initialValue"], {
+                piece: surface,
+              }) === "";
+        });
       });
     });
   }

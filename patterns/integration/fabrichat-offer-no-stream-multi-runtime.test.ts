@@ -3,11 +3,13 @@
  * finds no `receive` stream, under either server-execution posture. Each person
  * has a Home stand-in with a real profile, which points at a real private inbox
  * or at a piece that takes no offers, and the inbox's space can stop admitting
- * other people, or be deleted, before the sender's runtime has read it. An add
- * naming such a person reads `noticed`, with a notice for them, and a group
- * naming them still offers the room to its other members. A serving loop reads
- * a space as its OWNER does, so it finds the inbox in a space that no longer
- * admits the sender, and delivers the offer.
+ * other people, or be deleted, before the sender's runtime has read it. Where a
+ * profile points decides nothing the sender records: an add naming such a
+ * person reads `offered`, lists them on the room's roster by their profile,
+ * and queues no notice for them, and a group naming them lists them too, and
+ * still offers the room to its other members. A serving loop reads a space as
+ * its OWNER does, so it finds the inbox in a space that no longer admits the
+ * sender, and delivers the offer.
  *
  * No toolshed or browser required (Deno workers + in-process storage server).
  */
@@ -199,32 +201,38 @@ describe("fabrichat offers to an inbox that takes none", () => {
     return { room, requestId };
   };
 
-  /** Expects an add of `session`'s person to read `noticed`, with a notice. */
-  const expectAddNoticed = async (
+  /**
+   * Expects an add of `session`'s person to read `offered`, to list them on
+   * the room's roster, and to queue no notice for them, and returns the add.
+   */
+  const expectAddListed = async (
     key: string,
     session: MultiRuntimeSession,
-  ): Promise<void> => {
-    const { room, requestId, offerId } = await addToNewRoom(key, session);
+  ): Promise<{ room: CellAddress; requestId: string; offerId: string }> => {
+    const added = await addToNewRoom(key, session);
     await harness.settleUntil(async () =>
-      await deliveryOf(requestId, room) === "noticed"
+      await rosterLists(added.room, await session.link(["profiles", 0]))
     );
-    expect(await noticeWaits(session, offerId)).toBe(true);
-    expect(await rosterLists(room, await session.link(["profiles", 0])))
-      .toBe(false);
+    expect(await deliveryOf(added.requestId, added.room)).toBe("offered");
+    expect(await noticeWaits(session, added.offerId)).toBe(false);
+    return added;
   };
 
   /**
    * Expects a group naming `session`'s person and Carol to offer Carol the
-   * room, and to leave a notice for `session`'s person.
+   * room, to list `session`'s person on its roster, and to queue no notice
+   * for them, and returns the group's request id.
    */
-  const expectGroupNoticed = async (
+  const expectGroupListed = async (
     key: string,
     session: MultiRuntimeSession,
-  ): Promise<void> => {
+  ): Promise<string> => {
     const { room, requestId } = await groupWithCarol(key, session);
-    expect(await noticeWaits(session, requestId)).toBe(true);
-    expect(await rosterLists(room, await session.link(["profiles", 0])))
-      .toBe(false);
+    await harness.settleUntil(async () =>
+      await rosterLists(room, await session.link(["profiles", 0]))
+    );
+    expect(await noticeWaits(session, requestId)).toBe(false);
+    return requestId;
   };
 
   beforeAll(async () => {
@@ -323,32 +331,32 @@ describe("fabrichat offers to an inbox that takes none", () => {
   });
 
   describe("a member whose inbox pointer names a piece with no `receive`", () => {
-    it("reads `noticed` for an add, with a notice for them", async () => {
-      await expectAddNoticed("pieceless", pieceless);
+    it("reads `offered` for an add, and lists them on the roster with no notice", async () => {
+      await expectAddListed("pieceless", pieceless);
     });
 
-    it("leaves a group's other member offered the room", async () => {
-      await expectGroupNoticed("pieceless", pieceless);
+    it("lists them on a group's roster, and offers the room to its other member", async () => {
+      await expectGroupListed("pieceless", pieceless);
     });
   });
 
   describe("a member whose inbox pointer names text at `receive`", () => {
-    it("reads `noticed` for an add, with a notice for them", async () => {
-      await expectAddNoticed("texted", texted);
+    it("reads `offered` for an add, and lists them on the roster with no notice", async () => {
+      await expectAddListed("texted", texted);
     });
 
-    it("leaves a group's other member offered the room", async () => {
-      await expectGroupNoticed("texted", texted);
+    it("lists them on a group's roster, and offers the room to its other member", async () => {
+      await expectGroupListed("texted", texted);
     });
   });
 
   describe("a member whose inbox pointer names an object at `receive`", () => {
-    it("reads `noticed` for an add, with a notice for them", async () => {
-      await expectAddNoticed("objected", objected);
+    it("reads `offered` for an add, and lists them on the roster with no notice", async () => {
+      await expectAddListed("objected", objected);
     });
 
-    it("leaves a group's other member offered the room", async () => {
-      await expectGroupNoticed("objected", objected);
+    it("lists them on a group's roster, and offers the room to its other member", async () => {
+      await expectGroupListed("objected", objected);
     });
   });
 
@@ -362,39 +370,30 @@ describe("fabrichat offers to an inbox that takes none", () => {
   });
 
   describe("a member whose inbox is in a deleted space", () => {
-    it("reads `noticed` for an add, with a notice for them", async () => {
-      await expectAddNoticed("deleted", deleted);
+    it("reads `offered` for an add, and lists them on the roster with no notice", async () => {
+      await expectAddListed("deleted", deleted);
     });
 
-    it("leaves a group's other member offered the room", async () => {
-      await expectGroupNoticed("deleted", deleted);
+    it("lists them on a group's roster, and offers the room to its other member", async () => {
+      await expectGroupListed("deleted", deleted);
     });
   });
 
   describe("a member whose inbox is in a space that doesn't admit the sender", () => {
-    it("reads what the runtime running the offer can do, for an add", async () => {
-      if (!SERVER_EXECUTION) {
-        await expectAddNoticed("closed", closed);
-        return;
-      }
-      const { room, requestId, offerId } = await addToNewRoom("closed", closed);
+    it("lists them on the roster for an add, and sends what the runtime running the offer can", async () => {
+      const { offerId } = await expectAddListed("closed", closed);
+      if (!SERVER_EXECUTION) return;
       await harness.settleUntil(async () =>
         await inboxHolds(closed, closedInbox, offerId)
       );
-      expect(await deliveryOf(requestId, room)).toBe("offered");
-      expect(await noticeWaits(closed, offerId)).toBe(false);
     });
 
-    it("leaves a group's other member offered the room", async () => {
-      if (!SERVER_EXECUTION) {
-        await expectGroupNoticed("closed", closed);
-        return;
-      }
-      const { requestId } = await groupWithCarol("closed", closed);
+    it("lists them on a group's roster, and offers the room to its other member", async () => {
+      const requestId = await expectGroupListed("closed", closed);
+      if (!SERVER_EXECUTION) return;
       await harness.settleUntil(async () =>
         await inboxHolds(closed, closedInbox, requestId)
       );
-      expect(await noticeWaits(closed, requestId)).toBe(false);
     });
   });
 });

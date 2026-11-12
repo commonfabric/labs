@@ -714,6 +714,97 @@ describe("cfc-share-snapshot", () => {
       await fixture.dispose();
     }
   });
+  it("refuses a review the committing transaction reads differently", async () => {
+    // Nothing between the stale check and the committing transaction yields,
+    // so the change is landed as that transaction opens.
+
+    const fixture = await setup();
+    const runtime = fixture.runtimes[0];
+    const edit = runtime.edit.bind(runtime);
+    const landed: Promise<unknown>[] = [];
+    try {
+      const prepared = prepareSnapshotShare(fixture.source, {
+        user: fixture.recipient,
+      });
+      let edits = 0;
+      runtime.edit = (...args: Parameters<typeof runtime.edit>) => {
+        if (++edits === 2) {
+          const change = edit();
+          fixture.source.withTx(change).key("title").set("Changed");
+          landed.push(change.commit().settled);
+        }
+        return edit(...args);
+      };
+      await expect(commitSnapshotShare(prepared.consent, trustedClick()))
+        .rejects.toThrow("Snapshot review changed before commit");
+      runtime.edit = edit;
+      await Promise.all(landed);
+      expect(fixture.source.key("title").get()).toBe("Changed");
+    } finally {
+      runtime.edit = edit;
+      await fixture.dispose();
+    }
+  });
+
+  it("refuses a recommendation binding retargeted after review, and appends nothing", async () => {
+    const fixture = await setup();
+    const runtime = fixture.runtimes[0];
+    const space = visitor.did();
+    try {
+      const tx = runtime.edit();
+      const library = runtime.getCell<{ books: string[] }>(space, "library", {
+        type: "object",
+        properties: { books: { type: "array", items: { type: "string" } } },
+        required: ["books"],
+        ifc: { confidentiality: [cfcAtom.user(visitor.did())] },
+      }, tx);
+      library.set({ books: ["Solaris"] });
+      const list = (name: string, scope: "user" | "space") =>
+        runtime.getCell<string[]>(space, name, undefined, tx, scope);
+      const recommendedList = list("recommended-list", "user");
+      recommendedList.set([]);
+      const otherList = list("other-recommended-list", "user");
+      otherList.set([]);
+      const receivedList = list("received-list", "space");
+      receivedList.set([]);
+      const recommended = runtime.getCell<unknown>(
+        space,
+        "recommended",
+        undefined,
+        tx,
+      );
+      recommended.set(recommendedList);
+      const received = runtime.getCell<unknown>(
+        space,
+        "received",
+        undefined,
+        tx,
+      );
+      received.set(receivedList);
+      expect((await tx.commit().settled).error).toBeUndefined();
+
+      const prepared = prepareSnapshotShare(
+        library.withTx(undefined),
+        { user: fixture.recipient },
+        {
+          recommended: recommended.withTx(undefined),
+          received: received.withTx(undefined),
+        },
+      );
+      const retarget = runtime.edit();
+      recommended.withTx(retarget).set(otherList);
+      expect((await retarget.commit().settled).error).toBeUndefined();
+
+      await expect(commitSnapshotShare(prepared.consent, trustedClick()))
+        .rejects.toThrow("Snapshot recommendation targets changed");
+      expect(recommendedList.withTx(undefined).get()).toEqual([]);
+      expect(otherList.withTx(undefined).get()).toEqual([]);
+      expect(receivedList.withTx(undefined).get()).toEqual([]);
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
   it("retains a shared library clause while releasing only the visitor's private clause", async () => {
     const fixture = await setup();
     const invitationSpace = visitor.did();

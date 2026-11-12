@@ -157,7 +157,10 @@ memory server would admit writing directly is admitted, and no other. A
 deployment with ACL enforcement off admits every authenticated caller, as its
 memory server does. One denial covers a malformed DID, a space the deployment does not host,
 an absent ACL, and a caller without a grant, so the check is not an existence
-oracle over the deployment's spaces.
+oracle over the deployment's spaces. Whether a space exists is an ordinary read,
+so `cf piece new` asks it when `instantiate` is refused `forbidden`, and reports
+a space with no history the way it does without server execution: no space
+answers to the name, and `cf space create` makes one.
 
 The hosted authority check reads the ACL through the memory server's internal
 document reader. It grants no graph READ or WRITE to the process identity: a

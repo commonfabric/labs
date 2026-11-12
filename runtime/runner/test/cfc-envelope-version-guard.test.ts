@@ -17,6 +17,7 @@ import {
   readStoredCfcMetadata,
   storedCfcMetadataAppliesToPath,
   StoredCfcMetadataError,
+  storesCfcEnvelope,
   UnknownCfcMetadataVersionError,
   UnreadableCfcMetadataError,
 } from "../src/cfc/metadata.ts";
@@ -92,6 +93,67 @@ describe("CFC envelope version guard", () => {
           path: ["secret"],
         }),
       ).toBe(true);
+      tx.abort();
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
+  it("reports that a document stores an envelope it cannot interpret", async () => {
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+    });
+    try {
+      const id = await seedWithVersion(runtime, "version-guard-stores", 3);
+      const readable = await seedWithVersion(
+        runtime,
+        "version-guard-stores-readable",
+        1,
+      );
+      const tx = runtime.edit();
+      expect(storesCfcEnvelope(tx, { space, scope: "space", id })).toBe(true);
+      expect(readStoredCfcMetadata(tx, { space, id: readable })).toBeDefined();
+      expect(storesCfcEnvelope(tx, { space, scope: "space", id: readable }))
+        .toBe(true);
+      expect(
+        storesCfcEnvelope(tx, {
+          space,
+          scope: "space",
+          id: parseLink(
+            runtime.getCell(space, "version-guard-bare").getAsLink(),
+          )
+            .id!,
+        }),
+      ).toBe(false);
+      tx.abort();
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
+  it("throws from a write declaring no policy into a document whose envelope version is unknown", async () => {
+    // The write brings no policy of its own, so the stored envelope is what
+    // decides whether one applies, and that envelope cannot be read.
+
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+    });
+    try {
+      await seedWithVersion(runtime, "version-guard-plain-write", 3);
+      const tx = runtime.edit();
+      const cell = runtime.getCell(space, "version-guard-plain-write", {
+        type: "object",
+        properties: { secret: { type: "string" } },
+      }, tx);
+      expect(() => cell.key("secret").set("updated")).toThrow(
+        UnknownCfcMetadataVersionError,
+      );
       tx.abort();
     } finally {
       await runtime.dispose();
@@ -378,6 +440,21 @@ describe("CFC envelope version guard", () => {
         scope: "space",
         id: "of:torn" as `${string}:${string}`,
         path: [],
+      })
+    ).toThrow("torn read");
+  });
+
+  it("propagates a transaction failure from the envelope probe", () => {
+    const tx = {
+      readOrThrow: () => {
+        throw new Error("torn read");
+      },
+    } as unknown as Parameters<typeof storesCfcEnvelope>[0];
+    expect(() =>
+      storesCfcEnvelope(tx, {
+        space,
+        scope: "space",
+        id: "of:torn" as `${string}:${string}`,
       })
     ).toThrow("torn read");
   });

@@ -21,8 +21,12 @@ import {
  * @property {string} type - Optional: type identifier for filtering drop zones
  * @property {boolean} disabled - Disable dragging
  *
- * @fires cf-drag-start - Fired when drag starts with { cell: CellHandle }
- * @fires cf-drag-end - Fired when drag ends with { cell: CellHandle, dropped: boolean }
+ * @fires cf-drag-start - Fired when drag starts with { cell: SigilLink }
+ * @fires cf-drag-end - Fired when drag ends with { cell: SigilLink }
+ *
+ * Each detail carries the dragged cell's link rather than its `CellHandle`,
+ * so that the detail is a `FabricValue` and can cross to a handler in the
+ * worker; `cf-drop-zone` says the same of its events.
  *
  * @slot - Default slot for draggable content
  *
@@ -67,7 +71,8 @@ export class CFDragSource extends BaseElement {
   @state()
   private accessor _resolvedCell: CellHandle | undefined = undefined;
 
-  private _isDragging = false;
+  /** The cell being dragged, from the start of a drag until it ends. */
+  #draggedCell: CellHandle | undefined;
   private _isTracking = false;
   private _startX = 0;
   private _startY = 0;
@@ -75,6 +80,14 @@ export class CFDragSource extends BaseElement {
   private _preview?: HTMLElement;
   private _boundPointerMove = this._handlePointerMove.bind(this);
   private _boundPointerUp = this._handlePointerUp.bind(this);
+
+  override disconnectedCallback() {
+    super.disconnectedCallback();
+    // A press removed before it became a drag starts none. A drag under way
+    // runs on until release, as a list reordering mid-drag removes and
+    // re-adds its source, and ending the drag here would drop it at once.
+    if (!this.#draggedCell) this.#stopTracking();
+  }
 
   protected override willUpdate(changedProperties: PropertyValues) {
     super.willUpdate(changedProperties);
@@ -129,13 +142,13 @@ export class CFDragSource extends BaseElement {
     const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
 
     // Start drag after threshold (~5px)
-    if (!this._isDragging && distance > 5) {
-      this._isDragging = true;
-      this._startDrag(e);
+    if (!this.#draggedCell && distance > 5) {
+      this.#draggedCell = this._resolvedCell ?? this.cell;
+      this._startDrag(e, this.#draggedCell);
     }
 
     // Update preview position and notify drop zones if dragging
-    if (this._isDragging && this._preview) {
+    if (this.#draggedCell && this._preview) {
       this._preview.style.left = `${e.clientX + 10}px`;
       this._preview.style.top = `${e.clientY + 10}px`;
       // Update drag state so drop zones can check intersection
@@ -149,17 +162,21 @@ export class CFDragSource extends BaseElement {
       return;
     }
 
-    // Clean up listeners
+    this.#stopTracking();
+  }
+
+  /**
+   * Stops following the pointer pressed on the source, ending the drag it
+   * started, if any. Drop zones detect a drop themselves, from the drag state.
+   */
+  #stopTracking(): void {
     document.removeEventListener("pointermove", this._boundPointerMove);
     document.removeEventListener("pointerup", this._boundPointerUp);
     document.removeEventListener("pointercancel", this._boundPointerUp);
 
-    if (this._isDragging) {
-      // Drop detection is now handled by drop-zones polling the drag state
-      this._endDrag();
-    }
+    if (this.#draggedCell) this._endDrag(this.#draggedCell);
 
-    this._isDragging = false;
+    this.#draggedCell = undefined;
     this._isTracking = false;
     this._pointerId = undefined;
   }
@@ -173,12 +190,7 @@ export class CFDragSource extends BaseElement {
     return interactive !== null && this.contains(interactive);
   }
 
-  private _startDrag(e: PointerEvent) {
-    const cell = this._resolvedCell ?? this.cell;
-    if (!cell) {
-      return;
-    }
-
+  private _startDrag(e: PointerEvent, cell: CellHandle) {
     // Now that we're actually dragging, capture the pointer and add dragging class
     const body = this.shadowRoot?.querySelector(".drag-body") as HTMLElement;
     if (body) {
@@ -209,15 +221,10 @@ export class CFDragSource extends BaseElement {
     });
 
     // Emit drag start event
-    this.emit("cf-drag-start", { cell });
+    this.emit("cf-drag-start", { cell: cell.toSigilLink() });
   }
 
-  private _endDrag() {
-    const cell = this._resolvedCell ?? this.cell;
-    if (!cell) {
-      return;
-    }
-
+  private _endDrag(cell: CellHandle) {
     // Remove dragging class
     this.shadowRoot?.querySelector(".drag-body")?.classList.remove("dragging");
 
@@ -226,7 +233,7 @@ export class CFDragSource extends BaseElement {
     endDrag();
 
     // Emit drag end event
-    this.emit("cf-drag-end", { cell });
+    this.emit("cf-drag-end", { cell: cell.toSigilLink() });
 
     this._preview = undefined;
   }

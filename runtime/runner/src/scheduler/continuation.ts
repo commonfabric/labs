@@ -1,4 +1,4 @@
-import { queueTask } from "./diagnostics.ts";
+import { type ArmedTurn, armTurn } from "@commonfabric/async/turn";
 import { isHeadEventParked } from "./events.ts";
 import { planPullExecuteContinuation } from "./execution.ts";
 import type { PullSchedulingState } from "./work-oracle.ts";
@@ -28,9 +28,7 @@ export interface ExecuteContinuationState {
   readonly setScheduled: (scheduled: boolean) => void;
   readonly resetSettlingTracker: () => void;
   readonly resetConvergenceHoldPasses: () => void;
-  readonly setPendingQueueTaskTimer: (
-    timer: ReturnType<typeof setTimeout> | null,
-  ) => void;
+  readonly setQueuedPass: (turn: ArmedTurn | null) => void;
   readonly execute: () => void;
 }
 
@@ -85,11 +83,10 @@ export function queueAnotherExecutionTick(
   state: ExecuteContinuationState,
 ): void {
   // Keep scheduled = true since we're queuing another execution.
-  const timer = queueTask(() => {
-    state.setPendingQueueTaskTimer(null);
+  state.setQueuedPass(armTurn(() => {
+    state.setQueuedPass(null);
     state.execute();
-  });
-  state.setPendingQueueTaskTimer(timer);
+  }));
 }
 
 function markNotScheduled(state: ExecuteContinuationState): void {

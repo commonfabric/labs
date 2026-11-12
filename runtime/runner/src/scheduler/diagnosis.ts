@@ -258,7 +258,6 @@ function readInvariantMovedExternally(
   for (const read of log2.reads) spaces.add(read.space);
   for (const read of log2.shallowReads) spaces.add(read.space);
   const before = transactionReadInvariants(tx, spaces);
-  if (before.size === 0) return false;
   const after = transactionReadInvariants(tx2, spaces);
   for (const [key, { address, value }] of after) {
     const previous = before.get(key);

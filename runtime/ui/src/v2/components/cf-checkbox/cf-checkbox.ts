@@ -250,7 +250,7 @@ export class CFCheckbox extends BaseElement {
 
     override firstUpdated() {
       // Register with form after first render when context is available
-      this._formField.register(this.name);
+      this._formField.register();
     }
 
     override disconnectedCallback() {
@@ -363,19 +363,5 @@ export class CFCheckbox extends BaseElement {
         event.preventDefault();
         this._handleClick(event);
       }
-    }
-
-    /**
-     * Focus the checkbox programmatically
-     */
-    override focus(): void {
-      super.focus();
-    }
-
-    /**
-     * Blur the checkbox programmatically
-     */
-    override blur(): void {
-      super.blur();
     }
   }

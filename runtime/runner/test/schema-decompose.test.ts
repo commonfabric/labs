@@ -16,6 +16,7 @@ import {
   type DecomposedSchema,
   decomposeSchema,
   recomposeSchema,
+  recomposeSchemaRefs,
   SchemaNotDecomposableError,
 } from "../src/schema-decompose.ts";
 import {
@@ -609,7 +610,44 @@ describe("schema-decompose", () => {
     });
   });
 
+  describe("recomposeSchemaRefs()", () => {
+    it("returns an inline schema as it is, and recomposes a reference", () => {
+      const schema: JSONSchemaObj = {
+        type: "object",
+        properties: { name: { type: "string" } },
+      };
+      const decomposed = decomposeSchema(schema);
+      const lookup = lookupIn(decomposed);
+
+      expect(recomposeSchemaRefs(schema, lookup)).toBe(schema);
+      expect(recomposeSchemaRefs({ $ref: decomposed.rootRef }, lookup))
+        .toEqual(schema);
+    });
+
+    it("throws for a reference with sibling keywords", () => {
+      const decomposed = decomposeSchema({ type: "string" });
+
+      expect(() =>
+        recomposeSchemaRefs(
+          { $ref: decomposed.rootRef, type: "string" },
+          lookupIn(decomposed),
+        )
+      ).toThrow("carries sibling keywords");
+    });
+  });
+
   describe("recomposeSchema()", () => {
+    it("returns a boolean root document as it is", () => {
+      const taggedHash = internSchemaAsTaggedHashString(true);
+
+      expect(
+        recomposeSchema(
+          formatExternalSchemaRef(taggedHash),
+          (hash) => hash === taggedHash ? true : undefined,
+        ),
+      ).toBe(true);
+    });
+
     it("returns the document itself for a closure of one", () => {
       const schema: JSONSchemaObj = {
         type: "object",

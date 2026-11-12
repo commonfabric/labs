@@ -112,6 +112,15 @@ describe("compile-cache-output-memo", () => {
       );
     });
 
+    it("returns the compiler-input version once an output-version input is missing", async () => {
+      await recordMemo();
+      await Deno.remove(join(root, "corpus"), { recursive: true });
+
+      expect(await computeSourceCompileCacheVersion(root, INPUTS)).toBe(
+        await inputVersion(),
+      );
+    });
+
     it("returns the compiler-input version for a file that does not hold a memo", async () => {
       const key = await computeOutputVersionMemoKey(root, INPUTS);
       const path = join(root, OUTPUT_VERSION_MEMO_PATH);

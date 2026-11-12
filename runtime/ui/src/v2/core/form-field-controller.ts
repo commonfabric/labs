@@ -32,7 +32,7 @@
  *
  *   override firstUpdated() {
  *     this._cellController.bind(this.value, stringSchema);
- *     this._formField.register(this.name);
+ *     this._formField.register();
  *   }
  * }
  * ```
@@ -90,44 +90,38 @@ export interface FormFieldControllerOptions<T> {
  * values pass through to the cell controller directly.
  */
 export class FormFieldController<T> implements ReactiveController {
-  private _host: ReactiveControllerHost & HTMLElement;
-  private _cellController: CellControllerLike<T>;
-  private _validate: () => ValidationResult;
+  #host: ReactiveControllerHost & HTMLElement;
+  #cellController: CellControllerLike<T>;
+  #validate: () => ValidationResult;
 
   /** Form context consumer, which automatically subscribes to the context. */
-  private _formContextConsumer: ContextConsumer<
+  #formContextConsumer: ContextConsumer<
     typeof formContext,
     ReactiveControllerHost & HTMLElement
   >;
 
   /** The buffered value, only used when in a form context. */
-  private _buffer: T | undefined;
-
-  /**
-   * Whether the buffer has been set, which allows `undefined` as a valid
-   * buffered value.
-   */
-  private _hasBuffer = false;
+  #buffer: { value: T } | undefined;
 
   /**
    * Original value, captured when the form field is registered and used for
    * reset.
    */
-  private _originalValue: T | undefined;
+  #originalValue: T | undefined;
 
   /** Cleanup function for the form registration. */
-  private _formUnregister?: () => void;
+  #formUnregister?: () => void;
 
   constructor(
     host: ReactiveControllerHost & HTMLElement,
     options: FormFieldControllerOptions<T>,
   ) {
-    this._host = host;
-    this._cellController = options.cellController;
-    this._validate = options.validate ?? (() => ({ valid: true }));
+    this.#host = host;
+    this.#cellController = options.cellController;
+    this.#validate = options.validate ?? (() => ({ valid: true }));
 
     // Set up context consumer to access FormContext from ancestor cf-form
-    this._formContextConsumer = new ContextConsumer(host, {
+    this.#formContextConsumer = new ContextConsumer(host, {
       context: formContext,
       subscribe: false, // Don't need updates, just initial value
     });
@@ -136,17 +130,10 @@ export class FormFieldController<T> implements ReactiveController {
   }
 
   /**
-   * Get the form context (if we're inside a cf-form)
-   */
-  private get _formContext(): FormContext | undefined {
-    return this._formContextConsumer.value;
-  }
-
-  /**
    * Check if this field is participating in a form
    */
   get inFormContext(): boolean {
-    return this._formContext !== undefined;
+    return this.#formContext !== undefined;
   }
 
   /**
@@ -154,10 +141,8 @@ export class FormFieldController<T> implements ReactiveController {
    * Returns buffer if in form context and buffer is set, otherwise cell value.
    */
   getValue(): T {
-    if (this._formContext && this._hasBuffer) {
-      return this._buffer as T;
-    }
-    return this._cellController.getValue();
+    if (this.#formContext && this.#buffer) return this.#buffer.value;
+    return this.#cellController.getValue();
   }
 
   /**
@@ -165,12 +150,11 @@ export class FormFieldController<T> implements ReactiveController {
    * Updates buffer if in form context, otherwise writes directly to cell.
    */
   setValue(value: T): void {
-    if (this._formContext) {
-      this._buffer = value;
-      this._hasBuffer = true;
-      this._host.requestUpdate();
+    if (this.#formContext) {
+      this.#buffer = { value };
+      this.#host.requestUpdate();
     } else {
-      this._cellController.setValue(value);
+      this.#cellController.setValue(value);
     }
   }
 
@@ -179,101 +163,63 @@ export class FormFieldController<T> implements ReactiveController {
    * write. This is for standalone fields: it drains any pending
    * debounced/throttled write, then writes the current value (buffered value if
    * present, otherwise the cell controller's value) to the bound cell, and
-   * rebaselines dirty/reset tracking to the committed value. Resolves once the
+   * rebaselines reset tracking to the committed value. Resolves once the
    * runtime confirms the commit and rejects when the write fails. When no Cell
    * is bound, it falls back to the cell controller's setValue.
    *
    * In a form context the form owns durable writes: each field buffers its edit
    * and the form flushes them together on submit. So when this field is in a
    * form, commit() returns without writing and without rebaselining; the edit
-   * stays in the buffer for the form to flush, and dirty tracking is unchanged
-   * so the value still counts as unsaved until the form submits.
+   * stays in the buffer for the form to flush.
    */
   async commit(): Promise<void> {
     // In a form context the form owns durable writes via its atomic submit;
     // leave the edit buffered and do not write or rebaseline here.
-    if (this._formContext) return;
+    if (this.#formContext) return;
 
-    this._cellController.flush?.();
-    const valueToFlush = this._hasBuffer
-      ? this._buffer as T
-      : this._cellController.getValue();
-    const cell = this._cellController.getCell?.();
-    if (cell) {
-      await cell.setStrict(valueToFlush);
-    } else {
-      this._cellController.setValue(valueToFlush);
-    }
-    // Rebaseline dirty/reset tracking so a later isDirty()/reset() stays
-    // coherent with what was committed (mirrors the form-registered flush).
-    this._originalValue = valueToFlush;
+    this.#cellController.flush?.();
+    await this.#write();
   }
 
   /**
    * Clear the buffer and update original value from current cell.
    * Call this when the underlying cell binding changes (e.g., switching records).
-   * This ensures reset/dirty tracking uses the new cell's value as baseline.
+   * This ensures reset tracking uses the new cell's value as baseline.
    */
   clearBuffer(): void {
-    this._buffer = undefined;
-    this._hasBuffer = false;
+    this.#buffer = undefined;
     // Update original value to the new cell's value so reset works correctly
     // when reusing the same field for a different record
-    this._originalValue = this._cellController.getValue();
+    this.#originalValue = this.#cellController.getValue();
   }
 
   /**
    * Register this field with the form.
    * Call this in firstUpdated() after the cell controller is bound.
-   *
-   * @param name - Field name for form submission (e.g., "email", "username")
    */
-  register(name?: string): void {
+  register(): void {
     // Only register once
-    if (this._formUnregister) return;
+    if (this.#formUnregister) return;
 
     // Only register if we have a form context
-    if (!this._formContext) return;
+    if (!this.#formContext) return;
 
     // Capture the original value at registration time for proper reset behavior
-    this._originalValue = this._cellController.getValue();
+    this.#originalValue = this.#cellController.getValue();
 
-    this._formUnregister = this._formContext.registerField({
-      element: this._host,
-      name,
-      // Return buffer if set, otherwise fall back to cell value
-      getValue: () =>
-        this._hasBuffer ? this._buffer as T : this._cellController.getValue(),
-      setValue: (v) => {
-        this._buffer = v as T;
-        this._hasBuffer = true;
-        this._host.requestUpdate();
-      },
-      flush: async () => {
-        const valueToFlush = this._hasBuffer
-          ? this._buffer as T
-          : this._cellController.getValue();
-        const cell = this._cellController.getCell?.();
-        if (cell) {
-          await cell.setStrict(valueToFlush);
-        } else {
-          this._cellController.setValue(valueToFlush);
-        }
-        // Update original value after successful flush
-        this._originalValue = valueToFlush;
-      },
+    this.#formUnregister = this.#formContext.registerField({
+      element: this.#host,
+      flush: () => this.#write(),
       reset: () => {
         // Restore to original value captured at registration time
         // This ensures "cancel" restores the value from when the form opened
-        if (this._originalValue !== undefined) {
-          this._cellController.setValue(this._originalValue);
+        if (this.#originalValue !== undefined) {
+          this.#cellController.setValue(this.#originalValue);
         }
-        this._buffer = undefined;
-        this._hasBuffer = false;
-        this._host.requestUpdate();
+        this.#buffer = undefined;
+        this.#host.requestUpdate();
       },
-      validate: this._validate,
-      isDirty: () => this.isDirty(),
+      validate: this.#validate,
     });
   }
 
@@ -282,63 +228,42 @@ export class FormFieldController<T> implements ReactiveController {
    * Called automatically in hostDisconnected, but can be called manually.
    */
   unregister(): void {
-    this._formUnregister?.();
-    this._formUnregister = undefined;
-    this._buffer = undefined;
-    this._hasBuffer = false;
-    this._originalValue = undefined;
-  }
-
-  /**
-   * Check if the field has unsaved changes.
-   * Compares current value (buffer or cell) against the original value.
-   */
-  isDirty(): boolean {
-    if (!this._formContext) return false;
-
-    const currentValue = this._hasBuffer
-      ? this._buffer
-      : this._cellController.getValue();
-    // Deep equality check for objects/arrays
-    return !this._deepEqual(currentValue, this._originalValue);
-  }
-
-  /**
-   * Reset the original value to the current cell value.
-   * Useful after programmatic updates that should be considered "saved".
-   */
-  captureOriginalValue(): void {
-    this._originalValue = this._cellController.getValue();
-  }
-
-  /**
-   * Simple deep equality check for comparing values
-   */
-  private _deepEqual(a: unknown, b: unknown): boolean {
-    if (Object.is(a, b)) return true;
-    if (a === null || b === null) return false;
-    if (typeof a !== typeof b) return false;
-    if (typeof a !== "object") return false;
-
-    const aObj = a as Record<string, unknown>;
-    const bObj = b as Record<string, unknown>;
-    const aKeys = Object.keys(aObj);
-    const bKeys = Object.keys(bObj);
-
-    if (aKeys.length !== bKeys.length) return false;
-
-    return aKeys.every((key) => this._deepEqual(aObj[key], bObj[key]));
+    this.#formUnregister?.();
+    this.#formUnregister = undefined;
+    this.#buffer = undefined;
+    this.#originalValue = undefined;
   }
 
   // ReactiveController lifecycle
 
-  hostConnected(): void {
-    // Context consumer is set up in constructor
-    // Registration happens in register() called by component's firstUpdated
-  }
-
   hostDisconnected(): void {
     this.unregister();
+  }
+
+  /**
+   * Get the form context (if we're inside a cf-form)
+   */
+  get #formContext(): FormContext | undefined {
+    return this.#formContextConsumer.value;
+  }
+
+  /**
+   * Writes the current value (the buffered one if present, otherwise the cell
+   * controller's) to the bound cell, awaiting its confirmed write, or through
+   * the cell controller's setValue when no cell is bound, and makes it the
+   * value a reset restores.
+   */
+  async #write(): Promise<void> {
+    const valueToFlush = this.#buffer
+      ? this.#buffer.value
+      : this.#cellController.getValue();
+    const cell = this.#cellController.getCell?.();
+    if (cell) {
+      await cell.setStrict(valueToFlush);
+    } else {
+      this.#cellController.setValue(valueToFlush);
+    }
+    this.#originalValue = valueToFlush;
   }
 }
 

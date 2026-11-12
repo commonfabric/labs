@@ -293,11 +293,17 @@ export class CFVoiceInput extends BaseElement {
 
   private mediaRecorder?: MediaRecorder;
   private audioChunks: Blob[] = [];
-  private startTime?: number;
   private stream?: MediaStream;
   private timerInterval?: ReturnType<typeof setInterval>;
   private maxDurationTimeout?: ReturnType<typeof setTimeout>;
   private visualizerRef: Ref<CFAudioVisualizer> = createRef();
+
+  /**
+   * The request `_startRecording()` is pursuing, through to the end of
+   * processing what it recorded, which a release while the microphone is
+   * being asked for or a removal abandons.
+   */
+  #request?: object;
 
   private _generateId(): string {
     return `voice-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
@@ -333,22 +339,6 @@ export class CFVoiceInput extends BaseElement {
   }
 
   private _cleanup() {
-    // Clear timers
-    if (this.timerInterval) {
-      clearInterval(this.timerInterval);
-      this.timerInterval = undefined;
-    }
-    if (this.maxDurationTimeout) {
-      clearTimeout(this.maxDurationTimeout);
-      this.maxDurationTimeout = undefined;
-    }
-
-    // Stop visualizer
-    const visualizer = this.visualizerRef.value;
-    if (visualizer) {
-      visualizer.stopVisualization();
-    }
-
     // Stop media recorder (without triggering onstop processing)
     if (this.mediaRecorder) {
       this.mediaRecorder.onstop = null; // Prevent processing
@@ -358,15 +348,12 @@ export class CFVoiceInput extends BaseElement {
       this.mediaRecorder = undefined;
     }
 
-    // Stop and release the stream
-    if (this.stream) {
-      this.stream.getTracks().forEach((track) => track.stop());
-      this.stream = undefined;
-    }
+    this._release();
 
     // Reset state
     this.audioChunks = [];
     this._recordingState = "idle";
+    this.#request = undefined;
   }
 
   /** Track active pointer to prevent multi-touch issues */
@@ -392,9 +379,7 @@ export class CFVoiceInput extends BaseElement {
     this._activePointerId = null;
     (e.target as HTMLElement).releasePointerCapture(e.pointerId);
 
-    if (this.recordingMode === "hold" && this.isRecording) {
-      this._stopRecording();
-    }
+    this._endHold();
   }
 
   private _handlePointerCancel(e: PointerEvent) {
@@ -402,8 +387,19 @@ export class CFVoiceInput extends BaseElement {
     if (this._activePointerId !== e.pointerId) return;
 
     this._activePointerId = null;
+    this._endHold();
+  }
 
-    if (this.recordingMode === "hold" && this.isRecording) {
+  /**
+   * Ends a hold-mode recording when its pointer is let go. Let go while the
+   * microphone is still being asked for, it records nothing.
+   */
+  private _endHold() {
+    if (this.recordingMode !== "hold") return;
+    if (this._recordingState === "requesting") {
+      this._recordingState = "idle";
+      this.#request = undefined;
+    } else if (this.isRecording) {
       this._stopRecording();
     }
   }
@@ -442,18 +438,18 @@ export class CFVoiceInput extends BaseElement {
   private async _startRecording() {
     // Guard: only allow starting from idle state
     if (this._recordingState !== "idle") {
-      console.warn(
-        `Cannot start recording: current state is ${this._recordingState}`,
-      );
+      console.warn("Cannot start recording in state", this._recordingState);
       return;
     }
 
+    const request = {};
+    this.#request = request;
     this._recordingState = "requesting";
     this.errorMessage = "";
 
     try {
       // Request microphone permission
-      this.stream = await navigator.mediaDevices.getUserMedia({
+      const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           channelCount: 1,
           // Note: sampleRate constraint is often ignored by browsers
@@ -463,13 +459,20 @@ export class CFVoiceInput extends BaseElement {
         },
       });
 
+      // Released or removed while the microphone was being asked for.
+      if (this.#request !== request) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      this.stream = stream;
+
       // Create MediaRecorder with cross-platform mime type
       const mimeType = this._getSupportedMimeType();
       const options: MediaRecorderOptions = mimeType ? { mimeType } : {};
 
       this.mediaRecorder = new MediaRecorder(this.stream, options);
       this.audioChunks = [];
-      this.startTime = Date.now();
+      const startTime = Date.now();
       this.recordingDuration = 0;
 
       // Collect audio chunks
@@ -485,11 +488,10 @@ export class CFVoiceInput extends BaseElement {
         const chunks = [...this.audioChunks];
         const recordedMimeType = this.mediaRecorder?.mimeType || mimeType ||
           "audio/webm";
-        const duration = this.startTime
-          ? (Date.now() - this.startTime) / 1000
-          : this.recordingDuration;
+        const duration = (Date.now() - startTime) / 1000;
 
-        this._processRecording(chunks, recordedMimeType, duration);
+        this._release();
+        this._processRecording(request, chunks, recordedMimeType, duration);
       };
 
       // Start recording with larger timeslice to reduce blob count
@@ -498,6 +500,8 @@ export class CFVoiceInput extends BaseElement {
 
       // Wait for Lit to render the visualizer element
       await this.updateComplete;
+      // Removed while it rendered.
+      if (this.#request !== request) return;
 
       // Start visualizer - guard against stream being cleared
       if (this.showWaveform && this.stream) {
@@ -509,8 +513,8 @@ export class CFVoiceInput extends BaseElement {
 
       // Start timer with slightly lower frequency (250ms is enough for UI)
       this.timerInterval = setInterval(() => {
-        if (this.startTime && this._recordingState === "recording") {
-          this.recordingDuration = (Date.now() - this.startTime) / 1000;
+        if (this._recordingState === "recording") {
+          this.recordingDuration = (Date.now() - startTime) / 1000;
         }
       }, 250);
 
@@ -521,67 +525,52 @@ export class CFVoiceInput extends BaseElement {
         }
       }, this.maxDuration * 1000);
 
-      this.emit("cf-recording-start", { timestamp: this.startTime });
+      this.emit("cf-recording-start", { timestamp: startTime });
     } catch (error) {
+      // Released or removed while the microphone was being asked for.
+      if (this.#request !== request) return;
+      this._release();
       this._recordingState = "idle";
       const errorObj = error as Error;
       this._handleError(errorObj);
     }
   }
 
+  /** Stops a recording in progress, which every caller checks there is. */
   private _stopRecording() {
-    // Guard: only allow stopping from recording state
-    if (this._recordingState !== "recording") {
-      return;
-    }
-
     this._recordingState = "stopping";
-
-    // Stop visualizer first
-    const visualizer = this.visualizerRef.value;
-    if (visualizer) {
-      visualizer.stopVisualization();
-    }
-
-    // Clear timers before stopping recorder
-    if (this.timerInterval) {
-      clearInterval(this.timerInterval);
-      this.timerInterval = undefined;
-    }
-
-    if (this.maxDurationTimeout) {
-      clearTimeout(this.maxDurationTimeout);
-      this.maxDurationTimeout = undefined;
-    }
 
     // Stop the media recorder - this triggers onstop which calls _processRecording
     if (this.mediaRecorder && this.mediaRecorder.state !== "inactive") {
       this.mediaRecorder.stop();
     }
 
-    // Stop and release the stream
-    if (this.stream) {
-      this.stream.getTracks().forEach((track) => track.stop());
-      this.stream = undefined;
-    }
+    this._release();
   }
 
+  /**
+   * Stops the waveform and the timers and releases the microphone, however
+   * the recording ended.
+   */
+  private _release() {
+    this.visualizerRef.value?.stopVisualization();
+    clearInterval(this.timerInterval);
+    clearTimeout(this.maxDurationTimeout);
+    this.timerInterval = this.maxDurationTimeout = undefined;
+    this.stream?.getTracks().forEach((track) => track.stop());
+    this.stream = undefined;
+  }
+
+  /**
+   * Reports and transcribes what `request` recorded, then returns to idle
+   * unless a removal has abandoned `request` meanwhile.
+   */
   private async _processRecording(
+    request: object,
     chunks: Blob[],
     mimeType: string,
     duration: number,
   ) {
-    // Guard: should be in stopping state (set by _stopRecording or transitioning)
-    if (
-      this._recordingState !== "stopping" &&
-      this._recordingState !== "recording"
-    ) {
-      console.warn(
-        `Unexpected state in _processRecording: ${this._recordingState}`,
-      );
-      return;
-    }
-
     this._recordingState = "processing";
 
     const audioBlob = new Blob(chunks, { type: mimeType });
@@ -592,8 +581,7 @@ export class CFVoiceInput extends BaseElement {
       await this._transcribeAudio(audioBlob, mimeType, duration);
     }
 
-    // Return to idle state after processing
-    this._recordingState = "idle";
+    if (this.#request === request) this._recordingState = "idle";
   }
 
   private async _transcribeAudio(

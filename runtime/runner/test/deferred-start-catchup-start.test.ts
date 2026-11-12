@@ -5,9 +5,11 @@
  */
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+import { spy } from "@std/testing/mock";
 import { expect } from "@std/expect";
 
 import { Identity } from "@commonfabric/identity";
+import { getLogger } from "@commonfabric/logger";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import type { Cell } from "../src/cell.ts";
 import {
@@ -15,6 +17,7 @@ import {
   trustExecutable,
 } from "./support/trusted-builder.ts";
 import { Runtime } from "../src/runtime.ts";
+import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
 import { entityKey } from "../src/scheduler/keys.ts";
 import type { CommitError } from "../src/storage/interface.ts";
 import type { RuntimeTelemetryEvent } from "../src/telemetry.ts";
@@ -939,6 +942,121 @@ describe("deferred-start-catchup-start", () => {
           installed.restore();
           injector.restore();
         }
+      }
+    });
+
+    it("yields to a start that took the piece during the readiness wait, leaving the parent's handle off it", async () => {
+      // A start of the piece landing while the recovery awaits the refusal's
+      // readiness gate installs the piece under its own authority. The
+      // recovery then installs nothing and settles the parent's token without
+      // binding it, so the parent's one handle cannot stop that start.
+      const { lift, pattern } = createTrustedBuilder(runtime).commonfabric;
+      const Piece = pattern<{ value: number }>(({ value }) => ({
+        doubled: lift((input: number) => input * 2)(value),
+      }));
+      const harness = runtime.runner.accessForTestingOnly;
+      const tx = gatedTxOn(runtime);
+      const result = runtime.getCell<{ doubled?: number }>(
+        space,
+        "a start takes the piece during the readiness wait",
+        undefined,
+        tx,
+      );
+      let competing: Promise<boolean> | undefined;
+      const refusal = {
+        ...staleConfirmedReadOf(result),
+        readyToRetry: () => {
+          competing = runtime.runner.start(result);
+          return Promise.resolve();
+        },
+      };
+      const injector = refuseDeferredStartCommits(runtime, refusal);
+      const installed = observeContextInstalls(runtime, key(result));
+      const pending = observePendingDeferredStarts(runtime);
+      try {
+        const { cancelDeferredStart } = harness.runWithStartOwnership(
+          tx,
+          trustExecutable(runtime, Piece),
+          { value: 3 },
+          result.withTx(tx),
+        );
+        runtime.prepareTxForCommit(tx);
+        expect((await tx.commit().settled).error).toBeUndefined();
+
+        await waitForSignal(
+          injector.refusalsReach(1),
+          "the start's transaction being refused",
+        );
+        await runtime.runner.idleDeferredStartCatchUps();
+        await runtime.idle();
+
+        // The refused attempt's install and the competing start's: the
+        // recovery added none.
+        expect(await competing).toBe(true);
+        expect(installed.installs()).toBe(2);
+        expect(pending.count(key(result))).toBe(0);
+        expect(pending.settled("cancelled")).toBe(1);
+
+        cancelDeferredStart!();
+        expect(runtime.runner.cancels.has(key(result))).toBe(true);
+      } finally {
+        pending.restore();
+        installed.restore();
+        injector.restore();
+      }
+    });
+
+    it("reports a recovery whose walk leaves the piece stopped though nothing stopped it", async () => {
+      // During the readiness wait the piece's pointer moves to a pattern no
+      // session can load (a legacy session-synthetic identity), which a start
+      // walk reports as not started rather than as a failure.
+      const { lift, pattern } = createTrustedBuilder(runtime).commonfabric;
+      const Piece = pattern<{ value: number }>(({ value }) => ({
+        doubled: lift((input: number) => input * 2)(value),
+      }));
+      const tx = gatedTxOn(runtime);
+      const result = runtime.getCell<{ doubled?: number }>(
+        space,
+        "a recovery walk that starts nothing",
+        undefined,
+        tx,
+      );
+      const refusal = {
+        ...staleConfirmedReadOf(result),
+        readyToRetry: async () => {
+          const move = runtime.edit();
+          result.withTx(move).setMetaRaw("patternIdentity", {
+            identity: "keyless:fid1:a-pattern-no-session-holds",
+            symbol: "default",
+          }, rawMetaWriteAuthorization);
+          expect((await move.commit().settled).error).toBeUndefined();
+        },
+      };
+      const injector = refuseDeferredStartCommits(runtime, refusal);
+      const pending = observePendingDeferredStarts(runtime);
+      const logged = spy(getLogger("runner"), "error");
+      try {
+        runtime.run(tx, Piece, { value: 3 }, result.withTx(tx));
+        expect((await tx.commit().settled).error).toBeUndefined();
+
+        await waitForSignal(
+          injector.refusalsReach(1),
+          "the start's transaction being refused",
+        );
+        await runtime.runner.idleDeferredStartCatchUps();
+        await runtime.idle();
+
+        expect(runtime.runner.cancels.has(key(result))).toBe(false);
+        expect(pending.count(key(result))).toBe(0);
+        expect(logged.calls.map((call) => call.args)).toContainEqual([
+          "deferred-start-catchup-failed",
+          "Deferred start catch-up start resolved without the piece running " +
+          "(superseded or stopped mid-walk)",
+        ]);
+      } finally {
+        logged.restore();
+        pending.restore();
+        injector.restore();
       }
     });
 

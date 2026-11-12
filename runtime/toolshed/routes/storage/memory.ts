@@ -115,6 +115,9 @@ export const memoryServer = new MemoryServer.Server({
   // Invitations issued here name this deployment's public origin, so the
   // HTTP routes and `space.invite` requests check codes against the same host.
   inviteHost: normalizeInviteHost(env.API_URL),
+  // Offered unless the deployment turns it off; a client takes it only when
+  // it opts in.
+  syncCidReferences: env.MEMORY_SYNC_CID_REFERENCES,
   // The posture this process publishes on `/api/meta`, read when an open asks
   // rather than now: it is published once the Runtime exists, after this
   // server is constructed, and until then it names no instances.

@@ -44,6 +44,7 @@ import {
   newLoopbackServer,
   StorageManager,
 } from "../src/storage/cache.deno.ts";
+import { createTransactionCommitReceipt } from "../src/storage/commit-receipt.ts";
 import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
@@ -378,6 +379,107 @@ describe("cfc-owner-release-by-intent", () => {
       });
     };
 
+    describe("storedClausesForRelease()", () => {
+      /** What `storedClausesForRelease()` returns at the root of `cell`. */
+      const storedAtRoot = (cell: Cell<unknown>) =>
+        storedClausesForRelease(runtime, {
+          space: actor,
+          id: cell.getAsNormalizedFullLink().id,
+          path: [],
+        });
+
+      it("returns no clauses for a document that stores no label", async () => {
+        const cell = runtime.getCell<unknown>(actor, "runner-cfc-intent-plain");
+        const tx = runtime.edit();
+        cell.withTx(tx).set({ title: "plain" });
+        expect((await tx.commit().settled).error).toBeUndefined();
+
+        const stored = await storedAtRoot(cell);
+
+        expect(stored.clauses).toEqual([]);
+        expect(stored.otherPositions).toEqual([]);
+        expect(stored.owner).toBe(actor);
+      });
+
+      it("throws for a document whose labels cannot be read", async () => {
+        const cell = runtime.getCell<unknown>(
+          actor,
+          "runner-cfc-intent-unreadable",
+        );
+        const tx = runtime.edit();
+        writeSeedEnvelopeDoc(tx, actor);
+        seedStoredEnvelope(
+          tx,
+          { ...cell.getAsNormalizedFullLink(), path: [] },
+          {
+            value: { title: "sealed" },
+            cfc: {
+              version: 3,
+              schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+              labelMap: { version: 1, entries: [] },
+            },
+          },
+        );
+        expect((await tx.commit().settled).error).toBeUndefined();
+
+        await expect(storedAtRoot(cell)).rejects.toThrow(
+          `Cannot read the labels of ${cell.getAsNormalizedFullLink().id}:`,
+        );
+      });
+
+      it("throws the error a load of the document fails with", async () => {
+        const cell = await seedDocument("runner-cfc-intent-load", {}, [
+          entry([], "derived", { confidentiality: [own] }),
+        ]);
+        const failure = new Error("the load failed");
+        const provider = runtime.storageManager.open(actor);
+        provider.sync = () => Promise.resolve({ error: failure });
+
+        await expect(storedAtRoot(cell)).rejects.toBe(failure);
+      });
+
+      it("throws the failure a quarantine holds the document back with", async () => {
+        const cell = await seedDocument("runner-cfc-intent-held", {}, [
+          entry([], "derived", { confidentiality: [own] }),
+        ]);
+        const id = cell.getAsNormalizedFullLink().id;
+        const failure = new Error("the document is held back");
+        const { replica } = runtime.storageManager.open(actor);
+        replica.quarantineFailure = (held: URI) =>
+          Promise.resolve(held === id ? failure : undefined);
+
+        await expect(storedAtRoot(cell)).rejects.toBe(failure);
+      });
+    });
+
+    describe("releaseByIntentTargetOf()", () => {
+      it("returns the space-scoped document and path a cell addresses", () => {
+        const cell = runtime.getCell<unknown>(
+          actor,
+          "runner-cfc-intent-target",
+        );
+        expect(releaseByIntentTargetOf(cell.key("items"))).toEqual({
+          space: actor,
+          id: cell.getAsNormalizedFullLink().id,
+          path: ["items"],
+        });
+      });
+
+      it("throws for a document at another scope", () => {
+        const cell = runtime.getCell<unknown>(
+          actor,
+          "runner-cfc-intent-user-scope",
+          undefined,
+          undefined,
+          "user",
+        );
+        expect(() => releaseByIntentTargetOf(cell)).toThrow(
+          "a release by intent names a document at space scope, and this " +
+            "one is at user scope.",
+        );
+      });
+    });
+
     describe("a result whose membership carries ten other principals' clauses", () => {
       // The links-only result an earlier setup stamped: the existence entry
       // holds the owner's clause alone, the membership the owner's and the
@@ -603,6 +705,37 @@ describe("cfc-owner-release-by-intent", () => {
           await expect(releaseConfidentialityByIntent(runtime, signed)).rejects
             .toThrow("changed since the request was made");
           expect(storedMetadata(reseeded)).toEqual(before);
+        });
+
+        it("fails at the commit when the envelope changes after the release reads it, and keeps the change", async () => {
+          // Nothing yields between the release reading the envelope and its
+          // commit, so the change lands as the commit begins, as another
+          // client's would reach the store first.
+
+          const signed = await sign(await requestAt(result, [], tenDigests));
+          const edit = runtime.edit.bind(runtime);
+          try {
+            runtime.edit = (...args: Parameters<typeof runtime.edit>) => {
+              runtime.edit = edit;
+              const tx = edit(...args);
+              const commit = tx.commit.bind(tx);
+              tx.commit = () =>
+                createTransactionCommitReceipt((async () => {
+                  await seedDocument("runner-cfc-intent-result", VALUE, [
+                    ...ROOT_ENTRIES,
+                  ]);
+                  return await commit().settled;
+                })());
+              return tx;
+            };
+            await expect(releaseConfidentialityByIntent(runtime, signed))
+              .rejects.toThrow("Releasing by intent failed");
+          } finally {
+            runtime.edit = edit;
+          }
+          expect(storedMetadata(result)?.labelMap.entries).toEqual(
+            ROOT_ENTRIES,
+          );
         });
 
         it("refuses a transaction without the release-by-intent writer's identity", async () => {

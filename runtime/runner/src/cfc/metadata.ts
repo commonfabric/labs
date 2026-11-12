@@ -428,6 +428,23 @@ const readStoredCfcLabelPaths = (
   );
 
 /**
+ * Whether `target`'s document stores an envelope. One this build cannot
+ * interpret counts as stored, as it counts as applying in
+ * {@link storedCfcMetadataAppliesToPath}.
+ */
+export const storesCfcEnvelope = (
+  tx: IExtendedStorageTransaction,
+  target: StoredCfcTarget,
+): boolean => {
+  try {
+    return readStoredEnvelope(tx, target, DEPENDENT_READ) !== undefined;
+  } catch (error) {
+    if (error instanceof StoredCfcMetadataError) return true;
+    throw error;
+  }
+};
+
+/**
  * The resolved envelope stored for `target`, or `undefined` when the
  * document stores none. Throws a {@link StoredCfcMetadataError} for an
  * envelope this build cannot produce labels from — an unknown version, a

@@ -212,15 +212,7 @@ export function createRef(
       // Reading the entity id is what materializes a link from an explicit
       // cause, so it comes first: the link read below is available only once
       // this has happened.
-      const id = obj.entityId;
-      if (id == null) {
-        // A Cell referenced from a derived id must have an entityId; otherwise
-        // the id would silently become non-deterministic (audit S14). Fail
-        // closed rather than mint a random substitute.
-        throw new Error(
-          "[createRef] Cell has no entityId; cannot derive a stable id",
-        );
-      }
+      void obj.entityId;
 
       // The path is part of what names a cell, so a cell derives from the link
       // naming it -- the same form the encodable-form branch above gives a cell

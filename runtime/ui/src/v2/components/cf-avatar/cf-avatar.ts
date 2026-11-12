@@ -185,12 +185,12 @@ export class CFAvatar extends BaseElement {
     const src = (this.src ?? "").trim();
     const name = this.name;
     const showBytes = (this.bytes?.length ?? 0) > 0;
-    const showImage = !showBytes && src.length > 0 && isAvatarImageUrl(src) &&
-      !this._imgError;
+    const isImage = isAvatarImageUrl(src);
+    const showImage = !showBytes && isImage && !this._imgError;
     // Short typed glyphs (emoji / a couple of letters) render as-is; URL/path
-    // -like sources are neither fetched nor shown as raw text — they fall
-    // through to initials.
-    const showGlyph = !showBytes && src.length > 0 && !showImage &&
+    // -like sources, and an image that failed to load, are neither fetched
+    // nor shown as raw text — they fall through to initials.
+    const showGlyph = !showBytes && src.length > 0 && !isImage &&
       !isRemoteLikeSource(src);
 
     return html`

@@ -6,7 +6,7 @@ import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import { createBuilder } from "../src/builder/factory.ts";
-import { schemaWithOpenObjects } from "../src/builtins/fetch.ts";
+import { fetchText, schemaWithOpenObjects } from "../src/builtins/fetch.ts";
 import { setPatternEnvironment } from "../src/env.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
@@ -333,6 +333,58 @@ describe("fetch builtins (fetchBinary / fetchText / fetchJson)", () => {
     expect(cleared.result).toBeUndefined();
     expect(cleared.pending).toBe(false);
     expect(cleared.error).toBeUndefined();
+  });
+  describe("teardown", () => {
+    // A node's teardown releases its request through a transaction of its
+    // own. A node whose only run failed before creating its cells has
+    // nothing to release, and opens no transaction for it.
+
+    for (const firstRunFails of [false, true]) {
+      it(`opens ${firstRunFails ? "no transaction after a first run that failed before creating its cells" : "a transaction after a first run that created its cells"}`, async () => {
+        const other = (await Identity.fromPassphrase("fetch teardown other"))
+          .did();
+        const input = runtime.getCell<{ url?: string }>(
+          space,
+          "fetch-teardown-input",
+        );
+        // A transaction writes to one space, so a run whose cells belong to
+        // a parent in another space fails creating them.
+        const parent = runtime.getCell(
+          firstRunFails ? other : space,
+          "fetch-teardown-parent",
+        );
+        const cancels: Array<() => void> = [];
+        const { action } = fetchText(
+          input,
+          () => {},
+          (cancel) => cancels.push(cancel),
+          [parent],
+          parent,
+          runtime,
+        );
+        const run = runtime.edit();
+        input.withTx(run).set({ url: "http://mock-test-server.local/text" });
+        if (firstRunFails) {
+          expect(() => action(run)).toThrow("Can not open transaction writer");
+        } else {
+          action(run);
+        }
+        run.abort();
+
+        const edit = runtime.edit.bind(runtime);
+        let edits = 0;
+        runtime.edit = (options) => {
+          edits++;
+          return edit(options);
+        };
+        try {
+          for (const cancel of cancels) cancel();
+        } finally {
+          runtime.edit = edit;
+        }
+        expect(edits).toBe(firstRunFails ? 0 : 1);
+      });
+    }
   });
 });
 

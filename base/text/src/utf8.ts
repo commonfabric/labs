@@ -116,9 +116,10 @@ export function utf8Compare(a: string, b: string): number {
 }
 
 /**
- * Produces a frozen array containing the ordered keys of the given object,
- * in UTF-8 sort order. If the given object is frozen and its keys needed
- * sorting, the result is cached for possible reuse.
+ * Produces an array containing the ordered keys of the given object, in UTF-8
+ * sort order. If the given object is frozen and its keys needed sorting, the
+ * result is frozen and cached, and later calls return the same array.
+ * Otherwise the result is a new array.
  */
 export function utf8SortedKeysOf(value: object): readonly string[] {
   if (value === null) {
@@ -134,25 +135,21 @@ export function utf8SortedKeysOf(value: object): readonly string[] {
   // performs on a short array, and object keys usually arrive already in
   // order.
   const keys = Object.keys(value);
-  let ordered = true;
   for (let at = 1; at < keys.length; at++) {
     if (utf8Compare(keys[at - 1]!, keys[at]!) > 0) {
-      ordered = false;
-      break;
+      // An entry lives as long as its object does, so one is kept only where
+      // it saves a sort. Reading keys already in order again takes one
+      // `Object.keys()` call and the check above, which costs less than
+      // holding a copy of them for the object's whole life.
+      keys.sort(utf8Compare);
+      if (Object.isFrozen(value)) {
+        sortedKeyCache.set(value, Object.freeze(keys));
+      }
+      return keys;
     }
   }
 
-  const sorted = Object.freeze(ordered ? keys : keys.sort(utf8Compare));
-
-  // An entry lives as long as its object does, so one is kept only where it
-  // saves a sort. Reading keys already in order again takes one
-  // `Object.keys()` call and the check above, which costs less than holding a
-  // copy of them for the object's whole life.
-  if (!ordered && Object.isFrozen(value)) {
-    sortedKeyCache.set(value, sorted);
-  }
-
-  return sorted;
+  return keys;
 }
 
 /**

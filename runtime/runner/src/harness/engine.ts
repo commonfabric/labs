@@ -15,6 +15,7 @@ import {
   identitySourceMap,
 } from "@commonfabric/js-compiler/source-map";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { isPrimitive } from "@commonfabric/js-values/types";
 import type { StaticCache } from "@commonfabric/static";
 import type { BuilderSourceSitesV1 } from "@commonfabric/ts-transformers";
 import { PATTERN_COVERAGE_GLOBAL } from "@commonfabric/ts-transformers/runtime-contract";
@@ -225,12 +226,6 @@ class RootedProgramResolver implements ProgramResolver {
     return source;
   }
 
-  resolveDataFile(name: string): Promise<Source | undefined> {
-    return this.#inner.resolveDataFile
-      ? this.#inner.resolveDataFile(name)
-      : this.#inner.resolveSource(name);
-  }
-
   resolveSource(identifier: string): Promise<Source | undefined> {
     return this.#inner.resolveSource(identifier);
   }
@@ -246,8 +241,8 @@ function reachableModuleSpecifiers(
     const specifier = pending.pop()!;
     if (reachable.has(specifier)) continue;
     reachable.add(specifier);
-    const record = records.get(specifier);
-    if (record === undefined) continue;
+    // A verified graph holds a record for its entry and every import target.
+    const record = records.get(specifier)!;
     for (const importSpecifier of record.imports) {
       pending.push(resolveRecordImport(record, importSpecifier));
     }
@@ -343,13 +338,9 @@ function sourcePackageImports(
   if (owner === undefined) return [];
   const imports: CacheableModule["imports"] = [];
   for (const rootPath of owner.rootPaths) {
-    const rootIdentity = identityByPath.get(rootPath);
-    if (rootIdentity === undefined) {
-      throw new Error(`Source root '${rootPath}' has no module identity.`);
-    }
     imports.push({
       specifier: sourceRootSpecifier(storedNameFor(rootPath)),
-      targetIdentity: rootIdentity,
+      targetIdentity: requiredIdentity(identityByPath, rootPath),
     });
   }
   for (const dataPath of owner.dataPaths ?? []) {
@@ -397,8 +388,6 @@ export class Engine extends EventTarget {
   #ctRuntime: Runtime;
 
   #sesRuntime: SESRuntime | undefined;
-
-  #nextEvalId = 0;
 
   readonly #executableRegistry = new ExecutableRegistry();
 
@@ -622,7 +611,7 @@ export class Engine extends EventTarget {
       const mounts = fabricResolver?.mounts() ?? [];
       const specifierAliases = fabricResolver?.specifierAliases() ?? new Map();
       const resolvedPins = fabricResolver?.resolvedPins() ?? [];
-      const resolvedFiles = uniqueSourcesByName(resolvedProgram.files);
+      const resolvedFiles = resolvedProgram.files;
       // For compilation, fabric mounts need the helper import too (they are
       // fetched as authored source — see the identity fix below). Authored
       // modules are already injected by `pretransformProgramForModules`.
@@ -708,8 +697,8 @@ export class Engine extends EventTarget {
         moduleFiles.every((f) => cached.has(identityByPath.get(f.name)!));
 
       const precompiledBodies = new Map<string, string>();
-      // Carry per-module source maps so the ESM loader can compose a per-load
-      // bundle map for authored error-stack coordinates.
+      // Carry per-module source maps so error stacks map back to authored
+      // coordinates.
       const precompiledSourceMaps = new Map<string, SourceMap>();
       const precompiledBuilderSourceSites = new Map<
         string,
@@ -1038,15 +1027,22 @@ export class Engine extends EventTarget {
     const unioned = new Map<string, Source>();
     const mains: string[] = [];
     const batchIds: string[] = [];
-    const authoredSources: AuthoredSourceLookup[] = [];
+    // Keyed by `batchIdOf()`, whose `undefined` names no program.
+    const authoredSourceById = new Map<
+      string | undefined,
+      AuthoredSourceLookup
+    >();
     for (const program of programs) {
       const id = computeId(program);
       batchIds.push(id);
-      authoredSources.push(authoredSourceForCompile({
-        id,
-        mounts: [],
-        sourceFiles: partitionDataFiles(program).codeFiles,
-      }));
+      authoredSourceById.set(
+        `/${id}`,
+        authoredSourceForCompile({
+          id,
+          mounts: [],
+          sourceFiles: partitionDataFiles(program).codeFiles,
+        }),
+      );
       const mapped = pretransformProgramForModules(program, id);
       const resolver = new EngineProgramResolver(
         { ...mapped, files: partitionDataFiles(mapped).codeFiles },
@@ -1056,7 +1052,7 @@ export class Engine extends EventTarget {
         resolver,
         mapped.sourceRoots ?? [],
       );
-      for (const file of uniqueSourcesByName(resolved.files)) {
+      for (const file of resolved.files) {
         if (!unioned.has(file.name)) unioned.set(file.name, file);
       }
       mains.push(mapped.main);
@@ -1076,13 +1072,8 @@ export class Engine extends EventTarget {
       .compileToModulesCollecting(merged, {
         runtimeModules: Engine.runtimeModuleNames(),
         // Each lookup knows only its own program's `/<id>` prefix.
-        authoredSource: (fileName) => {
-          for (const lookup of authoredSources) {
-            const authored = lookup(fileName);
-            if (authored !== undefined) return authored;
-          }
-          return undefined;
-        },
+        authoredSource: (fileName) =>
+          authoredSourceById.get(batchIdOf(fileName))?.(fileName),
         beforeTransformers: runTransform
           ? (program) => {
             const moduleIdentities = new Map(
@@ -1120,7 +1111,6 @@ export class Engine extends EventTarget {
     const verified = new Map<string, number>();
     if (runTransform) {
       for (const [name, body] of modules) {
-        if (name.endsWith(".d.ts")) continue;
         const at = performance.now();
         try {
           verifyCompiledModuleBody(body.js, name);
@@ -1134,20 +1124,17 @@ export class Engine extends EventTarget {
       }
     }
 
-    // A file's `/<id>` prefix is the first path segment of its name, so the
-    // program it belongs to is one lookup rather than a scan of the batch.
-    // The injected `cfc.ts` helper carries no prefix and belongs to none of
-    // them, which is why an unmatched name is passed over. Verifying a body
-    // is per-file work like checking and emitting one, so it is charged
-    // alongside them rather than left in what the sum does not reach.
-    const mainById = new Map(
+    // The injected `cfc.ts` helper belongs to no program of the batch, which
+    // is why an unmatched name is passed over. Verifying a body is per-file
+    // work like checking and emitting one, so it is charged alongside them
+    // rather than left in what the sum does not reach.
+    const mainById = new Map<string | undefined, string>(
       batchIds.map((id, index) => [`/${id}`, programs[index]!.main]),
     );
     const durations = new Map<string, number>();
     for (const spent of [fileDurations, verified]) {
       for (const [name, ms] of spent) {
-        const cut = name.indexOf("/", 1);
-        const main = cut === -1 ? undefined : mainById.get(name.slice(0, cut));
+        const main = mainById.get(batchIdOf(name));
         if (main === undefined) continue;
         durations.set(main, (durations.get(main) ?? 0) + ms);
       }
@@ -1273,7 +1260,7 @@ export class Engine extends EventTarget {
     );
     const mounts = fabricResolver?.mounts() ?? [];
     const specifierAliases = fabricResolver?.specifierAliases() ?? new Map();
-    const resolvedProgramFiles = uniqueSourcesByName(resolvedProgram.files);
+    const resolvedProgramFiles = resolvedProgram.files;
     // Fabric mounts are fetched as authored source; inject the helper for
     // compilation (authored entry modules were injected before resolve above).
     const resolvedForCompile = {
@@ -1464,7 +1451,6 @@ export class Engine extends EventTarget {
   ): Promise<EvaluateResult> {
     const prefix = `/${id}`;
     return this.#evaluateGraph(graph, mainSpecifier, {
-      evalIdPrefix: id,
       fileNameForPath: (path) =>
         path.startsWith(prefix) ? path.slice(prefix.length) : path,
       filesForExports: program.files,
@@ -1492,7 +1478,6 @@ export class Engine extends EventTarget {
     graph: CompiledModuleGraph,
     mainSpecifier: string,
     ctx: {
-      evalIdPrefix: string;
       fileNameForPath(path: string): string;
       filesForExports: Source[];
       dataFilesForExports?: string[];
@@ -1501,13 +1486,6 @@ export class Engine extends EventTarget {
     // Evaluations of this engine can overlap, so this is not a named timer.
     const evaluationStart = performance.now();
     try {
-      // Per-evaluation id, used ONLY to key this evaluation's synthetic
-      // source-map names (`${evalId}.js`). The former "verified load id" —
-      // which scoped CFC identity and registry partitions to a load — is gone
-      // (PR E2): identity flows through the content-addressed provenance
-      // recorded below.
-      const evalId = `${ctx.evalIdPrefix}:esm:${this.#nextEvalId++}`;
-
       const patternCoverage = this.#patternCoverageByGraph.get(graph);
       const globals = createModuleCompartmentGlobals({
         console: this.#consoleShim,
@@ -1515,21 +1493,22 @@ export class Engine extends EventTarget {
           ? { [PATTERN_COVERAGE_GLOBAL]: patternCoverage.sandboxGlobal() }
           : {}),
       });
-      // Register a composed bundle source map for `${evalId}.js` so that a
-      // stack coordinate from this evaluation maps back to authored source.
-      // Its consumers are error mapping for throws escaping module evaluation
-      // or invocation, plus scheduler action diagnostics.
-      // Full module path per specifier.
-      const sourceNameBySpecifier = new Map<string, string>();
-      for (const [name, specifier] of graph.specifierByPath) {
-        sourceNameBySpecifier.set(specifier, name);
-      }
-      // Composition + registration are DEFERRED (CT-1819): composing these
-      // maps is a per-segment VLQ transcode over every module (~16-22ms per
-      // cold boot post-#4455/#4460), while error mapping only asks for one
-      // after a throw. Providers capture per-module line counts and raw maps,
-      // never compiled bodies, so the closures retain KBs, not bundle text;
-      // each is one-shot and dropped after first use.
+      // Register each module's map under its eval `//# sourceURL` (its
+      // sanitized source name), which names the module's frame in a stack, so
+      // that a stack coordinate from this evaluation maps back to authored
+      // source. Its consumers are error mapping for throws escaping module
+      // evaluation or invocation, plus scheduler action diagnostics. Those
+      // coordinates are eval-relative, hence the one-line shift for the
+      // factory wrapper.
+      //
+      // Each map is registered lazily: shifting one transcodes every VLQ
+      // segment in it, while error mapping asks for a module's map only after
+      // a throw. A provider captures the module's line count and raw map, never
+      // its compiled body, and runs at most once.
+      //
+      // A module with no authored map, such as a cached body that retained
+      // none, gets an identity map keyed on its source name, so its frame
+      // still names the module rather than a raw compiled coordinate.
       const lineCountBySpecifier = new Map<string, number>();
       for (const [specifier, body] of graph.compiledBodies) {
         lineCountBySpecifier.set(
@@ -1538,39 +1517,6 @@ export class Engine extends EventTarget {
         );
       }
       const moduleSourceMaps = graph.moduleSourceMaps;
-      const bundleEntries = [...graph.compiledBodies.keys()].map(
-        (specifier) => {
-          const source = sourceNameBySpecifier.get(specifier);
-          const bodyLineCount = lineCountBySpecifier.get(specifier)!;
-          return { specifier, source, bodyLineCount };
-        },
-      );
-      this.#getSESRuntime().loadSourceMapLazy(
-        `${evalId}.js`,
-        () =>
-          composeBundleSourceMap(
-            bundleEntries.map(({ specifier, source, bodyLineCount }) => ({
-              bodyLineCount,
-              map: moduleSourceMaps.get(specifier) ??
-                (source !== undefined
-                  ? identitySourceMap(bodyLineCount, source)
-                  : undefined),
-              source,
-            })),
-            `${evalId}.js`,
-          ),
-      );
-      // ALSO register each module's map under its eval `//# sourceURL` (its
-      // sanitized source name). Browsers surface the per-module eval frame in
-      // `new Error().stack` rather than the bundle frame, so it needs a map of
-      // its own. Those coordinates are eval-relative, hence the factory-wrapper
-      // line shift (`(function (...) {\n` = +1).
-      //
-      // When no authored map exists for a module (the warm/cached record load \u2014
-      // `buildRecordsFromCompiled` populates `moduleSourceMaps` only for cached
-      // bodies that retained one), fall back to an IDENTITY map keyed on the
-      // module's per-module source `name`, so the frame is still re-labeled with
-      // the module source name instead of a raw bundle coordinate.
       for (const [name, specifier] of graph.specifierByPath) {
         const sourceUrl = name.replace(/[\r\n\u2028\u2029]/g, "_");
         const bodyLineCount = lineCountBySpecifier.get(specifier) ?? 1;
@@ -1586,6 +1532,12 @@ export class Engine extends EventTarget {
       }
 
       const MODULE_SPECIFIER_PREFIX = "cf:module/";
+      // Full module path per specifier, which names each module's timing.
+      const sourceNameBySpecifier = new Map<string, string>();
+      for (const [name, specifier] of graph.specifierByPath) {
+        sourceNameBySpecifier.set(specifier, name);
+      }
+
       // One frame for the whole graph: a cell holds the frame it was made under,
       // and a module's cells reach the modules that import it. The frame goes on
       // the stack only while a module runs, because other runtimes read that
@@ -1657,11 +1609,7 @@ export class Engine extends EventTarget {
           // Only object/function exports are sub-pattern candidates. Skip the
           // `__esModule` flag and primitives, which would otherwise collide in
           // this value-keyed map (e.g. every module's `true`).
-          if (exportName === "__esModule") continue;
-          if (typeof value !== "object" && typeof value !== "function") {
-            continue;
-          }
-          if (value === null) continue;
+          if (exportName === "__esModule" || isPrimitive(value)) continue;
           exportsByValue.set(value, {
             main: fileName,
             mainExport: exportName,
@@ -1909,15 +1857,9 @@ export class Engine extends EventTarget {
       }
     }
     const mainSpecifier = `cf:module/${entryIdentity}`;
-    if (!graph.records.has(mainSpecifier)) {
-      throw new Error(
-        `Cached closure is missing the entry module ${mainSpecifier}`,
-      );
-    }
     verifyModuleGraph(graph.records, mainSpecifier);
 
     return this.#evaluateGraph(graph, mainSpecifier, {
-      evalIdPrefix: entryIdentity,
       fileNameForPath: (path) => path, // already normalized
       filesForExports: options.sourceFiles ?? [],
       ...(options.dataFiles === undefined
@@ -2041,7 +1983,6 @@ export class Engine extends EventTarget {
     this.#sesRuntime = undefined;
     this.#runtimeInternals = undefined;
     this.#compilerInternals = undefined;
-    this.#nextEvalId = 0;
     this.#executableRegistry.clear();
   }
 
@@ -2073,6 +2014,17 @@ function validatePolicyManifestsForModule(
     }
     return artifact;
   });
+}
+
+/**
+ * The `/<id>` prefix of a file `typeCheckBatch()` compiled, which is the first
+ * path segment of its name, so the program it belongs to is one lookup rather
+ * than a scan of the batch. A name of one segment, such as the injected
+ * `cfc.ts` helper's, carries none.
+ */
+function batchIdOf(name: string): string | undefined {
+  const cut = name.indexOf("/", 1);
+  return cut === -1 ? undefined : name.slice(0, cut);
 }
 
 function computeId(program: RuntimeProgram): string {
@@ -2208,23 +2160,6 @@ function cachedArtifactsIncludePatternCoverage(
   return true;
 }
 
-function uniqueSourcesByName(files: readonly Source[]): Source[] {
-  const byName = new Map<string, Source>();
-  for (const file of files) {
-    const previous = byName.get(file.name);
-    if (previous !== undefined) {
-      if (previous.contents !== file.contents) {
-        throw new Error(
-          `Conflicting resolved source contents for '${file.name}'`,
-        );
-      }
-      continue;
-    }
-    byName.set(file.name, file);
-  }
-  return [...byName.values()];
-}
-
 function cacheableImportsFor(
   fileName: string,
   importEdges: ReadonlyMap<string, ModuleImportEdges>,
@@ -2238,18 +2173,15 @@ function cacheableImportsFor(
   }));
   const fabric = (edges?.externalDeps ?? [])
     .filter(isFabricImportSpecifier)
-    .map((specifier) => {
-      const target = specifierAliases.get(specifier);
-      if (target === undefined) {
-        throw new Error(
-          `unresolved fabric specifier '${specifier}' survived compile`,
-        );
-      }
-      return {
-        specifier,
-        targetIdentity: requiredIdentity(identityByPath, target),
-      };
-    });
+    .map((specifier) => ({
+      specifier,
+      // Resolution refuses an import it cannot resolve, and
+      // `FabricAwareResolver` aliases every fabric specifier it resolves.
+      targetIdentity: requiredIdentity(
+        identityByPath,
+        specifierAliases.get(specifier)!,
+      ),
+    }));
   return [...internal, ...fabric];
 }
 

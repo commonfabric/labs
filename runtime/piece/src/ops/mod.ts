@@ -91,6 +91,11 @@ export {
   joinVisitedRoomOf,
 } from "./join-visited-room.ts";
 export {
+  adoptCatalogRoomsOf,
+  ADOPTION_BATCH_SIZE,
+  adoptionRequestId,
+} from "./adopt-catalog-rooms.ts";
+export {
   type DeletionMarkDecision,
   markDeletedSpaceOf,
   type ProfileRetirementDecision,

@@ -1275,7 +1275,11 @@ describe("cli piece parsing", () => {
       const started: unknown[] = [];
       const cell = { name: "created piece" };
       const controller = {
-        runtime: { experimental: { serverExecution: true } },
+        runtime: {
+          experimental: { serverExecution: true },
+          // The space this fixture creates in exists: a refusal is the server's.
+          spaceExists: () => Promise.resolve(true),
+        },
         getSpace: () => SPACE_DID,
         getPieceCell: (id: string, run: boolean) => {
           expect(run).toBe(false);

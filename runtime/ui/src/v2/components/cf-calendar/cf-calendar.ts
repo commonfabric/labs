@@ -271,20 +271,19 @@ export class CFCalendar extends BaseElement {
     this.removeEventListener("keydown", this._handleKeyDown);
   }
 
-  override firstUpdated() {
-    this._valueCellController.bind(this.value);
-    this._markedDatesCellController.bind(this.markedDates as any);
-    this._syncViewToValue();
-  }
-
-  override updated(changed: PropertyValues) {
+  // Binding before rendering shows the bound value's month from the first
+  // render on, whether or not the value is a cell that delivers later.
+  override willUpdate(changed: PropertyValues) {
     if (changed.has("value")) {
       this._valueCellController.bind(this.value);
       this._syncViewToValue();
     }
     if (changed.has("markedDates")) {
-      this._markedDatesCellController.bind(this.markedDates as any);
+      this._markedDatesCellController.bind(this.markedDates);
     }
+  }
+
+  override updated(changed: PropertyValues) {
     if (changed.has("disabled")) {
       this.setAttribute("aria-disabled", String(this.disabled));
     }

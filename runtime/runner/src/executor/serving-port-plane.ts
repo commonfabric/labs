@@ -49,7 +49,7 @@ import {
 } from "./serving-port-protocol.ts";
 import { servedAclChangeData } from "./served-acl-change.ts";
 import type { WaveCommitSinkDeps } from "./space-server.ts";
-import type { ServingLoopStats } from "./stats.ts";
+import type { ServingLoopCounters, ServingLoopStats } from "./stats.ts";
 import { ViewInterestCache } from "./view-interests.ts";
 import type {
   WaveCommitRejection,
@@ -80,7 +80,7 @@ export const servingPlaneEndpoint = (port: PortLike): ServingPlaneEndpoint =>
 /** What the worker's host answers the server's thread with. */
 export type ServingPlaneHost = {
   stats: () => ServingLoopStats;
-  eventStats: () => ServingLoopStats["events"];
+  counters: () => ServingLoopCounters;
   diagnostics: () => ServingLoopDiagnostics;
   collectedMemory: () => CollectedMemory;
   runLifecycleVerb: (
@@ -96,6 +96,12 @@ export type ServingPlaneHost = {
 
   close: () => Promise<void>;
 };
+
+/** The loopback plane this module builds: one that makes transports. */
+type TransportPlane = Extract<
+  LoopbackPlane,
+  { createTransport(): MemoryClient.Transport }
+>;
 
 /** A session as the mirror holds it. */
 type MirroredSession = {
@@ -215,22 +221,22 @@ type WaveCommitSinkReads = Required<
  * The tenure's wave commit sink on the worker: the reads run on the worker's
  * engines, and each commit crosses to the sink the server's thread keeps for
  * this session, carrying the number this side's counter minted for it.
- * `reportEventStats` runs just before each commit is posted.
+ * `reportCounters` runs just before each commit is posted.
  */
 class PlaneWaveCommitSink implements WaveCommitSink, WaveCommitSinkReads {
   readonly #endpoint: ServingPlaneEndpoint;
   readonly #deps: WaveCommitSinkDeps;
-  readonly #reportEventStats: () => void;
+  readonly #reportCounters: () => void;
   readonly #reads: EngineWaveCommitSink;
 
   constructor(
     endpoint: ServingPlaneEndpoint,
     deps: WaveCommitSinkDeps,
-    reportEventStats: () => void,
+    reportCounters: () => void,
   ) {
     this.#endpoint = endpoint;
     this.#deps = deps;
-    this.#reportEventStats = reportEventStats;
+    this.#reportCounters = reportCounters;
     // Its counter never advances: only the reads are called on it.
     this.#reads = new EngineWaveCommitSink({
       engineFor: (space) =>
@@ -300,13 +306,15 @@ class PlaneWaveCommitSink implements WaveCommitSink, WaveCommitSinkReads {
     batch: WaveSpaceCommit,
   ): Promise<Result<{ seq: number }, WaveCommitRejection>> {
     const localSeq = ++this.#deps.localSeqRef.value;
-    // The event counters cross ahead of the commit on the same port, whose
+    // The counters cross ahead of the commit on the same port, whose
     // messages the server's thread handles in order, so it holds what this
-    // wave's drain counted before it applies the commit. A client that has
-    // seen the commit then reads counters that include it. Only the `events`
-    // block crosses here: the whole counters, settle series included, cost
-    // about as much to post as the commit itself.
-    this.#reportEventStats();
+    // wave counted before its commit by the time it applies the commit. A
+    // client that has seen the commit then reads counters that include those
+    // counts. What the wave counts for the commit itself, such as `waves` and
+    // `derivedCommits`, arrives with the next full post. The settle blocks
+    // stay behind: their series cost about as much to post as the commit
+    // itself.
+    this.#reportCounters();
     try {
       return await this.#endpoint.request("sink.commitWave", {
         sessionId: this.#deps.sessionId,
@@ -596,7 +604,7 @@ export class ServingPlane {
     MemoryClient.QueuedFrameTransport
   >();
   readonly #server: HostMemoryServer;
-  readonly #loopback: LoopbackPlane;
+  readonly #loopback: TransportPlane;
   #observer: ServerExecutionObserver | undefined;
   #host: ServingPlaneHost | undefined;
   #nextTransport = 1;
@@ -651,7 +659,7 @@ export class ServingPlane {
   }
 
   /** The loopback plane, for the serving runtime factory. */
-  get loopback(): LoopbackPlane {
+  get loopback(): TransportPlane {
     return this.#loopback;
   }
 
@@ -676,8 +684,8 @@ export class ServingPlane {
   createWaveCommitSink(deps: WaveCommitSinkDeps): WaveCommitSink {
     return new PlaneWaveCommitSink(this.#endpoint, deps, () => {
       if (this.#host === undefined) return;
-      this.#endpoint.notify("host.eventStats", {
-        events: this.#host.eventStats(),
+      this.#endpoint.notify("host.counters", {
+        counters: this.#host.counters(),
       });
     });
   }

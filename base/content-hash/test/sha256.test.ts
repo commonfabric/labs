@@ -12,7 +12,7 @@ import { fromBase64url } from "@commonfabric/bytes/base64url";
 import { sha256 } from "@commonfabric/content-hash";
 import { sha256Deno } from "@/sha256-deno.ts";
 import { sha256Noble } from "@/sha256-noble.ts";
-import { initWasm, sha256Wasm } from "@/sha256-wasm.ts";
+import { initWasm, initWasmOneShot, sha256Wasm } from "@/sha256-wasm.ts";
 import { FIXTURES } from "./fixtures.ts";
 
 const sha256Funcs = [
@@ -31,6 +31,20 @@ describe("sha256()", () => {
   it("is one of the implementation functions", () => {
     const found = sha256Funcs.indexOf(sha256);
     expect(found).not.toBe(-1);
+  });
+});
+
+describe("sha256Deno() and `hash-wasm`", () => {
+  it("produces the expected hash for a short input before and after asking for `hash-wasm`", async () => {
+    // A short input asks for `hash-wasm`; until its setup is done, short inputs
+    // are hashed by `node:crypto`, and afterwards in WASM.
+
+    const { bytes, sha256: hashStr } = FIXTURES.find((fixture) =>
+      fixture.bytes.length === 192
+    )!;
+    expect(sha256Deno(bytes)).toEqual(fromBase64url(hashStr));
+    await initWasmOneShot();
+    expect(sha256Deno(bytes)).toEqual(fromBase64url(hashStr));
   });
 });
 

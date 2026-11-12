@@ -228,4 +228,15 @@ describe("view-interests", () => {
     expect((await cache.interestsFor(space, undefined, r.read))[0])
       .toEqual(interest("a", undefined));
   });
+
+  it("ignores a selection for a space it holds no list for, and reads the server's", async () => {
+    const cache = new ViewInterestCache();
+    const r = reader(() => [interest("a", undefined, 2)]);
+
+    cache.noteSelection(space, interest("a", undefined).handle, 9);
+
+    expect(await cache.interestsFor(space, undefined, r.read)).toEqual([
+      interest("a", undefined, 2),
+    ]);
+  });
 });

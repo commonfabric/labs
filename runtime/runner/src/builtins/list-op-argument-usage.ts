@@ -1,4 +1,4 @@
-import type { Pattern } from "../builder/types.ts";
+import type { JSONSchema, Pattern } from "../builder/types.ts";
 import { ContextualFlowControl } from "../cfc.ts";
 
 export type ListOpArgumentUsage = {
@@ -53,12 +53,11 @@ const usageCache = new WeakMap<object, ListOpArgumentUsage>();
  * by default, which other readers rely on.
  */
 function hasArgumentSchema(
-  pattern: Pattern,
+  argumentSchema: JSONSchema,
   path: readonly string[],
 ): boolean {
-  if (pattern.argumentSchema === undefined) return false;
   return ContextualFlowControl.schemaAtPath(
-    pattern.argumentSchema,
+    argumentSchema,
     path,
     undefined,
     false,
@@ -72,7 +71,8 @@ export function inferListOpArgumentUsage(
   const cached = usageCache.get(pattern as object);
   if (cached) return cached;
 
-  if (pattern.argumentSchema === undefined) {
+  const { argumentSchema } = pattern;
+  if (argumentSchema === undefined) {
     const legacyUsage = {
       usesElement: true,
       usesIndex: true,
@@ -84,10 +84,10 @@ export function inferListOpArgumentUsage(
   }
 
   const usage = {
-    usesElement: hasArgumentSchema(pattern, ["element"]),
-    usesIndex: hasArgumentSchema(pattern, ["index"]),
-    usesArray: hasArgumentSchema(pattern, ["array"]),
-    usesParams: hasArgumentSchema(pattern, ["params"]),
+    usesElement: hasArgumentSchema(argumentSchema, ["element"]),
+    usesIndex: hasArgumentSchema(argumentSchema, ["index"]),
+    usesArray: hasArgumentSchema(argumentSchema, ["array"]),
+    usesParams: hasArgumentSchema(argumentSchema, ["params"]),
   } satisfies ListOpArgumentUsage;
 
   usageCache.set(pattern as object, usage);

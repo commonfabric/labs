@@ -21,6 +21,8 @@
     "@opentelemetry/api": "npm:@opentelemetry/api@^1.9.1",
     "@opentelemetry/exporter-trace-otlp-http": "npm:@opentelemetry/exporter-trace-otlp-http@^0.220.0",
     "@opentelemetry/resources": "npm:@opentelemetry/resources@^2.9.0",
-    "@opentelemetry/sdk-trace-web": "npm:@opentelemetry/sdk-trace-web@^2.9.0"
+    "@opentelemetry/sdk-trace-web": "npm:@opentelemetry/sdk-trace-web@^2.9.0",
+    "core-js/proposals/explicit-resource-management": "npm:core-js@^3.46.0/proposals/explicit-resource-management.js",
+    "core-js/proposals/async-explicit-resource-management": "npm:core-js@^3.46.0/proposals/async-explicit-resource-management.js"
   }
 }
