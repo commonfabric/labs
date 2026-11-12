@@ -131,7 +131,10 @@ function hashUnit(seed: number, label: string): number {
     hash = Math.imul(hash, 0x0100_0193) >>> 0;
     hash ^= hash >>> 13;
   }
-  return hash / 0x1_0000_0000;
+  // MurmurHash3's finalizer spreads the last characters across every bit.
+  hash = Math.imul(hash ^ (hash >>> 16), 0x85eb_ca6b);
+  hash = Math.imul(hash ^ (hash >>> 13), 0xc2b2_ae35);
+  return ((hash ^ (hash >>> 16)) >>> 0) / 0x1_0000_0000;
 }
 
 function terrainFor(seed: number, x: number, y: number): Terrain {
