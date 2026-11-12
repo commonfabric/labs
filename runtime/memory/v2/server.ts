@@ -1425,6 +1425,10 @@ class Connection {
   #admissionNotice = false;
   #elidedVerdicts = false;
   #sessions = new Map<string, SessionHandle>();
+  /** The keys of this connection's sessions that their space's deletion
+   *  revoked. A deleted space opens no session again, so a key enters once
+   *  and the set holds no more than the sessions the connection opened. */
+  #deletedSessions = new Set<string>();
   #sessionOpenChallenge: SessionOpenChallengeState | null = null;
   #routedOwns: ((space: string) => boolean) | undefined;
   #routedExpiries = new Map<string, ReturnType<typeof setTimeout>>();
@@ -1682,7 +1686,7 @@ class Connection {
       this.#send({
         type: "response",
         requestId,
-        error: toError(
+        error: this.#deletedSessionRefusal(space, sessionId) ?? toError(
           "SessionRevokedError",
           "Session was revoked while the request was in flight",
         ),
@@ -1690,6 +1694,20 @@ class Connection {
       return;
     }
     this.#send(response, { space, sessionId });
+  }
+
+  /**
+   * The refusal of a command on the session `sessionId` on `space` when the
+   * space's deletion revoked that session on this connection and the
+   * connection is still routed to the space, and otherwise `null`. Every
+   * command on such a session is refused as the space is, whether it was in
+   * flight at the revocation or arrived after it (INV-15).
+   */
+  #deletedSessionRefusal(space: string, sessionId: string): V2Error | null {
+    return this.#deletedSessions.has(sessionKey(space, sessionId)) &&
+        (this.#routedOwns?.(space) ?? true)
+      ? this.#server.deletedSpaceRefusalNow(space)
+      : null;
   }
 
   addSession(
@@ -1734,6 +1752,7 @@ class Connection {
     if (!this.#sessions.delete(key) || this.#closed) {
       return;
     }
+    if (reason === "deleted") this.#deletedSessions.add(key);
     this.#server.reapAdmissionWaits();
     // A membership is admitted by the session it joined through, so losing
     // the session ends it.
@@ -2269,7 +2288,7 @@ class Connection {
       this.#send({
         type: "response",
         requestId,
-        error: toError(
+        error: this.#deletedSessionRefusal(space, sessionId) ?? toError(
           "SessionError",
           "Session is not open on this connection",
         ),
@@ -4190,7 +4209,8 @@ export class Server {
    * Like {@link deletedSpaceRefusal}, from the engine already open for
    * `space`, without waiting, for a request answered as it is handed over.
    * A session open on `space` has that engine open, since its open opened
-   * it; with none open, `null`.
+   * it, and the engine stays open once the space's deletion has revoked its
+   * sessions; with none open, `null`.
    */
   deletedSpaceRefusalNow(space: string): V2Error | null {
     const engine = this.#resolvedEngines.get(space);
