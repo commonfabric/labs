@@ -5100,10 +5100,13 @@ export class SchemaObjectTraverser<V extends FabricValue>
     // whatever is there, whatever shape it has: the declaration names a
     // reference rather than a value, so a stored string is as opaque as a
     // stored object, and one uniform answer is what lets a reader test,
-    // compare and pass on any of them the same way. A link is exempt — it is
-    // followed first, because the reference is to what it names and not to the
-    // link. Answering here descends into nothing, so it is also not part of a
-    // cycle and registers nothing with the tracker.
+    // compare and pass on any of them the same way. A link within the space
+    // is exempt — it is followed first, because the reference is to what it
+    // names and not to the link. A link into another space at a position
+    // typed `unknown` alone is answered without being followed, by
+    // `#traversePointerWithSchema()`, naming its target. Answering here
+    // descends into nothing, so it is also not part of a cycle and registers
+    // nothing with the tracker.
     const jsonType = getJsonType(doc.value);
     if (
       jsonType !== null && !isSigilLink(doc.value) &&
@@ -6596,21 +6599,23 @@ export function getJsonType(value: unknown): JSONSchemaTypes | null {
 }
 
 /**
- * Whether `schema`, its references resolved, types its position `unknown`,
- * alone or among other types, whether or not it marks the position a cell.
+ * Whether `schema`, its references resolved, types its position `unknown` and
+ * nothing else: a union naming `unknown` beside other types decides by them.
  */
 function isUnknownValueSchema(schema: JSONSchema | undefined): boolean {
   if (!isObjectOrArray(schema)) return false;
   const resolved = resolveSchemaRefsCanonical(schema);
-  return isObjectOrArray(resolved) &&
-    (resolved.type === "unknown" ||
-      (Array.isArray(resolved.type) && resolved.type.includes("unknown")));
+  return isObjectOrArray(resolved) && resolved.type === "unknown";
 }
 
 /** Returns whether a schema requests a cell handle with no declared value shape. */
 export function isUnknownCellSchema(schema: JSONSchema | undefined): boolean {
-  return isUnknownValueSchema(schema) && isObjectOrArray(schema) &&
-    SchemaObjectTraverser.hasAsCell(resolveSchemaRefsCanonical(schema));
+  if (!isObjectOrArray(schema)) return false;
+  const resolved = resolveSchemaRefsCanonical(schema);
+  return isObjectOrArray(resolved) &&
+    (resolved.type === "unknown" ||
+      (Array.isArray(resolved.type) && resolved.type.includes("unknown"))) &&
+    SchemaObjectTraverser.hasAsCell(resolved);
 }
 
 /**

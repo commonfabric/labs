@@ -3808,10 +3808,13 @@ describe("SchemaObjectTraverser unknown type handling", () => {
   describe("a link at a property typed unknown", () => {
     /**
      * Traverses a container in `did:test:home` whose `room` property, typed
-     * `unknown` with no `asCell`, links a document in `targetSpace`, and
+     * `roomType` with no `asCell`, links a document in `targetSpace`, and
      * returns whether the traversal read that document.
      */
-    const readsTarget = (targetSpace: string): boolean => {
+    const readsTarget = (
+      targetSpace: string,
+      roomType: JSONSchema = { type: "unknown" },
+    ): boolean => {
       const store = new Map<string, Revision<State>>();
       const type = "application/json" as const;
       const targetUri = "of:doc-unknown-link-target" as URI;
@@ -3837,7 +3840,7 @@ describe("SchemaObjectTraverser unknown type handling", () => {
       });
       const schema = {
         type: "object",
-        properties: { room: { type: "unknown" } },
+        properties: { room: roomType },
       } as JSONSchema;
       const manager = new StoreObjectManager(store);
       const tx = new ExtendedStorageTransaction(
@@ -3869,6 +3872,14 @@ describe("SchemaObjectTraverser unknown type handling", () => {
 
     it("reads the target of a link within the same space", () => {
       expect(readsTarget("did:test:home")).toBe(true);
+    });
+
+    it("reads the target of a link into another space at a union naming unknown", () => {
+      expect(
+        readsTarget("did:test:elsewhere", {
+          type: ["unknown", "string", "number", "boolean", "null"],
+        } as JSONSchema),
+      ).toBe(true);
     });
   });
 
