@@ -18,6 +18,7 @@ import {
   loadCompiledClosure,
   loadVerifiedSourceClosure,
   readVerifiedSourceClosure,
+  setCompileCacheRuntimeVersionForTesting,
   type SourceDoc,
   verifySourceDocs,
   writeCompiledDocs,
@@ -332,6 +333,23 @@ describe("source import attestation", () => {
           .toBe(true);
       } finally {
         tx.abort();
+      }
+    });
+
+    it("asks for the compiler for an attested closure when this runtime reads no compiled closures", async () => {
+      // The attested lists live in the compiled documents, which a runtime
+      // with no compile-cache version does not read.
+      const entry = await compileIntoSpace(newRuntime());
+      const fresh = newRuntime();
+
+      const restore = setCompileCacheRuntimeVersionForTesting(undefined);
+      try {
+        const demands = await compilerDemandsOf(() =>
+          fresh.patternManager.prepareSourceClosureVerification(space, [entry])
+        );
+        expect(demands).toBeGreaterThan(0);
+      } finally {
+        restore();
       }
     });
 

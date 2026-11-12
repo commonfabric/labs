@@ -24,6 +24,7 @@ import {
   deriveModuleDelegations,
   loadCompiledClosure,
   loadVerifiedSourceClosure,
+  setCompileCacheRuntimeVersionForTesting,
   type SourceDoc,
   sourceDocKey,
   stageModuleDelegations,
@@ -952,6 +953,47 @@ describe("module identity delegation", () => {
     expect(delegations.has("new-shared")).toBe(false);
   });
 
+  it("leaves the previous entry to its successor when another module takes over the entry's name", () => {
+    // Without the entry pair the module now named `/main.tsx` succeeds the
+    // previous entry by name; with it, the previous entry belongs to the
+    // named successor and the module that took over its name matches nothing.
+    const previous = new Map<string, SourceDoc>([
+      ["old-entry", {
+        kind: "source",
+        code: "export {};",
+        filename: "/main.tsx",
+        imports: [],
+      }],
+    ]);
+    const next: CacheableModule[] = [
+      {
+        identity: "new-entry",
+        filename: "/app.tsx",
+        source: "export {};",
+        js: "export {};",
+        imports: [],
+      },
+      {
+        identity: "new-namesake",
+        filename: "/main.tsx",
+        source: "export {};",
+        js: "export {};",
+        imports: [],
+      },
+    ];
+
+    const paired = deriveModuleDelegations(previous, next, {
+      previous: "old-entry",
+      next: "new-entry",
+    });
+    expect(paired.get("new-entry")).toEqual(new Set(["old-entry"]));
+    expect(paired.has("new-namesake")).toBe(false);
+
+    const unpaired = deriveModuleDelegations(previous, next);
+    expect(unpaired.get("new-namesake")).toEqual(new Set(["old-entry"]));
+    expect(unpaired.has("new-entry")).toBe(false);
+  });
+
   it("does not trust delegation metadata without compiler integrity", async () => {
     const oldIdentity = computeModuleHashes(moduleProgram("old")).get(
       "/writer.ts",
@@ -1442,6 +1484,25 @@ describe("module identity delegation", () => {
         runtime.grantsModuleDelegation(space, successor.identity, oldIdentity),
       ).toBe(true);
       expect(demands).toBe(0);
+    });
+
+    it("registers no delegation from a compiled closure when this runtime reads no compiled closures", async () => {
+      await storeSuccessorCompiled();
+
+      const restore = setCompileCacheRuntimeVersionForTesting(undefined);
+      try {
+        await runtime.patternManager.readInheritedAuthority(
+          space,
+          successor.identity,
+          [oldIdentity],
+        );
+      } finally {
+        restore();
+      }
+
+      expect(
+        runtime.grantsModuleDelegation(space, successor.identity, oldIdentity),
+      ).toBe(false);
     });
 
     it("registers the delegation the successor's source closure carries when reading its compiled closure fails", async () => {

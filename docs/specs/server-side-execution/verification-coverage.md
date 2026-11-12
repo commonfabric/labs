@@ -5413,10 +5413,8 @@ supply; OW29/OW32/OW34 closed):
     non-zero count coexists with every fire resolved by its mark — the chat
     witness below reads 2 beside 25/25), `intent-listener-installed` /
     `-released`, `intent-watch-failed` / `intent-listener-failed` /
-    `intent-check-read-failed` / `intent-apply-failed` (the loud
-    fail-soft arms; the last is the fix pass's per-entry guard, N-2 —
-    nothing in the arms throws today); the effects channel's
-    `effects-reconcile`; the overlay's diagnostic getters
+    `intent-check-read-failed` (the loud fail-soft arms); the effects
+    channel's `effects-reconcile`; the overlay's diagnostic getters
     `pendingIntentCount`, `intentListenerInstalled`, `intentCheckCount`,
     `intentCheckVisits` (the `sidecarEntriesRead` witness),
     `intentCheckMaxVisits`; the browser churn line

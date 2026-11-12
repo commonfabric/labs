@@ -43,10 +43,9 @@ import {
   schemaAcceptsOpaqueCellValue,
 } from "./runner-utils.ts";
 import { ignoreReadForScheduling } from "./scheduler.ts";
-import {
-  type IExtendedStorageTransaction,
-  type IReadOptions,
-  toThrowable,
+import type {
+  IExtendedStorageTransaction,
+  IReadOptions,
 } from "./storage/interface.ts";
 
 // An unreadable stored link has a value owned elsewhere. Its type is checked
@@ -185,7 +184,7 @@ function readTopLevel(
   tx: IExtendedStorageTransaction,
 ): { value: unknown } | null {
   const target = slot.resolveAsCell().getAsNormalizedFullLink();
-  const { ok, error } = tx.read(
+  const value = tx.readOrThrow(
     {
       space: target.space,
       id: target.id,
@@ -195,14 +194,7 @@ function readTopLevel(
     },
     { ...READ_NON_RECURSIVE, meta: ignoreReadForScheduling },
   );
-  if (error !== undefined) {
-    // The line `readStoredLinkChainRaw()` draws.
-    if (error.name !== "NotFoundError" && error.name !== "TypeMismatchError") {
-      throw toThrowable(error);
-    }
-    return null;
-  }
-  return ok.value === undefined ? null : { value: ok.value };
+  return value === undefined ? null : { value };
 }
 
 /**
@@ -213,10 +205,11 @@ function readTopLevel(
  * reduced the same way, except that `oneOf` becomes `anyOf`: two branches that
  * differ only below the top level reduce alike, so more than one of them may
  * fit. `active` holds the schemas being reduced, so a reference that leads
- * back to one says nothing more.
+ * back to one says nothing more, and so does `undefined`, which a reference
+ * that resolves to nothing yields.
  */
 function topLevelSchema(
-  schema: JSONSchema,
+  schema: JSONSchema | undefined,
   root: JSONSchema,
   primitive: boolean,
   active: Set<object>,
@@ -226,7 +219,6 @@ function topLevelSchema(
   try {
     if (typeof schema.$ref === "string") {
       const resolved = resolveCfcSchemaRefs(schema, root);
-      if (resolved === undefined) return true;
       return topLevelSchema(
         resolved,
         isObjectOrArray(resolved)
@@ -492,7 +484,10 @@ export function readStoredLinkChainRaw(
       if (within !== undefined && !within(link)) {
         return { value: undefined, base: link, outside: true };
       }
-      const { ok, error } = tx.read(
+      // An absent document or a path through a primitive reads as no value
+      // here, and every other failure — a dead transaction, malformed
+      // storage — surfaces.
+      let value: unknown = tx.readOrThrow(
         {
           space: link.space,
           id: link.id,
@@ -502,21 +497,9 @@ export function readStoredLinkChainRaw(
         },
         READ_NON_RECURSIVE,
       );
-      if (error !== undefined) {
-        // The same line readOrThrow draws: an absent document or a path
-        // through a primitive reads as no value here, and every other
-        // failure — a dead transaction, malformed storage — surfaces.
-        if (
-          error.name !== "NotFoundError" && error.name !== "TypeMismatchError"
-        ) {
-          throw toThrowable(error);
-        }
+      if (value === undefined) {
         return { value: undefined, base: link };
       }
-      if (ok.value === undefined) {
-        return { value: undefined, base: link };
-      }
-      let value: unknown = ok.value;
       const path = [...link.path] as string[];
       let followed: NormalizedFullLink | undefined;
       while (path.length > 0) {

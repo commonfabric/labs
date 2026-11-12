@@ -12,6 +12,7 @@ import { Runtime } from "../src/runtime.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { getPatternProgram } from "../src/builder/pattern-metadata.ts";
+import { pattern } from "../src/builder/pattern.ts";
 import {
   sourceCfcMetadataProhibitsCrossSpaceCopy,
 } from "../src/pattern-manager.ts";
@@ -639,5 +640,62 @@ describe("PatternManager.compileOrGetPattern", () => {
     // And the pattern should have its program attached
     expect(getPatternProgram(pattern)).toBeDefined();
     expect(getPatternProgram(pattern)?.main).toEqual("/main.ts");
+  });
+});
+
+describe("PatternManager.associatePatternProgram()", () => {
+  let storageManager: ReturnType<typeof StorageManager.emulate>;
+  let runtime: Runtime;
+
+  beforeEach(() => {
+    storageManager = StorageManager.emulate({ as: signer });
+    runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+    });
+  });
+
+  afterEach(async () => {
+    await runtime.dispose();
+    await storageManager.close();
+  });
+
+  it("attaches a source string as a one-file program, which `getPatternProgramBySync()` returns", () => {
+    const hand = pattern(() => ({}));
+    const ref = { identity: "associate-program-string", symbol: "default" };
+    runtime.patternManager.associatePatternIdentity(hand, ref);
+    expect(
+      runtime.patternManager.getPatternProgramBySync(ref.identity, ref.symbol),
+    )
+      .toBeUndefined();
+
+    runtime.patternManager.associatePatternProgram(hand, "export default 1;");
+
+    const expected = {
+      main: "/main.tsx",
+      files: [{ name: "/main.tsx", contents: "export default 1;" }],
+    };
+    expect(getPatternProgram(hand)).toEqual(expected);
+    expect(
+      runtime.patternManager.getPatternProgramBySync(ref.identity, ref.symbol),
+    )
+      .toEqual(expected);
+    expect(
+      runtime.patternManager.getPatternProgramBySync("unindexed", "default"),
+    )
+      .toBeUndefined();
+  });
+
+  it("attaches a program as given, and leaves a pattern's program in place", () => {
+    const hand = pattern(() => ({}));
+    const program: RuntimeProgram = {
+      main: "/entry.ts",
+      files: [{ name: "/entry.ts", contents: "export default 2;" }],
+    };
+
+    runtime.patternManager.associatePatternProgram(hand, program);
+    runtime.patternManager.associatePatternProgram(hand, "export default 3;");
+
+    expect(getPatternProgram(hand)).toEqual(program);
   });
 });
