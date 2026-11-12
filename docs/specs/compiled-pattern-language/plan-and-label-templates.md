@@ -1481,12 +1481,15 @@ two kinds of row in the space's store, beside the documents
 instance and input document, which holds the sequence number of that
 input at the cone instance's last evaluation, and a row of the stream
 index per stream, which leads from the stream's identifier to its
-instance and its binding. A row is not a document. It has no address a
-reference can name, no envelope, and no stored label. That scheduler
-alone reads it: a row is never sent to a client, never read at admission,
-and no pattern code reaches it. A row is derived from data all the same.
-*Assumed:* where the runtime shows one in a diagnostic or to a tool, it
-shows it under the label below.
+instance and its binding. The stream index is ruled: an event is routed
+through it to an instance that is not loaded. Its row takes the place of
+the `result` back-link that setup stores on a stream's document today. A
+row is not a document. It has no address a reference can name, no
+envelope, and no stored label. That scheduler alone reads it: a row is
+never sent to a client, never read at admission, and no pattern code
+reaches it. A row is derived from data all the same. *Assumed:* where the
+runtime shows one in a diagnostic or to a tool, it shows it under the
+label below.
 
 - **A row of the stream index** says that a stream exists. For a binding
   of the reactive tier in an element body it says that the collection has
@@ -1498,7 +1501,11 @@ shows it under the label below.
 - **A basis row** says which documents a cone instance read. For the reads
   of a `dynamic` node that is data, so the row carries the confidentiality
   of the cone-level join (section 7.2), as what a cache entry records of
-  the cone's reads does.
+  the cone's reads does. The scheduler also consults basis rows to decide
+  whether a read returns a stored value without loading the instance that
+  wrote it (section 5.4). That use shows no row to anyone and changes no
+  label: the read joins the label stored at the address, as any read of a
+  stored value does.
 
 **The state of an operation inside an element body.** An `Operation` with
 an `element` step in `within` has state per element key (section 1.3): an
@@ -3951,13 +3958,24 @@ its own, and that transaction has two parts.
    loaded instance of the same space that writes the address is evaluated
    first, and its write is instantiated and checked before the read
    returns (section 4.5). Where the writer is in an instance of the same
-   space that is not loaded, or is an invalid materializer, the attempt is
-   withdrawn whole, the instance is loaded or the materializer runs, and
-   the event is dispatched again under the same handling. Where the writer
-   is in an instance that is marked as torn down, or in another space, the
-   read returns what is stored. Nothing of a withdrawn attempt commits,
-   and nothing is instantiated for it: the handler's label is its
-   template over what the attempt that commits read.
+   space that is not loaded, the scheduler's basis rows decide, by ruling
+   (`scheduler-and-serving-loop.md` §10.4). Where they show the stored
+   value current, the read returns it and the instance is not loaded.
+   Where they show it stale, the attempt is withdrawn whole, the instance
+   is loaded, and the event is dispatched again under the same handling.
+   An attempt is withdrawn in the same way where the writer is an invalid
+   materializer, which runs before the event is dispatched again. Where
+   the writer is in an instance that is marked as torn down, or in another
+   space, the read returns what is stored. Nothing of a withdrawn attempt
+   commits, and nothing is instantiated for it: the handler's label is
+   its template over what the attempt that commits read. The two cases
+   change no label rule. A read that returns a stored current value joins
+   the label stored at the address, as any read of a stored value does.
+   That label is the one the writer's last evaluation instantiated, and
+   rows at the heads say that no document that evaluation read has
+   changed, in value or in label. A slot of `Body.reads` whose writer is
+   in an instance that is not loaded is decided by the same rows, before
+   the transaction opens.
 2. **The body.** It stages its writes and its requests: instantiations,
    cells, effects, bindings (section 3.14). Its write edges are
    instantiated and their constraints checked, and a failure rejects the
@@ -4030,10 +4048,24 @@ deployment documents:
   (section 3.10). The current scheduler loses the same addresses at a
   restart.
 - **A handler run again.** A handler's attempt is withdrawn and the event
-  dispatched again when a journaled read reaches an instance that is not
-  loaded or an invalid materializer (section 5.4). That delays the event.
-  Whether it happens depends on which address the body read and on which
-  instances the process holds.
+  dispatched again when a journaled read reaches an invalid materializer,
+  or an address that an instance that is not loaded writes and that the
+  basis rows show stale (section 5.4). That delays the event. Whether it
+  happens depends on which address the body read, on which instances the
+  process holds, and on whether an input of such an instance changed
+  since its last evaluation. What the handler reads does not depend on
+  it: a read that returns a stored value returns it only where the rows
+  show it current.
+- **A cone that reads a stale stored value.** In a derivation
+  transaction, a journaled read of a body inside a cone whose writer is
+  in an instance that is not loaded returns what is stored, also where
+  the basis rows show it stale. The instance is then loaded, the writer
+  is evaluated, and the reading cone is evaluated again
+  (`scheduler-and-serving-loop.md` §4.4). A kept output computed from
+  the stale value can be stored meanwhile. Its label joins the label
+  stored at the address read, which covers what it was computed from.
+  This is the delay of a dynamic read by one evaluation, which a
+  computation has today.
 - **Rejection.** A constraint that fails on what a handler itself writes
   rejects the event's whole transaction, so that no part of what the
   handler asked for commits when any part of it is not allowed. Every
@@ -4669,7 +4701,11 @@ a pattern, which may request effects (3.14); what a handler binding holds
 of ten evaluations of a cone in one transaction (5.2); a change of demand
 is a cause (Notation); handler factories bindable as values (3.21); the
 accumulator of `reduce` is a data type, which `language-subset.md` §4.4.1
-requires (3.13).
+requires (3.13); an event is routed to an instance that is not loaded
+through a stream index (2.6); a read of a cell whose writer is in an
+instance that is not loaded returns the stored value where the basis rows
+show it current, and loads the instance only where they show it stale
+(5.4).
 
 What remains is for the project owner, the sibling documents, the
 specification change, or the prototype. Each entry states the assumption
@@ -4805,18 +4841,18 @@ this document made.
     operation in an element body in one document per key. Its §2.8
     stages the result document and the argument of an instance a
     computation makes whether or not the body keeps the link, which
-    section 3.14 states as well. Three things remain for it, each
-    *assumed* here:
+    section 3.14 states as well. Three further things are met:
     - the units of its §1.9 include the stored state of section 2.6 and a
       dropped write, and what a unit uses is as section 4.5 lists it;
     - the binding state document of a handler factory value bound in a
       function body holds the factory's content address under the label
       of which factory it is, instantiated by the transaction that makes
-      the binding (section 3.21);
+      the binding (its §4.7; section 3.21 here, where the label is an
+      assumption);
     - the allocation record of an anonymous `inSpace` target is named by
       the request's own identifier, which is not the identifier of the
-      instance where the request has `root: true` (section 3.14). Its
-      §5.6 names the record by the identifier of the instance requested.
+      instance where the request has `root: true` (its §5.6; section 3.14
+      here).
 20. **To `scheduler-and-serving-loop.md`.** Met, item by item, in the
     sections of that document named in parentheses. It watches the chain
     of a slot and of a `resolved` slot (§3.2). It leaves a `sampled` read
@@ -4831,15 +4867,16 @@ this document made.
     instance computed, for which the plan has no edge (§2.6). And it says
     what becomes of an event when a withdrawal reaches the unit of its
     handler's own writes (§5.5). Its open questions 31 and 32 are answered
-    in sections 3.10 and 4.4 here. Three things remain for it, each
-    *assumed* here:
+    in sections 3.10 and 4.4 here. Three further things are met:
     - a row of the stream index and a basis row are shown, where the
-      runtime shows one at all, under the labels section 2.6 gives them;
+      runtime shows one at all, under the labels section 2.6 gives them
+      (its §5.1 and §10.4). Those labels are an assumption of section
+      2.6;
     - the trigger reads lost at a restart are an accepted residual for a
-      body that makes a sampled read (section 3.10, and question 29);
+      body that makes a sampled read (its §3.4; section 3.10 here, and
+      question 29, which is the owner's);
     - its §9.4 names the allocation record of an anonymous `inSpace`
-      target by the identifier of the instance requested, where section
-      3.14 names it by the request's own identifier.
+      target by the request's own identifier, as section 3.14 does.
 21. **To `builtin-inventory.md`.** Section 3.14 follows the references of
     an effect's request as far as the built-in serializes, and leaves out
     an operand the inventory declares a reference. Met: the entry of each

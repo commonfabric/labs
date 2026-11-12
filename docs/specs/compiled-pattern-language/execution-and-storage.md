@@ -183,6 +183,14 @@ ones an earlier event of the same batch made stale.
   edges name the writer (`ConeEdge.via` of kind `state` or `handle`). Across
   instances the writer is found from the bound addresses, which the
   scheduler's writer map holds.
+- **A writer in an instance that is not loaded.** The writer map holds no
+  entry for it. Where the document a slot is bound to names such an
+  instance, the basis rows decide, by ruling
+  (`scheduler-and-serving-loop.md` §4.4 and §10.4). Where they show the
+  stored value current, the slot is read from storage and the instance is
+  not loaded. Where they show it stale, the instance is loaded and the
+  stale cone instance that writes the address is evaluated first. Both
+  happen before the transaction opens (§5.2 there).
 - **A static read through a handle.** A read through a handle that
   `footprint-analysis.md` §7.2 makes static is a slot of `Body.reads` like
   any other, and is covered by the rules above.
@@ -197,7 +205,9 @@ address of one of the handler's slots, or such a read, lies inside the
 envelope of an invalid materializer, `scheduler-and-serving-loop.md` §5.2 and
 §5.3 govern. For a slot the materializer runs first, in its own
 transaction. For such a read the attempt is withdrawn, the materializer
-runs, and the event is dispatched again (section 1.4).
+runs, and the event is dispatched again (section 1.4). A read through such
+a handle that reaches a writer in an instance that is not loaded follows
+the two cases of section 1.4.
 
 ### 1.4 The body
 
@@ -235,14 +245,18 @@ During the call:
   the read returns (section 1.6). The read then returns what is staged, or
   what is stored where no write is staged or the check dropped the write.
   Where the writer is in an instance of the same space that is not loaded,
-  the read does not settle on the stored value: the attempt is withdrawn
-  whole, the instance is loaded, and the event is dispatched again under
-  the same handling, so that it names the same things
-  (`scheduler-and-serving-loop.md` §5.3). The same happens where the
-  address lies inside the envelope of an invalid materializer, which runs
-  before the event is dispatched again. Where the writer is in an instance
-  that is marked as torn down, or in another space, the read returns what
-  is stored.
+  the scheduler's basis rows decide, by ruling
+  (`scheduler-and-serving-loop.md` §5.3 and §10.4). Where they show the
+  stored value current, the read returns it, with the label stored there,
+  and the instance is not loaded. The check reads rows and loads nothing.
+  Where they show it stale, the attempt is withdrawn whole, the instance
+  is loaded, and the event is dispatched again under the same handling,
+  so that it names the same things. The second attempt finds the instance
+  loaded and evaluates the stale cone instance at the read. The attempt is
+  withdrawn in the same way where the address lies inside the envelope of
+  an invalid materializer, which runs before the event is dispatched
+  again. Where the writer is in an instance that is marked as torn down,
+  or in another space, the read returns what is stored.
 - A **request** (`Body.calls`) is recorded and returns at once: a link to an
   instance, a handle to a cell, a link to an effect's result, or a stream.
   The identifier in what is returned is computed from the request and the
@@ -834,12 +848,32 @@ For a slot with `resolved` the handle is the resolved reference.
 - A handle listed in `handles` reads through the transaction. Its `get()`
   and `sample()` read under the entry's `envelope` schema and return the
   value narrowed to it, and each read is journaled. Before such a read
-  returns, a stale cone instance that writes the address is evaluated, as
-  section 1.4 says for a handler. For a body that runs inside a cone, a
-  read that lands inside the envelope of an invalid materializer is not
-  waited for: the body reads what is stored, and the materializer's later
-  write makes the cone instance stale
+  returns, a stale cone instance of a loaded instance that writes the
+  address is evaluated, as section 1.4 says for a handler. For a body
+  that runs inside a cone, a read that lands inside the envelope of an
+  invalid materializer is not waited for: the body reads what is stored,
+  and the materializer's later write makes the cone instance stale
   (`scheduler-and-serving-loop.md` §7.3).
+- A read of a body inside a cone whose writer is in an instance that is
+  not loaded is not waited for either, in a derivation transaction. The
+  read returns what is stored, with the label stored there, and the
+  address is registered for the `dynamic` node. Where the basis rows show
+  the stored value current, nothing more is evaluated. Where they show it
+  stale, the scheduler loads the instance and evaluates the stale cone
+  instance that writes the address, in the same transaction where the
+  load needs no wait and otherwise in the derivation transaction of the
+  change of demand that the load is. Its write makes the reading cone
+  instance stale through the registered address, which is recorded as a
+  trigger read, and the reading cone instance is evaluated again, under
+  the bound of section 2.7 (`scheduler-and-serving-loop.md` §4.4). The
+  transaction is not withdrawn: a body inside a cone may be evaluated any
+  number of times, so it can be handed the stored value and evaluated
+  again. Until that evaluation, a kept output computed from the stale
+  value can be stored, under a label that joins the label stored at the
+  address read. A cone instance evaluated in an event's transaction,
+  before the body or at a read of the body, follows the handler's rule of
+  section 1.4 instead, because the body that waits for its value runs
+  once.
 - A handle the body finds by a read through a listed handle reaches it by
   that read, where the listed entry's envelope admits the position as a
   handle. Reads through it are journaled with the reads of the entry it was
@@ -926,14 +960,13 @@ and 2.8), a side-write, a copied path of a binding or of an inline
 pattern's parameters (sections 4.7 and 4.6), and an entry of the cache
 document (section 8.4). The element slots of those positions can resolve
 to different labels. *Assumed*, as open question 27 of
-`plan-and-label-templates.md` states it for the first three: what is
-stored once per key carries the join over the positions that hold the key
-(§2.6 there), formed from the label identifiers the table holds per
-position. This document applies the same assumption to the others
-(section 11, request 51). An output at one position that reads such a
-result through a slot then carries the labels of the other positions that
-hold an equal element, which is looser than today, so the question is the
-project owner's.
+`plan-and-label-templates.md` and its §2.6 state it for every item of
+this list: what is stored once per key carries the join over the
+positions that hold the key, formed from the label identifiers the table
+holds per position (section 11, request 51). An output at one position
+that reads such a result through a slot then carries the labels of the
+other positions that hold an equal element, which is looser than today,
+so the question is the project owner's.
 
 The runtime evaluates a `map` over the collection as follows.
 
@@ -1159,10 +1192,10 @@ at a `BodyCall` site of kind `instantiate`.
   cone, the document holds one record per element key, under the key, and
   a key derived from a value is the salted one (section 5.3). The record
   of one key carries the join of section 2.5 ("What is stored once per
-  key"). The set of keys says which elements the collection has.
-  *Assumed:* it carries the collection's instantiated membership label, as
-  §2.6 there rules for an operation's state document that holds several
-  keys (section 11, request 49).
+  key"). The set of keys says which elements the collection has, so it
+  carries the collection's instantiated membership label
+  (`plan-and-label-templates.md` §2.6, "The state of an operation inside
+  an element body").
 - **Teardown.** An instance that the last committed evaluation made and
   this evaluation does not make is torn down in this transaction. The
   transaction removes it from the instances document and writes a mark
@@ -1445,6 +1478,13 @@ the heads of its inputs is current in storage: its kept outputs are read
 from the documents that store them and are not evaluated, and its interim
 outputs are evaluated only when a stale consumer pulls them. A cone
 instance whose rows are behind, or that has none, is stale.
+
+The same rows answer a read of something an instance that is not loaded
+wrote, by ruling. A read whose writer is in such an instance returns the
+stored value where the rows of the writing cones, and of what they depend
+on, are at the heads of their inputs, and the instance is loaded only
+where they are not (sections 1.4 and 2.4;
+`scheduler-and-serving-loop.md` §10.4, "A read answered from the rows").
 
 The runtime does not derive this from the commit that last wrote the result
 document. That commit says nothing about a cone instance that was stale and
@@ -1776,23 +1816,34 @@ template joins the label stored there (`plan-and-label-templates.md`
 **The stream document.** Under server execution an event is an entry
 appended to a stream document
 ([events](../server-side-execution/events.md), §1), so a stream that
-received an event has a document. Today a stream document also exists from
-setup and holds a back-link to its owner, and a bound handler has an
-argument document
+received an event has a document. Today a stream has two documents and a
+bound handler a third. The stream's cell has a document that exists from
+setup and holds a `result` back-link to its owner. The entries and the
+`eventWatermark` are in a second document, named by a hash of the
+stream's link (`streamEntriesDocId` in `runtime/memory/v2.ts`). And a
+bound handler has an argument document
 ([row-instance investigation](../../history/development/performance/2026-10-16-fabrichat-row-instances.md),
-"Its handlers"). In the compiled layout a stream document holds the
-entries of the events appended to the stream and the stream's
-`eventWatermark`, and nothing else. It is created by the first event
-appended to the stream, and no transaction writes one when a binding comes
-to exist. A stream identifier is a hash and cannot be inverted, and the
-document it names does not exist before the first append, so an event is
-not routed by a document. It is routed by a row of the stream index that
-`scheduler-and-serving-loop.md` §5.1 proposes: one row per stream of a
-compiled instance, in the space's store beside the basis index, from the
-stream's identifier to the instance and the binding. A binding therefore
-costs one row of that index, written in the store transaction of the wave
-whose transaction first computed the stream's identifier, and no document
-until its stream receives an event.
+"Its handlers"). The runtime routes an event on a stream of a piece that
+does not run by following the back-link from the stream's cell to the
+piece's result document (`followResultCellChain` in
+`runtime/runner/src/ensure-piece-running.ts`).
+
+In the compiled layout a stream document holds the entries of the events
+appended to the stream and the stream's `eventWatermark`, and nothing
+else: it is today's second document, under the stream's identifier. It is
+created by the first event appended to the stream, and no transaction
+writes one when a binding comes to exist. Nothing takes the place of the
+document of the stream's cell. A stream identifier is a hash and cannot
+be inverted, and the document it names does not exist before the first
+append, so an event is not routed by a document. By ruling, it is routed
+by a row of the stream index
+(`scheduler-and-serving-loop.md` §5.1): one row per stream of a compiled
+instance, in the space's store beside the basis index, from the stream's
+identifier to the instance and the binding. The row takes the place of
+the back-link and of the walk that follows it. A binding therefore costs
+one row of that index, written in the store transaction of the wave whose
+transaction first computed the stream's identifier, and no document until
+its stream receives an event.
 
 ### 4.8 What the runtime stores today, from source
 
@@ -2937,11 +2988,11 @@ under the key (section 8.4), and a key derived from a value is the salted
 one (section 5.3). An entry is stored once for the positions that hold
 its key, so a cached output carries the join of section 2.5 ("What is
 stored once per key") where those positions resolve to different labels.
-The set of keys says which elements the collection has. *Assumed:* it
-carries the collection's instantiated membership label, as §2.6 there
-rules for an operation's state document that holds several keys (section
-11, request 49). A forced cache in an element body is an operation and
-has one state document per key (section 6).
+The set of keys says which elements the collection has, so it carries
+the collection's instantiated membership label
+(`plan-and-label-templates.md` §2.6, "The state of an operation inside an
+element body"). A forced cache in an element body is an operation and has
+one state document per key (section 6).
 
 ### 8.7 Why promotion does not change what a pattern means
 
@@ -3377,8 +3428,12 @@ request creates is obtained, and recorded before the step in that space
 copies nothing, and a binding made in a function body binds a stored
 container by reference (4.7, 5.5); a `lift` or a `computed` may instantiate
 a pattern (2.8); the keep set is stored in several documents, by a rule
-about size that this document owns (4.10). The last one answers what was
-question 1 of this list, the size of a result document.
+about size that this document owns (4.10); an event is routed to an
+instance that is not loaded through a stream index (4.7); a read of a cell
+whose writer is in an instance that is not loaded returns the stored
+value where the basis rows show it current, and loads the instance only
+where they show it stale (1.3, 1.4, 2.4, 3.4). The ruling on the keep set
+answers what was question 1 of this list, the size of a result document.
 
 ### 11.1 For the project owner
 
@@ -3453,13 +3508,14 @@ To `scheduler-and-serving-loop.md`:
 
 5. **Dirty slots since a commit.** Withdrawn. The scheduler marks the stale
    cone instances from the basis rows of its §10.4 (section 3.4 here).
-6. **Routing an event to a binding.** Met by its §5.1. A stream document
-   holds the entries and the `eventWatermark` and is created by the first
-   append. An event is routed by a row of the stream index, one row per
-   stream beside the basis index, from the stream's identifier to the
-   instance and the binding, which also leads to an instance that is not
-   loaded (section 4.7 here). That document proposes the index and lists
-   it as its open question 26.
+6. **Routing an event to a binding.** Met by its §5.1, and ruled. A
+   stream document holds the entries and the `eventWatermark` and is
+   created by the first append. An event is routed by a row of the stream
+   index, one row per stream beside the basis index, from the stream's
+   identifier to the instance and the binding, which also leads to an
+   instance that is not loaded (section 4.7 here). The row takes the
+   place of the back-link that setup stores on a stream's document today.
+   Its open question 26 leaves the size of the index to the prototype.
 7. **Several scope keys in one transaction.** Met by its §10.3.
 8. **The first evaluation as a cause.** Ruled: a change of demand is the
    fourth kind of cause (section 1.1), as its §4.5 has it.
@@ -3492,9 +3548,15 @@ To `scheduler-and-serving-loop.md`:
 37. **A read made current at the read** (sections 1.4 and 2.4). Met by its
     §5.3: a stale cone instance of a loaded instance of the same space
     that writes the address is evaluated before a journaled read returns.
-    Where the writer is in an instance that is not loaded, the attempt is
-    withdrawn whole, the instance is loaded, and the event is dispatched
-    again under the same handling.
+    Where the writer is in an instance that is not loaded, the basis rows
+    decide, by ruling (its §4.4, §5.3 and §10.4). Where they show the
+    stored value current, the read returns it and the instance is not
+    loaded, for a handler and for a body inside a cone alike. Where they
+    show it stale, a handler's attempt is withdrawn whole, the instance
+    is loaded, and the event is dispatched again under the same handling.
+    A body inside a cone, in a derivation transaction, reads what is
+    stored and is evaluated again after the instance was loaded and the
+    writer evaluated.
 38. **Element entries come from the element table** (section 2.5). Met by
     its §3.2: the scheduler registers the per-position entries of element
     slots after the collection's first evaluation and after each change of

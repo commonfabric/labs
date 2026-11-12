@@ -720,9 +720,10 @@ Eight notes on the table.
 - **`for` on an instantiation.** The form is legal in every kind of
   function body. Its argument is the explicit cause of the instance, which
   `plan-and-label-templates.md` calls the tag. In a `lift` or a `computed`
-  it takes the place of the site and the ordinal in the instance's
-  identifier ([§5.2](#52-runtime-calls)). What it identifies from one event
-  to the next in a `handler` or an `action` is not defined here:
+  it takes the place of the ordinal in the instance's identifier, and the
+  site stays ([§5.2](#52-runtime-calls); `plan-and-label-templates.md`
+  §1.3 and §3.14). What it identifies from one event to the next in a
+  `handler` or an `action` is not defined here:
   `plan-and-label-templates.md` (§1.3) owns the identifiers of what a
   function body creates.
 - **`get`, `key`, and `elementById` in tier R** are operations of the plan

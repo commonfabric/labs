@@ -1083,10 +1083,11 @@ The sources are the rows of section 2.5. In short:
 - a **handler's reads**, for the length of the event's transaction.
 
 An instance is *demanded* when at least one of its kept outputs or write
-edges is. On the serving runtime an instance is loaded when it is demanded
-or one of its streams has a queued event, and not otherwise, as only the
-structure "sufficient to resolve the demanded values and the queued events"
-is loaded today
+edges is. On the serving runtime an instance is loaded when demand that
+stands reaches it, when a read finds something it wrote stale (section
+4.4), or when one of its streams has a queued event, and not otherwise, as
+only the structure "sufficient to resolve the demanded values and the
+queued events" is loaded today
 ([serving loop](../server-side-execution/serving-loop.md), §1).
 
 ### 4.2 Why per path
@@ -1134,8 +1135,9 @@ nodes registered, and the outputs of other cones it pulled.
    output or write edge, if a loaded unit writes it.
 2. That output's or edge's demand count is raised by one. If it went from
    zero to one, the step repeats from its cone instance.
-3. If the writer is an instance that is not loaded, the scheduler loads it
-   (section 4.4).
+3. If the writer is in an instance that is not loaded, section 4.4
+   applies: demand that stands loads the instance, and demand held for a
+   read consults the basis index first.
 
 So demand reaches, for one path of a consumer, exactly the cone instances
 of the producers that path reads, and no other cone instance of those
@@ -1172,14 +1174,56 @@ place of nodes.
 ### 4.4 Loading on demand
 
 When demand reaches an address that no loaded unit writes, the scheduler
-looks at the document the address is in. If its metadata names a pattern
-instance, that instance is loaded: its compiled pattern is fetched by
-identity (section 10.5), its record is built, and its basis rows are compared
-with the current heads to mark its stale cone instances. The demand then
-continues into it. This is the demand pass's structure load of today,
-without a step that starts a piece.
+looks at the document the address is in. Its metadata can name a pattern
+instance that is not loaded: the address is a path of a result cell whose
+result document holds a pattern reference, or it lies in a document with a
+`result` back-link to such a result document, as a state cell document
+has. A cell that an instance that is not loaded writes through a handle
+names that instance nowhere, so demand on it loads nothing and a read of
+it returns what is stored. What happens for a named instance depends on
+the demand.
 
-Three kinds of instance are not loaded this way.
+- **Demand that stands** loads the instance: a session's tracked set, a
+  render sink, an effect operation, a materializer, a warm request, and
+  the registered addresses and slots of a cone instance that one of these
+  demands (section 2.5). The scheduler has to learn of later changes to
+  the instance's inputs, and it learns of them through the entries of a
+  record. The compiled pattern is fetched by identity (section 10.5), the
+  record is built, and the basis rows are compared with the current heads
+  to mark the stale cone instances. The demand then continues into the
+  instance. This is the demand pass's structure load of today, without a
+  step that starts a piece.
+- **Demand held for a read** consults the basis index first, by ruling: an
+  event's transaction, which holds demand on what the handler reads for
+  its length, and a one-shot pull. The check of section 10.4 ("A read
+  answered from the rows") says whether the stored value is current. Where
+  it is, the read returns it, and the instance is not loaded. Where it is
+  stale, the instance is loaded as above and the stale cone instance that
+  writes the address is evaluated before the read returns. Sections 5.2
+  and 5.3 say when that happens for a handler: before the transaction
+  opens for a static read, and after a withdrawn attempt for a journaled
+  one.
+- **A journaled read of a cone instance in a derivation transaction** does
+  not wait in either case. The read returns what is stored, and the
+  address is registered for the `dynamic` node (section 3.4). A registered
+  address carries the demand of its cone instance (section 4.3). Where
+  the basis index shows the address current, nothing more is evaluated,
+  and the instance is loaded only where that demand stands, by the first
+  item. Where it shows the address stale, the instance is loaded, and the
+  stale cone instance that writes the address is evaluated in the same
+  transaction if the load completes without a wait, and otherwise in the
+  derivation transaction of the change of demand that the completed load
+  is (section 4.5). Its write matches the registered address, so the
+  reading cone instance is stale, the address is a trigger read, and the
+  reading cone instance is evaluated again, under the bound of section
+  8.1. This is the one-evaluation-late rule of section 3.4, which a cone
+  instance follows for a read inside an invalid materializer's envelope
+  as well (section 7.3). A body inside a cone may be evaluated any number
+  of times, so the stored value can be handed to it and corrected. A cone
+  instance that is evaluated in an event's transaction follows the
+  handler's rule (section 5.3).
+
+Three kinds of instance are not loaded in any of these ways.
 
 - **An instance marked as torn down** (section 2.7). The setup record of
   its result document holds the mark. Demand that reaches it evaluates
@@ -1226,7 +1270,9 @@ evaluation, and a reader that follows a link to it without creating demand
 reads that. `plan-and-label-templates.md` (open question 4) leaves undecided
 whether such an output should carry a mark saying it may be stale. This
 document does not need the mark: every reader the scheduler knows about
-creates demand. Section 9.2 names the reader it does not know about.
+creates demand that loads the instance, or has the basis rows checked
+before its read returns (section 4.4). Section 9.2 names the reader it
+does not know about.
 
 ### 4.7 Releasing demand
 
@@ -1288,19 +1334,112 @@ event appended to it. No transaction writes a stream document when a
 binding comes to exist, so a binding that never receives an event has no
 document (`execution-and-storage.md` §4.7).
 
-Today a stream document exists from setup and carries a `result` back-link,
-and the runtime finds the piece that owns a stream by following those
-back-links to a document that carries a pattern reference
-(`followResultCellChain` in `runtime/runner/src/ensure-piece-running.ts`).
-A stream identifier of this design is a hash over the instance, the
-binding, and the element keys (`execution-and-storage.md` §5.2 and §5.5).
-It cannot be inverted, and the document it names does not exist before the
-first append. The scheduler therefore keeps the way from a stream to its
-binding itself.
+**Today: from a queued event to its handler.** Server-primary execution
+stores no index from a stream to its piece. It follows back-links that
+setup stored, and then starts the piece. Activation has no step that
+starts the pieces of a space
+([serving loop](../server-side-execution/serving-loop.md), §1): a piece
+is started when a queued event or a demanded value needs its structure,
+and both go through the same function (`ensurePieceRunningVerdict`,
+which `#attemptStructureLoad` of `SpaceServer` calls for a demanded
+root).
 
-**The stream index.** *Proposed:* the serving runtime keeps one row per
-stream of a compiled instance, in the space's store, beside the basis index
-(section 10.4).
+- **What is stored.** A stream is a cell of its piece, with a document of
+  its own. Setup creates that document and writes a `result` back-link on
+  it, as on every internal cell of the piece (`setResultCell` in
+  `runtime/runner/src/result-utils.ts`, called by
+  `#materializeDerivedInternalCells` in `runtime/runner/src/runner.ts`).
+  The piece's result document holds the pattern reference
+  (`patternIdentity`). The events of the stream are entries of a second
+  document, whose identifier is a hash of the stream's link
+  (`streamEntriesDocId` in `runtime/memory/v2.ts`), and each entry names
+  its stream by that link (`StreamEventEntry.stream`).
+- **Finding the pending entries.** The drain lists the entries documents
+  that hold an entry past their `eventWatermark`, by a scan of the document
+  heads of the space (`selectPendingStreamEventDocs` in
+  `runtime/memory/v2/engine.ts`). It brings each entries document and the
+  document of each stream into the replica, and queues each entry under
+  the link of its stream (`#drainStreamEvents` of `SpaceServer` in
+  `runtime/runner/src/executor/space-server.ts`).
+- **A piece that runs.** The scheduler holds the handlers of the pieces
+  that run in a registry keyed by the stream's link (`EventHandlerRegistry`
+  in `runtime/runner/src/scheduler/events.ts`). An event whose stream has a
+  handler there is queued with it (`queueSchedulerEvent`).
+- **A piece that does not run.** An event whose stream has no handler
+  takes its place in the queue at once and holds it (`handlerLoadPending`)
+  while the scheduler starts the piece (`startEventPiece`, which calls
+  `ensurePieceRunningVerdict` in
+  `runtime/runner/src/ensure-piece-running.ts`). The start reads the
+  stream's document and follows `result` back-links, over at most ten
+  hops, to a document that has none (`followResultCellChain`). It reads
+  the pattern reference there and loads the pattern by its identity. On a
+  serving runtime it then reads the piece's argument document, follows the
+  back-links of every document of the same space that the argument links
+  to, and starts the pieces those documents belong to first
+  (`startInputSources` and `inputSourcesOf`), so that a stream of a nested
+  instance starts the instance that encloses it. Then it starts the piece
+  (`Runtime.start`), which registers a handler for each stream of the
+  piece (`#instantiateJavaScriptHandlerNode` in
+  `runtime/runner/src/runner.ts`, through `addSchedulerEventHandler`). The
+  scheduler looks the stream up in the registry again and gives the
+  waiting event the handler it finds.
+- **A piece that cannot be found or started.** A piece that started with
+  its graph installed and registered no handler for the stream makes the
+  event unrunnable: the entry records the dropped-event notice, and the
+  `eventWatermark` passes it. Every other outcome defers the event: a
+  chain that cycles or is longer than ten hops, a document at the end of
+  the chain that holds no pattern reference, a pattern that cannot be
+  loaded, a start that throws, and a piece whose graph is not installed.
+  The entry stays pending, every later entry of the space waits behind
+  it, and a later cycle drains it again. Each deferral counts against a
+  budget of eight (`EVENT_DEFERRAL_DROP_THRESHOLD` in
+  `runtime/runner/src/scheduler/constants.ts`), after which the event is
+  dropped. A deferral counts nothing while an earlier entry of the space
+  is still pending, because that entry's handler may be what creates the
+  piece. A pattern whose program the space does not hold yet is waited
+  for, and its absence ends in a `needs-attention` notice
+  ([events](../server-side-execution/events.md), §5).
+- **What it costs.** One event on a stream of a piece that does not run
+  loads the entries document, the stream's document, each document on the
+  back-link chain, the pattern's program, the argument document, the
+  chain of each document the argument links to, and the pieces found that
+  way, each started whole.
+
+**What this design keeps, and what it cannot keep.** The entries, the
+drain and the queue are unchanged: how the pending entries are found, the
+order they are queued in, the place an event takes in the queue before
+its handler is known, the registry in memory from a stream to its handler,
+the pattern reference of the result document as what names the code to
+load, and what becomes of an event that cannot be routed. Two steps have
+no counterpart.
+
+- **The walk has no document to start from.** A stream identifier of this
+  design is a hash over the instance, the binding, and the element keys
+  (`execution-and-storage.md` §5.2 and §5.5), and it cannot be inverted.
+  The one document it names is the stream document, which does not exist
+  before the first append, and that append is a client's commit in the
+  common case. A back-link would have to be written when the binding
+  comes to exist, in a document per binding of each element, which is the
+  cost `execution-and-storage.md` §4.7 removes: a message row of
+  FabriChat has at least eleven handler bindings today, each with a
+  stream document and an argument document (§4.9 there).
+- **A load does not register every stream.** Today a start instantiates
+  the piece's graph, each row of a collection is a piece of its own, and
+  so a start registers every stream. Loading a compiled instance
+  evaluates nothing (section 4.4). It can compute the identifier of a
+  stream whose binding is outside every element body, from the result
+  cell and the plan. It cannot compute one that holds an element key or
+  what a binding made in a function body holds, because those come from
+  evaluation.
+
+**The stream index.** By ruling, an event is routed to an instance that is
+not loaded through a stream index. The serving runtime keeps one row per
+stream of a compiled instance, in the space's store, beside the basis
+index (section 10.4). The index is needed for the two steps above and for
+nothing else. A row takes the place of the `result` back-link on the
+stream's document and of the walk that follows it. For a stream whose
+identifier a load cannot compute, it also takes the place of the
+registration that a start makes today.
 
 | Column | Holds |
 | --- | --- |
@@ -1318,7 +1457,9 @@ stream of a compiled instance, in the space's store, beside the basis index
   stream is stored only by a transaction that computed the identifier, so
   every stream a stored link names has a row.
 - **When a row is deleted.** When its element key leaves the collection,
-  and when its instance is torn down (section 2.7) or retired.
+  and when its instance is torn down (section 2.7) or retired. A source
+  update deletes no row: a stream identifier holds no compiled identity,
+  so the row still names the stream.
 - **What it is.** Identifiers only, overwritten in place, written inside
   the wave's store transaction, never pushed to a client, and never read at
   admission. Those are the properties of a basis row. Only the scheduler of
@@ -1326,16 +1467,34 @@ stream of a compiled instance, in the space's store, beside the basis index
   diagnostic or to a tool, it shows it under the label
   `plan-and-label-templates.md` §2.6 gives a row of the stream index
   ("Rows beside the documents"), which is an assumption there.
-- **For a loaded instance** the scheduler holds the same mapping in memory
-  and does not read the row.
+- **The registry comes first.** The scheduler keeps the registry in memory
+  from a stream to its binding, as today. A loaded instance's streams are
+  entered in it when the instance is loaded, for the bindings outside
+  every element body, and when a transaction of this process computes a
+  stream's identifier, for the others. A row is read only for a stream
+  that is not in the registry.
 
-**From a queued event to its handler.** For an event on a stream whose
-instance is not loaded, the row gives the instance, and the scheduler loads
-it (section 4.4). The row then gives the binding. For a binding in an
-element body, the element keys of the row name the cone instances the
-handler's `binding` slots resolve to, and the collection's membership is
-evaluated before the handler body, like any stale cone instance the handler
-reads, so that the position that holds the key is known.
+**From a queued event to its handler.** The steps are today's, with a row
+in the place of the walk.
+
+1. The stream is looked up in the registry. A stream found there has its
+   binding, and its instance is loaded.
+2. Otherwise the event takes its place in the queue and holds it, as
+   today, and the scheduler reads the row. The row gives the instance,
+   which the scheduler loads if it is not loaded (section 4.4), and the
+   binding, which it enters in the registry. One row is read and one
+   instance is loaded. No document is read to find the instance, and no
+   other instance is started on the event's account: the instances that
+   write what the handler reads are loaded only where what they wrote is
+   stale (section 5.3), which takes the place of starting the pieces a
+   piece's inputs come from.
+3. For a binding in an element body, the element keys of the row name the
+   cone instances the handler's `binding` slots resolve to, and the
+   collection's membership is evaluated before the handler body, like any
+   stale cone instance the handler reads, so that the position that holds
+   the key is known.
+
+An event that cannot be routed is treated as today.
 
 - **No row.** An event on a stream that has no row cannot be routed. A
   client can derive the identifier of a stream before the server has
@@ -1352,12 +1511,23 @@ reads, so that the position that holds the key is known.
   and is dropped as that section has it.
 - **A key no position holds.** An event on a stream of an element whose key
   left its collection is unrunnable, and is dropped in the same way.
+- **A binding the plan does not have.** After a source update, a row can
+  name a binding that the plan the instance runs does not have. An event
+  on its stream is unrunnable.
+- **An instance that is marked as torn down,** or whose result document
+  holds no pattern reference. The event is unrunnable (section 2.7).
+- **An instance that cannot be loaded yet.** A load that waits for a
+  compiled pattern or for a migration holds the event's place in the
+  queue (sections 10.5 and 10.8). A load that fails defers the event with
+  the events that arrived after it, under the deferral budget of
+  [events](../server-side-execution/events.md) §5, and a compiled pattern
+  the space does not hold yet is waited for as a program is today.
 
-The alternative to the index is a stream document written at setup with a
-back-link, as today. It costs one document for each binding of each
-element, where the index costs one row
-(`execution-and-storage.md` §4.7 states that cost). The index is listed
-under open question 26.
+The alternative to the index is a document per binding written at setup
+with a back-link, as today. It costs one document for each binding of
+each element, where the index costs one row
+(`execution-and-storage.md` §4.7 states that cost). What remains for the
+prototype is the size of the index (open question 26).
 
 ### 5.2 One transaction per event
 
@@ -1373,15 +1543,24 @@ scheduler does around them and across instances.
 
 Before the transaction opens:
 
-1. **Resolving the handler.** The stream gives the instance and the binding
-   (section 5.1), and the instance is loaded if it is not. The binding
-   gives the handler: a body of the instance's plan, or a compiled handler
-   named by a factory value, whose record is fetched by content address
+1. **Resolving the handler.** The stream gives the instance and the binding,
+   from the registry or from its row of the stream index (section 5.1),
+   and the instance is loaded if it is not. The binding gives the
+   handler: a body of the instance's plan, or a compiled handler named by
+   a factory value, whose record is fetched by content address
    (`plan-and-label-templates.md`, §3.21).
 2. **Loading.** The documents the handler's bound slots name are brought
-   into the replica, and an instance that writes one of them is loaded
-   (section 4.4). The event holds its place in the queue while that I/O
-   runs, and the load's completion queues the next step. Nothing polls.
+   into the replica. Where an instance that is not loaded writes one of
+   them, the basis index decides whether it is loaded, by ruling: it is
+   loaded where the address is stale, and not where the stored value is
+   current (sections 4.4 and 10.4). The scheduler follows the handler's
+   static reads upstream through the loaded cone instances that write
+   them, as demand does (section 4.3), and makes the same check at each
+   address it reaches whose writer is in an instance that is not loaded.
+   The event holds its place in the queue while that I/O runs, and the
+   load's completion queues the next step. Nothing polls. All of this
+   happens before the transaction opens, so no attempt is withdrawn on
+   account of a static read.
 3. **Materializers.** If the bound address of one of the handler's `reads`
    slots lies inside the envelope index, under an entry of an invalid
    materializer, that materializer runs first, in its own transaction
@@ -1500,9 +1679,10 @@ runtime looks the address up in the writer map
 
 | The address is written by | What happens |
 | --- | --- |
-| No unit, and the document names no instance | The read returns what is stored or staged |
+| No loaded unit, and the document of the address names no instance that is not loaded | The read returns what is stored or staged |
 | A stale cone instance of a loaded instance of the same space | It is evaluated first, inside the transaction and under the bound of section 8.1. Its write to the address is instantiated and checked before the read returns (section 5.2). The read then returns what it staged, or what is stored where the check dropped the write |
-| An instance of the same space that is not loaded | The attempt is withdrawn whole, the instance is loaded, and the event is dispatched again under the same handling. The event holds demand on the instance until its transaction ends, so the second attempt finds it loaded |
+| An instance of the same space that is not loaded, where the basis index shows the address current | The read returns what is stored, with the label stored there. The instance is not loaded, and the event holds no demand on it |
+| An instance of the same space that is not loaded, where the basis index shows the address stale | The attempt is withdrawn whole, the instance is loaded, and the event is dispatched again under the same handling. The event holds demand on the instance until its transaction ends, so the second attempt finds it loaded and evaluates the stale cone instance at the read, by the second row |
 | An invalid materializer, by an entry of the envelope index | The attempt is withdrawn whole, the materializer runs, and the event is dispatched again under the same handling |
 | An instance marked as torn down, or an instance of another space | The read returns what is stored (sections 2.7 and 9.2) |
 
@@ -1511,11 +1691,62 @@ named by the handling and the order of creation, so the next attempt names
 the same things. Each withdrawn attempt loads an instance or runs a
 materializer that the attempt before it did not have, so the attempts end.
 
-The third row is this document's decision. Returning the stored value there
-would make what a handler reads depend on which instances other sessions
-happen to have loaded. The cost is that a handler which reads outputs of
-many instances through handles loads each of them, and runs once more for
-each load it discovers (open question 28).
+**A writer in an instance that is not loaded.** The third and fourth rows
+are the ruling: the scheduler's stored record of what is stale decides,
+and the instance is loaded only where the stored value is stale.
+
+- **Which reads are checked.** Every journaled read looks the address up
+  in the writer map, as it does for the other rows. The basis index is
+  consulted only where the map has no entry and the document of the
+  address names an instance that is not loaded: the address is a path of
+  that instance's result cell, or lies in a state cell document of it
+  (section 10.4, "A read answered from the rows"). A read of a document
+  that names no instance, of an instance marked as torn down, or of
+  another space consults no row. A cell that an instance that is not
+  loaded writes through a handle is attributed to that instance by
+  nothing stored, so a read of it returns what is stored. Section 4.4 has
+  the same limit for demand.
+- **What is consulted.** The basis rows of the cones of that instance
+  that write the address and of the cones they depend on, and the rows of
+  the instances whose outputs those cones read, as section 10.4 states
+  it. The address is current when every one of those rows holds the
+  sequence number its input document has now. That is the definition of
+  the Terms and of section 10.4, by which the rows decide in a process
+  that holds no memo entry, and it is what loading the instance would
+  find: a load marks the stale cone instances from the same rows (section
+  4.4). A write that did not reach storage left its rows behind (section
+  3.5), so an unstored output is found stale.
+- **The check loads no instance.** It builds no record, binds no slot,
+  enters nothing in the address index or the writer map, fetches no
+  compiled pattern, and evaluates nothing. It reads rows, heads, and the
+  metadata of the documents the rows name.
+- **What it costs.** A read whose address the writer map holds costs the
+  lookup and no more. A checked read costs, beside it, one range of the
+  index per consulted cone and scope instance and one head per row. The
+  verdict for an instance is kept for the length of the transaction, and
+  is dropped when the transaction stages a write to a document the
+  verdict consulted, so a body that reads several paths of one instance
+  pays for one check.
+- **The current case.** The stored value is the one the writer's last
+  evaluation stored, and nothing that evaluation read has changed, so the
+  read returns what it would return if the instance were loaded. What a
+  handler reads therefore does not depend on which instances other
+  sessions happen to have loaded.
+- **The stale case** keeps the withdrawal. The documents give no cheaper
+  sound rule for a handler. Its body runs once, so it cannot be handed
+  the stored value and evaluated again when the writer has been
+  evaluated, as a cone's body is (section 4.4). And a load is I/O, which
+  a body suspended at a read does not wait for: a body can be suspended
+  while a cone instance is evaluated (`execution-and-storage.md` §1.4),
+  and not while a record is built from documents the replica may not
+  hold. The cost is one more run of the handler for each instance whose
+  stale output a journaled read discovers (open question 28).
+- **A cone instance evaluated in the event's transaction,** before the
+  body or at a read of the body, follows the same two rows for its own
+  journaled reads: the body that waits for its value runs once.
+- **A runtime that keeps no basis index,** such as a client (section
+  11.1), has nothing that says whether the stored value is current. There
+  the stale case applies.
 
 ### 5.4 Ordering guarantees
 
@@ -1561,7 +1792,7 @@ Two things follow for what is observable.
 | A recorded read of the handler is stale when the wave commits | The event is requeued whole and runs again once the replica holds the commit that made the read stale. Later entries of the same stream that sealed into the wave requeue behind it ([serving loop](../server-side-execution/serving-loop.md), §3d, where the rule is proposed and awaits a ruling) | Yes, on the arrival of that commit |
 | A derived write conflicts when the wave commits | That write is withdrawn alone, with the derived writes that used what it staged. The rest of the transaction commits | The cone instance is evaluated again when the conflicting commit arrives and marks it stale. A write withdrawn for a conflict on its target alone is stored again from the memo |
 | A withdrawal reaches the handler's own writes, because the handler read by address a value that a withdrawn derived write staged | The event's transaction is withdrawn whole, and the event is requeued, as for a stale read of the handler | Yes, on the arrival of the conflicting commit |
-| The handler body did not run to its end, because an input did not resolve or a journaled read reached an instance that is not loaded or an invalid materializer (section 5.3) | The transaction is withdrawn whole and the entry stays pending | Yes, when the document arrives, the instance is loaded, or the materializer has run |
+| The handler body did not run to its end, because an input did not resolve or a journaled read reached a stale address of an instance that is not loaded or an invalid materializer (section 5.3) | The transaction is withdrawn whole and the entry stays pending | Yes, when the document arrives, the instance is loaded, or the materializer has run |
 | The handling's receipt exists already | The event was handled. The attempt is dropped | No |
 | A deterministic refusal by the memory server: a refused access-list change, a refused write to another space | The refusal is the consequence | No |
 
@@ -1862,7 +2093,8 @@ whatever is evaluated again.
 - An operation's state document is named by its cause, so every evaluation
   names the same document.
 - An operation of an instance a computation made is named within that
-  instance, and the instance is named by the computation's site and an
+  instance, and the instance is named as `plan-and-label-templates.md`
+  §1.3 names it: by the enclosing instance, the body, the site, and an
   ordinal or a cause (section 2.7). An evaluation of the computation that
   makes the same instance with the same argument changes no request.
 - A handler's requests are named by the handling and their order. An event
@@ -2346,9 +2578,13 @@ Five properties make the sequence sufficient:
   aborted transaction therefore applies no step and leaves nothing in any
   space, and the key pair of a space it would have created is discarded.
 - **A repeated attempt names the same instance.** The identifier of an
-  `inSpace` instance is known at the request, from the handling and the
-  request's ordinal, or for a request a computation makes from the site
-  and an ordinal or a cause.
+  `inSpace` instance is known at the request. For a request a handler
+  makes it derives from the handling and the request's ordinal. For a
+  request a computation makes it derives from the enclosing instance, the
+  body's `name` and `within`, the site, and the ordinal of the
+  instantiation among those the evaluation makes at that site, or, with
+  `.for(cause)`, that cause in place of the ordinal
+  (`plan-and-label-templates.md` §1.3).
 - **A repeated attempt names the same space.** If a later step fails after
   the allocation record committed, on a conflict or a crash, the event is
   not consequenced and runs again. The request finds the record, returns
@@ -2570,6 +2806,70 @@ identity and the scope instance that ran. Here it is:
   document makes the cone instance stale. The first evaluation in this
   process replaces the row entries by slot, chain and dynamic entries.
 
+**A read answered from the rows.** By ruling, a read of an address whose
+writer is in an instance that is not loaded consults the rows, and the
+instance is loaded only where they show the stored value stale (sections
+4.4 and 5.3). The check is made for an address in one scope instance, as
+follows.
+
+1. **The instance.** The document of the address names it. The address is
+   a path of a result cell whose result document holds a pattern
+   reference, whether the result document or a part document stores the
+   path. Or it lies in a state cell document, whose `result` back-link
+   leads to that result document (`execution-and-storage.md` §4.2, and
+   request 25 there). An instance marked as torn down is not checked: a
+   read of it returns what is stored (section 4.4).
+2. **The cones.** The plan of the compiled pattern that the result
+   document names gives the cones that write the address: the cone of
+   each kept output at, above or below the path, or each cone with a
+   write edge of kind `state` to the cell. The check adds every cone from
+   which `Plan.edges` leads to one of them, over any number of edges. It
+   uses the parsed plan the worker holds for that compiled pattern
+   (section 10.5). Where the worker holds none, the address counts as
+   stale.
+3. **The rows.** Every row of those cones, under the instance and that
+   compiled pattern, for the scope instance of the address and for each
+   broader one: the user's and the space's for a session's, and the
+   space's for a user's.
+4. **Current.** The address is current when each of those cones has a row
+   among them and every row holds the sequence number its input document
+   has now. This is the definition by which the rows decide after a
+   restart (Terms, "Stale"; `execution-and-storage.md` §3.4): an output is
+   current if and only if its inputs are unchanged since the recorded
+   sequence numbers, and a cone that has no row has not been evaluated. A
+   document to which a transaction of the open cycle staged or sealed a
+   write counts as changed, the reading transaction's own writes
+   included, because the store does not hold that write yet and an
+   instance that is not loaded has no entry for it to match (section
+   3.7).
+5. **Inputs that are derived.** An input document that a row names can
+   itself be written by a cone: it is a result document, a part document
+   or a state cell document of a compiled instance of the same space,
+   loaded or not. For each such document the check is repeated from step
+   2 with every cone that writes into that document, because a row names
+   a document and no path. The address is current when every instance
+   reached this way passes. An instance is checked once per read. An
+   input document of another space is compared with the head the
+   runtime's replica of that space holds and is not followed further
+   (section 9.2).
+
+The check errs toward stale. A row names a document and no path, so a
+write to a path the cone does not read puts the row behind the head. A
+change of a label alone is a write to the document that stores the label,
+so it does the same, and a current address has a current stored label. A
+row, a head or a document that the check cannot read without a wait
+counts as behind. An address the check finds stale is treated as section
+4.4 says, and the load that follows marks the stale cone instances from
+the same rows.
+
+The check loads nothing. It builds no instance record, enters nothing in
+the address index or the writer map, fetches no compiled pattern, and
+evaluates nothing. It costs one range of the index per consulted cone and
+scope instance, one head per row, and the metadata of each input document
+that a row names. For a cone applied to a collection that is one row per
+element document. Section 5.3 says which reads are checked and how long a
+verdict is kept.
+
 The number of rows is the number of cones times the documents each reads. A
 collection costs one row per element document for each cone applied to it,
 where today each element is a sub-pattern with several nodes and a set of
@@ -2767,8 +3067,11 @@ holds, before the server's result arrives.
   cells and the addresses of those containers. A client derives it.
 - A cell, an instance, an effect and a sent event that a handler requests
   are named by the handling and their order (section 11.6).
-- An instance a computation makes is named by its site and an ordinal or a
-  cause (section 2.7).
+- An instance a computation makes is named by the enclosing instance, the
+  body's `name` and `within`, the site, and the ordinal of the
+  instantiation among those the evaluation makes at that site, or, with
+  `.for(cause)`, that cause in place of the ordinal
+  (`plan-and-label-templates.md` §1.3; section 2.7).
 
 So a user can act on a control that a speculative run rendered, before
 the server has evaluated the binding. The event is appended to a stream
@@ -3028,7 +3331,12 @@ step in that space (9.4); a client cannot read the element-key salt
 set is stored in several documents (4.2, 11.6); a binding of the reactive
 tier copies nothing, and a binding made in a function body binds a stored
 container by reference (5.2, 11.1); a `lift` or a `computed` may
-instantiate a pattern (2.7).
+instantiate a pattern (2.7); an event is routed to an instance that is not
+loaded through a stream index, aligned with what server-primary execution
+does for a queued event (5.1); a read of a cell whose writer is in an
+instance that is not loaded returns the stored value where the basis index
+shows it current, and loads the instance only where it shows it stale
+(4.4, 5.3, 10.4).
 
 ### Needing the project owner
 
@@ -3108,8 +3416,12 @@ instantiate a pattern (2.7).
 11. **Reads through handles are made current at the read**
     (`execution-and-storage.md`). Met by its §1.4 and §2.4 for a writer in
     a loaded instance of the same space. Where the writer's instance is
-    not loaded, section 5.3 decides: the attempt is withdrawn, the instance
-    is loaded, and the event is dispatched again. Question 28 has the cost.
+    not loaded, the ruling decides (sections 4.4, 5.3 and 10.4): the read
+    returns the stored value where the basis index shows it current. Where
+    it shows it stale, a handler's attempt is withdrawn, the instance is
+    loaded, and the event is dispatched again, and a cone instance in a
+    derivation transaction reads what is stored and is evaluated again
+    after the writer. Question 28 has the cost.
 12. **A slot's value is supplied when it is first read**
     (`execution-and-storage.md`). Met by its §2.2 (section 4.3 here).
 13. **An effect's request is stored** (`execution-and-storage.md`). Met in
@@ -3169,24 +3481,29 @@ instantiate a pattern (2.7).
     [module loading](../module-loading.md)). Section 10.5 assumes the space
     of the instance, written by the serving runtime alone.
 26. **The stream index** (`execution-and-storage.md`, and the prototype).
-    Its question 6 asks how an event reaches its binding when no stream
-    document is written at setup. *Proposed:* one row per stream in the
-    space's store, beside the basis index, from the stream's identifier to
-    the instance and the binding (section 5.1). Its §4.7 and §4.9 then
-    count no document for a stream that received no event, and one row.
-    The prototype has to measure the rows against a stream document
-    written at setup.
+    Ruled: one row per stream in the space's store, beside the basis
+    index, from the stream's identifier to the instance and the binding
+    (section 5.1). It answers question 6 of that document, how an event
+    reaches its binding when no stream document is written at setup. The
+    row takes the place of the back-link that setup stores on a stream's
+    document today and of the walk that follows it; the entries, the
+    drain, the queue and the registry in memory are kept. Its §4.7 and
+    §4.9 count no document for a stream that received no event, and one
+    row. What remains for the prototype is the size of the index.
 27. **Materializers on a client** (the prototype). *Assumed:* a client runs
     no materializer, and reads what a materializer wrote as committed
     (section 7.2). The alternative runs it inside the speculative
     transaction of the cause that made it invalid, which needs today's
     label rule on a client.
 28. **A handler's journaled read of an output of an instance that is not
-    loaded** (the prototype). Section 5.3 loads the instance and runs the
-    event again, so that what a handler reads does not depend on what
-    other sessions have loaded. The prototype has to measure how many
-    handlers of the corpus read outputs of other instances through handles
-    of `Body.handles`, and how many loads one event causes.
+    loaded** (the prototype). Ruled: the basis index decides. Where it
+    shows the stored value current, the read returns it and the instance
+    is not loaded. Where it shows it stale, the instance is loaded and the
+    event runs again (section 5.3). What a handler reads then does not
+    depend on what other sessions have loaded. The prototype has to
+    measure how many handlers of the corpus read outputs of other
+    instances through handles of `Body.handles`, how many rows one check
+    reads (section 10.4), and how many loads one event causes.
 29. **The remote-echo gate** (the prototype). *Assumed:* it has no case for
     a cone instance, because the loop it bounds needs two runtimes that
     commit derived writes to one document (section 8.4).

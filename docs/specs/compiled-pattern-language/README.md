@@ -637,10 +637,12 @@ computation
   computation writes, and its label reaches the request with it.
 - Two things are assumed, as question 38 of the
   [continuation plan](../../plans/compiled-pattern-language.md) states them.
-  The instance is identified by the enclosing instance, the site of the
-  call, and the ordinal of the instantiation among those the evaluation
-  makes at that site, or by an explicit cause where the author writes
-  `.for(cause)`. And the computation does not request an effect directly.
+  The instance is identified by the enclosing instance, the body's `name`
+  and `within`, the site of the call, and the ordinal of the
+  instantiation among those the evaluation makes at that site. Where the
+  author writes `.for(cause)`, that cause takes the place of the ordinal
+  ([plan format and label templates](plan-and-label-templates.md), §1.3).
+  And the computation does not request an effect directly.
 
 In the reactive tier the same call, with a callee the compiler can resolve
 statically, denotes an anonymous sub-pattern, compiled into the surrounding
