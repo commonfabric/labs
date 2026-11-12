@@ -228,8 +228,11 @@ A request to the worker that fails because its space refused the runtime, such
 as opening the space's root or listing a record's fields with
 `CellHandle.fields()`, fails with
 `RuntimeErrorCode.SpaceAccessRefused`, so a host that missed the space's one
-`spaceaccesslost` still tells the refusal from other failures, and shows the
-space as out of reach rather than waiting on it. A deleted space's refusal fails
+`spaceaccesslost` still tells the refusal from other failures, and can show the
+space as out of reach rather than wait on it. The shell does not read the code:
+a page load failing with it shows the shell's ordinary load error, where one
+failing with `SpaceDeleted`, `SpaceNotFound`, or `SpaceUnreachable` gets a
+message of its own. A deleted space's refusal fails
 with `RuntimeErrorCode.SpaceDeleted` instead, as
 [A deleted space](#a-deleted-space) says. The code is what the storage manager
 reports for the space, through `spaceAccessError(space)` or
