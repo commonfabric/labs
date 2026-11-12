@@ -85,6 +85,8 @@ import {
   newLoopbackServer,
 } from "@commonfabric/runner/storage/cache.deno";
 
+import { moduleByteCache } from "./pieces-controller.ts";
+
 const owner = await Identity.fromPassphrase("FabriChat update rehearsal");
 
 // Principals the owner chats with, none of whom has a profile, so each is
@@ -514,7 +516,11 @@ const rehearse = (
       );
       const apiUrl = new URL(`http://127.0.0.1:${http.addr.port}`);
       storage = EmulatedStorageManager.connectTo(server, { as: owner });
-      runtime = new Runtime({ apiUrl, storageManager: storage });
+      runtime = new Runtime({
+        apiUrl,
+        storageManager: storage,
+        moduleByteCache,
+      });
       controller = new PiecesController(
         createSession({ identity: owner, spaceDid: owner.did() }),
         runtime,

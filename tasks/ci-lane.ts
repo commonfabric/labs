@@ -802,14 +802,8 @@ export function batchesOf(
     // A `describe` that fails as a whole is recorded under its own title,
     // and the outermost `describe` registers one test under its title, so
     // skipping that title skips every leaf inside it. A title enclosing a
-    // chosen name therefore stays off the list, and its hooks run, so its
-    // own cost is part of what the unit takes.
+    // chosen name therefore stays off the list, and its hooks run.
     const around = new Set([...names].flatMap(enclosingNames));
-    const runs = whole
-      ? all
-      : all.filter((entry) =>
-        names.has(entry.test.n) || around.has(entry.test.n)
-      );
     const request: UnitRequest = {
       unit,
       skip: whole ? [] : all
@@ -817,7 +811,6 @@ export function batchesOf(
           !names.has(entry.test.n) && !around.has(entry.test.n)
         )
         .map((entry) => entry.test.n),
-      cost: runs.reduce((total, entry) => total + entry.cost, 0),
     };
     const suiteKnows = known.get(suiteId) ?? new Set();
     known.set(suiteId, suiteKnows);

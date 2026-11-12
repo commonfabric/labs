@@ -758,9 +758,7 @@ minute where another's take nothing, and they are counted once per run of
 the unit. A unit the fit names no hooks for takes nothing for them.
 
 A suite with no fit is charged no overhead, nothing per unit, no hooks,
-and a correction of one. A runner that runs units side by side starts the
-costliest first, by the cost the lane hands it with each unit, since the
-second figure assumes nothing long starts last.
+and a correction of one.
 
 A capability's setup is charged at the ninetieth percentile of its
 openings over the cost window. A unit's hooks are charged at the ninetieth

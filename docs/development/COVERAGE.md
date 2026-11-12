@@ -1143,10 +1143,10 @@ them into runs of neighbors of about a fifth of the list each, never across a
 program root, and hands each run to a `cf test --compile-only` process, five at
 a time; each compiles its files' programs and runs nothing. Files that sit
 together share most of their modules, so each run compiles those once, and the
-test processes that follow, five at a time, all start from a full cache. A
-`cf test` process seeds from the file only as it starts, so without that pass
-the processes started together on a cold cache each compile the modules they
-share. The compile-only process writes no coverage, since nothing ran.
+test processes that follow, one at a time, all start from a full cache. A
+`cf test` process seeds from the file as it starts, so the time recorded for a
+file does not include compiling its program. The
+compile-only process writes no coverage, since nothing ran.
 
 The persistent cell cache stores each module's span list as one JSON string.
 This keeps reporting metadata in one value instead of expanding every span
