@@ -612,10 +612,11 @@ loop's duty).
   `error`, `status` or `reason`. A drain-delivered run writes `withheld`
   in its own transaction, the wave writes it beside a same-wave copy's
   mark, and the consequence notice writes it for a failure. The sender's
-  durable-ack coupling reports every such outcome as
-  `EventDeliveryError` of kind `withheld`, and the overlay signals
-  `withheld`, so neither the sender nor a reader of the stream's space
-  learns whether the handling committed. What the handling wrote stays
+  durable-ack coupling reports every such outcome as `done`, on a view
+  `isWithheldDelivery()` names, never as a failure, since the handling
+  may have committed; the overlay signals `withheld`. Neither the sender
+  nor a reader of the stream's space learns whether the handling
+  committed. What the handling wrote stays
   readable under its own labels. A delivery failure that ends in
   `needs-attention` made no claim: the event was not handled and stays
   retryable, and its record holds fixed text and the failure's class,
