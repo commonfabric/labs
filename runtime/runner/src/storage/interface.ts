@@ -3358,8 +3358,9 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    * on any write, so a cached entry is only ever returned when no write has
    * intervened. A transaction that is no longer ready, whose CFC state is
    * prepared, that is marked for a UI-input blind write, or that is reading at
-   * an earlier epoch neither returns nor stores an entry, so such a read takes
-   * the full pipeline.
+   * an earlier epoch neither returns nor stores an entry at the time it is
+   * asked, so such a read takes the full pipeline. A read made while CFC is
+   * prepared invalidates that preparation, so its result is then stored.
    *
    * Optional: transactions that must not cache (e.g. the non-reactive `sample()`
    * wrapper) leave these undefined and callers fall back to recomputing.
