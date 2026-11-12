@@ -153,18 +153,43 @@ export type FuseLib = Deno.DynamicLibrary<typeof COMMON_SYMBOLS>;
 // Platform interface
 //
 
+/** A native callback of any signature. */
 // deno-lint-ignore no-explicit-any
-type AnyCallback = Deno.UnsafeCallback<any>;
+export type AnyCallback = Deno.UnsafeCallback<any>;
 
 /** Which FUSE implementation openFuse() loaded. */
-export type FuseProvider = "fuse-t" | "macfuse" | "linux-libfuse" | "unknown";
+export type FuseProvider = "fuse-t" | "macfuse" | "linux-libfuse";
+
+/** A libfuse that has been loaded, and the mount lifecycle it provides. */
+export interface LoadedFuse {
+  /** The functions every libfuse provides. */
+  readonly symbols: FuseLib["symbols"];
+
+  /** Which implementation was loaded. */
+  readonly provider: FuseProvider;
+
+  /** Mounts a filesystem served by the operations in `opsBuf`. */
+  mount(
+    mountpoint: Uint8Array<ArrayBuffer>,
+    argsBuf: ArrayBuffer,
+    opsBuf: ArrayBuffer,
+    opsSize: bigint,
+  ): MountHandle;
+
+  /** Unmounts, which ends the session loop. */
+  unmount(handle: MountHandle, mountpoint: Uint8Array<ArrayBuffer>): void;
+
+  /** Frees the session, first unmounting unless that has happened. */
+  cleanup(
+    handle: MountHandle,
+    mountpoint: Uint8Array<ArrayBuffer>,
+    alreadyUnmounted: boolean,
+  ): void;
+}
 
 export interface FusePlatform {
-  /** Open the platform-appropriate libfuse and return a lib with common symbols. */
-  openFuse(): FuseLib;
-
-  /** The implementation loaded by openFuse(); "unknown" before it runs. */
-  provider(): FuseProvider;
+  /** Loads the platform's libfuse; throws naming every place it looked. */
+  openFuse(): LoadedFuse;
 
   // Struct sizes
   STAT_SIZE: number;
@@ -238,28 +263,31 @@ export interface FusePlatform {
       newnamePtr: Deno.PointerValue,
     ) => void,
   ): AnyCallback;
+}
 
-  // Mount lifecycle
-  mount(
-    lib: FuseLib,
-    mountpoint: Uint8Array,
-    argsBuf: ArrayBuffer,
-    opsBuf: ArrayBuffer,
-    opsSize: bigint,
-  ): MountHandle;
-
-  unmount(
-    lib: FuseLib,
-    handle: MountHandle,
-    mountpoint: Uint8Array,
-  ): void;
-
-  cleanup(
-    lib: FuseLib,
-    handle: MountHandle,
-    mountpoint: Uint8Array,
-    alreadyUnmounted: boolean,
-  ): void;
+/**
+ * Loads the first of `paths` that `load` can open and hands it to `wrap`.
+ * Throws `advice` followed by why each path failed when none opens.
+ */
+export function loadFirstLibrary<L>(
+  paths: readonly string[],
+  load: (path: string) => L,
+  wrap: (lib: L, path: string) => LoadedFuse,
+  advice: string,
+): LoadedFuse {
+  const errors: string[] = [];
+  for (const path of paths) {
+    let lib: L;
+    try {
+      lib = load(path);
+    } catch (e) {
+      errors.push(`  ${path}: ${e}`);
+      continue;
+    }
+    console.log(`Loaded ${path}`);
+    return wrap(lib, path);
+  }
+  throw new Error(`${advice}Tried:\n${errors.join("\n")}`);
 }
 
 //
@@ -269,6 +297,7 @@ export interface FusePlatform {
 // Errno constants (POSIX-standard values)
 export const ENOENT = 2;
 export const EIO = 5;
+export const EBADF = 9;
 export const EACCES = 13;
 export const EEXIST = 17;
 export const EXDEV = 18;
@@ -376,7 +405,6 @@ export function readCString(ptr: Deno.PointerValue): string {
 export function makeWriteEntryParam(
   writeStat: (buf: ArrayBuffer, opts: StatOpts) => void,
   statSize: number,
-  entryParamSize: number,
 ) {
   return function writeEntryParam(
     buf: ArrayBuffer,
@@ -401,15 +429,6 @@ export function makeWriteEntryParam(
     const timeoutBase = 16 + statSize;
     view.setFloat64(timeoutBase, opts.attrTimeout ?? 1.0, true);
     view.setFloat64(timeoutBase + 8, opts.entryTimeout ?? 1.0, true);
-
-    // Sanity: ensure we haven't overflowed
-    if (timeoutBase + 16 > entryParamSize) {
-      throw new Error(
-        `writeEntryParam: timeouts overflow entry_param (${
-          timeoutBase + 16
-        } > ${entryParamSize})`,
-      );
-    }
   };
 }
 
@@ -452,23 +471,22 @@ export function createFuseArgs(
 // Platform dispatcher
 //
 
-let _platform: FusePlatform | null = null;
-
-export async function getPlatform(): Promise<FusePlatform> {
-  if (_platform) return _platform;
-  if (Deno.build.os === "darwin") {
-    // The Darwin bindings cannot load anywhere else.
+/**
+ * The bindings for `os`, loaded only when asked for. Throws for an operating
+ * system with no FUSE bindings.
+ */
+export async function getPlatform(
+  os: typeof Deno.build.os = Deno.build.os,
+): Promise<FusePlatform> {
+  if (os === "darwin") {
+    // Loaded only where the mount runs on macOS.
     // deno-lint-ignore cf-imports/no-inline-module-import
-    const mod = await import("./platform-darwin.ts");
-    _platform = mod.default;
-    return _platform;
+    return (await import("./platform-darwin.ts")).default;
   }
-  if (Deno.build.os === "linux") {
-    // The Linux bindings cannot load anywhere else.
+  if (os === "linux") {
+    // Loaded only where the mount runs on Linux.
     // deno-lint-ignore cf-imports/no-inline-module-import
-    const mod = await import("./platform-linux.ts");
-    _platform = mod.default;
-    return _platform;
+    return (await import("./platform-linux.ts")).default;
   }
-  throw new Error(`Unsupported platform: ${Deno.build.os}`);
+  throw new Error(`Unsupported platform: ${os}`);
 }
