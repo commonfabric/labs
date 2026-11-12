@@ -1281,10 +1281,15 @@ export class Client {
       // A response that arrived before the send settled answers the request,
       // whatever the send then reports: the server has acted on it.
       if (answered) {
-        logger.debug("send-failed-after-answer", () => [
-          `request ${requestId} was answered before its send failed:`,
-          describeError(error),
-        ]);
+        // The close that reports a lost connection records a send lost with
+        // it. Any other failure is recorded only here, since the request
+        // itself no longer fails with it.
+        if (!isConnectionError(error)) {
+          logger.warn("send-failed-after-answer", () => [
+            `request ${requestId} was answered before its send failed: ` +
+            describeError(error),
+          ]);
+        }
       } else {
         // A send the transport refused outright gets no response, so its
         // entry would otherwise stay until the connection closes. A send lost

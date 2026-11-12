@@ -8,6 +8,7 @@
 
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
 
 import { decodeMemoryBoundary } from "../v2.ts";
 import {
@@ -184,6 +185,43 @@ describe("client", () => {
       expect((await server.readDocument(spaceFor("transact"), "of:doc"))?.value)
         .toBe("A");
     } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("logs what a send that failed outright reported, once, when its request was answered first", async () => {
+    // The request resolves with the server's answer, so this line is the
+    // only record of the failure the send reported.
+
+    const server = serverFor("logged");
+    const { transport } = answeredBeforeSendSettles(
+      server,
+      "transact",
+      () => Promise.reject(new Error("test write refused")),
+    );
+    const client = await connect({ transport });
+    const lines: string[] = [];
+    const warn = stub(console, "warn", (...args: unknown[]) => {
+      lines.push(args.map(String).join(" "));
+    });
+    try {
+      const session = await client.mount(
+        spaceFor("logged"),
+        {},
+        testSessionOpenAuthFactory,
+      );
+      await session.transact(commit());
+
+      const logged = lines.filter((line) =>
+        line.includes("send-failed-after-answer")
+      );
+      expect(logged).toHaveLength(1);
+      expect(logged[0]).toContain(
+        'was answered before its send failed: "Error": "test write refused"',
+      );
+    } finally {
+      warn.restore();
       await client.close();
       await server.close();
     }
