@@ -19,7 +19,12 @@ import {
 } from "../src/cfc/types.ts";
 import { stampWaveRunContext, WaveAccumulator } from "../src/executor/wave.ts";
 import { EngineWaveCommitSink } from "../src/executor/engine-wave-sink.ts";
-import { writeProcessedClaim } from "../src/executor/processed-claim.ts";
+import {
+  waveClaimIsWithheld,
+  withholdProcessedClaimOutcome,
+  writeProcessedClaim,
+} from "../src/executor/processed-claim.ts";
+import { processedClaimJoinIsForeign } from "../src/cfc/prepare.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
   seedStoredEnvelope,
@@ -322,5 +327,73 @@ describe("cfc-processed-claim", () => {
       `writer-fit confidentiality misfit for ${plainId} at /entries/0/consequenced`,
     );
     tx.abort();
+  });
+
+  describe("the outcome withheld under a foreign join", () => {
+    // Under a join the stream's space doesn't admit, the claim says the same
+    // thing however the handling ends: the run records `withheld` beside the
+    // mark, or has the wave record it, so that no outcome tells a reader of
+    // the stream's space what the handler read.
+
+    /** The entry's `withheld` field, as `tx` sees it. */
+    const withheldOn = (tx: ReturnType<Runtime["edit"]>): unknown =>
+      runtime.getCellFromLink({
+        space,
+        scope: "space",
+        id: entriesId as never,
+        path: ["entries", "0", "withheld"],
+      }).withTx(tx).get();
+
+    /** A handler run that read nothing. */
+    const plainRun = (actionId: string) => {
+      const tx = runtime.edit();
+      stampWaveRunContext(tx, { actionId, kind: "event-handler" });
+      return tx;
+    };
+
+    it("finds the join of a run that read another space's label foreign", () => {
+      const foreignTx = handlerRun("foreign-join");
+      const plainTx = plainRun("plain-join");
+
+      expect(processedClaimJoinIsForeign(foreignTx, space)).toBe(true);
+      expect(processedClaimJoinIsForeign(plainTx, space)).toBe(false);
+      foreignTx.abort();
+      plainTx.abort();
+    });
+
+    it("records the outcome withheld beside the claim, and measures neither", () => {
+      const tx = handlerRun("withheld-handler");
+      const entry = { sidecarId: entriesId, index: 0 };
+      writeProcessedClaim(runtime, tx, space, entry, { clearDeferral: false });
+
+      expect(withholdProcessedClaimOutcome(runtime, tx, space, entry)).toBe(
+        true,
+      );
+      expect(withheldOn(tx)).toBe(true);
+      expect(preparedWriterFitReasons(tx)).toEqual([]);
+      tx.abort();
+    });
+
+    it("notes a same-wave run's claim for the wave to record withheld", () => {
+      const tx = handlerRun("same-wave-handler");
+
+      expect(withholdProcessedClaimOutcome(runtime, tx, space, undefined))
+        .toBe(true);
+      expect(waveClaimIsWithheld(tx)).toBe(true);
+      tx.abort();
+    });
+
+    it("withholds nothing for a run whose join the stream's space admits", () => {
+      const tx = plainRun("admitted-handler");
+      const entry = { sidecarId: entriesId, index: 0 };
+      writeProcessedClaim(runtime, tx, space, entry, { clearDeferral: false });
+
+      expect(withholdProcessedClaimOutcome(runtime, tx, space, entry)).toBe(
+        false,
+      );
+      expect(withheldOn(tx)).toBeUndefined();
+      expect(waveClaimIsWithheld(tx)).toBe(false);
+      tx.abort();
+    });
   });
 });

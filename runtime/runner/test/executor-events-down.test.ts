@@ -84,6 +84,11 @@ import {
 } from "../src/cfc/ui-contract.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
 import {
+  SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
+  writeSeedEnvelopeDoc,
+} from "./cfc-seed-envelope.ts";
+import {
   admittedCommits,
   ArrivalLog,
   awaitAdmitted,
@@ -2465,6 +2470,192 @@ describe("Phase 3 events-down (serving side)", () => {
       expect(sidecarValue()?.eventWatermark).toBe(
         entryByKind("follower")!.seq,
       );
+    } finally {
+      cancelProbe();
+      cancelDemand();
+    }
+  });
+
+  it("records the same withheld outcome for a served handling that read another space's label, whether it committed or was refused, and tells its sender so", async () => {
+    // A probe on the pattern's stream reads a document of another space whose
+    // label this space doesn't admit. For `commits` it writes nothing more;
+    // for `refuses` it also copies the value into this space, which the
+    // writer-fit gate refuses; for `plain` it reads nothing labeled. The
+    // processed claim (`processed-claim.ts`) takes nothing of the join, so
+    // the two foreign-read handlings are delivered, and each records the
+    // outcome withheld, not how it ended.
+    const foreignSigner = await Identity.fromPassphrase(
+      "events down withheld foreign",
+    );
+    const foreign = foreignSigner.did() as MemorySpace;
+    const foreignManager = EmulatedStorageManager.connectTo(server, {
+      as: foreignSigner,
+    });
+    extraManagers.push(foreignManager);
+    const foreignRuntime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: foreignManager,
+    });
+    extraRuntimes.push(foreignRuntime);
+    const secretId = foreignRuntime.getCell(foreign, "withheld-secret")
+      .getAsNormalizedFullLink().id;
+    const seed = foreignRuntime.edit();
+    writeSeedEnvelopeDoc(seed, foreign);
+    seedStoredEnvelope(seed, {
+      space: foreign,
+      scope: "space",
+      id: secretId,
+      path: [],
+    }, {
+      value: { secret: "s3cr3t" },
+      cfc: {
+        version: 1,
+        schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+        labelMap: {
+          version: 1,
+          entries: [{
+            path: ["secret"],
+            label: {
+              confidentiality: [
+                "https://commonfabric.org/cfc/atom/Public/withheld-secret",
+              ],
+            },
+          }],
+        },
+      },
+    });
+    expect((await seed.commit().settled).error).toBeUndefined();
+
+    ({ manager: clientManager, runtime: clientRuntime } = openClient());
+    const engine = await server.engineForSpace(space);
+    const { result } = await standUp(clientRuntime, BUMP_PATTERN, {
+      arg: "withheld-arg",
+      result: "withheld-result",
+    });
+    const cancelDemand = result.sink(() => {});
+    await clientRuntime.idle();
+    await clientRuntime.storageManager.synced();
+
+    host = newHost();
+    result.key("bump").send({ kind: "warmup" });
+    await clientRuntime.idle();
+    await clientRuntime.storageManager.synced();
+    await awaitAdmitted(server, () => sidecarIdsIn(engine).length === 1);
+    const sidecarId = sidecarIdsIn(engine)[0];
+    const entryByKind = (kind: string) =>
+      ((Engine.read(engine, { id: sidecarId })?.value as
+        | StreamEventsDocValue
+        | undefined)?.entries ?? []).find((entry) =>
+          (entry.payload as { kind?: string } | undefined)?.kind === kind
+        );
+    await awaitAdmitted(
+      server,
+      () => entryByKind("warmup")?.consequenced === true,
+    );
+    await awaitActive();
+
+    const warmup = entryByKind("warmup")!;
+    const streamLink = {
+      space,
+      id: warmup.stream.id as never,
+      path: [...warmup.stream.path],
+      scope: (warmup.stream.scope ?? "space") as never,
+    };
+    const secretLink = {
+      space: foreign,
+      id: secretId,
+      path: [],
+      scope: "space" as const,
+    };
+    /** The commit outcome of every served run of the probe, by event kind. */
+    const commitOutcomes = new ArrivalLog<{ kind: string; error: unknown }>();
+    const cancelProbe = servingRuntime!.scheduler.addEventHandler(
+      (tx, event) => {
+        const kind = (event as { kind?: string }).kind ?? "unknown";
+        tx.addCommitCallback((_tx, outcome) =>
+          commitOutcomes.record({ kind, error: outcome.error })
+        );
+        if (kind === "plain") return;
+        const read = servingRuntime!.getCellFromLink(
+          secretLink,
+          undefined,
+          tx,
+        ).getRaw() as { secret?: string } | undefined;
+        if (kind !== "refuses") return;
+        servingRuntime!.getCell<{ copied?: string }>(
+          space,
+          "withheld-sink",
+          undefined,
+          tx,
+        ).set({ copied: read?.secret });
+      },
+      streamLink,
+    );
+    try {
+      // A first read of the foreign document loads it into the serving
+      // runtime, so that the cases below read it on their first run.
+      result.key("bump").send({ kind: "loads" });
+      await clientRuntime.idle();
+      await awaitAdmitted(
+        server,
+        () => entryByKind("loads")?.consequenced === true,
+      );
+      const fired = {
+        commits: fireVerb(result, "bump", { kind: "commits" }, "withheld-1"),
+        refuses: fireVerb(result, "bump", { kind: "refuses" }, "withheld-2"),
+        plain: fireVerb(result, "bump", { kind: "plain" }, "withheld-3"),
+      };
+      await clientRuntime.idle();
+      await awaitAdmitted(
+        server,
+        () =>
+          ["commits", "refuses", "plain"].every((kind) =>
+            entryByKind(kind)?.consequenced === true
+          ),
+      );
+      // The `commits` handling committed, after the load of the foreign
+      // document its first run waited on; the `refuses` one was refused.
+      await commitOutcomes.matching((outcome) =>
+        outcome.kind === "commits" && outcome.error === undefined
+      );
+      const refusal = (await commitOutcomes.matching((outcome) =>
+        outcome.kind === "refuses"
+      )).error as { name?: string; message?: string } | undefined;
+      expect(refusal?.name).toBe("CfcCommitRefusalError");
+      expect(refusal?.message).toContain("writer-fit confidentiality misfit");
+
+      /** What an entry says of how its handling ended. */
+      const outcomeOf = (kind: string) => {
+        const entry = entryByKind(kind)!;
+        return {
+          consequenced: entry.consequenced,
+          withheld: entry.withheld,
+          error: entry.error,
+          status: entry.status,
+          reason: entry.reason,
+        };
+      };
+      const withheld = {
+        consequenced: true,
+        withheld: true,
+        error: undefined,
+        status: undefined,
+        reason: undefined,
+      };
+      expect(outcomeOf("commits")).toEqual(withheld);
+      expect(outcomeOf("refuses")).toEqual(withheld);
+      expect(outcomeOf("plain")).toEqual({ ...withheld, withheld: undefined });
+
+      for (const kind of ["commits", "refuses"] as const) {
+        await fired[kind].reached(1);
+        const status = fired[kind].entries[0].tx.status();
+        const error = status.status === "error" ? status.error : undefined;
+        expect(error).toBeInstanceOf(EventDeliveryError);
+        if (!(error instanceof EventDeliveryError)) return;
+        expect(error.kind).toBe("withheld");
+      }
+      await fired.plain.reached(1);
+      expect(fired.plain.entries[0].status).not.toBe("error");
     } finally {
       cancelProbe();
       cancelDemand();

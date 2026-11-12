@@ -707,13 +707,15 @@ const mintedRuntimeInjectedKeys = new WeakSet<readonly string[]>();
 /** How a sent event's delivery failed: its append was refused, or its
  * served handling ended without committing (events.md §5) — the handler
  * threw (`errored`), admission refused it (`refused`), it was dropped, or it
- * needs attention. */
+ * needs attention — or its outcome is `withheld`, which a handling that read
+ * data its stream's space doesn't admit reports whether it committed or not. */
 export type EventDeliveryFailure =
   | "append-refused"
   | "errored"
   | "refused"
   | "dropped"
-  | "needs-attention";
+  | "needs-attention"
+  | "withheld";
 
 /** The error a sender's commit callback reads from `tx.status()` when the
  * durable-ack coupling reports a failed delivery: `kind` says which failure
@@ -2688,7 +2690,8 @@ export class CellImpl<T extends FabricValue>
                   consequence.kind === "errored" ||
                   consequence.kind === "dropped" ||
                   consequence.kind === "refused" ||
-                  consequence.kind === "needs-attention"
+                  consequence.kind === "needs-attention" ||
+                  consequence.kind === "withheld"
                 ) {
                   callerOnCommit(errorStatusTxView(
                     echoTx,

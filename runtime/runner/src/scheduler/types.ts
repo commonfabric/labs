@@ -285,7 +285,16 @@ export const ACL_DOCUMENT_WRITE_REFUSED = "acl-document-write-refused";
 
 export type ServedEventFailureOutcome =
   | {
-    kind: "error" | "dropped";
+    kind: "error";
+    message: string;
+
+    /** Whether the run's join carries a clause its stream's space doesn't
+     * admit, so that its consequence records the outcome withheld rather
+     * than `message` (`withholdProcessedClaimOutcome()`). */
+    withheld?: true;
+  }
+  | {
+    kind: "dropped";
     message: string;
   }
   | {

@@ -158,7 +158,7 @@ export type EventIntentOutcome = {
   eventId: string;
   seq?: number;
   sidecarId?: string;
-  kind: "dropped" | "errored" | "refused" | "needs-attention";
+  kind: "dropped" | "errored" | "refused" | "needs-attention" | "withheld";
   retryable?: boolean;
   reason: string;
   attention?: DeliveryAttention;
@@ -178,6 +178,7 @@ export type IntentConsequence = {
     | "dropped"
     | "refused"
     | "needs-attention"
+    | "withheld"
     | "unsettled";
   reason?: string;
   attention?: DeliveryAttention;
@@ -1644,6 +1645,24 @@ export class SpeculationOverlayDestination
         eventId: entry.eventId,
         kind: "dropped",
         reason: entry.reason ?? "dropped",
+      });
+    } else if (entry.consequenced === true && entry.withheld === true) {
+      // The handling read data this space doesn't admit, so the entry says
+      // the same thing however it ended (events.md §5): the echo retires,
+      // and subscribers hear only that the outcome is withheld.
+      const reason = "the outcome is withheld: the handling read data this " +
+        "space does not admit";
+      this.#untrackIntent(space, sidecarId, entry.eventId);
+      this.retireIntent(space, entry.eventId);
+      this.#settleIntentConsequence(space, entry.eventId, {
+        kind: "withheld",
+        reason,
+      });
+      this.#notifyIntentOutcome({
+        space,
+        eventId: entry.eventId,
+        kind: "withheld",
+        reason,
       });
     } else if (entry.consequenced === true) {
       if (entry.error !== undefined) {

@@ -6,7 +6,10 @@ import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import { createRef } from "../create-ref.ts";
 import { toURI } from "../uri-utils.ts";
-import { loadStoredCfcEnvelope } from "../cfc/prepare.ts";
+import {
+  loadStoredCfcEnvelope,
+  processedClaimJoinIsForeign,
+} from "../cfc/prepare.ts";
 import {
   recordTrustedEventPolicyInputs,
   type StoredSchemaResolver,
@@ -22,6 +25,7 @@ import {
   waveRunContextOf,
   waveSettlementOf,
 } from "../executor/wave.ts";
+import { withholdProcessedClaimOutcome } from "../executor/processed-claim.ts";
 import {
   addressKey,
   areNormalizedLinksSame,
@@ -2380,6 +2384,33 @@ export async function dispatchQueuedEvent(state: {
     }
   };
 
+  // Whether a served run's outcome is withheld: whether its join carries a
+  // clause its stream's space doesn't admit, so that its processed claim, and
+  // every failure it reports, says the same thing whatever happened
+  // (`withholdProcessedClaimOutcome()`). Decided once, before the commit, or
+  // by the first failure arm to ask. A join that can't be derived withholds,
+  // which hides more rather than less.
+  let outcomeWithheld: boolean | undefined;
+  const servedOutcomeWithheld = (): boolean => {
+    if (served === undefined) return false;
+    if (outcomeWithheld === undefined) {
+      try {
+        outcomeWithheld = processedClaimJoinIsForeign(
+          tx,
+          queuedEvent.eventLink.space,
+        );
+      } catch {
+        outcomeWithheld = true;
+      }
+    }
+    return outcomeWithheld;
+  };
+  /** `outcome`, with `withheld` set when the served run's outcome is. */
+  const servedErrorOutcome = (message: string): ServedEventFailureOutcome =>
+    servedOutcomeWithheld()
+      ? { kind: "error", message, withheld: true }
+      : { kind: "error", message };
+
   let failureFinalized = false;
   // A failed setup or handler completes every owner notification once, even
   // when one observer throws. The original failure remains the event outcome.
@@ -2400,10 +2431,10 @@ export async function dispatchQueuedEvent(state: {
         releaseLineage,
         () => state.handleError(handlerError, action, queuedEvent.id),
         () =>
-          reportServedEventFailure(served, {
-            kind: "error",
-            message: handlerError.message,
-          }),
+          reportServedEventFailure(
+            served,
+            servedErrorOutcome(handlerError.message),
+          ),
         runFinalCommitCallback,
         () => tx.abandonStagedWork(eventAbandonError("event execution failed")),
       ]
@@ -3051,6 +3082,14 @@ export async function dispatchQueuedEvent(state: {
         return;
       }
 
+      if (served !== undefined) {
+        outcomeWithheld = withholdProcessedClaimOutcome(
+          state.runtime,
+          tx,
+          queuedEvent.eventLink.space,
+          served.streamEntry,
+        );
+      }
       try {
         state.runtime.prepareTxForCommit(tx);
       } catch (error) {
@@ -3182,10 +3221,7 @@ export async function dispatchQueuedEvent(state: {
         // still-"queued" copy.
         const sealCfcRefusalConsequence = (): void => {
           if (served === undefined || !isCfcRejectedCommitError(error)) return;
-          reportServedEventFailure(served, {
-            kind: "error",
-            message: error.message,
-          });
+          reportServedEventFailure(served, servedErrorOutcome(error.message));
         };
         // The seal's refusal of a write to the space's ACL document is
         // deterministic in the same way, so a run delivering a durable entry
@@ -3198,10 +3234,7 @@ export async function dispatchQueuedEvent(state: {
           ) {
             return;
           }
-          reportServedEventFailure(served, {
-            kind: "error",
-            message: error.message,
-          });
+          reportServedEventFailure(served, servedErrorOutcome(error.message));
         };
         // For a served event, a commit preparation that failed for a cause a
         // fresh attempt may clear (`failedCommitPreparation`) is a delivery
@@ -3283,10 +3316,10 @@ export async function dispatchQueuedEvent(state: {
           if (served === undefined || !isExplicitTransactionAbort(error)) {
             return;
           }
-          reportServedEventFailure(served, {
-            kind: "error",
-            message: "Event handler aborted its transaction",
-          });
+          reportServedEventFailure(
+            served,
+            servedErrorOutcome("Event handler aborted its transaction"),
+          );
         };
 
         let requeue: Promise<void> | undefined;
