@@ -4033,7 +4033,9 @@ export class V2StorageTransaction implements IStorageTransaction {
    * The commit-time claim check over every space this transaction touched:
    * each snapshotted document is re-read from its replica, and a value that
    * differs from the snapshot rejects the transaction before its read set
-   * is built (03-commit-model.md §3.3.4).
+   * is built (03-commit-model.md §3.3.4), except a stream sidecar that took
+   * only tail appends this transaction's use of it commutes with
+   * (`#survivesTailAppends()`).
    */
   #validate(): Result<Unit, IStorageTransactionInconsistent> {
     for (const [space, branch] of this.#branches) {
