@@ -1490,4 +1490,49 @@ describe("private inbox across runtimes", () => {
     );
     expect(await owner.read(refusal)).toBeUndefined();
   });
+
+  // The two cases below copy the offers in a derivation, which keeps running
+  // once started, so they come last. What a session reads afterwards is no
+  // evidence here: this fixture's inbox space grants every principal `WRITE`,
+  // so each session's own runtime can run the same derivation itself. The
+  // served run's refusal is what each case checks.
+
+  it("refuses a stranger's served derivation of the offers", {
+    ignore: !SERVER_EXECUTION,
+  }, async () => {
+    await offer("private");
+
+    const before = (await harness.servingDiagnostics()).loggerCounts;
+    await stranger.send("setDerivedCopy", { on: true });
+    await harness.settle();
+    const after = (await harness.servingDiagnostics()).loggerCounts;
+    expect(writeRefusals(after)).toBeGreaterThan(writeRefusals(before));
+    expect(crossHolderMisfits(after)).toBeGreaterThan(
+      crossHolderMisfits(before),
+    );
+    await stranger.send("setDerivedCopy", { on: false });
+    await harness.settle();
+  });
+
+  it(
+    "refuses the served derivation of a piece a stranger's handler starts over a link to the offers",
+    {
+      ignore: !SERVER_EXECUTION,
+    },
+    async () => {
+      // The handler writes only a link, which writer-fit does not measure; the
+      // started piece's derivation reads through it.
+
+      await offer("private");
+
+      const before = (await harness.servingDiagnostics()).loggerCounts;
+      await stranger.send("startLinkedCopier");
+      await harness.settle();
+      const after = (await harness.servingDiagnostics()).loggerCounts;
+      expect(writeRefusals(after)).toBeGreaterThan(writeRefusals(before));
+      expect(crossHolderMisfits(after)).toBeGreaterThan(
+        crossHolderMisfits(before),
+      );
+    },
+  );
 });
