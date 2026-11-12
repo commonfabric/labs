@@ -630,8 +630,8 @@ loop's duty).
   preflight load does, and a load it already waited for does not
   withdraw it again. A read in the home space needs none of this,
   since the wave holds the run's home-space reads to the store's head
-  (serving-loop.md §3d), and a document the load confirms absent reads
-  as before. Sealing the skip is the
+  (serving-loop.md §3d), and the run that reads a document its load
+  confirms absent proceeds with that absence. Sealing the skip is the
   defect this rule prevents: the mark committed ALONE — a 1-op derived
   commit, the user's event permanently consumed with zero effects and
   no error (the b1-lifts a04 red, seqs 53/56). Consequence atomicity
