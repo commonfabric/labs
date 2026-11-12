@@ -1,4 +1,9 @@
-import { createTestSpace, env, type Page } from "@commonfabric/integration";
+import {
+  createTestSpace,
+  type ElementHandle,
+  env,
+  type Page,
+} from "@commonfabric/integration";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
@@ -11,20 +16,36 @@ import {
   PieceController,
   PiecesController,
 } from "./pieces-controller.ts";
+import { waitForText } from "./cfc-browser-helpers.ts";
 
 const { API_URL, FRONTEND_URL } = env;
 
 type Item = { title: string };
 
-/** The center of the first element `selector` pierces to, in the viewport. */
+/** The center of an element's box, in the viewport. */
 async function centerOf(
-  page: Page,
-  selector: string,
+  element: ElementHandle,
 ): Promise<{ x: number; y: number }> {
-  const element = await page.waitForSelector(selector, { strategy: "pierce" });
   const box = await element.boundingBox();
-  if (!box) throw new Error(`"${selector}" has no box to aim at`);
+  if (!box) throw new Error("the element has no box to aim at");
   return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+}
+
+/**
+ * The drag source showing `title`, once it shows it. The source is bound to
+ * its item's cell in the same batch that renders the item, so the title being
+ * there is what says the source can start a drag.
+ */
+async function dragSourceShowing(
+  page: Page,
+  title: string,
+): Promise<ElementHandle> {
+  await waitForText(page, "cf-drag-source", title);
+  const sources = await page.$$("cf-drag-source", { strategy: "pierce" });
+  for (const source of sources) {
+    if ((await source.innerText()).trim() === title) return source;
+  }
+  throw new Error(`no drag source shows "${title}"`);
 }
 
 describe("drag-drop-demo", () => {
@@ -100,8 +121,10 @@ describe("drag-drop-demo", () => {
     page.addEventListener("pageerror", onPageError);
 
     try {
-      const from = await centerOf(page, "cf-drag-source:nth-of-type(3)");
-      const to = await centerOf(page, "cf-drop-zone");
+      const from = await centerOf(await dragSourceShowing(page, "Item C"));
+      const to = await centerOf(
+        await page.waitForSelector("cf-drop-zone", { strategy: "pierce" }),
+      );
       const mouse = page.astralPage.mouse;
       await mouse.move(from.x, from.y);
       await mouse.down();
