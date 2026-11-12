@@ -47,6 +47,15 @@ describe("trimRange()", () => {
     });
   });
 
+  it("returns an empty range at the end for a range of only trivia", () => {
+    const source = "  /* only */ // trivia";
+
+    expect(trimRange(source, 0, source.length)).toEqual({
+      start: source.length,
+      end: source.length,
+    });
+  });
+
   it("leaves already-trimmed plain expressions unchanged", () => {
     const source = "exports.default";
 
@@ -95,6 +104,70 @@ describe("parseFunctionText()", () => {
     expect(() => parseFunctionText(source, 0, source.length)).toThrow(
       "Expected '{'",
     );
+  });
+
+  it("throws for tokens after a function body", () => {
+    const fn = `function () {} extra`;
+    const arrow = `() => {} + 1`;
+
+    expect(() => parseFunctionText(fn, 0, fn.length)).toThrow(
+      "Function expression contains trailing tokens",
+    );
+    expect(() => parseFunctionText(arrow, 0, arrow.length)).toThrow(
+      "Arrow function must use a block body",
+    );
+  });
+
+  it("throws for a body with no closing brace", () => {
+    const source = `function () { a();`;
+
+    expect(() => parseFunctionText(source, 0, source.length)).toThrow(
+      "Unterminated '{}' pair",
+    );
+  });
+
+  it("returns no parameters for an empty arrow parameter list", () => {
+    const source = `() => { return 1; }`;
+
+    expect(parseFunctionText(source, 0, source.length).params).toEqual([]);
+  });
+
+  it("ends a statement after each block-terminated compound statement", () => {
+    const source = `function () {
+      if (a) { b(); } else { c(); }
+      switch (x) { case 1: break; }
+      try { d(); } catch (e) {} finally { f(); }
+      do { g(); } while (x);
+      items();
+      tally();
+      skip();
+    }`;
+
+    const parsed = parseFunctionText(source, 0, source.length);
+
+    expect(
+      parsed.body.statements.map((s) => source.slice(s.start, s.end).trim()),
+    ).toEqual([
+      "if (a) { b(); } else { c(); }",
+      "switch (x) { case 1: break; }",
+      "try { d(); } catch (e) {} finally { f(); }",
+      "do { g(); } while (x);",
+      "items();",
+      "tally();",
+      "skip();",
+    ]);
+  });
+
+  it("reads a slash after a line comment by the token before the comment", () => {
+    // The comment's own last character is not a token, so the `/` that
+    // follows `1` is division and the statement ends at the first `;`.
+    const source = `function () { const a = 1 // =\n/ 2; b(); }`;
+
+    const parsed = parseFunctionText(source, 0, source.length);
+
+    expect(
+      parsed.body.statements.map((s) => source.slice(s.start, s.end).trim()),
+    ).toEqual(["const a = 1 // =\n/ 2;", "b();"]);
   });
 });
 
@@ -210,6 +283,39 @@ describe("scanner helpers", () => {
     expect(() => new Function(`return ${escapedBackslash};`)).not.toThrow();
     expect(() => new Function(`return ${unicodeEscape};`)).not.toThrow();
     expect(() => new Function(`return ${adjacentStrings};`)).toThrow();
+  });
+
+  it("returns false for a range that does not start with a quote", () => {
+    expect(isStringLiteralRange("value", 0, 5)).toBe(false);
+  });
+
+  it("throws for an unterminated parenthesis in a call", () => {
+    const source = `call(a, b`;
+
+    expect(() => tryParseCallExpression(source, 0, source.length)).toThrow(
+      "Unterminated '()' pair",
+    );
+  });
+
+  it("throws for unterminated literals and comments", () => {
+    expect(() => stripJsTrivia("x = `a b")).toThrow(
+      "Unterminated template literal",
+    );
+    expect(() => stripJsTrivia("x = `a ${b")).toThrow(
+      "Unterminated template expression",
+    );
+    expect(() => stripJsTrivia("x = /a\nb/")).toThrow(
+      "Unterminated regular expression",
+    );
+    expect(() => stripJsTrivia("x = /ab")).toThrow(
+      "Unterminated regular expression",
+    );
+    expect(() => trimRange(" /* open", 0, 8)).toThrow(
+      "Unterminated block comment",
+    );
+    expect(() => trimRange("x */", 0, 4)).toThrow(
+      "Unterminated block comment",
+    );
   });
 
   it("strips only whole parentheses", () => {

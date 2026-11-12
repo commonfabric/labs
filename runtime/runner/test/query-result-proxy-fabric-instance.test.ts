@@ -26,6 +26,7 @@ import {
   FabricError,
   FabricLink,
 } from "@commonfabric/data-model/fabric-instances";
+import { IS_DEEP_FROZEN } from "@commonfabric/data-model/fabric-bases";
 import { Identity } from "@commonfabric/identity";
 import {
   createQueryResultProxy,
@@ -102,6 +103,16 @@ describe("query-result proxy: a FabricInstance's members reach the instance", ()
       ["code", 42],
       ["where", "here"],
     ]);
+  });
+
+  it("returns a symbol-keyed method bound to the instance", () => {
+    const cell = runtime.getCell<unknown>(space, "symbolCell", undefined, tx);
+    cell.set(Object.assign(new Error("boom"), { code: 42 }));
+
+    const view = cell.get() as FabricError;
+    const isDeepFrozen = view[IS_DEEP_FROZEN];
+    expect(isDeepFrozen(() => true)).toBe(true);
+    expect(isDeepFrozen(() => false)).toBe(false);
   });
 
   it("runs a method the class inherits against the instance", () => {

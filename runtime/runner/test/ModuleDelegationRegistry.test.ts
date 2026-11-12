@@ -167,6 +167,17 @@ describe("ModuleDelegationRegistry", () => {
         );
       });
 
+      it("returns the published snapshot itself for an empty space", () => {
+        registry.register(spaceA, delegations({ previous: ["ancestor"] }));
+
+        expect(
+          registry.snapshotWith(
+            "" as MemorySpace,
+            delegations({ candidate: ["previous"] }),
+          ),
+        ).toBe(registry.snapshot);
+      });
+
       it("layers a proposal for a space with nothing registered", () => {
         const layered = registry.snapshotWith(
           spaceA,

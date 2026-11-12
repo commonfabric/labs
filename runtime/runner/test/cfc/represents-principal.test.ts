@@ -397,6 +397,21 @@ describe("represents-principal", () => {
       ).toBeUndefined();
     });
 
+    it("returns the principal a value's root names beside integrity that is no principal claim", () => {
+      expect(
+        soleRepresentedPrincipal(view([{
+          path: [],
+          label: {
+            integrity: [
+              { type: "https://example.com/cfc/atom/Extension" },
+              "unrelated-string-atom",
+              { kind: "represents-principal", subject: DID },
+            ],
+          },
+        }])),
+      ).toBe(DID);
+    });
+
     it("returns `undefined` for a claim a link carries or one deeper down", () => {
       expect(
         soleRepresentedPrincipal(

@@ -373,11 +373,8 @@ export function getPatternSourcePath(value: unknown): string | undefined {
  * never reach `noteDerivedCopy` with a trusted original.
  */
 export function isTrustedPattern(value: unknown): value is Pattern {
-  if (!isPattern(value)) return false;
-  const key = asKey(value);
-  if (!key) return false;
-  return trustedPatterns.has(key) ||
-    trustedPatterns.has(resolveOriginal(key) as object);
+  return isPattern(value) &&
+    (trustedPatterns.has(value) || trustedPatterns.has(resolveOriginal(value)));
 }
 
 /** Stamp a value as produced by a trusted non-pattern builder (lift/handler/…). */

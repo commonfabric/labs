@@ -682,9 +682,9 @@ export function recomposeSchema(
     }
   }
 
-  if (combined.size === 0) return internSchema(rootBody);
-  if (!isObjectNotArray(rootBody)) {
-    throw new Error("A boolean root cannot carry a `$defs` scope");
+  // A boolean root names no other document, so `combined` is empty under one.
+  if (combined.size === 0 || !isObjectNotArray(rootBody)) {
+    return internSchema(rootBody);
   }
   return internSchema({ ...rootBody, $defs: Object.fromEntries(combined) });
 }

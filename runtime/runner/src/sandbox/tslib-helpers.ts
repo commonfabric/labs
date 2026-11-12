@@ -7,13 +7,6 @@ import { stripJsTrivia } from "./compiled-js-parser.ts";
  * exactly the canonical forms (and nothing else).
  */
 
-const ALLOWED_TSLIB_HELPERS = new Set([
-  "__createBinding",
-  "__exportStar",
-  "__importDefault",
-  "__setModuleDefault",
-]);
-
 const IDENT = String.raw`([A-Za-z_$][\w$]*)`;
 const CANONICAL_CREATE_BINDING_PATTERN = new RegExp(
   String
@@ -41,11 +34,7 @@ const CANONICAL_SET_MODULE_DEFAULT_PATTERN = new RegExp(
  */
 export function isAllowedTsLibHelperDeclaration(normalized: string): boolean {
   const match = normalized.match(/^var([A-Za-z_$][\w$]*)=/);
-  if (!match || !ALLOWED_TSLIB_HELPERS.has(match[1])) {
-    return false;
-  }
-
-  switch (match[1]) {
+  switch (match?.[1]) {
     case "__importDefault":
       return /^var__importDefault=\(this&&this\.__importDefault\)\|\|function\(\w+\)\{return\(\w+&&\w+\.__esModule\)\?\w+:\{"default":\w+\};\};?$/
         .test(normalized);

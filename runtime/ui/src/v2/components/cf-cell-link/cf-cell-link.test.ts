@@ -1,11 +1,14 @@
-import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+// First, so that the document it installs is there when Lit loads.
+import { mount, settle } from "../../test-utils/dom.ts";
 
+import { expect } from "@std/expect";
+import { afterEach, describe, it } from "@std/testing/bdd";
+
+import type { DID } from "@commonfabric/identity/did";
 import type { CellHandle, CellRef } from "@commonfabric/runtime-client";
 
 import { endDrag, getCurrentDrag, isDragging } from "../../core/drag-state.ts";
 import { createMockCellHandle } from "../../test-utils/mock-cell-handle.ts";
-import { installMockDocument } from "../../test-utils/mock-document.ts";
 import { createRenderableCellHandle } from "../../test-utils/mock-vdom-connection.ts";
 import { CFCellLink } from "./index.ts";
 
@@ -466,19 +469,10 @@ describe("CFCellLink", () => {
       return installed.promise;
     }
 
-    /** Disconnects `element`, giving it the slice of `document` that touches. */
+    /** Disconnects `element`. */
     function disconnect(element: any): void {
-      const globals = globalThis as { document?: unknown };
-      const had = Object.hasOwn(globals, "document");
-      const previous = globals.document;
-      globals.document = { removeEventListener() {} };
-      try {
-        markConnected(element, false);
-        element.disconnectedCallback();
-      } finally {
-        if (had) globals.document = previous;
-        else delete globals.document;
-      }
+      markConnected(element, false);
+      element.disconnectedCallback();
     }
 
     /** The piece ids navigated to while `act()` runs. */
@@ -806,78 +800,401 @@ describe("CFCellLink disposal handling", () => {
   });
 });
 
-describe("CFCellLink drag preview", () => {
-  let mockDocument: ReturnType<typeof installMockDocument>;
+/** A cell link with `properties` set, mounted in the document. */
+function cellLink(
+  properties: Partial<
+    Pick<
+      CFCellLink,
+      "cell" | "link" | "label" | "isStatic" | "runtime" | "space"
+    >
+  > = {},
+): Promise<CFCellLink> {
+  return mount(Object.assign(new CFCellLink(), properties));
+}
 
-  beforeEach(() => {
-    mockDocument = installMockDocument();
+/** The chip `element` renders. */
+function chip(element: CFCellLink): HTMLElement {
+  const found = element.shadowRoot!.querySelector<HTMLElement>("cf-chip");
+  if (!found) throw new Error("cf-cell-link rendered no chip");
+  return found;
+}
+
+/** The text `element` shows, once what it is resolving has settled. */
+async function shownText(element: CFCellLink): Promise<string> {
+  await settle();
+  await element.updateComplete;
+  return chip(element).textContent!.trim();
+}
+
+/**
+ * A cell standing in for a piece, with the id `id` and the name `name`. It
+ * holds no link, so it resolves to itself.
+ */
+function pieceCell(id: string, name?: string): CellHandle {
+  return selfResolving(
+    createMockCellHandle(name === undefined ? {} : { $NAME: name }, {
+      id: id as CellRef["id"],
+      space: "did:key:test-space" as CellRef["space"],
+    }) as CellHandle,
+  );
+}
+
+/** `cell`, made to resolve to itself, as a cell holding no link does. */
+function selfResolving<T>(cell: CellHandle<T>): CellHandle<T> {
+  return Object.assign(cell, { resolveAsCell: () => Promise.resolve(cell) });
+}
+
+/** A cell whose drag preview can render, holding `value` and no link. */
+function draggableCell(value?: unknown): CellHandle {
+  return selfResolving(createRenderableCellHandle(value).cell);
+}
+
+/** The arguments `console.error` is called with while `act()` runs. */
+async function errorsLogged(act: () => Promise<unknown>): Promise<unknown[][]> {
+  const calls: unknown[][] = [];
+  const original = console.error;
+  console.error = (...args: unknown[]) => calls.push(args);
+  try {
+    await act();
+  } finally {
+    console.error = original;
+  }
+  return calls;
+}
+
+/** A pointer event of `type` at (`x`, `y`) from the pointer `pointerId`. */
+function pointer(type: string, x: number, y: number, pointerId = 1): Event {
+  return new PointerEvent(type, {
+    clientX: x,
+    clientY: y,
+    pointerId,
+    bubbles: true,
+    composed: true,
   });
+}
 
+/** The piece ids navigated to while `act()` runs. */
+function navigatedTo(act: () => void): string[] {
+  const seen: string[] = [];
+  const listener = (event: Event) =>
+    seen.push((event as CustomEvent).detail.pieceId);
+  globalThis.addEventListener("cf-navigate", listener);
+  try {
+    act();
+  } finally {
+    globalThis.removeEventListener("cf-navigate", listener);
+  }
+  return seen;
+}
+
+describe("CFCellLink in a document", () => {
   afterEach(() => {
     if (isDragging()) endDrag();
-    mockDocument.restore();
+    document.body.replaceChildren();
   });
 
-  /** The subset of a PointerEvent the drag handlers read. */
-  function pointerEvent(x: number, y: number): PointerEvent {
-    return { clientX: x, clientY: y, pointerId: 1 } as unknown as PointerEvent;
-  }
+  describe("text", () => {
+    it("shows the label over the cell's name", async () => {
+      const element = await cellLink({
+        label: "Team chat",
+        cell: pieceCell("of:fid1:piece-123456", "Inbox"),
+      });
 
-  /**
-   * An element built with `new` is never upgraded, so it has no `classList`.
-   * Give it one that records, so the drag's own class toggle is observable.
-   */
-  function withClassList(element: object): Set<string> {
-    const classes = new Set<string>();
-    Object.defineProperty(element, "classList", {
-      configurable: true,
-      value: {
-        add: (name: string) => classes.add(name),
-        remove: (name: string) => classes.delete(name),
-      },
+      expect(await shownText(element)).toBe("Team chat");
     });
-    return classes;
+
+    it("shows a resolved cell's name and the end of its id", async () => {
+      const element = await cellLink({
+        cell: pieceCell("of:fid1:piece-abcdef", "Inbox"),
+      });
+
+      expect(await shownText(element)).toBe("Inbox #abcdef");
+    });
+
+    it("shows only the end of the id of a resolved cell with no name", async () => {
+      const element = await cellLink({
+        cell: pieceCell("of:fid1:piece-abcdef"),
+      });
+
+      expect(await shownText(element)).toBe("#abcdef");
+    });
+
+    it("shows the start of the handle of a link it cannot resolve", async () => {
+      const element = await cellLink({
+        link: "/of:fid1:abcdefghijklmnopqrstuvwxyz/path",
+      });
+
+      expect(await shownText(element)).toBe("#abcdef");
+    });
+
+    it("shows a link that names no handle as it is", async () => {
+      const element = await cellLink({ link: "not a link" });
+
+      expect(await shownText(element)).toBe("not a link");
+    });
+
+    it("follows a change of the link it shows", async () => {
+      const element = await cellLink({ link: "not a link" });
+      await shownText(element);
+
+      element.link = "still not a link";
+
+      expect(await shownText(element)).toBe("still not a link");
+    });
+
+    it("shows Unknown Link once its link is cleared", async () => {
+      const element = await cellLink({ link: "not a link" });
+      await shownText(element);
+
+      element.link = undefined;
+
+      expect(await shownText(element)).toBe("Unknown Link");
+    });
+
+    it("shows Unknown Link with neither a cell nor a link", async () => {
+      const element = await cellLink();
+
+      expect(await shownText(element)).toBe("Unknown Link");
+    });
+  });
+
+  describe("resolving a link", () => {
+    /** A runtime whose every cell is `target`. */
+    function runtimeOf(target: CellHandle) {
+      return Object.assign(target.runtime(), {
+        getCellFromRef: () => target,
+      });
+    }
+
+    it("resolves a link in the space it is shown in", async () => {
+      const target = pieceCell("of:fid1:piece-abcdef", "Inbox");
+      const element = await cellLink({
+        link: "/of:fid1:abcdefghijklmnopqrstuvwxyz",
+        runtime: runtimeOf(target),
+        space: "did:key:test-space" as DID,
+      });
+
+      expect(await shownText(element)).toBe("Inbox #abcdef");
+      expect(navigatedTo(() => chip(element).click())).toEqual([
+        "of:fid1:piece-abcdef",
+      ]);
+    });
+
+    it("logs a link with no space to resolve it in, and resolves nothing", async () => {
+      const target = pieceCell("of:fid1:piece-abcdef", "Inbox");
+      let element: CFCellLink | undefined;
+
+      const logged = await errorsLogged(async () => {
+        element = await cellLink({
+          link: "/of:fid1:abcdefghijklmnopqrstuvwxyz",
+          runtime: runtimeOf(target),
+        });
+        await settle();
+      });
+
+      expect(logged).toEqual([[
+        "Failed to resolve link:",
+        new Error("Link missing space."),
+      ]]);
+      expect(await shownText(element!)).toBe("#abcdef");
+    });
+
+    it("logs nothing when a cell it stopped resolving fails", async () => {
+      const failure = deferred<CellHandle>();
+      const replaced = Object.assign(pieceCell("of:fid1:piece-abcdef"), {
+        resolveAsCell: () => failure.promise,
+      });
+
+      const logged = await errorsLogged(async () => {
+        const element = await cellLink({ cell: replaced });
+        element.cell = pieceCell("of:fid1:piece-123456", "Archive");
+        await element.updateComplete;
+        failure.reject(new Error("boom"));
+        expect(await shownText(element)).toBe("Archive #123456");
+      });
+
+      expect(logged).toEqual([]);
+    });
+
+    it("logs nothing when a link it stopped resolving fails", async () => {
+      const failure = deferred<CellHandle>();
+      const linked = Object.assign(pieceCell("of:fid1:piece-abcdef"), {
+        resolveAsCell: () => failure.promise,
+      });
+
+      const logged = await errorsLogged(async () => {
+        const element = await cellLink({
+          link: "/of:fid1:abcdefghijklmnopqrstuvwxyz",
+          runtime: runtimeOf(linked),
+          space: "did:key:test-space" as DID,
+        });
+        element.link = undefined;
+        await element.updateComplete;
+        failure.reject(new Error("boom"));
+        expect(await shownText(element)).toBe("Unknown Link");
+      });
+
+      expect(logged).toEqual([]);
+    });
+
+    it("resolves again when it is attached again", async () => {
+      const element = await cellLink({
+        cell: pieceCell("of:fid1:piece-abcdef", "Inbox"),
+      });
+      await shownText(element);
+      element.remove();
+
+      const replacement = pieceCell("of:fid1:piece-123456", "Archive");
+      element.cell = replacement;
+      document.body.append(element);
+
+      expect(await shownText(element)).toBe("Archive #123456");
+    });
+  });
+
+  describe("dragging", () => {
+    it("starts a drag once the pointer moves more than five pixels", async () => {
+      const cell = draggableCell({ $NAME: "Inbox" });
+      const element = await cellLink({ cell });
+      await shownText(element);
+
+      chip(element).dispatchEvent(pointer("pointerdown", 10, 10));
+      document.dispatchEvent(pointer("pointermove", 13, 14));
+      expect(isDragging()).toBe(false);
+
+      document.dispatchEvent(pointer("pointermove", 20, 20));
+      expect(isDragging()).toBe(true);
+      expect(getCurrentDrag()!.cell).toBe(cell);
+      expect(element.classList.contains("dragging")).toBe(true);
+
+      document.dispatchEvent(pointer("pointermove", 50, 60));
+      expect(getCurrentDrag()!.pointerX).toBe(50);
+      expect(getCurrentDrag()!.preview.style.left).toBe("60px");
+      expect(getCurrentDrag()!.preview.style.top).toBe("70px");
+    });
+
+    it("ends the drag, and swallows the click that follows, when the pointer is released", async () => {
+      const element = await cellLink({
+        cell: draggableCell({ $NAME: "Inbox" }),
+      });
+      await shownText(element);
+      chip(element).dispatchEvent(pointer("pointerdown", 10, 10));
+      document.dispatchEvent(pointer("pointermove", 30, 30));
+
+      document.dispatchEvent(pointer("pointerup", 30, 30));
+
+      expect(isDragging()).toBe(false);
+      expect(element.classList.contains("dragging")).toBe(false);
+      expect(navigatedTo(() => chip(element).click())).toEqual([]);
+    });
+
+    it("follows only the pointer that started it", async () => {
+      const element = await cellLink({
+        cell: draggableCell({ $NAME: "Inbox" }),
+      });
+      await shownText(element);
+      chip(element).dispatchEvent(pointer("pointerdown", 10, 10, 1));
+
+      document.dispatchEvent(pointer("pointermove", 40, 40, 2));
+      expect(isDragging()).toBe(false);
+
+      document.dispatchEvent(pointer("pointermove", 40, 40, 1));
+      document.dispatchEvent(pointer("pointerup", 40, 40, 2));
+      expect(isDragging()).toBe(true);
+    });
+
+    it("ends the drag when it leaves the document", async () => {
+      const element = await cellLink({
+        cell: draggableCell({ $NAME: "Inbox" }),
+      });
+      await shownText(element);
+      chip(element).dispatchEvent(pointer("pointerdown", 10, 10));
+      document.dispatchEvent(pointer("pointermove", 30, 30));
+
+      element.remove();
+
+      expect(isDragging()).toBe(false);
+    });
+
+    it("starts no drag when its cell goes away while the pointer is down", async () => {
+      const element = await cellLink({
+        cell: draggableCell({ $NAME: "Inbox" }),
+      });
+      await shownText(element);
+      chip(element).dispatchEvent(pointer("pointerdown", 10, 10));
+
+      element.cell = undefined;
+      await shownText(element);
+      document.dispatchEvent(pointer("pointermove", 40, 40));
+
+      expect(isDragging()).toBe(false);
+      expect(element.classList.contains("dragging")).toBe(false);
+    });
+
+    it("starts no drag when static", async () => {
+      const element = await cellLink({
+        cell: draggableCell({ $NAME: "Inbox" }),
+        isStatic: true,
+      });
+      await shownText(element);
+
+      chip(element).dispatchEvent(pointer("pointerdown", 10, 10));
+      document.dispatchEvent(pointer("pointermove", 40, 40));
+
+      expect(isDragging()).toBe(false);
+    });
+
+    it("starts no drag before a cell resolves", async () => {
+      const element = await cellLink({ link: "not a link" });
+      await shownText(element);
+
+      chip(element).dispatchEvent(pointer("pointerdown", 10, 10));
+      document.dispatchEvent(pointer("pointermove", 40, 40));
+
+      expect(isDragging()).toBe(false);
+    });
+  });
+});
+
+describe("CFCellLink drag preview", () => {
+  afterEach(() => {
+    if (isDragging()) endDrag();
+    document.body.replaceChildren();
+  });
+
+  /** Starts dragging `element` from (`x`, `y`) to 10 pixels right of it. */
+  function drag(element: CFCellLink, x: number, y: number): void {
+    chip(element).dispatchEvent(pointer("pointerdown", x - 10, y));
+    document.dispatchEvent(pointer("pointermove", x, y));
   }
 
-  it("hands the preview's teardown to the drag state", () => {
-    const { cell } = createRenderableCellHandle({
+  it("hands the preview's teardown to the drag state", async () => {
+    const cell = draggableCell({
       $UI: { type: "vnode", name: "div", props: {}, children: [] },
     });
-    const element = new CFCellLink() as any;
-    const classes = withClassList(element);
-    element._resolvedCell = cell;
+    const element = await cellLink({ cell });
+    await shownText(element);
 
-    element._beginDrag(pointerEvent(30, 40));
+    drag(element, 30, 40);
 
-    expect(classes.has("dragging")).toBe(true);
-    const drag = getCurrentDrag();
-    expect(drag).not.toBeNull();
-    expect(drag!.type).toBe("cell-link");
-    expect(drag!.cell).toBe(cell);
+    const drag_ = getCurrentDrag();
+    expect(drag_).not.toBeNull();
+    expect(drag_!.type).toBe("cell-link");
+    expect(drag_!.cell).toBe(cell);
     // Without this the preview's render stays mounted after the drag ends.
-    expect(typeof drag!.previewCleanup).toBe("function");
-    expect(mockDocument.document.body.children).toContain(drag!.preview);
-    expect(
-      (drag!.preview as unknown as { style: Record<string, string> }).style,
-    )
-      .toMatchObject({ left: "40px", top: "50px" });
+    expect(typeof drag_!.previewCleanup).toBe("function");
+    expect(drag_!.preview.parentNode).toBe(document.body);
+    expect(drag_!.preview.style.left).toBe("40px");
+    expect(drag_!.preview.style.top).toBe("50px");
   });
 
-  it("carries the teardown of the render that names the cell in its preview", () => {
-    const { cell } = createRenderableCellHandle(undefined);
-    const element = new CFCellLink() as any;
-    withClassList(element);
-    element._resolvedCell = cell;
+  it("carries the teardown of the render that names the cell in its preview", async () => {
+    const cell = draggableCell();
+    const element = await cellLink({ cell });
+    await shownText(element);
 
-    element._beginDrag(pointerEvent(0, 0));
+    drag(element, 30, 40);
 
     expect(getCurrentDrag()!.previewCleanup).toBeDefined();
-  });
-
-  it("does not begin a drag before a cell resolves", () => {
-    const element = new CFCellLink() as any;
-    withClassList(element);
-    element._beginDrag(pointerEvent(0, 0));
-    expect(isDragging()).toBe(false);
   });
 });

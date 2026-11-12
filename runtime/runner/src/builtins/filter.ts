@@ -41,6 +41,7 @@ import { issueResultContainerSetup } from "./list-result-container.ts";
 import {
   createResumeRepublisher,
   resumeSettleRunKind,
+  settleOnceInputSyncs,
 } from "./resume-republish.ts";
 
 // Presence probe for the result container: slots resolve as cells, so the
@@ -222,49 +223,37 @@ function createFilterInstance(
   // aggregate. Await the resolved input and, once it confirms, clear the result
   // only if the input is genuinely empty — a non-empty input re-triggers the
   // normal reconcile via its journaled read, so it converges either way.
-  const awaitInputThenSettle = (
-    inputListCell: Cell<any>,
-  ): void => {
-    runtime.storageManager.trackUntilSettled(
-      syncCellForIdentity(inputListCell, identity)
-        .then(() =>
-          !active ? undefined : runtime.editWithRetry((settleTx) => {
-            if (!active || !result) return;
-            if (identity !== undefined) settleTx.tx.scopeKeyIdentity = identity;
-            // Out-of-band recovery write; the kind decision (bookkeeping
-            // on the serving posture, derivation on clients — the settle
-            // writes DERIVED content) is shared across map/filter/flatMap
-            // in resumeSettleRunKind (r3756175819).
-            runtime.stampServerRun(settleTx, {
-              actionId: `filter/resume-settle/${parentCell.sourceURI}`,
-              kind: resumeSettleRunKind(runtime),
-              scopeKeyIdentity: identity,
-            });
-            const { list } = inputsCell.asSchema(FILTER_INPUT_SCHEMA)
-              .withTx(settleTx).get();
-            if (
-              list === undefined || (Array.isArray(list) && list.length === 0)
-            ) {
-              settleTx.runWithAmbientReadMeta(
-                { ...linkResolutionProbe, ...machineryRead },
-                () =>
-                  result!.asSchema(RESULT_PRESENCE_SCHEMA).withTx(settleTx)
-                    .set([]),
-              );
-            }
-          }).then(({ error }) => {
-            if (error) {
-              logger.warn("resume-input", "settling the resumed input failed", {
-                error,
-              });
-            }
-          })
-        )
-        .catch((error) =>
-          logger.warn("resume-input", "the resumed input list sync rejected", {
-            error,
-          })
-        ),
+  const awaitInputThenSettle = (inputListCell: Cell<any>): void => {
+    settleOnceInputSyncs(
+      runtime,
+      logger,
+      syncCellForIdentity(inputListCell, identity),
+      () => active,
+      (settleTx) => {
+        if (!active || !result) return;
+        if (identity !== undefined) settleTx.tx.scopeKeyIdentity = identity;
+        // Out-of-band recovery write; the kind decision (bookkeeping
+        // on the serving posture, derivation on clients — the settle
+        // writes DERIVED content) is shared across map/filter/flatMap
+        // in resumeSettleRunKind (r3756175819).
+        runtime.stampServerRun(settleTx, {
+          actionId: `filter/resume-settle/${parentCell.sourceURI}`,
+          kind: resumeSettleRunKind(runtime),
+          scopeKeyIdentity: identity,
+        });
+        const { list } = inputsCell.asSchema(FILTER_INPUT_SCHEMA)
+          .withTx(settleTx).get();
+        if (
+          list === undefined || (Array.isArray(list) && list.length === 0)
+        ) {
+          settleTx.runWithAmbientReadMeta(
+            { ...linkResolutionProbe, ...machineryRead },
+            () =>
+              result!.asSchema(RESULT_PRESENCE_SCHEMA).withTx(settleTx)
+                .set([]),
+          );
+        }
+      },
     );
   };
 

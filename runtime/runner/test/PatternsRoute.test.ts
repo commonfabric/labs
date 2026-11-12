@@ -428,6 +428,41 @@ describe("PatternsRoute", () => {
     });
   });
 
+  it("answers 400 for a path whose decoded name is not valid percent-encoding", async () => {
+    // The route decodes the name its router hands it once more, so a `%`
+    // the router's decoding produced has to be followed by two hex digits.
+
+    await withRoute({ "main.tsx": ENTRY, "%ZZ.tsx": ENTRY }, async (route) => {
+      const served = await route.serve(get("/api/patterns/%25ZZ.tsx"));
+      const direct = await route.serveFile("%ZZ.tsx");
+
+      for (const response of [served, direct]) {
+        expect(response?.status).toBe(400);
+        expect(await response?.json()).toEqual({ error: "Invalid file path" });
+      }
+      expect((await route.serveFile("main.tsx")).status).toBe(200);
+    });
+  });
+
+  it("answers 400 naming the file for an identity whose closure imports a path that is not valid percent-encoding", async () => {
+    await withRoute(
+      {
+        "main.tsx": 'import "./%ZZ.ts";\nexport default 1;\n',
+        "%ZZ.ts": ENTRY,
+      },
+      async (route) => {
+        const response = await route.serve(
+          get("/api/patterns/main.tsx?identity"),
+        );
+
+        expect(response?.status).toBe(400);
+        expect((await response?.json()).error).toBe(
+          "the patterns route does not serve `/api/patterns/%ZZ.ts`",
+        );
+      },
+    );
+  });
+
   it("answers 400 for an entry the light identity path cannot model", async () => {
     // A fabric import folds another pattern's identity into this entry, which
     // only a compile resolves. The entry is answerable, just not this way, and

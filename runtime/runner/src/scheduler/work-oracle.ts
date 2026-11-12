@@ -213,8 +213,7 @@ export function assessPullWork(
 
   // Dirty sources: the invalid-node index is exactly the candidate set.
   for (const action of state.nodes.getInvalidNodes()) {
-    const record = state.nodes.get(action);
-    if (!record || !isInvalidOrNeverRan(record)) continue;
+    const record = state.nodes.get(action)!;
     const idleRelevant = state.effects.has(action) ||
       state.dirtyPullRunnableStateWithDebounce
         .isDemandedPullComputation(action) ||

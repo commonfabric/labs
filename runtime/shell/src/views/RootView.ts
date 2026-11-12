@@ -504,18 +504,11 @@ export class XRootView extends BaseView implements ShellApp {
     if (!changedProperties.has("app")) {
       return;
     }
+    // The first state set creates the runtime; a later one recreates it only
+    // where it changes what the runtime is built from.
     const previous = changedProperties.get("app");
-    const current = this.app;
-
-    // If the first set, or if removed, run
-    const flipState = (!previous && current) ||
-      !current;
-
-    const stateChanged = !!previous &&
-      shouldRecreateRuntime(previous, current);
-
-    if (flipState || stateChanged) {
-      this.#rt.run([current]);
+    if (!previous || shouldRecreateRuntime(previous, this.app)) {
+      this.#rt.run([this.app]);
     }
   }
 

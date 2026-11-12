@@ -1,0 +1,2 @@
+{"date":"2026-11-11","from":{"k":"unit","s":"shell","n":"browser telemetry stays off unless the flag is set"},"to":{"k":"unit","s":"shell","n":"otel > initBrowserOtel() > returns `null`, sending nothing, unless the flag is set"}}
+{"date":"2026-11-11","from":{"k":"unit","s":"shell","n":"a marker becomes a span carrying the merged resource"},"to":{"k":"unit","s":"shell","n":"otel > initBrowserOtel() > exports a marker as a span carrying the merged resource"}}

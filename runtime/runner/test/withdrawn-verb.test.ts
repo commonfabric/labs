@@ -350,4 +350,104 @@ describe("withdrawn-verb", () => {
       .toBe(false);
     await tx.commit().settled;
   });
+
+  describe("over an empty document a holder links to", () => {
+    // Each case writes the owner facts by hand, so what the judgement reads is
+    // exactly what the case names.
+
+    /**
+     * Returns whether a holder's `tick` slot, linking to the root of the empty
+     * document `cause` names, names a withdrawn verb, after `withMeta` writes
+     * that document's and its owner's meta.
+     */
+    const withdrawnOver = async (
+      cause: string,
+      withMeta: (
+        target: Cell<unknown>,
+        owner: Cell<unknown>,
+      ) => void = () => {},
+    ): Promise<boolean> => {
+      const write = rt.edit();
+      const target = rt.getCell<unknown>(space, cause, undefined, write);
+      const owner = rt.getCell<unknown>(
+        space,
+        `${cause} owner`,
+        undefined,
+        write,
+      );
+      withMeta(target, owner);
+      const holder = rt.getCell<Record<string, unknown>>(
+        space,
+        `${cause} holder`,
+        undefined,
+        write,
+      );
+      holder.set({ tick: target.getAsLink() });
+      await write.commit().settled;
+
+      const tx = rt.edit();
+      try {
+        return isWithdrawnVerb(
+          rt,
+          tx,
+          holder.key("tick").getAsNormalizedFullLink(),
+        );
+      } finally {
+        await tx.commit().settled;
+      }
+    };
+
+    /** Writes `owner` as `target`'s owner, with `manifest` as its manifest. */
+    const ownedBy = (manifest?: unknown[]) =>
+    (
+      target: Cell<unknown>,
+      owner: Cell<unknown>,
+    ) => {
+      target.setMetaRaw(
+        "result",
+        owner.getAsLink(),
+        rawMetaWriteAuthorization,
+      );
+      if (manifest !== undefined) {
+        owner.setMetaRaw(
+          "internal",
+          manifest as never,
+          rawMetaWriteAuthorization,
+        );
+      }
+    };
+
+    it("returns `false` when no owner claims the document", async () => {
+      // The document exists, holding no value and no `result` back-link.
+      expect(
+        await withdrawnOver(
+          "unowned",
+          (target) =>
+            target.setMetaRaw("internal", [], rawMetaWriteAuthorization),
+        ),
+      ).toBe(false);
+    });
+
+    it("returns `false` when the owner keeps no manifest", async () => {
+      expect(await withdrawnOver("no manifest", ownedBy())).toBe(false);
+    });
+
+    it("returns `true` when neither the owner's manifest nor its argument names the document", async () => {
+      expect(await withdrawnOver("unnamed", ownedBy(["not an entry"])))
+        .toBe(true);
+    });
+
+    it("returns `false` when the owner's manifest names the document", async () => {
+      expect(
+        await withdrawnOver(
+          "named",
+          (target, owner) =>
+            ownedBy(["not an entry", { link: target.getAsLink() }])(
+              target,
+              owner,
+            ),
+        ),
+      ).toBe(false);
+    });
+  });
 });

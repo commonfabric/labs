@@ -86,10 +86,17 @@ export class ModuleRegistry {
     return this.#moduleMap.size;
   }
 
+  /**
+   * Registers `module` under `ref`. Registering names the module, so a module
+   * that cannot be extended is registered as a copy with the same members.
+   */
   addModuleByRef(ref: string, module: Module): void {
     const target = Object.isExtensible(module)
       ? module
-      : cloneModuleRecord(module);
+      : Object.defineProperties(
+        { ...module },
+        Object.getOwnPropertyDescriptors(module),
+      );
     recordRegisteredModule(target, ref);
     this.#moduleMap.set(ref, target);
   }
@@ -109,7 +116,6 @@ export class ModuleRegistry {
    * and writes unattributed.
    */
   getModule(ref: string, defaultScope?: CellScope): Module {
-    if (typeof ref !== "string") throw new Error(`Unknown module ref: ${ref}`);
     const module = this.#moduleMap.get(ref);
     if (!module) throw new Error(`Unknown module ref: ${ref}`);
     if (defaultScope === undefined) return module;
@@ -167,18 +173,6 @@ function recordRegisteredModule(module: Module, ref: string): void {
     configurable: true,
   });
   registeredModules.set(module, ref);
-}
-
-function cloneModuleRecord(module: Module): Module {
-  const clone: Record<PropertyKey, unknown> = {};
-  for (const key of Reflect.ownKeys(module as object)) {
-    const descriptor = Object.getOwnPropertyDescriptor(module as object, key);
-    if (!descriptor) {
-      continue;
-    }
-    Object.defineProperty(clone, key, descriptor);
-  }
-  return clone as unknown as Module;
 }
 
 export interface RawModuleOptions {

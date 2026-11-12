@@ -67,6 +67,10 @@ describe("artifact index pinning (session-lifetime)", () => {
 
     await pm.compilePattern(program(2));
     await pm.compilePattern(program(3));
+    const { modulesByIdentity, maxEvaluatedModuleCacheSize } =
+      pm.accessForTestingOnly;
+    expect(modulesByIdentity.size).toBe(maxEvaluatedModuleCacheSize);
+    expect(modulesByIdentity.has(firstRef!.identity)).toBe(false);
 
     // The first pattern's module rolled out of the bounded namespace cache,
     // but its artifacts are pinned for the session: the sync resolution the

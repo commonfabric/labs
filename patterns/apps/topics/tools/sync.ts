@@ -477,7 +477,7 @@ export async function openSession(
   // no runtime is here to declare one, so the session declares the mode a
   // runtime given these settings would.
   factory.setInstanceNames?.(namesInstancesByDefault(experimental));
-  const opened = await factory.create(space);
+  const opened = await factory.create(space, session.as);
   return {
     space,
     session: opened.session,

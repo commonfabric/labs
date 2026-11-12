@@ -52,6 +52,13 @@ describe("extractCompiledExports", () => {
     expect(new Set(names)).toEqual(new Set(["z"]));
     expect(starTargetSpecs).toEqual(["./util.ts"]);
   });
+  it("records no export-star target for a star over a binding", () => {
+    const compiled = [
+      `const util_1 = require("./util.ts");`,
+      `__exportStar(util_1, exports);`,
+    ].join("\n");
+    expect(extractCompiledExports(compiled).starTargetSpecs).toEqual([]);
+  });
 });
 
 describe("buildRecordsFromCompiled (resolve-free, source-free)", () => {
@@ -257,6 +264,51 @@ describe("buildRecordsFromCompiled parse memo (content-addressed)", () => {
         `const beta = require("./beta.ts");`,
     );
     expect(second).toEqual(["./beta.ts"]);
+  });
+});
+
+describe("buildRecordsFromCompiled export-star surface", () => {
+  const STAR = (spec: string) =>
+    `Object.defineProperty(exports, "__esModule", { value: true });\n` +
+    `__exportStar(require("${spec}"), exports);\n`;
+
+  it("unions a runtime module's names, without its default, for a star with no edge", () => {
+    const id = "star-runtime-0000000000000000000000000000";
+    const built = buildRecordsFromCompiled([{
+      identity: id,
+      filename: "/main.ts",
+      code: STAR("commonfabric") + `exports.own = 1;`,
+      imports: [],
+    }], { runtimeModules: { commonfabric: ["pattern", "default"] } });
+
+    expect(new Set(built.records.get(`cf:module/${id}`)!.exports)).toEqual(
+      new Set(["pattern", "own", "__esModule"]),
+    );
+  });
+
+  it("collects every name around an export-star cycle", () => {
+    const a = "star-cycle-a-000000000000000000000000000";
+    const b = "star-cycle-b-000000000000000000000000000";
+    const built = buildRecordsFromCompiled([
+      {
+        identity: a,
+        filename: "/a.ts",
+        code: STAR("./b.ts") + `exports.fromA = 1;`,
+        imports: [{ specifier: "./b.ts", targetIdentity: b }],
+      },
+      {
+        identity: b,
+        filename: "/b.ts",
+        code: STAR("./a.ts") + `exports.fromB = 2;`,
+        imports: [{ specifier: "./a.ts", targetIdentity: a }],
+      },
+    ]);
+
+    for (const id of [a, b]) {
+      expect(new Set(built.records.get(`cf:module/${id}`)!.exports)).toEqual(
+        new Set(["fromA", "fromB", "__esModule"]),
+      );
+    }
   });
 });
 
