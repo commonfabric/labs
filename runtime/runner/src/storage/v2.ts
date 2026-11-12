@@ -230,6 +230,7 @@ import {
   recordCoverageWait,
 } from "./reactivity-log.ts";
 import { SelectorTracker } from "./selector-tracker.ts";
+import { noteSpaceAccessRefusal } from "./space-access-refusal.ts";
 import * as SubscriptionManager from "./subscription.ts";
 import {
   getDirectTransactionMergeableOpAddresses,
@@ -2832,7 +2833,7 @@ export class StorageManager implements IStorageManager {
           if (error === undefined) {
             this.#spaceAccessErrors.delete(space);
           } else {
-            this.#spaceAccessErrors.set(space, error);
+            this.#spaceAccessErrors.set(space, noteSpaceAccessRefusal(error));
             if (!alreadyDenied || nowDeleted) {
               for (const observer of [...this.#spaceAccessObservers]) {
                 try {
@@ -3189,9 +3190,11 @@ export class StorageManager implements IStorageManager {
    * on purpose: `synced()` stays silent so a denied cross-space link does not
    * fail an unrelated caller, and a caller that must access a specific space
    * reads this after `synced()` to surface the real failure.
+   * `isSpaceAccessRefusal()` holds of what this returns.
    */
   authorizationError(space: MemorySpace): Error | undefined {
-    return this.#providers.get(space)?.authorizationError();
+    const error = this.#providers.get(space)?.authorizationError();
+    return error === undefined ? undefined : noteSpaceAccessRefusal(error);
   }
 
   /** @inheritDoc */

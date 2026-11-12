@@ -668,7 +668,11 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
     observer: (status: ClientUpdateRequired) => void,
   ): Cancel;
 
-  /** The latest authoritative access loss for a space, cleared on reopening. */
+  /**
+   * The latest authoritative access loss for a space, cleared on reopening.
+   * The memory-backed manager's answer is one `isSpaceAccessRefusal()` holds
+   * of, as is its `authorizationError()`.
+   */
   spaceAccessError?(space: MemorySpace): Error | undefined;
 
   /**

@@ -224,6 +224,24 @@ was before the retry. The placeholder's `data-space-access-retries` attribute
 counts the space's settled retries, which is what a test waits on to know that
 a retry has been decided.
 
+A request to the worker that fails because its space refused the runtime, such
+as opening the space's root or listing a record's fields with
+`CellHandle.fields()`, fails with
+`RuntimeErrorCode.SpaceAccessRefused`, so a host that missed the space's one
+`spaceaccesslost` still tells the refusal from other failures, and can show the
+space as out of reach rather than wait on it. The shell does not read the code:
+a page load failing with it shows the shell's ordinary load error, where one
+failing with `SpaceDeleted`, `SpaceNotFound`, or `SpaceUnreachable` gets a
+message of its own. A deleted space's refusal fails
+with `RuntimeErrorCode.SpaceDeleted` instead, as
+[A deleted space](#a-deleted-space) says. The code is what the storage manager
+reports for the space, through `spaceAccessError(space)` or
+`authorizationError(space)`, and `isSpaceAccessRefusal()` recognizes those
+errors. The memory server sends the refusal of one operation in a space the
+runtime may still read, such as a write the principal has no grant for, as an
+`AuthorizationError` too, and a request failing on one of those carries no
+code.
+
 An admission also crosses the worker boundary as `spaceaccessrestored`, naming
 the space, whoever asked for the retry that decided it. The shell drops the
 loads of that space it remembered as failed, a piece's or the space root's, and

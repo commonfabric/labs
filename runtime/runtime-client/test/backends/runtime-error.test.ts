@@ -85,4 +85,28 @@ describe("runtime error notifications", () => {
     );
     expect(runtimeErrorCode(new Error("connection refused"))).toBe(undefined);
   });
+
+  it("returns no code for an authorization denial no storage manager reported as a space's refusal", () => {
+    // The memory server's refusal of one operation, which leaves the space
+    // readable, and a denial it marked `retriable`, which a fresh handshake
+    // heals. Neither says the space is gone.
+    const denial = (message: string, marks: object = {}) =>
+      Object.assign(new Error(message), {
+        name: "AuthorizationError",
+        ...marks,
+      });
+
+    expect(runtimeErrorCode(
+      denial("Only the original acting user may resolve this event"),
+    )).toBe(undefined);
+    expect(runtimeErrorCode(
+      denial("Principal P lacks WRITE on space S", {
+        permanentEvidence: true,
+        aclRevision: 1,
+      }),
+    )).toBe(undefined);
+    expect(runtimeErrorCode(
+      denial("memory authentication lease has run out", { retriable: true }),
+    )).toBe(undefined);
+  });
 });

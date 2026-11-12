@@ -128,7 +128,11 @@ deleted space
 ([`space-access.md`](space-access.md#a-deleted-space)) `spaceaccesslost` also
 carries `deleted: true`, the one marker of the refusal it forwards. A space
 already refused that turns out to be deleted is reported again, with the
-marker, to the storage provider's loss and access-change observers alike.
+marker, to the storage provider's loss and access-change observers alike. A
+request to the worker that fails on a refused space crosses with
+`RuntimeErrorCode.SpaceAccessRefused`, or with `RuntimeErrorCode.SpaceDeleted`
+for a deleted one
+([`space-access.md`](space-access.md#keeping-the-answer-current)).
 
 The worker renderer subscribes at cell boundaries. Revoking a foreign target
 removes that target's content and event handlers while retaining the authorized
