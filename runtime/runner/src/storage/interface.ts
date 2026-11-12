@@ -3356,7 +3356,10 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    * identical. These two methods let `Cell.get()` cache its result keyed by the
    * stable value of the cell view; the implementation clears the entire cache
    * on any write, so a cached entry is only ever returned when no write has
-   * intervened.
+   * intervened. A transaction that is no longer ready, whose CFC state is
+   * prepared, that is marked for a UI-input blind write, or that is reading at
+   * an earlier epoch neither returns nor stores an entry, so such a read takes
+   * the full pipeline.
    *
    * Optional: transactions that must not cache (e.g. the non-reactive `sample()`
    * wrapper) leave these undefined and callers fall back to recomputing.

@@ -2068,19 +2068,9 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     key: string,
     variant: string,
   ): { value: unknown } | undefined {
-    // Both caches key on path and schema, not on which instant is being read,
-    // and they are dropped on write to stay level with current state. A read
-    // resolving against an earlier epoch is describing a different instant, so
-    // it neither takes from them nor adds to them — serving one across that
-    // boundary would hand a materialized read's value to a current one, or the
-    // reverse.
-    if (this.#readEpoch !== undefined) return undefined;
-    // Cell traversals, like link-resolution memos, must stay within their
-    // ambient read classification; a scheduler probe cannot authorize a get.
-    variant = `${
-      this.#snapshotMemoKey(undefined, this.#ambientReadMeta)
-    }|${variant}`;
-    const cached = this.#readResultCache.get(key)?.get(variant);
+    const cacheVariant = this.#readResultCacheVariant(variant);
+    if (cacheVariant === undefined) return undefined;
+    const cached = this.#readResultCache.get(key)?.get(cacheVariant);
     if (cached === undefined) {
       this.#readResultCacheMisses++;
     } else {
@@ -2094,17 +2084,60 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     variant: string,
     value: unknown,
   ): void {
-    if (this.#readEpoch !== undefined) return;
-    variant = `${
-      this.#snapshotMemoKey(undefined, this.#ambientReadMeta)
-    }|${variant}`;
+    const cacheVariant = this.#readResultCacheVariant(variant);
+    if (cacheVariant === undefined) return;
     let byVariant = this.#readResultCache.get(key);
     if (byVariant === undefined) {
       byVariant = new Map();
       this.#readResultCache.set(key, byVariant);
     }
-    byVariant.set(variant, { value });
+    byVariant.set(cacheVariant, { value });
     this.#readResultCacheSets++;
+  }
+
+  /**
+   * Helper for `getCachedReadResult()` and `setCachedReadResult()`, which
+   * returns the key a read of `variant` files under in a view's entry of the
+   * read result cache, or `undefined` when this transaction may neither serve
+   * nor store a cached read.
+   */
+  #readResultCacheVariant(variant: string): string | undefined {
+    // This cache keys on path and schema, not on which instant is being read,
+    // and is dropped on write to stay level with current state. A read
+    // resolving against an earlier epoch is describing a different instant, so
+    // it neither takes from it nor adds to it — serving one across that
+    // boundary would hand a materialized read's value to a current one, or the
+    // reverse.
+    if (this.#readEpoch !== undefined || !this.#memoizesReads()) {
+      return undefined;
+    }
+    // Cell traversals, like link-resolution memos, must stay within their
+    // ambient read classification; a scheduler probe cannot authorize a get.
+    return `${
+      this.#snapshotMemoKey(undefined, this.#ambientReadMeta)
+    }|${variant}`;
+  }
+
+  /**
+   * Helper for `getSnapshotMemo()` and `#readResultCacheVariant()`, which
+   * returns whether this transaction may serve or store a memoized read.
+   */
+  #memoizesReads(): boolean {
+    return (
+      // A finished transaction answers no reads, so nothing it memoized
+      // earlier may be handed out as if it had.
+      this.status().status === "ready" &&
+      // Once CFC is prepared, the read path's `read-after-prepare`
+      // invalidation is load-bearing: a memoized read issues no reads and
+      // would leave a prepared digest standing over a read it never made.
+      this.#cfcState.prepare.status !== "prepared" &&
+      // The UI-input blind-write mode tags every read it sees
+      // `ignoreReadForCommit`. An entry made under it, served after it is
+      // cleared, would stand in for reads that are supposed to carry a
+      // value-equality commit precondition — and the precondition would
+      // simply not be there.
+      !isUiInputBlindWriteTx(this)
+    );
   }
 
   resetCurrentReadMemoization(): void {
@@ -2112,19 +2145,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   }
 
   getSnapshotMemo(): Map<string, unknown> | undefined {
-    // A finished transaction answers no reads, so nothing it memoized earlier
-    // may be handed out as if it had.
-    if (this.status().status !== "ready") return undefined;
-    // Once CFC is prepared, the read path's `read-after-prepare` invalidation
-    // is load-bearing: a memoized resolution issues no reads and would leave a
-    // prepared digest standing over a read it never made.
-    if (this.#cfcState.prepare.status === "prepared") return undefined;
-    // The UI-input blind-write mode tags every read it sees
-    // `ignoreReadForCommit`. An entry made under it, served after it is
-    // cleared, would stand in for reads that are supposed to carry a
-    // value-equality commit precondition — and the precondition would simply
-    // not be there.
-    if (isUiInputBlindWriteTx(this)) return undefined;
+    if (!this.#memoizesReads()) return undefined;
     const epoch = this.#readEpoch;
     const meta = this.#ambientReadMeta;
     if (epoch === undefined && meta === undefined) return this.#snapshotMemo;
