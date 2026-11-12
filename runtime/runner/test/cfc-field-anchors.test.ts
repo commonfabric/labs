@@ -374,9 +374,11 @@ describe("cfc-field-anchors", () => {
         .toBeUndefined();
     });
 
-    it("leaves the reader of an anchor the edit did not move untainted", async () => {
+    it("taints the reader of an anchor the edit did not move", async () => {
       // An anchor at the start of the body stays ahead of text inserted
-      // there, so its offset is still the one its writer chose.
+      // there, so its offset is still the one its writer chose. It takes the
+      // field's label with the anchor that moved, since which anchors an
+      // edit moves says where it fell.
 
       await anchorBlind("blind-beside", SECRET_FIELD_SCHEMA, {
         start: 0,
@@ -392,7 +394,8 @@ describe("cfc-field-anchors", () => {
       copy.prepareCfc();
 
       expect(start).toBe(0);
-      expect(refusalOf(await copy.commit().settled)).toBeUndefined();
+      expect(refusalOf(await copy.commit().settled))
+        .toContain("maxConfidentiality failed at /out");
     });
 
     it("keeps their reader tainted through a later edit", async () => {
@@ -465,9 +468,9 @@ describe("cfc-field-anchors", () => {
         .toContain("maxConfidentiality failed at /out");
     });
 
-    it("leaves their reader untainted by a label the field takes on in an edit that moves no anchor, until one does", async () => {
-      // The anchors carry what the field was labeled when an edit last
-      // moved them, which the field's label can since have outgrown.
+    it("taints their reader with a label the field takes on in an edit that moves no anchor", async () => {
+      // Text appended at the end of the body lands after `w`, so the append
+      // moves no anchor, and labels `w` with what the field holds after it.
 
       await anchorBlind("blind-relabeled", PLAIN_FIELD_SCHEMA, { w: 99999 });
       await insertAtStart("blind-relabeled", PLAIN_FIELD_SCHEMA, 14);
@@ -477,11 +480,6 @@ describe("cfc-field-anchors", () => {
         "oh hello world!",
       );
       expect(await copyAnchor("blind-relabeled", PLAIN_FIELD_SCHEMA, 14))
-        .toBeUndefined();
-
-      await insertAtStart("blind-relabeled", PLAIN_FIELD_SCHEMA, 17);
-
-      expect(await copyAnchor("blind-relabeled", PLAIN_FIELD_SCHEMA, 17))
         .toContain("maxConfidentiality failed at /out");
     });
 

@@ -240,9 +240,10 @@ What a reader of the anchors may learn is decided as for any other cell, by
 the label of what was written to it. A handler that reads the field before
 writing the anchors writes them under the field's confidentiality. One that
 writes anchors without reading the field does not, since an offset its writer
-chose says nothing about the field. Once an edit moves such an anchor, its
-offset follows the field, and it becomes as confidential as the field was at
-that edit; it stays so until a handler writes that anchor again. The field's
+chose says nothing about the field. Once an edit to the field integrates,
+every anchor of the field becomes as confidential as the field was at that
+edit, whether or not the edit moved it, since which anchors move says where
+the edit fell; an anchor stays so until a handler writes it again. The field's
 write policy does not cover the anchors; a pattern that wants only certain
 handlers to move them declares a write policy on the anchors cell's type.
 

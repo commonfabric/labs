@@ -5910,16 +5910,19 @@ const applyOperation = (
       },
     }));
   }
-  if (!sameAnchors(priorAnchors, nextAnchors)) {
+  // Every anchor is labeled on every edit that integrates, moved or not, so
+  // which anchors carry the field's label does not show where the edit fell
+  // (§7.7.4).
+  if (
+    Object.keys(priorAnchors).length > 0 && result.operations.length > 0
+  ) {
     for (
       const revision of writeAnchorsDocument(engine, {
         ...options,
         field: operation,
         scopeKey,
         anchors: nextAnchors,
-        moved: Object.keys(nextAnchors).filter((id) =>
-          nextAnchors[id] !== priorAnchors[id]
-        ),
+        moved: !sameAnchors(priorAnchors, nextAnchors),
       })
     ) {
       revisions.push(revision);
@@ -5959,13 +5962,16 @@ const upsertOperationFieldHead = (
 };
 
 /**
- * Rewrites the field's anchors document (§7.15) as an edit to the field moved
- * the anchors `moved` names, in the field's own scope, beside the field's
- * materializing patch. The patch replaces the document's value, and, where
- * the field's document holds a confidentiality over the field, the
- * document's CFC envelope with one that labels each moved anchor with it
- * (§7.7.4): a moved offset was computed from the field, whoever wrote the
- * anchor. Whatever else the envelope holds stays as its writer left it.
+ * Rewrites the field's anchors document (§7.15) for an edit to the field that
+ * integrated, in the field's own scope, beside the field's materializing
+ * patch. Where `moved` says the edit moved an anchor, the patch replaces the
+ * document's value with `anchors`. Where the field's document holds a
+ * confidentiality over the field that some anchor does not yet carry, the
+ * patch also replaces the document's CFC envelope with one that labels every
+ * anchor of `anchors` with it, moved or not (§7.7.4): a moved offset was
+ * computed from the field, whoever wrote the anchor, and labeling only the
+ * moved ones would show where the edit fell. Whatever else the envelope holds
+ * stays as its writer left it. Where neither holds, nothing is written.
  *
  * Returns the revisions written: the document's, and ahead of it, where a
  * label is added and the store does not hold the schema document
@@ -5988,7 +5994,7 @@ const writeAnchorsDocument = (
     scopeKey: string;
     field: OperationFieldAddress;
     anchors: FieldAnchors;
-    moved: readonly string[];
+    moved: boolean;
   },
 ): AppliedRevision[] => {
   const { field, anchors, moved, scopeKey, ...write } = options;
@@ -5999,17 +6005,18 @@ const writeAnchorsDocument = (
       readAnchorsDocument(engine, { branch: write.branch, field, scopeKey })
         ?.cfc,
       fieldConfidentiality(engine, { branch: write.branch, field, scopeKey }),
-      moved,
+      Object.keys(anchors),
       `the anchors document ${id}`,
       labelDocumentOf(engine, write.branch),
     );
   } catch (cause) {
     throw cause instanceof AnchorsLabelError
       ? new ProtocolError(
-        `commit operation ${write.opIndex}: the anchors of ${field.id} cannot be labeled as its edit moves them: ${cause.message}`,
+        `commit operation ${write.opIndex}: the anchors of ${field.id} cannot be labeled for its edit: ${cause.message}`,
       )
       : cause;
   }
+  if (!moved && envelope === undefined) return [];
   const revisions: AppliedRevision[] = [];
   const schemaDocument = `cid:${anchorsSchemaHash()}`;
   if (
@@ -6041,11 +6048,13 @@ const writeAnchorsDocument = (
         id,
         ...(field.scope === undefined ? {} : { scope: field.scope }),
         patches: [
-          {
-            op: "replace",
-            path: encodePointer(["value"]),
-            value: anchors,
-          },
+          ...(moved
+            ? [{
+              op: "replace" as const,
+              path: encodePointer(["value"]),
+              value: anchors,
+            }]
+            : []),
           ...(envelope === undefined ? [] : [{
             op: "replace" as const,
             path: encodePointer(["cfc"]),

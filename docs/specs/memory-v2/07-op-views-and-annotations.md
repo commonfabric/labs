@@ -395,13 +395,14 @@ Within the apply steps of §7.7.1:
    submission integrated (§7.5), in order. A submission that integrates
    nothing maps nothing.
 3. Where an anchor moved, the engine replaces the document's value with the
-   mapped anchors, under the same ids, as a `patch`. Where no anchor moved,
-   the document is not written.
-4. The same `patch` labels each anchor that moved with the field's
-   confidentiality. A moved offset is computed from the field's edits, so it
-   is as confidential as the field, regardless of who wrote the anchor. That a
-   moved offset takes the field's confidentiality is a rule of Contextual Flow
-   Control; what follows is how the engine arranges it. The engine reads the
+   mapped anchors, under the same ids, as a `patch`.
+4. The same `patch` labels every anchor of the field with the field's
+   confidentiality, moved or not. A moved offset is computed from the field's
+   edits, so it is as confidential as the field, regardless of who wrote the
+   anchor, and which anchors an edit moves says where it fell, so labeling
+   only the moved ones would tell a reader that. That the anchors take the
+   field's confidentiality is a rule of Contextual Flow Control; what follows
+   is how the engine arranges it. The engine reads the
    stored CFC envelope of the field's document, in the field's scope instance
    and in each broader instance, and takes the confidentiality of every label
    entry whose path is the field's path, a prefix of it, or beneath it, a `*`
@@ -412,7 +413,7 @@ Within the apply steps of §7.7.1:
    document is read from that document. Integrity is not taken. Where that
    confidentiality is not empty, the move's label is that confidentiality
    with no integrity, since the engine rather than the anchor's writer
-   produced the offset. For each moved anchor, the engine joins it into the
+   produced the offset. For each anchor, the engine joins it into the
    entry at the anchor's path of origin `derived` and class `value`, or makes
    it that entry where the envelope holds none, so that the path holds one
    such entry. The join keeps every clause either label held, since the
@@ -422,14 +423,15 @@ Within the apply steps of §7.7.1:
    integrity meets the move's as well, and its confidentiality stays. A
    label one of these entries names by document is read from that
    document. Where the envelope already holds every label this would write, it
-   is not written. An anchors document with no envelope gets one, naming the
+   is not written. Where no anchor moved and the envelope is not written, the
+   document is not written. An anchors document with no envelope gets one, naming the
    schema document of the schema that declares nothing, which the engine stores
    in the same commit where the store does not hold it. Whatever else the
    envelope holds is left as its writer wrote it.
 
-The engine refuses the operation, and so the commit, where an anchor moved
-and it cannot read the field's envelope, or, where it has a label to add, the
-anchors document's. It checks an envelope with the checks the runner uses,
+The engine refuses the operation, and so the commit, where the field has
+anchors and it cannot read the field's envelope, or, where it has a label to
+add, the anchors document's. It checks an envelope with the checks the runner uses,
 so that an envelope the runner would not produce labels from is one the
 engine does not copy a label out of: it refuses one of a version other than
 1 and 2, one with no `schemaHash`, one with no label map, an entry with no
@@ -441,14 +443,14 @@ bear on the field and no others, and refuses a reference among them that no
 stored document backs or whose document does not hold a label. It does not
 compare a label document with its id, since the store installs a `cid:`
 document only when its content hashes to its id. It also refuses a reference
-in an entry at a moved anchor's path that no stored document backs. An edit
-that moves no anchor reads no envelope and is not refused for one.
+in an entry at an anchor's path that no stored document backs. An edit to a
+field with no anchors reads no envelope and is not refused for one.
 
 The label is a record of the field at the edit, and it is the document's
 writers that end it. A writer's CFC pass drops a derived `value` entry at a
 path the writer replaces, so an anchor written again carries its writer's
-label alone, and the engine labels it again when a later edit moves it. A
-change to the field's label moves no anchor and changes no anchor's label.
+label alone, and the engine labels it again when the next edit integrates.
+A change to the field's label, with no edit, changes no anchor's label.
 
 Anchors are not operations: they enter no submitted or integrated row and
 advance no version. A commit that writes the anchors document and also applies

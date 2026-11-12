@@ -1,11 +1,12 @@
 /**
- * The confidentiality a collaborative field's anchors take on when the
- * engine moves them (`07-op-views-and-annotations.md` §7.7.4). A moved offset
- * is computed from the field's edits, so it is as confidential as the field,
- * whoever wrote the anchor. The engine reads what labels the field's stored
- * CFC envelope holds over the field's path, keeps their confidentiality, and
- * joins it onto the anchors document's envelope as a label of each offset
- * it moved.
+ * The confidentiality a collaborative field's anchors take on when an edit
+ * to the field integrates (`07-op-views-and-annotations.md` §7.7.4). A moved
+ * offset is computed from the field's edits, so it is as confidential as the
+ * field, whoever wrote the anchor, and which anchors an edit moves says where
+ * it fell, so every anchor takes the label, moved or not. The engine reads
+ * what labels the field's stored CFC envelope holds over the field's path,
+ * keeps their confidentiality, and joins it onto the anchors document's
+ * envelope as a label of each anchor's offset.
  *
  * The functions here read and build envelopes as plain stored values. Which
  * stored envelopes they read is decided by the checks of
@@ -32,7 +33,7 @@ import {
 
 /**
  * A stored CFC envelope the engine cannot read a confidentiality out of, or
- * cannot add one to. The edit that would have moved the anchors is refused
+ * cannot add one to. The edit that would have labeled the anchors is refused
  * with it, so that no offset is derived from a field whose label is unknown.
  */
 export class AnchorsLabelError extends Error {}
@@ -191,7 +192,7 @@ export const confidentialityOver = (
       if (isLabelMetadataTemplateEntry(entry)) continue;
       if (!bearsOn(entry.path, path)) continue;
       const label = resolvedLabel(entry.label, holder, labelDocument);
-      clauses.push(...(label.confidentiality ?? []));
+      for (const clause of label.confidentiality ?? []) clauses.push(clause);
     }
   }
   return distinctClauses(clauses);
@@ -228,14 +229,15 @@ const resolvedLabel = (
   return resolved;
 };
 
-// SPEC-PENDING https://github.com/commonfabric/specs/pull/93 The label of a
-// moved anchor is a store-performed derivation, which the pull request adds
-// a section to rule on: the move's label, the field's confidentiality with no
-// integrity, joined into the anchor's derived value entry. It changes what is
-// stored, and runs by default rather than behind a setting that keeps the old
-// behavior until the ruling, an exception to the pending-marker procedure
-// that Robin McCollum accepted in the review of labs#9667: anchors are
-// already persisted, and the label narrows what a reader of them learns.
+// SPEC-PENDING https://github.com/commonfabric/specs/pull/93 The label an
+// edit gives a field's anchors is a store-performed derivation, which the
+// pull request adds a section to rule on: the field's confidentiality with no
+// integrity, joined into every anchor's derived value entry, moved or not.
+// It changes what is stored, and runs by default rather than behind a
+// setting that keeps the old behavior until the ruling, an exception to the
+// pending-marker procedure that Robin McCollum accepted in the review of
+// labs#9667: anchors are already persisted, and the label narrows what a
+// reader of them learns.
 
 /**
  * The envelope an anchors document stores once each anchor of `anchorIds`
@@ -244,16 +246,16 @@ const resolvedLabel = (
  * written: `confidentiality` is empty, or the envelope already holds every
  * label this would write.
  *
- * Each moved anchor's offset is labeled by one derived entry of the value
- * class at the anchor's own path, which is what ties the label to the offset
- * the engine computed. The move's own label is `confidentiality` with no
- * integrity, since no principal produced the offset, and the engine joins it
+ * Each anchor's offset is labeled by one derived entry of the value class at
+ * the anchor's own path, which is what ties the label to the offset. The
+ * edit's own label is `confidentiality` with no integrity, since no
+ * principal produced the offset, and the engine joins it
  * into that entry. The join keeps every clause either label held, as the new
  * offset is computed from the old one, and meets their integrity, which with
- * the move's empty integrity leaves none. Where the envelope holds no such
- * entry, the move's label is the entry. A derived entry of no class at the
+ * the edit's empty integrity leaves none. Where the envelope holds no such
+ * entry, the edit's label is the entry. A derived entry of no class at the
  * path is consumed by a read of the offset as well, so its integrity meets
- * the move's too; its confidentiality, which reads of the other classes
+ * the edit's too; its confidentiality, which reads of the other classes
  * consume, stays. Every other entry, a declared one at the anchor's path
  * among them, stays as its writer left it.
  *
@@ -262,11 +264,11 @@ const resolvedLabel = (
  * differ, so the label lasts until its anchor is next written and no longer.
  *
  * A document with no envelope gets one naming {@link anchorsSchemaHash}. A
- * label an entry at a moved anchor's path holds by reference is read through
+ * label an entry at an anchor's path holds by reference is read through
  * `labelDocument`, as {@link confidentialityOver} reads one.
  *
  * @throws AnchorsLabelError for an envelope the engine cannot read, and for
- *   a label at a moved anchor's path that it cannot resolve.
+ *   a label at an anchor's path that it cannot resolve.
  */
 export const anchorsEnvelopeWith = (
   envelope: Stored,
@@ -278,15 +280,15 @@ export const anchorsEnvelopeWith = (
   if (confidentiality.length === 0) return undefined;
   const stored = readableEnvelopeOf(envelope, holder);
   const held: readonly ReadEntry[] = stored?.labelMap.entries ?? [];
-  const moved = new Set(anchorIds);
+  const labeled = new Set(anchorIds);
   const resolved = (entry: ReadEntry) =>
     resolvedLabel(entry.label, holder, labelDocument);
 
-  // The clauses each moved anchor's offset already carried, from every
+  // The clauses each anchor's offset already carried, from every
   // derived value-class entry at its path, which the one written replaces.
   const carried = new Map<string, FabricValue[]>();
   for (const entry of held) {
-    const anchor = movedAnchorOf(entry, moved);
+    const anchor = labeledAnchorOf(entry, labeled);
     if (anchor === undefined || entry.observes !== "value") continue;
     carried.set(anchor, [
       ...(carried.get(anchor) ?? []),
@@ -303,7 +305,7 @@ export const anchorsEnvelopeWith = (
   const written = new Set<string>();
   const entries: FabricValue[] = [];
   for (const entry of held) {
-    const anchor = movedAnchorOf(entry, moved);
+    const anchor = labeledAnchorOf(entry, labeled);
     if (anchor === undefined) {
       entries.push(entry);
     } else if (entry.observes === "value") {
@@ -361,16 +363,16 @@ export const anchorsEnvelopeWith = (
 };
 
 /**
- * Helper for {@link anchorsEnvelopeWith}, which returns the anchor of `moved`
- * whose offset `entry` labels as a derived entry at its path, or `undefined`
- * for an entry of another component or path.
+ * Helper for {@link anchorsEnvelopeWith}, which returns the anchor of
+ * `labeled` whose offset `entry` labels as a derived entry at its path, or
+ * `undefined` for an entry of another component or path.
  */
-const movedAnchorOf = (
+const labeledAnchorOf = (
   entry: ReadEntry,
-  moved: ReadonlySet<string>,
+  labeled: ReadonlySet<string>,
 ): string | undefined =>
   entry.origin === "derived" && entry.path.length === 1 &&
-    moved.has(entry.path[0])
+    labeled.has(entry.path[0])
     ? entry.path[0]
     : undefined;
 

@@ -2800,7 +2800,7 @@ describe("v2-operation-engine", () => {
         }
       });
 
-      it("labels each anchor the edit moved with the confidentiality at the field's path, and no other", async () => {
+      it("labels every anchor of the field, moved or not, with the confidentiality at the field's path, and no other", async () => {
         const { engine, path } = await openTestEngine();
         try {
           seed(
@@ -2817,7 +2817,40 @@ describe("v2-operation-engine", () => {
           ]);
           expect(read(engine, { id: anchorsDoc("of:labeled") })).toEqual({
             value: { b: 1, end: 4 },
-            cfc: envelope([moved("end", ["secret"])]),
+            cfc: envelope([moved("b", ["secret"]), moved("end", ["secret"])]),
+          });
+        } finally {
+          close(engine);
+          await Deno.remove(path);
+        }
+      });
+
+      it("labels every anchor in a patch of the envelope alone for an edit that moves none", async () => {
+        const { engine, path } = await openTestEngine();
+        try {
+          seed(
+            engine,
+            "of:still",
+            envelope([{ path: ["body"], origin: "declared", label: secret }]),
+          );
+
+          // Text inserted at `end`, the end of `abc`, lands after it.
+          const applied = commit(engine, [
+            applyOp("of:still", "alice:1", "abc", [changes(3, 3, "X")]),
+          ]);
+
+          expect(written(applied)).toEqual([
+            ["of:still", "patch", false],
+            [anchorsDoc("of:still"), "patch", true],
+          ]);
+          expect(applied.revisions[1].patches).toEqual([{
+            op: "replace",
+            path: "/cfc",
+            value: envelope([moved("b", ["secret"]), moved("end", ["secret"])]),
+          }]);
+          expect(read(engine, { id: anchorsDoc("of:still") })).toEqual({
+            value: { b: 1, end: 3 },
+            cfc: envelope([moved("b", ["secret"]), moved("end", ["secret"])]),
           });
         } finally {
           close(engine);
@@ -2865,8 +2898,8 @@ describe("v2-operation-engine", () => {
           ]);
           expect(read(engine, { id: schemaDoc })).toEqual({ value: {} });
           expect(labelEntries(engine, "of:first")).toEqual([
-            moved("end", ["secret"]),
             moved("b", ["secret"]),
+            moved("end", ["secret"]),
           ]);
         } finally {
           close(engine);
@@ -2899,6 +2932,7 @@ describe("v2-operation-engine", () => {
           insert(engine, "of:around");
 
           expect(labelEntries(engine, "of:around")).toEqual([
+            moved("b", ["above", "every", "at", "inside"]),
             moved("end", ["above", "every", "at", "inside"]),
           ]);
         } finally {
@@ -2922,6 +2956,7 @@ describe("v2-operation-engine", () => {
           insert(engine, "of:vouched");
 
           expect(labelEntries(engine, "of:vouched")).toEqual([
+            moved("b", ["secret"]),
             moved("end", ["secret"]),
           ]);
         } finally {
@@ -2949,6 +2984,7 @@ describe("v2-operation-engine", () => {
           insert(engine, "of:referenced");
 
           expect(labelEntries(engine, "of:referenced")).toEqual([
+            moved("b", ["referenced"]),
             moved("end", ["referenced"]),
           ]);
         } finally {
@@ -2991,11 +3027,10 @@ describe("v2-operation-engine", () => {
               labelMap: {
                 version: 1,
                 entries: [
-                  {
-                    path: ["b"],
-                    origin: "derived",
-                    label: { integrity: ["i"] },
-                  },
+                  // The integrity of `b`'s derived entry of no class meets
+                  // the edit's, which holds none.
+                  { path: ["b"], origin: "derived", label: {} },
+                  moved("b", ["secret"]),
                   moved("end", ["secret"]),
                 ],
               },
@@ -3041,6 +3076,7 @@ describe("v2-operation-engine", () => {
 
           expect(labelEntries(engine, "of:written")).toEqual([
             moved("end", ["carol", "secret"]),
+            moved("b", ["secret"]),
           ]);
         } finally {
           close(engine);
@@ -3219,7 +3255,7 @@ describe("v2-operation-engine", () => {
 
             expect(edit).toThrow(ProtocolError);
             expect(edit).toThrow(
-              `commit operation 0: the anchors of ${id} cannot be labeled as its edit moves them: `,
+              `commit operation 0: the anchors of ${id} cannot be labeled for its edit: `,
             );
             expect(edit).toThrow(fault);
             expect(snapshot(engine, id).materialized).toBe("abc");

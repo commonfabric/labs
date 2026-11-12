@@ -168,11 +168,10 @@ its value is a map from anchor id to offset. Anyone who may write the space
 changes the anchors by writing that document, as they would any entity, and
 Memory refuses a write that leaves anything other than such a map in it
 ([`../specs/memory-v2/07-op-views-and-annotations.md`](../specs/memory-v2/07-op-views-and-annotations.md),
-§7.8). When an edit moves an anchor, Memory rewrites the document's value in
-the transaction that integrates the edit, and labels each anchor it moved
-with the field's confidentiality, as described below. The rest of the
-document is left as it was. An edit that moves no anchor leaves the document
-alone.
+§7.8). In the transaction that integrates an edit, Memory rewrites the
+document's value where the edit moved an anchor, and labels every anchor
+with the field's confidentiality, moved or not, as described below. The rest
+of the document is left as it was.
 
 Releasing a field keeps its anchors, since the released text is the text they
 refer to, and so does deleting the field's entity, which releases its fields.
@@ -228,9 +227,10 @@ other anchors in the document keep the labels they had.
 
 The second is Memory. An offset Memory computed from an edit says where the
 field was edited and by how much, and, for an anchor written past the end of
-the text, how long the field is. So when an edit moves an anchor, Memory
-labels that anchor with the confidentiality the field's document holds over
-the field at that edit, in the same transaction. It reads the label entries
+the text, how long the field is, and which anchors an edit moves says where
+it fell. So when an edit integrates, Memory labels every anchor of the
+field, moved or not, with the confidentiality the field's document holds
+over the field at that edit, in the same transaction. It reads the label entries
 of the field's stored envelope that lie at, above or inside the field's path,
 in the field's scope instance and in each broader instance of the same
 document. The label-metadata templates are left out: they are keyed against
@@ -238,7 +238,7 @@ the stored document rather than its value, so none labels the field, not
 even a field that is the whole value, whose path is a prefix of every path,
 or one named `cfc`. The move's own label is the confidentiality of the
 entries it read, with no integrity, since Memory rather than the anchor's
-writer produced the offset. Memory joins it into the label of the moved
+writer produced the offset. Memory joins it into the label of each
 anchor's offset, the one derived entry of the value class at the anchor's
 path, or makes it that entry where there is none. The join keeps every
 clause either label held, since the new offset is computed from the old one,
@@ -247,23 +247,24 @@ A derived entry of no class at the path is consumed by a read of the offset
 too, so its integrity meets the move's as well, and its clauses stay. Every
 other label at the path stays as it was. A later reader
 of that offset is tainted as a reader of the field was, whoever wrote the
-anchor. An anchor the edit left where it was gets no label from it, and an
-anchor neither written nor moved keeps the labels it had.
+anchor. An anchor the edit left where it was is labeled too: labeling only
+the anchors that moved would show where the edit fell. An anchor written
+since the last edit carries its writer's label alone until the next one.
 
 The label is of the offset Memory wrote, and lasts as long as that offset
 does:
 
-- A later edit that moves the anchor again joins what the field holds then
-  into the label the anchor carries.
-- The field's label changing without an edit that moves the anchor leaves
-  the anchor's label as it was.
+- Each later edit joins what the field holds then into the label each
+  anchor carries.
+- The field's label changing without an edit leaves the anchors' labels as
+  they were.
 - A write that replaces the anchor's offset replaces the label with the
   writer's own, as a write of any derived value does. An offset written by a
   transaction that read nothing confidential is unlabeled again.
 - Releasing the field leaves the labels in place, with the anchors.
 
-Where an edit moves an anchor and Memory cannot read the field's envelope,
-it refuses the edit and moves nothing, so that no offset is stored that is
+Where an edit to a field with anchors integrates and Memory cannot read the
+field's envelope, it refuses the edit and moves nothing, so that no offset is stored that is
 less confidential than the field it came from. It checks the envelope with
 the checks the runner uses, so it refuses one of a version it does not know,
 one that names no schema, a label of a shape it does not know, and a label
@@ -275,8 +276,7 @@ not compare a label document with its hash, since the store installs a
 `cid:` document only when its content hashes to its id. It reads the anchors
 document's envelope only when it has a label to add to it, and refuses the
 edit when that envelope cannot be read, or when a label it holds by
-reference at a moved anchor's path has no stored label document behind
-it.
+reference at an anchor's path has no stored label document behind it.
 
 The anchors take none of the field's integrity, from either source, and the
 field's write policy does not govern them: a pattern that wants only certain
