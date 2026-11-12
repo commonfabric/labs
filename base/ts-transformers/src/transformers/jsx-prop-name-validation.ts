@@ -1,3 +1,10 @@
+import ts from "typescript";
+import {
+  camelCasePropName,
+  isMisnamedPropName,
+} from "@commonfabric/pattern-contract/jsx-prop-names";
+import { HelpersOnlyTransformer, TransformationContext } from "../core/mod.ts";
+
 /**
  * JSX Prop Name Validation Transformer
  *
@@ -16,14 +23,6 @@
  * `@commonfabric/pattern-contract/jsx-prop-names` holds the rule, which the
  * renderer applies too.
  */
-
-import ts from "typescript";
-import {
-  camelCasePropName,
-  isMisnamedPropName,
-} from "@commonfabric/pattern-contract/jsx-prop-names";
-import { HelpersOnlyTransformer, TransformationContext } from "../core/mod.ts";
-
 export class JsxPropNameValidationTransformer extends HelpersOnlyTransformer {
   transform(context: TransformationContext): ts.SourceFile {
     const visit = (node: ts.Node): void => {

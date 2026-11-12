@@ -518,6 +518,7 @@ export class DomApplicator {
   #setBinding(nodeId: number, propName: string, cellRef: CellRef): void {
     const node = this.#nodes.get(nodeId);
     if (!isElementNode(node)) return;
+    warnMisnamedProp(node.localName, propName);
 
     if (!this.#runtimeClient) {
       // No client-side runtime to hand the element a live handle; the

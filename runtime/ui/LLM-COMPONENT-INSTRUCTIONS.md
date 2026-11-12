@@ -162,7 +162,7 @@ await input.pressSequentially("user@example.com");
 - `cf-change` - Fired on change with detail: `{ value, name }` **Example**:
 
 ```html
-<cf-textarea rows="4" placeholder="Enter message" autoResize></cf-textarea>
+<cf-textarea rows="4" placeholder="Enter message" auto-resize></cf-textarea>
 ```
 
 ### 4. cf-checkbox
@@ -497,7 +497,9 @@ await input.pressSequentially("user@example.com");
 - `cf-change` - Fired on tab change with detail: `{ value }` **Slots**: Default
   slot for cf-tab-list and cf-tab-panel elements **Example**:
 
-```html
+In a pattern, where `value` sets the property:
+
+```tsx
 <cf-tabs value="tab1">
   <cf-tab-list>
     <cf-tab value="tab1">Tab 1</cf-tab>
@@ -505,7 +507,7 @@ await input.pressSequentially("user@example.com");
   </cf-tab-list>
   <cf-tab-panel value="tab1">Content 1</cf-tab-panel>
   <cf-tab-panel value="tab2">Content 2</cf-tab-panel>
-</cf-tabs>
+</cf-tabs>;
 ```
 
 ### 22. cf-tab-list
@@ -840,7 +842,8 @@ automatically on its own.
     </cf-grid>
   </cf-card>
 
-  <cf-tabs value="overview">
+  <!-- The active tab is the value property, which has no attribute. -->
+  <cf-tabs>
     <cf-tab-list>
       <cf-tab value="overview">Overview</cf-tab>
       <cf-tab value="analytics">Analytics</cf-tab>

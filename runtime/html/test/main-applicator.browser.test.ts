@@ -223,3 +223,33 @@ Deno.test("a prop whose name names no property is warned of once, naming the pro
   assertEquals(warnings.length, 1);
   assertStrictEquals(String(warnings[0]![0]).includes("`defaultSize`"), true);
 });
+
+Deno.test("a bound prop whose name names no property is warned of too", () => {
+  const warnings: unknown[][] = [];
+  const warn = console.warn;
+  console.warn = (...args: unknown[]) => warnings.push(args);
+  try {
+    const applicator = new DomApplicator({
+      onEvent: () => {},
+      onError: (error) => {
+        throw error;
+      },
+    });
+    applicator.applyBatch({
+      batchId: 1,
+      ops: [
+        { op: "create-element", nodeId: 1, tagName: "x-bound-target" },
+        {
+          op: "set-binding",
+          nodeId: 1,
+          propName: "max-size",
+          cellRef: {} as never,
+        },
+      ],
+    });
+  } finally {
+    console.warn = warn;
+  }
+  assertEquals(warnings.length, 1);
+  assertStrictEquals(String(warnings[0]![0]).includes("`maxSize`"), true);
+});

@@ -39,5 +39,8 @@ describe("jsx-prop-names", () => {
     expect(camelCasePropName("default-size")).toBe("defaultSize");
     expect(camelCasePropName("accept-charset")).toBe("acceptCharset");
     expect(camelCasePropName("hide-when-stacked")).toBe("hideWhenStacked");
+    expect(camelCasePropName("foo--bar")).toBe("fooBar");
+    expect(camelCasePropName("foo-")).toBe("foo");
+    expect(camelCasePropName("foo-Bar")).toBe("fooBar");
   });
 });

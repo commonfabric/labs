@@ -155,6 +155,10 @@ export class CFResizablePanelGroup extends BaseElement
   /** Each handle with a panel on both sides of it, and the indexes of those
    * two panels. A handle at either end moves nothing. */
   #handleNeighbors = new Map<HTMLElement, [number, number]>();
+  /** Each handle with the indexes of the panels beside it, one or two: a
+   * handle at an end has one. A handle is drawn only while every panel
+   * beside it is. */
+  #handleBeside = new Map<HTMLElement, number[]>();
   /** The panels and handles that joined this group, in no order. */
   #members = new Set<HTMLElement>();
   /** Set while the group adopts the members already in place, so that it
@@ -190,7 +194,9 @@ export class CFResizablePanelGroup extends BaseElement
 
     // Members join as they connect. Those already in place connected before
     // this element was upgraded, or connect just after it in the same
-    // insertion; either way the group adopts them now.
+    // insertion; either way the group adopts them now. One not yet upgraded
+    // joins when it upgrades, which connects it, so it is left until then:
+    // until it upgrades, it could leave with nothing to tell the group.
     this.#adopting = true;
     try {
       for (
@@ -198,7 +204,9 @@ export class CFResizablePanelGroup extends BaseElement
           "cf-resizable-panel, cf-resizable-handle",
         )
       ) {
-        if (owningGroupElement(member) === this) adopt(member, this);
+        if (member.matches(":defined") && owningGroupElement(member) === this) {
+          adopt(member, this);
+        }
       }
     } finally {
       this.#adopting = false;
@@ -273,8 +281,11 @@ export class CFResizablePanelGroup extends BaseElement
 
   memberLeft(member: HTMLElement): void {
     if (!this.#members.delete(member)) return;
-    // A member leaves as this group found it: unsized and unoriented.
-    if (this.#sizedDimension) member.style[this.#sizedDimension] = "";
+    // A member leaves as this group found it: unsized and unoriented. Only
+    // panels are sized; a handle's own size is the author's.
+    if (this.#sizedDimension && this._panels.has(member)) {
+      member.style[this.#sizedDimension] = "";
+    }
     delete member.dataset.orientation;
     member.removeAttribute("aria-orientation");
     // The members leave after the group when it is taken out with them.
@@ -343,6 +354,7 @@ export class CFResizablePanelGroup extends BaseElement
 
     // A handle moves the nearest panel on each side of it.
     this.#handleNeighbors.clear();
+    this.#handleBeside.clear();
     let before = -1;
     let pending: HTMLElement[] = [];
     for (const member of members) {
@@ -350,11 +362,18 @@ export class CFResizablePanelGroup extends BaseElement
       else if (member instanceof CFResizablePanel) {
         const index = panels.indexOf(member);
         for (const handle of pending) {
-          if (before !== -1) this.#handleNeighbors.set(handle, [before, index]);
+          if (before === -1) this.#handleBeside.set(handle, [index]);
+          else {
+            this.#handleNeighbors.set(handle, [before, index]);
+            this.#handleBeside.set(handle, [before, index]);
+          }
         }
         pending = [];
         before = index;
       }
+    }
+    if (before !== -1) {
+      for (const handle of pending) this.#handleBeside.set(handle, [before]);
     }
 
     for (const handle of this._handles) this.#orient(handle);
@@ -584,8 +603,8 @@ export class CFResizablePanelGroup extends BaseElement
       panel.element.dataset.orientation = orientation;
     });
     for (const handle of this._handles) {
-      const neighbors = this.#handleNeighbors.get(handle);
-      if (neighbors?.some((i) => hide[i])) hidden.add(handle);
+      const beside = this.#handleBeside.get(handle);
+      if (beside?.some((i) => hide[i])) hidden.add(handle);
     }
     for (const [element, display] of this.#hidden) {
       if (hidden.has(element)) continue;

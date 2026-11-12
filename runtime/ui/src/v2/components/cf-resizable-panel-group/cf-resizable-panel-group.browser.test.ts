@@ -717,3 +717,22 @@ Deno.test("a group taken out and put back with its panels lays them out again", 
   await pressKey("ArrowRight");
   expect(page.first.style.width).toBe("37%");
 });
+
+Deno.test("a handle at an end steps aside with the hidden panel beside it", async () => {
+  using page = built("horizontal");
+  page.group.stackBelow = 500;
+  const trailing = new CFResizableHandle();
+  page.group.append(trailing);
+  page.second.hideWhenStacked = true;
+  document.body.append(page.group);
+  await laidOut(page.group);
+  expect(page.second.style.display).toBe("none");
+  expect(trailing.style.display).toBe("none");
+});
+
+Deno.test("a handle leaving keeps the size its author gave it", async () => {
+  using page = await mounted("vertical");
+  page.handle.style.height = "12px";
+  page.handle.remove();
+  expect(page.handle.style.height).toBe("12px");
+});

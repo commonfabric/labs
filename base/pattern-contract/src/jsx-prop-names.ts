@@ -39,10 +39,11 @@ export function isMisnamedPropName(name: string): boolean {
     !isAttributePropName(name);
 }
 
-/** The camel-case form of a hyphenated name: `default-size` → `defaultSize`. */
+/**
+ * The camel-case form of a hyphenated name: `default-size` → `defaultSize`.
+ * Each run of hyphens goes, and the character after it is upper-cased, so
+ * the result holds no hyphen whatever the input.
+ */
 export function camelCasePropName(name: string): string {
-  return name.replace(
-    /-([a-z0-9])/g,
-    (_, letter: string) => letter.toUpperCase(),
-  );
+  return name.replace(/-+(.?)/g, (_, next: string) => next.toUpperCase());
 }
