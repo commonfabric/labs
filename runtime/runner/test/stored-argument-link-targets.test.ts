@@ -271,4 +271,84 @@ describe("stored argument link targets", () => {
       expect(requested).not.toContain(ownTarget.getAsNormalizedFullLink().id);
     });
   });
+
+  describe("an argument linking out of its own space", () => {
+    let storageManager: ReturnType<typeof StorageManager.emulate>;
+    let runtime: Runtime;
+
+    beforeEach(() => {
+      storageManager = StorageManager.emulate({ as: signer });
+      runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager,
+      });
+    });
+    afterEach(async () => {
+      await runtime?.dispose();
+      await storageManager?.close();
+    });
+
+    it("requests the targets in the argument's space and none in another", async () => {
+      // Setup reads no link that leaves the argument's space and scope, so
+      // naming such a target would load a document nothing in the setup
+      // reads, and for a Home linking each of its rooms, every room.
+
+      const elsewhere = (await Identity.fromPassphrase(
+        "stored-argument-link-targets elsewhere",
+      )).did();
+      const far = runtime.getCell(elsewhere, "far target", undefined);
+      const farTx = runtime.edit();
+      far.withTx(farTx).set({ n: 2 });
+      expect((await farTx.commit().settled).error).toBeUndefined();
+      const tx = runtime.edit();
+      const near = runtime.getCell(space, "near target", undefined, tx);
+      near.set({ n: 1 });
+      const argument = runtime.getCell<Record<string, unknown>>(
+        space,
+        "argument linking out",
+        undefined,
+        tx,
+      );
+      argument.set({ near, far });
+      const piece = runtime.getCell<Record<string, unknown>>(
+        space,
+        "piece over an argument linking out",
+        undefined,
+        tx,
+      );
+      piece.set({});
+      piece.setMetaRaw(
+        "argument",
+        argument.getAsWriteRedirectLink({ base: piece }),
+        rawMetaWriteAuthorization,
+      );
+      expect((await tx.commit().settled).error).toBeUndefined();
+      await runtime.storageManager.synced();
+
+      const pattern = await runtime.patternManager.compilePattern(
+        emptyPattern,
+        { space },
+      );
+      const requested: string[] = [];
+      const restores = [space, elsewhere].map((target) => {
+        const provider = storageManager.open(target);
+        const sync = provider.sync;
+        provider.sync = (id, selector, scope, instance) => {
+          requested.push(id);
+          return sync.call(provider, id, selector, scope, instance);
+        };
+        return () => {
+          provider.sync = sync;
+        };
+      });
+      try {
+        await runtime.runner.syncStoredPieceCells(piece, pattern);
+      } finally {
+        for (const restore of restores) restore();
+      }
+
+      expect(requested).toContain(near.getAsNormalizedFullLink().id);
+      expect(requested).not.toContain(far.getAsNormalizedFullLink().id);
+    });
+  });
 });
