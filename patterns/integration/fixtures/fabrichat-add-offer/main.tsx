@@ -121,6 +121,7 @@ export default pattern<MainInput, MainOutput>((
   );
   const pointProfiles = pointProfilesAtPrivateInbox({
     privateInbox,
+    retainedPrivateInboxes,
     // deno-lint-ignore no-explicit-any
     profiles: profiles as any,
   });

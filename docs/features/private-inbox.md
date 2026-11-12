@@ -194,47 +194,6 @@ to, refusing and recording a refusal are tested there, by
 `patterns/system/private-inbox/private-inbox.test.tsx` and, vetting rule by
 rule, by `runtime/piece/test/ops/private-inbox.test.ts`.
 
-### Creating Home's own
-
-Home creates an inbox in one step only, `createOwnPrivateInbox` in
-`private-inbox.tsx`, which records the inbox in Home's `ownPrivateInbox` and
-creates one only while that field is empty. The ensure and the replacement of a
-refused inbox create none: they take the inbox that field holds, and the ensure
-has the step create it first when Home may need it.
-
-The reason is the inbox's confidentiality. A document a run writes takes on
-the confidentiality of what the run has read, and the CFC write gate's
-writer-fit check refuses a write to a document in another space that would
-carry a label the document does not admit. The ensure reads the owner's labeled
-state: Home's holder and the profiles' pointers can carry the owner's label, as
-a pointer comes to carry its inbox's, as the next section says, and the
-replacement reads the refusal record, which carries the refused inbox's. An
-inbox created in such a run is refused, and an inbox that carried the owner's
-label would pass it into the run of every sender that reads it. So the creating
-step reads nothing before the creation but `ownPrivateInbox`, which only it
-writes, and its event, which carries no label.
-
-When Home has no inbox of its own, the event names none to adopt, and either
-the event names inboxes to replace or Home holds none, the ensure does nothing
-but send its event to the creating step. That step creates Home's inbox,
-records it, and hands the event on to a second binding of the ensure, one with
-no creating step to send to, which decides as the list above says. Whether the
-ensure sends depends only on the host's event, `ownPrivateInbox` and whether
-Home holds an inbox, never on which inbox Home's holder or a profile names. So
-Home creates its own at most once, and sometimes takes it nowhere yet: when the
-host names an inbox to replace that Home keeps, as when Home holds one it made
-and the deciding profile advertises another, and when Home holds none while a
-profile advertises an inbox the host refused or did not vet. The last is what
-the replacement of a refused inbox relies on. A Home that adopts an inbox it
-made, or keeps the one it holds while the host names nothing to replace,
-creates none, and a Home that has held an inbox it made since before
-`ownPrivateInbox` may never need one.
-
-Two runtimes ensuring at once both find `ownPrivateInbox` empty, and the one
-whose commit lands second finds it stale, runs again and creates nothing. What
-its first attempt wrote in the inbox's space, which commits before Home's, may
-be left there: an empty inbox that no profile and nothing of Home's names.
-
 `retainedPrivateInboxes` holds a link to each inbox Home gave up or replaced,
 in the order it did so, and never the one it holds: adopting an inbox the list
 holds, as when a profile is pointed back at it, takes it out, and so does
@@ -257,10 +216,12 @@ elsewhere.
 
 Home opens without waiting for the ensure, which reads every profile's pointer
 and loads inbox documents in other spaces. The ensure itself waits for Home's
-handling of the event it sends: it finishes once the handler's run has
-committed, on the server under server execution, and fails when that run
-fails. Either kind of failure, one raised while sending the event, such as Home
-failing to come up, or one inside the handler, is logged, and the next time
+handling of the event it sends, and for the creation of Home's own inbox when it
+has Home take that step first, as "Creating Home's own" says: it finishes once
+each run has committed, on the server under server execution, and fails when
+either fails, sending no event after a creation that failed. Either kind of
+failure, one raised while sending an event, such as Home failing to come up, or
+one inside a handler, is logged, and the next time
 that worker brings up Home it sends the event again.
 
 A profile is pointed in one of three ways:
@@ -308,16 +269,19 @@ handlers read the inbox the event names to adopt, the inbox Home holds, the ones
 it retains, the one its refusal record names and the one its replacement record
 names, as a typed link,
 `Cell<ShareInboxPiece>`; the host reads it through `inboxPieceLinkSchema` in
-`runtime/piece/src/ops/private-inbox.ts`, the same type as a schema. A link
-that names the inbox's own result document, as `setInbox` and an adoption write
-it, carries the label of what it reaches, and the inbox labels its offers
-confidential to its owner; a profile's pointer, and Home's holder once Home has
-adopted an inbox, hold such a link. Read as an untyped link, `Cell<unknown>`,
-the pointer joins that label, from another space, into the reading run.
+`runtime/piece/src/ops/private-inbox.ts`, the same type as a schema. A profile's
+pointer, and Home's holder once Home has adopted an inbox, hold a link that
+names the inbox's own result document, as `setInbox` and an adoption write it,
+and the inbox labels its offers confidential to its owner. The link stores only
+the label of the run that wrote it: the inbox's label stays on the inbox, and a
+run joins it where it reads what the link reaches. Read as an untyped link,
+`Cell<unknown>`, the pointer is followed into the inbox's result, `offers` among
+it, and the reading run joins the owner's label from another space.
 Writer-fit then refuses the run's own sends, whichever path delivered it. When
 the event drain, rather than the wave that queued it, delivered the run, it also
 refuses the run's record that it handled the event, and the event is lost. Read
-as the typed link, the pointer joins no confidentiality.
+as the typed link, the pointer names the inbox and reads nothing of it, so the
+run joins only the label the link itself stores.
 
 The handler reads the inbox an event names as refused through the same typed
 link, for a narrower reason. That link travels in the event, which carries no
@@ -327,9 +291,10 @@ and the event drain delivering the run, a handler reading it as
 of the inbox's result through it, such as `offers`: read that way, the run joins
 the inbox's label and the event is lost. The copy Home's refusal record stores
 is a different matter: it names the refused inbox's result document, as an
-adoption's link does, so like Home's holder it carries the label the refused
-inbox's owner gives its offers, and any reader of the record's `inbox` reads it
-as the typed link. The notice in Home's UI, as "When the host refuses an inbox"
+adoption's link does, so a run that read the record's `inbox` untyped would
+follow it into that inbox's result and join the label the refused inbox's owner
+gives its offers. Any reader of the record's `inbox` reads it as the typed link.
+The notice in Home's UI, as "When the host refuses an inbox"
 says, reads the record's `reason` and `refusedAt` and never its `inbox`.
 
 `private-inbox.pointer-type.test.ts` fails to compile if any reader's pointer
@@ -361,10 +326,9 @@ over such a pointer, and reports it instead, so the two converge on Home's
 repair. The pattern test pins it with a profile whose stored `inbox` is a
 string.
 
-The link a profile receives names the inbox's own result document rather than
-the cell Home's link reaches it through: a link written into a profile's
-labeled `inbox` takes its label from the document it names, and the result
-document is the one with a schema to take it from. Home's own link to an
+The link a profile receives names the inbox's own result document, the one the
+typed pointer describes, rather than the cell Home's link reaches it through.
+Home's own link to an
 adopted inbox names that document too, rather than the profile's pointer, so
 a later change to that pointer moves Home's inbox only through a later ensure,
 by the rules above.
@@ -376,6 +340,55 @@ profile list the new root holds. Nothing replaces an identity Home's root:
 `PiecesController.recreateDefaultPattern()` in `runtime/piece` refuses one,
 absent or present, and a Home's source is changed in place, which keeps both
 (`docs/common/conventions/HOME_SPACE.md`, "Custom Home Pattern").
+
+### Creating Home's own
+
+Home creates an inbox in one step only, `createOwnPrivateInbox` in
+`private-inbox.tsx`, which records the inbox in Home's `ownPrivateInbox` and
+creates one only while that field is empty. The ensure and the replacement of a
+refused inbox create none: they take the inbox that field holds, and the ensure
+has the step create it first when Home may need it.
+
+The reason is the inbox's confidentiality. A document a run writes takes on
+the confidentiality of what the run has read, and the CFC write gate's
+writer-fit check refuses a write to a document in another space that would
+carry a label the document does not admit. The ensure reads the owner's labeled
+state. A link stores the label of the run that wrote it, so Home's holder
+carries the owner's label once a run that had read it adopted an inbox, and a
+profile's pointer can carry a label too. The replacement reads the refusal
+record, which the ensure writes. An
+inbox created in such a run is refused, and an inbox that carried the owner's
+label would pass it into the run of every sender that reads it. So the creating
+step reads nothing before the creation but `ownPrivateInbox`, which only it
+writes, and its event, which carries no label.
+
+The host has Home take the step first. When Home has no inbox of its own and the
+event the host is about to send names none to adopt and either names inboxes to
+replace or Home holds none, the host sends Home's `createOwnPrivateInbox`
+stream, a binding of the step that does nothing more, and waits for that run to
+commit before it sends the ensure, so a creation that fails fails the ensure and
+the next bring-up tries again. For a sender of the ensure that has not had the
+step taken first, such as `requestPrivateInbox`, or a host sending a Home
+without that stream, the ensure takes it itself: in the same case it does
+nothing but send its event to the creating step, which creates Home's inbox,
+records it, and hands the event on to a second binding of the ensure, one with
+no creating step to send to, which decides as the list above says. Nothing waits
+for those two runs: the sender learns only of the first ensure's. Whether the
+ensure sends depends only on the host's event, `ownPrivateInbox` and whether
+Home holds an inbox, never on which inbox Home's holder or a profile names. So
+Home creates its own at most once, and sometimes takes it nowhere yet: when the
+host names an inbox to replace that Home keeps, as when Home holds one it made
+and the deciding profile advertises another, and when Home holds none while a
+profile advertises an inbox the host refused or did not vet. The last is what
+the replacement of a refused inbox relies on. A Home that adopts an inbox it
+made, or keeps the one it holds while the host names nothing to replace,
+creates none, and a Home that has held an inbox it made since before
+`ownPrivateInbox` may never need one.
+
+Two runtimes ensuring at once both find `ownPrivateInbox` empty, and the one
+whose commit lands second finds it stale, runs again and creates nothing. What
+its first attempt wrote in the inbox's space, which commits before Home's, may
+be left there: an empty inbox that no profile and nothing of Home's names.
 
 ## Requesting it
 
@@ -408,11 +421,11 @@ answer is `unlisted`. An answer holds `status`:
 
 | `status` | The profile `from` names | Final |
 | --- | --- | --- |
-| `pending` | is in Home's list and points at no inbox, and Home is pointing it at the inbox it holds or creates | no |
+| `pending` | is in Home's list and points at no inbox, and Home is pointing it at the inbox it holds or takes | no |
 | `ensured` | points at the inbox Home holds | yes |
 | `unlisted` | is not in Home's list, or has left it since the request, or the event names none, so Home points it at nothing | yes |
 | `unpointable` | has no `setInbox`, through which alone Home points a profile | yes |
-| `not-held` | points at an inbox other than the one Home holds, as when something other than Home sets its pointer first, which Home never replaces, or points anywhere while Home holds none, or points at none while Home holds none and creates none, because another profile advertises an inbox that awaits the host's vetting | yes |
+| `not-held` | points at an inbox other than the one Home holds, as when something other than Home sets its pointer first, which Home never replaces, or points anywhere while Home holds none, or points at none while Home holds none and takes none, because another profile advertises an inbox that awaits the host's vetting | yes |
 
 The profile is pointed in events after the handler's run, Home's pointing step
 and then the profile's own `setInbox`, so `ensured` comes only once the
@@ -426,10 +439,10 @@ One way the pointer can fail to come is not a final status: the profile's
 refused run records nothing, and the pointing step's send gives Home no word
 of how the profile handled it, so Home cannot tell a refused pointing from one
 still on its way, and the answer stays `pending`. A client's own abort is the
-only way out of that wait. The answer holds
-no link to the inbox: a link to an inbox carries the label its
-owner gives its offers, which would then reach every run reading Home's
-answers. Once a request is `ensured`, the client reads the inbox from the
+only way out of that wait. The answer holds no link to the inbox, which a run
+reading Home's answers could follow, untyped, into the label the inbox's owner
+gives its offers. Once a request is `ensured`, the client reads the inbox from
+the
 profile's pointer.
 
 A client reads the answer without polling. It sends the event through

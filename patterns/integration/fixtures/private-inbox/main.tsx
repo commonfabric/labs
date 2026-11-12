@@ -33,6 +33,7 @@ import {
   currentPrincipal,
   Default,
   type DID,
+  equals,
   handler,
   NAME,
   pattern,
@@ -217,9 +218,9 @@ const createPointerOnlyProfile = handler<
 });
 
 /**
- * The label of the owner's home space, which a profile's inbox pointer can come
- * to carry from its inbox: the owner is the DID the harness derives for the
- * session `private-inbox-owner`.
+ * The label of the owner's home space, which the labeled profile's inbox
+ * pointer is declared to carry: the owner is the DID the harness derives for
+ * the session `private-inbox-owner`.
  */
 const OWNER_LABEL = {
   type: "https://commonfabric.org/cfc/atom/PersonalSpace",
@@ -261,13 +262,33 @@ interface SetLabeledInboxEvent {
   // handler's event schema marks a reference position only where the wrapper
   // is written in the event type.
   inbox?: Cell<ShareInboxPiece>;
+
+  /**
+   * When present, the pointer the write requires, as the profile's own
+   * `setInbox` takes it: held by nothing when it holds `undefined`, and held by
+   * the inbox it names otherwise.
+   */
+  // Spelled `Cell<…>` for the reason `inbox` is; the `| undefined` admits an
+  // explicit `undefined` as a value of the property, as the profile's does.
+  replacing?: Cell<ShareInboxPiece> | undefined;
 }
 
-/** Points the labeled profile at the event's inbox, or at none. */
+/**
+ * Points the labeled profile at the event's inbox, or at none, under the
+ * condition the profile's own `setInbox` checks: an event carrying `replacing`
+ * writes only while the pointer meets it.
+ */
 const setLabeledInbox = handler<
   SetLabeledInboxEvent,
   { inbox: Writable<LabeledPointer> }
 >((event, { inbox }) => {
+  if (event !== undefined && "replacing" in event) {
+    const held = inbox.get()?.piece;
+    const met = event.replacing === undefined
+      ? held === undefined
+      : held !== undefined && equals(held, event.replacing);
+    if (!met) return;
+  }
   inbox.set(event?.inbox === undefined ? {} : { piece: event.inbox });
 });
 
@@ -572,6 +593,12 @@ export interface HomeStandInOutput {
   /** Replaces the inbox the Home was refused, as Home's own stream does. */
   replaceRefusedPrivateInbox: Stream<void>;
 
+  /**
+   * Creates the Home's own inbox for the host before an ensure, as Home's own
+   * stream does.
+   */
+  createOwnPrivateInbox: Stream<EnsurePrivateInboxEvent>;
+
   /** Creates one of the Home's profiles. */
   createProfile: Stream<void>;
 
@@ -672,6 +699,7 @@ const HomeStandIn = pattern<{ label: string }, HomeStandInOutput>(
         seedName: seedProfileName({}),
       }),
       createEarlierProfile: createEarlierProfile({ profiles }),
+      createOwnPrivateInbox: createOwnPrivateInbox({ ownPrivateInbox }),
     };
   },
 );
@@ -843,6 +871,12 @@ export interface MainOutput {
    * its own, and points profiles at it.
    */
   ensurePrivateInbox: Stream<EnsurePrivateInboxEvent>;
+
+  /**
+   * Creates the stand-in Home's own inbox for the host before an ensure, as
+   * Home's own stream does.
+   */
+  createOwnPrivateInbox: Stream<EnsurePrivateInboxEvent>;
 
   /** Creates one of the owner's profiles. */
   createProfile: Stream<void>;
@@ -1242,6 +1276,7 @@ export default pattern<MainInput, MainOutput>((
         }),
       }),
     }),
+    createOwnPrivateInbox: createOwnPrivateInbox({ ownPrivateInbox }),
     createProfile: createProfile({
       profiles,
       seedName: seedProfileName({}),

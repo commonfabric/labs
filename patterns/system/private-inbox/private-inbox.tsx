@@ -638,11 +638,12 @@ export type EnsurePrivateInboxEvent = {
  * the owner's labeled state, the links Home's holder and the profiles keep
  * among it, and an inbox created in a run that has read that would carry the
  * owner's label to every sender that reads the inbox, which the write gate
- * refuses. So when Home has no inbox of its own, the event names none to adopt,
- * and either the event names inboxes to replace or Home holds none, this
- * handler does nothing but send the event to `createOwn`. That step creates
- * Home's inbox and hands the event on to an ensure bound without `createOwn`,
- * which decides as above. Whether to send depends only on the host's event,
+ * refuses. The host has Home's `createOwnPrivateInbox` create it first, and
+ * waits for that, when Home may need it. For a sender that has not, when Home
+ * has no inbox of its own, the event names none to adopt, and either the event
+ * names inboxes to replace or Home holds none, this handler does nothing but
+ * send the event to `createOwn`. That step creates Home's inbox and hands the
+ * event on to an ensure bound without `createOwn`, which decides as above. Whether to send depends only on the host's event,
  * `ownPrivateInbox` and whether Home holds an inbox, never on which inbox Home
  * or a profile names. An ensure bound without `createOwn`, while Home has no
  * inbox of its own, neither replaces an inbox nor takes one.
@@ -806,20 +807,29 @@ export const ensurePrivateInbox = handler<
 });
 
 /**
- * Creates Home's own private inbox when `ownPrivateInbox` holds none, records
- * it there, and hands `event` on to `ensure`, which decides what Home holds now
- * that it has an inbox of its own. {@link ensurePrivateInbox} sends it its
- * event when Home may need an inbox and has none of its own, and nothing else
- * creates an inbox for Home.
+ * Creates Home's own private inbox when `ownPrivateInbox` holds none, and
+ * records it there. Nothing else creates an inbox for Home. Home binds it
+ * twice:
+ *
+ * - As Home's `createOwnPrivateInbox` stream, with no `ensure`. The host sends
+ *   it when its vetting finds that Home may need an inbox of its own and has
+ *   none, and waits for the run to commit before it sends the ensure, so a
+ *   creation that fails fails the host's ensure, and the next bring-up tries
+ *   again.
+ * - As the step {@link ensurePrivateInbox} sends its event to when Home may
+ *   need an inbox and has none of its own, for a sender of the ensure that
+ *   has not had one created first, such as `requestPrivateInbox`. This binding
+ *   hands `event` on to `ensure`, which decides what Home holds now that it has
+ *   an inbox of its own. Nothing waits for it: a sender of the ensure learns of
+ *   the ensure's own run, not of this one.
  *
  * Before the creation the run reads nothing but `ownPrivateInbox`, which only
- * this step writes, and its event, the host's as `ensurePrivateInbox` received
- * it, which carries no label. That is the point of the step. The documents a
- * creation writes take on the confidentiality its run has read, so after a read
- * of the owner's labeled state, such as the links Home's holder and its
- * profiles keep, the write gate refuses the creation; and an inbox carrying the
- * owner's label would pass it into the run of every sender that reads the
- * inbox.
+ * this step writes, and its event, which carries no label. That is the point
+ * of the step. The documents a creation writes take on the confidentiality its
+ * run has read, so after a read of the owner's labeled state, such as the
+ * links Home's holder and its profiles keep, the write gate refuses the
+ * creation; and an inbox carrying the owner's label would pass it into the run
+ * of every sender that reads the inbox.
  *
  * Two runs racing to create the inbox both read `ownPrivateInbox` empty, and
  * the one that commits second finds its commit stale, runs again, and creates
@@ -834,13 +844,14 @@ export const createOwnPrivateInbox = handler<
   EnsurePrivateInboxEvent,
   {
     ownPrivateInbox: Writable<PrivateInboxHolder>;
-    ensure: Stream<EnsurePrivateInboxEvent>;
+    /** Absent from the binding the host sends, which hands nothing on. */
+    ensure?: Stream<EnsurePrivateInboxEvent>;
   }
 >((event, { ownPrivateInbox, ensure }) => {
   if (ownPrivateInbox.get()?.piece === undefined) {
     ownPrivateInbox.set({ piece: createPrivateInbox() });
   }
-  ensure.send(event ?? {});
+  ensure?.send(event ?? {});
 });
 
 /**
@@ -912,9 +923,9 @@ export type PrivateInboxAnswerStatus =
 export type PrivateInboxAnswer = {
   /**
    * Where the request stands. Once it is `ensured`, the inbox is the one the
-   * profile's own pointer names. The answer holds no link to it, which would
-   * carry the label the inbox gives its offers into Home's answers, and so
-   * into every run that reads them.
+   * profile's own pointer names. The answer holds no link to it, which a run
+   * reading Home's answers could follow, untyped, into the label the inbox
+   * gives its offers.
    */
   status: PrivateInboxAnswerStatus;
 };

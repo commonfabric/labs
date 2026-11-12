@@ -366,18 +366,23 @@ registers each one that passes in Home's shared-space catalog through Home's
 `registerSharedSpace` stream; it leaves every offer in its inbox. Home creates
 an inbox from `patterns/system/private-inbox/private-inbox.tsx` once, in a step
 of its own that reads nothing labeled before it, and records it in
-`defaultPattern.ownPrivateInbox`. Home takes that inbox when it holds none and
+`defaultPattern.ownPrivateInbox`. The host has Home take that step, through
+Home's `createOwnPrivateInbox` stream, before an ensure for which Home may need
+it, and waits for it, so a creation that fails fails the ensure. Home takes that
+inbox when it holds none and
 no profile points at one, and in place of an inbox it did not make, such as a
 loom daemon's, which it then retains. An inbox that fails vetting is neither
 adopted nor replaced, and Home keeps what it holds, or holds none. While Home
-holds an inbox, it points each profile that points at no inbox at it, through
-the profile's `inbox` field, which is how a sender finds it, and leaves a
-profile pointing at another inbox as it is. While it holds none, as after a
+holds an inbox, it points each profile that points at no inbox, or at an inbox
+Home gave up or replaced, at it, through the profile's `inbox` field, which is
+how a sender finds it, and leaves a profile pointing at any other inbox as it
+is. While it holds none, as after a
 failed vetting, a profile that points at no inbox stays unpointed. A failed
 vetting is recorded in `defaultPattern.privateInboxRefusal`, under `refusal`:
 the host's reason code, a link to the refused inbox, and when Home first
 recorded it. Each ensure, which is to say the next bring-up of Home in a runtime
-worker, clears it when Home adopts an inbox or takes its own, when the deciding
+worker, that records no refusal itself clears it when Home adopts an inbox or
+takes its own, when the deciding
 profile points at the inbox Home holds, or when no profile points at the refused
 inbox any longer. Nothing else clears it automatically in between, though the
 owner can clear it by replacing the refused inbox, as below, and the owner's own

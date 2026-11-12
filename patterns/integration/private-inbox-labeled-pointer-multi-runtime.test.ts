@@ -1,10 +1,10 @@
 /**
  * The multi-runtime harness driving the system private inbox for a Home in its
  * owner's home space, as a person's Home is. The Home holds an inbox shaped as
- * a loom daemon's, and its profile points at that inbox through a pointer
- * carrying the owner's label, as a pointer can come to carry its inbox's, so
- * Home's holder, and every run that reads it or the profile, carries the label
- * too. Ensuring the Home's inbox creates one of its own in that one's place,
+ * a loom daemon's, and its profile points at that inbox through a pointer the
+ * fixture declares confidential to the owner, so Home's holder, written by a
+ * run that read that pointer, and every run that reads it or the profile,
+ * carries the owner's label too. Ensuring the Home's inbox creates one of its own in that one's place,
  * in a step that reads neither, retains that one, and points the profile at
  * its own, with nothing refused by the CFC write gate. The fixture is
  * `private-inbox-multi-runtime.test.ts`'s.

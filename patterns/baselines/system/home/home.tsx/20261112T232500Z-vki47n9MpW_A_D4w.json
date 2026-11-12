@@ -2004,7 +2004,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/system/private-inbox/private-inbox.tsx",
-              "moduleIdentity": "mh_y2NbZVQdkylSOgJAUdzAQ-AGjW-ONqxMfW-yPhdo",
+              "moduleIdentity": "AKsHdcYWgaVZEKNQyruZ1OlBCDoFPL1ZWcDIFN7Sc4k",
               "path": [
                 "replaceRefusedPrivateInbox"
               ]
@@ -3187,6 +3187,12 @@
       "chatManager": {
         "$ref": "#/$defs/FabriChatManagerOutput"
       },
+      "createOwnPrivateInbox": {
+        "$ref": "#/$defs/EnsurePrivateInboxEvent",
+        "asCell": [
+          "stream"
+        ]
+      },
       "createProfile": {
         "$ref": "#/$defs/CreateProfileEvent",
         "asCell": [
@@ -3407,6 +3413,7 @@
       "ensurePrivateInbox",
       "requestPrivateInbox",
       "replaceRefusedPrivateInbox",
+      "createOwnPrivateInbox",
       "addFavorite",
       "removeFavorite",
       "addJournalEntry",
