@@ -35,7 +35,10 @@ the other way. The section of `AGENTS.md` titled "Pace Layers" says more.
   (`js-compiler`, `ts-transformers`, and `schema-generator`), the client for
   language-model services (`llm`), the reader of the GitHub webhook relay
   (`github-webhooks`), a front-end build tool (`felt`), and the code that
-  records test results (`test-support`).
+  records test results (`test-support`). One package here is written in Rust and
+  is not a workspace member: `pattern-compiler`, a prototype of the front end of
+  the compiled pattern language that `docs/specs/compiled-pattern-language/`
+  proposes. It is built and tested with `cargo`, and its `README.md` says how.
 - `runtime/` holds the program that runs patterns (`runner`) and everything
   built on it. Examples are the storage service (`memory`), the server that
   hosts storage and serves patterns (`toolshed`), the web front end (`shell`),

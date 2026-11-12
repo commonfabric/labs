@@ -1,0 +1,486 @@
+//! The diagnostics catalog of `language-subset.md` §10, and what this front
+//! end does with each entry.
+//!
+//! `catalog-ids.txt` in the crate root is a copy of the catalog's identifiers
+//! and severities extracted from the document. `tests/catalog.rs` fails when
+//! the document, the copy, and [`CATALOG`] disagree.
+
+use crate::diagnostics::Severity;
+
+/// What the front end does with one catalog entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Status {
+    /// The front end reports the entry. `rest` names the part of the entry's
+    /// condition that syntax and name resolution cannot decide, which is left
+    /// to the type checker.
+    Implemented { rest: Option<&'static str> },
+    /// The condition needs a fact only the type checker has. The text names
+    /// the fact.
+    NeedsTypes(&'static str),
+    /// The condition needs the footprint of a body, or the plan built from
+    /// footprints. The text names what is needed.
+    NeedsFootprint(&'static str),
+    /// The entry is not decided when a module is compiled.
+    NotCompileTime(&'static str),
+    /// The catalog lists the identifier as no longer reported.
+    Retired,
+}
+
+impl Status {
+    /// The name of the status as the `catalog` command prints it.
+    pub fn label(self) -> &'static str {
+        match self {
+            Status::Implemented { rest: None } => "implemented",
+            Status::Implemented { rest: Some(_) } => "implemented in part",
+            Status::NeedsTypes(_) => "needs the type checker",
+            Status::NeedsFootprint(_) => "needs footprint analysis",
+            Status::NotCompileTime(_) => "not a compile-time rule",
+            Status::Retired => "retired",
+        }
+    }
+
+    /// The explanation printed beside the label, if the status has one.
+    pub fn detail(self) -> Option<&'static str> {
+        match self {
+            Status::Implemented { rest } => rest,
+            Status::NeedsTypes(text)
+            | Status::NeedsFootprint(text)
+            | Status::NotCompileTime(text) => Some(text),
+            Status::Retired => None,
+        }
+    }
+}
+
+/// One entry of the catalog.
+#[derive(Debug, Clone, Copy)]
+pub struct Entry {
+    pub id: &'static str,
+    /// `None` for a retired identifier, which has no severity.
+    pub severity: Option<Severity>,
+    pub status: Status,
+}
+
+const fn done(id: &'static str, severity: Severity) -> Entry {
+    Entry {
+        id,
+        severity: Some(severity),
+        status: Status::Implemented { rest: None },
+    }
+}
+
+const fn part(id: &'static str, severity: Severity, rest: &'static str) -> Entry {
+    Entry {
+        id,
+        severity: Some(severity),
+        status: Status::Implemented { rest: Some(rest) },
+    }
+}
+
+const fn types(id: &'static str, severity: Severity, fact: &'static str) -> Entry {
+    Entry {
+        id,
+        severity: Some(severity),
+        status: Status::NeedsTypes(fact),
+    }
+}
+
+const fn footprint(id: &'static str, severity: Severity, need: &'static str) -> Entry {
+    Entry {
+        id,
+        severity: Some(severity),
+        status: Status::NeedsFootprint(need),
+    }
+}
+
+const fn retired(id: &'static str) -> Entry {
+    Entry {
+        id,
+        severity: None,
+        status: Status::Retired,
+    }
+}
+
+use Severity::{Error, Hint, Warning};
+
+const LABEL_TYPES: &str =
+    "the label annotations of a type, which the checker evaluates (`language-subset.md` §8)";
+const LABEL_TEMPLATES: &str =
+    "the label templates of the plan, which are built from footprints and declared labels";
+const PROMOTION_REST: &str = "decided by syntax and by method names, as the measurement of \
+     `language-subset.md` §11.5 is; whether a method is the pure one of its name needs \
+     the receiver's type";
+const HANDLE_REST: &str = "reported when an annotation or a cell constructor declares the \
+     receiver as a cell handle; any other receiver needs its type";
+
+/// Every entry of the catalog, in the order of the document.
+pub const CATALOG: &[Entry] = &[
+    // §10.1 Module scope
+    done("module-scope:let-declaration", Error),
+    done("module-scope:var-declaration", Error),
+    done("module-scope:class-declaration", Error),
+    done("module-scope:statement", Error),
+    part(
+        "module-scope:frozen-data-type",
+        Error,
+        "reported for a function written in the literal structure of the initializer; \
+         any other initializer needs its type",
+    ),
+    part(
+        "module-scope:frozen-data-write",
+        Error,
+        "reported for an assignment, `delete`, `++`, or `--` through the binding, and \
+         for a mutating method on a constant whose initializer is an array literal, \
+         `new Map`, or `new Set`; a write through an alias or through any other \
+         constant needs the read-only type",
+    ),
+    part(
+        "module-scope:stateful-regexp",
+        Error,
+        "reported for a literal and for `new RegExp` with literal flags; flags that \
+         are computed need their literal type",
+    ),
+    done("module-scope:import-form", Error),
+    done("builder-callback:indirect-reference", Error),
+    part(
+        "cell-factory:empty-array",
+        Error,
+        "reported when no type argument is written; whether an expected type \
+         supplies the element type needs the checker",
+    ),
+    // §10.2 Reactive tier
+    done("pattern-context:let-declaration", Error),
+    done("pattern-context:var-declaration", Error),
+    done("pattern-context:assignment", Error),
+    done("pattern-context:loop", Error),
+    done("pattern-context:early-return", Error),
+    done("pattern-context:control-flow", Error),
+    done("pattern-context:statement", Error),
+    done("pattern-context:function-creation", Error),
+    done("pattern-context:object-member", Error),
+    done("pattern-context:parameter-form", Error),
+    done("pattern-context:builder-placement", Error),
+    done("pattern-context:callback-container", Error),
+    part(
+        "reactive:unsupported-call",
+        Error,
+        "reported when the callee is decided by name resolution or by a method name \
+         no legal receiver has; a method call with one argument that could be the \
+         argument of a factory value needs the receiver's type",
+    ),
+    done("reactive:unsupported-expression", Error),
+    types(
+        "opaque-get:invalid-call",
+        Error,
+        "whether the receiver's type is `Cell`, `Writable`, or `ReadonlyCell`",
+    ),
+    done("pattern-context:self-access", Error),
+    part(
+        "ses-callback:callable-capture",
+        Error,
+        "reported for a captured binding that is declared as a function; a captured \
+         binding whose type is a function type needs the checker",
+    ),
+    done("removed-form:helper", Warning),
+    done("removed-form:helper-unsupported", Error),
+    done("removed-form:pattern-tool", Error),
+    done("removed-form:builtin", Error),
+    done("collection:callback-parameters", Error),
+    done("collection:reduce-callback", Error),
+    done("collection:reduce-initial", Error),
+    types(
+        "collection:reduce-accumulator",
+        Error,
+        "whether the accumulator's type is a code type",
+    ),
+    done("collection:index-keyed", Hint),
+    part("cell:unsupported-method", Error, HANDLE_REST),
+    part("cell:collection-method-in-function", Error, HANDLE_REST),
+    part(
+        "collection:nested-scan",
+        Warning,
+        "reported for a scan of a captured binding of an enclosing reactive body; \
+         whether the binding has an array type needs the checker",
+    ),
+    retired("pattern-context:get-call"),
+    retired("pattern-context:optional-chaining"),
+    retired("pattern-context:computation"),
+    retired("compute-context:local-reactive-use"),
+    retired("standalone-function:reactive-operation"),
+    // §10.3 Function tier
+    done("function-body:async", Error),
+    done("function-body:generator", Error),
+    done("function-body:class", Error),
+    done("function-body:this", Error),
+    done("function-body:var", Error),
+    done("function-body:for-in", Error),
+    done("function-body:dynamic-code", Error),
+    done("function-body:accessor", Error),
+    done("function-body:unsupported-global", Error),
+    done("function-body:global-write", Error),
+    done("function-body:ambient-read", Error),
+    done("function-body:builder-call", Error),
+    done("function-body:handler-capture", Error),
+    part(
+        "function-body:cell-needs-cause",
+        Error,
+        "reported for a cell constructor called in the body or in an authored \
+         function it calls by name; a call through a function value needs the \
+         call's resolved target",
+    ),
+    part(
+        "function-body:effect-in-computation",
+        Error,
+        "reported for the effectful built-ins called by their imported names; \
+         `query` on a SQLite handle needs the receiver's type",
+    ),
+    done("function-body:event-context-in-computation", Error),
+    part(
+        "collection:shared-element-state",
+        Error,
+        "reported when the collection is plain by its syntax: a module-scope \
+         constant, an array literal, or the result of `Object.keys`, \
+         `Object.entries`, or `split`; any other collection needs its element type",
+    ),
+    done("verb-result:undeclared-return", Error),
+    footprint(
+        "mergeable-push:read-then-push",
+        Warning,
+        "the read and write sets of the handler, and whether the push depends on the read",
+    ),
+    footprint("footprint:widened", Hint, "the footprint of the body"),
+    footprint("footprint:dynamic-read", Hint, "the footprint of the body"),
+    footprint(
+        "footprint:materializer",
+        Hint,
+        "the write side of the footprint",
+    ),
+    footprint(
+        "side-write:not-idempotent",
+        Warning,
+        "the read and write sets of the body",
+    ),
+    footprint("side-write:cycle", Warning, "the edges of the plan"),
+    part("computed:not-promoted", Hint, PROMOTION_REST),
+    part("computed:redundant", Hint, PROMOTION_REST),
+    retired("function-body:instantiation-in-computation"),
+    // §10.4 Types
+    done("subset-type:conditional", Error),
+    done("subset-type:mapped", Error),
+    done("subset-type:template-literal", Error),
+    done("subset-type:overload", Error),
+    done("subset-type:class", Error),
+    done("subset-type:callable-object", Error),
+    done("subset-type:assertion-signature", Error),
+    part(
+        "subset-type:unsupported-modifier",
+        Error,
+        "reported for variance annotations and `const` type parameters; `satisfies` \
+         on a type parameter is not a form the parser produces",
+    ),
+    part(
+        "subset-type:index-signature-key",
+        Error,
+        "reported for an index signature; `Record<K, T>` needs the evaluated key type",
+    ),
+    done("subset-syntax:enum", Error),
+    done("subset-syntax:namespace", Error),
+    done("subset-syntax:ambient-declaration", Error),
+    done("subset-syntax:decorator", Error),
+    types(
+        "subset-type:function-in-data",
+        Error,
+        "the evaluated type of a pattern input or result, a cell value, or a \
+         handler's state or event",
+    ),
+    part(
+        "subset-type:non-regular-recursion",
+        Error,
+        "reported for a declaration that refers to itself directly; recursion \
+         through other declarations needs alias instantiation",
+    ),
+    types(
+        "subset-type:empty-intersection",
+        Error,
+        "the evaluated intersection",
+    ),
+    types(
+        "subset-type:operator-operand",
+        Error,
+        "the evaluated operand type",
+    ),
+    types(
+        "subset-type:cannot-infer-type-argument",
+        Error,
+        "inference at a generic call",
+    ),
+    done("subset-type:any", Error),
+    types("subset-type:mismatch", Error, "assignability"),
+    types(
+        "cast-validation:double-unknown",
+        Error,
+        "whether the operand's type and the target type are related",
+    ),
+    part(
+        "cast-validation:forbidden-cast",
+        Error,
+        "reported when the target is written as `Reactive<T>`; a target reached \
+         through an alias needs the evaluated type",
+    ),
+    part(
+        "cast-validation:cell-cast",
+        Error,
+        "reported when the target is written as a cell type; a target reached \
+         through an alias needs the evaluated type",
+    ),
+    types(
+        "schema:unknown-type-access",
+        Error,
+        "the type of the value read",
+    ),
+    types(
+        "schema:path-not-in-type",
+        Error,
+        "the type of the value read",
+    ),
+    types(
+        "pattern:any-result-schema",
+        Error,
+        "the inferred result type",
+    ),
+    types(
+        "pattern-result:unknown-type",
+        Error,
+        "the inferred result type",
+    ),
+    types(
+        "pattern-result:opaque-reserved-key",
+        Error,
+        "the declared result type",
+    ),
+    types(
+        "reactive-capture:unknown-type",
+        Error,
+        "the type of the captured value",
+    ),
+    done("schema-type:symbol", Error),
+    retired("schema-type:unread"),
+    part(
+        "stdlib:unsupported-member",
+        Error,
+        "reported for a global and for a member of a standard-library namespace; a \
+         method or property of a value needs the receiver's type",
+    ),
+    part(
+        "import:signature-not-in-subset",
+        Error,
+        "reported for a missing annotation and for a refused type form written in \
+         the signature; a refused form reached through an alias needs the evaluated type",
+    ),
+    done("import:not-a-function", Error),
+    part(
+        "import:signature-not-data",
+        Error,
+        "reported for a cell type or a function type written in the signature; one \
+         reached through an alias needs the evaluated type",
+    ),
+    done("import:commonfabric-value", Error),
+    // §10.5 Labels, defaults, and scopes
+    types("cfc-label:not-a-list", Error, LABEL_TYPES),
+    types("cfc-label:not-static", Error, LABEL_TYPES),
+    types("cfc-label:conflict", Error, LABEL_TYPES),
+    types("cfc-label:cast-ignored", Warning, LABEL_TYPES),
+    types("cfc-write-authorized-by", Error, LABEL_TYPES),
+    types("cfc-policy-of", Error, LABEL_TYPES),
+    types("cfc-policy-authoring", Error, LABEL_TYPES),
+    retired("cfc-write-authorized-by:unread"),
+    retired("cfc-label:unread"),
+    retired("cfc-schema:recursion-limit"),
+    retired("cfc-schema:recursive-alias-of-any"),
+    footprint("cfc-flow:max-confidentiality", Error, LABEL_TEMPLATES),
+    footprint("cfc-flow:required-integrity", Error, LABEL_TEMPLATES),
+    footprint("cfc-flow:write-policy", Error, LABEL_TEMPLATES),
+    footprint("cfc-flow:write-floor", Error, LABEL_TEMPLATES),
+    footprint("cfc-flow:writer-fit", Error, LABEL_TEMPLATES),
+    footprint("cfc-flow:ui-contract", Warning, LABEL_TEMPLATES),
+    types(
+        "default:not-static",
+        Error,
+        "the evaluated default value and its assignability",
+    ),
+    types(
+        "scope:union-member",
+        Error,
+        "the evaluated members of the union",
+    ),
+];
+
+/// The entry for `id`, if the catalog has one.
+pub fn entry(id: &str) -> Option<&'static Entry> {
+    CATALOG.iter().find(|entry| entry.id == id)
+}
+
+/// The severity of `id` when the front end implements it, and `None` for any
+/// other identifier.
+pub fn implemented_severity(id: &str) -> Option<Severity> {
+    let entry = entry(id)?;
+    match entry.status {
+        Status::Implemented { .. } => entry.severity,
+        _ => None,
+    }
+}
+
+/// The status labels, in the order the `catalog` command prints their counts.
+pub const STATUS_LABELS: [&str; 6] = [
+    "implemented",
+    "implemented in part",
+    "needs the type checker",
+    "needs footprint analysis",
+    "not a compile-time rule",
+    "retired",
+];
+
+/// The number of entries with each status label, in the order of
+/// [`STATUS_LABELS`].
+pub fn status_counts() -> Vec<(&'static str, usize)> {
+    STATUS_LABELS
+        .iter()
+        .map(|label| {
+            let count = CATALOG
+                .iter()
+                .filter(|entry| entry.status.label() == *label)
+                .count();
+            (*label, count)
+        })
+        .collect()
+}
+
+/// The catalog as the `catalog` command prints it: one line per entry, then
+/// the number of entries with each status.
+pub fn render() -> String {
+    let mut out = String::new();
+    let width = CATALOG
+        .iter()
+        .map(|entry| entry.id.len())
+        .max()
+        .unwrap_or(0);
+    for entry in CATALOG {
+        let severity = entry.severity.map_or("-", Severity::as_str);
+        out.push_str(&format!(
+            "{:width$}  {:7}  {}",
+            entry.id,
+            severity,
+            entry.status.label()
+        ));
+        if let Some(detail) = entry.status.detail() {
+            let detail = detail.split_whitespace().collect::<Vec<_>>().join(" ");
+            out.push_str(&format!(": {detail}"));
+        }
+        out.push('\n');
+    }
+    out.push('\n');
+    for (label, count) in status_counts() {
+        out.push_str(&format!("{count:4}  {label}\n"));
+    }
+    out.push_str(&format!("{:4}  entries\n", CATALOG.len()));
+    out
+}
