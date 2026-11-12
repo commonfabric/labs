@@ -48,6 +48,7 @@ import ProfilePicker from "../profile-picker/profile-picker.tsx";
 import { refusalReasonText } from "../private-inbox/private-inbox-refusal-text.ts";
 import type { BackwardsCompatibleProfile } from "../profile-home/profile-home.tsx";
 import {
+  createOwnPrivateInbox,
   ensurePrivateInbox,
   type EnsurePrivateInboxEvent,
   pointProfilesAtPrivateInbox,
@@ -140,6 +141,8 @@ export type HomeOutput = {
   // `ensurePrivateInbox` runs, and while Home holds none and the advertised
   // inbox failed vetting.
   privateInbox: Writable<PrivateInboxHolder>;
+  // The private inbox Home created for itself.
+  ownPrivateInbox: Writable<PrivateInboxHolder>;
   // The inboxes `privateInbox` held before, in the order Home gave them up, so
   // that what senders delivered to them stays readable.
   retainedPrivateInboxes: Writable<RetainedPrivateInboxes | Default<[]>>;
@@ -389,6 +392,9 @@ const Home = pattern(
     const privateInbox = new Writable<PrivateInboxHolder>({}).for(
       "privateInbox",
     );
+    const ownPrivateInbox = new Writable<PrivateInboxHolder>({}).for(
+      "ownPrivateInbox",
+    );
     // The inboxes Home held before, where `ensurePrivateInbox` moves the one
     // Home holds when it adopts another.
     const retainedPrivateInboxes = new Writable<RetainedPrivateInboxes>([])
@@ -461,18 +467,33 @@ const Home = pattern(
     // that held its position before, and a stored slot the child's argument
     // schema refuses is dropped with a `setup-stored-slot-dropped` warning.
     const chatManager = FabriChatManager({ sharedSpaceCatalog: catalog });
-    const ensurePrivateInboxStream = ensurePrivateInbox({
+    const pointProfiles = pointProfilesAtPrivateInbox({
       privateInbox,
+      profiles: profiles as any,
+    });
+    const ensureOnceOwned = ensurePrivateInbox({
+      privateInbox,
+      ownPrivateInbox,
       retainedPrivateInboxes,
       privateInboxRefusal,
       profiles: profiles as any,
-      pointProfiles: pointProfilesAtPrivateInbox({
-        privateInbox,
-        profiles: profiles as any,
+      pointProfiles,
+    });
+    const ensurePrivateInboxStream = ensurePrivateInbox({
+      privateInbox,
+      ownPrivateInbox,
+      retainedPrivateInboxes,
+      privateInboxRefusal,
+      profiles: profiles as any,
+      pointProfiles,
+      createOwn: createOwnPrivateInbox({
+        ownPrivateInbox,
+        ensure: ensureOnceOwned,
       }),
     });
     const replaceRefusedInboxStream = replaceRefusedPrivateInbox({
       privateInbox,
+      ownPrivateInbox,
       privateInboxRefusal,
       privateInboxReplacement,
       repointProfiles: repointProfilesFromReplacedInbox({
@@ -676,6 +697,7 @@ const Home = pattern(
       agentQueue,
       chatManager,
       privateInbox,
+      ownPrivateInbox,
       retainedPrivateInboxes,
       privateInboxRefusal,
       privateInboxReplacement,

@@ -22,6 +22,7 @@ import {
 } from "commonfabric";
 import ProfileHome from "../profile-home/profile-home.tsx";
 import PrivateInbox, {
+  createOwnPrivateInbox,
   ensurePrivateInbox,
   pointProfilesAtPrivateInbox,
   type PointTarget,
@@ -63,7 +64,7 @@ const holdInboxElsewhere = handler<
 /**
  * Stands in for Home's request for its inbox: Home's `requestPrivateInbox`
  * over a profile list and the answers Home computes for it, sending Home's
- * `ensurePrivateInbox`, with its pointing step, over the same.
+ * `ensurePrivateInbox`, with its pointing and creating steps, over the same.
  */
 const RequestingHome = pattern<
   {
@@ -81,6 +82,10 @@ const RequestingHome = pattern<
     profiles,
     requested,
   });
+  const own = new Writable<PrivateInboxHolder>({});
+  const retainedPrivateInboxes = new Writable<RetainedPrivateInboxes>([]);
+  const privateInboxRefusal = new Writable<PrivateInboxRefusalHolder>({});
+  const pointProfiles = pointProfilesAtPrivateInbox({ privateInbox, profiles });
   return {
     request: requestPrivateInbox({
       profiles,
@@ -88,10 +93,22 @@ const RequestingHome = pattern<
       answers,
       ensure: ensurePrivateInbox({
         privateInbox,
-        retainedPrivateInboxes: new Writable<RetainedPrivateInboxes>([]),
-        privateInboxRefusal: new Writable<PrivateInboxRefusalHolder>({}),
+        ownPrivateInbox: own,
+        retainedPrivateInboxes,
+        privateInboxRefusal,
         profiles,
-        pointProfiles: pointProfilesAtPrivateInbox({ privateInbox, profiles }),
+        pointProfiles,
+        createOwn: createOwnPrivateInbox({
+          ownPrivateInbox: own,
+          ensure: ensurePrivateInbox({
+            privateInbox,
+            ownPrivateInbox: own,
+            retainedPrivateInboxes,
+            privateInboxRefusal,
+            profiles,
+            pointProfiles,
+          }),
+        }),
       }),
     }),
     answers,

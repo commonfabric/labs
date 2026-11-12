@@ -72,6 +72,7 @@ import ProfilePicker from "../profile-picker/profile-picker.tsx";
 import { refusalReasonText } from "../private-inbox/private-inbox-refusal-text.ts";
 import type { BackwardsCompatibleProfile } from "../profile-home/profile-home.tsx";
 import {
+  createOwnPrivateInbox,
   ensurePrivateInbox,
   type EnsurePrivateInboxEvent,
   pointProfilesAtPrivateInbox,
@@ -175,6 +176,12 @@ export type HomeOutput = {
   // `ensurePrivateInbox` runs, and while Home holds none and the advertised
   // inbox failed vetting.
   privateInbox: Writable<PrivateInboxHolder>;
+  // The private inbox Home created for itself, which it takes in place of one
+  // it replaces, or when it holds none. Only `createOwnPrivateInbox` writes
+  // it, and only once. Absent until Home first needs an inbox of its own: a
+  // Home that adopted an inbox it made, or holds one it made before this
+  // field, may never need one.
+  ownPrivateInbox: Writable<PrivateInboxHolder>;
   // The inboxes `privateInbox` held before, in the order Home gave them up, so
   // that what senders delivered to them stays readable.
   retainedPrivateInboxes: Writable<RetainedPrivateInboxes | Default<[]>>;
@@ -183,7 +190,7 @@ export type HomeOutput = {
   // and when Home first recorded it. `ensurePrivateInbox` records one only
   // while that profile is in Home's list and still points at the refused inbox,
   // which is not the one Home holds. The next ensure clears it when Home adopts
-  // or creates an inbox, when the deciding profile points at the inbox Home
+  // or takes its own, when the deciding profile points at the inbox Home
   // holds, or when no profile points at the refused inbox any longer; nothing
   // else clears it automatically between ensures, though the owner's own code
   // can, through `ensurePrivateInbox`. No `refusal` while there is none to
@@ -247,10 +254,13 @@ export type HomeOutput = {
   restoreProfile: Stream<ProfileRetirementEvent>;
   // Gives Home the private inbox the deciding profile advertises: it adopts the
   // one the host vetted and names, with that profile, when the profile is in
-  // Home's list and still points at it, or creates one when Home holds none
-  // and no profile points at an inbox, and points every profile that points at
-  // no inbox at Home's. It records the host's refusal of the deciding
-  // profile's inbox in `privateInboxRefusal`.
+  // Home's list and still points at it, or takes its own when Home holds none
+  // and no profile points at an inbox, or in place of an inbox the host has it
+  // replace, and points every profile that points at no inbox, or at a
+  // replaced one, at Home's. It has Home's own inbox created first, by
+  // `createOwnPrivateInbox`, when Home may need one and has none. It records
+  // the host's refusal of the deciding profile's inbox in
+  // `privateInboxRefusal`.
   // The host sends it the first time a runtime worker brings up Home, and
   // again at that worker's next bring-up if the ensure failed, so Home adopts
   // again only then. `requestPrivateInbox` sends it an event naming nothing,
@@ -263,8 +273,8 @@ export type HomeOutput = {
   // points at Home's inbox, or a final status saying why it never will.
   requestPrivateInbox: Stream<PrivateInboxRequest, PrivateInboxReceipt>;
   // For the owner, from the button on Home's refusal notice: replaces the
-  // refused inbox with the one Home holds, or with one it creates when it holds
-  // none, and points the profiles that point at the refused inbox at Home's.
+  // refused inbox with the one Home holds, or with its own when it holds none,
+  // and points the profiles that point at the refused inbox at Home's.
   // Refused unless the renderer marks the event as a click on that button.
   replaceRefusedPrivateInbox: Stream<void>;
   addFavorite: Stream<{
@@ -466,6 +476,10 @@ const Home = pattern(
     const privateInbox = new Writable<PrivateInboxHolder>({}).for(
       "privateInbox",
     );
+    // The inbox Home created for itself, which only the creating step writes.
+    const ownPrivateInbox = new Writable<PrivateInboxHolder>({}).for(
+      "ownPrivateInbox",
+    );
     // The inboxes Home held before, where `ensurePrivateInbox` moves the one
     // Home holds when it adopts another.
     const retainedPrivateInboxes = new Writable<RetainedPrivateInboxes>([])
@@ -534,19 +548,36 @@ const Home = pattern(
     const favoritesComponent = FavoritesManager({});
     const agentQueue = AgentQueue({});
     const chatManager = FabriChatManager({ sharedSpaceCatalog: catalog });
-    const ensurePrivateInboxStream = ensurePrivateInbox({
+    const pointProfiles = pointProfilesAtPrivateInbox({
       privateInbox,
+      retainedPrivateInboxes,
+      profiles,
+    });
+    // The ensure the creating step hands its event on to, once Home has an
+    // inbox of its own; it never asks for one.
+    const ensureOnceOwned = ensurePrivateInbox({
+      privateInbox,
+      ownPrivateInbox,
       retainedPrivateInboxes,
       privateInboxRefusal,
       profiles,
-      pointProfiles: pointProfilesAtPrivateInbox({
-        privateInbox,
-        retainedPrivateInboxes,
-        profiles,
+      pointProfiles,
+    });
+    const ensurePrivateInboxStream = ensurePrivateInbox({
+      privateInbox,
+      ownPrivateInbox,
+      retainedPrivateInboxes,
+      privateInboxRefusal,
+      profiles,
+      pointProfiles,
+      createOwn: createOwnPrivateInbox({
+        ownPrivateInbox,
+        ensure: ensureOnceOwned,
       }),
     });
     const replaceRefusedInboxStream = replaceRefusedPrivateInbox({
       privateInbox,
+      ownPrivateInbox,
       privateInboxRefusal,
       privateInboxReplacement,
       repointProfiles: repointProfilesFromReplacedInbox({
@@ -788,6 +819,7 @@ const Home = pattern(
       agentQueue,
       chatManager,
       privateInbox,
+      ownPrivateInbox,
       retainedPrivateInboxes,
       privateInboxRefusal,
       privateInboxReplacement,

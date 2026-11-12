@@ -1148,12 +1148,13 @@ describe("private inbox across runtimes", () => {
     expect(ownerAgainReads.id).toBe(loom.id);
   });
 
-  it("creates no inbox while a profile whose pointer it cannot read advertises one", async () => {
+  it("takes no inbox while a profile whose pointer it cannot read advertises one", async () => {
     // The profile keeps its pointer per user in a space of its own. With
     // server execution on, the Home's serving runtime refuses to read that
     // pointer, so the ensure would see a profile advertising nothing; it
     // fails instead, and Home holds no inbox. With it off, the owner's
-    // runtime reads the pointer, and Home creates nothing either.
+    // runtime reads the pointer, and Home takes none either: it creates its
+    // own, as it does whenever it holds none, and keeps it for later.
     await owner.send("createUnreadableProfile");
     await harness.settle();
     await owner.send("pointUnreadableProfileAtLoom", { index: 0 });
@@ -1367,6 +1368,14 @@ describe("private inbox across runtimes", () => {
     await owner.send("pointOwnSpaceProfileAtPrivateInbox", { index: 0 });
     await harness.settleUntil(async () =>
       await pointed(["ownSpaceHome", "profiles", 0])
+    );
+    // The ensure that precedes a refusal notice, which here has Home create
+    // its own inbox, since Home holds none, and leaves the advertised one to
+    // the refusal recorded next.
+    await owner.send("ensureOwnSpace", {});
+    await harness.settleUntil(async () =>
+      (await owner.read(["ownSpaceHome", "ownPrivateInbox", "piece"])) !==
+        undefined
     );
     await owner.send("refuseOwnSpaceInbox");
     const refusalPath = ["ownSpaceHome", "privateInboxRefusal", "refusal"];

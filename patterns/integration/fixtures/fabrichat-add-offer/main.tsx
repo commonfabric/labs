@@ -32,6 +32,7 @@ import ProfileHome, {
   type ProfileHomeOutput,
 } from "../../../system/profile-home/profile-home.tsx";
 import {
+  createOwnPrivateInbox,
   ensurePrivateInbox,
   type EnsurePrivateInboxEvent,
   pointProfilesAtPrivateInbox,
@@ -109,12 +110,20 @@ export default pattern<MainInput, MainOutput>((
     outgoingNotices,
   },
 ) => {
+  const ownPrivateInbox = new Writable<PrivateInboxHolder>({}).for(
+    "ownPrivateInbox",
+  );
   const retainedPrivateInboxes = new Writable<RetainedPrivateInboxes>([]).for(
     "retainedPrivateInboxes",
   );
   const privateInboxRefusal = new Writable<PrivateInboxRefusalHolder>({}).for(
     "privateInboxRefusal",
   );
+  const pointProfiles = pointProfilesAtPrivateInbox({
+    privateInbox,
+    // deno-lint-ignore no-explicit-any
+    profiles: profiles as any,
+  });
   const profile = firstProfileOf(profiles);
   const chats = FabriChatManagerCore({
     myProfile: profile,
@@ -133,14 +142,23 @@ export default pattern<MainInput, MainOutput>((
     profiles,
     ensurePrivateInbox: ensurePrivateInbox({
       privateInbox,
+      ownPrivateInbox,
       retainedPrivateInboxes,
       privateInboxRefusal,
       // deno-lint-ignore no-explicit-any
       profiles: profiles as any,
-      pointProfiles: pointProfilesAtPrivateInbox({
-        privateInbox,
-        // deno-lint-ignore no-explicit-any
-        profiles: profiles as any,
+      pointProfiles,
+      createOwn: createOwnPrivateInbox({
+        ownPrivateInbox,
+        ensure: ensurePrivateInbox({
+          privateInbox,
+          ownPrivateInbox,
+          retainedPrivateInboxes,
+          privateInboxRefusal,
+          // deno-lint-ignore no-explicit-any
+          profiles: profiles as any,
+          pointProfiles,
+        }),
       }),
     }),
     createProfile: createProfile({ profiles }),

@@ -364,8 +364,11 @@ delivered there stays readable. The host's share intake follows the offers in
 the inbox Home holds and in each one it retains, vets each as the user, and
 registers each one that passes in Home's shared-space catalog through Home's
 `registerSharedSpace` stream; it leaves every offer in its inbox. Home creates
-an inbox from `patterns/system/private-inbox/private-inbox.tsx` only when it
-holds none and no profile points at one. An inbox that fails vetting is neither
+an inbox from `patterns/system/private-inbox/private-inbox.tsx` once, in a step
+of its own that reads nothing labeled before it, and records it in
+`defaultPattern.ownPrivateInbox`. Home takes that inbox when it holds none and
+no profile points at one, and in place of an inbox it did not make, such as a
+loom daemon's, which it then retains. An inbox that fails vetting is neither
 adopted nor replaced, and Home keeps what it holds, or holds none. While Home
 holds an inbox, it points each profile that points at no inbox at it, through
 the profile's `inbox` field, which is how a sender finds it, and leaves a
@@ -374,7 +377,7 @@ failed vetting, a profile that points at no inbox stays unpointed. A failed
 vetting is recorded in `defaultPattern.privateInboxRefusal`, under `refusal`:
 the host's reason code, a link to the refused inbox, and when Home first
 recorded it. Each ensure, which is to say the next bring-up of Home in a runtime
-worker, clears it when Home adopts or creates an inbox, when the deciding
+worker, clears it when Home adopts an inbox or takes its own, when the deciding
 profile points at the inbox Home holds, or when no profile points at the refused
 inbox any longer. Nothing else clears it automatically in between, though the
 owner can clear it by replacing the refused inbox, as below, and the owner's own
@@ -383,7 +386,7 @@ stream. It is read from Home's root like any other field of Home, the root being
 the link the `#default` wish answers with, as "Custom Home Pattern" below says,
 and Home shows it as a notice above its tabs, by its code and time alone. The
 notice's "Use a new inbox" button, which a click on it sends, has Home clear the
-refusal, keep its inbox or create its own, and point the profiles that point at
+refusal, keep its inbox or take its own, and point the profiles that point at
 the refused inbox at it, and records that in
 `defaultPattern.privateInboxReplacement`. A profile created once Home holds the
 inbox is pointed at it as it is created; one created earlier is pointed by the
@@ -394,8 +397,8 @@ other direction, adopting the inbox a profile advertises and never replacing a
 pointer to a different one. A client that would otherwise create an inbox of its
 own, as a loom daemon does, asks Home for it through
 `defaultPattern.requestPrivateInbox`, naming the profile it finds the owner by:
-Home ensures its inbox with an event naming nothing, which keeps or creates
-Home's inbox and points the profiles that point at none but adopts nothing,
+Home ensures its inbox with an event naming nothing, which keeps Home's inbox or
+takes its own and points the profiles that point at none but adopts nothing,
 and its handling's receipt links to Home's answer for that profile, which
 reads `ensured` once the profile points at Home's inbox, or a final status
 saying why it never will.
