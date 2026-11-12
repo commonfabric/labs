@@ -533,7 +533,11 @@ execution the caller's act is the event append — the serving loop runs the
 handler afterwards — so `committed` arrives as soon as the event is on the
 record, and the readback that follows is what waits for the served handling
 to land before it reads the receipt. A handling the server refuses, drops,
-or fails is reported there, as the readback's failure.
+or fails is reported there, as the readback's failure. A served handling that
+read data its stream's space doesn't admit reports the same thing whether it
+committed or not: the call settles with `"withheld": true` in the envelope and
+no `result`, reads no receipt, and says on stderr that it was handled and its
+outcome withheld.
 
 ### Dispatching now, collecting later
 

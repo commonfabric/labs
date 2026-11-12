@@ -391,6 +391,11 @@ export const callVerbTool: HarnessToolDefinition<
     // author can write instructions there. To harden, measure the failure
     // against the release ceiling as the result below is, and withhold it
     // where the ceiling refuses it.
+    // A withheld handling ran, and whether it committed is not told; its
+    // message is fixed text, carrying nothing the handler read.
+    if (called.status === "withheld") {
+      return { outputId, status: "ok", verb: name, message: called.message };
+    }
     if (called.status !== "settled") return fail(called.message);
 
     const receipt = called.receipt;

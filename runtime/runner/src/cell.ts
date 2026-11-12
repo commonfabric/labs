@@ -800,7 +800,7 @@ const withheldDeliveries = new WeakSet<IExtendedStorageTransaction>();
  * stream's space doesn't admit, so that its outcome is withheld (events.md
  * §5): the handling may have committed or not, and the view says neither.
  */
-const withheldStatusTxView = (
+export const withheldStatusTxView = (
   tx: IExtendedStorageTransaction,
 ): IExtendedStorageTransaction => {
   const view = doneStatusTxView(tx);

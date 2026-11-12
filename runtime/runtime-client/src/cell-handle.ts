@@ -41,6 +41,7 @@ import {
   type CellReadRefusal,
   type CellRef,
   type CellResponse,
+  type CellSendResponse,
   type CellValueResponse,
   type CfcLabelView,
   type CfcLabelViewResponse,
@@ -200,7 +201,9 @@ export type CellSendOptions = {
    * that run's commit is refused, as it is for a write whose UI contract the
    * event does not satisfy, and when the run throws or the event is dropped
    * or refused admission. A run that finishes without an error resolves it,
-   * whether or not it wrote anything.
+   * whether or not it wrote anything, with nothing; a run whose outcome is
+   * withheld resolves it with `{ handling: "withheld" }` (see
+   * `CellSendResponse`), whether or not it committed.
    */
   awaitHandling?: boolean;
 };
@@ -908,11 +911,18 @@ export class CellHandle<T = unknown> {
    * delivered to the runtime, on its way to the stream's handler: a write the
    * handler makes that the runtime refuses, such as one whose UI contract the
    * event does not satisfy, does not reject it. `options.awaitHandling` waits
-   * for the handling too, and rejects on its refusal.
+   * for the handling too, rejects on its refusal, and resolves with
+   * `{ handling: "withheld" }` for a handling whose outcome is withheld: under
+   * server execution, one that read data its stream's space doesn't admit,
+   * which reports the same thing whether it committed or not. A caller can
+   * then say the event was sent and that its outcome is private.
    */
-  async sendStrict(event: T, options?: CellSendOptions): Promise<void> {
+  async sendStrict(
+    event: T,
+    options?: CellSendOptions,
+  ): Promise<CellSendResponse> {
     const serialized = CellHandle.serialize(event as ClientCellValue);
-    await this.#enqueueOperation(() =>
+    return await this.#enqueueOperation(() =>
       this.#send(serialized, true, options?.awaitHandling === true)
     );
   }
@@ -935,8 +945,12 @@ export class CellHandle<T = unknown> {
    * run's commit is refused, as it is for a write whose UI contract the event
    * does not satisfy, and when the run throws or the event is dropped or
    * refused admission. A run that finishes without an error resolves it,
-   * whether or not it wrote anything; a handler that turns an event down
-   * throws, which fails its run and rejects the send. The surface and action are read once, here.
+   * whether or not it wrote anything, with nothing; a run whose outcome is
+   * withheld resolves it with `{ handling: "withheld" }`, whether or not it
+   * committed, so that the host can say the action was sent and that its
+   * outcome is private. A handler that turns an event down throws, which
+   * fails its run and rejects the send. The surface and action are read once,
+   * here.
    *
    * This mints trusted events. The host calls it only from the control's
    * real user-input path, with exactly the values the control displayed and
@@ -948,10 +962,13 @@ export class CellHandle<T = unknown> {
    * @throws If `event` is not a record, or `control` names a blank surface or
    *   action.
    */
-  async sendReviewed(event: T, control: NativeUiControl): Promise<void> {
+  async sendReviewed(
+    event: T,
+    control: NativeUiControl,
+  ): Promise<CellSendResponse> {
     const serialized = CellHandle.serialize(event as ClientCellValue);
     const { surface, action } = control;
-    await this.#enqueueOperation(() =>
+    return await this.#enqueueOperation(() =>
       this.#conn.request<RequestType.CellSendReviewed>({
         type: RequestType.CellSendReviewed,
         cell: this.ref(),
@@ -966,7 +983,7 @@ export class CellHandle<T = unknown> {
     event: FabricValue,
     propagateFailure = false,
     awaitHandling = false,
-  ): Promise<void> {
+  ): Promise<CellSendResponse> {
     const request = this.#conn.request<RequestType.CellSend>({
       type: RequestType.CellSend,
       cell: this.ref(),
@@ -979,6 +996,7 @@ export class CellHandle<T = unknown> {
       if (!this.#conn.signal.aborted) {
         console.error("[CellHandle] Send failed:", error);
       }
+      return undefined;
     });
   }
 

@@ -249,6 +249,12 @@ export interface InvocationOutcome {
    * did not commit again, and `result` is the ORIGINAL outcome. */
   deduplicated?: boolean;
 
+  /** True when the handling's outcome is withheld: under server execution
+   * it read data its stream's space doesn't admit, so whether it committed,
+   * and what it returned, is not told. Such an outcome is `"settled"` with
+   * no `result`, and its receipt is not read. */
+  withheld?: true;
+
   /** Under `--show-links` only: result paths mapped to their backing cell
    * addresses in canonical reference syntax, provenance beside the value the
    * caller can pass straight back to `--cell`. The root `"/"` entry is the
@@ -1066,6 +1072,19 @@ export async function executeResolvedCallable(
           transactionFailureMessage(handling.error)
         }`,
       );
+    }
+    // A withheld handling may never have written its receipt, so nothing is
+    // read back.
+    if (handling.status === "withheld") {
+      return {
+        invocation: {
+          id: invocationId,
+          status: "settled",
+          withheld: true,
+          ...(deduplicated ? { deduplicated: true } : {}),
+          ...(receiptAddress !== undefined ? { receipt: receiptAddress } : {}),
+        },
+      };
     }
 
     // Read the handling's outcome back off its receipt. On a receipt-exists

@@ -79,6 +79,7 @@ import {
   isCellResult,
   isLoopbackHostname,
   isPieceRoot,
+  isWithheldDelivery,
   loadDocument,
   markDurableReadTx,
   type NormalizedFullLink,
@@ -196,6 +197,7 @@ import {
   type CellResolveAsCellResponse,
   CellResponse,
   type CellSendRequest,
+  type CellSendResponse,
   type CellSendReviewedRequest,
   type CellSetRequest,
   type CellSubscribeRequest,
@@ -2372,7 +2374,9 @@ export class RuntimeProcessor {
     });
   }
 
-  handleCellSend(request: CellSendRequest): void | Promise<void> {
+  handleCellSend(
+    request: CellSendRequest,
+  ): undefined | Promise<CellSendResponse> {
     const event = mapCellRefsToSigilLinks(request.event);
     return this.#sendCellEvent(
       request.cell,
@@ -2399,7 +2403,7 @@ export class RuntimeProcessor {
    */
   async handleCellSendReviewed(
     request: CellSendReviewedRequest,
-  ): Promise<void> {
+  ): Promise<CellSendResponse> {
     const payload = mapCellRefsToSigilLinks(request.event);
     if (!isPlainObject(payload)) {
       throw new Error("A reviewed action's event must be a record.");
@@ -2410,7 +2414,7 @@ export class RuntimeProcessor {
       throw new Error("A reviewed action requires a surface and an action.");
     }
     const control = { surface: request.surface, action: request.action };
-    await this.#sendCellEvent(
+    return await this.#sendCellEvent(
       request.cell,
       (send) => bindNativeUiControl({ send }, control)(payload),
       "handling",
@@ -2435,7 +2439,7 @@ export class RuntimeProcessor {
     ref: CellRef,
     deliver: (send: (event: unknown) => void) => void,
     wait: "commit" | "handling" | undefined,
-  ): void | Promise<void> {
+  ): undefined | Promise<CellSendResponse> {
     const target = getCell(this.#runtime, ref);
     const earlier = this.#loadingSends;
     const loading = earlier === undefined
@@ -2467,6 +2471,7 @@ export class RuntimeProcessor {
     void outcome.catch((error) => {
       console.error("[RuntimeProcessor] Cell send failed:", error);
     });
+    return undefined;
   }
 
   /**
@@ -2521,7 +2526,7 @@ export class RuntimeProcessor {
     target: Cell<unknown>,
     deliver: (send: (event: unknown) => void) => void,
     wait: "commit" | "handling" | undefined,
-  ): void | Promise<void> {
+  ): undefined | Promise<CellSendResponse> {
     const tx = this.#runtime.edit();
     const cell = target.withTx(tx);
     const handled = wait === "handling"
@@ -2535,15 +2540,26 @@ export class RuntimeProcessor {
     this.#runtime.prepareTxForCommit(tx);
     const commit = tx.commit().settled;
     if (handled !== undefined) {
-      return this.#requireCellCommit(commit).then(async () => {
-        const handling = (await handled.promise).status();
-        if (handling.status === "error") {
-          throw new Error(transactionFailureMessage(handling.error));
-        }
-      });
+      return this.#requireCellCommit(commit).then(
+        async (): Promise<CellSendResponse> => {
+          const handledTx = await handled.promise;
+          const handling = handledTx.status();
+          if (handling.status === "error") {
+            throw new Error(transactionFailureMessage(handling.error));
+          }
+          // A handling whose outcome is withheld may have committed or not
+          // (events.md §5), so it resolves, saying so.
+          return isWithheldDelivery(handledTx)
+            ? { handling: "withheld" }
+            : undefined;
+        },
+      );
     }
-    if (wait === "commit") return this.#requireCellCommit(commit);
+    if (wait === "commit") {
+      return this.#requireCellCommit(commit).then(() => undefined);
+    }
     this.#observeCellCommit(commit, "send");
+    return undefined;
   }
 
   #observeCellCommit(
