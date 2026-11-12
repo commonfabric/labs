@@ -24,7 +24,12 @@
  * is what pins that the schema carries it.
  */
 
-import { assert, assertEquals, assertGreater } from "@std/assert";
+import {
+  assert,
+  assertEquals,
+  assertGreater,
+  assertObjectMatch,
+} from "@std/assert";
 
 import { StateEffect } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
@@ -290,10 +295,14 @@ Deno.test("clicking the short name navigates to the destination", async () => {
       }),
     );
 
+    // The detail crosses to the worker, so it names the destination by link
+    // rather than holding its handle. The editor reads the destination through
+    // its mention schema, which adds to the fixture's, so the link is matched
+    // rather than compared whole.
     const event = await navigated.promise;
-    assertEquals(
-      (event.detail.piece as CellHandle<unknown>).id(),
-      destination.id(),
+    assertObjectMatch(
+      event.detail.piece,
+      destination.toSigilLink() as unknown as Record<string, unknown>,
     );
   } finally {
     done();
