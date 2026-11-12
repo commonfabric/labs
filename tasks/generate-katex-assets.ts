@@ -62,7 +62,9 @@ const faces = css.match(FONT_FACE) ?? [];
 if (faces.length === 0) {
   throw new Error(`KaTeX ${version}'s stylesheet declares no font faces.`);
 }
-const layout = css.replace(FONT_FACE, "");
+// KaTeX resets its equation-number counters on `body`, which a shadow root
+// holds none of, so the rules reset them on the editor's host instead.
+const layout = css.replace(FONT_FACE, "").replace(/(^|\})body\{/g, "$1:host{");
 if (/url\(/.test(layout)) {
   throw new Error(
     `KaTeX ${version}'s stylesheet names a URL outside its font faces.`,

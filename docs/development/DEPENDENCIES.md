@@ -512,7 +512,7 @@ then run it from the repository root:
 deno run --allow-read --allow-write --allow-run tasks/generate-katex-assets.ts
 ```
 
-`features/prose-math.test.ts` fails while the generated layout rules come from
+`features/katex-render.test.ts` fails while the generated layout rules come from
 another release than the one the editor imports.
 
 ### Viz.js

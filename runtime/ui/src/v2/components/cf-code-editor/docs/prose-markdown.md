@@ -96,8 +96,9 @@ draws it is `features/prose-math.ts`, and KaTeX itself is reached only through
   transaction whenever another lands first, which the editor's own updates do.
 
 KaTeX runs with `trust` off, so `\href`, `\url`, `\includegraphics` and the
-`\html…` commands draw nothing of the author's choosing; with `maxSize` 10 (em)
-and `maxExpand` 1000.
+`\html…` commands draw nothing of the author's choosing. A size a formula asks
+for is capped at 10em (`maxSize`), and its macro expansions at 1000
+(`maxExpand`).
 
 `katex-render.ts` holds KaTeX and its layout rules and imports nothing of the
 editor's. The editor imports it as `cf-katex-render`, the first time an editor

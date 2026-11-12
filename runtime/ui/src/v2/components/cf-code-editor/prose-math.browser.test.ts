@@ -67,6 +67,24 @@ Deno.test("a prose editor with math draws no link a formula asks for", async () 
   });
 });
 
+Deno.test("a prose editor with math keeps a $$ formula inside a sentence in its line", async () => {
+  const editor = new CFCodeEditor();
+  editor.mode = "prose";
+  editor.math = true;
+  editor.value = "So $$x = 1$$ holds.";
+  document.body.append(editor);
+  try {
+    await editor.updateComplete;
+    const display = editor.shadowRoot!.querySelector(
+      ".cm-prose-math .katex-display",
+    );
+    assert(display);
+    assertEquals(getComputedStyle(display).display, "inline-block");
+  } finally {
+    editor.remove();
+  }
+});
+
 Deno.test("a prose editor without math leaves formulas as text", async () => {
   await withEditor(false, (root, editor) => {
     assertEquals(root.querySelectorAll(".katex").length, 0);

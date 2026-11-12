@@ -47,5 +47,10 @@ describe("katex-render", () => {
       expect(KATEX_STYLES_VERSION).toBe(katex.version);
       expect(KATEX_STYLES).toContain(".katex{");
     });
+
+    it("resets KaTeX's equation counters on the editor's host", () => {
+      expect(KATEX_STYLES).toContain(":host{counter-reset:katexEqnNo");
+      expect(KATEX_STYLES).not.toMatch(/(^|\})body\{/);
+    });
   });
 });

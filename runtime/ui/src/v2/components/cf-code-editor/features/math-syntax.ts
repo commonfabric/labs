@@ -8,9 +8,9 @@
  * sign. A formula stays within one paragraph, so a `$$` with no closing `$$`
  * before the next blank line stays text.
  *
- * The editor parses with this whenever it draws formulas. It is apart from
- * `prose-math.ts`, which draws them, because that module brings KaTeX and is
- * loaded only when an editor first draws math.
+ * The editor parses with this whenever it draws formulas, and `prose-math.ts`
+ * draws the nodes it makes. Neither imports KaTeX, which the editor loads from
+ * `katex-render.ts` only when it first draws math.
  */
 
 import type { InlineContext, MarkdownConfig } from "@lezer/markdown";

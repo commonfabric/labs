@@ -2836,8 +2836,8 @@ export class CFCodeEditor extends BaseElement {
     }
 
     if (
-      (changedProperties.has("math") || changedProperties.has("mode")) &&
-      this.#drawsMath
+      (changedProperties.has("math") || changedProperties.has("mode") ||
+        changedProperties.has("language")) && this.#drawsMath
     ) {
       this.#loadKatex();
     }
@@ -2953,7 +2953,10 @@ export class CFCodeEditor extends BaseElement {
           this._proseMarkdownComp.reconfigure(this.#proseExtension()),
         ],
       });
-    } else if (changedProperties.has("math") && this._editorView) {
+    } else if (
+      (changedProperties.has("math") || changedProperties.has("language")) &&
+      this._editorView
+    ) {
       this._editorView.dispatch({
         effects: this._proseMarkdownComp.reconfigure(this.#proseExtension()),
       });
@@ -3169,7 +3172,8 @@ export class CFCodeEditor extends BaseElement {
 
   /** Whether the editor draws formulas: `math` set, in prose mode. */
   get #drawsMath(): boolean {
-    return this.math && this.mode === "prose";
+    return this.math && this.mode === "prose" &&
+      this.language === MimeType.markdown;
   }
 
   /** The language extension for `language`, with formulas when drawn. */

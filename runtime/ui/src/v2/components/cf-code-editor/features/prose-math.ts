@@ -114,17 +114,34 @@ class MathWidget extends WidgetType {
   }
 }
 
-/**
- * Builds the math decorations for `state`. A formula the selection touches,
- * while the editor has focus, keeps its TeX, marked as source; any other is
- * replaced by KaTeX's rendering. Exported for tests, which need no view.
- */
-export function buildMathDecorations(
-  state: EditorState,
-  hasFocus: boolean,
-): Range<Decoration>[] {
-  const decorations: Range<Decoration>[] = [];
-  const { doc, selection } = state;
+/** A formula in the document, with what drawing it needs. */
+interface Formula {
+  /** Where its syntax node starts, at its opening delimiter. */
+  from: number;
+
+  /** Where its syntax node ends, after its closing delimiter. */
+  to: number;
+
+  /** Where the range its widget replaces starts: a block's first line. */
+  drawnFrom: number;
+
+  /** Where the range its widget replaces ends: a block's last line. */
+  drawnTo: number;
+
+  /** Its TeX, without its delimiters or the space inside them. */
+  tex: string;
+
+  /** Whether it is `$$` math, set in display style. */
+  display: boolean;
+
+  /** Whether it has its lines to itself, and is drawn as a block. */
+  block: boolean;
+}
+
+/** The formulas of `state`'s syntax tree, in document order. */
+function findFormulas(state: EditorState): Formula[] {
+  const formulas: Formula[] = [];
+  const { doc } = state;
   syntaxTree(state).iterate({
     enter(node) {
       if (node.name !== INLINE_MATH && node.name !== DISPLAY_MATH) return;
@@ -138,30 +155,64 @@ export function buildMathDecorations(
       const block = display &&
         doc.sliceString(first.from, node.from).trim() === "" &&
         doc.sliceString(node.to, last.to).trim() === "";
-      const from = block ? first.from : node.from;
-      const to = block ? last.to : node.to;
-      const touched = hasFocus &&
-        selection.ranges.some((range) => range.from <= to && range.to >= from);
-      decorations.push(
-        touched
-          ? Decoration.mark({ class: "cm-prose-math-source" }).range(
-            node.from,
-            node.to,
-          )
-          : Decoration.replace({
-            widget: new MathWidget(
-              tex,
-              display,
-              block,
-              state.facet(formulaRenderer),
-            ),
-            block,
-          }).range(from, to),
-      );
+      formulas.push({
+        from: node.from,
+        to: node.to,
+        drawnFrom: block ? first.from : node.from,
+        drawnTo: block ? last.to : node.to,
+        tex,
+        display,
+        block,
+      });
       return false;
     },
   });
-  return decorations;
+  return formulas;
+}
+
+/**
+ * Helper for the math field, which draws `formulas` for `state`. A formula the
+ * selection touches, while the editor has focus, keeps its TeX, marked as
+ * source; any other is replaced by its rendering.
+ */
+function drawFormulas(
+  formulas: readonly Formula[],
+  state: EditorState,
+  hasFocus: boolean,
+): Range<Decoration>[] {
+  const render = state.facet(formulaRenderer);
+  return formulas.map((formula) => {
+    const touched = hasFocus &&
+      state.selection.ranges.some((range) =>
+        range.from <= formula.drawnTo && range.to >= formula.drawnFrom
+      );
+    return touched
+      ? Decoration.mark({ class: "cm-prose-math-source" }).range(
+        formula.from,
+        formula.to,
+      )
+      : Decoration.replace({
+        widget: new MathWidget(
+          formula.tex,
+          formula.display,
+          formula.block,
+          render,
+        ),
+        block: formula.block,
+      }).range(formula.drawnFrom, formula.drawnTo);
+  });
+}
+
+/**
+ * Builds the math decorations for `state`. A formula the selection touches,
+ * while the editor has focus, keeps its TeX, marked as source; any other is
+ * replaced by its rendering. Exported for tests, which need no view.
+ */
+export function buildMathDecorations(
+  state: EditorState,
+  hasFocus: boolean,
+): Range<Decoration>[] {
+  return drawFormulas(findFormulas(state), state, hasFocus);
 }
 
 /** Says that the editor gained focus (`true`) or lost it. */
@@ -181,34 +232,56 @@ const focusedField = StateField.define<boolean>({
   },
 });
 
+/** What the math field holds. */
+interface MathState {
+  /** The document's formulas, found when it or its parse last changed. */
+  formulas: readonly Formula[];
+
+  /** How they are drawn for the current selection and focus. */
+  decorations: DecorationSet;
+}
+
 /**
  * The math decorations. They come from a state field rather than a view
  * plugin, because a block formula replaces line breaks, which CodeMirror
- * accepts only from a field.
+ * accepts only from a field. The field walks the syntax tree only when the
+ * document, its parse or the renderer changes; a change of selection or
+ * focus draws again from the formulas it found.
  */
-const mathField = StateField.define<DecorationSet>({
-  create: (state) =>
-    Decoration.set(
-      buildMathDecorations(state, state.field(focusedField, false) ?? false),
-      true,
-    ),
-  update(decorations, transaction) {
-    if (
-      transaction.docChanged || transaction.selection !== undefined ||
-      transaction.effects.some((effect) => effect.is(setFocused)) ||
-      syntaxTree(transaction.startState) !== syntaxTree(transaction.state)
-    ) {
-      return Decoration.set(
-        buildMathDecorations(
-          transaction.state,
-          transaction.state.field(focusedField),
-        ),
+const mathField = StateField.define<MathState>({
+  create(state) {
+    const formulas = findFormulas(state);
+    const hasFocus = state.field(focusedField, false) ?? false;
+    return {
+      formulas,
+      decorations: Decoration.set(
+        drawFormulas(formulas, state, hasFocus),
         true,
-      );
-    }
-    return decorations;
+      ),
+    };
   },
-  provide: (field) => EditorView.decorations.from(field),
+  update(value, transaction) {
+    const { startState, state } = transaction;
+    const found = transaction.docChanged ||
+      syntaxTree(startState) !== syntaxTree(state) ||
+      startState.facet(formulaRenderer) !== state.facet(formulaRenderer);
+    if (
+      !found && transaction.selection === undefined &&
+      !transaction.effects.some((effect) => effect.is(setFocused))
+    ) {
+      return value;
+    }
+    const formulas = found ? findFormulas(state) : value.formulas;
+    return {
+      formulas,
+      decorations: Decoration.set(
+        drawFormulas(formulas, state, state.field(focusedField)),
+        true,
+      ),
+    };
+  },
+  provide: (field) =>
+    EditorView.decorations.from(field, (value) => value.decorations),
 });
 
 /**
@@ -271,6 +344,12 @@ const mathTheme = EditorView.baseTheme({
     overflowY: "hidden",
   },
   ".cm-prose-math-block .katex-display": {
+    margin: "0",
+  },
+  // A `$$` formula inside a sentence keeps display style but sits in the
+  // line, where KaTeX's display wrapper would break it and center it.
+  ".cm-prose-math .katex-display, .cm-prose-math .katex-display > .katex": {
+    display: "inline-block",
     margin: "0",
   },
   ".cm-prose-math-error": {
