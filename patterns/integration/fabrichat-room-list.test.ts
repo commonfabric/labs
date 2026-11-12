@@ -7,8 +7,9 @@
  * records hold is a handle that declares nothing of the room, so neither
  * Home's sync nor a read of the list reaches a room's space. A client loads a
  * room's documents when a read of its reaches the room, and its bring-up
- * prefetches nothing across spaces, so what the manager's view or its
- * `people` declare of the rooms is read only by whoever reads them. A room is
+ * names nothing a node reads past a link into another space, so what the
+ * manager's view or its `people` declare of the rooms is read only by whoever
+ * reads them. A room is
  * checked when it is opened, which is where a deleted room, or one that no
  * longer admits the person, is refused.
  *

@@ -259,8 +259,11 @@ did not await (`#syncCrossSpaceReads`). A read that dead-ends on a link into
 another space kicks a load there (`ensureLinkedDocLoaded`), and that load is
 the subscription. Only a serving runtime does either: a client that isn't
 serving kicks no crossing load and runs no cross-space pass, so its pre-sync
-loads nothing outside the spaces it starts in, and a run of its that reads
-through such a link loads the target then. A piece that links many spaces,
+loads nothing a plan reads past a link into another space, and a run of its
+that reads through such a link loads the target then. Setup's own reads are
+another matter: the pre-sync still syncs, root-only, each document a stored
+argument links to directly (`#syncStoredArgumentLinkTargets`), in whatever
+space it is. A piece that links many spaces,
 as a FabriChat manager links each of a person's rooms, would otherwise be
 loaded across all of them by every client's resume, whatever the client went
 on to read. The pass awaits loads, never the storage manager's settled
