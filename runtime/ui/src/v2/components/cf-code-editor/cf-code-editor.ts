@@ -73,7 +73,7 @@ import {
 } from "@commonfabric/runtime-client";
 import { GFM } from "@lezer/markdown";
 import { consume } from "@lit/context";
-import { type CSSResult, html, PropertyValues } from "lit";
+import { type CSSResult, html, PropertyValues, unsafeCSS } from "lit";
 import { property } from "lit/decorators.js";
 
 import { BaseElement } from "../../core/base-element.ts";
@@ -141,6 +141,7 @@ import {
   shortNameQueryAt,
 } from "./features/mention-refs.ts";
 import { mathMarkdown } from "./features/math-syntax.ts";
+import { proseMath } from "./features/prose-math.ts";
 import { createProseMarkdownPlugin } from "./features/prose-markdown.ts";
 import { styles } from "./styles.ts";
 import {
@@ -267,12 +268,14 @@ const getLangExtFromMimeType = (mime: MimeType, math: boolean) => {
   return langRegistry.get(mime) ?? defaultLang;
 };
 
-// What drawing formulas needs: KaTeX, its layout rules and the editor
-// extension around them. KaTeX is a large share of the shell's bundle and
-// only an editor with `math` set draws with it, so it loads when such an
-// editor first asks, from a chunk of its own.
+// KaTeX and its layout rules, from `features/katex-render.ts`. They would be a
+// large share of the shell's bundle, and only an editor with `math` set uses
+// them, so the shell builds them as a script of their own, maps
+// `cf-katex-render` to it in its page's import map, and leaves the specifier
+// for the browser to resolve. Everywhere else, `runtime/ui`'s import map
+// resolves it to the module.
 // deno-lint-ignore cf-imports/no-inline-module-import
-const loadProseMath = () => import("./features/prose-math.ts");
+const loadKatex = () => import("cf-katex-render");
 
 /** What the editor needs of a handle it computes writes from. */
 type EditorInput = Pick<CellHandle<unknown>, "lastRead" | "pull">;
@@ -518,14 +521,16 @@ export class CFCodeEditor extends BaseElement {
   private _modeComp = new Compartment();
   private _proseMarkdownComp = new Compartment();
 
-  /**
-   * What drawing formulas needs, once loaded. It loads the first time this
-   * editor draws math.
-   */
-  #proseMath: Awaited<ReturnType<typeof loadProseMath>> | undefined;
+  /** KaTeX's layout rules, made into a sheet once and shared by every editor. */
+  static #katexStyles: CSSResult | undefined;
 
-  /** The load of `#proseMath`, from when it starts; it never rejects. */
-  #proseMathLoad: Promise<void> | undefined;
+  /**
+   * KaTeX, once loaded. It loads the first time this editor draws math.
+   */
+  #katex: Awaited<ReturnType<typeof loadKatex>> | undefined;
+
+  /** The load of `#katex`, from when it starts; it never rejects. */
+  #katexLoad: Promise<void> | undefined;
   private _collaborationComp = new Compartment();
   private _presenceComp = new Compartment();
   /**
@@ -2834,7 +2839,7 @@ export class CFCodeEditor extends BaseElement {
       (changedProperties.has("math") || changedProperties.has("mode")) &&
       this.#drawsMath
     ) {
-      this.#loadProseMath();
+      this.#loadKatex();
     }
 
     // Update language, which parses formulas only for an editor drawing them
@@ -3173,28 +3178,32 @@ export class CFCodeEditor extends BaseElement {
   }
 
   /**
-   * Prose mode's Markdown rendering, with formulas once what draws them has
-   * loaded. Until then, formulas show as their TeX.
+   * Prose mode's Markdown rendering, with formulas once KaTeX has loaded.
+   * Until then, formulas show as their TeX.
    */
   #proseExtension(): Extension {
     if (this.mode !== "prose") return [];
-    const math = this.#drawsMath ? this.#proseMath : undefined;
+    const katex = this.#drawsMath ? this.#katex : undefined;
     return [
       createProseMarkdownPlugin(),
-      math?.proseMath(this._editorView?.hasFocus ?? false) ?? [],
+      katex === undefined
+        ? []
+        : proseMath(this._editorView?.hasFocus ?? false, katex.renderFormula),
     ];
   }
 
   /**
-   * Starts loading what drawing formulas needs, unless a load has started,
-   * and draws them once it arrives. A load that fails is reported as
-   * `cf-error`, and the formulas stay as their TeX.
+   * Starts loading KaTeX, unless a load has started, and draws formulas once
+   * it arrives. A load that fails is reported as `cf-error`, and the formulas
+   * stay as their TeX: a page that maps no script to `cf-katex-render` is
+   * one where that happens.
    */
-  #loadProseMath(): void {
-    if (this.#proseMathLoad !== undefined) return;
-    this.#proseMathLoad = loadProseMath().then((module) => {
-      this.#proseMath = module;
-      this.#adoptMathStyles(module.mathStyles);
+  #loadKatex(): void {
+    if (this.#katexLoad !== undefined) return;
+    this.#katexLoad = loadKatex().then((katex) => {
+      this.#katex = katex;
+      CFCodeEditor.#katexStyles ??= unsafeCSS(katex.KATEX_STYLES);
+      this.#adoptMathStyles(CFCodeEditor.#katexStyles);
       if (this._editorView !== undefined && this.#drawsMath) {
         this._editorView.dispatch({
           effects: this._proseMarkdownComp.reconfigure(this.#proseExtension()),
@@ -3225,12 +3234,12 @@ export class CFCodeEditor extends BaseElement {
   }
 
   /**
-   * Like Lit's, except that once this editor has started loading what draws
-   * formulas, it also waits for that load and the drawing it brings.
+   * Like Lit's, except that once this editor has started loading KaTeX, it
+   * also waits for that load and the drawing it brings.
    */
   protected override async getUpdateComplete(): Promise<boolean> {
     const complete = await super.getUpdateComplete();
-    await this.#proseMathLoad;
+    await this.#katexLoad;
     return complete;
   }
 

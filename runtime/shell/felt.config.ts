@@ -39,14 +39,15 @@ const SHELL_PORT = parseInt(
 
 const config: Config = {
   entries: [
+    { in: "src/index.ts", out: "scripts/index" },
+    // KaTeX and its layout rules, which cf-code-editor imports as
+    // `cf-katex-render` the first time an editor draws math. The name is left
+    // external below and `public/index.html` maps it to this script, so the
+    // page loads KaTeX only then. integration/katex-script.test.ts holds
+    // the three together.
     {
-      in: "src/index.ts",
-      out: "scripts/index",
-      // KaTeX is reached only through the dynamic import in cf-code-editor,
-      // the first time an editor draws math. Splitting emits it as a chunk of
-      // its own, so the page loads it only then.
-      // integration/page-boot-graph.test.ts holds it there.
-      splitting: true,
+      in: "../ui/src/v2/components/cf-code-editor/features/katex-render.ts",
+      out: "scripts/katex-render",
     },
     { in: "src/library.ts", out: "scripts/shell-library", splitting: true },
     {
@@ -66,7 +67,7 @@ const config: Config = {
       // The TypeScript compiler stack is reached only through the single
       // dynamic import in deferred-compiler-stack.ts. Splitting emits it as a
       // separate chunk loaded on first compile, so it stays out of the worker
-      // boot bundle.
+      // boot bundle. `index` above is a plain, unsplit bundle.
       splitting: true,
     },
   ],
@@ -93,6 +94,8 @@ const config: Config = {
       "source-map-support",
       "canvas",
       "inspector",
+      // Resolved by the page's import map; see the `katex-render` entry.
+      "cf-katex-render",
     ],
     define: {
       "$ENVIRONMENT": ENVIRONMENT,

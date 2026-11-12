@@ -5,19 +5,15 @@
  * lines to itself is drawn as a block, centered. The formulas are the nodes
  * `math-syntax.ts` parses.
  *
- * This module brings KaTeX and its layout rules, so the editor loads it only
- * when it first draws math, and the shell's bundle carries it in a chunk of
- * its own.
- *
- * KaTeX runs with `trust` off, so no command reaches a URL, a class or an
- * attribute of the author's choosing, with a size a formula asks for capped,
- * and with macro expansion capped.
+ * Nothing here imports KaTeX. The editor loads it, from `katex-render.ts`,
+ * when it first draws math, and hands `proseMath()` its `renderFormula`.
  */
 
 import { syntaxTree } from "@codemirror/language";
 import {
   type EditorState,
   type Extension,
+  Facet,
   type Range,
   StateEffect,
   StateField,
@@ -30,35 +26,25 @@ import {
   type ViewUpdate,
   WidgetType,
 } from "@codemirror/view";
-import katex from "katex";
-import { type CSSResult, unsafeCSS } from "lit";
 
-import { KATEX_STYLES } from "./katex-styles.ts";
+import type { RenderedFormula } from "./katex-render.ts";
 import { DISPLAY_MATH, INLINE_MATH } from "./math-syntax.ts";
 
-/**
- * KaTeX's layout rules, for the shadow root of an editor that draws
- * formulas. The fonts they name are declared by the page; see
- * `docs/prose-markdown.md`.
- */
-export const mathStyles: CSSResult = unsafeCSS(KATEX_STYLES);
+/** Sets a formula's TeX, in display style when `display`. */
+export type FormulaRenderer = (
+  tex: string,
+  display: boolean,
+) => RenderedFormula;
 
 /**
- * KaTeX's settings. `trust` off refuses `\href`, `\url`, `\includegraphics`
- * and the `\html…` commands. `maxSize` caps a size the author writes, in ems,
- * and `maxExpand` the macro expansions in one formula, so a formula cannot
- * draw a page-sized box or loop. `strict` is off because a warning about the
- * author's TeX is not the editor's to log. The MathML half of the output is
- * for screen readers.
+ * What sets the formulas, as `proseMath()` was given it. A state without one
+ * draws each formula as KaTeX's refusal would, so a test building decorations
+ * needs none.
  */
-const KATEX_OPTIONS = {
-  output: "htmlAndMathml",
-  throwOnError: true,
-  trust: false,
-  strict: "ignore",
-  maxSize: 10,
-  maxExpand: 1000,
-} as const;
+const formulaRenderer = Facet.define<FormulaRenderer, FormulaRenderer>({
+  combine: (renderers) =>
+    renderers[0] ?? (() => ({ error: "No renderer draws formulas here." })),
+});
 
 /** A formula set by KaTeX, in place of its TeX. */
 class MathWidget extends WidgetType {
@@ -71,21 +57,31 @@ class MathWidget extends WidgetType {
   /** Whether it is drawn as a block, in place of whole lines. */
   readonly #block: boolean;
 
+  /** What sets it. */
+  readonly #render: FormulaRenderer;
+
   /**
-   * Constructs an instance which draws `tex` in display style when
-   * `display`, as a block in place of whole lines when `block`.
+   * Constructs an instance which draws `tex` with `render`, in display style
+   * when `display`, as a block in place of whole lines when `block`.
    */
-  constructor(tex: string, display: boolean, block: boolean) {
+  constructor(
+    tex: string,
+    display: boolean,
+    block: boolean,
+    render: FormulaRenderer,
+  ) {
     super();
     this.#tex = tex;
     this.#display = display;
     this.#block = block;
+    this.#render = render;
   }
 
   /** @inheritDoc */
   override eq(other: WidgetType): boolean {
     return other instanceof MathWidget && other.#tex === this.#tex &&
-      other.#display === this.#display && other.#block === this.#block;
+      other.#display === this.#display && other.#block === this.#block &&
+      other.#render === this.#render;
   }
 
   /**
@@ -95,20 +91,15 @@ class MathWidget extends WidgetType {
   override toDOM(): HTMLElement {
     const element = document.createElement(this.#block ? "div" : "span");
     element.className = this.#block ? "cm-prose-math-block" : "cm-prose-math";
-    try {
-      // KaTeX's markup as a string rather than through `katex.render()`,
-      // which refuses a document in quirks mode, as the browser test harness
-      // is. With `trust` off, the markup holds nothing of the author's but
+    const rendered = this.#render(this.#tex, this.#display);
+    if ("html" in rendered) {
+      // With `trust` off, KaTeX's markup holds nothing of the author's but
       // escaped text.
-      element.innerHTML = katex.renderToString(this.#tex, {
-        ...KATEX_OPTIONS,
-        displayMode: this.#display,
-      });
-    } catch (error) {
-      if (!(error instanceof katex.ParseError)) throw error;
+      element.innerHTML = rendered.html;
+    } else {
       const delimiter = this.#display ? "$$" : "$";
       element.classList.add("cm-prose-math-error");
-      element.title = error.message;
+      element.title = rendered.error;
       element.textContent = `${delimiter}${this.#tex}${delimiter}`;
     }
     return element;
@@ -158,7 +149,12 @@ export function buildMathDecorations(
             node.to,
           )
           : Decoration.replace({
-            widget: new MathWidget(tex, display, block),
+            widget: new MathWidget(
+              tex,
+              display,
+              block,
+              state.facet(formulaRenderer),
+            ),
             block,
           }).range(from, to),
       );
@@ -287,11 +283,21 @@ const mathTheme = EditorView.baseTheme({
 });
 
 /**
- * The editor extension that draws formulas. It needs the language to parse
- * Markdown with `mathMarkdown`; without that, it finds no formula.
- * `hasFocus` says whether the view the extension joins has focus now, so an
- * extension added to a focused view draws as focused from its first update.
+ * The editor extension that draws formulas with `render`. It needs the
+ * language to parse Markdown with `mathMarkdown`; without that, it finds no
+ * formula. `hasFocus` says whether the view the extension joins has focus
+ * now, so an extension added to a focused view draws as focused from its
+ * first update.
  */
-export function proseMath(hasFocus: boolean): Extension {
-  return [focusedField.init(() => hasFocus), focusSync, mathField, mathTheme];
+export function proseMath(
+  hasFocus: boolean,
+  render: FormulaRenderer,
+): Extension {
+  return [
+    formulaRenderer.of(render),
+    focusedField.init(() => hasFocus),
+    focusSync,
+    mathField,
+    mathTheme,
+  ];
 }

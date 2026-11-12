@@ -36,6 +36,9 @@
     // Exact: `tasks/generate-katex-assets.ts` writes KaTeX's stylesheet and
     // fonts from this release. See DEPENDENCIES.md, "KaTeX".
     "katex": "npm:katex@0.19.1",
+    // The module the editor loads KaTeX from, by a name the shell's page maps
+    // to a script of its own. See `features/katex-render.ts`.
+    "cf-katex-render": "./src/v2/components/cf-code-editor/features/katex-render.ts",
     "leaflet": "npm:leaflet@^1.9.4",
     "@types/leaflet": "npm:@types/leaflet@^1.9.21",
     "d3-scale": "npm:d3-scale@^4.0.2",

@@ -4,9 +4,7 @@ import { ensureSyntaxTree } from "@codemirror/language";
 import { markdown } from "@codemirror/lang-markdown";
 import { EditorState } from "@codemirror/state";
 import { GFM } from "@lezer/markdown";
-import katex from "katex";
 
-import { KATEX_STYLES_VERSION } from "./katex-styles.ts";
 import { mathMarkdown } from "./math-syntax.ts";
 import { buildMathDecorations } from "./prose-math.ts";
 
@@ -171,12 +169,6 @@ describe("prose-math", () => {
     it("draws no formula with nothing between its delimiters", () => {
       expect(describeDecorations(createState("Empty $$ $$ here"), false))
         .toEqual([]);
-    });
-  });
-
-  describe("katex-styles", () => {
-    it("holds the stylesheet of the KaTeX release the editor imports", () => {
-      expect(KATEX_STYLES_VERSION).toBe(katex.version);
     });
   });
 });

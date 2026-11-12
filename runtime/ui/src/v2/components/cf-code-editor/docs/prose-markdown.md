@@ -64,8 +64,9 @@ activation: the cursor position is compared to the element's `from`/`to` span.
 ## Math
 
 With the `math` property set, prose mode also draws TeX formulas in Markdown:
-`$…$` inline and `$$…$$` display. The syntax is `features/math-syntax.ts`, and
-what draws it is `features/prose-math.ts`:
+`$…$` inline and `$$…$$` display. The syntax is `features/math-syntax.ts`, what
+draws it is `features/prose-math.ts`, and KaTeX itself is reached only through
+`features/katex-render.ts`:
 
 - **`mathMarkdown`**, a Markdown parser extension, makes each formula a node of
   the syntax tree, `InlineMath` or `DisplayMath`, with `MathMark` children for
@@ -86,23 +87,30 @@ what draws it is `features/prose-math.ts`:
   KaTeX cannot parse is shown as written, `cm-prose-math-error`, with KaTeX's
   message as its tooltip. A click on a formula places the cursor beside it,
   which shows its TeX.
-- **`proseMath(hasFocus)`** provides the decorations from a state field rather
-  than a view plugin, because a block formula replaces line breaks, which
-  CodeMirror accepts only from a field. A field cannot read the view's focus, so
-  a small view plugin compares the two after every update and sends a correction
-  when they differ. CodeMirror's `focusChangeEffect` would drop its transaction
-  whenever another lands first, which the editor's own updates do.
+- **`proseMath(hasFocus, render)`** draws each formula with `render`, which is
+  `katex-render.ts`'s `renderFormula`, and provides the decorations from a state
+  field rather than a view plugin, because a block formula replaces line breaks,
+  which CodeMirror accepts only from a field. A field cannot read the view's
+  focus, so a small view plugin compares the two after every update and sends a
+  correction when they differ. CodeMirror's `focusChangeEffect` would drop its
+  transaction whenever another lands first, which the editor's own updates do.
 
 KaTeX runs with `trust` off, so `\href`, `\url`, `\includegraphics` and the
 `\html…` commands draw nothing of the author's choosing; with `maxSize` 10 (em)
 and `maxExpand` 1000.
 
-`prose-math.ts` brings KaTeX and its layout rules, so the editor imports it
-dynamically, the first time an editor draws math, and the shell's bundle carries
-it in a chunk of its own; `runtime/shell/integration/page-boot-graph.test.ts`
-holds KaTeX off the page's static imports. Until it arrives, formulas show as
-their TeX, and the editor's `updateComplete` waits for it. A load that fails is
-reported as `cf-error`.
+`katex-render.ts` holds KaTeX and its layout rules and imports nothing of the
+editor's. The editor imports it as `cf-katex-render`, the first time an editor
+draws math. In Deno and the browser tests, `runtime/ui`'s import map resolves
+that name to the module. The shell instead leaves the name external to its
+bundles, builds the module as `/scripts/katex-render.js`, and maps the name to
+that script in its page's import map, so a page loads KaTeX only when an editor
+draws math, and the script carries no second copy of CodeMirror;
+`runtime/shell/integration/katex-script.test.ts` holds the three together. Until
+KaTeX arrives, formulas show as their TeX, and the editor's `updateComplete`
+waits for it. A load that fails is reported as `cf-error`; a page that maps no
+script to the name, one embedding the shell's components outside the shell's own
+page, is one where that happens.
 
 KaTeX's layout rules, `features/katex-styles.ts`, are added to the editor's
 shadow root once loaded. Its fonts cannot be declared there, since a shadow root
