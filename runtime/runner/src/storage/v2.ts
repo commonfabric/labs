@@ -862,23 +862,42 @@ const pendingVersion = (
   ...operation,
 });
 
+/** The key {@link readsByDocument} files a read of document `id` under. */
+const readDocumentKey = (id: string, scope: CellScope | undefined): string =>
+  `${normalizeCellScope(scope)}\0${id}`;
+
 /**
- * The paths of `operation`'s splices that a recursive read among `reads`
- * covers: a read of the same document whose path is the splice's array or
- * one of its ancestors. A shape-only read does not count, since a write
- * that replaces an element in place changes no shape and would be accepted
- * over the shown array.
+ * The reads among `reads`, grouped by the document each reads and keyed by
+ * {@link readDocumentKey}.
+ */
+const readsByDocument = (
+  reads: ClientCommit["reads"],
+): ReadonlyMap<string, readonly WireRead[]> => {
+  const byDocument = new Map<string, WireRead[]>();
+  for (const list of [reads.confirmed, reads.pending]) {
+    for (const read of list) {
+      const key = readDocumentKey(read.id, read.scope);
+      const group = byDocument.get(key);
+      if (group === undefined) byDocument.set(key, [read]);
+      else group.push(read);
+    }
+  }
+  return byDocument;
+};
+
+/**
+ * The paths of `operation`'s splices that a recursive read among
+ * `documentReads`, the commit's reads of the document `operation` writes,
+ * covers: a read whose path is the splice's array or one of its ancestors. A
+ * shape-only read does not count, since a write that replaces an element in
+ * place changes no shape and would be accepted over the shown array.
  */
 const intendedSplicePaths = (
   operation: NativeCommitOperation,
-  reads: ClientCommit["reads"],
+  documentReads: readonly WireRead[],
 ): ReadonlySet<string> | undefined => {
   if (operation.op !== "patch") return undefined;
-  const scope = normalizeCellScope(operation.scope);
-  const covering = [...reads.confirmed, ...reads.pending].filter((read) =>
-    read.id === operation.id && normalizeCellScope(read.scope) === scope &&
-    read.nonRecursive !== true
-  );
+  const covering = documentReads.filter((read) => read.nonRecursive !== true);
   if (covering.length === 0) return undefined;
   const paths = new Set<string>();
   for (const patch of operation.patches) {
@@ -8866,11 +8885,12 @@ export class SpaceReplica
       this.#speculativeLocalSeqs.set(localSeq, speculationSettled.promise);
     }
 
+    const reads = readsByDocument(commit.reads);
     for (const operation of operations) {
       this.#applyPending(
         withTextEditsShown(operation, applyOps),
         localSeq,
-        commit.reads,
+        reads,
         identity,
       );
     }
@@ -9686,11 +9706,12 @@ export class SpaceReplica
     );
 
     withCommitTiming(["commitOperations", "applyPending"], () => {
+      const reads = readsByDocument(commit.reads);
       for (const operation of operations) {
         this.#applyPending(
           withTextEditsShown(operation, applyOps),
           localSeq,
-          commit.reads,
+          reads,
         );
       }
     });
@@ -12362,17 +12383,14 @@ export class SpaceReplica
   #applyPending(
     operation: NativeCommitOperation,
     localSeq: number,
-    reads: ClientCommit["reads"],
+    reads: ReadonlyMap<string, readonly WireRead[]>,
     identity?: ScopeKeyIdentity,
   ): void {
     const { id, scope, ...pending } = operation;
     const record = this.#record(id, scope, identity);
-    const intended = intendedSplicePaths(operation, reads);
-    const normalizedScope = normalizeCellScope(scope);
-    const read = [...reads.confirmed, ...reads.pending].some((candidate) =>
-      candidate.id === id &&
-      normalizeCellScope(candidate.scope) === normalizedScope
-    );
+    const documentReads = reads.get(readDocumentKey(id, scope)) ?? [];
+    const intended = intendedSplicePaths(operation, documentReads);
+    const read = documentReads.length > 0;
     record.pending.push(
       pendingVersion(
         localSeq,
@@ -13178,6 +13196,7 @@ export class SpaceReplica
   #hasSinkSubscribers(
     entries: Iterable<LocalDocAddress>,
   ): boolean {
+    if (this.#sinks.size === 0) return false;
     for (const entry of entries) {
       if ((this.#sinks.get(this.#docKeyOf(entry))?.size ?? 0) > 0) {
         return true;
