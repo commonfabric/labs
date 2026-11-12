@@ -66,12 +66,20 @@ caller keeps them, walks them under a schema, and records what it reached.
   consumers of traversed values observe; see the OFF-ARM NEUTRALITY note at
   that site for what gates enabling it.
 - A walk reports each tracker record it makes, or finds the tracker already
-  holding, to the `onTrackedDoc` hook of its options, with the document whose
-  walk needed it: the document holding the link that was followed, the
+  holding, to the `onTrackedDoc` hook of its options, with the record whose
+  walk needed it (`trackedRecordKey`, one document under one selector): the
+  record of the document holding the link that was followed, or of the
   document whose schema or `cfc` envelope named a schema document, or the
-  referrer `visit()` was given for a root. `memory` attributes its tracker
-  with that, so a document nothing reaches any more can leave a session's
-  result (`../specs/memory-v2/04-protocol.md`, section 4.6.3). A visit a
+  referrer `visit()` was given for a root. A document is walked under the
+  record a visit or a followed link entered it by while the traversal of
+  the position that entered it lasts, which the traversal reports through
+  `TraversalContext.records`; the schema memo is kept per record, so a
+  record walking a position another record of its document walked before
+  still reports what it reaches. Misses and crossings are reported by
+  record in the same way. `memory` attributes its tracker with that, so a
+  document nothing reaches any more can leave a session's result
+  (`../specs/memory-v2/04-protocol.md`, section 4.6.3), and a record that
+  retires releases what its own walk reached without a walk. A visit a
   memory server's incremental passes make to a document it already tracks,
   for a root added again, a covered root walked on its own, or a document
   walked again for its attributions, asks for a `rewalk`, which traverses

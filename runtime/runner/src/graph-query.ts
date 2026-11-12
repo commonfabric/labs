@@ -13,7 +13,7 @@
  * the traversal's internals.
  */
 
-import type { FabricValue } from "@commonfabric/data-model";
+import { type FabricValue, hashStringOf } from "@commonfabric/data-model";
 import { internPathSelector } from "@commonfabric/data-model-schema";
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import type {
@@ -29,6 +29,7 @@ import { ExtendedStorageTransaction } from "./storage/extended-storage-transacti
 import {
   type BaseMemoryAddress,
   CompoundCycleTracker,
+  coverageKind,
   coveringSelector,
   createSchemaMemo,
   createTraversalContext,
@@ -46,6 +47,17 @@ import {
   schemaTrackerKey,
   type TraversalContext,
 } from "./traverse.ts";
+
+/**
+ * The key of one tracker record: the document `docKey` names, under
+ * `selector`. A walk attributes what it reaches to the record whose walk
+ * reached it (see `GraphQueryWalkOptions.onTrackedDoc`), and `memory` keys
+ * its attribution by the same records.
+ */
+export const trackedRecordKey = (
+  docKey: string,
+  selector: SchemaPathSelector,
+): string => `${docKey}\0${hashStringOf(internPathSelector(selector))}`;
 
 export type {
   BaseMemoryAddress,
@@ -225,6 +237,24 @@ export class GraphQueryWalk {
 
   readonly #onTrackedDoc: GraphQueryWalkOptions["onTrackedDoc"];
 
+  /**
+   * The records this visit has entered, by the tracker key of their
+   * document, latest last: the visit's root, and each document a followed
+   * link entered, with how many positions were being traversed when it was
+   * entered and the innermost of them. A record is walked while that
+   * position is still being traversed. One entered outside any position,
+   * as the root is and as each document the root's selector path leads
+   * through is, is walked while the visit lasts.
+   */
+  readonly #entered = new Map<
+    string,
+    { record: string; depth: number; position: object | undefined }[]
+  >();
+
+  /** The positions being traversed, which the traversal keeps
+   * (`RecordWalk.positions`). */
+  readonly #positions: object[] = [];
+
   constructor(options: GraphQueryWalkOptions) {
     this.#manager = options.manager;
     this.#space = options.space;
@@ -250,6 +280,20 @@ export class GraphQueryWalk {
       }
       return this.#keyOverrides.get(sourceKey) ?? sourceKey;
     };
+    // The record a source's document is being walked under, if any.
+    const recordOf = (
+      source: { id: string; scope?: CellScope } | undefined,
+    ): string | undefined => {
+      const sourceKey = referrerKeyOf(source);
+      return sourceKey === undefined
+        ? undefined
+        : this.#walkingRecordOf(sourceKey);
+    };
+    // What a source reaches is attributed to that record, or to the
+    // document where no record of it was entered.
+    const referrerOf = (
+      source: { id: string; scope?: CellScope } | undefined,
+    ): string | undefined => recordOf(source) ?? referrerKeyOf(source);
     this.#context = createTraversalContext(
       new CompoundCycleTracker<FabricValue, JSONSchema | undefined>(),
       options.schemaTracker,
@@ -265,12 +309,7 @@ export class GraphQueryWalk {
       onMissedDoc === undefined && onCrossing === undefined
         ? undefined
         : (link, _sourceSpace, source) => {
-          const sourceKey = source === undefined
-            ? undefined
-            : schemaTrackerKey(space, source.id, source.scope, identity);
-          const referrerKey = sourceKey === undefined
-            ? undefined
-            : this.#keyOverrides.get(sourceKey) ?? sourceKey;
+          const referrerKey = referrerOf(source);
           const selector = internPathSelector({
             path: ["value", ...link.path],
             schema: link.schema ?? false,
@@ -296,15 +335,58 @@ export class GraphQueryWalk {
       // exists; the override reaches the referrer side alone.
       onTrackedDoc === undefined
         ? undefined
-        : (key, selector, source, kind) =>
-          onTrackedDoc(key, selector, referrerKeyOf(source), kind),
+        : (key, selector, source, kind) => {
+          const referrer = referrerOf(source);
+          onTrackedDoc(key, selector, referrer, kind);
+          // A walked record other than the one the source is walked under,
+          // another document's or another of its own, is the record the
+          // walk continues under for as long as the position being
+          // traversed now lasts, if it continues into that document.
+          if (
+            kind === "walked" && referrer !== trackedRecordKey(key, selector)
+          ) {
+            this.#enter(key, selector);
+          }
+        },
     );
+    if (onTrackedDoc !== undefined) {
+      this.#context.records = { positions: this.#positions, recordOf };
+    }
     // The manager serves stored documents and nothing is handed back to be
     // written elsewhere, so an inline array element is walked where it is
     // stored.
     this.#context.inlineArrayItemsInPlace = true;
     this.#memo = options.memo ?? createSchemaMemo();
     this.stats = options.stats ?? createGraphQueryWalkStats();
+  }
+
+  /** Notes that the walk entered `docKey`'s record under `selector`. */
+  #enter(docKey: string, selector: SchemaPathSelector): void {
+    let entered = this.#entered.get(docKey);
+    if (entered === undefined) {
+      entered = [];
+      this.#entered.set(docKey, entered);
+    }
+    entered.push({
+      record: trackedRecordKey(docKey, selector),
+      depth: this.#positions.length,
+      position: this.#positions.at(-1),
+    });
+  }
+
+  /** The record `docKey`'s document is being walked under, if any: the
+   * latest it entered whose position is still being traversed. Entries
+   * whose position has ended are dropped as it looks. */
+  #walkingRecordOf(docKey: string): string | undefined {
+    const entered = this.#entered.get(docKey);
+    while (entered !== undefined && entered.length > 0) {
+      const { record, depth, position } = entered[entered.length - 1];
+      if (depth === 0 || this.#positions[depth - 1] === position) {
+        return record;
+      }
+      entered.pop();
+    }
+    return undefined;
   }
 
   /**
@@ -321,7 +403,8 @@ export class GraphQueryWalk {
    *
    * The document's own record attributes to `referrer` through
    * `onTrackedDoc` (a watch's root key, for a walk a watch roots); the
-   * records of what its walk reaches attribute to the document. Without a
+   * records of what its walk reaches attribute to that record, or to the
+   * record covering it when the tracker already holds one. Without a
    * referrer the document's record attributes to nothing, as a re-walk of
    * a document already attributed wants.
    *
@@ -364,11 +447,20 @@ export class GraphQueryWalk {
     const covered = covering !== undefined;
     if (covered) {
       this.stats.coveredSelectorSkips++;
-      this.#onTrackedDoc?.(docKey, covering, referrer, "covered");
+      this.#onTrackedDoc?.(
+        docKey,
+        covering,
+        referrer,
+        coverageKind(covering, internedSelector),
+      );
     } else {
       this.#context.schemaTracker.add(docKey, internedSelector);
       this.#onTrackedDoc?.(docKey, internedSelector, referrer, "walked");
     }
+    // A covered root is walked under the record covering it, which is the
+    // record its walk keeps.
+    this.#entered.clear();
+    this.#enter(docKey, covering ?? internedSelector);
     this.#context.trackedReferrer = {
       id: document.address.id,
       scope: document.address.scope,

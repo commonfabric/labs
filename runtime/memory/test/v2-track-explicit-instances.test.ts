@@ -91,13 +91,19 @@ describe("v2-track-explicit-instances", () => {
   describe("trackGraph()", () => {
     it("attributes what each instance of a root reaches to that instance", async () => {
       await withTrackedInstances((_engine, tracked) => {
+        // Each referrer is the record, one instance under one selector,
+        // whose walk reached the document; its key leads with the
+        // instance's document key.
         const referrersOf = (id: string) =>
           [...tracked.state.trackedBy.entries()]
             .filter(([entry]) => entry.startsWith(`${space}/space/${id}\0`))
-            .flatMap(([, referrers]) => [...referrers]);
-        expect(referrersOf("of:x")).toEqual([`${space}/${aliceKey}/of:root`]);
+            .flatMap(([, referrers]) => [...referrers])
+            .map((referrer) => referrer.split("\0"));
+        expect(referrersOf("of:x")).toEqual([
+          [`${space}/${aliceKey}/of:root`, expect.any(String)],
+        ]);
         expect(referrersOf("of:y")).toEqual([
-          `${space}/${serviceKey}/of:root`,
+          [`${space}/${serviceKey}/of:root`, expect.any(String)],
         ]);
       });
     });
