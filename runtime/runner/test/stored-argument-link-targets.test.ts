@@ -62,6 +62,20 @@ const childTakesLabel = (marker: string): RuntimeProgram =>
     "",
   ].join("\n"));
 
+/**
+ * A pattern whose argument declares what `far` holds, which its body never
+ * reads, and which reports `marker`, which names the version.
+ */
+const farUnread = (marker: string): RuntimeProgram =>
+  programOf([
+    "import { pattern } from 'commonfabric';",
+    "interface Args { far: { n: number } }",
+    "export default pattern<Args, { marker: string }>(() => {",
+    `  return { marker: ${JSON.stringify(marker)} };`,
+    "});",
+    "",
+  ].join("\n"));
+
 /** A pattern with no nodes, over an open argument. */
 const emptyPattern = programOf([
   "import { pattern } from 'commonfabric';",
@@ -188,6 +202,96 @@ describe("stored argument link targets", () => {
       // The carried slot is still stored: the start landed by reading it, not
       // by leaving it out.
       expect(isCellLink(storedChildArgument(cold, piece).extra)).toBe(true);
+    });
+  });
+
+  describe("a piece stored under another pattern", () => {
+    let server: MemoryV2Server.Server;
+    const runtimes: { runtime: Runtime; storage: EmulatedStorageManager }[] =
+      [];
+
+    beforeEach(() => {
+      server = newSharedServer();
+    });
+    afterEach(async () => {
+      for (const { runtime, storage } of runtimes.splice(0)) {
+        await runtime.dispose();
+        await storage.close();
+      }
+      await server.close();
+    });
+
+    const newRuntime = (): Runtime => {
+      const storage = EmulatedStorageManager.connectTo(server, { as: signer });
+      const runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: storage,
+      });
+      runtimes.push({ runtime, storage });
+      return runtime;
+    };
+
+    it("starts at the new version requesting nothing its argument links in another space", async () => {
+      // The setup reads the argument it stored as it stands, raw, and judges
+      // the link in `far` as a link. Nothing at either version reads what
+      // `far` reaches, so a runtime that first sees the piece at the update
+      // has no reason to load it.
+
+      const elsewhere = (await Identity.fromPassphrase(
+        "stored-argument-link-targets far space",
+      )).did();
+      const author = newRuntime();
+      const far = author.getCell(elsewhere, "far value", undefined);
+      const farTx = author.edit();
+      far.withTx(farTx).set({ n: 1 });
+      expect((await farTx.commit().settled).error).toBeUndefined();
+      const tx = author.edit();
+      const first = await author.patternManager.compilePattern(
+        farUnread("v1"),
+        { space, tx },
+      );
+      const authored = author.getCell<Record<string, unknown>>(
+        space,
+        "piece linking another space",
+        undefined,
+        tx,
+      );
+      author.run(tx, first, { far }, authored);
+      author.prepareTxForCommit(tx);
+      expect((await tx.commit().settled).error).toBeUndefined();
+      await authored.pull();
+      await author.idle();
+      await author.storageManager.synced();
+      author.runner.stop(authored);
+
+      const cold = newRuntime();
+      const piece = cold.getCell<Record<string, unknown>>(
+        space,
+        "piece linking another space",
+      );
+      await piece.sync();
+      const provider = cold.storageManager.open(elsewhere);
+      const sync = provider.sync;
+      const requested: string[] = [];
+      provider.sync = (id, selector, scope, instance) => {
+        requested.push(id);
+        return sync.call(provider, id, selector, scope, instance);
+      };
+      try {
+        const second = await cold.patternManager.compilePattern(
+          farUnread("v2"),
+          { space },
+        );
+        await cold.runSynced(piece, second);
+        await cold.runner.idlePieceInstantiationSettlements();
+        await cold.idle();
+        await cold.storageManager.synced();
+        expect(await piece.key("marker").pull()).toBe("v2");
+      } finally {
+        provider.sync = sync;
+      }
+
+      expect(requested).toStrictEqual([]);
     });
   });
 

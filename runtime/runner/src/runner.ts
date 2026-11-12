@@ -4770,8 +4770,11 @@ export class Runner {
         new Set(droppedArgumentFields),
       );
     } else {
+      // Read under no schema: what is wanted is the stored bytes, and a load
+      // under the link's schema, the outgoing pattern's, would deliver all it
+      // reaches, in other spaces too, which nothing here reads.
       const previousArgumentCell = this.#runtime.getCellFromLink(
-        argumentLink,
+        { ...argumentLink, schema: undefined },
         undefined,
         tx,
       );
