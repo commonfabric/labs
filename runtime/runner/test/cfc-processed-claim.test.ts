@@ -292,12 +292,21 @@ describe("cfc-processed-claim", () => {
     tx.abort();
   });
 
-  it("counts a processed claim naming a document other than a stream's entries for nothing", () => {
+  it("counts a processed claim naming a document other than a stream's entries for nothing", async () => {
     // Only a stream's entries document holds an event's processed claim, so
     // the runtime's mark on any other document names nothing the gate skips.
+    // The document holds an entry already, as the entries document does, so
+    // that the mark is the only write the gate could skip.
+    const plain = runtime.getCell<{ entries: { note: string }[] }>(
+      space,
+      "plain-document",
+      undefined,
+    );
+    const seed = runtime.edit();
+    plain.withTx(seed).set({ entries: [{ note: "pending" }] });
+    expect((await seed.commit().settled).error).toBeUndefined();
+    const plainId = plain.getAsNormalizedFullLink().id;
     const tx = handlerRun("misplaced-handler");
-    const plainId = runtime.getCell(space, "plain-document", undefined)
-      .getAsNormalizedFullLink().id;
     writeProcessedClaim(runtime, tx, space, { sidecarId: plainId, index: 0 }, {
       clearDeferral: false,
     });
