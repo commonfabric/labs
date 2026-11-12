@@ -263,7 +263,8 @@ The strict-only delta is:
   bit-for-bit on stored metadata. The reason string is stable and names the
   rule id, target, path, and offending clause(s) (SC-18c):
   `writer-fit confidentiality misfit for <doc> at /<path> (canWrite, §8.12.4):
-  <clauses>`. Scope note (v1): link-covered writes carry per-slot link labels
+  <clauses>`, or `(cross-holder, §8.12.5.1)` in place of the rule id for a
+  served run's cross-holder clause, below. Scope note (v1): link-covered writes carry per-slot link labels
   instead of the join and are outside the check, as is the pure-link-structure
   shape channel; grown existence atoms (SC-4) are historical and deliberately
   never measured — only the current join is. `User` and the bare DID-string
@@ -302,6 +303,41 @@ The strict-only delta is:
   transaction with recorded reasons CFC-relevant (`prepare-reasons`), so a
   reasoned tx whose reads never tripped an eager relevance mark cannot slip the
   ladder ([extended-storage-transaction.ts](../../runtime/runner/src/storage/extended-storage-transaction.ts)).
+
+  **A served run's cross-holder clauses.** A run the serving posture executes
+  for an acting principal, an event handler or a derivation, can read what
+  that principal's own runtime could not, and code that principal controls
+  chooses where it writes. For such a run (`isServedRunUnderHolderRule` in
+  `prepare.ts`: a wave run context of kind `event-handler` or `derivation`),
+  the flow join records which store each clause was read from
+  (`ClauseCarriers`), and a clause read from a store whose holders don't
+  include every holder of the target is cross-holder (`crossHolderClauses`).
+  Same holders means one space, and a source bound to no one, or source and
+  target both `user` or `session` documents of the one principal the run's
+  scoped reads and writes resolve under; where the storage transaction's
+  scope-key identity and the wave context's differ, or either is absent, no
+  two bound documents share holders. A clause carried by an observation of no
+  store, external content or label metadata, is cross-holder, and so is one
+  also carried from another store. A cross-holder clause fits a write only by
+  the target's residency, above. No declaration admits one, whether authored,
+  upgraded, or minted for a document the transaction creates, and neither
+  runtime-owned route below records one. Its misfit is refused at every
+  measured path of every document the run writes, the computed and
+  entries-document id classes and marked-undeclarable documents included,
+  with the `(cross-holder, §8.12.5.1)` reason, and each one counts under the
+  `cfc` logger's `writer-fit-cross-holder` key. Every other clause is measured
+  as for any writer, so a same-holder misfit keeps §8.12.5's options, and a
+  cross-holder clause residency covers is never offending there. A run in the
+  acting principal's own runtime, and a bookkeeping run such as a deferred
+  piece start, are measured as before. Residency's owner case still admits a
+  cross-holder `PersonalSpace(P)` clause into a store bound to `P`, which the
+  rule's text leaves out pending
+  [specs#68](https://github.com/commonfabric/specs/pull/68) and
+  [specs#71](https://github.com/commonfabric/specs/pull/71). This implements
+  [specs#95](https://github.com/commonfabric/specs/pull/95) ahead of its
+  ruling, widened from a served event handling to a served derivation, and
+  its two deciding sites carry its `SPEC-PENDING` marker; the conformance
+  statement records the gap.
 
   The DECLARED half of the ceiling also admits an owner case, in one
   direction. A `PersonalSpace(owner)` LABEL clause answers a
@@ -796,6 +832,11 @@ The strict-only delta is:
     commitment answer one the same way. A person-audience clause is
     not a container clause: `User(alice)` is honored by the reader check
     whoever holds the bytes.
+  - **No cross-holder clause of a served run.** Neither route admits a
+    clause a served run read from a store whose holders don't include every
+    holder of the target, nor writes one into a declaration (§8.12.5.1,
+    "A served run's cross-holder clauses" above). The route admits and
+    declares the same-holder misfit alone.
   - **Independent components.** The flow-stamp pass retains existing
     declarations and frozen existence entries while replacing the value
     stamps on overwritten paths. An unlabeled overwrite does not erase a

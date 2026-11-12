@@ -389,6 +389,18 @@ the route's pseudocode, so the kernel manifest carries no row for it until the
 next regeneration after the ruling. @danfuzz directed landing it this way. The
 conformance statement's §8 records the gap.
 
+The served-run holder rule (§8.12.5.1) implements
+[specs#95](https://github.com/commonfabric/specs/pull/95) ahead of its
+ruling. A served event handler or derivation admits a clause it read from a
+store whose holders don't include every holder of the target only by the
+target's residency. It refuses more than the pin at strict and persists
+nothing new, so it satisfies step 4's fail-closed condition; its two
+deciding sites carry the `SPEC-PENDING` marker, and the citation, to a
+section the snapshot does not hold, is exempted in
+`tasks/check-cfc-correspondence.ts`.
+It covers a served derivation, which the proposal does not name. The
+conformance statement's §5 records the gap.
+
 The header a kernel function carries is one `@spec` tag in its doc comment,
 `@spec <chapter-file> §<section> <name> sha256:<hash>`, parsed by
 `runtime/runner/src/cfc/kernel/spec-header.ts`. The hash is the snapshot's

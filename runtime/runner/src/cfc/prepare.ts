@@ -14116,6 +14116,9 @@ export function* prepareBoundaryCommitSteps(
           ) {
             continue;
           }
+          // SPEC-PENDING https://github.com/commonfabric/specs/pull/95
+          // Refused ahead of the ruling, fail-closed; see
+          // `isServedRunUnderHolderRule`.
           if (crossHolderMisfit.length > 0) {
             cfcLogger.debug(
               "writer-fit-cross-holder",
