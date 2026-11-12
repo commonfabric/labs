@@ -51,11 +51,12 @@ The compiler knows the data flow of a pattern body statically, so label
 precision can come from the program's structure instead of from transaction
 boundaries. For each output path the compiler emits a **label template**: the
 set of inputs whose labels join to form that output's label. The runtime runs
-one transaction per cause (an event, or an external change), evaluates only
-the outputs something demands, stores only the outputs something outside the
-pattern instance can reach, and instantiates label templates only for what it
-stores: those outputs, the targets of side-writes, the arguments of child
-instances, and effect requests.
+one transaction per cause (an event, a set of changes, the completion of an
+effect, or a change of demand), evaluates only the outputs something demands,
+stores only the outputs something outside the pattern instance can reach, and
+instantiates label templates only for what it stores or checks: those
+outputs, the targets of side-writes, the arguments of child instances, effect
+requests, and the values a handler binding or an inline pattern copies.
 
 ## The language
 
@@ -93,12 +94,22 @@ body from being tainted by, or gaining access to, data it never touches.
 
 Footprint analysis is allowed to give up. When it loses track of a value it
 widens the footprint to the whole subtree that value came from, and no
-further. The less often it gives up the more precise the labels are, so the
-analysis is worth investing in, and a diagnostic can tell the author which
-expression caused a widening.
+further. When it cannot tell which child of a record a key names, it records
+what the body reads of that one child for every child. A widening does not
+pass through a cell handle: a handle the analysis loses track of is not read
+in full, and the reads through it become dynamic
+([footprint analysis](footprint-analysis.md), §5.1). The less often the
+analysis gives up the more precise the labels are, so it is worth investing
+in, and a diagnostic tells the author which expression caused a widening.
 
 Inside a function body the reactive constructs do not exist. `?:` and
-`Array.prototype.map` are ordinary JavaScript there.
+`Array.prototype.map` are ordinary JavaScript there. A collection method
+called on a cell handle in a function body, such as `aCell.map(...)`, is a
+compile error, and the compiler does not rewrite it to a reactive form. The
+diagnostic names two corrections: wrap the expression in an inline
+`pattern(...)` and instantiate it, which keeps it reactive, or read first,
+`aCell.get().map(...)`, which processes the values the cell holds when the
+body runs ([language subset](language-subset.md), §4.7).
 
 ### Imported TypeScript
 
@@ -115,8 +126,11 @@ state, and module-scope data is frozen. A function that closes over nothing
 mutable can be called repeatedly without a fresh sandbox per call, which is
 the property the loader relies on today
 ([SES sandboxing](../sandboxing/SES_SANDBOXING_SPEC.md)). In this design the
-property is a language rule the compiler checks and reports on, and the
-compiler emits the freezing wrappers.
+property is a language rule. For a module in the subset the compiler checks
+it, reports on it, and emits the freezing wrappers. The compiler does not
+analyze the bodies of an imported TypeScript module, so for such a module the
+load-time verifier and the freezing wrappers of the current system stay in
+force ([language subset](language-subset.md), §3.4 and §5.5).
 
 ### Labels in the type system
 
@@ -155,9 +169,12 @@ that records, among other things:
 - `total` depends on `basePrice` and `glaze` of every element and on
   `taxRate`.
 
-`prices` and `total` are returned, so they are kept outputs: path entries of
-the result document. `glazed` is interim and is not stored, no element of
-either list has a document of its own, and `d.name` never taints `total`.
+`prices` and `total` are returned, so they are kept outputs: paths of the
+result. They are stored in the result document, or, for a subtree that is
+large enough, in a part document the result links to
+([The keep set](#the-keep-set)). `glazed` is interim and is not stored, no
+element of either list is a pattern instance with documents of its own, and
+`d.name` never taints `total`.
 
 ## What the compiler emits
 
@@ -193,7 +210,7 @@ distrusting the compiler that produced it. A runtime therefore either compiles
 from source itself or accepts a compiled artifact from a party it already
 trusts to execute the pattern. For a module in the language subset the
 compiler's statelessness check is the enforcement, and no load-time verifier
-runs on it.
+runs on it. The verifier runs only on imported TypeScript modules.
 
 ### Why not an interpreted intermediate representation
 
@@ -215,7 +232,7 @@ observation class (value, shape, enumeration, identity, or label metadata).
 
 - **Objects:** slots follow the paths the footprint analysis found. A subtree
   the analysis could not resolve is one slot, standing for the join over the
-  subtree.
+  subtree, and a key it could not name is the slots at every child.
 - **Arrays:** the body of a `map` is compiled once against an element slot,
   so there is one template per body, not per element. Membership of the
   collection is its own slot.
@@ -227,20 +244,32 @@ observation class (value, shape, enumeration, identity, or label metadata).
   ([plan format and label templates](plan-and-label-templates.md), §3.13 and
   §3.18).
 - **Sandboxed calls:** the output's template is the union of the slots in the
-  body's footprint and of what the body read dynamically through the cell
-  handles it was given. A reference the body passes on unchanged keeps its
-  own label ([plan format and label templates](plan-and-label-templates.md),
-  §3.9).
+  body's footprint, of the templates of the computed values the body
+  observes, and of what the body read dynamically through the cell handles
+  it was given. A reference the body passes on unchanged keeps its own label
+  ([plan format and label templates](plan-and-label-templates.md), §3.9).
+
+A template label is equal to the label the runtime computes today or tighter,
+with two deliberate exceptions
+([plan format and label templates](plan-and-label-templates.md), §3.1).
+
+- The membership label of a collection index bucket is wider, because it
+  includes the keys of the elements that are not in the bucket (§3.17 there).
+- A read through a cell handle is a static slot when every run of the body
+  that returns normally makes it. A run that throws before the read carries
+  the read's label all the same, where today its transaction does not (§3.9
+  there).
 
 Instantiating a template means substituting actual labels for slots and
-combining them. The runtime does this only for what it stores: kept outputs,
-the targets of side-writes, the arguments of child instances, and effect
-requests. It does so only when a slot's label changed, or one of the three
-choices above did. A change of value alone does no label work. With labels
-held by content address
-([content-addressed CFC labels](../content-addressed-cfc-labels.md)), an
-instantiation is a union of identifiers and can be memoized by template and
-input label identifiers.
+combining them. The runtime does this only for what it stores or checks:
+kept outputs, the targets of side-writes, the arguments of child instances,
+effect requests, and the values a handler binding or an inline pattern copies
+([plan format and label templates](plan-and-label-templates.md), §4.1). It
+does so only when a slot's label changed, or one of the three choices above
+did. A change of value alone does no label work. With labels held by content
+address ([content-addressed CFC labels](../content-addressed-cfc-labels.md)),
+an instantiation is a union of identifiers and can be memoized by template
+and input label identifiers.
 
 Constraints such as required integrity and maximum confidentiality become
 constraints on slots. Where the labels of the slots are declared in schemas the
@@ -255,16 +284,48 @@ requirement that a declared atom satisfies
 
 ### One transaction per cause
 
-A cause is an event delivered to a handler, a change arriving from storage, or
-the completion of an effect. The runtime opens one transaction per cause,
-evaluates what the cause invalidated and something demands, and commits the
-state the handler wrote and the kept outputs that changed, with their labels.
-A label constraint that fails rejects the cause's whole transaction. A cone
-that fails, for example because the body of a `lift` or a `computed` throws,
-does not: its outputs take an error state with a label, and the rest of the
-transaction commits. A handler body that throws aborts its event's
-transaction, as it does today
-([plan format and label templates](plan-and-label-templates.md), §5).
+A cause is what a transaction is opened for. There are four kinds: an event
+delivered to a handler, a set of changes, the completion of an effect, and a
+change of demand. A set of changes is the commits that arrived from storage
+and the writes of the events that were handled. A change of demand is a cause
+because an output that becomes demanded may be stale, and its transaction
+runs as the principal whose demand changed. The runtime opens one transaction
+per cause, in one space
+([execution and storage](execution-and-storage.md), §1.1).
+
+A transaction is one of two kinds.
+
+- **An event's transaction** evaluates the stale cones that compute what the
+  handler reads, and then runs the handler body. It holds no other
+  derivation.
+- **A derivation transaction** is what each of the other three kinds of cause
+  has. It evaluates the cones that are stale and that something demands, and
+  commits the kept outputs that changed, with their labels.
+
+Several events are handled in one batch. Each event of the batch has a
+transaction of its own. The stale cones a handler reads are evaluated before
+its body, the ones an earlier event of the batch made stale included. Every
+other derivation the batch made stale settles once, in one derivation
+transaction behind the batch, and not once per event
+([scheduler and serving loop](scheduler-and-serving-loop.md), §5.1 and §5.4).
+
+What a failure does depends on what failed
+([plan format and label templates](plan-and-label-templates.md), §4.4 and §5;
+[execution and storage](execution-and-storage.md), §1.7).
+
+- **A label constraint on what a handler itself writes** rejects that event's
+  whole transaction. The other events of the batch are not affected.
+- **A label constraint on a derived write** drops that write alone. A derived
+  write is a kept output, or a write a cone performs. Its target keeps what
+  is stored, and the rest of the transaction commits.
+- **A conflict on a derived write,** found when the transaction commits,
+  withdraws that write alone, with the writes that used what it staged. The
+  rest of the cause's transaction commits.
+- **A cone that fails,** for example because the body of a `lift` or a
+  `computed` throws, takes an error state with a label for its outputs, and
+  the rest of the transaction commits.
+- **A handler body that throws** aborts its event's transaction, as it does
+  today.
 
 ### Pull and dependency cones
 
@@ -279,29 +340,41 @@ label.
 
 - An output passed to another pattern is a link. When the consumer is pulled,
   the pull extends through the link into the cone of the producing instance
-  that computes that path.
-- A `map` element is a cone with a key. The key is the element's value when
-  the element is a plain value, and the identity of the element's cell when
-  it is not. Elements that move keep their cones, so reordering a list does
-  not recompute it. The element's index is part of the key only when the
-  callback uses the index, since such a cone cannot move. A key that enters
-  a document identifier is first salted with a secret of the space, so that
-  an identifier does not reveal that two confidential values are equal.
-- Equal plain values have one key and so share one cone. A body over plain
-  values that declares a state cell or binds a handler without using the
-  index is therefore refused: the two rows would share that state.
-- A change to one element dirties that element's cone. A membership change
+  that computes that path. That holds within one space. A consumer in
+  another space reads the producer's kept output as stored
+  ([scheduler and serving loop](scheduler-and-serving-loop.md), §9.2).
+- The body of an element construct, such as the callback of a `map`, is one
+  or more cones, and they are evaluated once per element key
+  ([execution and storage](execution-and-storage.md), §2.1 and §2.5). The
+  key is the element's value when the element is a plain value, and the
+  identity of the element's cell when it is not. An element that moves keeps
+  what was evaluated for its key, so reordering a list does not recompute
+  it. The element's index is part of the key only when the callback uses the
+  index, and a body that uses it is evaluated again for an element that
+  moves. A key derived from a value is salted with a secret of the space
+  before it enters a document identifier, so that an identifier does not
+  reveal the value.
+- Equal plain values have one key and so share one evaluation. They share
+  the value and not the label: each position has the label of the address
+  its element was read from. A body over plain values that declares a state
+  cell or binds a handler without using the index is refused, because the
+  two rows would share that state.
+- A change to one element dirties that element's cones. A membership change
   dirties the container.
 
 Within an instance the order of evaluation is static, so the runtime does not
 discover read sets or sort nodes for it at run time. Dynamic read tracking
 remains for link hops through data, whose targets are not known statically,
 and for some of the reads a function body makes through a cell handle it was
-given: such a read is static when it goes through one handle whose position
-in the body's inputs is known, at a static path, and unconditionally, and it
-is dynamic otherwise ([footprint analysis](footprint-analysis.md), §7.2).
-Where footprint analysis gives up it widens a static slot, and no dynamic
-tracking is involved.
+given. Such a read is static when it goes through one handle whose position
+in the body's inputs is known, at a static path, and every run of the body
+that returns normally makes it. It is dynamic otherwise
+([footprint analysis](footprint-analysis.md), §7.2). Where footprint analysis
+gives up on a value or on a key it widens a static slot, and no dynamic
+tracking is involved. A cell handle the analysis loses track of is
+different: the reads through it are tracked dynamically, and may reach
+everything the handle's declared type covers
+([footprint analysis](footprint-analysis.md), §5.1).
 
 ### Computations that write
 
@@ -310,8 +383,11 @@ A computation may write through a cell passed to it, and the write tiers of
 
 - **Primary output and static side-write targets** are part of the compiled
   instance. A static side-write target is one more output edge of the cone
-  that writes it. Its label is that cone's template, and the write-floor
-  checks apply to it.
+  that writes it. Its label is the template of the written expression, which
+  is the body's template when a sandboxed body performs the write, and the
+  write-side checks apply to it: the write floor, the fit with the target's
+  declared confidentiality, and the writer policy
+  ([plan format and label templates](plan-and-label-templates.md), §3.11).
 - **Materializers**, whose write targets are dynamic or too broad to predict,
   are scheduled outside the compiled instance with their own transactions and
   the rules they have today: standing demand, idle priority, and promotion
@@ -322,10 +398,15 @@ with static targets, which removes them from eager scheduling.
 
 Side-writes mean a pattern instance is not acyclic by construction. A
 side-write to a cell an earlier cone read dirties that cone again. The
-compiler reports the cycles it can see statically, and the bounded-iteration
-rule of the scheduler (P7) applies to the rest, inside the cause's
-transaction. The idempotency contract and its validator apply to every body
-that writes.
+compiler reports the cycles it can see in the plan, as a warning. Every cycle
+is bounded inside the cause's transaction: a cone is evaluated at most ten
+times in one transaction, and a cone that would need an eleventh evaluation
+fails and takes an error state. The number is a placeholder, and it is fixed
+with the plan version so that a client and the server fail the same cones. A
+cone that failed at the bound is not evaluated again until one of its inputs
+changes ([execution and storage](execution-and-storage.md), §2.7;
+[scheduler and serving loop](scheduler-and-serving-loop.md), §8.1). The
+idempotency contract and its validator apply to every body that writes.
 
 ## What is stored
 
@@ -335,11 +416,23 @@ An **instantiated** pattern is one whose result cell was explicitly assigned.
 The keep set of an instance is everything reachable from that result cell.
 Reachable derived values are stored with their labels, because readers
 elsewhere cannot recompute them. The rendered tree under `[UI]` is part of
-the result, so a value bound into it is kept, as a path entry of the result
-document and not as a document of its own. Nothing reaches a value inside an
-instance except through the result cell.
+the result, so a value bound into it is kept, as a path of the result and
+not as a node with a document and a transaction of its own. Nothing reaches
+a value inside an instance except through the result cell.
 
-A pattern used inside another, such as the body of a `map` or an inline
+The keep set is stored in as many documents as serve its readers: the result
+document, and part documents. A kept subtree, such as a row of a kept
+collection or a node of the rendered tree, can be stored in a part document
+of its own, with a link to it at its place in the result, so that a reader
+loads and subscribes to the parts it uses. The runtime decides which
+subtrees are split off by a rule about size. A reader names the result cell
+and a path, whichever document stores the path, and a split changes no value
+and no label. One evaluation writes every document it changed in one
+transaction. [Execution and storage](execution-and-storage.md) §4.10 owns the
+rule, and [plan format and label templates](plan-and-label-templates.md)
+§2.3 says what a split has to preserve.
+
+A pattern compiled into another, such as the body of a `map` or an inline
 sub-pattern, is not instantiated in this sense. It has no result cell and no
 pattern metadata. If all its outputs are consumed by further computation it
 has no stored state at all.
@@ -356,12 +449,18 @@ keeps the back-link to its result, which `resultOwnerOf` reads
 ([plan format and label templates](plan-and-label-templates.md), §3.16).
 
 The compiler derives the name as the transformer does, from the variable the
-cell is assigned to (the `.for(...)` cause it emits). A state cell declared
-directly in the pattern body keeps the identifier it has today. One declared
-inside a sub-pattern that is compiled into the surrounding instance has a new
-identifier, and its stored value is found through a carry-over record. One
-declared inside a `map` body is not carried over: its identifier includes the
-element key, which this design redefines
+cell is assigned to (the `.for(...)` cause it emits). A declaration assigned
+to nothing takes a name from what it is, such as the callee's name for a
+call. Where two declarations of one pattern body have the same name, each
+takes its ordinal among them
+([plan format and label templates](plan-and-label-templates.md), §1.3).
+
+A state cell declared directly in the pattern body, under a variable's name
+that no other declaration of the body has, keeps the identifier it has today.
+One declared inside a sub-pattern that is compiled into the surrounding
+instance has a new identifier, and its stored value is found through a
+carry-over record. One declared inside a `map` body is not carried over: its
+identifier includes the element key, which this design redefines
 ([execution and storage](execution-and-storage.md), §5.7 and §9). Migrating an
 instance is a procedure that document proposes: one setup transaction that
 replaces the stored layout with the compiled one.
@@ -382,11 +481,14 @@ Storing a pure derivation does not change what a pattern means, so whether to
 cache one is a runtime decision and not a language feature.
 
 - The runtime always keeps a memo of evaluated cones in memory.
-- Effect results, and the fold state of aggregates over collections, are
-  always stored.
+- Effect results, and the state of aggregates, `reduce`, and collection
+  indexes, are always stored.
 - The runtime measures the recomputation cost of each cone and how often it is
   pulled, and promotes a cone to a durable cache when recomputing costs more
-  than storing. An author annotation can force or forbid the promotion.
+  than storing. The plan can carry a directive per cone that forces or
+  forbids the promotion. The language has no form by which an author writes
+  one, so a compiled plan leaves the decision to the runtime
+  ([execution and storage](execution-and-storage.md), §8.5).
 
 ## Built-ins and factories
 
@@ -399,11 +501,13 @@ classes hold what remains an operation at run time.
   aggregates, the collection-index family, `str`, `anchorsOf`,
   `inspectConfLabel`, and `wish`. Authors write the reactive constructs of
   the language, and `mapWithPattern`, which the transformer generates today,
-  has no counterpart. The callable forms `ifElse`, `when`, `unless`, and the
-  `str` tag are removed, so that no new pattern is written in the old way.
-  The compiler accepts them for an interim period, with a warning that names
-  the replacement, only as long as doing so costs it nothing beyond mapping
-  each to the same operation as `?:`, `&&`, `||`, and a template literal.
+  has no counterpart: the compiler does not rewrite a collection method to
+  such a form, in any tier. The callable forms `ifElse`, `when`, `unless`,
+  and the `str` tag are removed, so that no new pattern is written in the old
+  way. The compiler accepts them for an interim period, with a warning that
+  names the replacement, only as long as doing so costs it nothing beyond
+  mapping each to the same operation as `?:`, `&&`, `||`, and a template
+  literal.
   `reduce`, `findIndex`, `some`, `every`, and `find` are reactive constructs
   too. The callback of `reduce` is restricted to an expression, and its
   accumulator is a data type. The labels of `findIndex`, `some`, and `every`,
@@ -427,36 +531,67 @@ them `streamData`, `llm`, and every form the transformer emits.
 
 Inside a function body, five kinds of runtime call remain:
 
-- instantiating a pattern;
-- creating a cell, which receives a causal identifier;
+- instantiating a pattern, which every kind of function body may do;
+- creating a cell, which receives a causal identifier. In a `lift` or a
+  `computed` the cell needs an explicit cause;
 - requesting an effectful built-in, which behaves like instantiating a
-  built-in pattern. Only a `handler` or an `action` may do this. A `lift` or
-  a `computed` may not, and since it does not instantiate a pattern either,
-  it has no indirect way to. An effect that depends on computed data is
-  requested in the reactive tier, with the computed value as its input;
+  built-in pattern. Only a `handler` or an `action` requests one directly. A
+  `lift` or a `computed` has an indirect way: a pattern it instantiates may
+  request effects in its own body. That a `lift` or a `computed` does not
+  request an effect itself is an assumption, which the
+  [continuation plan](../../plans/compiled-pattern-language.md) lists as
+  question 38. An effect that depends on computed data is written in a
+  pattern the computation instantiates, or in the reactive tier with the
+  computed value as its input;
 - reading context that is not a cell: the event's key and acting principal,
   a space's identity and access list, and the principals a label attests;
-- binding a handler to the values it captures, which yields a stream. An
-  inline event handler in JSX built by a function body is such a binding
+- binding a handler to its state, which yields a stream. An inline event
+  handler in JSX built by a function body is such a binding
   ([language subset](language-subset.md), §5.2).
 
-A function body that needs reactivity instantiates a pattern. A handler that
-wants a reactive mapped list, for example, wraps the list in a pattern.
+The [built-in inventory](builtin-inventory.md) ("Which body may make which
+call") has the table of which body may make which of them.
+
+A function body that needs reactivity instantiates a pattern. A body that
+wants a reactive mapped list, for example, wraps the expression in an inline
+`pattern(...)` and instantiates it.
 
 Each handler invocation is a new frame, so the cells and instances it creates
-are new on every call and are identified by the event and their order within
-the invocation. A handler binding is the exception: it is identified by the
-enclosing instance, the handler, and what it captures
+are new on every call. They are identified by the handling and their order
+within the invocation. A handling is one event on one stream, and it is
+identified by its receipt, which leaves the acting principal out
 ([plan format and label templates](plan-and-label-templates.md), §1.3).
-Pattern bodies and lifts are re-evaluated, so their cells need identifiers
-that are the same on every evaluation.
+Pattern bodies, lifts, and computeds are re-evaluated, so what they create
+needs an identifier that is the same on every evaluation.
+
+What a handler binding holds depends on where it is made
+([plan format and label templates](plan-and-label-templates.md), §3.14).
+
+- **A binding made in the reactive tier copies nothing.** The reactive tier
+  is the pattern body and everything compiled in it, the body of a
+  per-element callback included. Every path of the handler's state resolves
+  to a slot or an output of the instance, and the handler reads it from
+  there when an event arrives. The stream is named by where the binding is
+  declared.
+- **A binding made while a function body runs** holds a link or a copy for
+  each path of the handler's state. A cell handle stays a link. A container
+  that the body read from an input or a cell and passes on unchanged is
+  bound by reference: the binding holds a link to the address the container
+  is stored at, the body does not read its content, and the handler reads it
+  when an event arrives. A scalar, and a container the body computed, are
+  copied. The stream is identified by the enclosing instance, the handler,
+  the copied values, the identities of the linked cells, and the addresses
+  of the containers bound by reference. A copied value is salted before it
+  enters the identifier, as an element key is. A binding made in a handler
+  is identified the same way, and not by the handling.
 
 ### Instantiating a pattern from a function body
 
-Instantiation is an effect, not graph construction in JavaScript. The syntax
-stays a call, `DonutCard({ donut })`, and the callee must be one of:
+Instantiation is a request the runtime records and performs, not graph
+construction in JavaScript. The syntax stays a call, `DonutCard({ donut })`,
+and the callee must be one of:
 
-- a pattern imported by name;
+- a pattern declared in the module or imported by name;
 - an inline `pattern(...)` expression, which the compiler hoists, turning its
   captures into private parameters. In the reactive tier such an expression
   may also be used as a value, a pattern closure, which is what replaces
@@ -465,27 +600,54 @@ stays a call, `DonutCard({ donut })`, and the callee must be one of:
   ([first-class serializable factories](../pattern-construction/node-factory-shipping.md)).
 
 A callee may carry the modifiers `asScope(scope)` and
-`inSpace(space, options)`. A function body may call two kinds of factory
-value: a pattern factory, which it instantiates, and a handler factory, which
-it binds to state to obtain a stream. A handler received by reference is
-resolved at run time like a pattern received by reference: its own compiled
-record supplies its footprint, its write edges, and the identity that write
-policies name. A `lift` result is not a factory value.
+`inSpace(space, options)`. The identifier of an instance an `inSpace` request
+makes is known when the body makes the request. The identifier of a space
+the request creates is obtained and is not derived from the request. The
+runtime records the allocation in the calling space, in a step that commits
+before the step in the other space, so that a retry names the same space
+([execution and storage](execution-and-storage.md), §5.6).
+
+A function body may call two kinds of factory value: a pattern factory, which
+it instantiates, and a handler factory, which it binds to state to obtain a
+stream. A handler received by reference is resolved at run time like a
+pattern received by reference: its own compiled record supplies its
+footprint, its write edges, and the identity that write policies name. A
+`lift` result is not a factory value.
 
 In a handler, the call records an instantiation request with a causal
 identifier and returns a link. The runtime performs the instantiation when the
 handler's transaction commits. Writing the link into state is what gives the
 new instance a result cell and makes it an instantiated pattern. Passing the
 link to `navigateTo` does the same, because navigation requires a result
-cell. In the reactive tier the same call, with a callee the compiler can
-resolve statically, denotes an anonymous sub-pattern, compiled into the
-surrounding instance like the body of a `map`. A callee that is a factory
-value is known only at run time, so the call creates a child instance with
-its own plan and result cell
-([plan format and label templates](plan-and-label-templates.md), §3.15).
+cell.
 
-The body of a `computed` or a `lift` does not instantiate a pattern.
-Selecting among patterns is done in the reactive tier.
+In a `lift` or a `computed`, the instance the call makes belongs to the
+computation
+([plan format and label templates](plan-and-label-templates.md), §3.14;
+[execution and storage](execution-and-storage.md), §2.8).
+
+- An evaluation that instantiates the same pattern at the same place names
+  the same instance and updates its argument. The instance keeps its state
+  across evaluations.
+- An instance that an evaluation no longer makes is torn down: its cones are
+  not evaluated again and its effects are not requested again.
+- The pattern may request effects. An effect in the instance is requested
+  again when its request changes, as any effect is whose input changed. What
+  the computation read reaches the request through the argument the
+  computation writes, and its label reaches the request with it.
+- Two things are assumed, as question 38 of the
+  [continuation plan](../../plans/compiled-pattern-language.md) states them.
+  The instance is identified by the enclosing instance, the site of the
+  call, and the ordinal of the instantiation among those the evaluation
+  makes at that site, or by an explicit cause where the author writes
+  `.for(cause)`. And the computation does not request an effect directly.
+
+In the reactive tier the same call, with a callee the compiler can resolve
+statically, denotes an anonymous sub-pattern, compiled into the surrounding
+instance like the body of a `map`. A callee that is a factory value is known
+only at run time, so the call creates a child instance with its own plan and
+result cell
+([plan format and label templates](plan-and-label-templates.md), §3.15).
 
 ## The scheduler
 
@@ -498,27 +660,35 @@ today, for cones whose write surface is static:
 - trigger-read bookkeeping for statically known reads, because a template's
   slot set already contains every such input that can cause a recomputation.
 
-Trigger reads stay for reads that follow links through data. Their targets
-are not in any template, so a recomputation caused by a change behind a link
-has to join that address's label the way it does today.
+Trigger reads stay for dynamic reads: the reads that follow links through
+data, and the reads through a cell handle that stay dynamic. Their targets
+are not in any template, so a recomputation caused by a change at such an
+address has to join that address's label the way it does today.
 
 A scheduler remains across instances. Its units are pattern instances,
-effectful operations, and materializers, and its edges are links between kept
-outputs. It keeps five responsibilities:
+effectful operations, and materializers. An edge exists where one unit reads
+an address that another writes: a kept output, or the target of a write a
+cone performs. It keeps five responsibilities:
 
 - turning the storage change channel, including remote writes, into dirty
   slots;
-- tracking demand, which is held on kept outputs per path, so that an output
-  nothing observes is not evaluated
-  ([scheduler and serving loop](scheduler-and-serving-loop.md), §4.1 and
-  §4.2);
-- serializing the event queue;
-- running effects, with their time gates and retries;
+- tracking demand, which is held on kept outputs per path, whichever
+  document stores the path, and on the writes of cones, so that an output
+  nothing observes is not evaluated. A change of demand is a cause
+  ([scheduler and serving loop](scheduler-and-serving-loop.md), §4.1, §4.2,
+  and §4.5);
+- serializing the event queue, and forming the batches of events;
+- running effect operations, with their time gates and retries, and
+  materializers;
 - following links across spaces.
 
 Convergence bounds apply at this level and, because of side-writes, at cone
-level inside an instance. A handler's read closure is static, so the cones a
-handler reads can be evaluated inside the handler's own transaction.
+level inside an instance. What a handler reads through its static footprint
+is known before its body runs, so the stale cones that compute it are
+evaluated inside the event's transaction, before the body. A read the
+handler makes through a cell handle that stays dynamic is not known before
+the body runs. The runtime makes it current when the body makes it
+([scheduler and serving loop](scheduler-and-serving-loop.md), §5.3).
 
 ## Server execution and client speculation
 
@@ -530,12 +700,23 @@ loop ([serving loop](../server-side-execution/serving-loop.md)).
 Clients run the same compiled artifact speculatively to render with low
 latency, and send events to the server
 ([speculation](../server-side-execution/speculation.md)). A client fetches the
-value code and the plan and does not compile. Effectful operations are not
-speculated.
+value code and the plan and does not compile. A client requests no effect,
+with one exception: it enacts `navigateTo` from its speculative run, and the
+enactment is reconciled with the server's result as it is today
+([scheduler and serving loop](scheduler-and-serving-loop.md), §6.7).
+
+A client cannot read the secret that element keys are salted with. It can
+therefore not derive an identifier that holds a value-derived key or a
+copied value: per-element state whose key holds a value, and the stream of a
+handler binding with a copied path. It names either one only from a link
+the server has stored. Everything else a client names from the plan and the
+data it holds, before the server's result arrives
+([scheduler and serving loop](scheduler-and-serving-loop.md), §11.1).
 
 Speculative values that reach the render boundary need labels. A client
-reuses the last committed label of an output while the slots of its template
-are unchanged, and instantiates the template locally otherwise.
+reuses the last committed label of an output while the labels of its
+template's slots and its selections are unchanged, and instantiates the
+template locally otherwise.
 
 A client also evaluates the gates it can from the plan and the data it holds,
 so that it does not show a result it can tell the server is going to refuse.
@@ -544,9 +725,10 @@ requests, for example, depends on sink ceilings that are server
 configuration. The table of which gates a client can evaluate is in
 [scheduler and serving loop](scheduler-and-serving-loop.md), §11.3. FabriChat
 is the reference case: the pattern declares that a message is added only when
-the send event comes from a trusted UI element. A send from an element
-without that integrity is refused by the server, so the client's speculative
-run of the handler refuses it too, from the same plan. The client's verdict
+the send event comes from a trusted UI element. The constraint guards what
+the handler itself writes, so a send from an element without that integrity
+has its whole transaction rejected by the server. The client's speculative
+run of the handler rejects it too, from the same plan. The client's verdict
 is advisory and the server's is authoritative.
 
 ## Correspondence with the CFC specification
@@ -614,14 +796,21 @@ Each stage can be checked before the next begins.
    much of the pattern corpus they accept and how often the analysis gives up.
 3. Emit the plan alongside the transformer's existing output, and compare
    template labels with the labels the runtime computes for the whole corpus.
-   Template labels must be equal or tighter, with one deliberate exception:
-   the membership label of a collection index bucket is wider, because it
-   includes the keys of absent elements
-   ([plan format and label templates](plan-and-label-templates.md), §3.17).
+   Template labels must be equal or tighter, with the two deliberate
+   exceptions listed under [Label templates](#label-templates): the
+   membership label of a collection index bucket, and a static read through
+   a cell handle on a run that throws before the read
+   ([plan format and label templates](plan-and-label-templates.md), §3.1).
+   The comparison expects these two differences and no other in that
+   direction.
 4. Run one pattern with one transaction per cause and with only its keep set
    stored. Then do the same for `map`. FabriChat is the reference pattern for
    this stage and the previous one, because it exercises event integrity,
-   write policy, and per-row instances together.
+   write policy, and per-row instances together. This stage measures two
+   sets of placeholder numbers in
+   [execution and storage](execution-and-storage.md): the sizes at which a
+   kept subtree becomes a part document (§4.10), and the constants of cache
+   promotion (§8).
 5. Move the remaining scheduler into the serving loop.
 6. Retire the builder form the transformer emits.
 
@@ -631,20 +820,27 @@ The documents beside this one specify the parts of the design in detail. This
 document stays the overview, and where a detailed document and this one
 disagree, the detailed document governs and this one is corrected.
 
-- [Language subset](language-subset.md): grammar, type rules, and diagnostics
-- [Plan format and label templates](plan-and-label-templates.md): slots,
-  observation classes, and the label rule of each operation
+- [Language subset](language-subset.md): the tiers, grammar, type rules,
+  labels as annotations, the standard-library surface, and diagnostics
+- [Plan format and label templates](plan-and-label-templates.md): the plan's
+  records, slots, observation classes, the label rule of each operation,
+  instantiation and constraints, error states, and what rests on the
+  compiler
 - [Built-in inventory](builtin-inventory.md): each built-in's class, label
-  rule, and durable state
+  rule, and durable state, and the calls that are legal inside function
+  bodies
 - [Footprint analysis](footprint-analysis.md): the abstract domain over a
-  function body, where the analysis widens, the write side, and reads through
-  cell handles
+  function body, where the analysis widens, the write side, reads through
+  cell handles, the runtime calls in a body, and the soundness statement
 - [Execution and storage](execution-and-storage.md): the transaction of one
-  cause for one instance, the layout of a result document, causal
-  identifiers, cache promotion, and migration
+  cause for one instance, cone evaluation and the in-memory memo, the layout
+  of a result document and its part documents, causal identifiers, the
+  durable state of operations, provenance, cache promotion, and migration
 - [Scheduler and serving loop](scheduler-and-serving-loop.md): what remains
-  of the scheduler across instances, effects, links across spaces, and
-  client speculation
+  of the scheduler across instances, demand, the event queue and the batch
+  of events, effects, materializers, convergence bounds, links and commits
+  across spaces, the serving loop, compiled artifacts, and client
+  speculation
 
 The work that remains on these documents, and the rulings that are fixed, are
 in the [continuation plan](../../plans/compiled-pattern-language.md).
@@ -661,22 +857,35 @@ in the [continuation plan](../../plans/compiled-pattern-language.md).
   predicts the server will refuse, are not ruled on.
 - **Residual termination channels.** Error states are specified
   ([plan format and label templates](plan-and-label-templates.md), §5). What
-  stays termination-insensitive is listed there: divergence inside a body's
-  budget, demand, and the rejection of a cause's transaction.
+  stays termination-insensitive is listed there (§5.5): among others,
+  divergence inside a body's budget, demand, the rejection of an event's
+  transaction, a derived write that is dropped or withdrawn, an instance
+  that is torn down, how many events a batch holds, and whether a cache or a
+  part document exists.
 - **Commits that span spaces.** A transaction covers one space. A staged
   access change and an `inSpace` instantiation both reach another space
   ([built-in inventory](builtin-inventory.md), open question 3). The proposal
-  is one ordered sequence that serves both: access changes first, then the
-  writes to other spaces, then the writes to the home space, without
-  atomicity ([scheduler and serving loop](scheduler-and-serving-loop.md),
-  §9.4). Whether that sequence is accepted, or an atomic commit across spaces
-  is required, is not ruled on.
-- **Cycles through side-writes.** How much the compiler can reject statically,
-  and what the iteration bound inside a cause's transaction is. The proposed
-  bound is ten evaluations of a cone per transaction, after which the cone
+  is one ordered sequence that serves both, without atomicity: the creation
+  of a space a request creates, the record of its allocation, the access
+  changes, the writes to other spaces, and then the writes to the home space
+  ([scheduler and serving loop](scheduler-and-serving-loop.md), §9.4). One
+  part of the order is ruled: the allocation record commits before the step
+  in the space it names. Whether the sequence is accepted, or an atomic
+  commit across spaces is required, is not ruled on.
+- **Cycles through side-writes.** The bound inside one transaction is ruled:
+  ten evaluations of a cone, a placeholder number, after which the cone
   fails ([execution and storage](execution-and-storage.md), §2.7;
   [scheduler and serving loop](scheduler-and-serving-loop.md), §8.1). The
-  number is not ruled on and needs measurement on the corpus.
+  compiler warns of a cycle it can see in the plan and does not refuse it.
+  Open are the number, which needs measurement on the corpus, and whether a
+  cycle that spans several transactions is bounded at all: an effect whose
+  completion changes its own request, and a cycle across two spaces
+  ([scheduler and serving loop](scheduler-and-serving-loop.md), §8.4).
+- **Instances a computation makes.** A `lift` or a `computed` may
+  instantiate a pattern. How such an instance is identified, and that the
+  computation does not request an effect directly, are assumptions
+  ([continuation plan](../../plans/compiled-pattern-language.md), question
+  38).
 - **Cache promotion.** The cost model for promoting a cone to a durable cache,
   and where that cache lives. A model and a cache document per instance and
   scope key are proposed ([execution and storage](execution-and-storage.md),
@@ -686,5 +895,11 @@ in the [continuation plan](../../plans/compiled-pattern-language.md).
   stored can be deleted. A procedure is proposed
   ([execution and storage](execution-and-storage.md), §9). Open with it are
   what happens to settled effect results, how long retired documents are
-  kept, and what becomes of an instance whose stored source the compiler
-  refuses.
+  kept, what becomes of an instance whose stored source the compiler
+  refuses, and whether one serving runtime runs compiled instances and
+  instances that are not migrated in one space
+  ([scheduler and serving loop](scheduler-and-serving-loop.md), §10.8).
+- **Logs.** `console` is in the standard-library surface, and a function
+  body can pass it labeled data. Footprint analysis counts the arguments as
+  read ([footprint analysis](footprint-analysis.md), §3.4). Whether the
+  sandbox lets labeled data reach a log is not decided.
