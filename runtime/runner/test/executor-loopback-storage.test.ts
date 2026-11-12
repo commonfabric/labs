@@ -1,7 +1,15 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import { Identity } from "@commonfabric/identity";
+import type { Signer } from "@commonfabric/memory/interface";
 import type * as MemoryClient from "@commonfabric/memory/v2/client";
-import { delegatingTransport } from "../src/executor/loopback-storage.ts";
+import { Server } from "@commonfabric/memory/v2/server";
+import { hostTransport } from "../../memory/test/support/host-transport.ts";
+import {
+  delegatingTransport,
+  LoopbackStorageManager,
+} from "../src/executor/loopback-storage.ts";
+import { TEST_MEMORY_SERVER_AUTH } from "./memory-v2-test-utils.ts";
 
 /**
  * Every member of the transport type. A member the type gains and this list
@@ -153,6 +161,53 @@ describe("loopback-storage", () => {
         "send",
         "setReceiver",
       ]);
+    });
+  });
+
+  describe("LoopbackStorageManager", () => {
+    it("reads a routed space whose connection dropped while its session's open was being signed, once the connection is back", async () => {
+      // A space the serving runtime does not hold is reached over the
+      // network, as the routed plane reaches one. A mount whose connection
+      // drops before the open is sent is made again, so the read that opened
+      // the space is answered rather than failed.
+
+      const server = new Server(TEST_MEMORY_SERVER_AUTH);
+      const host = hostTransport(server);
+      const identity = await Identity.fromPassphrase("loopback-routed-mount");
+      const signing = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      let first = true;
+      const signer: Signer = {
+        did: () => identity.did(),
+        verifier: identity.verifier,
+        async sign(bytes) {
+          if (first) {
+            first = false;
+            signing.resolve();
+            await release.promise;
+          }
+          return await identity.sign(bytes);
+        },
+      };
+      const storage = LoopbackStorageManager.connect(server, {
+        as: signer,
+        servingHomeSpace: "did:key:z6Mk-loopback-routed-mount-home",
+        route: { createTransport: () => host.transport },
+      });
+      try {
+        const reading = storage.open("did:key:z6Mk-loopback-routed-mount")
+          .serverHeadSeq!();
+        await signing.promise;
+        host.drop();
+        release.resolve();
+
+        expect(await reading).toBe(0);
+        expect(host.sentOfType("session.open")).toBe(1);
+      } finally {
+        release.resolve();
+        await storage.closeNow();
+        await server.close();
+      }
     });
   });
 });

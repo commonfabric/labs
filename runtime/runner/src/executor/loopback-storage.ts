@@ -15,6 +15,7 @@
 import type { MemorySpace, Signer } from "@commonfabric/memory/interface";
 import type { SessionDescriptor } from "@commonfabric/memory/v2";
 import * as MemoryClient from "@commonfabric/memory/v2/client";
+import { untilSent } from "@commonfabric/memory/v2/resending-session";
 import {
   type ClientBuild,
   type ClientInfo,
@@ -223,20 +224,25 @@ class LoopbackSessionFactory implements SessionFactory {
         : { firstHandshakeAttempts: MEMORY_FIRST_HANDSHAKE_ATTEMPTS }),
     });
     try {
-      const session = await client.mount(
-        space,
-        mountOptions,
-        (
-          targetSpace: string,
-          descriptor: SessionDescriptor,
-          context: MemoryClient.SessionOpenAuthContext,
-        ) =>
-          createSignedSessionOpenAuth(
-            signer,
-            targetSpace as MemorySpace,
-            descriptor,
-            context,
-          ),
+      // A routed connection can drop while the mount is made, and a mount
+      // that was not sent is made again once the connection is back, as the
+      // remote factory's are.
+      const session = await untilSent(() =>
+        client.mount(
+          space,
+          mountOptions,
+          (
+            targetSpace: string,
+            descriptor: SessionDescriptor,
+            context: MemoryClient.SessionOpenAuthContext,
+          ) =>
+            createSignedSessionOpenAuth(
+              signer,
+              targetSpace as MemorySpace,
+              descriptor,
+              context,
+            ),
+        )
       );
       return { client, session };
     } catch (error) {
