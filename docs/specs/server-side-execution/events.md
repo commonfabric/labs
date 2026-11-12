@@ -616,7 +616,15 @@ loop's duty).
   unknowable, so the write is neither sent nor attempted (a value
   write would open a second space's writer, which the transaction
   refuses, and lose the event); the re-run reads the loaded document
-  and sends. A target the load confirms absent writes as before. Sealing the skip is the
+  and sends. A target the load confirms absent writes as before. A
+  body that did run records the same skip when it read, anywhere in
+  its run, a document whose load is in flight and of which the replica
+  holds nothing, not even a confirmed absence. Such a document is one
+  the body reached through a link it resolved while it ran, so no
+  dependency CT-1795's preflight park walks names it, and the read
+  returned the schema's default, or nothing, in place of the stored
+  value; the re-run reads the loaded document. A document the load
+  confirms absent reads as before. Sealing the skip is the
   defect this rule prevents: the mark committed ALONE — a 1-op derived
   commit, the user's event permanently consumed with zero effects and
   no error (the b1-lifts a04 red, seqs 53/56). Consequence atomicity
@@ -662,8 +670,10 @@ loop's duty).
   the argument reaches is a cold read rather than a schema mismatch: a
   computation reading a document the replica does not hold publishes
   `undefined` until the load lands, by design, so a handler reading
-  through it finds its argument unresolved in exactly that window.
-  Sealing the skip would fire the commit callback on a transaction that
+  through it finds its argument unresolved in exactly that window. A
+  body that read a document still loading, as the served rule above
+  describes, records the same skip, and its re-run is parked on that
+  load. Sealing the skip would fire the commit callback on a transaction that
   wrote nothing, which a caller reads as a completed handling. The
   finalize withdraws the transaction and requeues the event within the
   retry window a stale-basis rejection gets, drawing on the same budget:

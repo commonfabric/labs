@@ -47,10 +47,6 @@ import {
   validateLocalReadBasis,
 } from "../storage/local-read-policy.ts";
 import {
-  isLinkResolutionProbe,
-  isReadIgnoredForScheduling,
-} from "../storage/reactivity-log.ts";
-import {
   isCfcEnforcementRejection,
   isConflictRejection,
   isPermanentRejection,
@@ -77,6 +73,10 @@ import {
 import { createEventPreflightTraceContext } from "./diagnostics.ts";
 import { mintEventId } from "./event-identity.ts";
 import { planEventInvalidDependencyScheduling } from "./execution.ts";
+import {
+  consumedReadsOf,
+  withdrawHandlerAfterLoadingRead,
+} from "./handler-load-wait.ts";
 import type { OriginStatus } from "./lineage.ts";
 import type { NodeRegistry } from "./node-record.ts";
 import {
@@ -2913,7 +2913,13 @@ export async function dispatchQueuedEvent(state: {
       // argument reaches that is a cold read, not a schema mismatch: a
       // computation that reads a document the replica does not hold yet
       // publishes `undefined` until the load lands, so a handler reading
-      // through it finds its argument unresolved in exactly that window.
+      // through it finds its argument unresolved in exactly that window. A
+      // body that did run is withdrawn the same way when it read a document
+      // whose load is still in flight and of which the replica holds nothing
+      // (`withdrawHandlerAfterLoadingRead()`): it reached the document
+      // through a link it resolved while it ran, so no dependency the
+      // preflight parked on names it, and it read the schema's default in
+      // place of the document's value.
       // Both arms below withdraw the transaction and run the handler again
       // once the replica has moved; what differs is who re-delivers. Under
       // events-down (server-execution v2 Phase 3) a dispatch without a served
@@ -2921,11 +2927,10 @@ export async function dispatchQueuedEvent(state: {
       // handles authoritatively and re-drains itself, so it takes neither arm:
       // its skip seals as an empty speculative commit the authoritative
       // consequence replaces.
-      if (
-        tx.dispatchedHandlerNotRun !== undefined &&
-        (served !== undefined ||
-          state.runtime.experimental.serverExecution !== true)
-      ) {
+      const withdrawsNotRun = served !== undefined ||
+        state.runtime.experimental.serverExecution !== true;
+      if (withdrawsNotRun) withdrawHandlerAfterLoadingRead(state.runtime, tx);
+      if (tx.dispatchedHandlerNotRun !== undefined && withdrawsNotRun) {
         const reason = tx.dispatchedHandlerNotRun.reason;
         // Taken before the abort, since the read set is what the client arm
         // parks on.
@@ -3565,17 +3570,8 @@ export async function dispatchQueuedEvent(state: {
  * The first document whose value `tx` read under its identity that `manager`
  * does not admit (`scopedReadStanding`), as `<space>/<scope>/<id>` with the
  * standing it has and its address, or `undefined` when every document it read
- * is admitted.
- * A read of the document's root counts, as a read of its value does, among
- * the reads the run depends on. Three kinds of read do not count, since none
- * is the run consuming the document's data: a read of its CFC metadata, which
- * a run passing a link to the document along makes; a read the transaction
- * records as a link-resolution probe, which resolving a link through the
- * document makes; and a read it records as ignored for scheduling, which
- * writing into the document makes.
- *
- * The reads are the ones `tx`, the storage transaction itself, records
- * natively; a transaction that records none names no document.
+ * is admitted. The reads that count are the ones the run consumed the
+ * document's data with (`consumedReadsOf()`).
  */
 export function refusedReadIn(
   manager: Pick<IStorageManager, "scopedReadStanding">,
@@ -3586,14 +3582,7 @@ export function refusedReadIn(
   address: Pick<IReadActivity, "space" | "id" | "scope">;
 } | undefined {
   if (manager.scopedReadStanding === undefined) return undefined;
-  for (const read of tx.getReadActivities?.() ?? []) {
-    if (
-      isLinkResolutionProbe(read.meta) ||
-      isReadIgnoredForScheduling(read.meta)
-    ) {
-      continue;
-    }
-    if (read.path.length > 0 && read.path[0] !== "value") continue;
+  for (const read of consumedReadsOf(tx)) {
     const standing = manager.scopedReadStanding(read, tx.scopeKeyIdentity);
     if (standing !== "admitted") {
       return {
