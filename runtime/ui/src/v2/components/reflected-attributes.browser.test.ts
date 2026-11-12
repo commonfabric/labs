@@ -14,7 +14,9 @@ function componentClasses(): (typeof LitElement)[] {
   return Object.values(ui).filter((value): value is typeof LitElement =>
     typeof value === "function" && value.prototype instanceof LitElement
   ).map((component) => {
-    component.finalize();
+    // Reading observedAttributes finalizes the class, which fills in its
+    // elementProperties and elementStyles.
+    void component.observedAttributes;
     return component;
   });
 }
