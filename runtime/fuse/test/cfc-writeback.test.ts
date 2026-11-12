@@ -992,6 +992,18 @@ describe("cfc-writeback", () => {
           ).toEqual(writePrepare());
         });
 
+        it("leaves the store readable and writable by its owner alone", () => {
+          const store = new CfcWritebackStore({ storagePath });
+
+          store.setPreparedXattr(
+            5n,
+            CFC_WRITEBACK_PREPARE_XATTR,
+            prepareText(writePrepare()),
+          );
+
+          expect(Deno.statSync(storagePath).mode! & 0o777).toBe(0o600);
+        });
+
         it("throws when the store cannot be replaced, leaving no scratch file", () => {
           const store = new CfcWritebackStore({ storagePath });
           // A directory in the store's place, which a file cannot be renamed

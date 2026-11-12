@@ -2,13 +2,14 @@ import { assertEquals } from "@std/assert";
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import {
+  discardBuffer,
   handleHasBufferedContent,
   handleHasPendingChanges,
   HandleMap,
   MAX_VIRTUAL_FILE_SIZE,
   validateVirtualFileRange,
 } from "./handles.ts";
-import { O_RDONLY, O_RDWR } from "./platform.ts";
+import { O_RDONLY, O_RDWR, O_WRONLY } from "./platform.ts";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -261,16 +262,38 @@ describe("HandleMap", () => {
         );
         expect(handles.get(fh)).toBeUndefined();
       });
+
+      it("throws for a read-only handle, leaving its buffer as it was", () => {
+        const handles = new HandleMap();
+        const reader = handles.open(1n, O_RDONLY, encoder.encode("hello"));
+
+        expect(() => handles.write(reader, encoder.encode("x"), 0)).toThrow(
+          `File handle ${reader} is not open for writing`,
+        );
+        expect(handleHasBufferedContent(handles.get(reader))).toBe(false);
+      });
+
+      it("starts a buffer a flush discarded again from empty", () => {
+        const handles = new HandleMap();
+        const fh = handles.open(1n, O_WRONLY, encoder.encode("hello"));
+        discardBuffer(handles.get(fh)!);
+
+        handles.write(fh, encoder.encode("hi"), 0);
+
+        const handle = handles.get(fh);
+        expect(decoder.decode(handle?.buffer)).toBe("hi");
+        expect(handleHasPendingChanges(handle)).toBe(true);
+      });
     });
 
     describe("truncateByIno()", () => {
-      it("throws for a pending handle that holds no buffer, leaving every buffer as it was", () => {
+      it("throws for a read-only pending handle, leaving every buffer as it was", () => {
         const handles = new HandleMap();
         const writer = handles.open(1n, O_RDWR, encoder.encode("hello"));
         const reader = handles.open(1n, O_RDONLY, encoder.encode("hello"));
 
         expect(() => handles.truncateByIno(1n, 0, reader)).toThrow(
-          `File handle ${reader} holds no buffer to truncate`,
+          `File handle ${reader} is not open for writing`,
         );
         expect(decoder.decode(handles.get(writer)?.buffer)).toBe("hello");
         expect(handles.get(writer)?.version).toBe(0);
@@ -362,17 +385,44 @@ describe("HandleMap", () => {
         expect(readerHandle?.buffer.length).toBe(0);
         expect(handleHasPendingChanges(readerHandle)).toBe(false);
       });
+
+      it("zero-fills a pending buffer a flush discarded, marking it dirty", () => {
+        const handles = new HandleMap();
+        const fh = handles.open(1n, O_WRONLY, encoder.encode("hello"));
+        discardBuffer(handles.get(fh)!);
+
+        handles.truncateByIno(1n, 2, fh);
+
+        const handle = handles.get(fh);
+        expect(handle?.buffer).toEqual(new Uint8Array(2));
+        expect(handleHasPendingChanges(handle)).toBe(true);
+      });
     });
 
     describe("truncate()", () => {
-      it("throws for a handle that holds no buffer", () => {
+      it("throws for a read-only handle", () => {
         const handles = new HandleMap();
         const reader = handles.open(1n, O_RDONLY, encoder.encode("hello"));
 
         expect(() => handles.truncate(reader, 0)).toThrow(
-          `File handle ${reader} holds no buffer to truncate`,
+          `File handle ${reader} is not open for writing`,
         );
         expect(handleHasPendingChanges(handles.get(reader))).toBe(false);
+      });
+
+      it("resizes a buffer a flush discarded from empty, as a pending change", () => {
+        const handles = new HandleMap();
+        const fh = handles.open(1n, O_WRONLY, encoder.encode("hello"));
+        discardBuffer(handles.get(fh)!);
+
+        handles.truncate(fh, 0);
+        expect(handles.get(fh)?.truncatePending).toBe(true);
+
+        discardBuffer(handles.get(fh)!);
+        handles.truncate(fh, 3);
+        const handle = handles.get(fh);
+        expect(handle?.buffer).toEqual(new Uint8Array(3));
+        expect(handle?.dirty).toBe(true);
       });
 
       it("throws for a closed handle", () => {

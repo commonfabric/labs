@@ -55,6 +55,7 @@ import {
   visitDirectoryEntries,
 } from "./directory-handles.ts";
 import {
+  discardBuffer,
   handleHasBufferedContent,
   handleHasPendingChanges,
   HandleMap,
@@ -70,6 +71,7 @@ import { finalizeCommittedSourceWrite } from "./source-write-finalize.ts";
 import {
   type AnyCallback,
   EACCES,
+  EBADF,
   EFBIG,
   EINVAL,
   EIO,
@@ -1071,7 +1073,8 @@ export function createFuseOperations(
         }
         writeTarget = { kind: "handler", target: handlerTarget };
       }
-      const truncate = (flags & O_TRUNC) !== 0;
+      // POSIX leaves `O_TRUNC` without write access unspecified; it is ignored.
+      const truncate = isWriting && (flags & O_TRUNC) !== 0;
       const initialBuffer = node.callableKind === "handler" && isWriting
         ? new Uint8Array(0)
         : truncate
@@ -1129,7 +1132,8 @@ export function createFuseOperations(
 
     // Get current content for the handle buffer
     const content = node.kind === "file" ? node.content : new Uint8Array(0);
-    const truncate = (flags & O_TRUNC) !== 0;
+    // POSIX leaves `O_TRUNC` without write access unspecified; it is ignored.
+    const truncate = isWriting && (flags & O_TRUNC) !== 0;
     // Fix a generated file's bytes for the life of the descriptor, taking
     // what the last getattr published so the descriptor serves the bytes
     // whose size its reader was already given. A reader that has read to the
@@ -1392,12 +1396,7 @@ export function createFuseOperations(
     };
     try {
       if (writeTarget?.kind === "ignored") {
-        if (handle.version === flushVersion) {
-          handle.dirty = false;
-          handle.truncatePending = false;
-          handle.buffer = new Uint8Array(0);
-          handle.bufferValid = false;
-        }
+        if (handle.version === flushVersion) discardBuffer(handle);
         return 0;
       }
 
@@ -1424,12 +1423,7 @@ export function createFuseOperations(
         // may not have settled yet. The cell.sink subscription in
         // subscribePiece fires when the result cell actually updates,
         // which triggers invalidateRootPropCache at the right time.
-        if (handle.version === flushVersion) {
-          handle.dirty = false;
-          handle.truncatePending = false;
-          handle.buffer = new Uint8Array(0); // fire-and-forget
-          handle.bufferValid = false;
-        }
+        if (handle.version === flushVersion) discardBuffer(handle);
         return completeWrite("handler");
       }
 
@@ -1711,6 +1705,10 @@ export function createFuseOperations(
     const handle = handles.get(fh);
     if (!handle) {
       fuse.symbols.fuse_reply_err(req, EIO);
+      return;
+    }
+    if ((handle.flags & (O_WRONLY | O_RDWR)) === 0) {
+      fuse.symbols.fuse_reply_err(req, EBADF);
       return;
     }
 

@@ -31,6 +31,7 @@ function setup(overrides: Partial<ReverseInvalidationDeps> = {}) {
       return 0;
     },
     isUnmounting: () => false,
+    pendingReplyCount: () => 0,
     debug: false,
     log: (m) => rec.logs.push(m),
     warn: (m) => rec.warns.push(m),
@@ -176,13 +177,14 @@ Deno.test("the drain loop picks up work queued while an await is outstanding", a
     invalidateEntry: (parentIno, nameBuf, nameLen) => {
       const name = decoder.decode(nameBuf).replace(/\0$/, "");
       rec.entryCalls.push({ parentIno, name, nameLen });
-      // Enqueue more work during the first notify; the snapshot-and-clear loop
-      // must pick it up in a later pass rather than drop it.
+      // Enqueue more work during the first notify; the same drain must send
+      // it rather than drop it.
       if (rec.entryCalls.length === 1) queue.addEntry(2n, ["x"]);
       return Promise.resolve(0);
     },
     invalidateInode: () => 0,
     isUnmounting: () => false,
+    pendingReplyCount: () => 0,
     debug: false,
   });
   queue.addEntry(1n, ["a"]);
@@ -191,6 +193,33 @@ Deno.test("the drain loop picks up work queued while an await is outstanding", a
     rec.entryCalls.map((c) => `${c.parentIno}:${c.name}`),
     ["1:a", "2:x"],
   );
+});
+
+Deno.test("a reply held back mid-flush stops the drain, keeping what it has not sent", async () => {
+  let pending = 0;
+  const { queue, rec } = setup({
+    pendingReplyCount: () => pending,
+    invalidateEntry: (parentIno, nameBuf, nameLen) => {
+      const name = decoder.decode(nameBuf).replace(/\0$/, "");
+      rec.entryCalls.push({ parentIno, name, nameLen });
+      // A lookup starts holding its reply during the first notify.
+      if (rec.entryCalls.length === 1) pending = 1;
+      return Promise.resolve(0);
+    },
+  });
+  queue.addEntry(1n, ["a", "b"]);
+  queue.addInode(4n);
+
+  await queue.flush();
+  assertEquals(rec.entryCalls.map((c) => c.name), ["a"]);
+  assertEquals(rec.inodeCalls, []);
+
+  pending = 0;
+  await queue.flush();
+  assertEquals(rec.entryCalls.map((c) => c.name), ["a", "b"]);
+  assertEquals(rec.inodeCalls, [4n]);
+  assertEquals(queue.pendingEntryCount, 0);
+  assertEquals(queue.pendingInodeCount, 0);
 });
 
 Deno.test("a re-entrant flush returns the running flush instead of starting a second", async () => {
@@ -313,25 +342,36 @@ Deno.test("both synchronous and asynchronous notify results are drained", async 
 });
 
 describe("connectReverseInvalidation()", () => {
-  /** A bridge's hooks, connected to a queue whose notify calls are recorded. */
-  function connect() {
+  /**
+   * A bridge's hooks, connected to a queue whose notify calls are recorded.
+   * `onSend` runs after each notify call with what has been sent so far, and
+   * may call `setPending` to hold a reply back.
+   */
+  function connect(
+    onSend: (sent: string[], setPending: (count: number) => void) => void =
+      () => {},
+  ) {
     const source: InvalidationSource = {
       onInvalidate: null,
       onInvalidateInode: null,
     };
     const sent: string[] = [];
-    const inodeSent = Promise.withResolvers<void>();
+    const waiters: { count: number; resolve: () => void }[] = [];
     let pending = 0;
+    const setPending = (count: number) => pending = count;
+    const record = (line: string) => {
+      sent.push(line);
+      onSend(sent, setPending);
+      for (const waiter of waiters.filter((w) => sent.length >= w.count)) {
+        waiters.splice(waiters.indexOf(waiter), 1);
+        waiter.resolve();
+      }
+      return 0;
+    };
     const invalidation = connectReverseInvalidation(source, {
-      invalidateEntry: (parentIno, nameBuf) => {
-        sent.push(`entry ${parentIno} ${decoder.decode(nameBuf)}`);
-        return 0;
-      },
-      invalidateInode: (ino) => {
-        sent.push(`inode ${ino}`);
-        inodeSent.resolve();
-        return 0;
-      },
+      invalidateEntry: (parentIno, nameBuf) =>
+        record(`entry ${parentIno} ${decoder.decode(nameBuf)}`),
+      invalidateInode: (ino) => record(`inode ${ino}`),
       isUnmounting: () => false,
       debug: false,
       pendingReplyCount: () => pending,
@@ -339,28 +379,31 @@ describe("connectReverseInvalidation()", () => {
     return {
       source,
       sent,
-      inodeSent: inodeSent.promise,
+      /** Resolves once `count` notify calls have been made. */
+      sentCount: (count: number) =>
+        new Promise<void>((resolve) => waiters.push({ count, resolve })),
       invalidation,
-      setPending: (count: number) => pending = count,
+      setPending,
     };
   }
 
-  it("sends the bridge's invalidations to the kernel off the request path", async () => {
+  it("sends the bridge's invalidations to the kernel off the request path, entries and inodes in turn", async () => {
     using time = new FakeTime();
-    const { source, sent, inodeSent } = connect();
+    const { source, sent, sentCount } = connect();
 
     source.onInvalidate!(1n, ["a", "b"]);
     source.onInvalidateInode!(9n);
     expect(sent).toEqual([]);
+    const allSent = sentCount(3);
     await time.tickAsync(0);
-    await inodeSent;
+    await allSent;
 
-    expect(sent).toEqual(["entry 1 a\0", "entry 1 b\0", "inode 9"]);
+    expect(sent).toEqual(["entry 1 a\0", "inode 9", "entry 1 b\0"]);
   });
 
   it("waits until no reply is held back, and sends once told the last one went", async () => {
     using time = new FakeTime();
-    const { source, sent, inodeSent, invalidation, setPending } = connect();
+    const { source, sent, sentCount, invalidation, setPending } = connect();
     setPending(1);
 
     source.onInvalidateInode!(9n);
@@ -368,10 +411,36 @@ describe("connectReverseInvalidation()", () => {
     expect(sent).toEqual([]);
     setPending(0);
     invalidation.repliesDrained();
+    const inodeSent = sentCount(1);
     await time.tickAsync(0);
     await inodeSent;
 
     expect(sent).toEqual(["inode 9"]);
+  });
+
+  it("stops when a reply is held back mid-drain, and sends the rest once told it went", async () => {
+    using time = new FakeTime();
+    const { source, sent, sentCount, invalidation, setPending } = connect(
+      (sent, setPending) => {
+        // A lookup starts holding its reply during the first notify.
+        if (sent.length === 1) setPending(1);
+      },
+    );
+
+    source.onInvalidate!(1n, ["a", "b"]);
+    const firstSent = sentCount(1);
+    await time.tickAsync(0);
+    await firstSent;
+    await time.tickAsync(0);
+    expect(sent).toEqual(["entry 1 a\0"]);
+
+    setPending(0);
+    invalidation.repliesDrained();
+    const restSent = sentCount(2);
+    await time.tickAsync(0);
+    await restSent;
+
+    expect(sent).toEqual(["entry 1 a\0", "entry 1 b\0"]);
   });
 
   it("sends nothing once closed, including what was waiting to be sent", async () => {

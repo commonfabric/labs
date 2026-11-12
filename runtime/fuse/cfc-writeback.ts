@@ -1,4 +1,5 @@
 import { encodeHex } from "@std/encoding/hex";
+import { dirname } from "@std/path";
 
 import { sha256 } from "@commonfabric/content-hash";
 import { cloneIfNecessary, type FabricValue } from "@commonfabric/data-model";
@@ -1272,40 +1273,38 @@ export class CfcWritebackStore {
   #persist(): void {
     const storagePath = this.#storagePath;
     if (!storagePath) return;
-    const slash = storagePath.lastIndexOf("/");
-    const directory = slash > 0 ? storagePath.slice(0, slash) : ".";
+    const directory = dirname(storagePath);
     Deno.mkdirSync(directory, { recursive: true });
     // Written beside the store, flushed to disk, and renamed over it, so a
     // crash or a power loss leaves the previous store whole rather than one
-    // the next mount refuses or reads as empty.
-    const scratchPath = `${storagePath}.${Deno.pid}.tmp`;
-    try {
-      Deno.writeTextFileSync(
-        scratchPath,
-        canonicalCfcJsonStringify({
-          version: 1,
-          records: [...this.#records.values(), ...this.#unrecognizedRecords],
-        }),
-      );
-      syncPath(scratchPath);
-      Deno.renameSync(scratchPath, storagePath);
-    } catch (e) {
-      try {
-        Deno.removeSync(scratchPath);
-      } catch (removal) {
-        // A write that failed before creating the scratch file left none.
-        if (!(removal instanceof Deno.errors.NotFound)) throw removal;
+    // the next mount refuses or reads as empty. The scratch file has a name
+    // nobody can predict and is created only if nothing has that name, so a
+    // link planted beside the store cannot redirect the write.
+    const scratchPath = `${storagePath}.${crypto.randomUUID()}.tmp`;
+    const bytes = new TextEncoder().encode(canonicalCfcJsonStringify({
+      version: 1,
+      records: [...this.#records.values(), ...this.#unrecognizedRecords],
+    }));
+    {
+      using scratch = Deno.openSync(scratchPath, {
+        write: true,
+        createNew: true,
+        mode: 0o600,
+      });
+      // Removes the scratch file unless the rename succeeds, reporting a
+      // failed removal together with the failure that called for it.
+      using removal = new DisposableStack();
+      removal.defer(() => Deno.removeSync(scratchPath));
+      for (let written = 0; written < bytes.length;) {
+        written += scratch.writeSync(bytes.subarray(written));
       }
-      throw e;
+      scratch.syncSync();
+      Deno.renameSync(scratchPath, storagePath);
+      removal.move();
     }
-    syncPath(directory);
+    using renamed = Deno.openSync(directory, { read: true });
+    renamed.syncSync();
   }
-}
-
-/** Flushes the file or directory at `path` to disk. */
-function syncPath(path: string): void {
-  using file = Deno.openSync(path, { read: true });
-  file.syncSync();
 }
 
 function parsePreparedWriteback(value: string): CfcPreparedWriteback | null {

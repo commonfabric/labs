@@ -297,6 +297,7 @@ export function loadFirstLibrary<L>(
 // Errno constants (POSIX-standard values)
 export const ENOENT = 2;
 export const EIO = 5;
+export const EBADF = 9;
 export const EACCES = 13;
 export const EEXIST = 17;
 export const EXDEV = 18;

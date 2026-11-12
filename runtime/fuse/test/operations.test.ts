@@ -26,6 +26,7 @@ import linuxPlatform, { STAT_LAYOUT } from "../platform-linux.ts";
 import {
   DIR_MODE,
   EACCES,
+  EBADF,
   EINVAL,
   EIO,
   EISDIR,
@@ -1633,6 +1634,38 @@ describe("operations", () => {
         expect(m.bridge.calls).toEqual([]);
       });
 
+      it("refuses a write through a read-only descriptor with `EBADF`", () => {
+        const m = mount();
+        const file = m.tree.addFile(m.tree.rootIno, "f", "abcdef", "string");
+        m.bridge.writePaths.set(file, writePath(fakePiece(EMPTY), ["f"]));
+        const fh = openFile(m, file, O_RDONLY);
+
+        expect(writeText(m, file, fh, "xy")).toEqual({
+          kind: "err",
+          errno: EBADF,
+        });
+        expect(contentOf(m.tree, file)).toBe("abcdef");
+        expect(m.bridge.calls).toEqual([]);
+      });
+
+      it("ignores `O_TRUNC` on a read-only open, serving the file whole", () => {
+        const m = mount();
+        const file = m.tree.addFile(m.tree.rootIno, "f", "abcdef", "string");
+        const fh = openFile(m, file, O_RDONLY | linuxPlatform.O_TRUNC);
+        const { req, id } = request();
+
+        m.operations.handlers.read(
+          req,
+          file,
+          100n,
+          0n,
+          m.args.fileInfo(O_RDONLY, fh),
+        );
+
+        expect(m.fuse.replyTo(id)).toEqual({ kind: "data", text: "abcdef" });
+        expect(contentOf(m.tree, file)).toBe("abcdef");
+      });
+
       it("counts a flush that fails while reporting its own failure", async () => {
         using _time = new FakeTime();
         class FailingStore extends CfcWritebackStore {
@@ -1900,6 +1933,52 @@ describe("operations", () => {
         expect(m.fuse.replyTo(id)).toMatchObject({ kind: "attr" });
         expect(m.bridge.callsTo("sendToHandlerTarget")).toEqual([
           { method: "sendToHandlerTarget", cellKey: "addItem", value: "book" },
+        ]);
+      });
+
+      it("sends again through a descriptor truncated after its first send", async () => {
+        const m = mount();
+        const handler = m.tree.addCallable(
+          m.tree.rootIno,
+          "addItem.handler",
+          "handler",
+          "addItem",
+          "input",
+          new Uint8Array(0),
+        );
+        m.bridge.handlerTargets.set(handler, {
+          piece: fakePiece(EMPTY),
+          cellProp: "input",
+          cellKey: "addItem",
+        });
+        const fh = openFile(m, handler, O_WRONLY);
+        const send = async (text: string) => {
+          writeText(m, handler, fh, text);
+          const { req, id } = request();
+          m.operations.handlers.flush(
+            req,
+            handler,
+            m.args.fileInfo(O_WRONLY, fh),
+          );
+          return await m.fuse.nextReply(id);
+        };
+        expect(await send("book")).toEqual({ kind: "err", errno: 0 });
+        const truncate = request();
+
+        m.operations.handlers.setattr(
+          truncate.req,
+          handler,
+          m.args.statWithSize(0),
+          8,
+          m.args.fileInfo(O_WRONLY, fh),
+        );
+
+        expect(m.fuse.replyTo(truncate.id)).toMatchObject({ kind: "attr" });
+        expect(await send("pen")).toEqual({ kind: "err", errno: 0 });
+        releaseFile(m, handler, fh);
+        expect(m.bridge.callsTo("sendToHandlerTarget")).toEqual([
+          { method: "sendToHandlerTarget", cellKey: "addItem", value: "book" },
+          { method: "sendToHandlerTarget", cellKey: "addItem", value: "pen" },
         ]);
       });
 
