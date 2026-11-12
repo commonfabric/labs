@@ -103,14 +103,11 @@ export const REQUEST_DISPOSITIONS = {
   },
   [RequestType.CustodySealCommit]: reference,
   [RequestType.CustodySealCancel]: write,
-  [RequestType.CustodyAnswerPublish]: {
-    kind: "trusted-operation",
-    why: "the answer the seal releases",
+  [RequestType.CustodyAnswerWatch]: {
+    kind: "no-cell-value",
+    why: "starts a watch whose updates carry what it reports",
   },
-  [RequestType.CustodyAnswerRead]: {
-    kind: "trusted-operation",
-    why: "the answer the seal released",
-  },
+  [RequestType.CustodyAnswerUnwatch]: write,
   [RequestType.OperationCapabilities]: {
     kind: "no-cell-value",
     why: "the codecs a cell's operation field offers",
@@ -277,6 +274,13 @@ export const NOTIFICATION_DISPOSITIONS = {
   [NotificationType.OperationUpdate]: {
     kind: "ungated",
     why: "a collaborative field's operations and materialized value",
+  },
+  [NotificationType.CustodyAnswerUpdate]: {
+    kind: "trusted-operation",
+    why: "the answer the seal published, which the worker sends only as the " +
+      "host-read gate decides a read of it (`state.answer` carries the " +
+      "gate's mark); and the reason an attempt to publish failed, which " +
+      "can quote what the seal read",
   },
   [NotificationType.PresenceUpdate]: {
     kind: "ungated",

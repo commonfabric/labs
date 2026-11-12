@@ -21,6 +21,7 @@ import { RuntimeConnection } from "@/client/connection.ts";
 import { EventEmitter } from "@/client/emitter.ts";
 import {
   type CellRef,
+  type CustodyAnswerUpdateNotification,
   type InitializationData,
   type IPCClientMessage,
   type IPCClientNotification,
@@ -284,6 +285,23 @@ describe("connection", () => {
         anchors: {},
         operations: [],
       },
+    };
+    transport.emit("message", notification);
+
+    expect(messages).toEqual([notification]);
+    await connection.dispose();
+  });
+
+  it("routes custody answer notifications", async () => {
+    const transport = new FakeTransport();
+    const connection = await initializedConnection(transport);
+    const messages: unknown[] = [];
+    connection.on("custodyanswerupdate", (message) => messages.push(message));
+
+    const notification: CustodyAnswerUpdateNotification = {
+      type: NotificationType.CustodyAnswerUpdate,
+      watchId: "watch:1",
+      state: { status: "pending" },
     };
     transport.emit("message", notification);
 

@@ -129,8 +129,6 @@ import {
   CUSTODY_SEAL_GESTURE,
   type CustodySealConsent,
   prepareCustodySeal,
-  publishCustodyAnswer,
-  readCustodyAnswer,
 } from "@commonfabric/runner/cfc/custody-seal";
 import { cfcSchemaGivesNoShape } from "@commonfabric/runner/cfc/schema-primitives";
 import { hashStringForEntityAddress } from "@commonfabric/runner/entity-kind";
@@ -157,6 +155,7 @@ import {
 import { backtickQuote } from "@commonfabric/text/markdown";
 import { isObjectNotArray, isPlainObject } from "@commonfabric/js-values/types";
 
+import { watchCustodyAnswerForHost } from "./custody-answer-watch.ts";
 import { HostReadGate } from "./host-read-gate.ts";
 import { postToClient } from "./post-to-client.ts";
 import { preloadProfiles } from "./preload-profiles.ts";
@@ -205,10 +204,8 @@ import {
   type CfcLabelViewResponse,
   ClientNotificationType,
   type CreateSpaceRequest,
-  type CustodyAnswerPublishRequest,
-  type CustodyAnswerPublishResponse,
-  type CustodyAnswerReadRequest,
-  type CustodyAnswerReadResponse,
+  type CustodyAnswerUnwatchRequest,
+  type CustodyAnswerWatchRequest,
   type CustodySealCommitRequest,
   type CustodySealCommitResponse,
   type CustodySealPrepareRequest,
@@ -1053,6 +1050,8 @@ export class RuntimeProcessor {
   #custodySeals = new Map<string, PendingCustodySeal>();
   /** One abort per commit in flight, aborted when its client detaches. */
   #custodySealCommits = new Map<string, AbortController>();
+  /** Each custody answer watch, by client and the id the client chose. */
+  #custodyAnswerWatches = new Map<string, Cancel>();
   #detachedClients = new WeakSet<WorkerClient>();
   #telemetry: RuntimeTelemetry;
 
@@ -1609,6 +1608,8 @@ export class RuntimeProcessor {
         for (const commit of this.#custodySealCommits.values()) {
           commit.abort(custodySealingUnavailable());
         }
+        for (const cancel of this.#custodyAnswerWatches.values()) cancel();
+        this.#custodyAnswerWatches.clear();
 
         // Clean up VDOM mounts
         for (const { reconciler, cancel } of this.#vdomMounts.values()) {
@@ -1704,6 +1705,11 @@ export class RuntimeProcessor {
     }
     for (const [key, commit] of this.#custodySealCommits) {
       if (key.startsWith(prefix)) commit.abort(custodySealingUnavailable());
+    }
+    for (const [key, cancel] of [...this.#custodyAnswerWatches]) {
+      if (!key.startsWith(prefix)) continue;
+      cancel();
+      this.#custodyAnswerWatches.delete(key);
     }
 
     for (const [key, cancel] of [...this.#subscriptions]) {
@@ -2860,37 +2866,47 @@ export class RuntimeProcessor {
   }
 
   /**
-   * Publishes a custody instance's answer once. The worker reads the room's
-   * terms, policy and projected answer at the addresses the host names, and
-   * the seal decides from what it reads whether the answer is released to the
-   * room's readers and not yet published; nothing in the request vouches for
-   * the answer.
+   * Watches a custody room's answer for a client: the worker follows the
+   * room's cells at the addresses the host names, with its own authority,
+   * publishes the answer once the seal can, and sends the client what the
+   * room's instance has published, the answer decided as a host's read of it
+   * is, by the host-read gate. Nothing in the request vouches for the answer.
+   * A watch id the client already uses names the watch standing.
    */
-  async handleCustodyAnswerPublish(
-    request: CustodyAnswerPublishRequest,
-  ): Promise<CustodyAnswerPublishResponse> {
+  handleCustodyAnswerWatch(
+    request: CustodyAnswerWatchRequest,
+    client: WorkerClient = ownerClient,
+  ): void {
     if (this.#isDisposed) throw new Error("Custody sealing is unavailable");
-    const terms = this.#hostSelectedCell(request.terms);
-    const policy = this.#hostSelectedCell(request.policy);
-    const output = this.#hostSelectedCell(request.output);
-    const published = await publishCustodyAnswer({ terms, policy }, output);
-    return { instance: published.instance, answer: published.value };
+    const key = clientScopedKey(client, request.watchId);
+    if (this.#custodyAnswerWatches.has(key)) return;
+    this.#custodyAnswerWatches.set(
+      key,
+      watchCustodyAnswerForHost(
+        this.#hostReadGate,
+        {
+          terms: this.#hostSelectedCell(request.terms),
+          policy: this.#hostSelectedCell(request.policy),
+        },
+        this.#hostSelectedCell(request.output),
+        (state) =>
+          client.post({
+            type: NotificationType.CustodyAnswerUpdate,
+            watchId: request.watchId,
+            state,
+          }),
+      ),
+    );
   }
 
-  /**
-   * Reads a custody instance's published answer from the slot the seal
-   * derives from the room's terms and policy, verified to be the seal's own
-   * write. A host renders this rather than anything the room holds.
-   */
-  async handleCustodyAnswerRead(
-    request: CustodyAnswerReadRequest,
-  ): Promise<CustodyAnswerReadResponse> {
-    if (this.#isDisposed) throw new Error("Custody sealing is unavailable");
-    const answer = await readCustodyAnswer({
-      terms: this.#hostSelectedCell(request.terms),
-      policy: this.#hostSelectedCell(request.policy),
-    });
-    return answer === undefined ? {} : { answer };
+  /** Ends a client's custody answer watch; one it does not hold is ignored. */
+  handleCustodyAnswerUnwatch(
+    request: CustodyAnswerUnwatchRequest,
+    client: WorkerClient = ownerClient,
+  ): void {
+    const key = clientScopedKey(client, request.watchId);
+    this.#custodyAnswerWatches.get(key)?.();
+    this.#custodyAnswerWatches.delete(key);
   }
 
   /**
@@ -4527,10 +4543,10 @@ export class RuntimeProcessor {
       case RequestType.CustodySealCancel:
         this.#custodySeals.delete(clientScopedKey(client, request.id));
         return;
-      case RequestType.CustodyAnswerPublish:
-        return await this.handleCustodyAnswerPublish(request);
-      case RequestType.CustodyAnswerRead:
-        return await this.handleCustodyAnswerRead(request);
+      case RequestType.CustodyAnswerWatch:
+        return this.handleCustodyAnswerWatch(request, client);
+      case RequestType.CustodyAnswerUnwatch:
+        return this.handleCustodyAnswerUnwatch(request, client);
       case RequestType.OperationQuery:
         return await this.handleOperationQuery(request, client);
       case RequestType.OperationCapabilities:

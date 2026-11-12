@@ -1,20 +1,25 @@
-/** Custody answer publication and display under Lit's headless element shim. */
+/** Custody answer display under Lit's headless element shim. */
 
-import type { RuntimeClient } from "@commonfabric/runtime-client";
+import type {
+  CellHandle,
+  CellRef,
+  CellValueResponse,
+  CustodyAnswerState,
+  RuntimeClient,
+} from "@commonfabric/runtime-client";
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import {
   createMockCellHandle,
   pushRefusal,
+  refuseReads,
 } from "../../test-utils/mock-cell-handle.ts";
 import { CFCustodyAnswer } from "./index.ts";
 
-type Publish = RuntimeClient["publishCustodyAnswer"];
-
 /** Supplies connection state without claiming DOM behavior. */
 class HeadlessAnswer extends CFCustodyAnswer {
-  connected = true;
+  connected = false;
 
   override get isConnected(): boolean {
     return this.connected;
@@ -41,38 +46,68 @@ function renderedText(element: CFCustodyAnswer): string {
   return parts.join("");
 }
 
-/** Lets queued publications settle. */
+/** One watch the element asked the worker for. */
+interface Watch {
+  readonly cells: { terms: CellRef; policy: CellRef; output: CellRef };
+  readonly send: (state: CustodyAnswerState) => void;
+  ended: boolean;
+}
+
+/**
+ * Makes a handle whose every read throws, so that a test fails on any value
+ * the element reads through it: the worker reads the room's cells, and the
+ * element never needs to.
+ */
+const unreadable = (id: CellRef["id"]): CellHandle<unknown> => {
+  const handle = createMockCellHandle<unknown>(undefined, { id });
+  // The ceiling refuses these to a member, as it refuses a room's policy
+  // and projected answer.
+  refuseReads(handle);
+  pushRefusal(handle);
+  const forbidden = (name: string) => () => {
+    throw new Error(`cf-custody-answer read ${id} through ${name}()`);
+  };
+  for (const read of ["get", "pull", "subscribe", "sink", "lastRead"]) {
+    Object.defineProperty(handle, read, { value: forbidden(read) });
+  }
+  return handle;
+};
+
+/** The answer the gate admits. */
+const shown = (value: unknown): CellValueResponse =>
+  ({ value }) as CellValueResponse;
+
+/** The answer the gate refuses. */
+const refused: CellValueResponse = {
+  refused: { refusedBy: "display-ceiling" },
+} as CellValueResponse;
+
+/** Lets the watch's start settle. */
 const settle = async () => {
-  for (let turn = 0; turn < 10; turn++) await Promise.resolve();
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  for (let turn = 0; turn < 5; turn++) await Promise.resolve();
 };
 
 const setup = (
-  publishes: Array<() => ReturnType<Publish>>,
-  slot: { answer?: unknown; refuse?: string; hold?: Promise<void> } = {},
-  termsValue: unknown = {},
+  { start }: { start?: () => Promise<void> } = {},
 ) => {
   const element = new HeadlessAnswer();
-  const requests: Parameters<Publish>[0][] = [];
-  const reads: unknown[] = [];
+  const watches: Watch[] = [];
   element.runtime = {
-    publishCustodyAnswer: (cells: Parameters<Publish>[0]) => {
-      requests.push(cells);
-      const next = publishes.shift();
-      return next ? next() : Promise.reject(new Error("unexpected request"));
-    },
-    readCustodyAnswer: (cells: unknown) => {
-      reads.push(cells);
-      const read = () =>
-        slot.refuse === undefined
-          ? Promise.resolve(slot.answer)
-          : Promise.reject(new Error(slot.refuse));
-      return slot.hold ? slot.hold.then(read) : read();
+    watchCustodyAnswer: async (
+      cells: Watch["cells"],
+      send: Watch["send"],
+    ) => {
+      const watch: Watch = { cells, send, ended: false };
+      watches.push(watch);
+      await start?.();
+      return () => {
+        watch.ended = true;
+      };
     },
   } as unknown as RuntimeClient;
-  const terms = createMockCellHandle<unknown>(termsValue, { id: "of:terms" });
-  const policy = createMockCellHandle<unknown>({}, { id: "of:policy" });
-  const output = createMockCellHandle<unknown>("sushi", { id: "of:choice" });
+  const terms = unreadable("of:terms");
+  const policy = unreadable("of:policy");
+  const output = unreadable("of:choice");
   element.terms = terms;
   element.policy = policy;
   element.output = output;
@@ -81,405 +116,218 @@ const setup = (
     "cf-published",
     (event) => published.push(event as CustomEvent),
   );
-  return { element, requests, reads, published, terms, policy, output };
+  const connect = async () => {
+    element.connected = true;
+    element.connectedCallback();
+    element.willUpdate(new Map([["terms", undefined]]));
+    await settle();
+  };
+  return { element, watches, published, terms, policy, output, connect };
 };
 
 describe("cf-custody-answer", () => {
-  it("names the room's cells, and shows the slot's answer once published", async () => {
-    const slot: { answer?: string } = {};
-    const state = setup([() => {
-      slot.answer = "sushi";
-      return Promise.resolve({ instance: "instance-digest", answer: "sushi" });
-    }], slot);
-    await state.element.accessForTestingOnly.publish();
-    expect(state.requests).toEqual([{
+  it("shows the answer the watch sends, though every binding's read is refused", async () => {
+    // Under the display ceiling a member is refused the room's policy and
+    // its projected answer. The element hands the worker the references, and
+    // shows what the worker sends.
+
+    const state = setup();
+    await state.connect();
+
+    expect(state.watches).toHaveLength(1);
+    expect(state.watches[0].cells).toEqual({
       terms: state.terms.ref(),
       policy: state.policy.ref(),
       output: state.output.ref(),
-    }]);
-    expect(state.reads).toEqual([{
-      terms: state.terms.ref(),
-      policy: state.policy.ref(),
-    }]);
+    });
+    state.watches[0].send({ status: "pending" });
+    expect(state.element.accessForTestingOnly.answer).toBeUndefined();
+    state.watches[0].send({
+      status: "published",
+      instance: "instance-digest",
+      publishedHere: true,
+      answer: shown("sushi"),
+    });
     expect(state.element.accessForTestingOnly.answer).toBe("sushi");
-    expect(state.published.map((event) => event.detail)).toEqual([
-      { instance: "instance-digest" },
-    ]);
-    // Published: no further requests.
-    await state.element.accessForTestingOnly.publish();
-    expect(state.requests).toHaveLength(1);
+    expect(renderedText(state.element)).toContain("sushi");
+    expect(renderedText(state.element)).not.toContain('role="alert"');
   });
 
-  it("asks nothing for a policy the worker refuses", async () => {
-    const state = setup([]);
-    pushRefusal(state.policy);
+  it("shows nothing, and says nothing, for an answer the gate refuses", async () => {
+    const state = setup();
+    await state.connect();
 
-    await state.element.accessForTestingOnly.publish();
-
-    expect(state.requests).toEqual([]);
-  });
-
-  it("asks nothing for a policy the worker has not answered", async () => {
-    const state = setup([]);
-    state.element.policy = createMockCellHandle<unknown>(undefined, {
-      id: "of:unanswered-policy",
+    state.watches[0].send({
+      status: "published",
+      instance: "instance-digest",
+      publishedHere: false,
+      answer: refused,
     });
 
-    await state.element.accessForTestingOnly.publish();
-
-    expect(state.requests).toEqual([]);
-  });
-
-  it("asks again after a refusal, and shows an answer another member published", async () => {
-    const slot: { answer?: string } = {};
-    const state = setup([
-      () =>
-        Promise.reject(
-          new Error("Custody answer requires every seat to have sealed"),
-        ),
-      () =>
-        Promise.reject(
-          new Error("Custody answer is already published for this instance"),
-        ),
-    ], slot);
-    slot.answer = undefined;
-    await state.element.accessForTestingOnly.publish();
-    expect(state.element.accessForTestingOnly.published).toBe(false);
     expect(state.element.accessForTestingOnly.answer).toBeUndefined();
-    slot.answer = "tacos";
-    await state.element.accessForTestingOnly.publish();
-    expect(state.element.accessForTestingOnly.published).toBe(true);
-    expect(state.element.accessForTestingOnly.answer).toBe("tacos");
-    await state.element.accessForTestingOnly.publish();
-    expect(state.requests).toHaveLength(2);
-  });
-
-  it("says so when the request fails for a reason other than a refusal", async () => {
-    const slot: { answer?: string; refuse?: string } = {};
-    const state = setup([
-      () => Promise.reject(new Error("worker connection lost")),
-      () =>
-        Promise.reject(
-          new Error("Custody answer requires every seat to have sealed"),
-        ),
-      () =>
-        Promise.reject(
-          new Error("Custody answer is already published for this instance"),
-        ),
-    ], slot);
-    await state.element.accessForTestingOnly.publish();
-    expect(state.element.accessForTestingOnly.error).toBe(
-      "worker connection lost",
-    );
-    expect(state.element.accessForTestingOnly.published).toBe(false);
-    // An expected refusal is quiet, and clears what an earlier failure said.
-    await state.element.accessForTestingOnly.publish();
     expect(state.element.accessForTestingOnly.error).toBe("");
-    // A slot the seal did not write is said, not shown.
-    slot.refuse = "Custody answer refuses a slot the seal did not write";
-    await state.element.accessForTestingOnly.publish();
-    expect(state.element.accessForTestingOnly.error).toBe(slot.refuse);
-    expect(state.element.accessForTestingOnly.answer).toBeUndefined();
-  });
-
-  it("stays quiet, asking nothing, while the room has no terms", async () => {
-    const state = setup([], {}, null);
-    await state.element.accessForTestingOnly.publish();
-    expect(state.requests).toHaveLength(0);
-    expect(state.reads).toHaveLength(0);
-    expect(state.element.accessForTestingOnly.error).toBe("");
-    expect(state.element.accessForTestingOnly.published).toBe(false);
-  });
-
-  it("shows the published answer, and an unexpected failure as an alert", async () => {
-    const slot: { answer?: string; refuse?: string } = {};
-    const state = setup([
-      () => Promise.reject(new Error("worker connection lost")),
-      () => {
-        slot.answer = "sushi";
-        return Promise.resolve({ instance: "instance", answer: "sushi" });
-      },
-    ], slot);
     expect(renderedText(state.element)).not.toContain('part="answer"');
-    await state.element.accessForTestingOnly.publish();
-    expect(renderedText(state.element)).toContain("worker connection lost");
+    expect(state.published).toHaveLength(0);
+  });
+
+  it("says why an attempt failed, until the answer is shown", async () => {
+    const state = setup();
+    await state.connect();
+
+    state.watches[0].send({ status: "pending", error: "worker failed" });
+    expect(renderedText(state.element)).toContain("worker failed");
     expect(renderedText(state.element)).toContain('role="alert"');
-    await state.element.accessForTestingOnly.publish();
-    const shown = renderedText(state.element);
-    expect(shown).toContain("sushi");
-    expect(shown).not.toContain('role="alert"');
+    state.watches[0].send({
+      status: "published",
+      instance: "instance-digest",
+      publishedHere: false,
+      answer: shown("tacos"),
+    });
+
+    expect(state.element.accessForTestingOnly.error).toBe("");
+    expect(renderedText(state.element)).toContain("tacos");
   });
 
-  it("asks on each change once bound, and starts over for new terms", async () => {
-    const slot: { answer?: string } = {};
-    const state = setup([
-      () =>
-        Promise.reject(
-          new Error("Custody answer requires every seat to have sealed"),
-        ),
-      () => {
-        slot.answer = "sushi";
-        return Promise.resolve({ instance: "first", answer: "sushi" });
-      },
-      () => {
-        slot.answer = "tacos";
-        return Promise.resolve({ instance: "second", answer: "tacos" });
-      },
-    ], slot);
-    // Binding subscribes: the terms and the answer are each read at once.
-    state.element.willUpdate(new Map([["terms", undefined]]));
-    await settle();
-    expect(state.requests.length).toBeGreaterThanOrEqual(1);
-    // A change to the projected answer asks again, and it publishes.
-    state.output.set("sushi");
-    await settle();
-    expect(state.element.accessForTestingOnly.answer).toBe("sushi");
-    // New terms are a new instance: what was shown is dropped, and the new
-    // instance's answer is asked for and shown.
-    slot.answer = undefined;
-    state.terms.set({ question: "tomorrow" });
-    await settle();
-    expect(state.element.accessForTestingOnly.answer).toBe("tacos");
+  it("shows an answer that is not a scalar as an alert, not as the answer", async () => {
+    const state = setup();
+    await state.connect();
+
+    state.watches[0].send({
+      status: "published",
+      instance: "instance-digest",
+      publishedHere: true,
+      answer: shown({ choice: "tacos" }),
+    });
+
+    const text = renderedText(state.element);
+    expect(text).not.toContain("[object Object]");
+    expect(text).not.toContain('part="answer"');
+    expect(text).toContain('role="alert"');
+    expect(state.published).toHaveLength(0);
+  });
+
+  it("announces each instance's answer once, naming the instance only when its own watch published it", async () => {
+    const state = setup();
+    await state.connect();
+    const send = (instance: string, publishedHere: boolean) =>
+      state.watches[0].send({
+        status: "published",
+        instance,
+        publishedHere,
+        answer: shown("sushi"),
+      });
+
+    send("first", true);
+    send("first", true);
+    send("second", false);
+
     expect(state.published.map((event) => event.detail)).toEqual([
       { instance: "first" },
-      { instance: "second" },
+      {},
     ]);
-    // Unbinding stops the requests.
+  });
+
+  it("watches afresh when rebound, ending the earlier watch and ignoring what it sends", async () => {
+    const state = setup();
+    await state.connect();
+    state.watches[0].send({
+      status: "published",
+      instance: "first",
+      publishedHere: true,
+      answer: shown("sushi"),
+    });
+
+    const policy = unreadable("of:another-policy");
+    state.element.policy = policy;
+    state.element.willUpdate(new Map([["policy", state.policy]]));
+    await settle();
+
+    expect(state.watches).toHaveLength(2);
+    expect(state.watches[0].ended).toBe(true);
+    expect(state.watches[1].cells.policy).toEqual(policy.ref());
+    // What the earlier room showed goes with it.
+    expect(state.element.accessForTestingOnly.answer).toBeUndefined();
+    state.watches[0].send({
+      status: "published",
+      instance: "first",
+      publishedHere: true,
+      answer: shown("stale"),
+    });
+    expect(state.element.accessForTestingOnly.answer).toBeUndefined();
+  });
+
+  it("watches once when connecting and the first update both ask", async () => {
+    const state = setup();
+
+    await state.connect();
+    state.element.willUpdate(new Map([["runtime", undefined]]));
+    await settle();
+
+    expect(state.watches).toHaveLength(1);
+    expect(state.watches[0].ended).toBe(false);
+  });
+
+  it("ends the watch when detached, and watches afresh when connected again", async () => {
+    const state = setup();
+    await state.connect();
+
     state.element.connected = false;
     state.element.disconnectedCallback();
-    const asked = state.requests.length;
-    state.output.set("pizza");
-    await settle();
-    expect(state.requests).toHaveLength(asked);
+    expect(state.watches[0].ended).toBe(true);
+    await state.connect();
+
+    expect(state.watches).toHaveLength(2);
+    expect(state.watches[1].ended).toBe(false);
   });
 
-  it("starts over for a new policy, as for new terms", async () => {
-    const slot: { answer?: string } = {};
-    const state = setup([
-      () => {
-        slot.answer = "sushi";
-        return Promise.resolve({ instance: "first", answer: "sushi" });
-      },
-      () => {
-        slot.answer = "tacos";
-        return Promise.resolve({ instance: "second", answer: "tacos" });
-      },
-    ], slot);
-    state.element.willUpdate(new Map([["policy", undefined]]));
-    await settle();
-    expect(state.element.accessForTestingOnly.answer).toBe("sushi");
-    // The policy cell now names another policy: the slot shown is another
-    // instance's, so what was shown is dropped and that slot is asked for.
-    slot.answer = undefined;
-    state.policy.set({ policyDigest: "another" });
-    await settle();
-    expect(state.element.accessForTestingOnly.answer).toBe("tacos");
-    expect(state.published.map((event) => event.detail)).toEqual([
-      { instance: "first" },
-      { instance: "second" },
-    ]);
-  });
-
-  it("drops what an in-flight request returns once detached", async () => {
-    let release: (() => void) | undefined;
-    const slot: { answer?: string } = {};
-    const state = setup([
-      () =>
-        new Promise((resolve) => {
-          release = () => {
-            slot.answer = "sushi";
-            resolve({ instance: "instance", answer: "sushi" });
-          };
+  it("ends a watch that finishes starting after the element is detached", async () => {
+    let started: (() => void) | undefined;
+    const state = setup({
+      start: () =>
+        new Promise<void>((resolve) => {
+          started = resolve;
         }),
-    ], slot);
-    const pending = state.element.accessForTestingOnly.publish();
-    await settle();
-    state.element.connected = false;
-    state.element.disconnectedCallback();
-    release!();
-    await pending;
-    expect(state.element.accessForTestingOnly.published).toBe(false);
-    expect(state.element.accessForTestingOnly.answer).toBeUndefined();
-    expect(state.published).toHaveLength(0);
-    expect(state.reads).toHaveLength(0);
-  });
-
-  it("drops what a slot read returns once detached mid-read", async () => {
-    let release: (() => void) | undefined;
-    const slot: { answer?: string; hold?: Promise<void> } = {
-      hold: new Promise((resolve) => {
-        release = resolve;
-      }),
-    };
-    const state = setup([() => {
-      slot.answer = "sushi";
-      return Promise.resolve({ instance: "instance", answer: "sushi" });
-    }], slot);
-    const pending = state.element.accessForTestingOnly.publish();
-    await settle();
-    expect(state.reads).toHaveLength(1);
-    state.element.connected = false;
-    state.element.disconnectedCallback();
-    release!();
-    await pending;
-    expect(state.element.accessForTestingOnly.published).toBe(false);
-    expect(state.element.accessForTestingOnly.answer).toBeUndefined();
-    expect(state.published).toHaveLength(0);
-  });
-
-  it("subscribes once connected, and starts over when connected again", async () => {
-    const slot: { answer?: string } = {};
-    const state = setup([
-      () => {
-        slot.answer = "sushi";
-        return Promise.resolve({ instance: "instance", answer: "sushi" });
-      },
-      () =>
-        Promise.reject(
-          new Error("Custody answer is already published for this instance"),
-        ),
-    ], slot);
-    state.element.connectedCallback();
-    await settle();
-    expect(state.element.accessForTestingOnly.answer).toBe("sushi");
-    state.element.connected = false;
-    state.element.disconnectedCallback();
-    // Connected again, it reads the slot afresh: already published, so the
-    // request is refused and the slot's answer shown.
+    });
     state.element.connected = true;
     state.element.connectedCallback();
     await settle();
-    expect(state.requests).toHaveLength(2);
-    expect(state.reads).toHaveLength(2);
-    expect(state.element.accessForTestingOnly.answer).toBe("sushi");
-    expect(state.published.map((event) => event.detail)).toEqual([
-      { instance: "instance" },
-      {},
-    ]);
+
     state.element.connected = false;
     state.element.disconnectedCallback();
-  });
-
-  it("keeps no request queued once the one it waited on publishes", async () => {
-    let release: (() => void) | undefined;
-    const slot: { answer?: string } = {};
-    const state = setup([
-      () =>
-        new Promise((resolve) => {
-          release = () => {
-            slot.answer = "sushi";
-            resolve({ instance: "first", answer: "sushi" });
-          };
-        }),
-      () =>
-        Promise.reject(
-          new Error("Custody answer requires every seat to have sealed"),
-        ),
-    ], slot);
-    // A request made while another is out waits on it, and that one
-    // publishes, so there is nothing left to ask.
-    const first = state.element.accessForTestingOnly.publish();
-    const second = state.element.accessForTestingOnly.publish();
+    started!();
     await settle();
-    release!();
-    await first;
-    await second;
-    expect(state.element.accessForTestingOnly.published).toBe(true);
-    expect(state.requests).toHaveLength(1);
-    // Rebound, with nothing subscribed: one request asks once, and nothing
-    // queued before the rebinding runs after it.
-    state.element.connected = false;
-    state.element.willUpdate(new Map([["policy", undefined]]));
-    slot.answer = undefined;
-    await state.element.accessForTestingOnly.publish();
-    expect(state.requests).toHaveLength(2);
+
+    expect(state.watches).toHaveLength(1);
+    expect(state.watches[0].ended).toBe(true);
   });
 
-  it("does not run a queued request once detached", async () => {
-    let release: (() => void) | undefined;
-    const state = setup([
-      () =>
-        new Promise((_, reject) => {
-          release = () =>
-            reject(
-              new Error("Custody answer requires every seat to have sealed"),
-            );
-        }),
-      () => Promise.resolve({ instance: "instance", answer: "sushi" }),
-    ]);
-    const first = state.element.accessForTestingOnly.publish();
-    const second = state.element.accessForTestingOnly.publish();
-    await settle();
-    state.element.connected = false;
-    state.element.disconnectedCallback();
-    release!();
-    await first;
-    await second;
-    expect(state.requests).toHaveLength(1);
-  });
+  it("says so when the watch cannot start", async () => {
+    const state = setup({
+      start: () => Promise.reject(new Error("worker connection lost")),
+    });
 
-  it("shows only a scalar answer, as the seal publishes only scalars", async () => {
-    const slot: { answer?: unknown } = {};
-    const state = setup([() => {
-      slot.answer = { choice: "tacos" };
-      return Promise.resolve({
-        instance: "instance",
-        answer: { choice: "tacos" },
-      });
-    }], slot);
-    await state.element.accessForTestingOnly.publish();
-    const shown = renderedText(state.element);
-    expect(shown).not.toContain("[object Object]");
-    expect(shown).not.toContain('part="answer"');
-    expect(shown).toContain('role="alert"');
-    expect(state.element.accessForTestingOnly.published).toBe(false);
-  });
+    await state.connect();
 
-  it("runs a request made during another once it ends, across a rebinding", async () => {
-    let release: (() => void) | undefined;
-    const slot: { answer?: string } = {};
-    const state = setup([
-      () =>
-        new Promise((_, reject) => {
-          release = () =>
-            reject(
-              new Error("Custody answer requires every seat to have sealed"),
-            );
-        }),
-      () => {
-        slot.answer = "sushi";
-        return Promise.resolve({ instance: "instance", answer: "sushi" });
-      },
-    ], slot);
-    const first = state.element.accessForTestingOnly.publish();
-    const second = state.element.accessForTestingOnly.publish();
-    await settle();
-    // The terms change while the first request is out: its result belongs to
-    // the instance before.
-    state.element.willUpdate(new Map([["policy", undefined]]));
-    release!();
-    await first;
-    await second;
-    expect(state.requests).toHaveLength(2);
-    expect(state.element.accessForTestingOnly.answer).toBe("sushi");
-  });
-
-  it("clears what a failure said once the room has no terms, and asks nothing unbound", async () => {
-    const state = setup([
-      () => Promise.reject(new Error("worker connection lost")),
-    ]);
-    await state.element.accessForTestingOnly.publish();
     expect(state.element.accessForTestingOnly.error).toBe(
       "worker connection lost",
     );
-    state.terms.set(null);
-    await state.element.accessForTestingOnly.publish();
-    expect(state.element.accessForTestingOnly.error).toBe("");
-    // With no projected answer bound there is nothing to subscribe to.
-    const unbound = new HeadlessAnswer();
-    unbound.terms = state.terms;
-    unbound.willUpdate(new Map([["terms", undefined]]));
+  });
+
+  it("asks nothing until every binding and the runtime are present", async () => {
+    const element = new HeadlessAnswer();
+    const asked: unknown[] = [];
+    element.runtime = {
+      watchCustodyAnswer: (cells: unknown) => {
+        asked.push(cells);
+        return Promise.resolve(() => {});
+      },
+    } as unknown as RuntimeClient;
+    element.terms = unreadable("of:terms");
+    element.policy = unreadable("of:policy");
+    element.connected = true;
+    element.connectedCallback();
     await settle();
-    expect(state.requests).toHaveLength(1);
+
+    expect(asked).toEqual([]);
   });
 });

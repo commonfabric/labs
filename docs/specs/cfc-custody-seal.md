@@ -336,14 +336,30 @@ that atom, and an atom admits a clause only by equality, so no member's
 rendering or sink admits the clause. The seal declassifies
 the answer once, into the instance's answer slot, which is the one thing the
 room's readers can read. `publishCustodyAnswer(room, output)` is the host operation
-that publishes it, and `readCustodyAnswer(room)` the one that reads it back.
-A pattern reaches both through `cf-custody-answer` (`$terms`, `$policy`,
-`$output`), which asks the worker to publish each time the projected answer
-changes, and shows what the seal published. The refusals below are expected
-while an answer is not, or is already, published, and the component stays
-quiet on them; any other failure, such as a lost worker connection or a slot
-the seal did not write, it shows as an alert. Before the room has terms it
-asks nothing.
+that publishes it, and `locateCustodyAnswer(room)` the one that finds the slot
+and reads it back.
+
+Whether the seal can publish is decided by cells only the seal may read: the
+instance's box, which fills as members seal, and the projected answer, which
+the rule releases to the seal alone. A member's host is refused both, and the
+room's policy cell besides, so a host cannot tell when to ask.
+`watchCustodyAnswer(room, output, onUpdate)` follows them in the worker
+instead: the terms, the policy cell, the projected answer, and the instance's
+box and answer slot. Whenever one changes it finds the slot, asks the seal to
+publish while the slot is empty, and reports what the slot holds. Following
+the box is what publishes a room whose last seal leaves the projected answer
+unchanged, as a room whose answer is "no agreement" both before and after its
+last seal does. A pattern reaches the watch through `cf-custody-answer`
+(`$terms`, `$policy`, `$output`), which reads none of its bindings: it hands
+the three references to the worker
+(`RuntimeClient.watchCustodyAnswer`), and shows the answer the worker sends.
+The worker sends the published answer as its host-read gate decides a read of
+it under the display ceiling, decided again as the membership it consults
+changes, so a viewer the ceiling refuses `Space(S)` is shown nothing, as for
+any read a host makes. The refusals below are expected while an answer is not,
+or is already, published, and the component stays quiet on them, as it does
+for a room with no terms yet; any other failure, such as a lost worker
+connection or a slot the seal did not write, it shows as an alert.
 
 The seal publishes only when all of these hold, read by the worker from the
 cells the host names, never from the request:
@@ -376,8 +392,8 @@ transaction reads the anchor, as the entry transaction does, so the slot is
 stamped `TransformedBy{builtin cfc-custody-seal}` like the box. Both reading
 and publishing refuse a slot without that stamp: anyone who can compute `D` can
 compute the slot's address and write there first, which blocks publication but
-shows nothing. A host shows the slot's value through `readCustodyAnswer`, never
-a link a room holds, which the room's members could point anywhere. A later
+shows nothing. A host shows the slot's value as the watch finds it, never a
+link a room holds, which the room's members could point anywhere. A later
 publication is refused, so the answer published for an instance never changes,
 whatever later points the projector at other input; which instance a room shows
 is another matter, below. The slot holds per instance: new terms are a
@@ -516,14 +532,16 @@ of it.
   a new instance. A transformation that re-stamps an output it recomputed
   unchanged would close both; it is a runtime change to how a no-op write is
   labeled.
-- **Cell-valued properties and bindings.** A confidentiality ceiling gates
-  what a render shows as text, but not a cell a pattern passes to an element
-  as a property or a `$` binding, and the worker answers a host's read of or
-  subscription to a cell without one. A member's own pattern that takes the
-  room as input can so show `choice`, or a rating read from the box, through
-  a property. This predates the answer slot and reaches every policy-labeled
-  value, not only custody; gating those paths belongs to the renderer and
-  the worker, not to this operation.
+- **Host reads the gate does not decide.** The worker decides a host's reads
+  of cells, through a binding's handle or by address, under the display
+  ceiling, so a member's own pattern that takes the room as input cannot show
+  `choice`, or a rating read from the box, by handing the cell to an element.
+  Resolving a cell's links and reading its label view are still answered
+  without that decision
+  (`docs/specs/cfc-render-boundary-composition.md`), and so is the reason the
+  watch reports for a failed publication, which can quote what the seal read.
+  Those gaps reach every policy-labeled value, not only custody; closing them
+  belongs to the worker, not to this operation.
 - **A squatted answer slot.** A slot other code wrote first blocks the
   instance's publication, as a squatted box or anchor blocks sealing. It
   shows nothing, since a host reads only a slot the seal stamped.

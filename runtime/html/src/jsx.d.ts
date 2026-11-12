@@ -4448,11 +4448,14 @@ interface CFCustodySealAttributes<T> extends CFHTMLAttributes<T> {
 interface CFCustodyAnswerAttributes<T> extends CFHTMLAttributes<T> {
   /** The room's terms document; its space is the room space. */
   "$terms"?: CellLike<unknown>;
-  /** A cell holding the room's custody policy reference. */
+  /** A cell holding, or whose label declares, the room's custody policy. */
   "$policy"?: CellLike<unknown>;
   /** The room's projected answer, which the host publishes once and shows. */
   "$output"?: CellLike<unknown>;
-  /** Fires once the answer is published; `instance` names it when known. */
+  /**
+   * Fires once per instance when its published answer is shown; `instance`
+   * names it when this element's watch published it.
+   */
   "oncf-published"?: EventHandler<{ instance?: string }>;
 }
 

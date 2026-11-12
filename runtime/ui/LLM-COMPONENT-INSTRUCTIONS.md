@@ -1016,35 +1016,37 @@ cannot. See `docs/common/components/COMPONENTS.md` and
 
 ### cf-custody-answer
 
-**Purpose**: Asks the trusted host to publish a custody room's answer once per
-instance, and shows it. The host publishes it only when every rule of the room's
-policy requires the seal's witness and releases only to the seal, a rule
-releases the answer to the seal, and every seat has sealed, and refuses every
-later request. What the component shows is read by the host from the instance's
-answer slot and verified to be the seal's write: a string, a number or a
-boolean, shown as text, since the seal publishes nothing else; any other value
-the slot holds is refused as an alert ("Custody answer refuses an answer that is
-not a scalar"), not shown as the answer. That is the slot of the instance the
-bound terms digest to, under the policy the bound policy cell names. The
-published answer for an instance never changes, but which instance the component
-shows is only as fixed as its bindings, which a room member's own code can
-rewrite. Binding both to cells each declared `WriteAuthorizedBy` the one handler
-that writes it, which writes only while the cell is unwritten, refuses other
-code's writes to those cells and nothing more. A failure other than those
-refusals (a lost worker connection, a slot the seal did not write) is shown as
-an alert; before the room has terms it asks nothing. **Tag**:
-`<cf-custody-answer>`
+**Purpose**: Has the trusted host publish a custody room's answer once per
+instance, and shows it. The component reads none of its bindings; the host
+follows the room's cells in the worker, the instance's box among them, and
+publishes the answer only when every rule of the room's policy requires the
+seal's witness and releases only to the seal, a rule releases the answer to the
+seal, and every seat has sealed, and refuses every later request. What the
+component shows is read by the host from the instance's answer slot, verified to
+be the seal's write and decided under the display ceiling (a viewer it refuses
+is shown nothing): a string, a number or a boolean, shown as text, since the
+seal publishes nothing else; any other value the slot holds is refused as an
+alert ("Custody answer refuses an answer that is not a scalar"), not shown as
+the answer. That is the slot of the instance the bound terms digest to, under
+the policy the bound policy cell names. The published answer for an instance
+never changes, but which instance the component shows is only as fixed as its
+bindings, which a room member's own code can rewrite. Binding both to cells each
+declared `WriteAuthorizedBy` the one handler that writes it, which writes only
+while the cell is unwritten, refuses other code's writes to those cells and
+nothing more. A failure other than those refusals (a lost worker connection, a
+slot the seal did not write) is shown as an alert; a room with no terms yet
+shows nothing. **Tag**: `<cf-custody-answer>`
 
 **Bindings**:
 
 - `$terms` - the room's terms document
-- `$policy` - a cell holding the room's custody policy reference
-- `$output` - the room's projected answer; each change asks for publication
+- `$policy` - a cell holding, or whose label declares, the room's custody policy
+- `$output` - the room's projected answer, which the host hands the seal
 
 **Events**:
 
-- `cf-published` - `detail.instance` when this component published it; fires
-  once the published answer is shown.
+- `cf-published` - `detail.instance` when this component's watch published it;
+  fires once per instance, once the published answer is shown.
 
 See `docs/specs/cfc-custody-seal.md`.
 

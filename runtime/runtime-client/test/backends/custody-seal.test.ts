@@ -8,18 +8,32 @@ import {
   buildCfcPolicyArtifactManifest,
   type CfcTrustConfigInput,
 } from "@commonfabric/runner/cfc";
-import { TRUSTED_DECLASSIFIER_CONCEPT } from "@commonfabric/runner/cfc/custody-seal";
+import {
+  type CustodyAnswerWatchUpdate,
+  TRUSTED_DECLASSIFIER_CONCEPT,
+} from "@commonfabric/runner/cfc/custody-seal";
+import { defaultDisplayCeiling } from "@commonfabric/runner/cfc/default-display-ceiling";
+import { rootRenderPolicyFor } from "@commonfabric/html/worker";
 import {
   EmulatedStorageManager,
   newLoopbackServer,
 } from "@commonfabric/runner/storage/cache.deno";
 
-import type { RuntimeProcessor } from "@/backends/runtime-processor.ts";
+import { watchCustodyAnswerForHost } from "@/backends/custody-answer-watch.ts";
+import { HostReadGate } from "@/backends/host-read-gate.ts";
+import {
+  renderConfidentialityResolverFor,
+  renderMembershipProviderFor,
+  renderModulePolicySourceFor,
+  type RuntimeProcessor,
+} from "@/backends/runtime-processor.ts";
 import { createCellRef } from "@/backends/utils.ts";
 import type { WorkerClient } from "@/backends/worker-client.ts";
 import {
   type CellRef,
+  type CustodyAnswerState,
   type CustodySealPreview,
+  NotificationType,
   RequestType,
 } from "@/protocol/mod.ts";
 
@@ -359,46 +373,18 @@ describe("custody-seal", () => {
     });
   });
 
-  it("routes an answer publication to the seal, which reads the room itself", async () => {
-    await withFixture(async ({ processor, runtime, refs }) => {
-      const output = runtime.getCell(S, "custody-room-choice");
-      // Nothing is sealed yet, so the seal refuses: the request carried the
-      // room's cells, and the worker read them.
-      await expect(processor.handleRequest({
-        type: RequestType.CustodyAnswerPublish,
-        terms: refs.terms,
-        policy: refs.policy,
-        output: createCellRef(output),
-      }, first)).rejects.toThrow("every seat to have sealed");
-    });
-  });
-
-  it("reads no answer for an instance nothing has published", async () => {
-    await withFixture(async ({ processor, refs }) => {
-      expect(
-        await processor.handleRequest({
-          type: RequestType.CustodyAnswerRead,
-          terms: refs.terms,
-          policy: refs.policy,
-        }, first),
-      ).toEqual({});
-    });
-  });
-
-  it("refuses publication and reading once the worker is disposed", async () => {
+  it("refuses a custody answer watch once the worker is disposed", async () => {
     await withFixture(async ({ processor, runtime, refs }) => {
       await processor.dispose();
-      await expect(processor.handleCustodyAnswerPublish({
-        type: RequestType.CustodyAnswerPublish,
-        terms: refs.terms,
-        policy: refs.policy,
-        output: createCellRef(runtime.getCell(S, "custody-room-choice")),
-      })).rejects.toThrow("Custody sealing is unavailable");
-      await expect(processor.handleCustodyAnswerRead({
-        type: RequestType.CustodyAnswerRead,
-        terms: refs.terms,
-        policy: refs.policy,
-      })).rejects.toThrow("Custody sealing is unavailable");
+      expect(() =>
+        processor.handleCustodyAnswerWatch({
+          type: RequestType.CustodyAnswerWatch,
+          watchId: "after-disposal",
+          terms: refs.terms,
+          policy: refs.policy,
+          output: createCellRef(runtime.getCell(S, "custody-room-choice")),
+        })
+      ).toThrow("Custody sealing is unavailable");
     });
   });
 
@@ -681,6 +667,300 @@ describe("custody-seal", () => {
           id: retained.id,
         }, second),
       ).toHaveProperty("box");
+    });
+  });
+});
+
+describe("custody answer watch", () => {
+  /** The room policy's clause as a pattern's `PolicyOf` cell declares it. */
+  const DECLARED = { ...P, subject: { __ctOwningSpace: true } };
+
+  /** Writes `value` into a new room-space cell labeled `confidentiality`. */
+  const labeled = async (
+    runtime: Runtime,
+    id: string,
+    value: unknown,
+    confidentiality: unknown[],
+  ): Promise<Cell<unknown>> => {
+    const tx = runtime.edit();
+    const cell = runtime.getCell(S, id, {
+      ifc: { confidentiality },
+    } as never, tx);
+    cell.set(value as never);
+    expect((await tx.commit().settled).error).toBeUndefined();
+    return cell.withTx(undefined);
+  };
+
+  /**
+   * A client that keeps what the worker posts it, and answers the first post
+   * from now on that a test admits, resolved by the post itself.
+   */
+  const recordingClient = (id: number) => {
+    const posted: unknown[] = [];
+    let waiting:
+      | { test: (message: unknown) => boolean; resolve: (m: unknown) => void }
+      | undefined;
+    const client: WorkerClient = {
+      id,
+      post: (message) => {
+        posted.push(message);
+        if (waiting?.test(message)) {
+          waiting.resolve(message);
+          waiting = undefined;
+        }
+        return true;
+      },
+    };
+    return {
+      client,
+      posted,
+      until(test: (message: unknown) => boolean): Promise<unknown> {
+        const { promise, resolve } = Promise.withResolvers<unknown>();
+        waiting = { test, resolve };
+        return promise;
+      },
+    };
+  };
+  const answerUpdate = (watchId: string) => (message: unknown) =>
+    (message as { type?: string }).type ===
+      NotificationType.CustodyAnswerUpdate &&
+    (message as { watchId?: string }).watchId === watchId;
+
+  it("watches a room whose policy the display ceiling refuses its member, sending what its instance has published", async () => {
+    // A pattern's policy cell is labeled with the room's policy, which no
+    // display ceiling admits: a member's host is refused it, as it is the
+    // projected answer. The watch reads both with the worker's authority, so
+    // the host learns what the instance has published all the same.
+
+    await withFixture(async ({ processor, runtime, refs }) => {
+      const policy = await labeled(runtime, "declared-policy", true, [
+        DECLARED,
+      ]);
+      processor.accessForTestingOnly.renderConfidentialityCeiling =
+        defaultDisplayCeiling(alice.did()) as never;
+      const host = recordingClient(7);
+      const refusal = host.until((message) =>
+        (message as { type?: string }).type === NotificationType.CellUpdate
+      );
+      processor.handleCellSubscribe({
+        type: RequestType.CellSubscribe,
+        cell: createCellRef(policy),
+      }, host.client);
+      expect(await refusal).toMatchObject({
+        refused: { refusedBy: "display-ceiling" },
+      });
+
+      const update = host.until(answerUpdate("room"));
+      await processor.handleRequest({
+        type: RequestType.CustodyAnswerWatch,
+        watchId: "room",
+        terms: refs.terms,
+        policy: createCellRef(policy),
+        output: createCellRef(runtime.getCell(S, "custody-room-choice")),
+      }, host.client);
+
+      // No seat has sealed, so nothing is published, and nothing failed.
+      expect(await update).toEqual({
+        type: NotificationType.CustodyAnswerUpdate,
+        watchId: "room",
+        state: { status: "pending" },
+      });
+    });
+  });
+
+  it("starts a watch again under an id it ended, and ends a departing client's watches", async () => {
+    await withFixture(async ({ processor, runtime, refs }) => {
+      const host = recordingClient(8);
+      const watch = (watchId: string) =>
+        processor.handleRequest({
+          type: RequestType.CustodyAnswerWatch,
+          watchId,
+          terms: refs.terms,
+          policy: refs.policy,
+          output: createCellRef(runtime.getCell(S, "custody-room-choice")),
+        }, host.client);
+
+      let update = host.until(answerUpdate("room"));
+      await watch("room");
+      await update;
+      await processor.handleRequest({
+        type: RequestType.CustodyAnswerUnwatch,
+        watchId: "room",
+      }, host.client);
+      // Ended, the id names no watch, so watching under it starts one.
+      update = host.until(answerUpdate("room"));
+      await watch("room");
+      expect(await update).toMatchObject({ state: { status: "pending" } });
+
+      processor.disposeClient(host.client);
+      const posts = host.posted.length;
+      // The room's terms change, which a standing watch would look at.
+      const tx = runtime.edit();
+      runtime.getCellFromLink(refs.terms, undefined, tx).set(
+        { ...TERMS, question: "And tomorrow?" } as never,
+      );
+      expect((await tx.commit().settled).error).toBeUndefined();
+      await runtime.idle();
+      expect(host.posted.length).toBe(posts);
+    });
+  });
+
+  describe("what the host is sent", () => {
+    /**
+     * Watches for a host whose gate holds `alice`'s reads to her display
+     * ceiling, with a seal's watch that reports what the test sends it.
+     */
+    const watchFor = (runtime: Runtime) => {
+      const ceiling = defaultDisplayCeiling(alice.did());
+      const membership = renderMembershipProviderFor(runtime, alice, ceiling);
+      const modulePolicies = renderModulePolicySourceFor(runtime, ceiling);
+      const gate = new HostReadGate(rootRenderPolicyFor(ceiling), {
+        resolveConfidentiality: renderConfidentialityResolverFor(
+          runtime,
+          alice,
+          ceiling,
+          alice.did(),
+          membership,
+          modulePolicies,
+        ),
+        membership,
+        modulePolicies,
+      });
+      let report: ((update: CustodyAnswerWatchUpdate) => void) | undefined;
+      const sent: CustodyAnswerState[] = [];
+      let waiting: ((state: CustodyAnswerState) => void) | undefined;
+      const cancel = watchCustodyAnswerForHost(
+        gate,
+        { terms: runtime.getCell(S, "unused-terms"), policy: P },
+        runtime.getCell(S, "unused-output"),
+        (state) => {
+          sent.push(state);
+          waiting?.(state);
+          waiting = undefined;
+        },
+        (_room, _output, onUpdate) => {
+          report = onUpdate;
+          return () => {
+            report = undefined;
+          };
+        },
+      );
+      return {
+        sent,
+        cancel,
+        /** Reports `update` as the seal's watch would. */
+        report: (update: CustodyAnswerWatchUpdate) => report!(update),
+        /** The next state the host is sent. */
+        next(): Promise<CustodyAnswerState> {
+          const { promise, resolve } = Promise.withResolvers<
+            CustodyAnswerState
+          >();
+          waiting = resolve;
+          return promise;
+        },
+      };
+    };
+    const published = (answer: Cell<unknown>, value: unknown) => ({
+      status: "published" as const,
+      instance: "instance-digest",
+      publishedHere: true,
+      answer,
+      value: value as never,
+    });
+
+    it("sends a published answer the room's readers may see, as the gate reads it", async () => {
+      await withFixture(async ({ runtime }) => {
+        const slot = await labeled(runtime, "readers-answer", {
+          answer: "sushi",
+        }, [cfcAtom.space(S)]);
+        const host = watchFor(runtime);
+        try {
+          const state = host.next();
+          host.report(published(slot.key("answer"), "sushi"));
+
+          expect(await state).toEqual({
+            status: "published",
+            instance: "instance-digest",
+            publishedHere: true,
+            answer: { value: "sushi" },
+          });
+        } finally {
+          host.cancel();
+        }
+      });
+    });
+
+    it("sends the gate's refusal in place of an answer the ceiling does not admit", async () => {
+      await withFixture(async ({ runtime }) => {
+        const slot = await labeled(runtime, "sealed-answer", {
+          answer: "sushi",
+        }, [DECLARED]);
+        const host = watchFor(runtime);
+        try {
+          const state = host.next();
+          host.report(published(slot.key("answer"), "sushi"));
+
+          expect(await state).toMatchObject({
+            status: "published",
+            answer: { refused: { refusedBy: "display-ceiling" } },
+          });
+          expect(JSON.stringify(host.sent)).not.toContain("sushi");
+        } finally {
+          host.cancel();
+        }
+      });
+    });
+
+    it("sends no answer whose value differs from the one the seal verified", async () => {
+      await withFixture(async ({ runtime }) => {
+        const slot = await labeled(runtime, "rewritten-answer", {
+          answer: "tacos",
+        }, [cfcAtom.space(S)]);
+        const host = watchFor(runtime);
+        try {
+          const state = host.next();
+          host.report(published(slot.key("answer"), "sushi"));
+
+          expect(await state).toEqual({
+            status: "pending",
+            error: "Custody answer refuses a slot the seal did not write",
+          });
+        } finally {
+          host.cancel();
+        }
+      });
+    });
+
+    it("sends each change once, and stops deciding an answer once nothing is published", async () => {
+      await withFixture(async ({ runtime }) => {
+        const slot = await labeled(runtime, "answer-then-pending", {
+          answer: "sushi",
+        }, [cfcAtom.space(S)]);
+        const host = watchFor(runtime);
+        try {
+          host.report({ status: "pending" });
+          host.report({ status: "pending" });
+          const state = host.next();
+          host.report(published(slot.key("answer"), "sushi"));
+          await state;
+          // The same instance again is decided by the subscription standing.
+          host.report(published(slot.key("answer"), "sushi"));
+          host.report({ status: "pending" });
+          // A subscription still standing would decide this write again.
+          const tx = runtime.edit();
+          slot.withTx(tx).set({ answer: "tacos" } as never);
+          expect((await tx.commit().settled).error).toBeUndefined();
+          await runtime.idle();
+
+          expect(host.sent.map((sent) => sent.status)).toEqual([
+            "pending",
+            "published",
+            "pending",
+          ]);
+        } finally {
+          host.cancel();
+        }
+      });
     });
   });
 });
