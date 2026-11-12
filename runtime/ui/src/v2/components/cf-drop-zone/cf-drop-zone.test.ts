@@ -20,7 +20,7 @@ import { createMockCellHandle } from "../../test-utils/mock-cell-handle.ts";
 const cell = createMockCellHandle<unknown>({ title: "Card" }, {
   id: "of:dragged" as `${string}:${string}`,
   path: ["items", "2"],
-  cfcLabelView: { confidentiality: [], integrity: [] },
+  cfcLabelView: { version: 1, entries: [] },
 });
 const { id, space, path } = cell.ref();
 

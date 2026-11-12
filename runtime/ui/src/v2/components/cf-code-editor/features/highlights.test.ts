@@ -183,9 +183,10 @@ describe("highlights", () => {
         { id: "named", fromAnchor: "a", toAnchor: "b" },
       ] as unknown as EditorHighlight[]);
 
-      expect(marks(state).map(({ spec }) => spec.attributes)).toEqual([
-        { "data-highlight-id": "named" },
-      ]);
+      expect(marks(state).map(({ spec }) => spec)).toEqual([{
+        class: "cm-highlight",
+        attributes: { "data-highlight-id": "named" },
+      }]);
     });
 
     it("brings an anchor past the end of the text back to the end", () => {
