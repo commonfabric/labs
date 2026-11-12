@@ -4179,7 +4179,9 @@ export type WaveWithdrawalCause = "contribution-dropped" | "wave-abandoned";
 /**
  * The wave commit step's per-sealed-commit disposition (serving-loop.md
  * §3d). `committed` carries the wave commit's accepted store seq — the
- * sealed commit's pending writes promote to confirmed at that seq.
+ * sealed commit's pending writes promote to confirmed at that seq — and,
+ * when the wave commit carried only part of the sealed commit, the writes
+ * it left out, which roll back while the rest promote.
  * `withdrawn` rolls the sealed commit's pending writes back: its ops were
  * dropped (superseded pure derivation), requeued (raced non-re-derivable
  * consequence), or the wave never committed (lease lost, abandon). The
@@ -4195,7 +4197,7 @@ export type WaveWithdrawalCause = "contribution-dropped" | "wave-abandoned";
  * it) and the sealed commit settles `ok`, not error.
  */
 export type SealedCommitVerdict =
-  | { committed: { seq: number } }
+  | { committed: { seq: number; dropped?: DroppedSealedWrites } }
   | {
     withdrawn: {
       message: string;
@@ -4205,6 +4207,19 @@ export type SealedCommitVerdict =
       cause?: WaveWithdrawalCause;
     };
   };
+
+/**
+ * The writes of a sealed commit that a wave commit left out
+ * (serving-loop.md §3d's superseded writes), keyed by the index of their
+ * operation in the sealed commit's operations: the whole operation, or the
+ * indexes of the patches it left out of a patch operation. The replica reads
+ * only the indexes of document operations, which come first in a commit; a
+ * collaborative-field edit is shown inside the patch layer of its document.
+ */
+export type DroppedSealedWrites = ReadonlyMap<
+  number,
+  "operation" | ReadonlySet<number>
+>;
 
 /** A replica's handle for one sealed native commit. */
 export interface SealedNativeCommit {
