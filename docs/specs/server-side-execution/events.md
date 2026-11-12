@@ -632,7 +632,10 @@ loop's duty).
   failure lets it run again on what the replica holds, and a load that
   fails otherwise defers it as a failed preflight load does. A read in
   the home space needs none of this, since the wave holds the run's
-  home-space reads to the store's head (serving-loop.md §3d), and the
+  home-space reads to the store's head (serving-loop.md §3d) once the
+  run seals a write there, as a drain's copy always does with its
+  consequence mark; an LT1 in-process copy that writes only into other
+  spaces seals nothing at home, so its home-space reads count too. The
   run that reads a document its load confirms absent proceeds with
   that absence. So does a run reading a document in a space the
   server refuses the serving identity, which commits the schema's

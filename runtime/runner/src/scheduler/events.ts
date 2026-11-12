@@ -2928,8 +2928,9 @@ export async function dispatchQueuedEvent(state: {
       // reached the document through a link it resolved while it ran, so no
       // dependency the preflight parked on names it. A read the commit holds
       // to the store's head needs nothing here: the wave holds a served run
-      // to its reads in the home space, and a client commit holds each space
-      // it wrote to the reads it made there. Any other such read withdraws
+      // to its reads in the home space when it seals a write there, as a
+      // copy with a stream entry always does with its consequence mark, and
+      // a client commit holds each space it wrote to the reads it made there. Any other such read withdraws
       // the run, which runs again once those loads settle, and a load the
       // event already waited for does not withdraw it twice
       // (`unawaitedLoadKeys`). A client one-shot (`retries: false`) is not
@@ -2943,10 +2944,12 @@ export async function dispatchQueuedEvent(state: {
           loadingReadKeysIn(
             state.runtime,
             tx,
-            served !== undefined
-              ? (space) => space === queuedEvent.eventLink.space
-              : (space) =>
-                tx.tx.getWriteTargetSpaces?.().includes(space) ?? false,
+            (space) =>
+              served === undefined
+                ? tx.tx.getWriteTargetSpaces?.().includes(space) ?? false
+                : space === queuedEvent.eventLink.space &&
+                  (served.streamEntry !== undefined ||
+                    (tx.tx.getWriteTargetSpaces?.().includes(space) ?? false)),
           ),
         )
         : [];

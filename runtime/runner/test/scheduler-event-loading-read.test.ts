@@ -748,6 +748,44 @@ describe("scheduler-event-loading-read", () => {
       ).not.toBe("authorization");
     });
 
+    it("withdraws an in-process copy whose only writes are in another space for a loading read in its home space", async () => {
+      // A copy with no stream entry carries no consequence mark, so a run of
+      // it that writes only into another space seals nothing in its home
+      // space, and nothing holds its home-space reads to the store's head.
+      // Its loading home read withdraws it as one in any other space does.
+
+      const { holder, eventCell, store } = await standUp(
+        "served-lt1-foreign",
+        ["a", "b", "c"],
+        { inboxSpace: space },
+      );
+      // The log is loaded first, so the home read is the run's only one of a
+      // document still loading.
+      const log = reader.getCell<string[]>(foreignSpace, "served-lt1-log");
+      await log.sync();
+      const { reads, firstRun } = addAppendingHandler(holder, log, eventCell);
+      const release = holdReaderSyncFor(store.getAsNormalizedFullLink().id);
+
+      const outcomes: ServedEventFailureOutcome[] = [];
+      const settled = Promise.withResolvers<string>();
+      reader.scheduler.queueEvent(
+        eventCell.getAsNormalizedFullLink(),
+        1,
+        false,
+        (tx) => settled.resolve(tx.status().status),
+        false,
+        { served: { onFailure: (outcome) => outcomes.push(outcome) } },
+      );
+      await firstRun;
+      release();
+
+      expect(await settled.promise).toBe("done");
+      await reader.idle();
+      expect(reads).toEqual([[], ["a", "b", "c"]]);
+      expect(log.get()).toEqual(["a,b,c"]);
+      expect(outcomes).toEqual([]);
+    });
+
     it("does not withdraw the run for a loading read in its home space", async () => {
       // The store here is a document of the run's home space that nothing
       // has written, read while its load is in flight, as a serving
