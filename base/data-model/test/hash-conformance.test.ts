@@ -47,10 +47,7 @@ const FIXTURE_URL = new URL(
  */
 const STUB_CODEC_CLASSES = ["FabricMap", "FabricSet"] as const;
 
-/**
- * The classes whose types are disabled for codecs, which have no text and so
- * no conformance case, though they hash.
- */
+/** The classes that bind no codec, and so have no text. */
 const NO_CODEC_CLASSES = ["FabricRegExp"] as const;
 
 /** One entry of the fixture, as `hash-conformance.md` defines it. */

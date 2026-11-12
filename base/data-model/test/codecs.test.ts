@@ -22,16 +22,25 @@ import { expect } from "@std/expect";
 import { hashStringOf, isValidFabricValue, valueEqual } from "@";
 import type { FabricValue } from "@";
 import { BaseLiveEnvironment } from "@/codec-common";
-import { JsonCodecEngine } from "@/codec-json";
+import { createBaseJsonRegistry, JsonCodecEngine } from "@/codec-json";
+import { JSON_FORMAT } from "@/codec-json/interface.ts";
+import { createBaseRealmRegistry, REALM_FORMAT } from "@/codec-realm";
 import {
+  codecClassesFor,
   createDefaultJsonRegistry,
   fabricFromJsonValue,
   jsonFromFabricValue,
   plainObjectFromJson,
   realmFromFabricValue,
 } from "@/codecs.ts";
-import { FabricError } from "@/fabric-instances";
-import { FabricKeyPair } from "@/fabric-primitives";
+import {
+  codecClasses as instanceClasses,
+  FabricError,
+} from "@/fabric-instances";
+import {
+  codecClasses as primitiveClasses,
+  FabricKeyPair,
+} from "@/fabric-primitives";
 import { SIZE_GUARANTEES_FOR_TESTING_ONLY } from "@/for-testing-only.ts";
 
 /** Mock runtime for decode calls. */
@@ -117,6 +126,30 @@ function expectEveryPathHolds(value: FabricValue, other: FabricValue): void {
 }
 
 describe("codecs", () => {
+  describe("codecClassesFor()", () => {
+    for (
+      const [name, format, base] of [
+        ["JSON", JSON_FORMAT, createBaseJsonRegistry()],
+        ["realm", REALM_FORMAT, createBaseRealmRegistry()],
+      ] as const
+    ) {
+      it(`returns exactly the listed classes a ${name} registry can register`, () => {
+        const returned = new Set<unknown>(codecClassesFor(format));
+        for (const cls of [...primitiveClasses(), ...instanceClasses()]) {
+          let registers = true;
+          try {
+            base.extend(cls);
+          } catch {
+            registers = false;
+          }
+
+          expect({ cls: cls.name, returned: returned.has(cls) })
+            .toEqual({ cls: cls.name, returned: registers });
+        }
+      });
+    }
+  });
+
   describe("createDefaultJsonRegistry()", () => {
     it("returns a frozen registry", () => {
       expect(Object.isFrozen(createDefaultJsonRegistry())).toBe(true);

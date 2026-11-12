@@ -13,9 +13,6 @@
  * `RegExp` it was given, and each read builds a fresh one, so mutating what
  * comes back cannot reach the stored value. The flavor counts toward identity
  * as well -- two values differing only in it hash differently.
- *
- * The type is disabled for codecs: neither wire format encodes one, and a
- * `RegExp@1` arriving over either decodes as an unknown tag.
  */
 
 import { expect } from "@std/expect";

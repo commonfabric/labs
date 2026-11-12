@@ -45,10 +45,7 @@ const STUB_CODEC_CLASSES: ReadonlySet<string> = new Set([
   "FabricSet",
 ]);
 
-/**
- * The classes whose types are disabled for codecs, which have no text and so
- * no conformance case.
- */
+/** The classes that bind no codec, and so have no text. */
 const NO_CODEC_CLASSES: ReadonlySet<string> = new Set(["FabricRegExp"]);
 
 /** One entry of the fixture, as `fvj1-conformance.md` defines it. */

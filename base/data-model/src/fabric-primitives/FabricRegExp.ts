@@ -37,9 +37,8 @@ const JS_FLAVOR = "es2025";
  * other regex syntaxes in the future. See Section 1.4.5 of
  * `1-fabric-values.md`.
  *
- * The type is disabled for codecs: this class binds no codec, so no wire
- * format carries an instance, and encoding one throws as it does for any class
- * no registry knows.
+ * The type is disabled for codecs: this class binds no codec, so encoding an
+ * instance throws as it does for any unregistered class.
  */
 export class FabricRegExp extends BaseFabricPrimitive
   implements ApiFabricRegExp {

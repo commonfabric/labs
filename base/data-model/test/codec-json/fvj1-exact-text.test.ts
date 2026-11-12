@@ -63,16 +63,12 @@ type StubbedClass = {
   readonly stubbed: () => FabricValue;
 };
 
-/**
- * A class whose type is disabled for codecs (`1-fabric-values.md` Section
- * 1.4.5), so that it binds no codec. A value of it has no text, and a text
- * under its tag decodes as an unknown tag.
- */
-type DisabledClass = {
+/** A class that binds no codec, so that a value of it has no text. */
+type NoCodecClass = {
   /** Makes a value of the class. */
-  readonly disabled: () => FabricValue;
+  readonly noCodec: () => FabricValue;
 
-  /** A text under the tag the type would have. */
+  /** A text under the tag the class would have. */
   readonly text: string;
 };
 
@@ -223,7 +219,7 @@ const FORMAT_TAG_CASES: Readonly<
 const CLASS_CASES: Readonly<
   Record<
     keyof FabricPrimitiveClassesByName | keyof FabricInstanceClassesByName,
-    readonly TextCase[] | StubbedClass | DisabledClass
+    readonly TextCase[] | StubbedClass | NoCodecClass
   >
 > = {
   FabricBytes: [
@@ -276,7 +272,7 @@ const CLASS_CASES: Readonly<
     },
   ],
   FabricRegExp: {
-    disabled: () => new FabricRegExp(/ab+c/gi),
+    noCodec: () => new FabricRegExp(/ab+c/gi),
     text: 'fvj1:{"/RegExp@1":{"flags":"gi","flavor":"es2025","source":"ab+c"}}',
   },
   FabricUnavailable: [
@@ -369,9 +365,9 @@ describe("fvj1-exact-text", () => {
               "not yet implemented",
             );
           });
-        } else if ("disabled" in cases) {
-          it("refuses to encode a value, its type being disabled for codecs", () => {
-            expect(() => jsonFromFabricValue(cases.disabled())).toThrow(
+        } else if ("noCodec" in cases) {
+          it("refuses to encode a value, the class binding no codec", () => {
+            expect(() => jsonFromFabricValue(cases.noCodec())).toThrow(
               "No codec registered",
             );
           });

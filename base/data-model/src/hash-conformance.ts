@@ -62,13 +62,13 @@ import {
   bytesOfHex,
   type ClassCaseNotes,
   classCasesOf,
-  DISABLED_CODEC_EXCLUSION,
   type ExampleMakers,
   fabricValueOfTextWithMods,
   type FixtureJson,
   type FixtureRequirements,
   fixtureTextOf,
   hexOf,
+  NO_CODEC_EXCLUSION,
   requirementsOf,
   sparseArrayOf,
   STUB_CODEC_EXCLUSION,
@@ -1000,7 +1000,7 @@ const PRIMITIVE_CLASS_NOTES: {
   FabricEpochNsec: { section: SECTION_EPOCH_NSEC },
   FabricHash: { section: SECTION_HASH },
   FabricKeyPair: { section: SECTION_KEY_PAIR },
-  FabricRegExp: { excluded: DISABLED_CODEC_EXCLUSION },
+  FabricRegExp: { excluded: NO_CODEC_EXCLUSION },
   FabricUnavailable: { section: SECTION_UNAVAILABLE },
 };
 
