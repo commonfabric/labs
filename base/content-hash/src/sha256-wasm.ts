@@ -151,16 +151,10 @@ class WasmUpdatingHasher extends BaseSmallChunkUpdatingHasher {
  * module is usable, `false` if not.
  */
 export function initWasmOneShot(): Promise<boolean> {
-  oneShotInitResult ??= (async () => {
-    try {
-      theOneShotHasher.push(await createSHA256());
-      moduleIsUsable = true;
-    } catch {
-      // `hash-wasm` not available.
-    }
-
-    return moduleIsUsable;
-  })();
+  oneShotInitResult ??= addHashers(theOneShotHasher, 1).then((usable) => {
+    moduleIsUsable = usable;
+    return usable;
+  });
 
   return oneShotInitResult;
 }
@@ -168,26 +162,29 @@ export function initWasmOneShot(): Promise<boolean> {
 /**
  * Performs module-level setup if (a) possible and (b) not already done: the
  * one-shot hasher, and the pool of hashers `createHasherWasm()` draws from.
- * Returns (a promise to) `true` if this module is usable, `false` if not. A
- * pool that could not be filled leaves `createHasherWasm()` collecting its
- * input for the one-shot hasher.
+ * Returns (a promise to) `true` if both were set up, `false` if not.
  */
 export function initWasm(): Promise<boolean> {
-  initResult ??= (async () => {
-    if (!await initWasmOneShot()) return false;
-
-    try {
-      for (let i = 0; i < HASHER_POOL_SIZE; i++) {
-        hasherPool.push(await createSHA256());
-      }
-    } catch {
-      // The pool is an optimization; `createHasherWasm()` works without it.
-    }
-
-    return true;
-  })();
+  initResult ??= initWasmOneShot().then((usable) =>
+    usable && addHashers(hasherPool, HASHER_POOL_SIZE)
+  );
 
   return initResult;
+}
+
+/**
+ * Helper for `initWasmOneShot()` and `initWasm()`, which adds `count` new
+ * hashers to `hashers`. Returns (a promise to) `true` if it could, `false` if
+ * `hash-wasm` is not available.
+ */
+async function addHashers(hashers: IHasher[], count: number): Promise<boolean> {
+  const goal = hashers.length + count;
+  try {
+    while (hashers.length < goal) hashers.push(await createSHA256());
+  } catch {
+    // `hash-wasm` is not available.
+  }
+  return hashers.length === goal;
 }
 
 /** Performs a hash on a single array. */

@@ -63,6 +63,16 @@ for (const createFunc of createFuncs) {
         .toThrow("Unknown encoding: ``a`b``");
     });
 
+    it("refuses an unknown encoding name after an input too long to buffer", () => {
+      // An implementation may digest a long input along a different path from
+      // a short one.
+
+      const hasher = createFunc();
+      hasher.update(new Uint8Array(5000));
+      expect(() => hasher.digest("hex" as "base64url"))
+        .toThrow("Unknown encoding: `hex`");
+    });
+
     describe("after `digest()`", () => {
       const alreadyDone = /`digest\(\)` already done/;
 
