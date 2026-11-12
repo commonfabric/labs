@@ -2299,8 +2299,13 @@ server checks for deletion once it has routed the command and, for a command
 that names a session, found that session open, and before every other check, so
 a command to a deleted space reports the deletion and never a shape, capability
 or genesis failure. The server revokes the sessions open on the space with the
-`session/revoked` reason `deleted`. The session that committed the deletion
-receives its transact response first and its revocation after, as a member's
+`session/revoked` reason `deleted`. Every command on one of those sessions, on
+the connection that held it and while that connection is routed to the space,
+reports the deletion too, whether it was in flight at the revocation or arrived
+after it, as a command its client sent before the revocation reached it does.
+Any other connection naming the session is told only that it holds no such
+session. The session that committed the deletion receives its transact response
+first and its revocation after, as a member's
 session does when it removes its own entry. The server admits no further commit
 to the space on any write path, engine-direct writes from the serving plane
 included, so no principal can undo the deletion. These checks run before a
