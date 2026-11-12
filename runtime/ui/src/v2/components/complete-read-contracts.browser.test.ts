@@ -95,11 +95,18 @@ const READS_OUTSIDE_CONTRACT: Readonly<
   "cf-profile-badge": [{
     reason: "The seal shows whether the profile is its space's root, which " +
       "`profileSpaceOf()` reads by opening the space's own cell by address, " +
-      "loading it, and resolving its `defaultPattern` link.",
+      "loading it under a schema that reads none of its value, and " +
+      "resolving its `defaultPattern` link. A read of the value would follow " +
+      "that link into the root piece, fields the badge never shows included.",
     admits: (read, origin, bound) =>
       origin.kind === "address" && origin.space === bound.space &&
       origin.cause === origin.space &&
-      ((read.type === RequestType.CellGet && read.ref.path.length === 0) ||
+      ((read.type === RequestType.CellGet && read.ref.path.length === 0 &&
+        readWithin(readSchemaOf(read.ref), {
+          type: "object",
+          properties: {},
+          additionalProperties: false,
+        })) ||
         (read.type === RequestType.CellResolveAsCell &&
           read.ref.path.length === 1 &&
           read.ref.path[0] === "defaultPattern")),

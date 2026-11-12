@@ -104,6 +104,19 @@ const spaceRootReads = new WeakMap<
 >();
 
 /**
+ * The schema the space cell is loaded under, which reads none of its value.
+ * Where the root links is a position, which `resolveAsCell()` answers; a read
+ * of the value would follow the link into the root piece, and take in labels
+ * of fields the badge never shows, which the worker's display ceiling can
+ * refuse.
+ */
+export const SPACE_CELL_LOAD_SCHEMA = {
+  type: "object",
+  properties: {},
+  additionalProperties: false,
+} as const;
+
+/**
  * Helper for {@link spaceRootOf}, which reads the piece `space`'s root links.
  * The space cell is loaded before its root is read.
  */
@@ -114,6 +127,7 @@ const readSpaceRoot = async (
   const spaceCell = await runtime.getCell<{ defaultPattern: unknown }>(
     space,
     space,
+    SPACE_CELL_LOAD_SCHEMA,
   );
   // Loaded first: a space cell this runtime has not received resolves to
   // itself, which would answer "not a profile" for a profile that is one.
