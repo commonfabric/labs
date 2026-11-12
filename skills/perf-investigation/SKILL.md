@@ -142,10 +142,21 @@ next section here is what to know before making them.
 has been read after a forced collection, between steps that vary one thing:
 `/api/health/collected-memory` on a local server. Then
 `skills/perf-investigation/scripts/heap-worker-probe.ts` has a serving worker
-snapshot its own heap around a run of creates, `heap-snapshot.ts` takes a
-running server's main thread over the inspector, and `heap-retained.ts` and
-`heap-removal.ts` beside them name what holds the growth.
-`docs/plans/serving-worker-heap.md` gives the process in order.
+snapshot its own heap around a run of creates, `read-worker-probe.ts` reports
+what each read of a board and of its members leaves on that worker and delivers
+to the client, `heap-snapshot.ts` takes a running server's main thread over the
+inspector, and `heap-retained.ts` and `heap-removal.ts` beside them name what
+holds the growth. `docs/plans/serving-worker-heap.md` gives the process in
+order.
+
+**A serving worker's own CPU.** The inspector reaches a process's main thread,
+and a toolshed's serving loop runs in a worker. The worker entry those probes
+start, `heap-worker-module.ts`, profiles its own isolate on request, and
+`skills/perf-investigation/scripts/create-worker-probe.ts` uses that to write
+one `.cpuprofile` of the worker over a run of creates at each of several board
+sizes. The sampler measures elapsed time, so on a loaded machine compare a
+function's share across sizes and take the absolute cost from the process's CPU
+time, which the probe prints beside it.
 
 ## Which process is doing the work
 
