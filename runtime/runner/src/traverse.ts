@@ -704,41 +704,30 @@ function prepareAnyOfBranch(
   };
   if (ContextualFlowControl.isFalseSchema(option)) return rejected;
   const merged = mergeSchemaOption(restSchema, option);
-  if (typeof merged === "boolean") {
+  const hasAsCell = SchemaObjectTraverser.hasAsCell(merged);
+  const resolved = typeof merged !== "boolean" && "$ref" in merged
+    ? resolveSchemaRefsCanonical(merged)
+    : merged;
+  if (typeof resolved === "boolean") {
     // canBranchMatch's first check: boolean schemas decide immediately.
     return {
       optionIsFalse: false,
       merged,
-      constant: merged,
-      hasAsCell: false,
+      constant: resolved,
+      hasAsCell,
       types: undefined,
       required: undefined,
     };
-  }
-  const hasAsCell = SchemaObjectTraverser.hasAsCell(merged);
-  let resolved: JSONSchema | undefined = merged;
-  if ("$ref" in merged) {
-    resolved = resolveSchemaRefsCanonical(merged);
-    if (typeof resolved === "boolean") {
-      return {
-        optionIsFalse: false,
-        merged,
-        constant: resolved,
-        hasAsCell,
-        types: undefined,
-        required: undefined,
-      };
-    } else if (resolved === undefined) {
-      // Unresolved $ref: pass the prefilter; traversal complains properly.
-      return {
-        optionIsFalse: false,
-        merged,
-        constant: true,
-        hasAsCell,
-        types: undefined,
-        required: undefined,
-      };
-    }
+  } else if (resolved === undefined) {
+    // Unresolved $ref: pass the prefilter; traversal complains properly.
+    return {
+      optionIsFalse: false,
+      merged,
+      constant: true,
+      hasAsCell,
+      types: undefined,
+      required: undefined,
+    };
   }
   const types = resolved.type !== undefined
     ? (Array.isArray(resolved.type) ? resolved.type : [resolved.type])
@@ -1502,33 +1491,6 @@ export const coveringSelector = (
   }
   return undefined;
 };
-
-export class CycleTracker<K> {
-  #partial: Set<K>;
-  #expectCycles: boolean;
-  constructor(expectCycles = false) {
-    this.#expectCycles = expectCycles;
-    this.#partial = new Set<K>();
-  }
-  include(k: K, context?: unknown): Disposable | null {
-    if (this.#partial.has(k)) {
-      if (!this.#expectCycles) {
-        logger.warn("traverse", () => [
-          "Cycle Detected!",
-          k,
-          context,
-        ]);
-      }
-      return null;
-    }
-    this.#partial.add(k);
-    return {
-      [Symbol.dispose]: () => {
-        this.#partial.delete(k);
-      },
-    };
-  }
-}
 
 /**
  * Cycle tracker for more complex objects with multiple parts.
@@ -2376,112 +2338,103 @@ export abstract class BaseObjectTraverser {
       // that is read back through here), so unlike the schema-`default`
       // paths it cannot fail loudly yet: the instance leafs through whole.
       return doc.value;
-    } else if (isObjectOrArray(doc.value)) {
-      // First, see if we need special handling
-      if (isSigilLink(doc.value)) {
-        // Check coverage before getAtPath/followPointer adds this link target
-        // to schemaTracker.
-        const alreadyTracked = this.traverseCells &&
-          this.isLinkedDocumentCovered(doc, DEFAULT_SELECTOR);
-        const link = parseLink(doc.value, doc.address);
-        const [redirDoc, _redirSelector] = this.getDocAtPath(
-          doc,
-          [],
-          DEFAULT_SELECTOR,
-          "writeRedirect",
-        );
-        this.tx.read(redirDoc.address, READ_FOR_SCHEDULING);
-        if (redirDoc.value === undefined) {
-          logger.debug(
-            "traverse",
-            () => [
-              "getAtPath returned undefined value for",
-              doc,
-            ],
-          );
-          return null;
-        }
-        // If the target doc was already tracked before this traversal,
-        // skip re-traversing it (followPointer already loaded and tracked it)
-        // We can only do this in the querySchema version.
-        // For validateAndTransform, we need the returned value, so we can't
-        // optmize this out. We can tell based on traverseCells.
-        if (
-          this.traverseCells && alreadyTracked &&
-          doc.address.id !== redirDoc.address.id
-        ) {
-          return null;
-        }
-        // our item link should point to the target of the last redirect
-        itemLink = getNormalizedLink(redirDoc.address, true);
-        // We can follow all the links, since we don't need to track cells
-        const [valueDoc, _] = this.getDocAtPath(redirDoc, [], DEFAULT_SELECTOR);
-        this.tx.read(valueDoc.address, READ_FOR_SCHEDULING);
-        // Same entry gate as followPointer: an unresolvable ref names a
-        // corrupt or malformed declaration (the loader logs it), and such
-        // a declaration selects nothing.
-        const linkSchemaCollected = link?.schema === undefined ||
-          loadExternalSchemaDocs(
-            this.tx,
-            doc.address,
-            link.schema,
-            this.context,
-          );
-        return this.traverseLinkedDoc(
-          valueDoc,
-          linkSchemaCollected ? link?.schema : false,
-          defaultValue,
-          itemLink,
-        );
-      } else {
-        const newValue: Record<string, FabricValue> = {};
-        using t = this.tracker.include(doc.value, true, newValue, doc);
-        if (t === null) {
-          return this.tracker.getExisting(doc.value, true);
-        }
-        const entries = Object.entries(doc.value as JSONObject).map((
-          [k, v],
-        ) => {
-          const itemDoc = {
-            address: {
-              ...doc.address,
-              path: appendToPath(doc.address.path, k),
-            },
-            value: v,
-          };
-          const val = this.traverseDAG(
-            itemDoc,
-            isWalkableObjectNotArray(defaultValue)
-              ? (defaultValue as JSONObject)[k]
-              : undefined,
-          )!;
-          return [k, val];
-        });
-        // We copy the contents of our result into newValue so that if we have
-        // a cycle, we can return newValue before we actually populate it.
-        for (const [k, v] of entries) {
-          if (typeof k === "string") {
-            newValue[k] = v;
-          }
-        }
-        // Our link is based on the last link in the chain and not the first.
-        const newLink = itemLink ?? getNormalizedLink(doc.address, true);
-        const recordResult = this.objectCreator.createObject(newLink, newValue);
-        if (defaultValue === undefined) {
-          const memoKey = itemLink
-            ? addressKey(scopedAddressForKey(doc.address)) + "|" +
-              addressKey(itemLink)
-            : addressKey(scopedAddressForKey(doc.address));
-          this.dagMemo.set(memoKey, recordResult);
-        }
-        return recordResult;
-      }
-    } else {
-      logger.error(
-        "traverse-error",
-        () => ["Encountered unexpected object: ", doc.value],
+    } else if (isSigilLink(doc.value)) {
+      // Check coverage before getAtPath/followPointer adds this link target
+      // to schemaTracker.
+      const alreadyTracked = this.traverseCells &&
+        this.isLinkedDocumentCovered(doc, DEFAULT_SELECTOR);
+      const link = parseLink(doc.value, doc.address);
+      const [redirDoc, _redirSelector] = this.getDocAtPath(
+        doc,
+        [],
+        DEFAULT_SELECTOR,
+        "writeRedirect",
       );
-      return null;
+      this.tx.read(redirDoc.address, READ_FOR_SCHEDULING);
+      if (redirDoc.value === undefined) {
+        logger.debug(
+          "traverse",
+          () => [
+            "getAtPath returned undefined value for",
+            doc,
+          ],
+        );
+        return null;
+      }
+      // If the target doc was already tracked before this traversal,
+      // skip re-traversing it (followPointer already loaded and tracked it)
+      // We can only do this in the querySchema version.
+      // For validateAndTransform, we need the returned value, so we can't
+      // optmize this out. We can tell based on traverseCells.
+      if (
+        this.traverseCells && alreadyTracked &&
+        doc.address.id !== redirDoc.address.id
+      ) {
+        return null;
+      }
+      // our item link should point to the target of the last redirect
+      itemLink = getNormalizedLink(redirDoc.address, true);
+      // We can follow all the links, since we don't need to track cells
+      const [valueDoc, _] = this.getDocAtPath(redirDoc, [], DEFAULT_SELECTOR);
+      this.tx.read(valueDoc.address, READ_FOR_SCHEDULING);
+      // Same entry gate as followPointer: an unresolvable ref names a
+      // corrupt or malformed declaration (the loader logs it), and such
+      // a declaration selects nothing.
+      const linkSchemaCollected = link?.schema === undefined ||
+        loadExternalSchemaDocs(
+          this.tx,
+          doc.address,
+          link.schema,
+          this.context,
+        );
+      return this.traverseLinkedDoc(
+        valueDoc,
+        linkSchemaCollected ? link?.schema : false,
+        defaultValue,
+        itemLink,
+      );
+    } else {
+      const newValue: Record<string, FabricValue> = {};
+      using t = this.tracker.include(doc.value, true, newValue, doc);
+      if (t === null) {
+        return this.tracker.getExisting(doc.value, true);
+      }
+      const entries = Object.entries(doc.value as JSONObject).map((
+        [k, v],
+      ) => {
+        const itemDoc = {
+          address: {
+            ...doc.address,
+            path: appendToPath(doc.address.path, k),
+          },
+          value: v,
+        };
+        const val = this.traverseDAG(
+          itemDoc,
+          isWalkableObjectNotArray(defaultValue)
+            ? (defaultValue as JSONObject)[k]
+            : undefined,
+        )!;
+        return [k, val];
+      });
+      // We copy the contents of our result into newValue so that if we have
+      // a cycle, we can return newValue before we actually populate it.
+      for (const [k, v] of entries) {
+        if (typeof k === "string") {
+          newValue[k] = v;
+        }
+      }
+      // Our link is based on the last link in the chain and not the first.
+      const newLink = itemLink ?? getNormalizedLink(doc.address, true);
+      const recordResult = this.objectCreator.createObject(newLink, newValue);
+      if (defaultValue === undefined) {
+        const memoKey = itemLink
+          ? addressKey(scopedAddressForKey(doc.address)) + "|" +
+            addressKey(itemLink)
+          : addressKey(scopedAddressForKey(doc.address));
+        this.dagMemo.set(memoKey, recordResult);
+      }
+      return recordResult;
     }
   }
 
@@ -2613,18 +2566,15 @@ export abstract class BaseObjectTraverser {
   }
 
   /**
-   * Traverse a document reached by following a link. The base implementation
-   * always uses traverseDAG; subclasses may override to switch to a
-   * schema-aware traversal when the link carries a schema.
+   * Traverse a document reached by following a link, under the schema the
+   * link carries, if any.
    */
-  protected traverseLinkedDoc(
+  protected abstract traverseLinkedDoc(
     doc: IMemorySpaceValueAttestation,
-    _linkSchema: JSONSchema | undefined,
+    linkSchema: JSONSchema | undefined,
     defaultValue: FabricValue,
     itemLink: NormalizedFullLink | undefined,
-  ): FabricValue {
-    return this.traverseDAG(doc, defaultValue, itemLink);
-  }
+  ): FabricValue;
 }
 
 /**
@@ -4213,6 +4163,12 @@ function isMatch(result: TraverseResult<FabricValue> | undefined): boolean {
   return result !== undefined && result.error === undefined;
 }
 
+/**
+ * The document an ordinary array-item link names: one in the source's space
+ * and scope, read at its root.
+ */
+type ArrayItemLinkTarget = IMemorySpaceValueAddress & { scope: CellScope };
+
 export class SchemaObjectTraverser<V extends FabricValue>
   extends BaseObjectTraverser {
   #sharedSchemaMemo?: SchemaMemo;
@@ -5430,7 +5386,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
   #plainArrayItemLinkTarget(
     doc: IMemorySpaceValueAttestation,
     selector: SchemaPathSelector,
-  ): IMemorySpaceValueAddress | undefined {
+  ): ArrayItemLinkTarget | undefined {
     if (
       this.traverseCells || selector.schema === undefined ||
       preparePlainSchemaPlan(selector.schema) === undefined ||
@@ -5444,7 +5400,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
   #ordinaryArrayItemLinkTarget(
     value: FabricValue,
     source: IMemorySpaceValueAddress,
-  ): IMemorySpaceValueAddress | undefined {
+  ): ArrayItemLinkTarget | undefined {
     const link = parseLink(value, source);
     const sourceScope = source.scope ?? "space";
     if (
@@ -5494,13 +5450,11 @@ export class SchemaObjectTraverser<V extends FabricValue>
   #reportMissingPlainArrayItemLink(
     doc: IMemorySpaceValueAttestation,
     selector: SchemaPathSelector,
-    target: IMemorySpaceValueAddress,
+    target: ArrayItemLinkTarget,
   ): void {
-    const link = parseLink(doc.value, doc.address);
-    if (link === undefined) return;
     reportMissingLinkTarget(
       this.context,
-      link,
+      { space: target.space, id: target.id, scope: target.scope, path: [] },
       { path: target.path, schema: selector.schema },
       doc.address.space,
       { id: doc.address.id, scope: doc.address.scope },
@@ -5521,7 +5475,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
   ):
     | {
       sourceAddresses: readonly IMemorySpaceValueAddress[];
-      targets: readonly IMemorySpaceValueAddress[];
+      targets: readonly ArrayItemLinkTarget[];
     }
     | undefined {
     const itemPlan = itemSchema === undefined
@@ -5536,7 +5490,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
     }
 
     const sourceAddresses: IMemorySpaceValueAddress[] = [];
-    const targets: IMemorySpaceValueAddress[] = [];
+    const targets: ArrayItemLinkTarget[] = [];
     for (let index = 0; index < docArray.length; index++) {
       if (!(index in docArray)) continue;
       const item = docArray[index];

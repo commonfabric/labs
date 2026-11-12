@@ -70,12 +70,6 @@ export class CoalescedDocListener {
   #subscription: IStorageNotification | undefined;
   #released = false;
 
-  /** DIAGNOSTIC: notifications that touched a wanted doc; microtask
-   * checks dispatched. */
-  #relevantNotifications = 0;
-
-  #dispatches = 0;
-
   constructor(
     manager: IStorageNotificationCapability,
     consumer: DocNotificationConsumer,
@@ -86,14 +80,6 @@ export class CoalescedDocListener {
 
   get installed(): boolean {
     return this.#subscription !== undefined && !this.#released;
-  }
-
-  get relevantNotificationCount(): number {
-    return this.#relevantNotifications;
-  }
-
-  get dispatchCount(): number {
-    return this.#dispatches;
   }
 
   /** Subscribe (idempotent). A released listener cannot be re-armed —
@@ -135,16 +121,13 @@ export class CoalescedDocListener {
       this.#record(notification.space, undefined, undefined);
       return undefined;
     }
-    let touched = false;
     for (const change of notification.changes) {
       const id = change.address.id as string;
       if (!this.#consumer.wants(notification.space, id, change.address.scope)) {
         continue;
       }
-      touched = true;
       this.#record(notification.space, id, change.address.path);
     }
-    if (touched) this.#relevantNotifications += 1;
     return undefined;
   }
 
@@ -156,18 +139,17 @@ export class CoalescedDocListener {
     const key = `${space}\0${id ?? ""}`;
     let record = this.#pending.get(key);
     if (record === undefined) {
-      record = { space, id, paths: [] };
-      this.#pending.set(key, record);
+      const due: PendingRecord = { space, id, paths: [] };
+      this.#pending.set(key, due);
       // ONE coalesced dispatch per (space, doc) per burst, off the
-      // dispatching stack.
+      // dispatching stack. Only `release` drops a record before its
+      // dispatch, and nothing records after it.
       queueMicrotask(() => {
-        const due = this.#pending.get(key);
-        if (due === undefined || due !== record) return;
-        this.#pending.delete(key);
         if (this.#released) return;
-        this.#dispatches += 1;
+        this.#pending.delete(key);
         this.#consumer.onNotify(due.space, due.id, due.paths);
       });
+      record = due;
     }
     if (path !== undefined) record.paths.push([...path]);
   }

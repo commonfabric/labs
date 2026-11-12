@@ -479,6 +479,88 @@ describe("pattern-binding", () => {
       expect(output.key("value").getRaw()).toBe("secret");
       expect(userScopedValue.getRaw()).toBeUndefined();
     });
+
+    it("throws on an alias deferred to a nested pattern, and writes through it once it is not", () => {
+      const testCell = runtime.getCell<{ value: number }>(
+        space,
+        "deferred alias write target",
+        undefined,
+        tx,
+      );
+      testCell.set({ value: 0 });
+      const argumentCellLink = getMetaCell(testCell, "argument", tx)
+        .getAsNormalizedFullLink();
+
+      expect(() =>
+        sendValueToBinding(tx, testCell, argumentCellLink, {
+          $alias: { cell: "result", path: ["value"], defer: 1 },
+        }, 42)
+      ).toThrow("Cannot write to deferred alias");
+      expect(testCell.getRaw()).toEqual({ value: 0 });
+
+      sendValueToBinding(tx, testCell, argumentCellLink, {
+        $alias: { cell: "result", path: ["value"], defer: 0 },
+      }, 42);
+      expect(testCell.getRaw()).toEqual({ value: 42 });
+    });
+
+    it("throws on an argument alias when the result cell names no argument", () => {
+      const testCell = runtime.getCell<{ value: number }>(
+        space,
+        "argument alias without an argument",
+        undefined,
+        tx,
+      );
+      testCell.set({ value: 0 });
+
+      expect(() =>
+        sendValueToBinding(tx, testCell, undefined, {
+          $alias: { cell: "argument", path: ["value"] },
+        }, 42)
+      ).toThrow(
+        "Cannot write to argument alias: no argument cell link available",
+      );
+
+      sendValueToBinding(tx, testCell, undefined, {
+        $alias: { cell: "result", path: ["value"] },
+      }, 42);
+      expect(testCell.getRaw()).toEqual({ value: 42 });
+    });
+
+    it("writes a partial-cause alias to the internal cell its descriptor derives", () => {
+      const testCell = runtime.getCell<{ value: number }>(
+        space,
+        "partial-cause alias write target",
+        undefined,
+        tx,
+      );
+      testCell.set({ value: 0 });
+      const argumentCellLink = getMetaCell(testCell, "argument", tx)
+        .getAsNormalizedFullLink();
+      const derivedInternalCells = [
+        { partialCause: "output" },
+        { partialCause: "other" },
+      ];
+      const derivedOf = (partialCause: string) =>
+        runtime.getCellFromLink(
+          getDerivedInternalCellLink(testCell, { partialCause }),
+          undefined,
+          tx,
+        );
+
+      sendValueToBinding(
+        tx,
+        testCell,
+        argumentCellLink,
+        { $alias: { partialCause: "output", path: ["count"] } },
+        7,
+        { derivedInternalCells },
+      );
+
+      expect(derivedOf("output").getRaw()).toEqual({ count: 7 });
+      expect(derivedOf("other").getRaw()).toBeUndefined();
+      expect(testCell.getRaw()).toEqual({ value: 0 });
+    });
   });
 
   describe("mapBindingToCell", () => {
@@ -1525,6 +1607,39 @@ describe("pattern-binding", () => {
       expect(links[0].path).toEqual(["foo"]);
       expect(links[0].id).toBeDefined();
       expect(links[0].space).toBe(space);
+    });
+
+    it("does not look inside a link that is not a write redirect", () => {
+      // The link's schema carries a write redirect in its `default`. That is
+      // part of how the link reads, not a write target of the binding.
+
+      const target = runtime.getCell<{ foo: number }>(
+        space,
+        "redirect named by a link schema default",
+        undefined,
+        tx,
+      );
+      target.set({ foo: 1 });
+      const redirect = target.key("foo").getAsWriteRedirectLink({
+        base: target,
+      });
+      const plainLink = {
+        "/": {
+          [LINK_V1_TAG]: {
+            id: target.getAsNormalizedFullLink().id,
+            path: [],
+            schema: { default: redirect },
+          },
+        },
+      };
+
+      expect(findAllWriteRedirectCells({ link: plainLink }, target))
+        .toEqual([]);
+      expect(
+        findAllWriteRedirectCells({ link: redirect }, target).map((link) =>
+          link.path
+        ),
+      ).toEqual([["foo"]]);
     });
   });
 

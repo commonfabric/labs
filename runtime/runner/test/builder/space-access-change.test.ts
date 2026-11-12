@@ -1161,6 +1161,19 @@ describe("space-access-change", () => {
   });
 
   describe("settleSpaceAccessChanges()", () => {
+    it("returns `undefined` and commits nothing for a client handler run that staged no change", async () => {
+      const { runtime, factory } = clientRuntime(alice);
+      const space = await createSpace(runtime, { [alice.did()]: "OWNER" });
+      const frame = inHandler(runtime, runtime.edit(), () => {});
+      const before = aclCommitCount(factory, space);
+
+      expect(settleSpaceAccessChanges(frame)).toBeUndefined();
+      await commitSpaceAccessChanges(frame);
+
+      expect(aclCommitCount(factory, space)).toBe(before);
+      expect(await storedAcl(space)).toEqual({ [alice.did()]: "OWNER" });
+    });
+
     it("commits a client handler's changes before it settles", async () => {
       const { runtime } = clientRuntime(alice);
       const space = await createSpace(runtime, { [alice.did()]: "OWNER" });

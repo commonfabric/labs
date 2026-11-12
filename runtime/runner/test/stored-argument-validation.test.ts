@@ -13,6 +13,10 @@ import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import type { JSONSchema } from "../src/builder/types.ts";
+import type {
+  IExtendedStorageTransaction,
+  IMemorySpaceAddress,
+} from "../src/storage/interface.ts";
 import { validateSchemaValue } from "../src/cfc/schema-sanitization.ts";
 import {
   extractDefaultValues,
@@ -38,6 +42,27 @@ const signer = await Identity.fromPassphrase("stored-argument-validation");
 const space = signer.did();
 const otherSpace = (await Identity.fromPassphrase("stored-argument-elsewhere"))
   .did();
+
+/**
+ * Spies on both of `tx`'s reads, the one that returns a failure and the one
+ * that throws it, until disposed.
+ */
+function spyReads(tx: IExtendedStorageTransaction): {
+  /** The address of every read made so far. */
+  addresses(): IMemorySpaceAddress[];
+  [Symbol.dispose](): void;
+} {
+  const read = spy(tx, "read");
+  const readOrThrow = spy(tx, "readOrThrow");
+  return {
+    addresses: () =>
+      [...read.calls, ...readOrThrow.calls].map((call) => call.args[0]),
+    [Symbol.dispose]() {
+      read.restore();
+      readOrThrow.restore();
+    },
+  };
+}
 
 describe("stored-argument-validation", () => {
   let storage: ReturnType<typeof StorageManager.emulate>;
@@ -87,12 +112,13 @@ describe("stored-argument-validation", () => {
         },
       };
       const before = argument.getRaw();
-      using reads = spy(tx, "read");
+      using reads = spyReads(tx);
       expect(storedArgumentValidationIssue(argument, schema, undefined, tx))
         .toBeUndefined();
-      const graphReads = reads.calls.filter((call) =>
-        graphIds.has(call.args[0].id)
-      ).length;
+      const graphReads = reads.addresses().filter((address) =>
+        graphIds.has(address.id)
+      )
+        .length;
       expect(graphReads).toBeGreaterThan(0);
       expect(graphReads).toBeLessThan(100 * graphIds.size);
       expect(argument.getRaw()).toEqual(before);
@@ -126,7 +152,7 @@ describe("stored-argument-validation", () => {
       const argument = runtime.getCell(space, "argument", undefined, tx);
       argument.set({ graph: nodes[0] });
       const raw = argument.getRaw();
-      using reads = spy(tx, "read");
+      using reads = spyReads(tx);
       const result = overlayUnreadableLinkPlaceholders(
         tx,
         argument.getAsNormalizedFullLink(),
@@ -149,8 +175,8 @@ describe("stored-argument-validation", () => {
       expect(validateSchemaValue(schema, result.graph, schema, {
         acceptOpaqueValue: acceptsOpaqueCellOrUnresolvedLink,
       })).toBeUndefined();
-      expect(reads.calls.length).toBeGreaterThan(0);
-      expect(reads.calls.length).toBeLessThan(4 * nodes.length);
+      expect(reads.addresses().length).toBeGreaterThan(0);
+      expect(reads.addresses().length).toBeLessThan(4 * nodes.length);
       let entry = result.graph;
       for (let i = 0; i < nodes.length; i++) {
         expect(entry.pending).toBeDefined();
@@ -190,12 +216,12 @@ describe("stored-argument-validation", () => {
         },
       };
       const before = argument.getRaw();
-      using reads = spy(tx, "read");
+      using reads = spyReads(tx);
       expect(storedArgumentValidationIssue(argument, schema, undefined, tx))
         .toBeUndefined();
       expect(
-        reads.calls.some((call) =>
-          call.args[0].id === second.getAsNormalizedFullLink().id
+        reads.addresses().some((address) =>
+          address.id === second.getAsNormalizedFullLink().id
         ),
       ).toBe(false);
       expect(argument.getRaw()).toEqual(before);
@@ -427,12 +453,12 @@ describe("stored-argument-validation", () => {
       };
 
       argument.set({ source: elsewhere });
-      using reads = spy(tx, "read");
+      using reads = spyReads(tx);
       expect(storedArgumentValidationIssue(argument, schema, undefined, tx))
         .toBeUndefined();
       expect(
-        reads.calls.some((call) =>
-          call.args[0].id === elsewhere.getAsNormalizedFullLink().id
+        reads.addresses().some((address) =>
+          address.id === elsewhere.getAsNormalizedFullLink().id
         ),
       ).toBe(false);
 
@@ -651,5 +677,97 @@ describe("stored-argument-validation", () => {
     } finally {
       tx.abort();
     }
+  });
+
+  describe("a stored link in a slot typed as a handle", () => {
+    // The value a handle's link reaches is judged by its top level alone:
+    // its type, and its `enum` and `const` when it is not a container.
+
+    /**
+     * Returns the issue `slotSchema` finds with a slot holding a link to a
+     * document in the argument's own space whose value is `reached`. The
+     * argument's schema defines `#/$defs/text` as a string.
+     */
+    function linkedSlotIssue(
+      slotSchema: JSONSchema,
+      reached: unknown,
+    ): string | undefined {
+      const tx = runtime.edit();
+      try {
+        const target = runtime.getCell<unknown>(space, "target", undefined, tx);
+        target.set(reached);
+        const argument = runtime.getCell(space, "argument", undefined, tx);
+        argument.set({ slot: target });
+        const schema: JSONSchema = {
+          type: "object",
+          properties: { slot: slotSchema },
+          $defs: { text: { type: "string" } },
+        };
+        return storedArgumentValidationIssue(argument, schema, undefined, tx);
+      } finally {
+        tx.abort();
+      }
+    }
+
+    it("holds a reached primitive to the handle's `enum`", () => {
+      const slot: JSONSchema = {
+        type: "string",
+        enum: ["red", "green"],
+        asCell: ["cell"],
+      };
+      expect(linkedSlotIssue(slot, "red")).toBeUndefined();
+      expect(linkedSlotIssue(slot, "blue")).toContain("slot:");
+    });
+
+    it("holds a reached primitive to the handle's `const`", () => {
+      const slot: JSONSchema = { const: "red", asCell: ["cell"] };
+      expect(linkedSlotIssue(slot, "red")).toBeUndefined();
+      expect(linkedSlotIssue(slot, "blue")).toContain("slot:");
+    });
+
+    it("leaves the members of a reached container out of the judgement", () => {
+      const slot: JSONSchema = {
+        type: "array",
+        items: { type: "string" },
+        enum: [["red"]],
+        asCell: ["cell"],
+      };
+      expect(linkedSlotIssue(slot, [1, 2])).toBeUndefined();
+      expect(linkedSlotIssue(slot, "red")).toContain("slot:");
+    });
+
+    it("holds a reached value to every branch of the handle's `allOf`", () => {
+      const slot: JSONSchema = {
+        allOf: [true, { type: "string" }],
+        asCell: ["cell"],
+      };
+      expect(linkedSlotIssue(slot, "red")).toBeUndefined();
+      expect(linkedSlotIssue(slot, 7)).toContain("slot:");
+    });
+
+    it("holds a reached value to both the handle's `anyOf` and its `oneOf`", () => {
+      const slot: JSONSchema = {
+        anyOf: [{ type: "string" }, { type: "number" }],
+        oneOf: [{ type: "string" }, { type: "boolean" }],
+        asCell: ["cell"],
+      };
+      expect(linkedSlotIssue(slot, "red")).toBeUndefined();
+      expect(linkedSlotIssue(slot, 7)).toContain("slot:");
+      expect(linkedSlotIssue(slot, true)).toContain("slot:");
+    });
+
+    it("follows the handle's references to judge the reached value", () => {
+      const missing: JSONSchema = {
+        $ref: "#/$defs/missing",
+        asCell: ["cell"],
+      };
+      expect(linkedSlotIssue(missing, 7)).toBe(
+        "slot: cannot resolve schema reference #/$defs/missing",
+      );
+
+      const present: JSONSchema = { $ref: "#/$defs/text", asCell: ["cell"] };
+      expect(linkedSlotIssue(present, "red")).toBeUndefined();
+      expect(linkedSlotIssue(present, 7)).toContain("slot:");
+    });
   });
 });

@@ -196,7 +196,6 @@ import {
   normalizeSpaceHost,
   parseMemoryUrl,
   type SpaceHostRegistration,
-  SpaceHostValidationError,
 } from "./space-host.ts";
 import { EffectsChannel } from "./speculation/effects-channel.ts";
 import {
@@ -1874,15 +1873,10 @@ export class Runtime {
     inputs: readonly unknown[],
   ): void {
     for (const input of inputs) {
+      // Validation recomputes the digest from the manifest, so two artifacts
+      // under one digest are equal and replacing one with the other changes
+      // nothing.
       const artifact = validateCfcPolicyArtifactManifest(input);
-      const existing = this.#policyManifests.get(artifact.policyDigest);
-      // Reaching this branch requires a collision in the canonical SHA-256
-      // digest: validation recomputes the digest for both artifacts.
-      if (existing !== undefined && !deepEqual(existing, artifact)) {
-        throw new Error(
-          `cfcPolicyManifest: immutable digest collision for ${artifact.policyDigest}`,
-        );
-      }
       this.#policyManifests.set(artifact.policyDigest, artifact);
       let spaces = this.#policyManifestSpaces.get(artifact.policyDigest);
       if (spaces === undefined) {
@@ -2210,7 +2204,6 @@ export class Runtime {
         try {
           route = normalizeSpaceHost(host);
         } catch (cause) {
-          if (!(cause instanceof SpaceHostValidationError)) throw cause;
           throw new Error(
             `Invalid spaceHostMap entry for ${space}`,
             { cause },
@@ -5694,7 +5687,6 @@ export class Runtime {
     try {
       return normalizeSpaceHost(host);
     } catch (cause) {
-      if (!(cause instanceof SpaceHostValidationError)) throw cause;
       throw new Error(
         `Invalid host for space ${space}`,
         { cause },
@@ -5731,19 +5723,13 @@ export class Runtime {
     const generation = ++this.#healthCheckGeneration;
     this.#serverGitSha = null;
     const defaultHost = this.apiUrl.toString();
-    const hosts = new Set([defaultHost]);
-    for (
-      const host of [
-        ...Object.values(this.spaceHostMap ?? {}),
-        ...this.#dynamicHosts.values(),
-      ]
-    ) {
-      try {
-        hosts.add(new URL(host).toString());
-      } catch {
-        return false; // a malformed mapped host is unhealthy by definition
-      }
-    }
+    // Every mapped host is already a normalized origin, so equal hosts are
+    // equal strings.
+    const hosts = new Set([
+      defaultHost,
+      ...Object.values(this.spaceHostMap ?? {}),
+      ...this.#dynamicHosts.values(),
+    ]);
     const deadline = new AbortController();
     const timer = setTimeout(
       () => deadline.abort(new DOMException("timed out", "TimeoutError")),

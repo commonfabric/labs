@@ -1961,6 +1961,34 @@ describe("determineTriggeredActions", () => {
       expect(result).toEqual([action]);
     });
 
+    it("triggers when an object becomes an array with the same keys for non-recursive reads", () => {
+      const action = createAction("nonRecursiveArrayForObject");
+      const dependencies = new Map<Action, SortedAndCompactPaths>([
+        [action, [["value", "a"]]],
+      ]);
+      const before = { value: { a: { 0: "x" } } };
+      const after = { value: { a: ["x"] } };
+
+      expect(
+        determineTriggeredActions(
+          dependencies,
+          before,
+          after,
+          ["value", "a"],
+          { nonRecursive: true },
+        ),
+      ).toEqual([action]);
+      expect(
+        determineTriggeredActions(
+          dependencies,
+          after,
+          { value: { a: ["y"] } },
+          ["value", "a"],
+          { nonRecursive: true },
+        ),
+      ).toEqual([]);
+    });
+
     it("triggers when a child write removes a key for non-recursive reads", () => {
       const action = createAction("nonRecursiveNewChildKey");
       const dependencies = new Map<Action, SortedAndCompactPaths>([

@@ -784,6 +784,22 @@ Deno.test("ACLManager grants refuse wildcard or unsupported authority without wr
   }
 });
 
+Deno.test("ACLManager removals refuse a missing ACL", async () => {
+  const ctx = await withUnGenesisedSpace("remove-no-acl");
+  try {
+    const marker = ctx.factory.mark();
+    await assertRejects(
+      () => ctx.acl.remove(ctx.space),
+      Error,
+      "No ACL initialized for space.",
+    );
+    assertEquals(ctx.factory.since(marker), []);
+    assertEquals(await ctx.readStoredAcl(), undefined);
+  } finally {
+    await ctx.dispose();
+  }
+});
+
 Deno.test("ACLManager grants cannot initialize a missing ACL", async () => {
   const ctx = await withUnGenesisedSpace("monotonic-grant-no-acl");
   try {
