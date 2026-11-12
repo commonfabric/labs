@@ -1029,6 +1029,11 @@ function searchByHashtag(
 
   if (allMatches.length === 0) {
     if (favoritesUnsearched) {
+      // A scope that was searched and could not load a candidate names the
+      // real failure; the missing identity is reported only when nothing
+      // else went wrong.
+      const failure = ctx.candidateFailures.values().next().value;
+      if (failure) throw failure;
       throw new WishError(
         `User identity DID not available to search favorites for ` +
           `"${searchTerm}"`,
