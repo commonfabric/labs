@@ -472,6 +472,47 @@ describe("client", () => {
       }
     });
 
+    it("rejects a mount whose `session.open` was accepted before its connection dropped with its caller's reason, when the caller cancels it while the host is still down", async () => {
+      // The accepted open's session has to be restored on the next connection
+      // before the mount hands it out. A host that stays down keeps that
+      // wait open, and the mount's caller must still be able to end it.
+
+      const t = await connected("cancel-mount-answered");
+      const macrotask = () =>
+        new Promise<void>((resolve) => setTimeout(resolve, 0));
+      try {
+        const cancel = new AbortController();
+        const reason = new Error("test cancels the mount");
+        t.host.holdNextSendOf("session.open", true);
+        const handled = t.host.whenHandled("session.open");
+        let outcome: unknown = "pending";
+        void t.client.mount(
+          "did:key:z6Mk-cancel-mount-answered-other",
+          {},
+          testSessionOpenAuthFactory,
+          cancel.signal,
+        ).then(() => {
+          outcome = "mounted";
+        }, (error) => {
+          outcome = error;
+        });
+        await handled;
+        t.host.hostDown();
+        // One macrotask, in which the mount finds its open answered and
+        // begins to wait for the connection that restores its session.
+        await macrotask();
+        expect(outcome).toBe("pending");
+
+        cancel.abort(reason);
+        // One more, which a cancelled mount settles well inside.
+        await macrotask();
+
+        expect(outcome).toBe(reason);
+      } finally {
+        await t.close();
+      }
+    });
+
     it("rejects a mount whose `session.open` was refused before its connection dropped with that refusal, though the send had not settled", async () => {
       const t = await connected("fail-mount-refused");
       try {
