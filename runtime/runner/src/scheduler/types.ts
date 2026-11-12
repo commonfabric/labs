@@ -580,15 +580,18 @@ export type QueuedEvent = {
    * on a load is not counted. Carried across requeues.
    */
   notRunBackoffs?: number;
-
-  /**
-   * Set on an event requeued and parked because its run read documents still
-   * loading, with the error that run threw, if it threw one; cleared when the
-   * event next dispatches. A load of those documents that fails with an
-   * authorization-class failure then releases the park, served or not, and
-   * the run that follows reads what the replica holds. A load that fails
-   * otherwise ends the event as it would at the preflight, and a client
-   * event's drop reports the error.
-   */
-  withdrawnForLoadingReads?: { readonly error?: Error };
 };
+
+/**
+ * What a load park records of the run that put its event in it, when that run
+ * was withdrawn for reading documents still loading (`parkHeadEventForLoads`):
+ * the error the run threw, if it threw one. A load of those documents that
+ * fails with an authorization-class failure releases such a park, served or
+ * not, and the run that follows reads what the replica holds. A load that
+ * fails otherwise ends the event as it would at the preflight, and a client
+ * event's drop reports the error.
+ */
+export interface LoadingReadWithdrawal {
+  /** The error the withdrawn run threw, if it threw one. */
+  readonly error?: Error;
+}

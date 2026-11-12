@@ -133,10 +133,13 @@ describe("scheduler-event-loading-read", () => {
 
   /**
    * Makes the reader's loads of the document `id` fail, once `fail` is
-   * called, with a failure of no class but `unknown`, as a transport's would.
-   * Returns `fail`.
+   * called, with an error named `name`: by default one of no class but
+   * `unknown`, as a transport's would be. Returns `fail`.
    */
-  function failReaderSyncFor(id: string): () => void {
+  function failReaderSyncFor(
+    id: string,
+    name: string = "TransportError",
+  ): () => void {
     const gate = Promise.withResolvers<void>();
     const manager = readerStorage as unknown as {
       open: (space: string) => {
@@ -152,9 +155,7 @@ describe("scheduler-event-loading-read", () => {
             return async (syncId: unknown, ...rest: unknown[]) => {
               if (syncId === id) {
                 await gate.promise;
-                return {
-                  error: { name: "TransportError", message: "load lost" },
-                };
+                return { error: { name, message: "load lost" } };
               }
               return (target.sync as (...a: unknown[]) => Promise<unknown>)(
                 syncId,
@@ -317,6 +318,52 @@ describe("scheduler-event-loading-read", () => {
       );
     }
     return settled.promise;
+  }
+
+  /**
+   * Whether `status` has settled once every turn the runtime has queued has
+   * run, with no time passing.
+   */
+  async function settledYet(status: Promise<string>): Promise<boolean> {
+    let settled = false;
+    status.then(() => (settled = true), () => (settled = true));
+    await clock.settle();
+    return settled;
+  }
+
+  /**
+   * Registers, on the reader, a handler that first writes `log`, then reads
+   * the offers of the inbox `holder` links to under a schema with no
+   * default, and throws when they read as `undefined`. Returns how many runs
+   * there were, and a promise of the first run.
+   */
+  function addWritingThenThrowingHandler(
+    holder: Cell<{ inbox: unknown }>,
+    log: Cell<string[]>,
+    eventCell: Cell<number>,
+  ): { runs: { count: number }; firstRun: Promise<void> } {
+    const runs = { count: 0 };
+    const firstRun = Promise.withResolvers<void>();
+    reader.scheduler.addEventHandler(
+      (tx: IExtendedStorageTransaction) => {
+        runs.count++;
+        firstRun.resolve();
+        const frame = makeFrame({ frameKind: "handler", runtime: reader, tx });
+        runInFrame(frame, () => {
+          log.withTx(tx).set(["writing"]);
+          const offers = holder.withTx(tx).key("inbox").resolveAsCell()
+            .key("offers").asSchema(offersSchemaWithoutDefault).get() as
+              | string[]
+              | undefined;
+          log.withTx(tx).set([[...offers!].join(",")]);
+        });
+      },
+      eventCell.getAsNormalizedFullLink(),
+      (depTx) => {
+        holder.withTx(depTx).get();
+      },
+    );
+    return { runs, firstRun: firstRun.promise };
   }
 
   describe("a client dispatch", () => {
@@ -517,6 +564,9 @@ describe("scheduler-event-loading-read", () => {
 
       const status = send(eventCell, undefined, { oneShot: true });
       await firstRun;
+      expect(await settledYet(status), "the one-shot ends on its run").toBe(
+        true,
+      );
 
       expect(await status).toBe("done");
       expect(reads).toEqual([[]]);
@@ -541,6 +591,9 @@ describe("scheduler-event-loading-read", () => {
 
       const status = send(eventCell, undefined, { oneShot: true });
       await firstRun;
+      expect(await settledYet(status), "the one-shot ends on its run").toBe(
+        true,
+      );
 
       expect(await status).not.toBe("done");
       expect(runs.count).toBe(1);
@@ -572,6 +625,88 @@ describe("scheduler-event-loading-read", () => {
       expect(runs.count).toBe(1);
       expect(log.get()).toBeUndefined();
       expect(errors.map((error) => error.name)).toEqual(["TypeError"]);
+    });
+
+    it("runs the handler again, rather than failing, when it threw on what it read while loading in a space it wrote", async () => {
+      // The run's commit would carry its read in the space it wrote, but a
+      // run that throws makes no commit, so nothing holds that read.
+
+      const { holder, log, eventCell, store } = await standUp(
+        "client-same-space-throws",
+        ["a", "b", "c"],
+        { inboxSpace: space },
+      );
+      const errors: Error[] = [];
+      reader.scheduler.onError((error) => errors.push(error));
+      const { runs, firstRun } = addWritingThenThrowingHandler(
+        holder,
+        log,
+        eventCell,
+      );
+      const release = holdReaderSyncFor(store.getAsNormalizedFullLink().id);
+
+      const status = send(eventCell);
+      await firstRun;
+      release();
+
+      expect(await status).toBe("done");
+      await reader.idle();
+      expect(runs.count).toBe(2);
+      expect(log.get()).toEqual(["a,b,c"]);
+      expect(errors).toEqual([]);
+    });
+
+    it("runs the handler once more, and not again, when the load it read fails by authorization with no refusal of the space recorded", async () => {
+      // Each read of a document whose load failed starts another load, and
+      // nothing of the document reaches the replica, so the run after the
+      // park finds a load in flight again. That one is of its own making,
+      // and the event does not park on it (`unawaitedLoadKeys`). From its
+      // third run on the handler stops reading, so a third run shows here
+      // as a missing log entry rather than as a loop.
+
+      const { holder, log, eventCell, store } = await standUp(
+        "client-authorization-fails",
+        ["a", "b", "c"],
+      );
+      const errors: Error[] = [];
+      reader.scheduler.onError((error) => errors.push(error));
+      const reads: string[][] = [];
+      const firstRun = Promise.withResolvers<void>();
+      reader.scheduler.addEventHandler(
+        (tx: IExtendedStorageTransaction) => {
+          firstRun.resolve();
+          if (reads.length >= 2) {
+            reads.push(["not read"]);
+            return;
+          }
+          const offers = holder.withTx(tx).key("inbox").resolveAsCell()
+            .key("offers").asSchema(offersSchema).get() as string[];
+          reads.push([...offers]);
+          log.withTx(tx).set([offers.join(",")]);
+        },
+        eventCell.getAsNormalizedFullLink(),
+        (depTx) => {
+          holder.withTx(depTx).get();
+        },
+      );
+      const fail = failReaderSyncFor(
+        store.getAsNormalizedFullLink().id,
+        "AuthorizationError",
+      );
+
+      const status = send(eventCell);
+      await firstRun.promise;
+      fail();
+
+      expect(await status).toBe("done");
+      await reader.idle();
+      expect(reads).toEqual([[], []]);
+      expect(log.get()).toEqual([""]);
+      expect(errors).toEqual([]);
+      expect(
+        readerStorage.spaceAccessError?.(foreignSpace),
+        "no refusal of the space is recorded",
+      ).toBeUndefined();
     });
 
     it("commits only the stored value of a document it read while loading in a space it wrote", async () => {
@@ -606,17 +741,6 @@ describe("scheduler-event-loading-read", () => {
     // ended, and the drain queues the entry again once it has. So a run
     // withdrawn and parked must not settle the callback until the run that
     // follows it does.
-
-    /**
-     * Whether `status` has settled once every turn the runtime has queued
-     * has run, with no time passing.
-     */
-    const settledYet = async (status: Promise<string>): Promise<boolean> => {
-      let settled = false;
-      status.then(() => (settled = true), () => (settled = true));
-      await clock.settle();
-      return settled;
-    };
 
     it("withdraws the run that read a loading document through the piece, and runs it again once, after the load lands", async () => {
       const { holder, log, eventCell, store } = await standUp("served", [
@@ -748,6 +872,34 @@ describe("scheduler-event-loading-read", () => {
       ).not.toBe("authorization");
     });
 
+    it("withdraws the run that threw on what it read while loading in its home space, and runs it again once, after the load lands", async () => {
+      // The wave would hold the run's home-space read, but a run that throws
+      // seals nothing, so nothing holds that read.
+
+      const { holder, log, eventCell, store } = await standUp(
+        "served-home-throws",
+        ["a", "b", "c"],
+        { inboxSpace: space },
+      );
+      const { runs, firstRun } = addWritingThenThrowingHandler(
+        holder,
+        log,
+        eventCell,
+      );
+      const release = holdReaderSyncFor(store.getAsNormalizedFullLink().id);
+
+      const outcomes: ServedEventFailureOutcome[] = [];
+      const status = send(eventCell, outcomes);
+      await firstRun;
+      release();
+
+      expect(await status).toBe("done");
+      await reader.idle();
+      expect(runs.count).toBe(2);
+      expect(log.get()).toEqual(["a,b,c"]);
+      expect(outcomes).toEqual([]);
+    });
+
     it("withdraws an in-process copy whose only writes are in another space for a loading read in its home space", async () => {
       // A copy with no stream entry carries no consequence mark, so a run of
       // it that writes only into another space seals nothing in its home
@@ -787,26 +939,52 @@ describe("scheduler-event-loading-read", () => {
     });
 
     it("does not withdraw the run for a loading read in its home space", async () => {
-      // The store here is a document of the run's home space that nothing
-      // has written, read while its load is in flight, as a serving
-      // runtime's read of a handling receipt is. A served run's home-space
-      // reads are held to the store's head by the wave
-      // (`serving-handler-stale-read.test.ts`), so such a read is no reason
-      // to withdraw the run. No wave is present here, so the run commits
+      // The run reads a document of its home space that nothing has written,
+      // while its load is in flight and with nothing of it in the replica, as
+      // a serving runtime's read of a handling receipt is. A served copy with
+      // a stream entry has its home-space reads held to the store's head by
+      // the wave (`serving-handler-stale-read.test.ts`), so such a read is no
+      // reason to withdraw it. No wave is present here, so the run commits
       // what it read.
 
-      const { holder, log, eventCell, store } = await standUp(
-        "served-home-space",
-        undefined,
-        { inboxSpace: space },
+      const cold = reader.getCell<string>(space, "served-home-space-cold");
+      const log = reader.getCell<string[]>(space, "served-home-space-log");
+      const eventCell = reader.getCell<number>(
+        space,
+        "served-home-space-events",
       );
-      const { reads } = addAppendingHandler(holder, log, eventCell);
-      holdReaderSyncFor(store.getAsNormalizedFullLink().id);
+      const reads: (string | undefined)[] = [];
+      reader.scheduler.addEventHandler(
+        (tx: IExtendedStorageTransaction) => {
+          const value = cold.withTx(tx).get();
+          reads.push(value);
+          log.withTx(tx).set([value ?? "absent"]);
+        },
+        eventCell.getAsNormalizedFullLink(),
+      );
+      const link = cold.getAsNormalizedFullLink();
+      holdReaderSyncFor(link.id);
 
       const outcomes: ServedEventFailureOutcome[] = [];
-      expect(await send(eventCell, outcomes)).toBe("done");
-      expect(reads).toEqual([[]]);
-      expect(log.get()).toEqual([""]);
+      const status = send(eventCell, outcomes);
+      expect(await settledYet(status)).toBe(true);
+      expect(await status).toBe("done");
+
+      expect(
+        readerStorage.pendingLoadGeneration(
+          `${link.space}/${link.scope}/${link.id}`,
+        ),
+        "the document's load is still in flight",
+      ).toBeDefined();
+      expect(
+        readerStorage.open(link.space).replica.hasLocalDocumentCoverage?.(
+          link.id,
+          link.scope,
+        ),
+        "the replica holds nothing of the document",
+      ).toBe(false);
+      expect(reads).toEqual([undefined]);
+      expect(log.get()).toEqual(["absent"]);
       expect(outcomes).toEqual([]);
     });
   });

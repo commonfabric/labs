@@ -93,6 +93,7 @@ import {
   type Action,
   type EventHandler,
   type EventPreflightTraceContext,
+  type LoadingReadWithdrawal,
   LT1_LATE_SEAL_REFUSED,
   type PieceStartWake,
   type QueuedEvent,
@@ -1422,6 +1423,7 @@ export interface SchedulerEventExecutionState {
   readonly parkHeadEventForLoads: (
     event: QueuedEvent,
     keys: readonly string[],
+    withdrawal?: LoadingReadWithdrawal,
   ) => void;
   readonly isHeadEventLoadParked: (event: QueuedEvent) => boolean;
   readonly nodes: NodeRegistry;
@@ -1533,6 +1535,7 @@ export function preflightQueuedEventDependencies(state: {
   readonly parkHeadEventForLoads: (
     event: QueuedEvent,
     keys: readonly string[],
+    withdrawal?: LoadingReadWithdrawal,
   ) => void;
   readonly isDebouncedComputationWaiting: (action: Action) => boolean;
   readonly getNextDebounceRunTime: (action: Action) => number | undefined;
@@ -2157,8 +2160,8 @@ export async function processPullQueuedEventDuringExecute(
         : {}),
       collectPendingLoadParkKeys: (event, deps) =>
         state.collectPendingLoadParkKeys(event, deps),
-      parkHeadEventForLoads: (event, keys) =>
-        state.parkHeadEventForLoads(event, keys),
+      parkHeadEventForLoads: (event, keys, withdrawal) =>
+        state.parkHeadEventForLoads(event, keys, withdrawal),
       isDebouncedComputationWaiting: (dep) =>
         state.isDebouncedComputationWaiting(dep),
       getNextDebounceRunTime: (dep) => state.getNextDebounceRunTime(dep),
@@ -2255,8 +2258,8 @@ export async function processPullQueuedEventDuringExecute(
     collectPendingLoadParkKeys: (event, log) =>
       state.collectPendingLoadParkKeys(event, log),
     unawaitedLoadKeys: (event, keys) => state.unawaitedLoadKeys(event, keys),
-    parkHeadEventForLoads: (event, keys) =>
-      state.parkHeadEventForLoads(event, keys),
+    parkHeadEventForLoads: (event, keys, withdrawal) =>
+      state.parkHeadEventForLoads(event, keys, withdrawal),
   }, queuedEvent);
 }
 
@@ -2310,6 +2313,7 @@ export async function dispatchQueuedEvent(state: {
   readonly parkHeadEventForLoads: (
     event: QueuedEvent,
     keys: readonly string[],
+    withdrawal?: LoadingReadWithdrawal,
   ) => void;
 }, queuedEvent: QueuedEvent): Promise<void> {
   const { action, handler, event: eventValue, retry, onCommit } = queuedEvent;
@@ -2336,7 +2340,6 @@ export async function dispatchQueuedEvent(state: {
     return;
   }
   state.eventQueue.shift();
-  delete queuedEvent.withdrawnForLoadingReads;
 
   const tx = state.runtime.edit();
   // The attempt's commit outcome is classified once, when it settles, by a
@@ -2930,7 +2933,8 @@ export async function dispatchQueuedEvent(state: {
       // to the store's head needs nothing here: the wave holds a served run
       // to its reads in the home space when it seals a write there, as a
       // copy with a stream entry always does with its consequence mark, and
-      // a client commit holds each space it wrote to the reads it made there. Any other such read withdraws
+      // a client commit holds each space it wrote to the reads it made there.
+      // A run that threw makes no commit, so nothing holds any of its reads. Any other such read withdraws
       // the run, which runs again once those loads settle, and a load the
       // event already waited for does not withdraw it twice
       // (`unawaitedLoadKeys`). A client one-shot (`retries: false`) is not
@@ -2945,11 +2949,13 @@ export async function dispatchQueuedEvent(state: {
             state.runtime,
             tx,
             (space) =>
-              served === undefined
+              error === undefined &&
+              (served === undefined
                 ? tx.tx.getWriteTargetSpaces?.().includes(space) ?? false
                 : space === queuedEvent.eventLink.space &&
                   (served.streamEntry !== undefined ||
-                    (tx.tx.getWriteTargetSpaces?.().includes(space) ?? false)),
+                    (tx.tx.getWriteTargetSpaces?.().includes(space) ??
+                      false))),
           ),
         )
         : [];
@@ -2959,13 +2965,14 @@ export async function dispatchQueuedEvent(state: {
         // head: it runs again once they settle, a load that fails with an
         // authorization-class failure lets it run again on what the replica
         // holds, and a load that fails otherwise ends it as one at the
-        // preflight does (`withdrawnForLoadingReads`). Waiting on a load is
-        // settlement,
-        // so the wait spends none of the retry window a stale-basis
-        // rejection gets. As after a RetryImmediately, the requeued event
-        // carries the final callback and the staged work on to the run that
-        // follows: a serving drain reads that callback as the end of its
-        // copy, and queues the entry again once it has heard it.
+        // preflight does (`LoadingReadWithdrawal`). Waiting on a load is
+        // settlement, not a retry: the park neither opens the retry window a
+        // stale-basis rejection gets nor counts as an attempt in it, though a
+        // window an earlier rejection opened keeps running while it waits.
+        // As after a RetryImmediately, the requeued event carries the final
+        // callback and the staged work on to the run that follows: a serving
+        // drain reads that callback as the end of its copy, and queues the
+        // entry again once it has heard it.
         state.noteLineageRerun(tx);
         if (tx.status().status === "ready") {
           tx.abort(
@@ -2975,11 +2982,13 @@ export async function dispatchQueuedEvent(state: {
             ),
           );
         }
-        const requeued = requeueToRunAgain();
-        requeued.withdrawnForLoadingReads = error === undefined ? {} : {
-          error: error instanceof Error ? error : new Error(String(error)),
-        };
-        state.parkHeadEventForLoads(requeued, loadingReads);
+        state.parkHeadEventForLoads(
+          requeueToRunAgain(),
+          loadingReads,
+          error === undefined ? {} : {
+            error: error instanceof Error ? error : new Error(String(error)),
+          },
+        );
         return;
       }
 

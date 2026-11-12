@@ -262,7 +262,10 @@ describe("serving-handler-stale-read", () => {
     it("requeues a handler whose read was of a doc its replica had never loaded", async () => {
       // A home-space read of a document the replica holds nothing of, as one
       // whose load is still in flight is, reads it as absent. The wave holds
-      // that read to the store's head like any other.
+      // that read to the store's head like any other. This is the wave's own
+      // behavior, which the scheduler's loading-read withdrawal relies on for
+      // a served run's home-space reads; nothing else in this case depends
+      // on that withdrawal.
 
       const { runtime, engine } = waves;
       const counter = runtime.getCell<number>(space, "cold", counterSchema);

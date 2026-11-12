@@ -184,6 +184,7 @@ import type {
   ActionRunTraceEntry,
   EventHandler,
   EventPreflightTraceContext,
+  LoadingReadWithdrawal,
   QueuedEvent,
   ReactivityLog,
   SchedulerObservationIdentity,
@@ -552,14 +553,18 @@ export class Scheduler {
   /**
    * Head event parked on in-flight document loads, keyed by event id. The
    * park ends once every load it waits on has settled: with no failure among
-   * them — or, for a client event, none but `authorization`-class failures —
-   * execution is re-queued, and otherwise `#failHeadEventLoadPark()` drops a
-   * client event and defers a served one.
+   * them — or none but `authorization`-class failures, for a client event or
+   * for one its own run's loading reads parked — execution is re-queued, and
+   * otherwise `#failHeadEventLoadPark()` drops a client event and defers a
+   * served one.
    */
   #headEventLoadPark: {
     eventId: string;
     keys: readonly string[];
     generations: ReadonlyMap<string, number>;
+
+    /** Present when the event's own run was withdrawn into this park. */
+    withdrawal?: LoadingReadWithdrawal;
   } | null = null;
 
   /**
@@ -3542,8 +3547,8 @@ export class Scheduler {
       unawaitedLoadKeys: (event, keys) => this.#unawaitedLoadKeys(event, keys),
       capturePendingLoadGenerations: () =>
         this.#capturePendingLoadGenerations(),
-      parkHeadEventForLoads: (event, keys) =>
-        this.#parkHeadEventForLoads(event, keys),
+      parkHeadEventForLoads: (event, keys, withdrawal) =>
+        this.#parkHeadEventForLoads(event, keys, withdrawal),
       isHeadEventLoadParked: (event) => this.#isHeadEventLoadParked(event),
       nodes: this.#nodes,
       pending: this.#pending,
@@ -3954,9 +3959,10 @@ export class Scheduler {
    * and saw settle is left out, unless the load in flight now was already in
    * flight when the current preflight began, which makes it a refresh rather
    * than a load the event's own reads kicked again. A load that settles
-   * leaving the replica no basis for its document, as one in a deleted space
-   * does, is kicked again by every read, so without this the event would park
-   * on it every time it ran.
+   * leaving the replica no basis for its document, as one failing with an
+   * authorization-class failure does where no refusal of its space is
+   * recorded, is kicked again by every read, so without this the event would
+   * park on it every time it ran.
    */
   #unawaitedLoadKeys(
     event: QueuedEvent,
@@ -3992,6 +3998,7 @@ export class Scheduler {
   #parkHeadEventForLoads(
     event: QueuedEvent,
     keys: readonly string[],
+    withdrawal?: LoadingReadWithdrawal,
   ): void {
     if (this.#headEventLoadPark?.eventId === event.id) return;
     const generations = new Map(
@@ -4016,7 +4023,12 @@ export class Scheduler {
           failures.push(error);
         })
       ));
-    this.#headEventLoadPark = { eventId: event.id, keys, generations };
+    this.#headEventLoadPark = {
+      eventId: event.id,
+      keys,
+      generations,
+      ...(withdrawal !== undefined ? { withdrawal } : {}),
+    };
     void settled.then(() => {
       if (failures.length === 0) this.#releaseHeadEventLoadPark(event.id);
       else this.#failHeadEventLoadPark(event, failures);
@@ -4096,7 +4108,7 @@ export class Scheduler {
    * hold what the closure reads.
    *
    * A park its own run's loading reads put the event in
-   * (`QueuedEvent.withdrawnForLoadingReads`) releases on authorization-class
+   * (`LoadingReadWithdrawal`) releases on authorization-class
    * failures served or not, so that a run reading into a space its principal
    * cannot read proceeds on the absence and holds no later event behind it,
    * as it would with no load in flight. Such a park's drop of a client event
@@ -4111,7 +4123,7 @@ export class Scheduler {
     errors: readonly unknown[],
   ): void {
     if (this.#headEventLoadPark?.eventId !== event.id) return;
-    const withdrawn = event.withdrawnForLoadingReads;
+    const withdrawn = this.#headEventLoadPark.withdrawal;
     if (
       (event.served === undefined || withdrawn !== undefined) &&
       errors.every(isAuthorizationLoadFailure)
@@ -4171,7 +4183,7 @@ export class Scheduler {
       this.#dropEvent(
         later,
         `Event deferred: held behind ${event.id}, whose required replica ` +
-          `load failed before dispatch (${keys}); later-arrived events wait ` +
+          `load failed ${when} (${keys}); later-arrived events wait ` +
           `behind it`,
         {
           servedKind: "deferred",
