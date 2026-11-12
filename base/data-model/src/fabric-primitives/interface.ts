@@ -1,11 +1,10 @@
 /**
  * The vocabularies that range over the concrete primitive classes: the tag a
  * class reports to the `tagOf*()` dispatches, and the tag its codec writes to
- * the wire. They are nominally distinct from each
- * other and from the names the classes have in the schema `type` vocabulary,
- * and a class's entry in one need not match its entry in another. Adding a
- * primitive means adding to each, and they sit together so that one visit
- * does it.
+ * the wire. They are nominally distinct from each other and from the names the
+ * classes have in the schema `type` vocabulary, and a class's entry in one need
+ * not match its entry in another. Adding a primitive means adding to each, and
+ * they sit together so that one visit does it.
  *
  * The schema `type` vocabulary is the one that is elsewhere, in `api.ts`. A
  * pattern compiles against that module, which can import nothing, and the
