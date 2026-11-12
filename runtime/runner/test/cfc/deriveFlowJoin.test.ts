@@ -34,19 +34,19 @@ import {
   writeSeedEnvelopeDoc,
 } from "../cfc-seed-envelope.ts";
 
-/** Resolves a scan with independent runtime value, existence, and template labels. */
-function scan(
+/** The entries a scan resolves its labels from, as `scan` resolves them. */
+function scannedEntries(
   entries: LabelMapEntry[],
   path: string[],
   shape: ReadObservationShape,
   machinery: boolean,
   nonRecursive = shape === "shape",
-): IFCLabel {
+): LabelMapEntry[] {
   // A reference-identity read issued by the runtime's own wiring is not an
   // observation at all: `forEachFlowObservation` skips it beside the ones a
   // dereference trace covers, so it consumes nothing and marks no space.
   if (shape === "followRef" && machinery) {
-    return { confidentiality: [], integrity: [] };
+    return [];
   }
   const template = (entry: LabelMapEntry) =>
     (entry.origin === "structure" || entry.origin === "derived") &&
@@ -99,6 +99,24 @@ function scan(
     );
     for (const entry of descendants) consumed.push(entry);
   }
+  return consumed;
+}
+
+/** Resolves a scan with independent runtime value, existence, and template labels. */
+function scan(
+  entries: LabelMapEntry[],
+  path: string[],
+  shape: ReadObservationShape,
+  machinery: boolean,
+  nonRecursive = shape === "shape",
+): IFCLabel {
+  const consumed = scannedEntries(
+    entries,
+    path,
+    shape,
+    machinery,
+    nonRecursive,
+  );
   return {
     confidentiality: uniqueCfcAtoms(
       consumed.flatMap((entry) => entry.label.confidentiality ?? []),
@@ -121,6 +139,11 @@ function corpus(): string[][] {
     for (const path of level) paths.push(path);
   }
   return paths;
+}
+
+/** Each (read path, label path, clause) once, in a fixed order. */
+function sourceKeys(sources: readonly unknown[][]): string[] {
+  return [...new Set(sources.map((source) => JSON.stringify(source)))].sort();
 }
 
 const signer = await Identity.fromPassphrase("flow-join-generated-corpus");
@@ -260,7 +283,10 @@ describe("deriveFlowJoin()", () => {
                   ...(machinery ? machineryRead : {}),
                 },
               });
-              const actual = deriveFlowJoin(tx, { collectLabeledSpaces: true });
+              const actual = deriveFlowJoin(tx, {
+                collectLabeledSpaces: true,
+                collectSources: true,
+              });
               const expected = scan(
                 entries,
                 path,
@@ -273,6 +299,26 @@ describe("deriveFlowJoin()", () => {
               expect([...actual.labeledSpaces!]).toEqual(
                 expected.confidentiality!.length ? [signer.did()] : [],
               );
+              // The sources name the read once for each clause of each entry
+              // its label resolves from, at that entry's path, and nothing
+              // else. Two entries at one path carrying one clause are one
+              // source, so the two are compared as sets.
+              expect(sourceKeys(
+                actual.sources!().map((source) => [
+                  source.read.path,
+                  source.labelPath,
+                  source.atom,
+                ]),
+              )).toEqual(sourceKeys(
+                scannedEntries(entries, path, shape, machinery, nonRecursive)
+                  .flatMap((entry) =>
+                    (entry.label.confidentiality ?? []).map((atom) => [
+                      path,
+                      entry.path,
+                      atom,
+                    ])
+                  ),
+              ));
             } finally {
               tx.abort();
             }

@@ -157,6 +157,7 @@ import {
 import {
   appliesAtItsPathOnly,
   consumedEntriesForRead,
+  entriesForConsumedLabel,
   isRuntimeMintedTemplate,
   joinLabels,
   joinLabelValues,
@@ -4804,6 +4805,51 @@ const followedReferenceWitnesses = (
   );
 };
 
+/** Notes that the read at `read` carried `atom`, by the entry at `labelPath`. */
+type ConsumedSourceNote = (
+  atom: CfcConfClause,
+  read: CfcAddress,
+  labelPath: readonly string[],
+) => void;
+
+/**
+ * A list of consumed-atom sources in first-seen order, one per (clause, read
+ * address, label path): the terms a refusal matches its offending clauses on
+ * (`describeRefusalInputs`). Two label-map entries of one document carrying
+ * the same clause to the same read are one source.
+ */
+const consumedAtomSources = (): {
+  readonly sources: readonly ConsumedAtomSource[];
+  note: ConsumedSourceNote;
+} => {
+  const sources: ConsumedAtomSource[] = [];
+  const buckets = new Map<string, ConsumedAtomSource[]>();
+  return {
+    sources,
+    note: (atom, read, labelPath) => {
+      // The tuple keeps address fields and pointer boundaries unambiguous,
+      // including paths containing separators. Only atoms sharing that
+      // identity need structural comparison.
+      const key = stringTupleKey([
+        read.id,
+        read.space,
+        read.scope,
+        pathKey(read.path),
+        pathKey(labelPath),
+        deepEqualKey(atom),
+      ]);
+      const bucket = buckets.get(key);
+      if (bucket?.some((seen) => deepEqual(seen.atom, atom))) {
+        return;
+      }
+      const source = { atom, read, labelPath };
+      sources.push(source);
+      if (bucket === undefined) buckets.set(key, [source]);
+      else bucket.push(source);
+    },
+  };
+};
+
 /** Helper for `deriveFlowJoin`, which computes labels from transaction reads. */
 const deriveFlowJoinImpl = (
   tx: IExtendedStorageTransaction,
@@ -4821,6 +4867,12 @@ const deriveFlowJoinImpl = (
      * refusal the join decided can make the run depend on them.
      */
     collectLabelSources?: boolean;
+
+    /**
+     * Collect which reads carried each clause of the join's confidentiality,
+     * so that a refusal the join decides names the inputs it consumed.
+     */
+    collectSources?: boolean;
 
     /**
      * Join only the reads journaled before this journal position, beside the
@@ -4854,9 +4906,24 @@ const deriveFlowJoinImpl = (
    * holds: the flow of external content.
    */
   labelSources?: readonly StoredCfcTarget[];
+
+  /**
+   * With `collectSources`, the reads that carried each clause of
+   * `confidentiality` in, in first-seen order, resolved on first ask. A read
+   * is named for the entries the join took from it: those its observation
+   * class consumes and the join's exclusions leave in, and of those, the ones
+   * its label resolves to. A label-metadata observation is named for its
+   * target, and external content for the reads its receipt names.
+   */
+  sources?: () => readonly ConsumedAtomSource[];
 } => {
   const atoms: unknown[] = [];
   const declaredAtoms: unknown[] = [];
+  // With `collectSources`, one step per contribution to `atoms`, in the
+  // join's order, each noting the sources of what it contributed. They run
+  // only when the sources are asked for, which a refusal alone does.
+  const sourceSteps: ((note: ConsumedSourceNote) => void)[] | undefined =
+    options?.collectSources === true ? [] : undefined;
   const declaredAtomsAt = new Map<
     string,
     { target: DeclaredOnwardTarget; atoms: unknown[] }
@@ -4909,6 +4976,13 @@ const deriveFlowJoinImpl = (
     indexes: Map<ReadObservationShape, ConsumedLabelIndex>;
     labels: Map<string, IFCLabel | undefined>;
     witnesses: Map<string, () => CfcAtom[] | undefined>;
+
+    // With `collectSources`, by the same key as `labels`, the entries the
+    // confidentiality an observation joins is resolved from, and the keys
+    // whose sources a step already notes: a second observation with the
+    // same key names the same sources.
+    joined: Map<string, readonly LabelMapEntry[]>;
+    sourced: Set<string>;
   }>();
   // §8.12.8 readback exclusion: see `ownRestampContainerPaths`.
   const ownRestamps = ownRestampContainerPaths(tx);
@@ -5014,6 +5088,8 @@ const deriveFlowJoinImpl = (
           indexes: new Map(),
           labels: new Map(),
           witnesses: new Map(),
+          joined: new Map(),
+          sourced: new Set(),
         };
         metadataByDoc.set(key, document);
       }
@@ -5142,6 +5218,9 @@ const deriveFlowJoinImpl = (
           observation.nonRecursive,
         );
         document.labels.set(labelKey, label);
+        if (sourceSteps !== undefined && entries !== undefined) {
+          document.joined.set(labelKey, entries);
+        }
         if (observation.declaredOnward !== undefined && entries !== undefined) {
           // The split a read declared onward is routed by, below: what the
           // read resolves to AT its own path — the entries at the path and
@@ -5158,20 +5237,24 @@ const deriveFlowJoinImpl = (
           // items too (§4.6.3 replace-down) — but not the membership's own
           // class entries at the path (`shape`, `enumerate`), which are
           // about the set and resolve at their exact path alone.
+          const below = entries.filter((entry) => {
+            if (canonicalizeLogicalPath(entry.path).length > depth) {
+              return true;
+            }
+            const entryClass = entryObservationClass(entry);
+            return entryClass !== "shape" && entryClass !== "enumerate";
+          });
           document.labels.set(
             `${labelKey}#below`,
             labelForConsumedEntries(
-              entries.filter((entry) => {
-                if (canonicalizeLogicalPath(entry.path).length > depth) {
-                  return true;
-                }
-                const entryClass = entryObservationClass(entry);
-                return entryClass !== "shape" && entryClass !== "enumerate";
-              }),
+              below,
               logicalPath,
               observation.nonRecursive,
             ),
           );
+          if (sourceSteps !== undefined) {
+            document.joined.set(labelKey, below);
+          }
         }
         // A shallow content read's locations are resolved over what a value
         // read of them would consume; see `observationInputWitnesses`. So are
@@ -5313,6 +5396,26 @@ const deriveFlowJoinImpl = (
         : label?.confidentiality;
       if (joined?.length) {
         for (const atom of joined) atoms.push(atom);
+        if (sourceSteps !== undefined && !document.sourced.has(labelKey)) {
+          document.sourced.add(labelKey);
+          const consumed = document.joined.get(labelKey) ?? [];
+          const read = { space, id, scope, path: logicalPath } as CfcAddress;
+          const nonRecursive = observation.nonRecursive;
+          sourceSteps.push((note) => {
+            for (
+              const entry of entriesForConsumedLabel(
+                consumed,
+                logicalPath,
+                nonRecursive,
+              )
+            ) {
+              const labelPath = canonicalizeLogicalPath(entry.path);
+              for (const atom of entry.label.confidentiality ?? []) {
+                note(atom, read, labelPath);
+              }
+            }
+          });
+        }
         let reads = confidentialReads.get(key);
         if (reads === undefined) {
           reads = [];
@@ -5361,6 +5464,11 @@ const deriveFlowJoinImpl = (
     if (observation.confidentiality.length === 0) continue;
     labeledSpaces?.add(observation.target.space);
     for (const atom of observation.confidentiality) atoms.push(atom);
+    sourceSteps?.push((note) => {
+      for (const atom of observation.confidentiality) {
+        note(atom, observation.target, observation.target.path);
+      }
+    });
     // The input-witness meet is not the hereditary one: it quantifies over
     // every confidential input, so a confidential input that carries no
     // evidence, as label metadata does not, empties it
@@ -5383,6 +5491,18 @@ const deriveFlowJoinImpl = (
     // over what the content consumed, so it overstates no input.
     if ((observation.flow.confidentiality?.length ?? 0) > 0) {
       noteInputWitnesses(retainedInputWitnesses(observation.flow.integrity));
+      // The receipt names the reads that carried what the content's reads
+      // consumed, counted as the egress collector counts them, and not the
+      // reads its own flow join took each clause from. Of those, the ones
+      // carrying a clause of the flow are named for it.
+      const flowed = observation.flow.confidentiality!;
+      sourceSteps?.push((note) => {
+        for (const source of observation.sources) {
+          if (flowed.some((atom) => deepEqual(atom, source.atom))) {
+            note(source.atom, source.read, source.labelPath);
+          }
+        }
+      });
     }
     const hereditary = (observation.flow.integrity ?? []).filter((atom) =>
       atomPropagationClass(atom) === "hereditary"
@@ -5549,6 +5669,7 @@ const deriveFlowJoinImpl = (
     }
   }
   if (labelWithoutDocument) labelSources = undefined;
+  let sources: readonly ConsumedAtomSource[] | undefined;
   return {
     declaredOnward: uniqueCfcAtoms(declaredAtoms),
     declaredOnwardAt: new Map(
@@ -5562,6 +5683,18 @@ const deriveFlowJoinImpl = (
     ...(labeledSpaces !== undefined ? { labeledSpaces } : {}),
     ...(options?.collectLabelSources === true
       ? { labelSources: labelSources && [...labelSources.values()] }
+      : {}),
+    ...(sourceSteps !== undefined
+      ? {
+        sources: () => {
+          if (sources === undefined) {
+            const collected = consumedAtomSources();
+            for (const step of sourceSteps) step(collected.note);
+            sources = collected.sources;
+          }
+          return sources;
+        },
+      }
       : {}),
   };
 };
@@ -11087,11 +11220,13 @@ const collectConsumedLabelImpl = (
 
   /**
    * Every (clause, read) pair this transaction consumed, in first-seen order.
-   * This is the provenance a refusal needs to name an offending INPUT rather
-   * than only an offending atom (`cfc/refusal-detail.ts`). A gate matches into
-   * it by `deepEqual`, the same structural identity the union above dedups by;
-   * the gates' fits-decisions themselves stay transaction-global and read only
-   * that union.
+   * This is the provenance a sink ceiling's refusal needs to name an
+   * offending INPUT rather than only an offending atom
+   * (`cfc/refusal-detail.ts`). A gate matches into it by `deepEqual`, the
+   * same structural identity the union above dedups by; the gates'
+   * fits-decisions themselves stay transaction-global and read only that
+   * union. Writer-fit names the flow join's own sources instead, which leave
+   * out the entries a read's observation class does not consume.
    */
   sources: readonly ConsumedAtomSource[];
 
@@ -11106,39 +11241,10 @@ const collectConsumedLabelImpl = (
   tx.noteCfcConsumedLabelWalk?.();
   const atoms: unknown[] = [];
   const modulePolicySpaces = new Map<string, Set<MemorySpace>>();
-  const sources: ConsumedAtomSource[] = [];
-  const sourceBuckets = new Map<string, ConsumedAtomSource[]>();
+  const { sources, note: noteSource } = consumedAtomSources();
   // Collection is synchronous and read-only. Share one validated metadata
   // snapshot per document here; another collection observes its current view.
   const labelIndexes = new Map<string, ConsumedLabelIndex | undefined>();
-  const noteSource = (
-    atom: CfcConfClause,
-    read: CfcAddress,
-    labelPath: readonly string[],
-  ): void => {
-    // Deduplicated on the same terms a consumer matches on: one entry per
-    // (clause, address, label path). Two label-map entries of one document
-    // carrying the same clause to the same read are one source.
-    // The tuple keeps address fields and pointer boundaries unambiguous,
-    // including paths containing separators. Only atoms sharing that identity
-    // need structural comparison; `sources` retains global first-seen order.
-    const key = stringTupleKey([
-      read.id,
-      read.space,
-      read.scope,
-      pathKey(read.path),
-      pathKey(labelPath),
-      deepEqualKey(atom),
-    ]);
-    const bucket = sourceBuckets.get(key);
-    if (bucket?.some((seen) => deepEqual(seen.atom, atom))) {
-      return;
-    }
-    const source = { atom, read, labelPath };
-    sources.push(source);
-    if (bucket === undefined) sourceBuckets.set(key, [source]);
-    else bucket.push(source);
-  };
   // Integrity evidence riding the same consumed entries, pooled the way the
   // confidentiality union is. The release gates evaluate rules over
   // `locations()` instead, and use this union only to tell whether any
@@ -12256,6 +12362,12 @@ export function* prepareBoundaryCommitSteps(
   const flowTargets = flowMode === "off"
     ? undefined
     : withRestatedResultWirings(tx, valueTargets);
+  // H4 (SC-18b): the writer-fit misfit REJECTS only at `enforce-strict`;
+  // every mode below persists-and-flags, so `enforce-explicit` keeps the
+  // shipped behavior where the derived component is a measurement, not a
+  // write ceiling (§8.12.4, enforcement-matrix §4).
+  const writerFitRejects = cfcEnforcementStrictness(state.enforcementMode) >=
+    cfcEnforcementStrictness("enforce-strict");
   const flowJoin: ReturnType<typeof deriveFlowJoin> = flowMode === "off"
     ? {
       confidentiality: [],
@@ -12266,20 +12378,21 @@ export function* prepareBoundaryCommitSteps(
     : deriveFlowJoin(tx, {
       collectLabeledSpaces: true,
       collectLabelSources: flowPersist,
+      // Read provenance for a writer-fit refusal's remedy channel: which
+      // reads carried each clause into the join the misfit is measured on.
+      // A rejecting mode records it as the join runs and matches it only
+      // when a write is refused; persist-and-flag diagnostics need only the
+      // atoms.
+      collectSources: writerFitRejects,
     });
   const flowConfidentiality = flowJoin.confidentiality;
-  // Read provenance for a refusal's remedy channel, computed only if a gate
-  // below actually refuses. `collectConsumedLabel` walks every read against
-  // every label-map entry of the document it resolved to, which is work no
-  // committing transaction should do just in case. Strict writer-fit refusals
-  // pay for it; persist-and-flag diagnostics need only the atoms. The set is
-  // transaction-global — wider than the per-write prefix the writer-fit
-  // decision itself runs on — so a named input is a
-  // read that genuinely carried the atom, while `attribution` stays the
-  // honest statement of whether the named ones account for all of them.
-  let memoizedRefusalSources: readonly ConsumedAtomSource[] | undefined;
+  // The join's own sources, and not the egress collector's: that one counts
+  // every entry a read overlaps, whatever its observation class, so it can
+  // name a read whose entries the join left out. The join is the same for
+  // every write of the transaction, so its refusals name the same reads, and
+  // `attribution` says whether those account for every offending clause.
   const refusalSources = (): readonly ConsumedAtomSource[] =>
-    memoizedRefusalSources ??= collectConsumedLabel(tx).sources;
+    flowJoin.sources?.() ?? [];
   const flowIntegrity = flowJoin.integrity;
   // The join's derivation provenance alone, for the membership stamps below.
   // `deriveFlowJoin` mints it only when every write of this transaction was
@@ -12310,12 +12423,6 @@ export function* prepareBoundaryCommitSteps(
     }
     return confidentiality;
   };
-  // H4 (SC-18b): the writer-fit misfit REJECTS only at `enforce-strict`;
-  // every mode below persists-and-flags, so `enforce-explicit` keeps the
-  // shipped behavior where the derived component is a measurement, not a
-  // write ceiling (§8.12.4, enforcement-matrix §4).
-  const writerFitRejects = cfcEnforcementStrictness(state.enforcementMode) >=
-    cfcEnforcementStrictness("enforce-strict");
   if (
     flowMode === "observe" &&
     flowTargets !== undefined &&
