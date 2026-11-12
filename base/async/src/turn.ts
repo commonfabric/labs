@@ -10,8 +10,8 @@
 // together cost about 8 microseconds each, 500 armed one after another about
 // 2.3 milliseconds each. A caller that holds at most one turn at a time,
 // arming the next only once the last has run, makes a chain of them, and a
-// chain is never the cheap case. Unrelated timers elsewhere in the process may
-// happen to share a wake-up, but nothing here can arrange for it.
+// chain of timers is never the cheap case. Unrelated timers elsewhere in the
+// process may happen to share a wake-up, but nothing here can arrange for it.
 
 // `setImmediate` and `clearImmediate` where the host has them (Deno and Node);
 // absent in a browser.
