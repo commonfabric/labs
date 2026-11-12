@@ -157,6 +157,7 @@ export {
   sendEvent,
   setCell,
   sinkProjected,
+  syncCellForIdentity,
 } from "./cell.ts";
 export {
   getCellOrThrow,
@@ -276,6 +277,7 @@ export {
   keepLaterConfirmation,
   knownPieceReleasedAt,
   mergeSchemaDefaults,
+  normalizePieceSourceOrigin,
   patternIdentityKey,
   type PatternSetupCommitReceipt,
   PatternSetupPostCommitError,

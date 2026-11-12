@@ -48,7 +48,7 @@ interface ChatManagerOutput {
   /** Notices this user's requests have produced that no one has delivered. */
   outgoingNotices: PerUser<{
     id: string;
-    room: Cell<ChatRoomOutput>;
+    room: Cell<unknown>;
     recipient: string;
   }[]>;
 
@@ -145,18 +145,17 @@ Everything a manager stores is `PerSpace` in the user's home space (see
 user, so `PerSpace` there means one instance for that user, which is why nothing
 it stores needs to be `PerUser` or `PerSession`.
 
-`rooms`, which the manager doesn't store, is `PerUser` all the same, and so are
-`people`, which is drawn from it, and `outgoingNotices`, which leaves out a
-notice whose room's roster attests its recipient, though each room's `roster` is
-shared by everyone the room's space admits: a profile lives in its owner's own
-space, and attests no principal to a reader that space refuses, so two readers
-can key the same roster differently. Each room in it is read under the reader's
-own access, so a manager more than one principal reads, as one outside a home
-space can be, lists different rooms to a principal a room's space refuses than
-to its members. Stored once for every reader, a value readers derive differently
-is one their runtimes overwrite without end. Read access is a property of the
-principal, so every session of one user derives the same values, and one
-instance per user serves them all. A stream reads none of them, except
+`people`, which is drawn from the listed rooms' rosters, and `outgoingNotices`,
+which leaves out a notice whose room's roster attests its recipient, are
+`PerUser` all the same, though each room's `roster` is shared by everyone the
+room's space admits: a profile lives in its owner's own space, and attests no
+principal to a reader that space refuses, so two readers can key the same
+roster differently. Stored once for every reader, a value readers derive
+differently is one their runtimes overwrite without end. Read access is a
+property of the principal, so every session of one user derives the same
+values, and one instance per user serves them all. `rooms` and `deletedRooms`,
+which the manager doesn't store and which read no room, are `PerUser` as the
+people drawn from them are. A stream reads none of them, except
 `offerRoom`, which reads `people` for the user that sends it: every other
 request names a room's members by principal or by profile itself.
 
@@ -172,28 +171,33 @@ session that has none is refused.
 ## Facts
 
 - **`rooms`** holds a [`ChatIndexEntry`](ChatIndexEntry.md) for every room this
-  user belongs to and hasn't forgotten, newest first. An entry is a link to its
-  room and never a copy of the room's data: what a room holds is read from the
-  room, under the reader's own access. Through the link a reader finds the
-  room's `about`, including its current title after a retitle, and where its
-  conversation stands, `messages.count` and `messages.newestAt`; [`ChatIndexEntry`](ChatIndexEntry.md) says why the link
-  declares those and no more. `rooms` is drawn from the user's shared-space
-  catalog, Home's: standalone `fabrichat-room` roots and explicit `chatRoom`
-  declarations on other saved spaces' roots, combined with the manager's
-  individual `roomMembership` choices. Resolved room identity deduplicates
-  discovery paths; an archived individual entry suppresses every path. A room
-  whose space is
-  [deleted](../random-space-identities.md#deleting-a-space) is left out: its
-  catalog entry is in the `deleted` state, or `spaceDeleted(room)` returns
-  `true`. The handler clock counts whole seconds, so two rooms created in one
-  second share a `since`; between them, the room created later comes first,
-  unless forgetting or rejoining the other has since moved its membership after
-  the later room's, and a room only the catalog finds comes before a room with a
-  membership.
+  user belongs to and hasn't forgotten, newest first. It is drawn from the
+  manager's own records alone: each saved `roomMembership`, read against the
+  user's shared-space catalog, Home's, which governs a standalone room's
+  membership. Listing the rooms reads nothing in any room's space, so it costs
+  the same whatever the rooms hold, and a reader of `rooms` loads no room. An
+  entry holds the room's link, as a handle that declares nothing of the room,
+  and what the manager's handlers recorded of the room when they read it: its
+  kind, its counterpart, its title as a hint, and its admission time.
+  [`ChatIndexEntry`](ChatIndexEntry.md) says how a reader reads the room itself.
+  A room's facts are checked by the handler that records its membership, and
+  are not checked again as the list is read. A room the catalog lists with no
+  membership is not listed until its membership is recorded: by a `joinRoom`
+  no message or reaction sent, as a visit sends, or by the host's adoption of
+  the catalog's rooms ([`FabriChatManager`](FabriChatManager.md#adopting-the-catalogs-rooms)).
+  Each room is listed once, a standalone room once for its space. A room whose
+  space is [deleted](../random-space-identities.md#deleting-a-space) is left out
+  once its catalog entry is in the `deleted` state, which the runtime that hears
+  of the deletion records; until then it is listed, and opening it is how a
+  runtime hears of it. A room whose space no longer admits this user is listed
+  until its catalog entry changes, and opening it is refused. The handler clock
+  counts whole seconds, so two rooms created in one second share a `since`;
+  between them, the room created later comes first, unless forgetting or
+  rejoining the other has since moved its membership after the later room's.
 - **`deletedRooms`** lists, newest first with ties broken as in `rooms`, every
   room this user holds a membership for, saved or archived, whose space is
   [deleted](../random-space-identities.md#deleting-a-space): its catalog entry
-  is in the `deleted` state, or `spaceDeleted(room)` returns `true`. It is
+  is in the `deleted` state. It is
   apart from the rooms this user can still use, as the catalog lists a deleted
   entry apart from saved and archived ones. The manager records a membership
   for every room it creates, accepts or joins, so the record outlives the
@@ -205,9 +209,9 @@ session that has none is refused.
   ([`clients.md`](clients.md#showing-a-room)). A deleted room can't be read,
   written or forgotten, so a client shows each one as deleted and offers no
   control for it. Nothing through the entry's link can be read, so what is left
-  to show is what the manager holds itself: the catalog's `title` hint for a
-  standalone room, or for a room declared in a container the container's catalog
-  `title`, and for any room the record's own `kind`, `counterpart` and `since`.
+  to show is what the manager holds itself: the record's own `kind`,
+  `counterpart`, `title` and `since`, and, for a standalone room whose record
+  holds no title, the catalog's `title` hint.
   A room from before the manager recorded memberships at creation and
   acceptance has no record, so once its catalog entry is deleted nothing holds
   its link, and it is the catalog's `deleted` list's to show. Recording the
@@ -216,8 +220,11 @@ session that has none is refused.
   ([`shared-space-catalog.md`](../../features/shared-space-catalog.md#deleted-spaces));
   the manager writes nothing when a room is deleted.
 - **`roomMembership`** keeps explicit choices about individual conversations:
-  resolved room links, `saved` or `archived` state, `since`, and opaque
-  `revision`. The manager records one for every room it creates, accepts or
+  resolved room links, `saved` or `archived` state, `since`, opaque
+  `revision`, and what the handler recording the choice read of the room: its
+  `kind`, a direct room's `counterpart`, and its `title` hint. It is what
+  `rooms` lists, and a reader MAY read it, with `sharedSpaceCatalog`, in place
+  of `rooms`, applying the catalog's state as `rooms` does. The manager records one for every room it creates, accepts or
   joins, beside the catalog entry a standalone room has, and one for every
   explicit choice about a room a container declares. An optional
   `catalogRevision` records that standalone catalog membership governs the
@@ -227,7 +234,8 @@ session that has none is refused.
   ([`shared-space-catalog.md`](../../features/shared-space-catalog.md)), as
   stored. A standalone room's catalog `title` is a display hint: the room's
   title as the manager last heard of it, refreshed when it handles `accept` or
-  `joinRoom` for the room, other than a `joinRoom` marked `messageAct`. A client reads a room's current title from the
+  `joinRoom` for the room, other than a `joinRoom` marked `messageAct`, as the
+  membership's `title` is. A client reads a room's current title from the
   room. Membership checks belong to the manager's Home-space handling. A room
   sends
   [`joinRoom`](#joinroomrequestid-string-room-cellchatroomoutput) after a
@@ -264,6 +272,33 @@ session that has none is refused.
   it to offer the people to name a new room's members by, through
   `createGroup`'s `profiles`, and a room's add control the people to add, and
   `offerRoom` offers a room through it to a member named by principal alone.
+
+## Reading the list
+
+A reader lists the user's rooms, from `rooms` or from `roomMembership` and
+`sharedSpaceCatalog`, without reading any room's space, as long as it declares
+each `room` it reads as the handle it is: `{ type: "unknown", asCell: ["cell"]
+}`. That delivers the room's link, which the reader opens later by its address.
+A declaration with any shape of its own at `room`, even
+`{ type: "object", properties: {}, asCell: ["cell"] }`, makes each read load
+the room's root, and the schema documents its labels name.
+
+- **What a row holds** is what the manager recorded: the room, its `kind`, a
+  direct room's `counterpart`, its `since`, its `title` hint, and its
+  `revision`. A member's retitle reaches this user's row once this user next
+  visits the room.
+- **Where a conversation stands**, the count of its messages and when the
+  newest was sent, is not in the row: no event reaches this user's manager when
+  someone else writes in a room, since that someone's runtime can't write this
+  user's Home. A reader that shows it reads the room's `messages.count` and
+  `messages.newestAt` for the rows it shows, through a link declaring those
+  alone. That reads the room's root and the document holding its summary, and
+  no message, and doesn't start the room.
+- **One request's outcome** is read at `requests.<requestId>`, which delivers
+  that outcome alone. `requests` is one document, which the reader holds whole.
+- **Opening a room** is where a room that is gone, or no longer admits the
+  user, shows: the runtime reports that it can't reach the room's space, as
+  [`clients.md`](clients.md#opening-a-room) says.
 
 ## Streams
 
@@ -334,10 +369,9 @@ outward act when it creates a room, or offers one it finds.
   this user's host has accepted it for them (see [offers](#offers)). A found
   room that was offered `counterpart` nothing, since a notice for them of it is
   still in `outgoingNotices`, is offered them through `profile`'s inbox, and
-  `profile` is added to the room's participants, as for a new room. The notice
-  stays, so that it still tells them of the room should the offer not be sent,
-  as when `profile` points at no inbox; once the offer puts them on the room's
-  roster, `outgoingNotices` leaves it out. A room whose roster already lists a
+  `profile` is added to the room's participants, as for a new room, wherever
+  it points; once that puts them on the room's roster, `outgoingNotices` leaves
+  the notice out. A room whose roster already lists a
   profile attesting `counterpart` is one they have joined, and is offered
   nothing; so is one whose notice has been delivered. Nor is a room offered,
   and its notice stays, when `requestId` is longer than an offer's `id` may be.
@@ -353,7 +387,8 @@ outward act when it creates a room, or offers one it finds.
   another, and records its outcome under both ids. Otherwise, creates a direct
   room whose members are this user and `counterpart`, grants `counterpart`
   access, offers the room through `profile`'s inbox when there is one and adds
-  `profile` to the room's participants, or else produces a notice for them, and
+  `profile` to the room's participants, or else, with no `profile`, produces a
+  notice for them, and
   records the new entry in `rooms`, `roomMembership` and `direct`; adding this
   user to the new
   room's participants follows.
@@ -441,25 +476,24 @@ outcome back as the add's `delivery`.
 - **Effect:** offers the room to the person (see [offers](#offers)): through
   the share inbox `profile` points at, or, with no `profile`, through each
   distinct inbox the profiles `people` lists for `member` point at, once per
-  inbox, as this user reads `people`. The first profile the room is offered
-  through is added to the room's participants. A person offered nothing, since
-  no profile known for them points at an inbox, gets a notice instead. It
-  grants nobody anything. The offer is sent by an event of its own that
-  follows, which reads where the profiles point apart from the request's
-  outcome: a profile's inbox pointer can carry a label, such as its owner's
-  `PersonalSpace`, that this user's records don't admit.
+  inbox, as this user reads `people`. The first of those profiles is added to
+  the room's participants, wherever it points. A person with no profile known
+  for them gets a notice instead. It grants nobody anything. The offer is sent
+  by an event of its own that follows, which reads where the profiles point
+  apart from the request's outcome and records nothing: a profile's inbox
+  pointer can carry a label, such as its owner's `PersonalSpace`, that this
+  user's records don't admit.
 - **Outcome:** `done` with `delivery`, `offered` or `noticed`, and no entry:
-  `noticed` at once for a person with no profile known for them, and otherwise
-  `offered`, which the event sending the offer turns to `noticed` when none of
-  the profiles points at an inbox;
+  `noticed` for a person with no profile known for them, and otherwise
+  `offered`, wherever the profiles point;
   or `refused` if this user's catalog doesn't list the room, the room space's
   access list grants this user a level other than OWNER, the link isn't to a
   group room, as its creator's record would say, `requestId` is longer than an
   offer's `id` may be, `profile` attests no principal or names someone other
   than `member`, `member` is not a principal's DID, or it is this user. An
   access list the run doesn't hold yet, as a served run may not for a room
-  created moments before, refuses nothing. `offered` means sent, or about to
-  be, not received.
+  created moments before, refuses nothing. `offered` means handed to the event
+  that sends the offer, not sent or received.
 
 ### `accept(requestId: string, room: Cell<ChatRoomOutput>, counterpart?: string, keepArchived?: boolean)`
 
@@ -538,10 +572,12 @@ opening the room's page.
 
 - **Admitted:** without a reviewed gesture, as for `accept`.
 - **Effect:** for a room this user's chats list already, nothing but to bring
-  the title its catalog entry holds up to the room's, where the two differ,
-  leaving the entry's revision and membership as they are; with `messageAct`,
-  which arrives with every message and reaction and none of which changes the
-  title, not even that, and the room's `about` goes unread. Otherwise what
+  the title its catalog entry and its membership hold up to the room's, where
+  they differ, leaving the entry's revision and membership state as they are;
+  with `messageAct`, which arrives with every message and reaction and none of
+  which changes the title, not even that, and the room's `about` goes unread.
+  A `messageAct` join of a room the catalog lists with no membership leaves it
+  as it is too; any other join records its membership. Otherwise what
   `accept` does with no `counterpart` and without `keepArchived`: records an
   entry in `rooms`, putting a forgotten room back, and adds this user's profile
   to the room's participants once it has resolved. One case differs: a direct
@@ -633,14 +669,18 @@ When a request names a member's profile, as `openDirect`'s `profile` and
 through the share inbox the profile's `inbox` points at
 ([`private-inbox.md`](../../features/private-inbox.md)), once per distinct
 inbox among the member's profiles, after the room is created, and adds the
-first profile it offered the room through to the room's participants, through
-the room's `addParticipant`, without a step of the member's own. A profile that
-points at no inbox is offered nothing. A pointer counts as pointing at no inbox
-when the run offering the room finds no stream there to send to: a piece whose
-`receive` is no stream, an inbox in a deleted space (`spaceDeleted()`), or an
-inbox in a space that doesn't admit the run, which a serving loop's does, since
-it reads a space as its OWNER does. Such a member gets a notice, and the room is
-still offered to the request's other members. `offerRoom` offers a room someone
+first profile the request names for them to the room's participants, through
+the room's `addParticipant`, without a step of the member's own. It does so in
+two events: the first adds the profiles and reads no inbox pointer, and the
+second reads the pointers and sends the offers, and writes nothing else, so
+where a profile points decides nothing this user's records or the room hold. A
+profile that points at no inbox is offered nothing. A pointer counts as
+pointing at no inbox when the run sending the offer finds no stream there to
+send to: a piece whose `receive` is no stream, an inbox in a deleted space
+(`spaceDeleted()`), or an inbox in a space that doesn't admit the run, which a
+serving loop's does, since it reads a space as its OWNER does. Such a member is
+on the room's roster all the same, gets no notice, and the room is still
+offered to the request's other members. `offerRoom` offers a room someone
 was added to the same way, and so does `openDirect` a direct room it finds whose
 counterpart has a notice of it still waiting, which the offer replaces. The
 offer is the envelope a share inbox takes:
@@ -673,11 +713,10 @@ room as theirs. A direct room goes in their `direct` under its creator, unless
 for `openDirect`, so the received room replaces it; either way their later
 `openDirect` with the sender returns the room `direct` holds rather than
 creating another. An entry already in the catalog, archived or not, gets no
-acceptance. A notice is produced for each other member offered nothing: one
-known only by their DID, who has no profile to reach an inbox through, or one
-whose profile points at no inbox. A member sent an offer gets no notice, and
-nothing tells the sender whether the offer arrived: `offerRoom`'s `offered`
-means sent, or about to be. A runtime still holding an inbox it read before its
+acceptance. A notice is produced for each other member known only by their
+DID, who has no profile to reach an inbox through. A member named by a profile
+gets no notice, and nothing tells the sender whether the offer was sent or
+arrived: `offerRoom`'s `offered` means handed to the event that sends it. A runtime still holding an inbox it read before its
 space stopped admitting this user finds it, and the offer it sends is lost.
 
 ## Crossing creations

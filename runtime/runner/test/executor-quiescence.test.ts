@@ -158,8 +158,7 @@ const quiescence = (host: ExecutorHost): Promise<number> =>
 
 /**
  * Takes turns of the event loop for longer than the loop takes to run out of
- * things to do, its demand grace included. A wait that ends early has ended by
- * the time this returns.
+ * things to do. A wait that ends early has ended by the time this returns.
  */
 async function longAfterTheLoopRests(): Promise<void> {
   for (let turn = 0; turn < 30_000; turn++) await Deno.stat(".");
@@ -229,8 +228,8 @@ describe("executor-quiescence", () => {
   });
 
   it("resolves after the demand pass a client's new watch owes", async () => {
-    // A watch asks for a pass through a grace timer, and the loop is otherwise
-    // quiet until that fires.
+    // A watch asks for a pass through a demand note, and the loop is otherwise
+    // quiet until that note wakes it.
     let cycles = 0;
     await withPattern(CHAIN_SOURCE, {
       onWaveCycle: () => cycles++,

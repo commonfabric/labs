@@ -122,3 +122,8 @@ that their cases are added then.
 A key pair holding `CryptoKey` handles, which section 8 refuses, has no text.
 The refusals the file records are those of unregistered symbols, alone and
 inside containers.
+
+No value among the cases is as large as a floor that section 12 of
+`3-json-encoding.md` sets, by any measure.
+[`fvj1-conformance.md`](fvj1-conformance.md#what-is-not-among-the-cases) says
+how an implementation tests its guarantees instead.

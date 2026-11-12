@@ -4456,6 +4456,26 @@ export type SpaceOfFunction = <T>(
 export declare const spaceOf: SpaceOfFunction;
 
 /**
+ * Returns the DID of the space `target`'s own link names, without following
+ * it or any link it reaches, and without reading anything in that space: so a
+ * pattern can tell which space a cell it holds by link is in, as a list of
+ * entries read as links needs to, at no cost in the space it names. A cell a
+ * value holds at a position typed `Cell<unknown>` is such a link, as is each
+ * cell `linksOf()` returns. Where the link names a document that links
+ * elsewhere in turn, this is the space of that document, not of the value it
+ * leads to, which `spaceOf()` returns.
+ *
+ * `undefined` means the answer is not known yet: `target` is `undefined`, or
+ * the run has named an `inSpace()` target whose space is not resolved yet, as
+ * for `spaceOf()`. Call it where `spaceOf()` can be called.
+ */
+export type SpaceOfLinkFunction = <T>(
+  target: AnyCell<T> | undefined,
+) => DID | undefined;
+
+export declare const spaceOfLink: SpaceOfLinkFunction;
+
+/**
  * Returns whether the space `target` names is deleted, so a pattern that keeps
  * a list of spaces can put away an entry whose space is gone. `target` is a
  * cell, naming the space its value lives in as `spaceAccess()` does, or the

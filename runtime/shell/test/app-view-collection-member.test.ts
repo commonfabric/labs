@@ -746,6 +746,38 @@ describe("AppView collection members", () => {
     }
   });
 
+  it("cites nothing once the address moves off a member, before its resolution runs again", async () => {
+    // The member's resolution has answered, and then the address moves to
+    // one naming no member. A render can come before the next resolution, and
+    // what the last one answered is no citation for the address now shown.
+    const restore = installBrowserGlobals();
+    try {
+      const { XAppView } = await import("../src/views/AppView.ts");
+      const cases = [
+        { moved: viewOf({}), cited: undefined },
+        { moved: viewOf({ pieceSlug: "top" }), cited: undefined },
+      ];
+      const outcomes = [];
+      for (const { moved } of cases) {
+        const stub = stubRuntime({ pieceId: "fid1:member-42", pathAfter: [] });
+        const view = appViewOver(
+          XAppView as never,
+          stub,
+          viewOf({ pieceSlug: "top", pieceMember: "42" }),
+        );
+        view._selectedPattern.run();
+        await view._selectedPattern.taskComplete;
+        // The control: on the address it resolved, the member is cited.
+        expect(citedReference(view)).toBe("//naming-demo/top/42");
+        view.app = { identity: {}, config: {}, view: moved };
+        outcomes.push({ moved, cited: citedReference(view) });
+      }
+      expect(outcomes).toStrictEqual(cases);
+    } finally {
+      restore();
+    }
+  });
+
   it("refuses a member after a slug naming a piece at its root, for as long as the slug names one", async () => {
     const restore = installBrowserGlobals();
     const errors = captureErrors();

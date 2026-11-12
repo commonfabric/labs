@@ -1356,6 +1356,17 @@ export type MemoryProtocolFlags = {
   syncPartsV1: boolean;
 
   /**
+   * A session sync may name a `cid:` schema document by id, without its
+   * body (04-protocol.md section 4.2.3), enabled only when both peers
+   * advertise it: the server references a schema its realm registry holds,
+   * and the client takes the body from its own registry or fetches it.
+   * Experimental: a server advertises it unless its `syncCidReferences`
+   * option turns it off, and a client only when its
+   * `ConnectOptions.syncCidReferences` turns it on.
+   */
+  syncCidReferencesV1: boolean;
+
+  /**
    * Server capability: a `session.watch.set` may come as staged parts that
    * the server applies as one set (04-protocol.md section 4.3.5). Inherent
    * to the build, so a server of this version always advertises it. Absent
@@ -1531,6 +1542,26 @@ export type MemoryProtocolFlags = {
   patternLifecycle?: boolean;
 
   /**
+   * Server capability: the `pattern.lifecycle` verbs this server runs, while
+   * it advertises `patternLifecycle`, take an origin — the `follow` verb, and
+   * `origin` on `setsrc` (04-protocol.md §4.3.10). Build-inherent, so a
+   * server of this version always advertises it. Absent (an older server)
+   * parses to false: such a server refuses `follow` unread and drops a
+   * `setsrc` origin, detaching the piece, so a client sends neither.
+   */
+  patternLifecycleOrigins?: boolean;
+
+  /**
+   * Server capability: the `setsrc` and `follow` verbs this server runs take
+   * `scope`, the scope a piece is addressed at, and change the requester's
+   * instance of a piece held at a user or session scope (04-protocol.md
+   * §4.3.10). Build-inherent. Absent (an older server) parses to false: such
+   * a server ignores `scope` and changes the piece's space instance, so a
+   * client sends no scoped request.
+   */
+  patternLifecycleScopes?: boolean;
+
+  /**
    * Server capability: the server runs `served` requests (04-protocol.md
    * §4.3.12), the crossings one serving process sends the process that owns
    * the target space. Advertised exactly while the deployment has a served
@@ -1598,6 +1629,7 @@ export type WireMemoryProtocolFlags = {
   syncCrossingsV1?: boolean;
   watchRemoveV1?: boolean;
   syncPartsV1?: boolean;
+  syncCidReferencesV1?: boolean;
   watchSetPartsV1?: boolean;
   messageCompressionV1?: boolean;
   sqliteCommitRowLabelEval?: boolean;
@@ -1618,6 +1650,8 @@ export type WireMemoryProtocolFlags = {
   elidedVerdicts?: boolean;
   sessionReportV1?: boolean;
   patternLifecycle?: boolean;
+  patternLifecycleOrigins?: boolean;
+  patternLifecycleScopes?: boolean;
   servedRequests?: boolean;
   spaceInvites?: boolean;
   instanceNameMark?: boolean;
@@ -1929,6 +1963,15 @@ export type SessionSyncUpsert = {
   seq: number;
   doc?: EntityDocument;
   deleted?: true;
+
+  /**
+   * Marks a `cid:` schema document named without its `doc`, on a
+   * connection that negotiated `syncCidReferencesV1`: the space's store
+   * holds it at `seq`, and the client takes its content from its own
+   * registry, fetching any it lacks. The client resolves every reference
+   * before the sync reaches a session, so nothing past it sees one.
+   */
+  byReference?: true;
 
   /**
    * The commit CLASS of the covering commit — the commit whose write
@@ -2477,7 +2520,11 @@ export type EventAttentionResolveResult = {
 export const PATTERN_LIFECYCLE_MAX_BYTES = 8 * 1024 * 1024;
 
 /** A pattern-lifecycle verb that a serving deployment runs on request. */
-export type PatternLifecycleVerb = "upload" | "instantiate" | "setsrc";
+export type PatternLifecycleVerb =
+  | "upload"
+  | "instantiate"
+  | "setsrc"
+  | "follow";
 
 /**
  * A request to run a pattern-lifecycle verb in the session's space, as the
@@ -3075,6 +3122,10 @@ export const getMemoryProtocolFlags = (): MemoryProtocolFlags => ({
   // Build-inherent: this build's server records a space's instance-naming
   // mark and admits sessions and commits by it (INV-16).
   instanceNameMark: true,
+  // Build-inherent: this build's lifecycle verbs take an origin.
+  patternLifecycleOrigins: true,
+  // Build-inherent: this build's `setsrc` and `follow` take a scope.
+  patternLifecycleScopes: true,
   // Configuration rather than build-inherent: a `Server` advertises each
   // from what it was given (`Server.memoryProtocolFlags()`).
   patternLifecycle: false,
@@ -3093,6 +3144,9 @@ export const getMemoryProtocolFlags = (): MemoryProtocolFlags => ({
   // Build-inherent: this build's client handles a sync split across
   // messages, and its routed host splits one for a client that does.
   syncPartsV1: true,
+  // Experimental, and each peer advertises its own choice: a `Server` by its
+  // `syncCidReferences` option, a client by `ConnectOptions.syncCidReferences`.
+  syncCidReferencesV1: false,
   // Build-inherent: this build's server applies a watch set staged in parts.
   watchSetPartsV1: true,
 });
@@ -3332,6 +3386,22 @@ export const parseMemoryProtocolFlags = (
     return null;
   }
 
+  const patternLifecycleOrigins = value.patternLifecycleOrigins;
+  if (
+    patternLifecycleOrigins !== undefined &&
+    typeof patternLifecycleOrigins !== "boolean"
+  ) {
+    return null;
+  }
+
+  const patternLifecycleScopes = value.patternLifecycleScopes;
+  if (
+    patternLifecycleScopes !== undefined &&
+    typeof patternLifecycleScopes !== "boolean"
+  ) {
+    return null;
+  }
+
   const servedRequests = value.servedRequests;
   if (servedRequests !== undefined && typeof servedRequests !== "boolean") {
     return null;
@@ -3361,6 +3431,14 @@ export const parseMemoryProtocolFlags = (
 
   const syncPartsV1 = value.syncPartsV1;
   if (syncPartsV1 !== undefined && typeof syncPartsV1 !== "boolean") {
+    return null;
+  }
+
+  const syncCidReferencesV1 = value.syncCidReferencesV1;
+  if (
+    syncCidReferencesV1 !== undefined &&
+    typeof syncCidReferencesV1 !== "boolean"
+  ) {
     return null;
   }
 
@@ -3436,6 +3514,12 @@ export const parseMemoryProtocolFlags = (
     // Absent (an older server) parses to false: the server records no mark
     // and admits a declaring session's commits without one.
     instanceNameMark: instanceNameMark === true,
+    // Absent (an older server) parses to false: a client then sends neither
+    // `follow` nor a `setsrc` origin.
+    patternLifecycleOrigins: patternLifecycleOrigins === true,
+    // Absent (an older server) parses to false: a client then sends no
+    // scoped `setsrc` or `follow`.
+    patternLifecycleScopes: patternLifecycleScopes === true,
     // Absent (an older server) parses to false: a client then finds the
     // links out of a space by reading what it synced.
     syncCrossingsV1: syncCrossingsV1 === true,
@@ -3445,6 +3529,9 @@ export const parseMemoryProtocolFlags = (
     // Absent (an older peer) parses to false: a server then sends that
     // client every sync whole.
     syncPartsV1: syncPartsV1 === true,
+    // Absent (an older peer) parses to false: a server then sends that
+    // client every schema document with its body.
+    syncCidReferencesV1: syncCidReferencesV1 === true,
     // Absent (an older server) parses to false: a client then sends every
     // watch set whole.
     watchSetPartsV1: watchSetPartsV1 === true,
@@ -3493,6 +3580,8 @@ export const wireMemoryProtocolFlags = (
   elidedVerdicts: flags.elidedVerdicts,
   sessionReportV1: flags.sessionReportV1,
   patternLifecycle: flags.patternLifecycle,
+  patternLifecycleOrigins: flags.patternLifecycleOrigins,
+  patternLifecycleScopes: flags.patternLifecycleScopes,
   servedRequests: flags.servedRequests,
   spaceInvites: flags.spaceInvites,
   instanceNameMark: flags.instanceNameMark,
@@ -3501,6 +3590,7 @@ export const wireMemoryProtocolFlags = (
   syncCrossingsV1: flags.syncCrossingsV1,
   watchRemoveV1: flags.watchRemoveV1,
   syncPartsV1: flags.syncPartsV1,
+  syncCidReferencesV1: flags.syncCidReferencesV1,
   watchSetPartsV1: flags.watchSetPartsV1,
 });
 

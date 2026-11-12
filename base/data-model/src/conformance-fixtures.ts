@@ -271,7 +271,7 @@ export const SIZE_FLOORS: { readonly [Measure in SizeMeasure]: number } = Object
     stringLength: 2 ** 24,
     bytesLength: 2 ** 24,
     symbolKeyLength: 2 ** 10,
-    depth: 2 ** 10,
+    depth: 2 ** 9,
     bigintBytes: 2 ** 21,
   });
 
@@ -279,14 +279,16 @@ export const SIZE_FLOORS: { readonly [Measure in SizeMeasure]: number } = Object
  * This package's guarantee by each measure, as its README states it, no
  * figure being written `Infinity`.
  */
-const SIZE_GUARANTEES: { readonly [Measure in SizeMeasure]: number } = Object
+export const SIZE_GUARANTEES: {
+  readonly [Measure in SizeMeasure]: number;
+} = Object
   .freeze({
     arrayLength: 2 ** 26,
     propertyCount: Infinity,
     stringLength: 2 ** 26,
     bytesLength: 2 ** 27,
     symbolKeyLength: 2 ** 26,
-    depth: 2 ** 11,
+    depth: 2 ** 9,
     bigintBytes: 2 ** 26,
   });
 

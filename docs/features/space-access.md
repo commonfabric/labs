@@ -8,7 +8,8 @@ a room it lists is one they belong to. The implementation is
 `runtime/runner/src/builder/space-access.ts`, which also holds
 `spaceMembers(target)`, the principals that space's access list names,
 described [below](#a-spaces-members), and `spaceOf(target)`, the DID of that
-same space, described [below](#the-spaces-own-did), and `spaceDeleted(target)`,
+same space, described [below](#the-spaces-own-did), with `spaceOfLink(target)`
+beside it, and `spaceDeleted(target)`,
 whether that space is deleted, described [below](#a-deleted-space).
 
 The answer is advisory. A memory server in `enforce` mode, which is toolshed's
@@ -197,7 +198,8 @@ above through the same access-change observer, and repeats every load the
 refusal failed, so a computation that read a document of the space without
 calling `spaceAccess(target)` runs again too. A refusal leaves the answer
 `"none"`. It acts only on a space the runtime has opened, and asks for admission
-only while that space's session is refused, one attempt per call. A session that
+only while that space's session is refused, or while its first connection never
+completed a handshake (described below), one attempt per call. A session that
 stands is left alone, except that loads a failed repeat left recorded are
 repeated. The session also opens again when something reads a document of that
 space that the replica has not asked for.
@@ -227,6 +229,18 @@ the space, whoever asked for the retry that decided it. The shell drops the
 loads of that space it remembered as failed, a piece's or the space root's, and
 runs again each one a view is showing, so a refused space's home or piece
 appears once access is granted, without a reload.
+
+A space whose first connection never completed a handshake, as when its memory
+host was down or out of the network's reach, is retried the same way, and only
+when asked: the runtime fails its loads at once rather than dialing again for
+each. Such a space is never refused, so it gets no "Access unavailable"
+placeholder; a load of it fails with `RuntimeErrorCode.SpaceUnreachable`. The
+shell asks the runtime to retry every such space
+(`RuntimeClient.retryUnreachableSpaces()`) on the occasions it retries refused
+ones, on the browser's `online` event, and when the person presses "Try again"
+on the failed load, which shows while a retry is in flight. A retry that reaches
+the space crosses the worker boundary as `spaceaccessrestored` too, so the
+failed load runs again as it does after an admission.
 
 ## A deleted space
 
@@ -402,6 +416,18 @@ new space's DID only once the record has arrived. See
 The DID carries no label. A space's DID is an address rather than a principal,
 and a stored reference to a cell in another space already records that space's
 DID, so it is in data anyone holding the reference can read.
+
+`spaceOfLink(target)` returns the DID that `target`'s own link records, without
+following it, so nothing in that space is read: where `spaceOf(target)`
+resolves the links `target` leads through, reading the document each one
+names, this reads the link alone. A pattern holding many cells by link, as a
+list of entries holding handles to rooms (`Cell<unknown>`) does, names each
+one's space this way at no cost in the spaces they name. The two agree for a
+link that names the document holding the value, which is how a handler that
+resolved a cell before storing it holds it; for a link to a document that
+links on, `spaceOfLink(target)` names the space of that first document. It can
+be called where `spaceOf(target)` can, and returns `undefined` in the same two
+cases its first two rows give.
 
 ## In a pattern test
 

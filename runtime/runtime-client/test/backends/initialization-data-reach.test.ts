@@ -66,6 +66,7 @@ const SENT = {
     webViewScopedReplication: true,
     contentAddressedSchemas: false,
     localSessionDocuments: true,
+    syncCidReferences: true,
   },
   cfcEnforcementMode: "enforce-strict",
   cfcFlowLabels: "persist",
@@ -163,12 +164,14 @@ const REACH = {
       webViewScopedReplication: o.runtime.experimental.webViewScopedReplication,
       contentAddressedSchemas: o.runtime.experimental.contentAddressedSchemas,
       localSessionDocuments: o.runtime.experimental.localSessionDocuments,
+      syncCidReferences: o.runtime.experimental.syncCidReferences,
     }),
     expected: {
       agentBuiltin: false,
       webViewScopedReplication: true,
       contentAddressedSchemas: false,
       localSessionDocuments: true,
+      syncCidReferences: true,
     },
   },
   cfcEnforcementMode: {

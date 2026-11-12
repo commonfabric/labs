@@ -792,12 +792,15 @@ loop keeps for tests. `prepareStorageManager` hands the test each serving
 runtime's storage manager before the runtime is built, which is where a stub on
 one of its providers goes.
 
-Either shape runs its loop in a Worker of the test's process when
+Either shape runs its loop in Workers of the test's process, one per served
+space, when
 `SERVER_EXECUTION_WORKER` is `true` in the environment, where a toolshed over a
-file store runs it in a worker unless that variable is `false`
+file store runs it in workers unless that variable is `false`
 ([`EXPERIMENTAL_OPTIONS.md`](EXPERIMENTAL_OPTIONS.md#server_execution_worker)),
 unless its `worker` option says otherwise, over a store in a temporary
-directory, since a worker cannot open a non-persistent one. `serving.host` is
+directory, since a worker cannot open a non-persistent one. Its `maxWorkers`
+option, or `SERVER_EXECUTION_MAX_WORKERS` in the environment, caps the workers
+spaces are placed on, and `1` serves every space from one. `serving.host` is
 then the loop's handle, with `stats()` and `close()`, and its `host` is
 `undefined`; on this thread `serving.host.host` is the `ExecutorHost`. Either
 way `serving.host.diagnostics()` returns the logger counts and timing statistics

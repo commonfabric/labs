@@ -35,12 +35,14 @@ import {
   deriveModuleDelegations,
   getCompileCacheRuntimeVersion,
   loadCompiledClosure,
+  loadSourceClosure,
   loadVerifiedSourceClosure,
   type ModuleDelegationMap,
   moduleDelegationsFromDocs,
   planCompileCacheWriteChunks,
   recordUndeclarablePolicyStore,
   ROOT_LINK_SPECIFIER,
+  sourceClosureNeedsParser,
   type SourceDoc,
   sourceDocKey,
   stageModuleDelegations,
@@ -53,7 +55,10 @@ import {
   deterministicCompileError,
   isDeterministicCompileFailure,
 } from "./harness/compile-failure.ts";
-import { compilerStack } from "./harness/deferred-compiler-stack.ts";
+import {
+  compilerStack,
+  ensureCompilerStack,
+} from "./harness/deferred-compiler-stack.ts";
 import type {
   CacheableModule,
   CompiledModuleArtifact,
@@ -327,28 +332,30 @@ function cacheEntriesIncludePatternCoverage(
 }
 
 /**
- * Re-derive a stored module's fabric edges from its SOURCE text (source docs
- * deliberately do not store them as links). Unpinned specifiers are skipped:
- * they carry no target identity to link, and they cannot legitimately occur
- * here — the cell-cache write path refuses to persist modules with unpinned
- * fabric imports (`assertNoUnpinnedFabricImports`), so a skip only ever drops
- * an edge from data that predates that guard.
+ * Re-derive a stored module's fabric edges from the module specifiers its
+ * SOURCE text names (source docs deliberately do not store them as links):
+ * the list its compiled document attests, or a parse of the source when it
+ * has none. Unpinned specifiers are skipped: they carry no target identity to
+ * link, and they cannot legitimately occur here — the cell-cache write path
+ * refuses to persist modules with unpinned fabric imports
+ * (`assertNoUnpinnedFabricImports`), so a skip only ever drops an edge from
+ * data that predates that guard.
+ *
+ * Parsing needs the compiler stack, which the caller loads when some module
+ * carries no attested list.
  */
 function fabricImportRefsFromSource(
   doc: SourceDoc,
+  attestedImports: readonly string[] | undefined,
 ): CacheableModule["imports"] {
-  // Deferred compiler stack (parses): source docs only reach this via
-  // loadVerifiedSourceClosure, which awaits ensureCompilerStack().
-  const { collectImportSpecifiers, ts } = compilerStack();
-  const source: Source = { name: doc.filename, contents: doc.code };
+  const specifiers = attestedImports ?? (() => {
+    const { collectImportSpecifiers, ts } = compilerStack();
+    const source: Source = { name: doc.filename, contents: doc.code };
+    return collectImportSpecifiers(source, ts.ScriptTarget.ES2023);
+  })();
   const refs: CacheableModule["imports"] = [];
   const seen = new Set<string>();
-  for (
-    const specifier of collectImportSpecifiers(
-      source,
-      ts.ScriptTarget.ES2023,
-    )
-  ) {
+  for (const specifier of specifiers) {
     if (!isFabricImportSpecifier(specifier)) continue;
     const ref = parseFabricRef(specifier);
     if (ref === undefined) continue;
@@ -1931,12 +1938,9 @@ export class PatternManager {
       let sourceDocs;
       let compiledDocs;
       try {
-        sourceDocs = await loadVerifiedSourceClosure(
-          this.#runtime,
-          origin,
-          entryIdentity,
-          readTx,
-        );
+        // The compiled closure first: reading it registers the import lists
+        // its documents attest, so verifying the source closure below parses
+        // only the modules that carry none.
         if (runtimeVersion === undefined) {
           compiledDocs = undefined;
         } else {
@@ -1949,6 +1953,12 @@ export class PatternManager {
             readTx,
           );
         }
+        sourceDocs = await loadVerifiedSourceClosure(
+          this.#runtime,
+          origin,
+          entryIdentity,
+          readTx,
+        );
       } finally {
         readTx.abort?.("closure-replication read complete");
       }
@@ -2108,6 +2118,21 @@ export class PatternManager {
       throw new ClosureReplicationSupplyError(origin.reason, entryIdentity);
     }
     const { runtimeVersion, sourceDocs, compiledDocs } = origin;
+    // A module whose compiled document carries neither an attested import
+    // list nor a record surface is parsed below, for its fabric edges or by
+    // the write that derives the surface.
+    if (
+      [...sourceDocs.keys()].some((identity) => {
+        const compiled = compiledDocs?.get(identity);
+        return compiled?.kind !== "data" &&
+          (compiled?.sourceImports === undefined ||
+            compiled.exportNames === undefined ||
+            compiled.starTargetSpecs === undefined ||
+            compiled.importSpecs === undefined);
+      })
+    ) {
+      await ensureCompilerStack();
+    }
     const modules: CacheableModule[] = [];
     const fabricDependencies = new Set<string>();
     for (const [identity, doc] of sourceDocs) {
@@ -2115,7 +2140,9 @@ export class PatternManager {
       if (runtimeVersion !== undefined && !compiled) {
         throw new Error(`compiled doc missing for ${identity}`);
       }
-      const fabricImports = fabricImportRefsFromSource(doc);
+      const fabricImports = compiled?.kind === "data"
+        ? []
+        : fabricImportRefsFromSource(doc, compiled?.sourceImports);
       for (const imp of fabricImports) {
         fabricDependencies.add(imp.targetIdentity);
       }
@@ -2125,6 +2152,18 @@ export class PatternManager {
         source: doc.code,
         js: compiled?.code ?? "",
         ...(compiled?.kind === "data" ? { isData: true } : {}),
+        ...(compiled?.sourceImports !== undefined
+          ? { sourceImports: compiled.sourceImports }
+          : {}),
+        ...(compiled?.exportNames !== undefined
+          ? { exportNames: compiled.exportNames }
+          : {}),
+        ...(compiled?.starTargetSpecs !== undefined
+          ? { starTargetSpecs: compiled.starTargetSpecs }
+          : {}),
+        ...(compiled?.importSpecs !== undefined
+          ? { importSpecs: compiled.importSpecs }
+          : {}),
         ...(compiled?.sourceMap !== undefined
           ? { sourceMap: compiled.sourceMap }
           : {}),
@@ -2285,6 +2324,83 @@ export class PatternManager {
   }
 
   /**
+   * Prepare this runtime to verify the source closures of `identities` in
+   * `space` synchronously, inside a transaction that cannot await: synchronize
+   * each closure, and make sure verifying it can run. Verification parses only
+   * a module whose import list no compiler-stamped compiled document attests,
+   * so a closure that needs one has its compiled closure for this runtime
+   * version read, which registers the lists it carries, and the parser is
+   * loaded only when a list is still missing after that. A runtime that
+   * evaluates only compiled patterns therefore verifies the closures of the
+   * pieces it creates without loading the compiler.
+   *
+   * Every closure is synchronized, whichever of them needs the parser. A read
+   * that fails loads the parser, so the verification it prepares runs as it
+   * would have, and reports the failure itself.
+   */
+  async prepareSourceClosureVerification(
+    space: MemorySpace,
+    identities: Iterable<string>,
+  ): Promise<void> {
+    const tx = this.#runtime.edit();
+    try {
+      let parserNeeded = false;
+      for (const identity of new Set(identities)) {
+        if (PatternManager.isKeylessPatternIdentity(identity)) continue;
+        if (!await this.#closureVerifiesWithoutParser(space, identity, tx)) {
+          parserNeeded = true;
+        }
+      }
+      if (parserNeeded) await ensureCompilerStack();
+    } finally {
+      tx.abort("source closure verification prepared");
+    }
+  }
+
+  /**
+   * Helper for `prepareSourceClosureVerification()`, which synchronizes the
+   * source closure of `identity` in `space` and returns whether verifying it
+   * parses nothing, reading the compiled closure for the import lists it
+   * attests when the source closure alone does not settle that. An absent
+   * source closure verifies, as unavailable, without parsing.
+   */
+  async #closureVerifiesWithoutParser(
+    space: MemorySpace,
+    identity: string,
+    tx: IExtendedStorageTransaction,
+  ): Promise<boolean> {
+    try {
+      const closure = await loadSourceClosure(
+        this.#runtime,
+        space,
+        identity,
+        tx,
+      );
+      if (closure === undefined) return true;
+      if (!sourceClosureNeedsParser(this.#runtime, space, closure)) return true;
+      const runtimeVersion = await this.compileCacheRuntimeVersion({
+        patternCoverage: this.#patternCoverageFor() !== undefined,
+      });
+      if (runtimeVersion === undefined) return false;
+      await loadCompiledClosure(
+        this.#runtime,
+        space,
+        identity,
+        { runtimeVersion },
+        tx,
+      );
+      return !sourceClosureNeedsParser(this.#runtime, space, closure);
+    } catch (error) {
+      logger.warn("source-closure-preparation-read-failed", () => [
+        `entry=${identity}`,
+        `space=${space}`,
+        error,
+      ]);
+      return false;
+    }
+  }
+
+  /**
    * Read the writer authority `identity` durably inherits in `space`, for a
    * runtime about to run it over state that `predecessorIdentities` wrote. A
    * source update registers its grants only in the runtime that performed
@@ -2297,11 +2413,13 @@ export class PatternManager {
    * Returns `undefined` when no read is owed: `identity` is keyless and so
    * has no stored closure, or the runtime already grants it every
    * predecessor other than itself. Otherwise returns a promise that settles
-   * once the successor's verified source closure has been read in a
-   * transaction without writes, which registers every delegation that
-   * closure durably carries. A predecessor the successor inherits nothing
-   * from stays ungranted, and a failed read is logged rather than rejected,
-   * leaving the runtime's grants as they were.
+   * once the successor's stored closures have been read in a transaction
+   * without writes, which registers every delegation they durably carry: the
+   * compiled closure for this runtime version first, and the verified source
+   * closure only when a predecessor is still ungranted after it. A
+   * predecessor the successor inherits nothing from stays ungranted, and a
+   * failed read is logged rather than rejected, leaving the runtime's grants
+   * as they were.
    */
   readInheritedAuthority(
     space: MemorySpace,
@@ -2309,31 +2427,52 @@ export class PatternManager {
     predecessorIdentities: Iterable<string>,
   ): Promise<void> | undefined {
     if (PatternManager.isKeylessPatternIdentity(identity)) return undefined;
-    let owed = false;
-    for (const predecessor of predecessorIdentities) {
-      if (
-        predecessor !== identity &&
-        !this.#runtime.grantsModuleDelegation(space, identity, predecessor)
-      ) {
-        owed = true;
-        break;
-      }
+    const predecessors = [...predecessorIdentities];
+    if (!this.#owesInheritedAuthority(space, identity, predecessors)) {
+      return undefined;
     }
-    if (!owed) return undefined;
-    return this.#readSourceDelegations(space, identity);
+    return this.#readStoredDelegations(space, identity, predecessors);
   }
 
   /**
-   * Helper for `readInheritedAuthority()`, which loads `identity`'s verified
-   * source closure in a transaction without writes, so the load registers
-   * the delegations it carries.
+   * Helper for `readInheritedAuthority()`, which returns whether some
+   * predecessor in `predecessors` other than `identity` itself is one the
+   * runtime does not yet grant `identity` in `space`.
    */
-  async #readSourceDelegations(
+  #owesInheritedAuthority(
     space: MemorySpace,
     identity: string,
+    predecessors: readonly string[],
+  ): boolean {
+    return predecessors.some((predecessor) =>
+      predecessor !== identity &&
+      !this.#runtime.grantsModuleDelegation(space, identity, predecessor)
+    );
+  }
+
+  /**
+   * Helper for `readInheritedAuthority()`, which loads `identity`'s closures
+   * in a transaction without writes, so each load registers the delegations
+   * it carries. The compiled closure is read first: its documents carry the
+   * compiler's stamp at the root, a source update stages its delegations on
+   * them as well as on the source documents, and reading them parses
+   * nothing, so a runtime that evaluates only compiled patterns never loads
+   * the compiler for this. The source closure, whose verification parses
+   * every module, is read only for a grant the compiled closure did not
+   * supply, as when this runtime version has compiled nothing for `identity`
+   * in `space` yet.
+   */
+  async #readStoredDelegations(
+    space: MemorySpace,
+    identity: string,
+    predecessors: readonly string[],
   ): Promise<void> {
     const tx = this.#runtime.edit();
     try {
+      await this.#readCompiledDelegations(space, identity, tx);
+      if (!this.#owesInheritedAuthority(space, identity, predecessors)) {
+        return;
+      }
       await loadVerifiedSourceClosure(this.#runtime, space, identity, tx);
     } catch (error) {
       logger.warn("inherited-authority-read-failed", () => [
@@ -2342,6 +2481,37 @@ export class PatternManager {
       ]);
     } finally {
       tx.abort("inherited authority read complete");
+    }
+  }
+
+  /**
+   * Helper for `#readStoredDelegations()`, which reads `identity`'s compiled
+   * closure for this runtime version in `tx`, registering the delegations it
+   * carries. A failed read is logged and registers nothing: the source closure
+   * is read on its own after it, and can still supply every grant.
+   */
+  async #readCompiledDelegations(
+    space: MemorySpace,
+    identity: string,
+    tx: IExtendedStorageTransaction,
+  ): Promise<void> {
+    try {
+      const runtimeVersion = await this.compileCacheRuntimeVersion({
+        patternCoverage: this.#patternCoverageFor() !== undefined,
+      });
+      if (runtimeVersion === undefined) return;
+      await loadCompiledClosure(
+        this.#runtime,
+        space,
+        identity,
+        { runtimeVersion },
+        tx,
+      );
+    } catch (error) {
+      logger.warn("inherited-authority-compiled-read-failed", () => [
+        `reading the compiled closure of ${identity} in ${space} failed`,
+        error,
+      ]);
     }
   }
 

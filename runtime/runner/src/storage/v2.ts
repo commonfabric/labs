@@ -1857,6 +1857,13 @@ export class StorageManager implements IStorageManager {
    */
   #instanceNames: boolean | undefined;
 
+  /**
+   * Whether `setSyncCidReferences()` declared that this manager's sessions
+   * take schema documents by reference, or `undefined` while nothing has,
+   * when they take every body.
+   */
+  #syncCidReferences: boolean | undefined;
+
   #localSessionDocuments: boolean | undefined;
   #eventAppendQueueStore?: EventAppendQueueStore;
   #eventAppendPacing?: EventAppendPacing | false;
@@ -2461,6 +2468,29 @@ export class StorageManager implements IStorageManager {
     this.#sessionFactory.setInstanceNames?.(enabled);
   }
 
+  /** See `IStorageManager.setSyncCidReferences`. */
+  setSyncCidReferences(enabled: boolean): void {
+    if (
+      this.#syncCidReferences !== undefined &&
+      this.#syncCidReferences !== enabled
+    ) {
+      throw new Error(
+        "setSyncCidReferences: this manager's runtimes already declared the " +
+          "other choice; one manager's connections cannot serve both",
+      );
+    }
+    if (
+      enabled !== (this.#syncCidReferences ?? false) && this.#providers.size > 0
+    ) {
+      throw new Error(
+        "setSyncCidReferences: a session is already open; declaring the " +
+          "choice now would leave that session's connection on the other",
+      );
+    }
+    this.#syncCidReferences = enabled;
+    this.#sessionFactory.setSyncCidReferences?.(enabled);
+  }
+
   /** See `IStorageManager.setSessionReadCeiling`. */
   setSessionReadCeiling(ceiling: SessionReadCeiling): void {
     if (this.#providers.size > 0) {
@@ -2585,11 +2615,37 @@ export class StorageManager implements IStorageManager {
     // Already-open providers only, as in `noteSpaceAclChanged()`: a space
     // this manager has never opened has no refusal to retry.
     const provider = this.#providers.get(space);
-    await provider?.retryAccess(() =>
-      this.#spaceAccessErrors.has(space) ||
-      provider.authorizationError() !== undefined ||
-      MemoryV2Client.isFirstHandshakeFailure(this.spaceSessionError(space))
+    const wasUnreachable = MemoryV2Client.isFirstHandshakeFailure(
+      this.spaceSessionError(space),
     );
+    try {
+      await provider?.retryAccess(() =>
+        this.#spaceAccessErrors.has(space) ||
+        provider.authorizationError() !== undefined ||
+        MemoryV2Client.isFirstHandshakeFailure(this.spaceSessionError(space))
+      );
+    } finally {
+      // A space reached at last is news to whoever showed its failed loads,
+      // and nothing else reports it: it was never refused, and its first
+      // session is no reconnect. Reported even when a repeated load then
+      // fails, since the space no longer counts as unreachable and no later
+      // retry would report it. Two retries that start together while the
+      // space is out of reach report it once each.
+      if (wasUnreachable && this.spaceSessionError(space) === undefined) {
+        this.#notifySpaceAccessChange(space);
+      }
+    }
+  }
+
+  /** Tells every access-change observer that `space`'s access changed. */
+  #notifySpaceAccessChange(space: MemorySpace): void {
+    for (const observer of [...this.#spaceAccessChangeObservers]) {
+      try {
+        observer(space);
+      } catch (cause) {
+        console.error("space-access-change subscriber threw:", cause);
+      }
+    }
   }
 
   isContentAddressedDocPersisted(space: MemorySpace, hash: string): boolean {
@@ -2788,13 +2844,7 @@ export class StorageManager implements IStorageManager {
             }
           }
           if (alreadyDenied !== (error !== undefined) || nowDeleted) {
-            for (const observer of [...this.#spaceAccessChangeObservers]) {
-              try {
-                observer(space);
-              } catch (cause) {
-                console.error("space-access-change subscriber threw:", cause);
-              }
-            }
+            this.#notifySpaceAccessChange(space);
           }
         },
         onSessionAnswered: () => {

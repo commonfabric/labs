@@ -26,6 +26,7 @@ import {
   isCapable,
   isDeletionTombstone,
 } from "../acl.ts";
+import { lookupSchemaDocument } from "../../runner/src/schema-registry.ts";
 import {
   canResolveScopeKey,
   type CellScope,
@@ -250,6 +251,7 @@ import {
   expandClientMessageLabels,
   hasClientMessageLabelMetadata,
 } from "./commit-label-table.ts";
+import { referenceServerMessageSchemaDocuments } from "./sync-cid-references.ts";
 import { compressServerMessageSchemas } from "./sync-schema-table.ts";
 import {
   appendWatchSetPart,
@@ -1394,6 +1396,14 @@ export type ServerConnectOptions = {
    * process's, leaves it unset.
    */
   inProcess?: boolean;
+
+  /**
+   * The process-instance component of the lease holder the peer's host
+   * acquires under (`executionLeaseHolder`), where the peer is a serving
+   * worker started with a component of its own. Absent, the component this
+   * realm mints holders with.
+   */
+  leaseHolderInstance?: string;
 };
 
 class Connection {
@@ -1402,6 +1412,9 @@ class Connection {
   #syncSchemaTable = false;
   #syncLabelTable = false;
   #commitLabelTable = false;
+
+  /** Whether both peers advertised `syncCidReferencesV1`. */
+  #syncCidReferences = false;
 
   /**
    * The bounds a sync is split to fit, when the transport bounds its
@@ -1472,6 +1485,7 @@ class Connection {
   readonly #sendRaw: Send;
   readonly #syncPartLimits: PartLimits | undefined;
   readonly #inProcess: boolean;
+  readonly #leaseHolderInstance: string | undefined;
 
   constructor(
     readonly id: string,
@@ -1480,12 +1494,14 @@ class Connection {
     routedOwns?: (space: string) => boolean,
     syncPartLimits?: PartLimits,
     inProcess = false,
+    leaseHolderInstance?: string,
   ) {
     this.#server = server;
     this.#sendRaw = sendRaw;
     this.#routedOwns = routedOwns;
     this.#syncPartLimits = syncPartLimits;
     this.#inProcess = inProcess;
+    this.#leaseHolderInstance = leaseHolderInstance;
   }
 
   /**
@@ -1570,6 +1586,15 @@ class Connection {
   /** Helper for `#send()`, which applies the negotiated table encodings. */
   #prepare(message: ServerMessage): ServerMessage {
     let prepared = message;
+    // First, so the tables below never walk a body the frame leaves out.
+    if (this.#syncCidReferences) {
+      const referenceStart = performance.now();
+      prepared = referenceServerMessageSchemaDocuments(
+        prepared,
+        lookupSchemaDocument,
+      );
+      timing.time(referenceStart, "memory", "response", "prepareReferences");
+    }
     if (this.#syncLabelTable) {
       const labelStart = performance.now();
       prepared = compressServerMessageLabels(prepared);
@@ -1797,6 +1822,15 @@ class Connection {
    */
   get inProcess(): boolean {
     return this.#inProcess;
+  }
+
+  /**
+   * The process-instance component of the lease holder this connection's
+   * peer acquires under (`ServerConnectOptions.leaseHolderInstance`), or
+   * `undefined` for the component this realm mints holders with.
+   */
+  get leaseHolderInstance(): string | undefined {
+    return this.#leaseHolderInstance;
   }
 
   /** Whether this routed session still has its lease and fenced owner. */
@@ -2480,6 +2514,8 @@ class Connection {
           serverFlags?.syncPartsV1 === true
         ? this.#syncPartLimits
         : undefined;
+      this.#syncCidReferences = clientFlags?.syncCidReferencesV1 === true &&
+        serverFlags?.syncCidReferencesV1 === true;
       this.#ready = true;
       return;
     }
@@ -3265,6 +3301,13 @@ export type PatternLifecycleCall = {
   /** The DID the request's session was opened as, which holds WRITE on `space`. */
   principal: string;
 
+  /**
+   * The memory session the request came on, which a session-scoped address
+   * names the instance of, as it does for the session's own reads and
+   * commits.
+   */
+  sessionId: string;
+
   verb: PatternLifecycleVerb;
 
   /** The verb's arguments, as the client sent them and not yet validated. */
@@ -3706,6 +3749,16 @@ export class Server {
       inviteHost?: string;
 
       /**
+       * Whether this server advertises `syncCidReferencesV1`, delivering
+       * `cid:` schema documents by reference to a client that advertises it
+       * too (`docs/specs/content-addressed-schemas.md`, "Delivery by
+       * reference"). On unless `false`: a client takes references only when
+       * it opts in, so a server that offers them changes nothing for one
+       * that does not, and `false` is how a deployment turns them off.
+       */
+      syncCidReferences?: boolean;
+
+      /**
        * Whether this server's posture names instances (INV-16): the
        * deployment's value of the `instanceNames` experimental flag. Asked at
        * every `session.open` that declares `instanceNames: true` of a space
@@ -3951,6 +4004,7 @@ export class Server {
       spaceInvites: this.options.inviteHost !== undefined,
       routedAuthV1: false,
       routedCompressionV1: false,
+      syncCidReferencesV1: this.options.syncCidReferences !== false,
     };
   }
 
@@ -4902,7 +4956,8 @@ export class Server {
    * parts; without it, every sync goes whole. `options.inProcess` says the
    * peer runs in this process; a connection from another process leaves it
    * unset, and the read row (protocol.md §2) treats its sessions as another
-   * process's.
+   * process's. `options.leaseHolderInstance` names the holder component of
+   * a peer that acquires leases under one of its own.
    */
   connect(
     send: Send,
@@ -4916,6 +4971,7 @@ export class Server {
       undefined,
       syncParts,
       options.inProcess === true,
+      options.leaseHolderInstance,
     );
     this.#connections.set(connection.id, connection);
     return connection;
@@ -7102,6 +7158,7 @@ export class Server {
       const outcome = await handler({
         space,
         principal: writer.principal,
+        sessionId,
         verb: message.verb,
         body: message.body,
       });
@@ -11614,6 +11671,14 @@ export class Server {
   }
 
   /**
+   * The session lifecycle events that bring a mirror of `space`'s sessions
+   * up to date, as installing an observer replays them for every space.
+   */
+  sessionSnapshot(space: string): SessionLifecycleEvent[] {
+    return this.#sessions.snapshot(space);
+  }
+
+  /**
    * Installs what runs `pattern.lifecycle` requests, or with `undefined`
    * removes it. The server advertises `patternLifecycle` from the next
    * `hello` on while one is installed. Connections that said `hello` before
@@ -11773,8 +11838,9 @@ export class Server {
    * Whether `session` is `space`'s serving session on this server: the
    * SpaceServer's own loopback session, which reached the server from this
    * process and whose principal holds the space's lease (protocol.md §2's
-   * read row). A session from another process carries the same principal, so
-   * the connection decides.
+   * read row) under the holder component its connection names. A session
+   * from another process carries the same principal, as does one from
+   * another serving worker of this process, so the connection decides.
    */
   #isServingSession(space: string, session: SessionState): boolean {
     if (session.principal === undefined) return false;
@@ -11783,7 +11849,10 @@ export class Server {
       : this.#connections.get(session.ownerConnectionId);
     return connection?.inProcess === true &&
       this.#executionLeases.holderOf(space) ===
-        executionLeaseHolder(session.principal);
+        executionLeaseHolder(
+          session.principal,
+          connection.leaseHolderInstance,
+        );
   }
 
   /**
@@ -12447,6 +12516,16 @@ export class Server {
    */
   engineForSpace(space: string): Promise<Engine.Engine> {
     return this.#openEngine(space);
+  }
+
+  /**
+   * Whether `space`'s store holds stream events no serving loop has
+   * delivered, read from the store as it stands (serving-loop.md §1's second
+   * ACTIVE criterion). Rejects when the store cannot be opened or read.
+   */
+  async hasUndeliveredEvents(space: string): Promise<boolean> {
+    const engine = await this.#openEngine(space);
+    return Engine.selectPendingStreamEventDocs(engine).length > 0;
   }
 
   /**
@@ -13243,7 +13322,7 @@ const parseDecodedClientMessage = (
     typeof parsed.space === "string" &&
     typeof parsed.sessionId === "string" &&
     (parsed.verb === "upload" || parsed.verb === "instantiate" ||
-      parsed.verb === "setsrc") &&
+      parsed.verb === "setsrc" || parsed.verb === "follow") &&
     isFabricPlainObject(parsed.body)
   ) {
     return {

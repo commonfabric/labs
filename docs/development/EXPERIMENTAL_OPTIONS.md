@@ -59,6 +59,7 @@ was last checked against the code.
 | [`conflictAdmissionMode`](#conflictadmissionmode)                           | `CF_CONFLICT_ADMISSION` env, or `setConflictAdmissionMode()`                                                                                    | `off`                                                                                | William Kelly (#4237); `hold` removed CT-1925 (#5110) | keep `preempt` as a tuning dial or remove after re-measurement                                                                                                                                                                    | implemented, off by default, measured net-negative                              |
 | [`syncSchemaTableV2`](#syncschematablev2)                                   | `setSyncSchemaTableConfig()` (negotiated per connection)                                                                                        | on                                                                                   | Ben Follington (#4292)                                | retire the negotiation once every peer speaks v2                                                                                                                                                                                  | implemented, on by default                                                      |
 | [`messageCompressionV1`](#messagecompressionv1)                             | `setMessageCompressionConfig()` (negotiated per connection)                                                                                     | on                                                                                   | PR #6474                                             | retire the rollback switch after the binary WebSocket envelope has field-soaked                                                                                                                                                   | implemented, on by default                                                      |
+| [`syncCidReferencesV1`](#synccidreferencesv1) | server: `MEMORY_SYNC_CID_REFERENCES` env on toolshed (the memory `Server`'s `syncCidReferences` option); client: `EXPERIMENTAL_SYNC_CID_REFERENCES` env, or `RuntimeOptions.experimental` (negotiated per connection) | server on, client off | Dan Bornstein (#9719) | measure the bandwidth saved against the extra round trip, then graduate or remove | implemented; servers on, clients off by default |
 | [`ownWriteEcho`](#ownwriteecho)                                             | `setOwnWriteEchoConfig()` (server-side only, not negotiated)                                                                                    | on                                                                                   | Robin McCollum (CT-1965)                              | remove the switch once the echo has field-soaked                                                                                                                                                                                  | implemented, on by default                                                      |
 | [`experimentalConcurrentWatchRefresh`](#experimentalconcurrentwatchrefresh) | `IRemoteStorageProviderSettings`; in the shell, the `commonfabric.concurrentWatchRefresh()` console command (localStorage, per browser profile) | off                                                                                  | Ben Follington (#4937; shell toggle #4974)            | graduate to always-on after live measurement, or remove if superseded                                                                                                                                                             | off by default; acquisition/removal ordering tested; real-latency measurement pending |
 | [`cfcRenderCeiling`](#cfcrenderceiling)                                     | `commonfabric.cfcRenderCeiling()` in the browser (localStorage)                                                                                 | on                                                                                   | Bernhard Seefeld (#4550)                              | graduate to an unconditional ceiling                                                                                                                                                                                           | implemented, on by default; per-profile opt-out                                 |
@@ -1759,6 +1760,56 @@ the per-epic implementation notes).
   delete the negotiation and the expanded-form encoder and always send the
   compact form.
 
+### `syncCidReferencesV1`
+
+- **Toggle via.** One switch on each side, and references flow only on a
+  connection where both are on:
+  - **Server:** the memory `Server`'s `syncCidReferences` option, which
+    toolshed sets from `MEMORY_SYNC_CID_REFERENCES` (on unless `false` or
+    `0`; any other spelling refuses startup). A server advertises the
+    capability unless it is turned off.
+  - **Client:** the runtime's `syncCidReferences` experimental option, from
+    `RuntimeOptions.experimental` (how a host that constructs a runtime sets
+    it), `EXPERIMENTAL_SYNC_CID_REFERENCES` (a process that reads env, and
+    the shell's build define of the same name), or, in the labs shell, the
+    per-profile `localStorage` key `syncCidReferences` set to `"true"` (how a
+    host loading a release shell in a WebView sets it, or
+    `commonfabric.syncCidReferences(true)` from the console; next runtime).
+    The runtime hands it to its memory connections
+    (`ConnectOptions.syncCidReferences`), whose `hello` then advertises the
+    capability. It is client-authoritative, so a client never adopts it from
+    a deployment
+    ([host embedding](../features/host-embedding.md), seam 13).
+- **Purpose.** A schema document's bytes are the same in every space that
+  stores it, so a client reading many spaces built from one pattern receives
+  the same closure from each. On a connection where both sides are on, a server
+  names a `cid:` schema document its registry holds by id and seq alone, unless
+  the schema names a principal (a DID anywhere in its closure), which keeps its
+  body. The client
+  takes the body from its own registry, and fetches what a frame lacks with one
+  `graph.query` for all of it, sharing a fetch already in flight from the same
+  host: any space's on a direct connection, the same space's on a routed one. A
+  schema that names a principal is always fetched from the space that named it
+  ("Delivery by reference" in
+  [`content-addressed-schemas.md`](../specs/content-addressed-schemas.md)).
+  Measured on a FabriChat fixture, a narrow read of 5 rooms' roots received
+  52% fewer bytes, and at 20 rooms the reader's heap grew a third less per room.
+- **The trade it measures.** A frame naming a body its client lacks waits one
+  round trip for it, and the session's later frames wait behind it. The option
+  stays an option until a measurement says whether the bandwidth saved
+  outweighs that.
+- **Current default and planned end state.** Servers advertise it by default;
+  clients do not, so nothing changes for a client until its runtime or host
+  opts in. A deployment turns it off with `MEMORY_SYNC_CID_REFERENCES=false`,
+  which delivers every client every body whatever it advertises. The end state
+  is to graduate it, with clients on by default, or to remove it, on that
+  measurement.
+- **Status on 2026-11-11.** Implemented; servers on, clients off by default.
+- **Path to removal.** Graduating: advertise the capability unconditionally on
+  both sides and delete the server option, the toolshed setting and the client
+  option. Removing: delete the reference rewrite, the client's resolution and
+  fetch, the capability and the three settings.
+
 ### `messageCompressionV1`
 
 - **Toggle via.** `setMessageCompressionConfig()` in
@@ -2201,29 +2252,42 @@ the per-epic implementation notes).
   ([`serverExecution`](#serverexecution) on).
 - **Added by.** Bernhard Seefeld, in the change that moves the serving loop
   off the request thread.
-- **Purpose.** The serving loop, its host and every serving runtime run in a Web
-  Worker of the toolshed process instead of on the thread that answers the
+- **Purpose.** The serving loop's hosts and serving runtimes run in Web
+  Workers of the toolshed process, one worker per served space, instead of on
+  the thread that answers the
   memory server's frames and the HTTP routes. A wave's settle step is a run of
   synchronous scheduler actions, and on one thread every client round trip waits
-  behind it. The worker reads the store through its own SQLite connections and
+  behind it, as on one worker every other space's wave does. A worker reads the
+  store through its own SQLite connections and
   reaches the memory server over a port: wave commits cross to a sink on the
   main thread, which applies every commit the server fans out; the serving
   runtimes' storage sessions cross as frames; and the server's observer crosses
   as events. The memory server's store has to be a file for the worker to open
   it. The pattern-lifecycle verbs reach the loop as descriptors on both arms.
+  The pool that places spaces on workers takes three more variables from the
+  same bootstrap, each a whole number: `SERVER_EXECUTION_MAX_WORKERS`, how
+  many workers spaces are placed on before a space joins a worker that
+  already serves one (default 16; `1` serves every space from one worker),
+  `SERVER_EXECUTION_SPARE_WORKERS`, how many workers are kept started ahead
+  of a placement (default 1 in the toolshed; `0` keeps none), and
+  `SERVER_EXECUTION_WORKER_HEAP_BUDGET_MB`, how large the workers' heaps may
+  be together before workers kept only for parked runtimes are closed
+  (default none). The serving memory server tests build reads the first.
   [`docs/plans/serving-loop-worker.md`](../plans/serving-loop-worker.md) is the
   design and its stages.
 - **Current default and planned end state.** On by default in the toolshed
   over a file store, off in the test harness's serving memory server. The end
   state is the in-process arm gone, with the knob.
-- **Status on 2026-10-31.** Implemented, on by default in the toolshed over a
-  file store. The worker entry builds its process's compiled-module byte cache,
-  as the main-thread loop does. Run with the variable `true`, the pattern
-  integration suites the `MultiRuntimeHarness` drives pass under the worker;
+- **Status on 2026-11-11.** Implemented, on by default in the toolshed over a
+  file store, with a worker per served space. Each worker's entry builds a
+  compiled-module byte cache for the spaces that worker serves, as the
+  main-thread loop builds one for its process. Run with the variable `true`,
+  the pattern integration suites the `MultiRuntimeHarness` drives pass with a
+  worker per space;
   the private-inbox and FabriChat suites need a serving runtime to run no child
   placed in a space other than the one it serves (#9418). No CI lane runs them
-  that way yet: in CI the worker runs in the toolshed-backed lanes and the
-  worker's own unit tests.
+  that way yet: in CI the workers run in the toolshed-backed lanes and the
+  workers' own unit tests.
 - **Path to removal.** Soak with the default on, then delete the knob and the
   in-process arm.
 
