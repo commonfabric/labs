@@ -3282,14 +3282,10 @@ interface CFToolbarAttributes<T> extends CFHTMLAttributes<T> {
 interface CFTableAttributes<T> extends CFHTMLAttributes<T> {
   "striped"?: boolean;
   "bordered"?: boolean;
-  "size"?: "xs" | "sm" | "md" | "lg" | "xl" | "sm" | "md" | "lg";
+  "size"?: "sm" | "md" | "lg";
   "sticky-header"?: boolean;
   "full-width"?: boolean;
   "hover"?: boolean;
-  "oncf-table-sort"?: EventHandler<{
-    columnIndex: number;
-    ascending: boolean;
-  }>;
 }
 
 type CFKeybindAttributes<T> = Omit<CFHTMLAttributes<T>, "key"> & {

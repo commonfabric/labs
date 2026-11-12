@@ -37,11 +37,17 @@ export class CFToggleGroup extends BaseElement {
   declare value: string | string[];
   declare disabled: boolean;
 
+  /** The toggles this group disabled, which it enables again. */
+  private disabledToggles = new WeakSet<Element>();
+
   constructor() {
     super();
     this.type = "single";
     this.value = "";
     this.disabled = false;
+    // Added before any listener a page adds, so that a toggle's `cf-change`
+    // stops here and the page hears only the group's own.
+    this.addEventListener("cf-change", this.handleToggle);
   }
 
   override willUpdate(changedProperties: PropertyValues) {
@@ -50,28 +56,18 @@ export class CFToggleGroup extends BaseElement {
       this.value = this.type === "multiple" ? [] : "";
     }
 
-    // Parse value from attribute for multiple type
+    // A multiple group given a string takes it as comma-separated values
     if (
       changedProperties.has("value") && typeof this.value === "string" &&
       this.type === "multiple"
     ) {
-      const valueAttr = this.getAttribute("value");
-      if (valueAttr) {
-        this.value = valueAttr.split(",").filter((v) => v);
-      }
+      this.value = this.value.split(",").filter((v) => v);
     }
   }
 
   override updated(changedProperties: PropertyValues) {
     if (changedProperties.has("type") || changedProperties.has("value")) {
       this.updateToggleSelection();
-
-      // Update attribute for persistence
-      if (this.type === "single" && typeof this.value === "string") {
-        this.setAttribute("value", this.value);
-      } else if (this.type === "multiple" && Array.isArray(this.value)) {
-        this.setAttribute("value", this.value.join(","));
-      }
 
       // Emit change if value changed
       if (changedProperties.has("value")) {
@@ -84,6 +80,12 @@ export class CFToggleGroup extends BaseElement {
           this.emit("cf-change", { value: this.value });
         }
       }
+
+      // Reflect the value, comma-separated for a multiple group
+      this.setAttribute(
+        "value",
+        Array.isArray(this.value) ? this.value.join(",") : this.value,
+      );
     }
 
     if (changedProperties.has("disabled")) {
@@ -91,26 +93,27 @@ export class CFToggleGroup extends BaseElement {
     }
   }
 
+  /**
+   * Ignores the value attribute when it only reflects the values a multiple
+   * group holds, which reading back would replace with a string.
+   */
+  override attributeChangedCallback(
+    name: string,
+    old: string | null,
+    value: string | null,
+  ) {
+    if (
+      name === "value" && Array.isArray(this.value) &&
+      value === this.value.join(",")
+    ) return;
+    super.attributeChangedCallback(name, old, value);
+  }
+
   override connectedCallback() {
     super.connectedCallback();
 
-    // Parse value attribute for multiple type
-    const valueAttr = this.getAttribute("value");
-    if (valueAttr && this.type === "multiple") {
-      this.value = valueAttr.split(",").filter((v) => v);
-    }
-
     // Set ARIA attributes
     this.setAttribute("role", "group");
-
-    // Add event listeners
-    this.addEventListener("cf-change", this.handleToggle);
-  }
-
-  override disconnectedCallback() {
-    super.disconnectedCallback();
-    // Clean up event listeners
-    this.removeEventListener("cf-change", this.handleToggle);
   }
 
   override firstUpdated() {
@@ -155,14 +158,12 @@ export class CFToggleGroup extends BaseElement {
   }
 
   private updateToggleDisabled(): void {
-    const toggles = this.getToggles();
-    toggles.forEach((toggle) => {
-      if (this.disabled) {
+    this.getToggles().forEach((toggle) => {
+      if (this.disabled && !toggle.hasAttribute("disabled")) {
         toggle.setAttribute("disabled", "");
-        (toggle as any).disabled = true;
-      } else if (!toggle.hasAttribute("disabled")) {
-        // Only enable if the toggle itself doesn't have disabled attribute
-        (toggle as any).disabled = false;
+        this.disabledToggles.add(toggle);
+      } else if (!this.disabled && this.disabledToggles.delete(toggle)) {
+        toggle.removeAttribute("disabled");
       }
     });
   }
@@ -172,7 +173,7 @@ export class CFToggleGroup extends BaseElement {
     const toggle = event.target as Element;
 
     if (!toggle || !toggle.matches("cf-toggle")) return;
-    event.stopPropagation();
+    event.stopImmediatePropagation();
 
     const toggleValue = toggle.getAttribute("value") ||
       toggle.textContent?.trim() || "";

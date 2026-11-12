@@ -280,13 +280,8 @@ export class CFSelect extends BaseElement {
     this._cellController.bind(this.value);
     this.applyValueToDom();
     // Register with form after binding is complete
-    this._formField.register(this.name);
+    this._formField.register();
     this._updateAccessibilityAttributes();
-  }
-
-  override disconnectedCallback() {
-    super.disconnectedCallback();
-    // Controllers handle cleanup automatically via ReactiveController
   }
 
   override willUpdate(changedProperties: Map<string, any>) {
@@ -432,7 +427,6 @@ export class CFSelect extends BaseElement {
 
   private _onChange(e: Event) {
     const select = e.target as HTMLSelectElement;
-    const _oldValue = this.getCurrentValue();
     let newValue: unknown | unknown[];
 
     if (this.multiple) {
@@ -464,10 +458,6 @@ export class CFSelect extends BaseElement {
 
   checkValidity() {
     return this._select?.checkValidity() ?? true;
-  }
-
-  reportValidity() {
-    return this._select?.reportValidity() ?? true;
   }
 
   private _lastGeneratedRole: string | null = null;

@@ -36,6 +36,14 @@ transitions in an ordinary source module and exercise them from a plain Deno
 unit test as well; keep the browser case for the boundary only a real DOM can
 prove.
 
+A component in `runtime/ui` does not need a browser to render. A plain Deno
+test that imports `runtime/ui/src/v2/test-utils/dom.ts` ahead of anything that
+loads Lit
+gets a happy-dom document, in which the component connects, renders into its
+shadow root, and answers events, and Deno's coverage records what it ran.
+`cf-toggle.test.ts` is the worked example. What happy-dom does not implement,
+such as layout and real focus, still takes the browser case.
+
 Do not name a source file so that its path ends in `test.ts` (or `test.tsx`,
 `test.js`, `test.mjs`, `test.jsx`). `deno coverage` takes those for test files
 and leaves them out of the report, even though V8 records them and even if

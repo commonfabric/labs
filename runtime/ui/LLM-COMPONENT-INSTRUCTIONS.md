@@ -718,11 +718,12 @@ main area **Tag**: `<cf-screen>`
 - `height` - string (CSS height)
 - `fade-edges` - boolean
 - `show-scrollbar` - boolean
-- `snap` - boolean **Events**:
+- `snap-to-bottom` - boolean (open at the bottom, and follow new content while
+  scrolled to the end) **Events**:
 - `cf-scroll` - Fired on scroll with detail:
   `{ scrollTop, scrollHeight, clientHeight }` **Methods**:
 - `scrollToY(y, smooth)` - Scroll to position
-- `scrollByY(y, smooth)` - Scroll by amount
+- `scrollToBottom(smooth)` - Scroll to the end of the content
 
 **Note**: `cf-vscroll` is only needed inside `cf-screen` when you need
 snap-to-bottom, fade-edges, or styled scrollbar. `cf-screen` scrolls
@@ -758,9 +759,10 @@ automatically on its own.
 - `striped` - boolean (zebra stripes)
 - `bordered` - boolean
 - `hover` - boolean (row hover effect)
-- `compact` - boolean (reduced padding)
-- `fixed` - boolean (fixed layout) **Slots**: Default slot for thead, tbody,
-  tfoot **Example**:
+- `size` - "sm" | "md" | "lg" (cell padding and text size; default "md")
+- `sticky-header` - boolean (header row stays visible while scrolling)
+- `full-width` - boolean **Slots**: Default slot for thead, tbody, tfoot
+  **Example**:
 
 ```html
 <cf-table striped hover>
@@ -933,9 +935,9 @@ label):
 
 **cf-toast Attributes**:
 
-- `variant` - "default" | "success" | "error" | "warning"
+- `status` - "info" | "success" | "error" | "warning"
 - `duration` - number, auto-dismiss ms (default: 5000, 0 = persistent)
-- `dismissable` - boolean, show X button
+- `dismissible` - boolean, show X button (`dismissable` is a deprecated alias)
 - `open` - boolean, visibility
 
 **cf-toast Slots**: Default (message), `action`, `icon`
@@ -943,13 +945,14 @@ label):
 **Events**:
 
 - `cf-toast-dismiss` - detail: `{ reason: "timeout" | "user" }`
+- `cf-dismiss` - the same, under the name other dismissible components use
 - `cf-toast-action` - detail: `{}`
 
 **Example**:
 
 ```html
 <cf-toast-provider position="bottom">
-  <cf-toast open variant="success" duration="4000">
+  <cf-toast open status="success" duration="4000">
     Changes saved.
     <button slot="action">View</button>
   </cf-toast>

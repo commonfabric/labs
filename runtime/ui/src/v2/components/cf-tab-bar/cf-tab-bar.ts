@@ -21,7 +21,9 @@ import type { CFTabBarItem } from "./cf-tab-bar-item.ts";
  * @slot - cf-tab-bar-item elements
  * @slot action - Optional primary action element (e.g. a cf-button). Renders to the right of the navigation pill.
  *
- * @fires cf-change - Fired when selected item changes with detail: { value, oldValue }
+ * @fires cf-change - Fired when the user selects an item, by a click or a key,
+ *   with detail: { value, oldValue }. A change to the bound value made
+ *   elsewhere moves the selection without firing it.
  *
  * @csspart container - The outermost flex row holding the nav pill and action slot side by side.
  * @csspart bar - The nav pill surface containing the navigation items.
@@ -219,18 +221,23 @@ export class CFTabBar extends BaseElement {
   declare variant: "default" | "inset";
   declare _hasAction: boolean;
 
+  /**
+   * The value a user click or a cell delivery last brought, or the bound
+   * value. A click under a plain value has no cell to write, so the bound
+   * value lags it until the page passes the new value back.
+   */
   private _lastKnownValue: string = "";
+
+  /** The bound value as the last update that synced the selection found it. */
+  private _boundValue: string = "";
 
   private _cellController = createStringCellController(this, {
     timing: { strategy: "immediate" },
-    onChange: (newValue: string, oldValue: string) => {
+    onChange: (newValue: string) => {
       this._lastKnownValue = newValue;
       this.updateItemSelection();
-      this.emit("cf-change", { value: newValue, oldValue });
     },
   });
-
-  private _pendingRetry: number | null = null;
 
   constructor() {
     super();
@@ -266,18 +273,6 @@ export class CFTabBar extends BaseElement {
     this.removeEventListener("keydown", this._handleKeydown);
   }
 
-  override firstUpdated() {
-    this._cellController.bind(this.value, stringSchema);
-
-    const slot = this.shadowRoot?.querySelector("slot");
-    if (slot) {
-      slot.addEventListener("slotchange", this._handleSlotChange);
-    }
-
-    this._lastKnownValue = this._cellController.getValue();
-    this.updateItemSelection();
-  }
-
   override willUpdate(
     changedProperties: Map<string | number | symbol, unknown>,
   ) {
@@ -293,9 +288,13 @@ export class CFTabBar extends BaseElement {
   ) {
     super.updated(changedProperties);
 
-    const currentValue = this._cellController.getValue();
-    if (currentValue !== this._lastKnownValue) {
-      this._lastKnownValue = currentValue;
+    const boundValue = this._cellController.getValue();
+    // A new `value` from the page always re-syncs. Any other update re-syncs
+    // only when the bound value itself moved, so a click the page has not
+    // passed back yet stands.
+    if (changedProperties.has("value") || boundValue !== this._boundValue) {
+      this._boundValue = boundValue;
+      this._lastKnownValue = boundValue;
       this.updateItemSelection();
     }
   }
@@ -304,7 +303,7 @@ export class CFTabBar extends BaseElement {
     return html`
       <div class="container" part="container">
         <div class="bar" part="bar">
-          <slot></slot>
+          <slot @slotchange="${this._handleSlotChange}"></slot>
         </div>
         <div class="action ${this._hasAction ? "" : "empty"}" part="action">
           <slot name="action" @slotchange="${this
@@ -323,27 +322,11 @@ export class CFTabBar extends BaseElement {
     return this.querySelectorAll("cf-tab-bar-item");
   }
 
+  /** Selects the item whose value is the last known one, and no other. */
   updateItemSelection(): void {
-    const items = this._getItems();
-    const currentValue = this._cellController.getValue();
-
-    // Defer selection until next frame if items exist but values aren't set yet
-    if (
-      items.length > 0 && (items[0] as CFTabBarItem).value === undefined
-    ) {
-      if (this._pendingRetry !== null) {
-        cancelAnimationFrame(this._pendingRetry);
-      }
-      this._pendingRetry = requestAnimationFrame(() => {
-        this._pendingRetry = null;
-        this.updateItemSelection();
-      });
-      return;
-    }
-
-    items.forEach((item) => {
+    this._getItems().forEach((item) => {
       const tabBarItem = item as CFTabBarItem;
-      tabBarItem.selected = tabBarItem.value === currentValue;
+      tabBarItem.selected = tabBarItem.value === this._lastKnownValue;
     });
   }
 
@@ -354,12 +337,11 @@ export class CFTabBar extends BaseElement {
   private _handleItemClick = (
     event: CustomEvent<{ item: CFTabBarItem }>,
   ): void => {
-    const item = event.detail.item;
-    if (item && item.value && !item.disabled) {
-      const currentValue = this._cellController.getValue();
-      if (currentValue !== item.value) {
-        this._cellController.setValue(item.value);
-      }
+    const item = event.detail?.item;
+    const oldValue = this._lastKnownValue;
+    if (item?.value && !item.disabled && item.value !== oldValue) {
+      this._cellController.setValue(item.value);
+      this.emit("cf-change", { value: item.value, oldValue });
     }
   };
 
@@ -401,15 +383,8 @@ export class CFTabBar extends BaseElement {
     }
 
     const nextItem = enabledItems[nextIndex];
-    if (nextItem) {
-      nextItem.focus();
-      const button = nextItem.button;
-      if (button) {
-        button.click();
-      } else {
-        nextItem.click();
-      }
-    }
+    nextItem.focus();
+    nextItem.button?.click();
   };
 
   /**

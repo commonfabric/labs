@@ -21,6 +21,10 @@
  *   unanswered, as a worker that has not taken it yet does
  * - `refuseReads(cell)` — answer every read the handle's network is asked
  *   for with a refusal
+ * - `failResolutions(cell)` — fail every resolution (`resolveAsCell()`) the
+ *   handle's network is asked for
+ * - `countSubscriptions(cell)` — count the subscriptions a handle holds and
+ *   the reads it is asked for
  */
 
 import {
@@ -56,6 +60,9 @@ class MockCellNetwork {
   /** Root handles keyed by "id:space" */
   #roots = new Map<string, CellHandle>();
 
+  /** The handles subscribed through this network. */
+  readonly subscribers = new Set<CellHandle>();
+
   /** Every write request sent through this network, in order. */
   readonly writes: { type: string; cell?: CellRef; value?: unknown }[] = [];
 
@@ -64,6 +71,9 @@ class MockCellNetwork {
    * not at all, or with a refusal.
    */
   reads: "nothing" | "held" | { refused: CellReadRefusal } = "nothing";
+
+  /** What each `cell:resolveAsCell` fails with, where it fails. */
+  resolutionFailure: Error | undefined;
 
   /** Whether each `cell:set` is left unanswered until it is let through. */
   writesHeld = false;
@@ -131,12 +141,10 @@ class MockCellNetwork {
     // whose read is refused, or that has read nothing, holds nothing to
     // reconstruct it from.
     const rootRead = root.lastRead();
-    if (!("value" in rootRead)) return;
-    const rootValue = rootRead.value;
-    if (!isObjectOrArray(rootValue)) return;
+    if (!("value" in rootRead) || !isObjectOrArray(rootRead.value)) return;
 
     const updated = deepSet(
-      rootValue as Record<string, unknown>,
+      rootRead.value as Record<string, unknown>,
       cellRef.path as string[],
       value,
     );
@@ -144,13 +152,15 @@ class MockCellNetwork {
   }
 }
 
-/** Immutable deep-set: returns a new object with path set to value. */
+/**
+ * Immutable deep-set: returns a new object with `path`, which is not empty,
+ * set to `value`.
+ */
 function deepSet(
   obj: Record<string, unknown>,
   path: string[],
   value: unknown,
 ): Record<string, unknown> {
-  if (path.length === 0) return value as Record<string, unknown>;
   const [head, ...rest] = path;
   const child = obj[head];
   const nested = rest.length === 0 ? value : deepSet(
@@ -176,8 +186,8 @@ function deepSet(
  *   answers CellResolveAsCell by following a stored `$link` at the asked
  *   path (echoing the asking ref when there is none to follow — already
  *   canonical), and resolves everything else with `{}`.
- * - `subscribe()` / `unsubscribe()` are no-ops.
- * - Includes EventEmitter stubs (`on`, `off`, `emit`) to satisfy the type.
+ * - `subscribe()` / `unsubscribe()` keep the network's subscribers, which
+ *   `pushUpdate()` and `pushRefusal()` reach.
  */
 function createMockConnection(
   network: MockCellNetwork,
@@ -200,6 +210,9 @@ function createMockConnection(
       if (data.type === "cell:set" && data.cell && data.value !== undefined) {
         network.handleCellSet(data.cell, data.value);
       }
+      if (data.type === "cell:resolveAsCell" && network.resolutionFailure) {
+        return Promise.reject(network.resolutionFailure);
+      }
       if (data.type === "cell:resolveAsCell" && data.cell) {
         return Promise.resolve({ cell: network.resolveRef(data.cell) } as any);
       }
@@ -214,15 +227,15 @@ function createMockConnection(
       }
       return Promise.resolve({} as any);
     },
-    subscribe: () => Promise.resolve(),
-    unsubscribe: () => Promise.resolve(),
+    subscribe: (handle: CellHandle) => {
+      network.subscribers.add(handle);
+      return Promise.resolve();
+    },
+    unsubscribe: (handle: CellHandle) => {
+      network.subscribers.delete(handle);
+      return Promise.resolve();
+    },
     peersOf: () => [],
-    on: () => ({}) as any,
-    off: () => ({}) as any,
-    once: () => ({}) as any,
-    emit: () => false,
-    removeAllListeners: () => ({}) as any,
-    listenerCount: () => 0,
   } as unknown as InitializedRuntimeConnection;
 }
 
@@ -285,11 +298,7 @@ const networks = new WeakMap<object, MockCellNetwork>();
 export function writesSent<T>(
   handle: CellHandle<T>,
 ): readonly { type: string; cell?: CellRef; value?: unknown }[] {
-  const network = networks.get(handle);
-  if (network === undefined) {
-    throw new Error("writesSent() takes a handle createMockCellHandle() made");
-  }
-  return network.writes;
+  return networkOf(handle, "writesSent").writes;
 }
 
 /**
@@ -340,6 +349,44 @@ export function refuseReads<T>(
   networkOf(handle, "refuseReads").reads = { refused: refusal };
 }
 
+/**
+ * Fails every resolution (`cell:resolveAsCell`) the network `handle` was made
+ * on is asked for with `error`, as a worker that cannot resolve the cell does.
+ */
+export function failResolutions<T>(
+  handle: CellHandle<T>,
+  error: Error = new Error("the cell cannot be resolved"),
+): void {
+  networkOf(handle, "failResolutions").resolutionFailure = error;
+}
+
+/**
+ * Counts what is asked of `handle` from now on: each `subscribe()` adds one
+ * to `live`, and each cancel it returned takes one away, so `live` is the
+ * number of subscriptions held; each `pull()` adds one to `reads`. It works
+ * on any handle, made by the mock or not.
+ */
+export function countSubscriptions<T>(
+  handle: CellHandle<T>,
+): { live: number; reads: number } {
+  const subscribe = handle.subscribe.bind(handle);
+  const pull = handle.pull.bind(handle);
+  const count = { live: 0, reads: 0 };
+  handle.subscribe = (callback, options) => {
+    count.live++;
+    const cancel = subscribe(callback, options);
+    return () => {
+      count.live--;
+      cancel();
+    };
+  };
+  handle.pull = (options) => {
+    count.reads++;
+    return pull(options);
+  };
+  return count;
+}
+
 /** The network `handle` was made on, for `caller`. */
 function networkOf<T>(handle: CellHandle<T>, caller: string): MockCellNetwork {
   const network = networks.get(handle);
@@ -350,21 +397,40 @@ function networkOf<T>(handle: CellHandle<T>, caller: string): MockCellNetwork {
 }
 
 /**
+ * The handles other than `handle` subscribed on its network to the cell and
+ * path it names, whatever their schema: those the worker tells as well of
+ * what happens to that cell.
+ */
+function othersSubscribed<T>(handle: CellHandle<T>): CellHandle[] {
+  const ref = handle.ref();
+  return [...networks.get(handle)?.subscribers ?? []].filter((other) => {
+    const theirs = other.ref();
+    return other !== handle && theirs.id === ref.id &&
+      theirs.space === ref.space && theirs.scope === ref.scope &&
+      theirs.path.length === ref.path.length &&
+      theirs.path.every((segment, i) => segment === ref.path[i]);
+  });
+}
+
+/**
  * Simulate the worker refusing `handle`'s read, the path a refused
- * subscription update takes.
+ * subscription update takes. Every handle subscribed to the same cell hears
+ * of it.
  */
 export function pushRefusal<T>(
   handle: CellHandle<T>,
   refusal: CellReadRefusal = { refusedBy: "display-ceiling" },
 ): void {
   handle[$onCellRefused](refusal);
+  for (const other of othersSubscribed(handle)) other[$onCellRefused](refusal);
 }
 
 /**
  * Simulate a backend-pushed value update on a CellHandle.
  *
  * This calls `$onCellUpdate` directly, which is the same code path the real
- * RuntimeConnection uses when the runtime pushes a cell update. Use this to
+ * RuntimeConnection uses when the runtime pushes a cell update, on `handle`
+ * and on every other handle subscribed to the same cell. Use this to
  * test how components react to external value changes (as opposed to local
  * writes via `.set()`).
  *
@@ -378,4 +444,5 @@ export function pushRefusal<T>(
  */
 export function pushUpdate<T>(handle: CellHandle<T>, value: T): void {
   handle[$onCellUpdate](value);
+  for (const other of othersSubscribed(handle)) other[$onCellUpdate](value);
 }

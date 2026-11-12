@@ -148,7 +148,8 @@ export class CFThemeProvider extends BaseElement {
   @property({ attribute: false })
   accessor _guestPresentation: IframePresentation | null = null;
 
-  #unsubs: Array<() => void> = [];
+  /** The theme whose cells are followed, while connected. */
+  #followed: { theme: unknown; cancel: Array<() => void> } | undefined;
 
   /** The enclosing `cf-theme`'s theme, or `undefined` for an outermost one. */
   #enclosing: CFTheme | undefined;
@@ -175,6 +176,7 @@ export class CFThemeProvider extends BaseElement {
     // Reconnected elsewhere, it is outermost unless a provider answers again.
     this.#enclosing = undefined;
     super.connectedCallback();
+    this.#follow();
     if (this.hasUpdated) this._recomputeAndApply();
     // Re-resolve when user toggles theme preference (data-theme attribute)
     document.addEventListener(
@@ -183,14 +185,10 @@ export class CFThemeProvider extends BaseElement {
     );
   }
 
-  override firstUpdated(changed: Map<string | number | symbol, unknown>) {
-    super.firstUpdated(changed);
-    this._recomputeAndApply();
-  }
-
   override updated(changed: Map<string | number | symbol, unknown>) {
     super.updated(changed);
     if (changed.has("theme")) {
+      this.#follow();
       this._recomputeAndApply();
     }
   }
@@ -209,10 +207,9 @@ export class CFThemeProvider extends BaseElement {
     applyThemeToElement(this, computed, around);
     this._computedTheme = computed;
     this.#provideGuestPresentation();
-    this.#setupSubscriptions();
 
-    // Manage the matchMedia listener based on the resolved colorScheme
-    if (this._computedTheme.colorScheme === "auto") {
+    // Follow the system scheme for an `auto` theme while connected.
+    if (this.isConnected && this._computedTheme.colorScheme === "auto") {
       if (
         !this._mediaQuery && typeof globalThis !== "undefined" &&
         globalThis.matchMedia
@@ -241,21 +238,24 @@ export class CFThemeProvider extends BaseElement {
     this._guestPresentation = next;
   }
 
-  #setupSubscriptions() {
-    // Clear previous subscriptions
-    for (const off of this.#unsubs) off();
-    this.#unsubs = [];
-
-    this.#unsubs = subscribeToThemeCellValues(
-      this.theme,
-      () => this._recomputeAndApply(),
-    );
+  /**
+   * Subscribes to the cells `theme` holds while the element is connected, and
+   * to nothing otherwise, cancelling the subscriptions it held before.
+   */
+  #follow(): void {
+    const theme: unknown = this.isConnected ? this.theme : undefined;
+    if (theme === this.#followed?.theme) return;
+    for (const cancel of this.#followed?.cancel ?? []) cancel();
+    const update = () => this._recomputeAndApply();
+    this.#followed = theme === undefined ? undefined : {
+      theme,
+      cancel: subscribeToThemeCellValues(theme, update),
+    };
   }
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
-    for (const off of this.#unsubs) off();
-    this.#unsubs = [];
+    this.#follow();
     if (this._mediaQuery) {
       this._mediaQuery.removeEventListener("change", this._onMediaChange);
       this._mediaQuery = undefined;

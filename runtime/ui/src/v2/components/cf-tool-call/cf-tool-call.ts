@@ -8,21 +8,19 @@ import { property } from "lit/decorators.js";
 import { BaseElement } from "../../core/base-element.ts";
 import { applyThemeToElement, type CFTheme } from "../theme-context.ts";
 
-export type ToolCallState = "pending" | "success" | "error";
-
 /**
  * CFToolCall - Expandable tool call display component
  *
  * @element cf-tool-call
  *
- * @attr {object} toolCall - The tool call data (BuiltInLLMToolCallPart)
- * @attr {object} toolResult - The tool result data (BuiltInLLMToolResultPart, optional)
+ * @prop {BuiltInLLMToolCallPart} call - The tool call
+ * @prop {BuiltInLLMToolResultPart} result - The tool's result, once it has one
  * @attr {boolean} expanded - Whether the tool call details are expanded
  *
  * @example
  * <cf-tool-call
- *   .toolCall=${toolCall}
- *   .toolResult=${toolResult}
+ *   .call=${toolCall}
+ *   .result=${toolResult}
  *   expanded
  * ></cf-tool-call>
  */
@@ -185,22 +183,6 @@ export class CFToolCall extends BaseElement {
       .status-success {
         color: var(--cf-theme-color-success, var(--cf-colors-green-600, #16a34a));
       }
-
-      .status-error {
-        color: var(--cf-theme-color-error, var(--cf-colors-red-600, #dc2626));
-      }
-
-      .error-content {
-        color: var(--cf-theme-color-error, var(--cf-colors-red-700, #b91c1c));
-        background-color: var(
-          --cf-theme-color-error-surface,
-          var(--cf-colors-red-50, #fef2f2)
-        );
-        border-color: var(
-          --cf-theme-color-error-light,
-          var(--cf-colors-red-200, #fecaca)
-        );
-      }
     `,
   ];
 
@@ -220,11 +202,6 @@ export class CFToolCall extends BaseElement {
   @property({ attribute: false })
   accessor theme: CFTheme | undefined = undefined;
 
-  constructor() {
-    super();
-    this.expanded = false;
-  }
-
   override updated(
     changedProperties: Map<string | number | symbol, unknown>,
   ) {
@@ -234,61 +211,23 @@ export class CFToolCall extends BaseElement {
     }
   }
 
-  private get _state(): ToolCallState {
-    if (this.result) {
-      return "success";
-    }
-    return "pending";
-  }
-
-  private get _statusIcon(): string {
-    switch (this._state) {
-      case "pending":
-        return "🔧";
-      case "success":
-        return "✅";
-      case "error":
-        return "❌";
-      default:
-        return "🔧";
-    }
-  }
-
-  private get _statusText(): string {
-    switch (this._state) {
-      case "pending":
-        return "Running";
-      case "success":
-        return "Complete";
-      case "error":
-        return "Error";
-      default:
-        return "Pending";
-    }
-  }
-
   private _toggleExpanded() {
     this.expanded = !this.expanded;
   }
 
   private _formatOutput(output: BuiltInLLMToolResultPart["output"]): string {
-    if (output.type === "text") {
-      return output.value;
-    } else {
-      try {
-        return JSON.stringify(output.value, null, 2);
-      } catch {
-        return String(output.value);
-      }
-    }
+    return output.type === "text"
+      ? output.value
+      : this._formatJSON(output.value);
   }
 
-  private _formatJSON(data: any): string {
-    try {
-      return JSON.stringify(data, null, 2);
-    } catch {
-      return String(data);
-    }
+  /** Indented JSON of `data`, writing a `bigint` as a string such as "2n". */
+  private _formatJSON(data: unknown): string {
+    return JSON.stringify(
+      data,
+      (_key, value) => typeof value === "bigint" ? `${value}n` : value,
+      2,
+    );
   }
 
   private _renderContent() {
@@ -307,14 +246,10 @@ export class CFToolCall extends BaseElement {
         ${this.result
           ? html`
             <div class="tool-section">
-              <div class="tool-section-title">
-                ${this._state === "error" ? "Error" : "Output"}
-              </div>
-              <pre
-                class="tool-section-content ${this._state === "error"
-                  ? "error-content"
-                  : ""}"
-              >${this._formatJSON(this.result.output)}</pre>
+              <div class="tool-section-title">Output</div>
+              <pre class="tool-section-content">${this._formatOutput(
+                this.result.output,
+              )}</pre>
             </div>
           `
           : null}
@@ -323,15 +258,15 @@ export class CFToolCall extends BaseElement {
   }
 
   override render() {
-    const statusClass = `status-${this._state}`;
+    const done = Boolean(this.result);
 
     return html`
       <div class="tool-call-container">
         <button class="tool-call-header" @click="${this._toggleExpanded}">
-          <span class="tool-call-icon">${this._statusIcon}</span>
+          <span class="tool-call-icon">${done ? "✅" : "🔧"}</span>
           <span class="tool-call-name">${this.call?.toolName}</span>
-          <span class="tool-call-status ${statusClass}">
-            ${this._statusText}
+          <span class="tool-call-status status-${done ? "success" : "pending"}">
+            ${done ? "Complete" : "Running"}
           </span>
           <svg
             class="chevron ${this.expanded ? "expanded" : ""}"

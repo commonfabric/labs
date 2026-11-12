@@ -179,10 +179,6 @@ export class CFForm extends BaseElement {
     event.preventDefault();
     event.stopPropagation();
 
-    if (!this._form) {
-      return;
-    }
-
     // 1. Validate all registered fields
     const errors: Array<{ element: HTMLElement; message?: string }> = [];
     for (const [element, field] of this._fields) {
@@ -218,19 +214,12 @@ export class CFForm extends BaseElement {
 
     // 3. Emit submit event - handlers read from cells directly
     // (Pattern handlers run in the runtime context where cells are updated)
-    const submitted = this.emit("cf-submit");
+    const submitted = this.emit("cf-submit", undefined, { cancelable: true });
 
     // 4. If event wasn't prevented, submit the form natively
     if (submitted && this.action) {
-      this._form.submit();
+      this._form?.submit();
     }
-  }
-
-  /**
-   * Get the form element
-   */
-  get form(): HTMLFormElement | null {
-    return this._form;
   }
 
   /**
@@ -258,31 +247,5 @@ export class CFForm extends BaseElement {
     if (this._form) {
       this._form.reset();
     }
-  }
-
-  /**
-   * Check form validity
-   */
-  checkValidity(): boolean {
-    return this._form?.checkValidity() ?? false;
-  }
-
-  /**
-   * Report form validity
-   */
-  reportValidity(): boolean {
-    return this._form?.reportValidity() ?? false;
-  }
-
-  /**
-   * Check if any field in the form has unsaved changes
-   */
-  isDirty(): boolean {
-    for (const field of this._fields.values()) {
-      if (field.isDirty()) {
-        return true;
-      }
-    }
-    return false;
   }
 }
