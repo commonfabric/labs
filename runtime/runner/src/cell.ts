@@ -707,15 +707,13 @@ const mintedRuntimeInjectedKeys = new WeakSet<readonly string[]>();
 /** How a sent event's delivery failed: its append was refused, or its
  * served handling ended without committing (events.md §5) — the handler
  * threw (`errored`), admission refused it (`refused`), it was dropped, or it
- * needs attention — or its outcome is `withheld`, which a handling that read
- * data its stream's space doesn't admit reports whether it committed or not. */
+ * needs attention. */
 export type EventDeliveryFailure =
   | "append-refused"
   | "errored"
   | "refused"
   | "dropped"
-  | "needs-attention"
-  | "withheld";
+  | "needs-attention";
 
 /** The error a sender's commit callback reads from `tx.status()` when the
  * durable-ack coupling reports a failed delivery: `kind` says which failure
@@ -793,6 +791,31 @@ const doneStatusTxView = (
     },
   }) as IExtendedStorageTransaction;
 };
+
+/** The done-status views {@link withheldStatusTxView} made. */
+const withheldDeliveries = new WeakSet<IExtendedStorageTransaction>();
+
+/**
+ * A done-status view of `tx` for a delivery whose handling read data its
+ * stream's space doesn't admit, so that its outcome is withheld (events.md
+ * §5): the handling may have committed or not, and the view says neither.
+ */
+const withheldStatusTxView = (
+  tx: IExtendedStorageTransaction,
+): IExtendedStorageTransaction => {
+  const view = doneStatusTxView(tx);
+  withheldDeliveries.add(view);
+  return view;
+};
+
+/**
+ * Whether `tx`, the transaction a sender's commit callback reads, reports a
+ * delivery whose outcome is withheld: its handling read data its stream's
+ * space doesn't admit, so whether it committed is not told (events.md §5).
+ * Such a transaction reports `done`.
+ */
+export const isWithheldDelivery = (tx: IExtendedStorageTransaction): boolean =>
+  withheldDeliveries.has(tx);
 
 /**
  * Whether `tx` is a speculative echo that withdrew: its run named an
@@ -2690,8 +2713,7 @@ export class CellImpl<T extends FabricValue>
                   consequence.kind === "errored" ||
                   consequence.kind === "dropped" ||
                   consequence.kind === "refused" ||
-                  consequence.kind === "needs-attention" ||
-                  consequence.kind === "withheld"
+                  consequence.kind === "needs-attention"
                 ) {
                   callerOnCommit(errorStatusTxView(
                     echoTx,
@@ -2700,6 +2722,15 @@ export class CellImpl<T extends FabricValue>
                       consequence.reason ?? consequence.kind,
                     ),
                   ));
+                  return;
+                }
+                // A handling whose outcome is withheld may have committed or
+                // not, so it is reported neither as done nor as a failure: a
+                // done-status view the sender can tell apart
+                // (`isWithheldDelivery()`), so that nothing retries or
+                // reports an error for a delivery that may have landed.
+                if (consequence.kind === "withheld") {
+                  callerOnCommit(withheldStatusTxView(echoTx));
                   return;
                 }
                 // Only a consequence the overlay observed is the served

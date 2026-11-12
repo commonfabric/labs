@@ -151,6 +151,7 @@ export {
   isCell,
   isReadableCell,
   isStream,
+  isWithheldDelivery,
   pullProjected,
   readProjected,
   resolveWriteTarget,

@@ -47,7 +47,12 @@ import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { Runtime } from "../src/runtime.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
 import type { ReconcileOutcome } from "../src/source-reconciler.ts";
-import { type Cell, EventDeliveryError, sendEvent } from "../src/cell.ts";
+import {
+  type Cell,
+  EventDeliveryError,
+  isWithheldDelivery,
+  sendEvent,
+} from "../src/cell.ts";
 import { handlingCommittedBy } from "../src/handling-commit.ts";
 import type {
   IExtendedStorageTransaction,
@@ -2476,7 +2481,7 @@ describe("Phase 3 events-down (serving side)", () => {
     }
   });
 
-  it("records the same withheld outcome for a served handling that read another space's label, whether it committed or was refused, and tells its sender so", async () => {
+  it("records the same withheld outcome for a served handling that read another space's label, whether it committed or was refused, and tells its sender it is withheld", async () => {
     // A probe on the pattern's stream reads a document of another space whose
     // label this space doesn't admit. For `commits` it writes nothing more;
     // for `refuses` it also copies the value into this space, which the
@@ -2646,16 +2651,21 @@ describe("Phase 3 events-down (serving side)", () => {
       expect(outcomeOf("refuses")).toEqual(withheld);
       expect(outcomeOf("plain")).toEqual({ ...withheld, withheld: undefined });
 
+      // Each sender is told the same: done, with the outcome withheld,
+      // whether the handling committed or not.
       for (const kind of ["commits", "refuses"] as const) {
         await fired[kind].reached(1);
-        const status = fired[kind].entries[0].tx.status();
-        const error = status.status === "error" ? status.error : undefined;
-        expect(error).toBeInstanceOf(EventDeliveryError);
-        if (!(error instanceof EventDeliveryError)) return;
-        expect(error.kind).toBe("withheld");
+        const { status, tx } = fired[kind].entries[0];
+        expect([kind, status, isWithheldDelivery(tx)]).toEqual([
+          kind,
+          "done",
+          true,
+        ]);
       }
       await fired.plain.reached(1);
-      expect(fired.plain.entries[0].status).not.toBe("error");
+      const plain = fired.plain.entries[0];
+      expect(plain.status).not.toBe("error");
+      expect(isWithheldDelivery(plain.tx)).toBe(false);
     } finally {
       cancelProbe();
       cancelDemand();
