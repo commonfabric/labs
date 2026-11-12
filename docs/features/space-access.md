@@ -8,7 +8,8 @@ a room it lists is one they belong to. The implementation is
 `runtime/runner/src/builder/space-access.ts`, which also holds
 `spaceMembers(target)`, the principals that space's access list names,
 described [below](#a-spaces-members), and `spaceOf(target)`, the DID of that
-same space, described [below](#the-spaces-own-did), and `spaceDeleted(target)`,
+same space, described [below](#the-spaces-own-did), with `spaceOfLink(target)`
+beside it, and `spaceDeleted(target)`,
 whether that space is deleted, described [below](#a-deleted-space).
 
 The answer is advisory. A memory server in `enforce` mode, which is toolshed's
@@ -415,6 +416,18 @@ new space's DID only once the record has arrived. See
 The DID carries no label. A space's DID is an address rather than a principal,
 and a stored reference to a cell in another space already records that space's
 DID, so it is in data anyone holding the reference can read.
+
+`spaceOfLink(target)` returns the DID that `target`'s own link records, without
+following it, so nothing in that space is read: where `spaceOf(target)`
+resolves the links `target` leads through, reading the document each one
+names, this reads the link alone. A pattern holding many cells by link, as a
+list of entries holding handles to rooms (`Cell<unknown>`) does, names each
+one's space this way at no cost in the spaces they name. The two agree for a
+link that names the document holding the value, which is how a handler that
+resolved a cell before storing it holds it; for a link to a document that
+links on, `spaceOfLink(target)` names the space of that first document. It can
+be called where `spaceOf(target)` can, and returns `undefined` in the same two
+cases its first two rows give.
 
 ## In a pattern test
 

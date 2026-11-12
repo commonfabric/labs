@@ -3805,6 +3805,84 @@ describe("SchemaObjectTraverser unknown type handling", () => {
     expect(obj?.data).toBeUndefined();
   });
 
+  describe("a link at a property typed unknown", () => {
+    /**
+     * Traverses a container in `did:test:home` whose `room` property, typed
+     * `roomType` with no `asCell`, links a document in `targetSpace`, and
+     * returns whether the traversal read that document.
+     */
+    const readsTarget = (
+      targetSpace: string,
+      roomType: JSONSchema = { type: "unknown" },
+    ): boolean => {
+      const store = new Map<string, Revision<State>>();
+      const type = "application/json" as const;
+      const targetUri = "of:doc-unknown-link-target" as URI;
+      const containerUri = "of:doc-unknown-link-container" as URI;
+      store.set(`${targetUri}/${type}`, {
+        the: type,
+        of: targetUri as Entity,
+        is: { value: { title: "not read" } },
+        since: 1,
+      });
+      const containerValue = {
+        room: {
+          "/": {
+            [LINK_V1_TAG]: { id: targetUri, space: targetSpace, path: [] },
+          },
+        },
+      };
+      store.set(`${containerUri}/${type}`, {
+        the: type,
+        of: containerUri as Entity,
+        is: { value: containerValue },
+        since: 2,
+      });
+      const schema = {
+        type: "object",
+        properties: { room: roomType },
+      } as JSONSchema;
+      const manager = new StoreObjectManager(store);
+      const tx = new ExtendedStorageTransaction(
+        new ManagedStorageTransaction(manager),
+      );
+      const traverser = new SchemaObjectTraverser(
+        tx,
+        { path: ["value"], schema },
+        createDefaultTraversalContext(TEST_SCOPE_IDENTITY),
+      );
+      const { error } = traverser.traverse({
+        address: {
+          space: "did:test:home",
+          id: containerUri,
+          type,
+          path: ["value"],
+        },
+        value: containerValue,
+      });
+      expect(error).toBeUndefined();
+      return [...manager.getReadDocs()].some((att) =>
+        att.address.id === targetUri
+      );
+    };
+
+    it("does not read the target of a link into another space", () => {
+      expect(readsTarget("did:test:elsewhere")).toBe(false);
+    });
+
+    it("reads the target of a link within the same space", () => {
+      expect(readsTarget("did:test:home")).toBe(true);
+    });
+
+    it("reads the target of a link into another space at a union naming unknown", () => {
+      expect(
+        readsTarget("did:test:elsewhere", {
+          type: ["unknown", "string", "number", "boolean", "null"],
+        } as JSONSchema),
+      ).toBe(true);
+    });
+  });
+
   it("does not resolve linked properties when property schema is type: unknown", () => {
     // Chain: outer => inner => redir => first -> second -> data
     //

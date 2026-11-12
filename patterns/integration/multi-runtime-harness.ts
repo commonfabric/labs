@@ -312,7 +312,7 @@ export function claimPatternEnvironment(apiUrl: URL): () => void {
  * and holds it, and every harness in a run wants the same answers.
  */
 let patternsRoute: PatternsRoute | undefined;
-function systemPatternsRoute(): PatternsRoute {
+export function systemPatternsRoute(): PatternsRoute {
   return patternsRoute ??= new PatternsRoute(
     fromFileUrl(new URL("..", import.meta.url)),
   );

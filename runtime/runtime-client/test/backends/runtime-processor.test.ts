@@ -4275,7 +4275,7 @@ describe("runtime-processor", () => {
     });
 
     /**
-     * Stands in for the four steps of the housekeeping, recording each
+     * Stands in for the five steps of the housekeeping, recording each
      * call, so that a case can say none was started even of a step that
      * fails at once.
      */
@@ -4300,6 +4300,11 @@ describe("runtime-processor", () => {
           PiecesController.prototype,
           "startShareIntake",
           () => Promise.resolve(undefined),
+        ),
+        stub(
+          PiecesController.prototype,
+          "adoptCatalogRooms",
+          () => Promise.resolve(),
         ),
       ];
       return {
@@ -5113,7 +5118,7 @@ describe("runtime-processor", () => {
         });
 
         expect(root.piece).toBeDefined();
-        expect(housekeeping.starts()).toEqual([0, 0, 0, 0]);
+        expect(housekeeping.starts()).toEqual([0, 0, 0, 0, 0]);
       });
 
       it("starts no housekeeping when the root started is another space's", async () => {
@@ -5127,7 +5132,7 @@ describe("runtime-processor", () => {
         });
 
         expect(root.piece).toBeDefined();
-        expect(housekeeping.starts()).toEqual([0, 0, 0, 0]);
+        expect(housekeeping.starts()).toEqual([0, 0, 0, 0, 0]);
       });
     });
 
@@ -5163,7 +5168,7 @@ describe("runtime-processor", () => {
 
         expect(response).toStrictEqual({});
         expect(worker.rootEnsures()).toBe(0);
-        expect(housekeeping.starts()).toEqual([0, 0, 0, 0]);
+        expect(housekeeping.starts()).toEqual([0, 0, 0, 0, 0]);
       });
 
       it("treats a root that records no pattern yet as no Home", async () => {
@@ -5191,7 +5196,7 @@ describe("runtime-processor", () => {
         expect(root.getRaw()).toEqual({ name: "Home" });
         expect(response).toStrictEqual({});
         expect(worker.rootEnsures()).toBe(0);
-        expect(housekeeping.starts()).toEqual([0, 0, 0, 0]);
+        expect(housekeeping.starts()).toEqual([0, 0, 0, 0, 0]);
       });
 
       it("creates Home where it has no root when not asked for an existing Home only", async () => {
@@ -5270,7 +5275,7 @@ describe("runtime-processor", () => {
         });
         expect(MemoryV2Client.isFirstHandshakeFailure(failure)).toBe(true);
         expect(ensure.calls.length).toBe(0);
-        expect(housekeeping.starts()).toEqual([0, 0, 0, 0]);
+        expect(housekeeping.starts()).toEqual([0, 0, 0, 0, 0]);
       });
 
       it("rejects an existing-only bring-up with the first handshake's failure, rather than returning no Home", async () => {
@@ -5284,7 +5289,7 @@ describe("runtime-processor", () => {
           message: expect.stringContaining("failed its first handshake"),
         });
         expect(MemoryV2Client.isFirstHandshakeFailure(failure)).toBe(true);
-        expect(housekeeping.starts()).toEqual([0, 0, 0, 0]);
+        expect(housekeeping.starts()).toEqual([0, 0, 0, 0, 0]);
       });
     });
 
@@ -5328,7 +5333,7 @@ describe("runtime-processor", () => {
         expect(response).toStrictEqual({});
         expect(join.calls.length).toBe(0);
         expect(worker.rootEnsures()).toBe(0);
-        expect(housekeeping.starts()).toEqual([0, 0, 0, 0]);
+        expect(housekeeping.starts()).toEqual([0, 0, 0, 0, 0]);
       });
     });
   });
@@ -5352,6 +5357,7 @@ describe("runtime-processor", () => {
           ensurePrivateInbox: () => Promise.resolve(),
           repairProfileRoots: () => Promise.resolve(),
           startShareIntake: () => Promise.resolve(undefined),
+          adoptCatalogRooms: () => Promise.resolve(),
         };
         // The space is the identity's Home, which is the identity's own.
         const processor = buildProcessor({
@@ -9130,6 +9136,7 @@ describe("runtime-processor", () => {
           "legacySpacesAdopted",
           "privateInboxEnsured",
           "profileRootsRepaired",
+          "catalogRoomsAdopted",
         ] as const
       ) {
         it(`resolves only once the \`${step}\` step of Home's housekeeping has settled`, async () => {
