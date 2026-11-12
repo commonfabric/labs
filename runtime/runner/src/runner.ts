@@ -15767,7 +15767,11 @@ export class Runner {
             }
             : {}),
         } satisfies RawNodeCause,
-        resultCell,
+        // The parent cell under the pattern's result schema, whatever schema
+        // the caller started the piece with: builtins copy it into the
+        // `result` back-links of the cells they mint, and every runtime
+        // running the piece writes those links.
+        resultCell.asSchema(pattern.resultSchema),
         this.#runtime,
         outputBinding,
         // The resumed-from-synced-state flag is passed out-of-band (a behavioral
