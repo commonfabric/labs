@@ -144,8 +144,7 @@ relitigated.
   to a reactive form. The diagnostic names two corrections: wrap the
   expression in an inline `pattern(...)`, which keeps it reactive, or read
   first, `aCell.get().map(...)`, which processes the values synchronously.
-  *(Pending. Question 38 is what the first correction means in a `lift` or
-  a `computed`.)*
+  *(Pending.)*
 - `any` is refused. Published label typings are identity aliases, and no
   editor plugin is part of the design.
 - `streamData` and `llm` are removed. `wish` is structural.
@@ -157,10 +156,14 @@ relitigated.
 
 - Five kinds: instantiate a pattern, create a cell, request an effectful
   built-in, read context that is not a cell, and bind a handler.
-- A `lift` or a `computed` does not instantiate a pattern and does not
-  request an effect, so it has no indirect route to an effect. A `handler`
-  or an `action` may do both, and so may the body of a pattern a handler
-  instantiates.
+- A `handler` or an `action` may instantiate a pattern and request an
+  effect, and so may the body of a pattern a handler instantiates.
+- A `lift` or a `computed` may instantiate a pattern, and that pattern may
+  request effects. An evaluation that instantiates the same pattern at the
+  same place names the same instance and updates its argument, and an
+  instance an evaluation no longer makes is torn down. An effect in the
+  instance is requested again when its request changes, as for any effect
+  whose input changed. *(Pending.)*
 - A function body may call two kinds of factory value: a pattern factory,
   which it instantiates, and a handler factory, which it binds. Both are
   resolved at run time from their own compiled records. A `lift` result is
@@ -331,19 +334,15 @@ answer goes to the specification with the document.
     are withdrawn, which leaves it visible that the write did not happen,
     as it is today; a child's argument and an effect's request take the
     error state.
-38. **A reactive `map` in a `lift` or a `computed`**
-    (`language-subset.md` §5.2 and §10.3). The correction "wrap it in
-    `pattern(...)`" is an instantiation. A `handler` or an `action` may
-    write it. A `lift` or a `computed` does not instantiate a pattern
-    (decided above; `function-body:instantiation-in-computation`), so the
-    wrap is refused there too. *Assumed:* that rule stands, and in a
-    `lift` or a `computed` the diagnostic says to move the `map` to the
-    pattern body, where a computation that chooses the list passes it on
-    as a reference. The alternative lets a computation instantiate an
-    inline pattern that requests no effect, directly or through what it
-    instantiates, which the compiler can check because it has the body;
-    the instance is then identified by its site, and a re-evaluation
-    names the same instance.
+38. **An instance made in a `lift` or a `computed`.** The ruling allows
+    the instantiation and leaves two things to assume. *Assumed:* the
+    instance is identified by the enclosing instance, the site, and the
+    ordinal of the instantiation among those the evaluation makes at that
+    site, or by an explicit cause where the author writes
+    `.for(cause)`; and a `lift` or a `computed` still does not request an
+    effect directly, so an effect that depends on computed data is
+    written in a pattern, inline or named, that the computation
+    instantiates.
 
 ## Open, and not needing the owner
 
@@ -495,8 +494,10 @@ And from the ruling on what a handler binding copies:
 - §4.4.1, §4.6: the naming rule of §1.3 of the plan document.
 - Open questions 9 and 10.
 - §4.7, §10.2: `cell:collection-method-in-function` names both
-  corrections, the inline `pattern(...)` and `get()` first (ruled; see
-  question 38 for a `lift` or a `computed`).
+  corrections, the inline `pattern(...)` and `get()` first (ruled).
+- §5.1, §5.2, §10.3: a `lift` or a `computed` may instantiate a pattern
+  (ruled); `function-body:instantiation-in-computation` goes, and the
+  hint of `function-body:effect-in-computation` names the pattern.
 - §5.2: a binding made in a function body copies a scalar and a computed
   value and binds a stored container by reference (ruled). The identity of
   a binding takes the address of a container bound by reference, so two
