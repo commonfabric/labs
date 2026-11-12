@@ -152,10 +152,16 @@ export function linkRefFrom<Payload extends FabricPlainObject>(
 function isLegacyLinkEnvelope(
   value: unknown,
 ): value is { "/": { [LINK_V1_TAG]: FabricPlainObject } } {
-  return isObjectOrArray(value) &&
-    Object.keys(value).length === 1 &&
-    isObjectOrArray(value["/"]) &&
-    LINK_V1_TAG in value["/"];
+  // The keys are listed last: most values answer at the `"/"` member, and only
+  // a value holding a tagged payload there pays for the list.
+  if (
+    !isObjectOrArray(value) || !isObjectOrArray(value["/"]) ||
+    !(LINK_V1_TAG in value["/"])
+  ) {
+    return false;
+  }
+  const keys = Object.keys(value);
+  return keys.length === 1 && keys[0] === "/";
 }
 
 /**

@@ -84,6 +84,7 @@ import {
 } from "./immutable-cell.ts";
 import { type LastNode, readMaybeLink } from "./link-resolution.ts";
 import {
+  assertStoredValuePath,
   type IMemorySpaceValueAddress,
   isSigilLink,
   isWriteRedirectLink,
@@ -5339,7 +5340,10 @@ export class SchemaObjectTraverser<V extends FabricValue>
 
     const newValue: Record<string, FabricValue> = {};
     const newLink = link ?? getNormalizedLink(doc.address, plan.schema);
-    for (const propKey of Object.keys(doc.value)) {
+    // `for...in` reads the keys off the object's own enumeration cache, where
+    // `Object.keys()` would copy them into an array per object.
+    for (const propKey in doc.value) {
+      if (!Object.hasOwn(doc.value, propKey)) continue;
       const propValue = doc.value[propKey];
       const childPlan = plan.properties.get(propKey);
       if (childPlan === undefined) {
@@ -6675,17 +6679,35 @@ function getNextCellLink(
   return getNormalizedLink(doc.address, schema);
 }
 
-// helper function - since path starts with value, the new array will too
+/**
+ * Returns `path` followed by `part`, in an array of exactly that length.
+ * Array spread leaves spare capacity in the copy, and a read journal keeps
+ * every path the traversal records until its transaction ends.
+ */
 function appendToPath(path: StoredValuePath, part: string): StoredValuePath {
-  return [...path, part] as StoredValuePath;
+  const result = new Array<string>(path.length + 1);
+  for (let index = 0; index < path.length; index++) {
+    result[index] = path[index];
+  }
+  result[path.length] = part;
+  assertStoredValuePath(result);
+  return result;
 }
 
-// helper function - since path starts with value, the new array will too
+/** Like `appendToPath()`, for several parts. */
 function appendPartsToPath(
   path: StoredValuePath,
-  parts: string[],
+  parts: readonly string[],
 ): StoredValuePath {
-  return [...path, ...parts] as StoredValuePath;
+  const result = new Array<string>(path.length + parts.length);
+  for (let index = 0; index < path.length; index++) {
+    result[index] = path[index];
+  }
+  for (let index = 0; index < parts.length; index++) {
+    result[path.length + index] = parts[index];
+  }
+  assertStoredValuePath(result);
+  return result;
 }
 
 /**
