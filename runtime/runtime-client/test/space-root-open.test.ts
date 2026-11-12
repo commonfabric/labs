@@ -1,5 +1,7 @@
 /**
- * Who gets a space root created by asking for one. Each case drives a real
+ * Who gets a space root created by asking for one, and the code a request
+ * fails with when its space refuses the runtime or is deleted. Each case
+ * drives a real
  * `RuntimeClient` over a `MessageChannel` to a real processor, whose runtime
  * acts as one principal over an in-process memory server enforcing access
  * lists, and reads what that server holds before and after.
@@ -235,6 +237,25 @@ async function rootlessSpace(grants: ACL = { "*": "WRITE" }) {
   };
 }
 
+/** The code the error of a request that has to fail crosses with. */
+async function codeOf(request: Promise<unknown>): Promise<unknown> {
+  const failure = await request.then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  expect(failure).toBeInstanceOf(Error);
+  return (failure as { code?: unknown }).code;
+}
+
+/** Lists the fields of a record in `space`, as `client` reads it. */
+async function fieldsIn(
+  client: RuntimeClient,
+  space: MemorySpace,
+): Promise<unknown> {
+  const cell = await client.getCell(space, "space-root-open record");
+  return await cell.fields();
+}
+
 describe("space-root-open", () => {
   describe("a visitor holding `WRITE`", () => {
     it("reads no root, and writes none, when `start` is `false`", async () => {
@@ -300,16 +321,6 @@ describe("space-root-open", () => {
   });
 
   describe("a deleted space", () => {
-    /** The code the error of a request that has to fail crosses with. */
-    const codeOf = async (request: Promise<unknown>): Promise<unknown> => {
-      const failure = await request.then(
-        () => undefined,
-        (error: unknown) => error,
-      );
-      expect(failure).toBeInstanceOf(Error);
-      return (failure as { code?: unknown }).code;
-    };
-
     /**
      * Each load the shell can make of a view of `space`, none of which
      * resolves, or finds nothing, for a deleted space. `piece` names a piece
@@ -376,6 +387,41 @@ describe("space-root-open", () => {
       await room.deleteSpace();
 
       expect(await room.visitor.listEventAttention(room.space)).toEqual([]);
+    });
+  });
+
+  describe("a space that refuses the runtime", () => {
+    it("fails each read with `SpaceAccessRefused` for a principal it never admitted", async () => {
+      await using room = await rootlessSpace({});
+
+      expect(await codeOf(fieldsIn(room.visitor, room.space)))
+        .toBe(RuntimeErrorCode.SpaceAccessRefused);
+      expect(await codeOf(room.visitor.getSpaceRootPattern(room.space)))
+        .toBe(RuntimeErrorCode.SpaceAccessRefused);
+    });
+
+    it("fails each read with `SpaceAccessRefused` for a principal it stopped admitting", async () => {
+      await using room = await rootlessSpace({ [visitor.did()]: "READ" });
+      expect(await fieldsIn(room.visitor, room.space)).toBeUndefined();
+
+      await room.revokeVisitor();
+
+      expect(await codeOf(fieldsIn(room.visitor, room.space)))
+        .toBe(RuntimeErrorCode.SpaceAccessRefused);
+      expect(await codeOf(room.visitor.getSpaceRootPattern(room.space)))
+        .toBe(RuntimeErrorCode.SpaceAccessRefused);
+    });
+
+    it("fails a read with `SpaceDeleted` instead once the space is deleted", async () => {
+      await using room = await rootlessSpace({});
+      expect(await fieldsIn(room.owner, room.space)).toBeUndefined();
+
+      await room.deleteSpace();
+
+      for (const client of [room.owner, room.visitor]) {
+        expect(await codeOf(fieldsIn(client, room.space)))
+          .toBe(RuntimeErrorCode.SpaceDeleted);
+      }
     });
   });
 

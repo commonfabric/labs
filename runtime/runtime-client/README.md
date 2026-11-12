@@ -253,6 +253,11 @@ worker; its placeholder reads "Retrying…" while any retry of its space is in
 flight. The shell calls it when the person navigates into a space
 `spaceaccesslost` named, and when the page regains focus or becomes visible.
 
+A request that has to read a refused space fails with the code
+`RuntimeErrorCode.SpaceAccessRefused`, and one of a deleted space with
+`RuntimeErrorCode.SpaceDeleted`, so a host that missed the space's
+`spaceaccesslost` learns of the loss from the request it made.
+
 A `spaceaccesslost` for a deleted space carries `deleted: true`. No retry can
 admit anyone to such a space, so its placeholder reads "Deleted" and has no
 Retry button, and the shell does not ask for it again. The worker also sends the
