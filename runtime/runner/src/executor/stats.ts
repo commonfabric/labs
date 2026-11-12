@@ -983,6 +983,15 @@ export const bumpDerivedCommits = (
   bySpace[space] += 1;
 };
 
+/** The counters without the settle blocks, whose series cost about as much
+ * to post as a wave commit. A serving worker posts these ahead of each wave
+ * commit, so a client that has seen the commit reads counts that include
+ * what the wave counted before its commit. */
+export type ServingLoopCounters = Omit<
+  ServingLoopStats,
+  "settle" | "settleAdvances"
+>;
+
 // One provider per process (the ExecutorHost registers itself); the
 // health route reads through this seam so toolshed needs no reference to
 // the host instance.

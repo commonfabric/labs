@@ -120,9 +120,10 @@ export function serveFromPort(
       }),
       createWaveCommitSink: (deps) => plane.createWaveCommitSink(deps),
       // The counters cross on the loop's own edges: every wave cycle, and
-      // each tenure's start and end. The sink also posts the `events` block
-      // ahead of each wave commit, so the server's thread holds what a
-      // wave's drain counted before it applies that wave's commit.
+      // each tenure's start and end. The sink also posts the counters other
+      // than the settle blocks ahead of each wave commit, so the server's
+      // thread holds what a wave counted before its commit by the time it
+      // applies that commit.
       onWaveCycle: () => plane.reportStats(host.stats()),
       onActivationSettled: (space, outcome) => {
         plane.reportActivationSettled(space, outcome);
@@ -136,7 +137,7 @@ export function serveFromPort(
     });
     plane.serve({
       stats: () => host.stats(),
-      eventStats: () => host.eventStats(),
+      counters: () => host.counters(),
       // This realm's loggers, the serving loop's own counts and timings, and
       // the compile worker's timings, which hold the compiler's phases.
       diagnostics: () => servingLoopDiagnostics(options.moduleCompiler),
