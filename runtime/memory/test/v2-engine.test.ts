@@ -36,6 +36,7 @@ import {
   open,
   ProtocolError,
   read,
+  runAtomicCommit,
 } from "../v2/engine.ts";
 
 const createEngine = async (): Promise<{
@@ -887,6 +888,90 @@ Deno.test("memory v2 engine requires principal context for user and session scop
       ProtocolError,
       "session scoped memory operations require a session id",
     );
+  } finally {
+    close(engine);
+    await Deno.remove(path);
+  }
+});
+
+Deno.test("memory v2 engine points commits at shared metadata records when the store requires them", async () => {
+  // A store whose `commit` table requires invocation and authorization
+  // references gets one shared empty record of each, which every commit
+  // names.
+  const path = await Deno.makeTempFile({ suffix: ".sqlite" });
+  const legacyDb = new Database(path, { create: true });
+  try {
+    legacyDb.exec(`
+      CREATE TABLE "commit" (
+        seq                INTEGER NOT NULL PRIMARY KEY,
+        branch             TEXT    NOT NULL DEFAULT '',
+        session_id         TEXT    NOT NULL,
+        local_seq          INTEGER NOT NULL,
+        invocation_ref     TEXT    NOT NULL,
+        authorization_ref  TEXT    NOT NULL,
+        original           JSON    NOT NULL,
+        resolution         JSON    NOT NULL,
+        created_at         TEXT    NOT NULL DEFAULT (datetime('now'))
+      );
+    `);
+  } finally {
+    legacyDb.close();
+  }
+
+  const engine = await open({ url: toFileUrl(path) });
+  try {
+    for (const localSeq of [1, 2]) {
+      applyCommit(engine, {
+        sessionId: "session:required-metadata",
+        commit: {
+          localSeq,
+          reads: { confirmed: [], pending: [] },
+          operations: [{
+            op: "set",
+            id: "entity:required-metadata",
+            value: { value: { localSeq } },
+          }],
+        },
+      });
+    }
+
+    const rows = engine.database.prepare(`
+      SELECT c.invocation_ref, c.authorization_ref,
+        i.ref AS invocation, a.ref AS authorization
+      FROM "commit" c
+      LEFT JOIN invocation i ON i.ref = c.invocation_ref
+      LEFT JOIN authorization a ON a.ref = c.authorization_ref
+      ORDER BY c.seq
+    `).all() as Array<Record<string, string | null>>;
+    assertEquals(rows.length, 2);
+    for (const row of rows) {
+      assertEquals(typeof row.invocation_ref, "string");
+      assertEquals(typeof row.authorization_ref, "string");
+      assertEquals(row.invocation, row.invocation_ref);
+      assertEquals(row.authorization, row.authorization_ref);
+    }
+    assertEquals(rows[1], rows[0]);
+    assertEquals(read(engine, { id: "entity:required-metadata" })?.value, {
+      localSeq: 2,
+    });
+  } finally {
+    close(engine);
+    await Deno.remove(path);
+  }
+});
+
+Deno.test("memory v2 engine refuses an atomic commit inside an open transaction", async () => {
+  const { engine, path } = await createEngine();
+  try {
+    assertThrows(
+      () =>
+        engine.database.transaction(() =>
+          runAtomicCommit(engine, () => undefined)
+        ).immediate(),
+      ProtocolError,
+      "atomic service operations cannot nest transactions",
+    );
+    assertEquals(runAtomicCommit(engine, () => "ran"), "ran");
   } finally {
     close(engine);
     await Deno.remove(path);
