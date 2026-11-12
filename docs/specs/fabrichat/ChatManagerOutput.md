@@ -369,10 +369,9 @@ outward act when it creates a room, or offers one it finds.
   this user's host has accepted it for them (see [offers](#offers)). A found
   room that was offered `counterpart` nothing, since a notice for them of it is
   still in `outgoingNotices`, is offered them through `profile`'s inbox, and
-  `profile` is added to the room's participants, as for a new room. The notice
-  stays, so that it still tells them of the room should the offer not be sent,
-  as when `profile` points at no inbox; once the offer puts them on the room's
-  roster, `outgoingNotices` leaves it out. A room whose roster already lists a
+  `profile` is added to the room's participants, as for a new room, wherever
+  it points; once that puts them on the room's roster, `outgoingNotices` leaves
+  the notice out. A room whose roster already lists a
   profile attesting `counterpart` is one they have joined, and is offered
   nothing; so is one whose notice has been delivered. Nor is a room offered,
   and its notice stays, when `requestId` is longer than an offer's `id` may be.
@@ -388,7 +387,8 @@ outward act when it creates a room, or offers one it finds.
   another, and records its outcome under both ids. Otherwise, creates a direct
   room whose members are this user and `counterpart`, grants `counterpart`
   access, offers the room through `profile`'s inbox when there is one and adds
-  `profile` to the room's participants, or else produces a notice for them, and
+  `profile` to the room's participants, or else, with no `profile`, produces a
+  notice for them, and
   records the new entry in `rooms`, `roomMembership` and `direct`; adding this
   user to the new
   room's participants follows.
@@ -476,25 +476,24 @@ outcome back as the add's `delivery`.
 - **Effect:** offers the room to the person (see [offers](#offers)): through
   the share inbox `profile` points at, or, with no `profile`, through each
   distinct inbox the profiles `people` lists for `member` point at, once per
-  inbox, as this user reads `people`. The first profile the room is offered
-  through is added to the room's participants. A person offered nothing, since
-  no profile known for them points at an inbox, gets a notice instead. It
-  grants nobody anything. The offer is sent by an event of its own that
-  follows, which reads where the profiles point apart from the request's
-  outcome: a profile's inbox pointer can carry a label, such as its owner's
-  `PersonalSpace`, that this user's records don't admit.
+  inbox, as this user reads `people`. The first of those profiles is added to
+  the room's participants, wherever it points. A person with no profile known
+  for them gets a notice instead. It grants nobody anything. The offer is sent
+  by an event of its own that follows, which reads where the profiles point
+  apart from the request's outcome and records nothing: a profile's inbox
+  pointer can carry a label, such as its owner's `PersonalSpace`, that this
+  user's records don't admit.
 - **Outcome:** `done` with `delivery`, `offered` or `noticed`, and no entry:
-  `noticed` at once for a person with no profile known for them, and otherwise
-  `offered`, which the event sending the offer turns to `noticed` when none of
-  the profiles points at an inbox;
+  `noticed` for a person with no profile known for them, and otherwise
+  `offered`, wherever the profiles point;
   or `refused` if this user's catalog doesn't list the room, the room space's
   access list grants this user a level other than OWNER, the link isn't to a
   group room, as its creator's record would say, `requestId` is longer than an
   offer's `id` may be, `profile` attests no principal or names someone other
   than `member`, `member` is not a principal's DID, or it is this user. An
   access list the run doesn't hold yet, as a served run may not for a room
-  created moments before, refuses nothing. `offered` means sent, or about to
-  be, not received.
+  created moments before, refuses nothing. `offered` means handed to the event
+  that sends the offer, not sent or received.
 
 ### `accept(requestId: string, room: Cell<ChatRoomOutput>, counterpart?: string, keepArchived?: boolean)`
 
@@ -670,14 +669,18 @@ When a request names a member's profile, as `openDirect`'s `profile` and
 through the share inbox the profile's `inbox` points at
 ([`private-inbox.md`](../../features/private-inbox.md)), once per distinct
 inbox among the member's profiles, after the room is created, and adds the
-first profile it offered the room through to the room's participants, through
-the room's `addParticipant`, without a step of the member's own. A profile that
-points at no inbox is offered nothing. A pointer counts as pointing at no inbox
-when the run offering the room finds no stream there to send to: a piece whose
-`receive` is no stream, an inbox in a deleted space (`spaceDeleted()`), or an
-inbox in a space that doesn't admit the run, which a serving loop's does, since
-it reads a space as its OWNER does. Such a member gets a notice, and the room is
-still offered to the request's other members. `offerRoom` offers a room someone
+first profile the request names for them to the room's participants, through
+the room's `addParticipant`, without a step of the member's own. It does so in
+two events: the first adds the profiles and reads no inbox pointer, and the
+second reads the pointers and sends the offers, and writes nothing else, so
+where a profile points decides nothing this user's records or the room hold. A
+profile that points at no inbox is offered nothing. A pointer counts as
+pointing at no inbox when the run sending the offer finds no stream there to
+send to: a piece whose `receive` is no stream, an inbox in a deleted space
+(`spaceDeleted()`), or an inbox in a space that doesn't admit the run, which a
+serving loop's does, since it reads a space as its OWNER does. Such a member is
+on the room's roster all the same, gets no notice, and the room is still
+offered to the request's other members. `offerRoom` offers a room someone
 was added to the same way, and so does `openDirect` a direct room it finds whose
 counterpart has a notice of it still waiting, which the offer replaces. The
 offer is the envelope a share inbox takes:
@@ -710,11 +713,10 @@ room as theirs. A direct room goes in their `direct` under its creator, unless
 for `openDirect`, so the received room replaces it; either way their later
 `openDirect` with the sender returns the room `direct` holds rather than
 creating another. An entry already in the catalog, archived or not, gets no
-acceptance. A notice is produced for each other member offered nothing: one
-known only by their DID, who has no profile to reach an inbox through, or one
-whose profile points at no inbox. A member sent an offer gets no notice, and
-nothing tells the sender whether the offer arrived: `offerRoom`'s `offered`
-means sent, or about to be. A runtime still holding an inbox it read before its
+acceptance. A notice is produced for each other member known only by their
+DID, who has no profile to reach an inbox through. A member named by a profile
+gets no notice, and nothing tells the sender whether the offer was sent or
+arrived: `offerRoom`'s `offered` means handed to the event that sends it. A runtime still holding an inbox it read before its
 space stopped admitting this user finds it, and the offer it sends is lost.
 
 ## Crossing creations

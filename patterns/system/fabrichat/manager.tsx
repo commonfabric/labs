@@ -27,15 +27,15 @@
  *
  * A new room is offered to each other member whose profile the request names,
  * through each share inbox their profiles point at, once per inbox, in the
- * envelope a share inbox takes, and each member it is offered to is added to
- * the room's participants. A notice is queued for each other member offered
- * nothing: one the request names only by principal, or whose profiles point at
- * no inbox. A member someone adds to a room later, from the room, is offered
- * it the same way, through `offerRoom`. A direct room's counterpart who got a
- * notice instead is offered the room the same way once a later start with
- * them names a profile of theirs pointing at an inbox, until they join it. The
- * notice stays, and is no longer listed once the offer puts them on the room's
- * roster.
+ * envelope a share inbox takes, and each of those members is added to the
+ * room's participants, wherever their profiles point. A member whose profiles
+ * point at no inbox is added all the same, sent nothing, and gets no notice. A
+ * notice is queued for each other member the request names only by principal.
+ * A member someone adds to a room later, from the room, is offered it the same
+ * way, through `offerRoom`. A direct room's counterpart who got a notice
+ * instead is offered the room the same way once a later start with them names
+ * a profile of theirs, until they join it. The notice stays, and is no longer
+ * listed once the offer puts them on the room's roster.
  *
  * The people the user's rooms list, each by the principal their profile
  * attests, are what the manager's rendering offers to name a new group's
@@ -101,7 +101,6 @@ import {
   type ChatIndexEntry,
   type ChatManagerNotice,
   type ChatManagerProfile,
-  type ChatOfferDelivery,
   type ChatProfile,
   type ChatRequestOutcome,
   type ChatRoomKind,
@@ -591,19 +590,27 @@ export interface OfferRoomEvent {
   members: OfferedMember[];
 
   /**
-   * Whether the request `id` names recorded `offered` as its delivery, which
-   * a member offered nothing turns to `noticed`. Absent for a request that
-   * records no delivery.
-   */
-  recordsDelivery?: boolean;
-
-  /**
    * Whether each member has a notice of the room waiting already, which a
    * member offered nothing keeps in place of a new one, and which makes this
    * a re-offer: a member the room's roster lists has joined the room, and is
    * offered nothing.
    */
   noticeWaiting?: boolean;
+}
+
+/** An offer of a room, which its `id` keys. */
+type RoomOffer = OfferEvent & { id: string };
+
+/** What delivering an offer asks: the offer, and whom to send it to. */
+export interface DeliverOffersEvent {
+  /** The offer to send. */
+  offer: RoomOffer;
+
+  /** The profiles through whose share inboxes the offer is sent. */
+  // `Cell<…>` is written out rather than reached through an alias: the
+  // event's schema marks a reference position only where the wrapper is
+  // written in the event type.
+  profiles: Cell<ChatManagerProfile>[];
 }
 
 /** What `offerRooms` is bound to. */
@@ -614,8 +621,8 @@ interface OfferRoomsState {
   /** Adds a profile to a room's participants. */
   joinRooms: Stream<JoinRoomsEvent>;
 
-  /** Each request's outcome. */
-  requests: RequestsCell;
+  /** Sends an offer to the share inboxes profiles point at. */
+  deliverOffers: Stream<DeliverOffersEvent>;
 }
 
 /** The share inbox `profile` points at; absent when it points at none. */
@@ -675,9 +682,6 @@ const distinctInboxes = (
       : [...found, { pointer, profile }];
   }, []);
 
-/** An offer of a room, which its `id` keys. */
-type RoomOffer = OfferEvent & { id: string };
-
 /**
  * The offer of the room in `space` that a share inbox takes, keyed by `id`,
  * from `from`, naming the host serving the room, this pattern's own.
@@ -702,86 +706,80 @@ const offerEnvelope = (
 };
 
 /**
- * Helper for `offerRooms`, which offers `room` to `member`, sending `offer` to
- * each distinct share inbox their profiles point at that isn't among `sent`,
- * the inboxes `offer` has gone to already, which it adds to. It adds to the
- * room's participants the first profile it offered the room through, so that
- * the member is listed once however many inboxes they have. A member whose
- * profiles point at no inbox that takes offers is offered nothing, and a notice
- * for them, keyed by the offer's `id`, is queued instead, unless `noticeWaiting`
- * says one waits already. Returns which of the two it did.
- */
-const offerToMember = (
-  offer: RoomOffer,
-  room: Cell<ChatRoomLink>,
-  { recipient, profiles }: OfferedMember,
-  { outgoingNotices, joinRooms }: OfferRoomsState,
-  sent: Cell<ShareInboxPiece>[],
-  noticeWaiting: boolean,
-): ChatOfferDelivery => {
-  const inboxes = distinctInboxes(profiles ?? []);
-  if (inboxes.length === 0) {
-    if (!noticeWaiting) {
-      outgoingNotices.push(noticeFor(recipient, offer.id, room));
-    }
-    return "noticed";
-  }
-  for (const { pointer } of inboxes) {
-    if (sent.some((known) => equals(known, pointer))) continue;
-    sent.push(pointer);
-    inboxOf(pointer.resolveAsCell()).key("receive").send(offer);
-  }
-  joinRooms.send({ room, profile: inboxes[0].profile });
-  return "offered";
-};
-
-/**
- * Offers a room to each of the event's `members`, as `offerToMember()` does,
- * naming the principal sending it as its sender. An inbox that profiles of
- * more than one member point at is sent the offer once, and each of those
- * members is offered the room through it. For a request that
- * `recordsDelivery`, a member offered nothing, since no profile of theirs
- * points at an inbox that takes offers, turns the request's delivery to
- * `noticed`.
+ * Offers a room to each of the event's `members`, naming the principal sending
+ * it as its sender, in two steps. This one reads none of the profiles' inbox
+ * pointers. It adds each member named by a profile to the room's participants,
+ * once, by the first profile the event names for them, queues a notice for a
+ * member named by no profile, unless `noticeWaiting` says one waits already,
+ * and hands the offer and every profile to `deliverOffers`, which reads where
+ * they point. A profile's inbox pointer can carry a label, such as its owner's
+ * `PersonalSpace`, that neither the room's space nor this user's records
+ * admit, and a transaction's writes are held to the labels of everything it
+ * reads, so nothing written here or in this user's records depends on where a
+ * profile points. A re-offer, one whose `noticeWaiting` is set, offers nothing
+ * to a member the room's roster already lists.
  *
  * It runs as an event of its own, queued by the act that creates or offers
  * the room, so that it reads the room's space once the room's creation has
- * committed, and the members' profiles are read apart from the act's own
- * writes. A profile's inbox pointer can carry a label, such as its owner's
- * `PersonalSpace`, that neither the room's space nor this user's records
- * admit, and a transaction's writes are held to the labels of everything it
- * reads. While the space is not known, nothing is sent.
+ * committed. While the space is not known, nothing is sent.
  */
 const offerRooms = handler<OfferRoomEvent, OfferRoomsState>(
   (event, state) => {
-    // TODO(danfuzz): Under server execution, a run that reads a pointer
-    // carrying its owner's label is refused whole: its sends and the mark
-    // that it handled this event live in this user's space, which doesn't
-    // admit the label, so nothing is offered. Expect it to commit once a
-    // served handler reading another person's labeled data can.
     const space = spaceOf(event?.room);
     const from = currentPrincipal();
     if (!isWellFormedDID(space) || from === undefined) return;
-    const offer = offerEnvelope(event.id, space, event.title ?? "", from);
-    const sent: Cell<ShareInboxPiece>[] = [];
     const roster = event.noticeWaiting === true
       ? event.room.key("roster").get() ?? []
       : [];
-    for (const member of event.members ?? []) {
-      if (
-        roster.some((profile) => profileOwnerOf(profile) === member.recipient)
-      ) continue;
-      const delivery = offerToMember(
-        offer,
-        event.room,
-        member,
-        state,
-        sent,
-        event.noticeWaiting === true,
-      );
-      if (event.recordsDelivery === true && delivery === "noticed") {
-        state.requests.key(event.id).set({ status: "done", delivery });
+    const profiles: Cell<ChatManagerProfile>[] = [];
+    for (const { recipient, profiles: named } of event.members ?? []) {
+      if (roster.some((profile) => profileOwnerOf(profile) === recipient)) {
+        continue;
       }
+      if ((named ?? []).length === 0) {
+        if (event.noticeWaiting !== true) {
+          state.outgoingNotices.push(
+            noticeFor(recipient, event.id, event.room),
+          );
+        }
+        continue;
+      }
+      state.joinRooms.send({ room: event.room, profile: named[0] });
+      for (const profile of named) profiles.push(profile);
+    }
+    if (profiles.length === 0) return;
+    state.deliverOffers.send({
+      offer: offerEnvelope(event.id, space, event.title ?? "", from),
+      profiles,
+    });
+  },
+);
+
+/**
+ * Sends the event's `offer` to each distinct share inbox the event's
+ * `profiles` point at that takes offers (see `distinctInboxes()`), once
+ * however many of the profiles point at it, and writes nothing else. A
+ * profile's inbox pointer can carry a label, such as its owner's
+ * `PersonalSpace`, that this user's records don't admit, and a transaction's
+ * writes are held to the labels of everything it reads. A profile pointing at
+ * no inbox that takes offers is sent nothing, and nothing records that.
+ */
+const deliverOffers = handler<
+  DeliverOffersEvent,
+  Record<PropertyKey, never>
+>(
+  (event) => {
+    // TODO(danfuzz): Under server execution, a run the serving loop delivers
+    // from the event's durable entry, rather than in the wave of the
+    // `offerRooms` run that queued it, writes its record that it handled the
+    // event in its own transaction, in this user's space. That space doesn't
+    // admit a label such as its owner's on a pointer the run read, so the run
+    // is refused whole and nothing is sent. Expect it to commit once that
+    // record takes nothing of what the handler read.
+    const offer = event?.offer;
+    if (offer === undefined) return;
+    for (const { pointer } of distinctInboxes(event.profiles ?? [])) {
+      inboxOf(pointer.resolveAsCell()).key("receive").send(offer);
     }
   },
 );
@@ -809,17 +807,17 @@ function joinStreamOf(room: Cell<ChatRoomLink>): unknown {
 /**
  * Adds the event's profile to the room's participants, through the room's own
  * `addParticipant`, the one writer its roster admits, so that whoever creates
- * or accepts a room, and each member it is offered to, is listed in it without
- * a step of their own. It runs as an event of its own, queued by the one that
+ * or accepts a room, and each member it is offered to by a profile, is listed
+ * in it without a step of their own. It runs as an event of its own, queued by the one that
  * creates, accepts, or offers the room, so that the room's streams exist when
  * it sends. A profile that hasn't resolved is added to nothing.
  */
 const joinRooms = handler<JoinRoomsEvent, Record<PropertyKey, never>>(
   (event) => {
-    // TODO(danfuzz): A stop-gap. A member offered nothing, whose manager
-    // neither created nor accepted the room, is never sent here, so isn't on
-    // the room's roster, and is shown among its participants only as an
-    // author, once they write. Add each member once their manager lists the
+    // TODO(danfuzz): A stop-gap. A member named by principal alone, whose
+    // manager neither created nor accepted the room, is never sent here, so
+    // isn't on the room's roster, and is shown among its participants only as
+    // an author, once they write. Add each member once their manager lists the
     // room without a step of their own.
     const profile = event?.profile?.resolveAsCell();
     if (profile === undefined || profile.get() === undefined) return;
@@ -1004,8 +1002,7 @@ const createRoom = (
     }),
   );
   // A member named by principal alone has no profile to offer the room
-  // through, so `offerRooms` queues a notice for them, as it does for a member
-  // whose profiles point at no inbox.
+  // through, so `offerRooms` queues a notice for them.
   const offered = offerTo.map(({ recipient }) => recipient);
   const told: OfferedMember[] = [
     ...offerTo,
@@ -1046,10 +1043,9 @@ const createRoom = (
  * Helper for `openDirect`, which offers `room`, a direct room it found, to
  * `counterpart` through the share inbox `profile` points at, by `offerRooms`
  * as a new one is offered, when the room was offered them nothing: a notice
- * for them of the room is still waiting. The notice stays, so that it still
- * tells them of the room should the offer not be sent, as when the profile
- * points at no inbox; once the offer adds them to the room's roster,
- * `outgoingNotices` leaves it out. A counterpart the room's roster lists has
+ * for them of the room is still waiting. `offerRooms` adds `profile` to the
+ * room's roster, and `outgoingNotices` then leaves the notice out, wherever
+ * the profile points. A counterpart the room's roster lists has
  * joined the room already, and `offerRooms` offers them nothing, and nothing
  * is offered to one named by no profile. Nothing is offered either when
  * `requestId`, which keys the offer, is longer than a share inbox keeps an
@@ -1479,8 +1475,8 @@ const performManagerAct = (
       : [named];
     // A member with no profile to offer through gets a notice at once. Any
     // other is offered the room by an event of its own, which reads where the
-    // profiles point apart from this request's outcome, and which turns the
-    // outcome to `noticed` when none points at an inbox.
+    // profiles point apart from this request's outcome, and which records
+    // nothing of where they point.
     if (profiles.length === 0) {
       outgoingNotices.push(noticeFor(member, requestId, room));
       recordOutcome(state, requestId, { status: "done", delivery: "noticed" });
@@ -1491,7 +1487,6 @@ const performManagerAct = (
       id: requestId,
       title: room.key("about").get()?.title ?? "",
       members: [{ recipient: member, profiles }],
-      recordsDelivery: true,
     });
     recordOutcome(state, requestId, { status: "done", delivery: "offered" });
     return;
@@ -2358,6 +2353,7 @@ export const FabriChatManagerCore = pattern<
         peopleIn(rostersForUser, profileOwnerOf(myProfile)),
     );
     const joining = joinRooms({});
+    const delivering = deliverOffers({});
     const records = {
       myProfile: sessionProfile,
       catalog: sharedSpaceCatalog,
@@ -2368,7 +2364,7 @@ export const FabriChatManagerCore = pattern<
       offerRooms: offerRooms({
         outgoingNotices,
         joinRooms: joining,
-        requests,
+        deliverOffers: delivering,
       }),
       joinRooms: joining,
       listRooms: listRooms({ catalog: sharedSpaceCatalog, roomMembership }),
