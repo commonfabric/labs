@@ -130,6 +130,12 @@ class LoopbackSessionFactory implements SessionFactory {
    */
   #instanceNames = namesInstancesByDefault();
 
+  /**
+   * Whether this factory's connections take `cid:` schema documents by
+   * reference: what `setSyncCidReferences()` last chose, and until then not.
+   */
+  #syncCidReferences = false;
+
   constructor(
     plane: LoopbackPlane,
     route: Pick<RouteOptions, "createTransport"> | undefined,
@@ -190,6 +196,11 @@ class LoopbackSessionFactory implements SessionFactory {
     this.#instanceNames = enabled;
   }
 
+  /** @inheritDoc */
+  setSyncCidReferences(enabled: boolean): void {
+    this.#syncCidReferences = enabled;
+  }
+
   async create(
     space: MemorySpace,
     signer?: Signer,
@@ -206,6 +217,7 @@ class LoopbackSessionFactory implements SessionFactory {
       transport: this.#transport(space, signer),
       client: this.#clientInfo,
       instanceNames: this.#instanceNames,
+      syncCidReferences: this.#syncCidReferences,
       ...(this.#routeFor(space, signer) === undefined
         ? {}
         : { firstHandshakeAttempts: MEMORY_FIRST_HANDSHAKE_ATTEMPTS }),

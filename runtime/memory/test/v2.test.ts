@@ -180,6 +180,7 @@ describe("memory v2 flags", () => {
       syncCrossingsV1: true,
       watchRemoveV1: true,
       syncPartsV1: true,
+      syncCidReferencesV1: false,
       watchSetPartsV1: true,
       syncSchemaTableV2: false,
       syncLabelTableV1: true,
@@ -228,6 +229,7 @@ describe("memory v2 flags", () => {
       syncCrossingsV1: true,
       watchRemoveV1: true,
       syncPartsV1: true,
+      syncCidReferencesV1: false,
       watchSetPartsV1: true,
       syncSchemaTableV2: true,
       syncLabelTableV1: true,
@@ -277,6 +279,7 @@ describe("memory v2 flags", () => {
         syncCrossingsV1: false,
         watchRemoveV1: false,
         syncPartsV1: false,
+        syncCidReferencesV1: false,
         watchSetPartsV1: false,
       },
       {
@@ -318,6 +321,7 @@ describe("memory v2 flags", () => {
         syncCrossingsV1: false,
         watchRemoveV1: false,
         syncPartsV1: false,
+        syncCidReferencesV1: false,
         watchSetPartsV1: false,
       },
     ));
@@ -469,6 +473,7 @@ describe("parseMemoryProtocolFlags", () => {
       syncCrossingsV1: false,
       watchRemoveV1: false,
       syncPartsV1: false,
+      syncCidReferencesV1: false,
       watchSetPartsV1: false,
     });
     assertEquals(parseMemoryProtocolFlags({ modernCellRep: false }), {
@@ -510,6 +515,7 @@ describe("parseMemoryProtocolFlags", () => {
       syncCrossingsV1: false,
       watchRemoveV1: false,
       syncPartsV1: false,
+      syncCidReferencesV1: false,
       watchSetPartsV1: false,
     });
   });
@@ -558,6 +564,7 @@ describe("parseMemoryProtocolFlags", () => {
         syncCrossingsV1: false,
         watchRemoveV1: false,
         syncPartsV1: false,
+        syncCidReferencesV1: false,
         watchSetPartsV1: false,
       },
     );
@@ -605,6 +612,21 @@ describe("parseMemoryProtocolFlags", () => {
       );
     });
   }
+
+  it("accepts the syncCidReferencesV1 capability key, which neither peer advertises by build", () => {
+    expect(parseMemoryProtocolFlags({})?.syncCidReferencesV1).toBe(false);
+    expect(
+      parseMemoryProtocolFlags({ syncCidReferencesV1: true })
+        ?.syncCidReferencesV1,
+    ).toBe(true);
+    expect(parseMemoryProtocolFlags({ syncCidReferencesV1: "true" })).toBe(
+      null,
+    );
+    expect(
+      wireMemoryProtocolFlags(getMemoryProtocolFlags()).syncCidReferencesV1,
+    )
+      .toBe(false);
+  });
 
   it("accepts the syncCrossingsV1 capability key", () => {
     assertEquals(parseMemoryProtocolFlags({})?.syncCrossingsV1, false);
@@ -656,6 +678,7 @@ describe("parseMemoryProtocolFlags", () => {
         syncCrossingsV1: false,
         watchRemoveV1: false,
         syncPartsV1: false,
+        syncCidReferencesV1: false,
         watchSetPartsV1: false,
         sqliteCommitRowLabelEval: false,
         sqliteQueryReader: false,
@@ -710,6 +733,7 @@ describe("parseMemoryProtocolFlags", () => {
         syncCrossingsV1: false,
         watchRemoveV1: false,
         syncPartsV1: false,
+        syncCidReferencesV1: false,
         watchSetPartsV1: false,
       },
     );
@@ -759,6 +783,7 @@ describe("parseMemoryProtocolFlags", () => {
         syncCrossingsV1: false,
         watchRemoveV1: false,
         syncPartsV1: false,
+        syncCidReferencesV1: false,
         watchSetPartsV1: false,
       },
     );
@@ -816,6 +841,7 @@ describe("parseMemoryProtocolFlags", () => {
         syncCrossingsV1: false,
         watchRemoveV1: false,
         syncPartsV1: false,
+        syncCidReferencesV1: false,
         watchSetPartsV1: false,
       },
     );
@@ -866,6 +892,7 @@ describe("parseMemoryProtocolFlags", () => {
         syncCrossingsV1: false,
         watchRemoveV1: false,
         syncPartsV1: false,
+        syncCidReferencesV1: false,
         watchSetPartsV1: false,
       },
     );
@@ -913,6 +940,7 @@ describe("parseMemoryProtocolFlags", () => {
         syncCrossingsV1: false,
         watchRemoveV1: false,
         syncPartsV1: false,
+        syncCidReferencesV1: false,
         watchSetPartsV1: false,
       },
     );
@@ -944,6 +972,7 @@ describe("parseMemoryProtocolFlags", () => {
         syncCrossingsV1: false,
         watchRemoveV1: false,
         syncPartsV1: false,
+        syncCidReferencesV1: false,
         watchSetPartsV1: false,
       }),
       {
@@ -985,6 +1014,7 @@ describe("parseMemoryProtocolFlags", () => {
         syncCrossingsV1: false,
         watchRemoveV1: false,
         syncPartsV1: false,
+        syncCidReferencesV1: false,
         watchSetPartsV1: false,
       },
     );

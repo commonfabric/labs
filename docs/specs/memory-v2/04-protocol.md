@@ -54,9 +54,9 @@ rewrite. In particular:
   document a write left no watch reaching, and a client shrinks its watch set
   explicitly
 - delivering schema documents by reference (`syncCidReferencesV1`, sections
-  4.1.1 and 4.2.3) is specified and not yet implemented. It is to ship as an
-  experimental option that servers offer and clients take only when they opt
-  in, so a client that has not receives each schema document with its body
+  4.1.1 and 4.2.3) is implemented as an experimental option that servers offer
+  by default and clients take only when they opt in, so a client that has not
+  receives each schema document with its body
 
 ## 4.1 Transport
 
@@ -294,7 +294,7 @@ with a switch on each side: a server advertises it unless its deployment turns
 it off, and a client advertises it only when its runtime, or the host
 embedding it, opts in. Since both must advertise it, a client that does not
 opt in sees no change, and a deployment that turns it off delivers bodies to
-every client. It is not yet implemented.
+every client.
 
 `commitLabelTableV1` independently advertises label and label-path tables for
 client `transact` requests and server transaction acknowledgments. This build

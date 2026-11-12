@@ -495,6 +495,19 @@ export interface ExperimentalOptions {
    * environment variable reaches it.
    */
   instanceNames?: boolean | undefined;
+
+  /**
+   * Take `cid:` schema documents by reference from a server that offers
+   * them (`syncCidReferencesV1`; `docs/specs/content-addressed-schemas.md`,
+   * "Delivery by reference"): this runtime's memory connections advertise
+   * the capability, and a server that advertises it too names the schema
+   * documents its registry holds by id, leaving this runtime to resolve or
+   * fetch their bodies. Defaults to off, which receives every body. Only
+   * the client side is switched here: a server offers it unless its
+   * deployment turns it off, and references flow only where both advertise
+   * it (`docs/development/EXPERIMENTAL_OPTIONS.md#synccidreferencesv1`).
+   */
+  syncCidReferences?: boolean | undefined;
 }
 
 /**
@@ -2250,6 +2263,11 @@ export class Runtime {
       // the mode and the server admits it by that (INV-16).
       this.storageManager.setInstanceNames?.(
         namesInstances(this.experimental),
+      );
+      // Declared before any session opens too, since each connection's
+      // `hello` advertises it.
+      this.storageManager.setSyncCidReferences?.(
+        this.experimental.syncCidReferences === true,
       );
       this.moduleByteCache = options.moduleByteCache;
       this.#compileTurns = options.compileTurns;
