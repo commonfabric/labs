@@ -64,7 +64,10 @@ document, it states the assumption it made and lists it under
   crosses the link when it resolves the path
   (`plan-and-label-templates.md` §2.5). The notation keeps apart two
   observations: one at the position that holds the handle, written `h`, and
-  one at the root of the cell it links to, written `h->`.
+  one at the root of the cell it links to, written `h->`. In the plan both
+  have the path of `h`. An `identity` slot, and a `shape` slot with
+  `inPlace`, observe the position. A slot of any other form observes the
+  cell the link leads to.
 - The **classes** are the five observation classes of
   `plan-and-label-templates.md` §2: `value`, `shape`, `enumeration`,
   `identity`, and `labelMetadata`.
@@ -620,20 +623,15 @@ read, and whatever reads it later does so under a schema of its own.
 | A bag | The member, by this table |
 | `Computed`, `Created` | Nothing |
 
-The state a handler is bound to is one more such destination. A handle, and
-a container the body passes on unchanged, arrive there by reference: the
-body records `identity`, and the binding holds a link. A scalar is copied
-into the binding, and so is a container the body computed, whose members
-are treated by the table above (`Binding.state` in
-`plan-and-label-templates.md` §1.1). [§8.5](#85-binding-a-handler) gives the
-rule.
-
-One destination copies a container the body passes on unchanged: the
-private parameters of a pattern closure. There a captured data value is
-copied and a captured handle stays a link (`Closure.params` in
-`plan-and-label-templates.md` §1.1).
-[§8.1](#81-instantiating-a-pattern) gives the rule for an inline pattern a
-body instantiates.
+The state a handler is bound to is one more such destination, and so are
+the private parameters of an inline pattern the body instantiates. A
+handle, and a container the body passes on unchanged, arrive there by
+reference: the body records `identity`, and the binding or the instance
+holds a link. A scalar is copied, and so is a container the body computed,
+whose members are treated by the table above (`Binding.state` and
+`Closure.params` in `plan-and-label-templates.md` §1.1).
+[§8.5](#85-binding-a-handler) gives the rule for a binding, and
+[§8.1](#81-instantiating-a-pattern) for an inline pattern.
 
 The reference rule is the reason a body that moves a record from one list to
 another does not read the record. It rests on how the runtime stores a value
@@ -767,18 +765,21 @@ The analysis gives up in two ways.
 Each widening adds one entry to `Body.widenings`, a `Widening` of
 `plan-and-label-templates.md` §1.1.
 
-- `slots` lists the entries that stand for more than the body reads. For a
-  widening on a value it is the `value` entry at the projection, or one per
-  alternative. For a widening on a key it is the entries at `*` below the
-  keyed container, with the container's `enumeration` entry.
+- `slots` lists the entries of `Body.reads` that stand for more than the
+  body reads. For a widening on a value it is the `value` entry at the
+  projection, or one per alternative. For a widening on a key it is the
+  entries at `*` below the keyed container, with the container's
+  `enumeration` entry.
+- `computed` lists the entries of `Body.computed` that stand for more than
+  the body reads, in the same two ways.
 - `handle` names an entry of `Body.handles`, for a handle the analysis lost
   track of.
 - `at` is the source position of the expression.
 
-`Widening.slots` indexes `Body.reads`. A widened entry on an input the
-instance computed is an entry of `Body.computed`, which the record cannot
-name. *Assumed:* such a widening lists no slot and is reported by its
-source position ([§13](#13-open-questions), request 16).
+Which of the two lists a widened entry is in follows from what its formal
+input is bound to where the body is used (§1.1): `slots` for an input bound
+to a slot root, and `computed` for an input bound to a value the instance
+computed.
 
 A widening never reaches above the projection it applies to, never reaches
 another formal input, and never passes through a handle: by §2.2 a `value`
@@ -936,6 +937,9 @@ For a dynamic target and for one that is too broad, the analysis records an
   - For a handle the body found by reading through another handle, the slot
     is at the position where it was found. Its path crosses the first
     handle's link and has `*` at each segment the analysis cannot name.
+    That slot is in no `Body.reads`: it names the place, nothing is
+    materialized for it, and it joins no template
+    (`plan-and-label-templates.md` §3.11).
   - For a handle the analysis lost track of, there is one envelope for each
     writable handle among the body's inputs, over the handle's whole cell.
 - **`created`**: a cell that a `createCell` site creates under a cause
@@ -952,12 +956,16 @@ order by.
 through `h.resolveAsCell()` lands in the cell where the resolution ends.
 The two differ when the cell `h` links to holds a link (`resolveWriteTarget`
 in `runtime/runner/src/cell.ts` documents the difference as it is today).
-So the target of the first names the plain `identity` slot of `h`, and the
-target of the second names the resolved one. *Assumed:* a target can name
-the resolved slot of a handle whose resolution the body journals
-([§7.1](#71-what-a-body-may-do-with-a-handle)). The slot then says where
-the write lands, and it is not an entry of `Body.reads`
-([§13](#13-open-questions), request 16).
+So the target of the first is a `handle` target that names the `identity`
+slot of `h`, and the target of the second is a `handle` target with
+`resolved`. The slot of the second is the `identity` slot the body has at
+the position of `h`: the resolved one where the resolution is static, and
+the plain one where the body journals it
+([§7.1](#71-what-a-body-may-do-with-a-handle)). Either is the entry the
+write records at the handle (§6.1). The flag says that the write lands
+where the resolution ends, and the runtime resolves the reference when the
+write is made (`plan-and-label-templates.md` §3.11). An envelope for a
+write through a resolved handle has the flag in the same way.
 
 ### 6.3 Computations: static side-write or materializer
 
@@ -1015,9 +1023,10 @@ own cones, through their `argument` slots. So the tier of the body is
 decided by its other writes. A body that also reads through the link an
 instantiation returned reads the child's result, which depends on the
 argument it writes. That read is dynamic (§8.1), and the plan has no edge
-for the dependency it makes. *Assumed:* the runtime applies the
-instantiations of an evaluation when its transaction commits, as it
-applies those of a handler ([§13](#13-open-questions), request 9).
+for the dependency it makes. `plan-and-label-templates.md` §3.14 ("In a
+body that is re-evaluated") has the same rule from the side of the plan:
+the write edges belong to the cone that runs the body, and they do not
+make the body a materializer.
 
 ### 6.4 Handlers
 
@@ -1179,6 +1188,13 @@ handle's link when the runtime resolves it
 and the journaled reads enter the label as a `dynamic` template
 (`plan-and-label-templates.md` §3.9).
 
+The conditions are decided on the body alone. Where the body is used with
+the handle's formal input bound to a value the instance computed, the plan
+cannot name the path, and the read is dynamic there whatever the
+conditions say: the handle's entry of `Body.handles` names its `identity`
+entry of `Body.computed` (`plan-and-label-templates.md` §2.5, §3.10). A
+resolution of such a handle is journaled for the same reason.
+
 `Body.handles` lists a handle only when some read through it is dynamic. A
 handle the body passes on, writes through, or reads at static entries alone
 is not listed. The runtime hands the body a handle for every position of
@@ -1193,12 +1209,13 @@ nothing at the entry's path to resolve, and the test of its presence is a
 
 That observation is at the position that holds the handle, `profile`, and
 not at the root of the cell it links to, `profile->`. The plan has one path
-for the two, and a slot of every class but `identity` resolves through a
-link at its last segment (`plan-and-label-templates.md` §2.5). So the plan
-has a slot for the second observation and none for the first. *Assumed:*
-the `identity` entry at the position stands for the test of presence, which
-leaves the label of the position's own existence out of the body's
-template ([§13](#13-open-questions), request 16).
+for the two and tells them apart by a flag
+(`plan-and-label-templates.md` §2.5). A `shape` slot with `inPlace` stops
+at its last segment and observes whether the position holds anything, a
+link included. A `shape` slot without the flag resolves through a link at
+its last segment and observes the root of the cell the link leads to. The
+analysis emits the first for a `shape` entry at a position of handle type
+or of reference type, and the second for a `shape` entry at `profile->`.
 
 **Why the conditions.** They are the cases in which a static entry reads
 exactly what the body's transaction reads today, on a run that returns
@@ -1304,11 +1321,11 @@ There are three ways a body reaches another cell.
     list of handles the event carries: an entry that names that `identity`
     entry, and that stands for every handle the position holds.
   - At a place the body reaches only by a dynamic read through another
-    handle: the found handle has no slot. *Assumed:* its reads are
-    journaled under the entry of the handle it was found through, and that
-    entry's envelope holds, at the position of the found handle, the
-    envelope of the reads through it ([§13](#13-open-questions), request
-    16).
+    handle: the found handle has no slot and no entry of its own. Its
+    reads are journaled with the reads of the entry it was found through.
+    That entry's envelope admits the position as a handle, and what it
+    admits below the position is the envelope of the reads through the
+    found handle (`plan-and-label-templates.md` §3.9, "Handles").
 - **A link the type does not show.** A position declared with a data type
   can be stored as a link: a record that a handler wrote into a list is a
   document of its own, and the list holds a link to it
@@ -1355,7 +1372,7 @@ what is specific to a body that is evaluated again follows it.
 | Part of the call | Recorded |
 | --- | --- |
 | The callee, when it is a factory value | `identity` at the position that holds it |
-| The callee, when it is an inline `pattern(...)` written at the call | Each value the inline pattern captures from the body is one of its private parameters. A captured handle records `identity` and stays a link. A captured data value is copied, which records `value` at the paths the inline pattern's plan reads below its `params` root (below) |
+| The callee, when it is an inline `pattern(...)` written at the call | The `Child` of the site has a `Closure` as its callee, and each value the inline pattern captures from the body is a path of `Closure.params`. A path is bound as a state path of a handler binding is bound ([§8.5](#85-binding-a-handler)), with what the inline pattern's plan reads below its `params` root in place of the handler's footprint. A handle, and a container passed on unchanged, record `identity` and stay links. A scalar records `value` and is copied. A container the body computed is copied by the rows §8.5 has for one (below) |
 | Each path of the argument | A `WriteEdge` with target `argument`, and the argument's members by the reference rule. A path that holds a passed reference is an edge with `reference` ([§6.5](#65-the-label-of-a-written-value)) |
 | `.for(tag)` | The tag by the reference rule. The site is `identifiedBy: "tag"` |
 | `asScope(scope)` | Nothing. The scope is a constant of the site (`Child.scope`) |
@@ -1367,10 +1384,13 @@ The target and each option of an `inSpace` request is a `RequestValue` of
 one projection it is; or, for a value the body computes, the body, whose
 template the value then carries.
 
-*Assumed,* for an inline pattern: its captures are bound as `Closure.params`
-binds the captures of a pattern closure, a data value copied and a cell
-linked. `plan-and-label-templates.md` has no member of `BodyCall` or of
-`Child` that records them ([§13](#13-open-questions), request 16).
+*Assumed,* for an inline pattern: the ruling on what a handler binding
+holds applies to its captures, on which the owner has not ruled
+(`plan-and-label-templates.md` §3.15, and open question 23 there). The
+analysis fills `capture` and `reference` for each path of `Closure.params`
+as it fills them for a path of `Binding.state` (§8.5). The parameters are
+stored with the instance, and each evaluation that makes the instance
+writes them as it writes the argument.
 
 **In a `lift` or a `computed`.** The analysis of the call is the one above:
 the members of the argument are recorded by the reference rule, each
@@ -1383,22 +1403,23 @@ evaluated again.
   and updates its argument, and an instance that an evaluation no longer
   makes is torn down. The sites of `Body.calls` are what the runtime
   compares: the occurrences an evaluation made at each site, against the
-  occurrences the evaluation before it made there. *Assumed:* an
-  occurrence is identified by the enclosing instance, the site, and its
+  occurrences the evaluation before it made there. An occurrence is
+  identified as `plan-and-label-templates.md` §1.3 has it: by the
+  enclosing instance, the body's `name` and `within`, the site, and its
   ordinal among the instantiations the evaluation makes at that site,
-  which is `identifiedBy: "order"`, or by an explicit cause where the
-  author writes `.for(cause)`, which is `identifiedBy: "tag"`.
-  `plan-and-label-templates.md` §1.3 owns the rule
-  ([§13](#13-open-questions), request 18).
+  which is `identifiedBy: "order"`, or, with `.for(cause)`, by that cause
+  in place of the ordinal, which is `identifiedBy: "tag"`. The rule is an
+  assumption there (open question 26 there).
 - **A read through the returned link is dynamic.** The instance outlives
   the evaluation that made it, so a later evaluation that reads through
   the link finds the child's result. That result is no input of the body
   and has no entry in the footprint. The read is journaled, like a read
   through a handle of `Body.handles`, and S1 holds for it because two
   executions are compared only when they agree on dynamic reads
-  ([§9.1](#91-the-statement)). *Assumed:* an entry of `Body.handles` can
-  name a call site, with the read envelope of the reads through the links
-  that site returns (request 16).
+  ([§9.1](#91-the-statement)). The site is an entry of `Body.handles`
+  whose `handle` is `{ call }`, and its envelope admits what the body
+  reads of the results of the instances the site makes
+  (`plan-and-label-templates.md` §3.9, "Handles").
 - **The computation requests no effect itself** (assumed, §8.3). The
   pattern it instantiates may. What the computation read reaches such a
   request through the argument: each argument path carries the body's
@@ -1552,16 +1573,32 @@ container is treated by the table of §3.8.
 - A bag stands for each of its members.
 
 Where the value at a state path is a set of alternatives of both kinds,
-each alternative is recorded by its own row. *Assumed:* the `Binding`
-records such a path as copied, and the runtime stores a link there on the
-runs on which the value it is handed is a reference
-([§13](#13-open-questions), request 16).
+each alternative is recorded by its own row. `Binding.state` records such
+a path with `capture: "copy"` and no `reference`, and the runtime stores a
+link there on the runs on which the value it is handed carries a stored
+address (`plan-and-label-templates.md` §3.14).
+
+**What the `Binding` records.** For each state path the analysis fills
+`capture` and `reference` (`plan-and-label-templates.md` §1.1).
+
+- A path bound by reference has `capture: "link"`. Its `reference` names
+  the `identity` entry of the one projection, as `passes`, or the entries
+  of the alternatives, as `oneOf`, as for a path of a written value
+  ([§6.5](#65-the-label-of-a-written-value)). The runtime verifies it by
+  identity.
+- A copied path has `capture: "copy"` and no `reference`.
+- A reference inside a computed container is a path of its own, bound by
+  reference, below the copied path.
+- A `Created` value has `capture: "link"` and no `reference`. Its template
+  is the body's.
 
 The rows for a computed container use the record of the hoisted or named
-handler, which the compiler has. *Assumed:* the copy holds the paths that
-record names, each as its class observes it, and no others
-([§13](#13-open-questions), request 15). The stand-ins are the ones the
-runtime builds for an argument (request 8).
+handler, which the compiler has. The copy holds the paths that record
+names, each as its class observes it, and no others (`language-subset.md`
+§5.2). `Binding.state` records no class for a copied path. *Assumed:* the
+runtime narrows the copy by the handler's slots with root `binding`, as it
+narrows the handler's argument, and builds the stand-ins it builds for an
+argument ([§13](#13-open-questions), request 8).
 
 The `identity` row for a computed container follows from the copy. A
 computed container has no stored address but the binding's state document.
@@ -2257,8 +2294,9 @@ of the two message handles.
 
 **Step 6.** Two writes through the alternatives, at the static paths `body`
 and `editedAt`. By §6.2 these are static targets: one write edge per
-alternative, each naming the resolved `identity` slot of the handle, since
-the writes go through what `resolveAsCell()` returned. Each write records
+alternative. Each target has `resolved`, since the writes go through what
+`resolveAsCell()` returned, and names the plain `identity` slot the body
+has at the handle, since the resolution is journaled. Each write records
 `identity` at the handle written through, which the footprint holds
 already. The value written to `body` is the alternatives
 `{event.body, event.target/value}` and the empty string `textOf` returns
@@ -2288,7 +2326,9 @@ No step widens.
 
 The listing is in the notation of this document and in the normal form of
 §2.3. In the plan a path has no arrow: `state.composer->editing` is the
-slot path `composer/editing`, which crosses the link at `composer`.
+slot path `composer/editing`, which crosses the link at `composer`. In the
+writes, `(resolved)` is the flag of the target, and its slot is the plain
+`identity` entry of the handle.
 
 ```text
 reads
@@ -2338,9 +2378,9 @@ label metadata.
 Four of the `shape` entries are at a position that holds a handle:
 `event.message`, `state.myProfile`, `state.message`, and
 `state.composer->editing`. Each observes whether a handle is there and not
-the cell behind it. The plan cannot write them as they are, since a `shape`
-slot at such a path resolves through the link (§7.2;
-[§13](#13-open-questions), request 16).
+the cell behind it, and is a `shape` slot with `inPlace` (§7.2). The entry
+at `state.myProfile->` has the path of the entry at `state.myProfile` and
+no flag: it resolves through the link.
 
 ### 12.4 Against what the transformer emits today
 
@@ -2453,13 +2493,13 @@ asked.
 2. **Handles in the record** (to `plan-and-label-templates.md`). Met, in
    two places in another form than this document assumed. (a) A slot path
    crosses a link, and the hop is not a segment (§2.5 there). (b) An entry
-   of `Body.handles` names the handle's `identity` slot, or an `identity`
-   entry of `Body.computed` (`HandleReads`). (c) The read envelope is a
-   schema on that entry, `HandleReads.envelope`, and not the schema of a
-   slot. (d) A sampled read is the flag `Slot.sampled`. (e) `Body.handles`
-   lists a handle only where some read through it is dynamic, and the body
-   is handed every handle its record names (§3.9 there). What §2.5 there
-   does not provide is in request 16.
+   of `Body.handles` names the handle's `identity` slot, an `identity`
+   entry of `Body.computed`, or an `instantiate` site (`HandleReads`).
+   (c) The read envelope is a schema on that entry,
+   `HandleReads.envelope`, and not the schema of a slot. (d) A sampled
+   read is the flag `Slot.sampled`. (e) `Body.handles` lists a handle only
+   where some read through it is dynamic, and the body is handed every
+   handle its record names (§3.9 there). Request 16 has the further forms.
 3. **Write targets** (to `plan-and-label-templates.md`). Met by §1.1 and
    §3.11 there: the `handle` target of a `WriteEdge`; `WriteEnvelope`, in
    `Body.envelopes`, for a write with no static target; the `reference`
@@ -2494,7 +2534,8 @@ asked.
    `enumeration`, or `identity` that carries that observation and no more:
    a stand-in of the right kind, a container with the right keys or length,
    a reference that can be passed on and not read. The copy a binding holds
-   needs the same stand-ins (§8.5). *Assumed:* it does, as the opaque and
+   needs the same stand-ins, narrowed by the bound handler's slots with
+   root `binding` (§8.5). *Assumed:* it does, as the opaque and
    comparable cells and the `unknown` items of today's schemas do. The same
    document has to confirm that a value passed on unchanged is stored as a
    reference (question 2 above), that a handle's `get()` and `sample()`
@@ -2509,11 +2550,10 @@ asked.
    materializer is its body's `writes` and `envelopes`
    (`plan-and-label-templates.md` §3.11); and the compile-time report of
    cycles is computed from `Plan.edges`, which the write edges of §6
-   supply. §8.5 answers its open question 24. *Assumed* too: the runtime
-   applies the instantiations a `lift` or a `computed` makes when the
-   evaluation's transaction commits, compares them site by site with the
-   ones the evaluation before it made, and tears down the instances that
-   are no longer made (§6.3, §8.1).
+   supply. §8.5 answers its open question 24. It also has to keep, with a
+   cone, which instances the last evaluation of a `lift` or a `computed`
+   made at each site, and tear down the ones an evaluation no longer
+   makes, as `plan-and-label-templates.md` §3.14 has it (§6.3, §8.1).
 10. **Limits** (to the prototype). W6 cuts a recursive type at its second
     entry, and W7 needs two bounds: alternatives per value, and rounds to a
     fixed point. *Assumed:* the second entry, eight alternatives, and eight
@@ -2538,56 +2578,38 @@ asked.
     records `shape`. The prototype has to measure how many cells the idiom
     is used on.
 15. **How much of a computed container a binding copies** (to
-    `language-subset.md`). A binding made in a body binds a container the
-    body passes on unchanged by reference, and copies a scalar and a
-    container the body computed (§8.5). What §5.2 there has still to say
-    is whether the copy of a computed container is the whole value or the
-    paths the bound handler reads. *Assumed:* the paths the handler's
-    footprint names, each as its class observes it. Two bindings whose
-    computed records differ only at paths the handler does not read are
-    then one stream.
-16. **What the plan's record does not express** (to
-    `plan-and-label-templates.md`). Each item is something the analysis
-    produces.
-    - **`shape` at a position that holds a handle.** A test of whether a
-      handle is present observes the position, and not the cell the handle
-      links to. Every class but `identity` resolves through a link at the
-      last segment of a slot path (§2.5 there), so the plan has no slot for
-      it. *Assumed:* the `identity` slot at the position stands for it
-      (§7.2). The handler of §12 has four such entries.
-    - **A widening on a computed input.** `Widening.slots` indexes
-      `Body.reads` and cannot name an entry of `Body.computed` (§5.1).
-      *Assumed:* such a widening lists no slot.
-    - **A write through a resolved handle whose resolution is journaled.**
-      The write lands where the resolution ends, which is not the cell the
-      plain `identity` slot links to. *Assumed:* the target of the edge
-      names the resolved slot, which is then not an entry of `Body.reads`
-      (§6.2).
-    - **A handle found by a dynamic read.** It has no slot, so
-      `HandleReads.handle` cannot name it. *Assumed:* its reads are
-      journaled under the entry of the handle it was found through, whose
-      envelope schema holds the found handle's envelope at that position
-      (§7.5), and a write envelope names it by a slot whose path crosses
-      the first handle's link (§6.2).
-    - **The captures of an inline pattern a body instantiates.**
-      `Closure.params` records the captures of a closure used as a value.
-      No member of `BodyCall` or `Child` records them for an inline
-      `pattern(...)` that is the callee of an instantiation in a body.
-      *Assumed:* they are bound as `Closure.params` binds them (§8.1).
-    - **`equalLinks`.** §3.16 there has a row for `equals`, whose operands
-      are resolved, and none for `equalLinks`, which compares the stored
-      references. *Assumed:* a plain `identity` entry at each operand
-      (§3.2).
+    `language-subset.md`). Met by §5.2 there ("What a binding holds"): the
+    copy holds the paths the bound handler's footprint names, and for a
+    handler received as a factory value the paths its declared state type
+    covers (§8.5 here). Two bindings whose computed records differ only at
+    paths the handler does not read are one stream.
+16. **Forms of the record for eight things the analysis produces** (to
+    `plan-and-label-templates.md`). Met by §1.1 there, form by form.
+    - **`shape` at a position that holds a handle:** a `shape` slot with
+      `inPlace` (§2.5 there; §7.2 here). The handler of §12 has four such
+      entries.
+    - **A widening on a computed input:** `Widening.computed` (§5.1).
+    - **A write through a resolved handle:** a `handle` target with
+      `resolved`, whose slot is the `identity` slot the body has at the
+      handle, the plain one where the resolution is journaled (§3.11
+      there; §6.2).
+    - **A handle found by a dynamic read:** no entry of its own. The
+      envelope of the entry it was found through admits the position as a
+      handle (§3.9 there; §7.5), and a write envelope names it by a slot
+      that is in no `reads` (§3.11 there; §6.2).
+    - **The captures of an inline pattern a body instantiates:** a `Child`
+      whose callee is a `Closure` (§3.15 there; §8.1). That they are bound
+      as the state of a handler binding is an assumption there (open
+      question 23 there).
+    - **`equalLinks`:** a row in §3.16 there, with a plain `identity` slot
+      at each operand (§3.2).
     - **A state path of a binding that holds a reference on some runs
-      only.** `Binding.state` records one capture mode for a path. A
-      conditional between a container passed on unchanged and one the body
-      computed binds a link on some runs and a copy on the others.
-      *Assumed:* the path is recorded as copied, and the runtime stores a
-      link where the value it is handed there is a reference (§8.5).
-    - **A read through the link of an instance a computation made.** The
-      link is a created value, so `HandleReads.handle` has no slot and no
-      computed entry to name. *Assumed:* an entry of `Body.handles` can
-      name the call site (§8.1).
+      only:** `capture: "copy"` and no `reference`, and the runtime stores
+      a link where the value it is handed carries a stored address (§3.14
+      there; §8.5).
+    - **A read through the link of an instance a computation made:** an
+      entry of `Body.handles` whose `handle` is `{ call }` (§3.9 there;
+      §8.1).
 17. **What a body sees at an `unknown` position** (to `language-subset.md`
     and `execution-and-storage.md`). §2.2 records `shape` for a test of
     presence or kind at such a position and `identity` for a conversion to
@@ -2597,9 +2619,10 @@ asked.
     alone. If a kind test can see the stored kind, a position narrowed by
     it is read under the narrowed type, which §2.2 covers.
 18. **The identity of an instance a computation makes** (to
-    `plan-and-label-templates.md`, §1.3 there). *Assumed:* the enclosing
-    instance, the site, and the ordinal of the occurrence among the
-    instantiations the evaluation makes at that site, or an explicit cause
-    where the author writes `.for(cause)` (§8.1). `BodyCall` records the
-    first as `identifiedBy: "order"` and the second as
-    `identifiedBy: "tag"`, as for a handler.
+    `plan-and-label-templates.md`). Met by §1.3 and §3.14 there: the
+    enclosing instance, the body's `name` and `within`, the site, and the
+    ordinal of the instantiation among those the evaluation makes at that
+    site, or, with `.for(cause)`, that cause in place of the ordinal
+    (§8.1). `BodyCall` records the first as `identifiedBy: "order"` and
+    the second as `identifiedBy: "tag"`. The rule is an assumption there,
+    pending the owner (open question 26 there).
