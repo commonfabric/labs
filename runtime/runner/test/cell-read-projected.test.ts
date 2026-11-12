@@ -114,6 +114,66 @@ async function holder(server?: MemoryV2Server.Server) {
   };
 }
 
+/**
+ * In `runtime`, a profile whose `face` field is a write redirect to a cell of
+ * its own holding "🦝", labeled as representing a visitor, beside a cell
+ * holding "🦊" labeled as representing the profile's owner. `field` is the
+ * profile's `face`, `point()` stores a new value for it in the profile, and
+ * `store()` stores a value under a label representing a principal.
+ */
+async function faceOf(runtime: Runtime) {
+  const owner = (await Identity.fromPassphrase("cell-read-projected owner"))
+    .did();
+  const visitor = (await Identity.fromPassphrase("cell-read-projected visitor"))
+    .did();
+  const cellAt = (cause: string) => runtime.getCell(space, cause);
+  const store = (
+    tx: ReturnType<Runtime["edit"]>,
+    cause: string,
+    value: string,
+    subject: string,
+  ) =>
+    seedStoredEnvelope(
+      tx,
+      { ...cellAt(cause).getAsNormalizedFullLink(), path: [] },
+      {
+        value,
+        cfc: {
+          version: 1,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: {
+            version: 1,
+            entries: [{
+              path: [],
+              label: { integrity: [{ kind: "represents-principal", subject }] },
+            }],
+          },
+        },
+      },
+    );
+  const commit = async (edit: (tx: ReturnType<Runtime["edit"]>) => void) => {
+    const tx = runtime.edit();
+    writeSeedEnvelopeDoc(tx, space);
+    edit(tx);
+    expect((await tx.commit().settled).error).toBeUndefined();
+    await runtime.idle();
+  };
+  const point = (face: unknown) =>
+    commit((tx) =>
+      cellAt("face-profile").withTx(tx).setRawUntyped({ face } as never)
+    );
+  await commit((tx) => {
+    store(tx, "face-by-visitor", "🦝", visitor);
+    store(tx, "face-by-owner", "🦊", owner);
+  });
+  await point(cellAt("face-by-visitor").getAsWriteRedirectLink());
+  const field = cellAt("face-profile").asSchema({
+    type: "object",
+    properties: { face: { type: "string" } },
+  }).key("face");
+  return { owner, visitor, cellAt, store, commit, point, field };
+}
+
 describe("cell-read-projected", () => {
   describe("readProjected()", () => {
     it("returns what the projection made of the value", async () => {
@@ -230,6 +290,117 @@ describe("cell-read-projected", () => {
       } finally {
         await server.close();
       }
+    });
+
+    it("passes the principal the value's own cell represents when asked, and runs again when that cell is relabeled or relinked", async () => {
+      await using docs = await holder();
+      const face = await faceOf(docs.runtime);
+      const delivered: unknown[] = [];
+      const cancel = sinkProjected(
+        face.field,
+        hostValueOf,
+        (value, _read, _label, writtenPrincipal) => {
+          delivered.push([value, writtenPrincipal]);
+        },
+        { includeWrittenPrincipal: true },
+      );
+      try {
+        expect(delivered).toEqual([["🦝", face.visitor]]);
+
+        await face.commit((tx) =>
+          face.store(tx, "face-by-visitor", "🦝", face.owner)
+        );
+        expect(delivered.at(-1)).toEqual(["🦝", face.owner]);
+
+        await face.point(face.cellAt("face-by-owner").getAsWriteRedirectLink());
+        expect(delivered.at(-1)).toEqual(["🦊", face.owner]);
+
+        await face.point("🐻");
+        expect(delivered.at(-1)).toEqual(["🐻", undefined]);
+      } finally {
+        cancel();
+      }
+    });
+
+    it("consumes no more when asked for the principal than when not, for a read that stops at a reference", async () => {
+      await using docs = await holder();
+      const face = await faceOf(docs.runtime);
+      await face.commit((tx) =>
+        seedStoredEnvelope(
+          tx,
+          {
+            ...face.cellAt("face-by-visitor").getAsNormalizedFullLink(),
+            path: [],
+          },
+          {
+            value: "🦝",
+            cfc: {
+              version: 1,
+              schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+              labelMap: {
+                version: 1,
+                entries: [{
+                  path: [],
+                  label: {
+                    confidentiality: [SECRET_ATOM],
+                    integrity: [{
+                      kind: "represents-principal",
+                      subject: face.visitor,
+                    }],
+                  },
+                }],
+              },
+            },
+          },
+        )
+      );
+      await face.point(face.cellAt("face-by-visitor").getAsLink());
+      const reference = face.cellAt("face-profile").asSchema({
+        type: "object",
+        properties: { face: { asCell: ["cell"] } },
+      }).key("face");
+      const readWith = (includeWrittenPrincipal: boolean) => {
+        const seen: unknown[] = [];
+        sinkProjected(reference, () => "nothing read", (
+          _value,
+          read,
+          _label,
+          writtenPrincipal,
+        ) => {
+          seen.push({
+            confidentiality: read?.confidentiality,
+            integrity: read?.integrity,
+            writtenPrincipal,
+          });
+        }, { includeWrittenPrincipal })();
+        return seen;
+      };
+
+      // The reference's read consumes the linked document's label itself, so
+      // the principal's read of the same links adds nothing to what it
+      // consumed.
+      const [plain] = readWith(false);
+      expect(plain).toMatchObject({
+        confidentiality: expect.arrayContaining([SECRET_ATOM]),
+        writtenPrincipal: undefined,
+      });
+      expect(readWith(true)).toEqual([plain]);
+    });
+
+    it("passes no principal when not asked, whatever the value's own cell represents", async () => {
+      await using docs = await holder();
+      const face = await faceOf(docs.runtime);
+      const delivered: unknown[] = [];
+      const cancel = sinkProjected(
+        face.field,
+        hostValueOf,
+        (value, _read, _label, writtenPrincipal) => {
+          delivered.push([value, writtenPrincipal]);
+        },
+      );
+      cancel();
+
+      expect(delivered).toEqual([["🦝", undefined]]);
     });
 
     it("refuses a stream, which holds no value to project", async () => {
