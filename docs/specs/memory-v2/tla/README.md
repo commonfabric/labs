@@ -287,18 +287,21 @@ declaration on both paths.
 (`docs/specs/content-addressed-schemas.md`, "Delivery by reference"). A frame
 that names a schema document body the client's registry lacks waits for its
 fetch in a queue in front of the replica, though the server has already
-recorded it as delivered. `Drain` is the fetch's reply: a verified body applies the frame
-at the head, and a body that could not be fetched drops it, which counts as a
-loss. A disconnect discards the queue. `inorder` queues every frame that
-arrives while one is held behind it, as the client does; `bypass` applies a
-frame that names no missing body at once, ahead of the held ones; `none`
-holds nothing. `MaxHeld` bounds the frames held for their own bodies. Each
-`Drain` applies one frame as one step, and the client matches that by
-handing on one held sync per turn, as a transport hands over messages:
-several handed on in one turn would let an effect apply before the watch
-response ahead of it had installed its view. The replica applies a push only when it advances the document's seq, the
-monotonic guard INV-14 states, so a late push cannot move a document
-backwards; a removal is not a seq, and nothing guards it.
+recorded it as delivered. `Drain` is the fetch's reply: a verified body
+applies the frame at the head, and a body that could not be fetched drops it,
+which counts as a loss. A disconnect discards the queue. `inorder` queues
+every frame that arrives while one is held behind it, as the client does;
+`bypass` applies a frame that names no missing body at once, ahead of the held
+ones; `none` holds nothing. `MaxHeld` bounds the frames held for their own
+bodies. Each `Drain` applies one frame as one step. The client keeps that
+atomicity by handing the held syncs on in arrival order and applying each as
+it would a frame straight off the connection: a watch response handed on is
+recorded then, and an effect handed on after it waits until the response has
+installed its view (`#arrivalsBehindWatchResponses` in
+`runtime/memory/v2/client.ts`). The replica applies a push only when it
+advances the document's seq, the monotonic guard INV-14 states, so a late push
+cannot move a document backwards; a removal is not a seq, and nothing guards
+it.
 
 Checked with TLC 2.19; every config finishes in seconds:
 
