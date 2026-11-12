@@ -551,7 +551,8 @@ describe("scheduler-event-loading-read", () => {
     it("commits what a one-shot read while the load was in flight, since it runs no second time", async () => {
       // A `retries: false` event is not run again, so withdrawing its run
       // would lose the event; it ends on its one run, as one whose read
-      // nothing was loading for does.
+      // nothing was loading for does. The load is released once the run has
+      // read, so a withdrawn run would show here as a second one.
 
       const { holder, log, eventCell, store } = await standUp(
         "client-one-shot",
@@ -559,16 +560,20 @@ describe("scheduler-event-loading-read", () => {
       );
       const errors: Error[] = [];
       reader.scheduler.onError((error) => errors.push(error));
-      const { reads, firstRun } = addAppendingHandler(holder, log, eventCell);
-      holdReaderSyncFor(store.getAsNormalizedFullLink().id);
+      const { reads, runs, firstRun } = addAppendingHandler(
+        holder,
+        log,
+        eventCell,
+      );
+      const release = holdReaderSyncFor(store.getAsNormalizedFullLink().id);
 
       const status = send(eventCell, undefined, { oneShot: true });
       await firstRun;
-      expect(await settledYet(status), "the one-shot ends on its run").toBe(
-        true,
-      );
+      release();
 
       expect(await status).toBe("done");
+      await reader.idle();
+      expect(runs.count).toBe(1);
       expect(reads).toEqual([[]]);
       expect(log.get()).toEqual([""]);
       expect(errors).toEqual([]);
@@ -587,15 +592,14 @@ describe("scheduler-event-loading-read", () => {
         eventCell,
         offersSchemaWithoutDefault,
       );
-      holdReaderSyncFor(store.getAsNormalizedFullLink().id);
+      const release = holdReaderSyncFor(store.getAsNormalizedFullLink().id);
 
       const status = send(eventCell, undefined, { oneShot: true });
       await firstRun;
-      expect(await settledYet(status), "the one-shot ends on its run").toBe(
-        true,
-      );
+      release();
 
       expect(await status).not.toBe("done");
+      await reader.idle();
       expect(runs.count).toBe(1);
       expect(log.get()).toBeUndefined();
       expect(errors.map((error) => error.name)).toEqual(["TypeError"]);
@@ -656,13 +660,12 @@ describe("scheduler-event-loading-read", () => {
       expect(errors).toEqual([]);
     });
 
-    it("runs the handler once more, and not again, when the load it read fails by authorization with no refusal of the space recorded", async () => {
-      // Each read of a document whose load failed starts another load, and
-      // nothing of the document reaches the replica, so the run after the
-      // park finds a load in flight again. That one is of its own making,
-      // and the event does not park on it (`unawaitedLoadKeys`). From its
-      // third run on the handler stops reading, so a third run shows here
-      // as a missing log entry rather than as a loop.
+    it("runs the handler once more, on the absence, and does not park again, when the load it read fails by authorization with no refusal of the space recorded", async () => {
+      // Nothing of the document reaches the replica, and the space stays
+      // unrefused, so nothing but the park's release keeps the event from
+      // waiting on it again. A further load, should the run after the park
+      // start one, is held until the event has either committed or parked
+      // again.
 
       const { holder, log, eventCell, store } = await standUp(
         "client-authorization-fails",
@@ -670,36 +673,66 @@ describe("scheduler-event-loading-read", () => {
       );
       const errors: Error[] = [];
       reader.scheduler.onError((error) => errors.push(error));
-      const reads: string[][] = [];
-      const firstRun = Promise.withResolvers<void>();
-      reader.scheduler.addEventHandler(
-        (tx: IExtendedStorageTransaction) => {
-          firstRun.resolve();
-          if (reads.length >= 2) {
-            reads.push(["not read"]);
-            return;
-          }
-          const offers = holder.withTx(tx).key("inbox").resolveAsCell()
-            .key("offers").asSchema(offersSchema).get() as string[];
-          reads.push([...offers]);
-          log.withTx(tx).set([offers.join(",")]);
-        },
-        eventCell.getAsNormalizedFullLink(),
-        (depTx) => {
-          holder.withTx(depTx).get();
-        },
-      );
-      const fail = failReaderSyncFor(
-        store.getAsNormalizedFullLink().id,
-        "AuthorizationError",
-      );
+      const { reads, firstRun } = addAppendingHandler(holder, log, eventCell);
+      const storeLink = store.getAsNormalizedFullLink();
+      const storeKey = `${storeLink.space}/${storeLink.scope}/${storeLink.id}`;
+      const failFirst = Promise.withResolvers<void>();
+      const failLater = Promise.withResolvers<void>();
+      heldSyncReleases.push(failFirst.resolve, failLater.resolve);
+      let loads = 0;
+      const manager = readerStorage as unknown as {
+        open: (space: string) => {
+          sync: (...args: unknown[]) => Promise<unknown>;
+        };
+        loadsSettled: (keys: readonly string[]) => Promise<void>;
+      };
+      const originalOpen = manager.open.bind(manager);
+      manager.open = (openSpace: string) => {
+        const provider = originalOpen(openSpace);
+        return new Proxy(provider, {
+          get(target, prop, receiver) {
+            if (prop === "sync") {
+              return async (syncId: unknown, ...rest: unknown[]) => {
+                if (syncId !== storeLink.id) {
+                  return (target.sync as (...a: unknown[]) => Promise<
+                    unknown
+                  >)(syncId, ...rest);
+                }
+                loads++;
+                await (loads === 1 ? failFirst.promise : failLater.promise);
+                return {
+                  error: { name: "AuthorizationError", message: "refused" },
+                };
+              };
+            }
+            const value = Reflect.get(target, prop, receiver);
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        });
+      };
+      const parkedAgain = Promise.withResolvers<void>();
+      let parks = 0;
+      const loadsSettled = manager.loadsSettled.bind(manager);
+      manager.loadsSettled = (keys) => {
+        if (keys.includes(storeKey) && ++parks === 2) parkedAgain.resolve();
+        return loadsSettled(keys);
+      };
 
       const status = send(eventCell);
-      await firstRun.promise;
-      fail();
+      await firstRun;
+      failFirst.resolve();
 
-      expect(await status).toBe("done");
+      expect(
+        await Promise.race([
+          status,
+          parkedAgain.promise.then(() => "parked again"),
+        ]),
+      ).toBe("done");
+      failLater.resolve();
       await reader.idle();
+      expect(loads, "the run after the park loads the document no more").toBe(
+        1,
+      );
       expect(reads).toEqual([[], []]);
       expect(log.get()).toEqual([""]);
       expect(errors).toEqual([]);

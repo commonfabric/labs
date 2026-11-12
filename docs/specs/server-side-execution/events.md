@@ -635,7 +635,8 @@ loop's duty).
   home-space reads to the store's head (serving-loop.md §3d) once the
   run seals a write there, as a drain's copy always does with its
   consequence mark; an LT1 in-process copy that writes only into other
-  spaces seals nothing at home, so its home-space reads count too. The
+  spaces seals nothing at home, so its home-space reads count too, and
+  so do every run's that threw, which seals nothing at all. The
   run that reads a document its load confirms absent proceeds with
   that absence. So does a run reading a document in a space the
   server refuses the serving identity, which commits the schema's
@@ -695,7 +696,8 @@ loop's duty).
   waiting on a load is settlement; a load that fails otherwise than by
   authorization drops it, reporting the error the withdrawn run threw.
   A read in a space the commit writes travels with that commit, which
-  the store refuses when the read is stale. A one-shot
+  the store refuses when the read is stale; a run that threw makes no
+  commit, so every one of its reads counts. A one-shot
   (`retries: false`) is not withdrawn, since it is never run again: one
   that read a document still loading commits what it read, the
   schema's default, as one with nothing in flight does. Sealing the skip
