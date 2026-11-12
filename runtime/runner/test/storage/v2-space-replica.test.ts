@@ -878,10 +878,10 @@ describe("SpaceReplica", () => {
         expect((await replica.sync(doc)).error).toBeUndefined();
         await replica.releaseUnread();
         const remove = sessions[0].watchRemoveSync.bind(sessions[0]);
-        sessions[0].watchRemoveSync = (watchIds) => {
+        sessions[0].watchRemoveSync = (watchIds, consume) => {
           // A reader takes the document up while its removal is on its way.
           held = true;
-          return remove(watchIds);
+          return remove(watchIds, consume);
         };
         await replica.releaseUnread();
         expect(await dropped.promise).toEqual([
