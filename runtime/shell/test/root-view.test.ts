@@ -49,10 +49,17 @@ function installBrowserGlobals(): () => void {
     get() {},
     whenDefined: () => Promise.resolve(),
   });
+  // The document's listeners are real, so that a test can dispatch the events
+  // the root view listens for there.
+  const documentEvents = new EventTarget();
   setGlobal("document", {
     documentElement: { style: {} },
-    addEventListener() {},
-    removeEventListener() {},
+    visibilityState: "visible",
+    addEventListener: documentEvents.addEventListener.bind(documentEvents),
+    removeEventListener: documentEvents.removeEventListener.bind(
+      documentEvents,
+    ),
+    dispatchEvent: documentEvents.dispatchEvent.bind(documentEvents),
     createElement: () => ({
       style: {},
       setAttribute() {},
@@ -100,6 +107,19 @@ function installBrowserGlobals(): () => void {
 function templateStrings(value: unknown): string {
   const result = value as { strings?: readonly string[] };
   return (result?.strings ?? []).join("");
+}
+
+/**
+ * Connects `view` with its render step stubbed out. Connecting enables
+ * updating, which would otherwise schedule a real render this shim has no
+ * DOM for; once the stubbed update has run, a committed state change
+ * resolves.
+ */
+function connectWithoutRendering(
+  view: object & { connectedCallback(): void },
+) {
+  (view as unknown as { performUpdate: () => void }).performUpdate = () => {};
+  view.connectedCallback();
 }
 
 describe("XRootView", () => {
@@ -1172,6 +1192,555 @@ describe("XRootView", () => {
       await first;
       await view._resolveEventAttention(notice, "dismiss");
       expect(calls).toBe(2);
+    } finally {
+      restore();
+    }
+  });
+
+  describe("application state", () => {
+    it("routes each command event to the setter it names", async () => {
+      const restore = installBrowserGlobals();
+      const originalLog = console.log;
+      const commits: string[] = [];
+      const identityCommitted = Promise.withResolvers<void>();
+      console.log = (message: unknown) => {
+        const description = String(message).replace(/^\[app\] \S+ /, "");
+        commits.push(description);
+        if (description === "set-identity") identityCommitted.resolve();
+      };
+      try {
+        const { XRootView } = await import("../src/views/RootView.ts");
+        const { SHELL_COMMAND } = await import("../src/views/BaseView.ts");
+        const view = new XRootView();
+        connectWithoutRendering(view);
+        const identity = await Identity.fromPassphrase(
+          "root-view-command-routing-test",
+        );
+        const space = "did:key:z6Mk-shell-command-space";
+        const send = (detail: unknown) =>
+          view.dispatchEvent(new CustomEvent(SHELL_COMMAND, { detail }));
+
+        send({ type: "set-view", view: { spaceDid: space } });
+        expect(view.state().view).toEqual({ spaceDid: space });
+
+        send({ type: "set-config", key: "showSidebar", value: true });
+        expect(view.state().config.showSidebar).toBe(true);
+        expect(view.state().config.showDebuggerView).toBeUndefined();
+
+        // An identity is resolved before it is committed, so the command
+        // lands asynchronously.
+        send({ type: "set-identity", identity });
+        await identityCommitted.promise;
+        expect(view.state().identity?.did()).toBe(identity.did());
+
+        expect(commits).toEqual([
+          "set-view",
+          "set-config showSidebar=true",
+          "set-identity",
+        ]);
+        expect(view.serialize()).toEqual({
+          view: { spaceDid: space },
+          config: { showSidebar: true },
+          identityDid: identity.did(),
+          apiUrl: "http://localhost:8000/",
+        });
+      } finally {
+        console.log = originalLog;
+        restore();
+      }
+    });
+
+    it("throws for a config key the state has no field for", async () => {
+      const restore = installBrowserGlobals();
+      try {
+        const { XRootView } = await import("../src/views/RootView.ts");
+        const { SHELL_COMMAND } = await import("../src/views/BaseView.ts");
+        const view = new XRootView();
+        const event = new CustomEvent(SHELL_COMMAND, {
+          detail: { type: "set-config", key: "showEverything", value: true },
+        });
+        expect(() => view.onCommand(event)).toThrow(
+          "Invalid config key: showEverything",
+        );
+        expect(view.state().config).toEqual({});
+      } finally {
+        restore();
+      }
+    });
+
+    it("closes the shell's piece list for a view that addresses a piece, and not for a space's default view", async () => {
+      const restore = installBrowserGlobals();
+      const originalLog = console.log;
+      console.log = () => {};
+      try {
+        const { XRootView } = await import("../src/views/RootView.ts");
+        const view = new XRootView();
+        connectWithoutRendering(view);
+        const space = "did:key:z6Mk-shell-piece-list-space" as const;
+
+        await view.setConfig("showShellPieceListView", true);
+        await view.setView({ spaceDid: space });
+        expect(view.state().config.showShellPieceListView).toBe(true);
+
+        await view.setView({ spaceDid: space, pieceId: "piece-1" });
+        expect(view.state().config.showShellPieceListView).toBe(false);
+      } finally {
+        console.log = originalLog;
+        restore();
+      }
+    });
+
+    it("refuses another identity while one is logged in, and takes it once logged out", async () => {
+      const restore = installBrowserGlobals();
+      const originalLog = console.log;
+      console.log = () => {};
+      try {
+        const { XRootView } = await import("../src/views/RootView.ts");
+        const view = new XRootView();
+        connectWithoutRendering(view);
+        const first = await Identity.fromPassphrase("root-view-first-identity");
+        const second = await Identity.fromPassphrase(
+          "root-view-second-identity",
+        );
+
+        await view.setIdentity(first);
+        await expect(view.setIdentity(second)).rejects.toThrow(
+          "Cannot change identity while logged in.",
+        );
+        expect(view.state().identity?.did()).toBe(first.did());
+
+        await view.setIdentity(undefined);
+        expect(view.state().identity).toBeUndefined();
+        await view.setIdentity(second);
+        expect(view.state().identity?.did()).toBe(second.did());
+      } finally {
+        console.log = originalLog;
+        restore();
+      }
+    });
+
+    it("reports a failed space-name lookup only while the view still names that space", async () => {
+      const restore = installBrowserGlobals();
+      const originalError = console.error;
+      console.error = () => {};
+      try {
+        const { XRootView } = await import("../src/views/RootView.ts");
+        const { resolveSpaceDid } = await import("@commonfabric/lib-shell");
+        const view = new XRootView();
+        const identity = await Identity.fromPassphrase(
+          "root-view-stale-lookup-test",
+        );
+        const lifecycle = view as unknown as {
+          willUpdate(changed: Map<string, unknown>): void;
+        };
+        const setView = (next: unknown) => {
+          view.app = {
+            ...view.app,
+            identity,
+            view: next as typeof view.app.view,
+          };
+          lifecycle.willUpdate(new Map([["app", undefined]]));
+        };
+        // A space name may not be a DID, so looking one up fails.
+        const unresolvable = "did:key:z6Mk-not-a-space-name";
+        const spaceError = 'spaceLoadError="{kind:"space"';
+
+        setView({ spaceName: unresolvable });
+        await view.spaceResolved();
+        expect(templateMarkup(view.render())).toContain(spaceError);
+
+        setView({ spaceName: unresolvable + "-again" });
+        const failing = view.spaceResolved();
+        setView({ spaceName: "atlas" });
+        await failing;
+        await view.spaceResolved();
+        expect(view.getRuntimeSpaceDID()).toBe(
+          await resolveSpaceDid(identity, "atlas"),
+        );
+        expect(templateMarkup(view.render())).not.toContain(spaceError);
+      } finally {
+        console.error = originalError;
+        restore();
+      }
+    });
+  });
+
+  describe("runtime task", () => {
+    it("runs the runtime task for the first state, and again only for a new identity or host", async () => {
+      const restore = installBrowserGlobals();
+      try {
+        const { XRootView } = await import("../src/views/RootView.ts");
+        const view = new XRootView();
+        const runs: unknown[] = [];
+        view.accessForTestingOnly.rt = {
+          run: (args: unknown) => runs.push(args),
+        } as never;
+        const lifecycle = view as unknown as {
+          updated(changed: Map<string, unknown>): void;
+        };
+        const identity = await Identity.fromPassphrase(
+          "root-view-runtime-recreation-test",
+        );
+        const initial = view.app;
+
+        lifecycle.updated(new Map([["app", undefined]]));
+        expect(runs).toEqual([[initial]]);
+
+        // Another view is view state, which the same runtime serves.
+        view.app = { ...initial, view: { builtin: "home" } };
+        lifecycle.updated(new Map([["app", initial]]));
+        expect(runs).toHaveLength(1);
+
+        // An update that leaves the state alone asks nothing of the runtime.
+        lifecycle.updated(new Map([["space", undefined]]));
+        expect(runs).toHaveLength(1);
+
+        const before = view.app;
+        view.app = { ...before, identity };
+        lifecycle.updated(new Map([["app", before]]));
+        expect(runs).toEqual([[initial], [view.app]]);
+
+        const sameIdentity = view.app;
+        view.app = { ...sameIdentity, apiUrl: new URL("http://other.test/") };
+        lifecycle.updated(new Map([["app", sameIdentity]]));
+        expect(runs).toEqual([[initial], [sameIdentity], [view.app]]);
+      } finally {
+        restore();
+      }
+    });
+
+    it("drops the runtime and its console globals when the identity goes", async () => {
+      const restore = installBrowserGlobals();
+      const { RuntimeInternals } = await import("@commonfabric/lib-shell");
+      const originalCreate = RuntimeInternals.create;
+      let disposals = 0;
+      const runtime = {
+        on: () => {},
+        off: () => {},
+        listEventAttention: () => Promise.resolve([]),
+      };
+      RuntimeInternals.create = (() =>
+        Promise.resolve({
+          runtime: () => runtime,
+          dispose: () => {
+            disposals++;
+            return Promise.resolve();
+          },
+        } as unknown as Awaited<
+          ReturnType<typeof RuntimeInternals.create>
+        >)) as typeof RuntimeInternals.create;
+      const global = globalThis as { commonfabric?: { rt?: unknown } };
+
+      try {
+        const { XRootView } = await import("../src/views/RootView.ts");
+        const view = new XRootView();
+        const identity = await Identity.fromPassphrase(
+          "root-view-logout-runtime-test",
+        );
+        const task = view.accessForTestingOnly.rt;
+
+        task.run([{ ...view.app, identity }]);
+        await task.taskComplete;
+        expect(task.value).toBeDefined();
+        expect(global.commonfabric?.rt).toBe(runtime);
+
+        task.run([{ ...view.app, identity: undefined }]);
+        await task.taskComplete;
+        expect(task.value).toBeUndefined();
+        expect(disposals).toBe(1);
+        expect(global.commonfabric?.rt).toBeUndefined();
+      } finally {
+        RuntimeInternals.create = originalCreate;
+        delete global.commonfabric;
+        restore();
+      }
+    });
+
+    it("waits on the rendered app view's pending work in the console's `viewSettled()`", async () => {
+      const restore = installBrowserGlobals();
+      const { RuntimeInternals } = await import("@commonfabric/lib-shell");
+      const originalCreate = RuntimeInternals.create;
+      const order: string[] = [];
+      RuntimeInternals.create = (() =>
+        Promise.resolve({
+          runtime: () => ({
+            on: () => {},
+            off: () => {},
+            listEventAttention: () => Promise.resolve([]),
+            idle: () => {
+              order.push("runtime idle");
+              return Promise.resolve();
+            },
+          }),
+          dispose: () => Promise.resolve(),
+        } as unknown as Awaited<
+          ReturnType<typeof RuntimeInternals.create>
+        >)) as typeof RuntimeInternals.create;
+      const global = globalThis as {
+        commonfabric?: { viewSettled?: () => Promise<void> };
+      };
+
+      try {
+        const { XRootView } = await import("../src/views/RootView.ts");
+        const view = new XRootView();
+        // The app view's `settling` is read each time it is asked for, so one
+        // thenable, logging when it is awaited, stands for the same work.
+        const settling = {
+          then(resolve: () => void) {
+            order.push("app view settled");
+            resolve();
+          },
+        };
+        Object.defineProperty(view, "renderRoot", {
+          value: {
+            querySelector: (selector: string) =>
+              selector === "x-app-view" ? { settling } : null,
+          },
+        });
+        const task = view.accessForTestingOnly.rt;
+        task.run([{
+          ...view.app,
+          identity: await Identity.fromPassphrase("root-view-settled-test"),
+        }]);
+        await task.taskComplete;
+
+        await global.commonfabric!.viewSettled!();
+        expect(order).toEqual(["app view settled", "runtime idle"]);
+      } finally {
+        RuntimeInternals.create = originalCreate;
+        delete global.commonfabric;
+        restore();
+      }
+    });
+  });
+
+  describe("page events", () => {
+    it("follows the theme preference the document announces", async () => {
+      const restore = installBrowserGlobals();
+      try {
+        const { XRootView } = await import("../src/views/RootView.ts");
+        const view = new XRootView();
+        connectWithoutRendering(view);
+        expect(templateMarkup(view.render())).not.toContain(
+          'colorScheme:"dark"',
+        );
+
+        document.dispatchEvent(
+          new CustomEvent("theme-preference-changed", { detail: "dark" }),
+        );
+        expect(templateMarkup(view.render())).toContain('colorScheme:"dark"');
+
+        // A disconnected view hears no more of it.
+        view.disconnectedCallback();
+        document.dispatchEvent(
+          new CustomEvent("theme-preference-changed", { detail: "light" }),
+        );
+        expect(templateMarkup(view.render())).toContain('colorScheme:"dark"');
+      } finally {
+        restore();
+      }
+    });
+
+    it("retries unavailable spaces when the page becomes visible, and not while it is hidden", async () => {
+      const restore = installBrowserGlobals();
+      const { RuntimeInternals } = await import("@commonfabric/lib-shell");
+      const originalCreate = RuntimeInternals.create;
+      let unreachableRetries = 0;
+      RuntimeInternals.create = (() =>
+        Promise.resolve({
+          runtime: () => ({
+            on: () => {},
+            off: () => {},
+            listEventAttention: () => Promise.resolve([]),
+            retryUnreachableSpaces: () => {
+              unreachableRetries++;
+              return Promise.resolve();
+            },
+          }),
+          dispose: () => Promise.resolve(),
+        } as unknown as Awaited<
+          ReturnType<typeof RuntimeInternals.create>
+        >)) as typeof RuntimeInternals.create;
+
+      try {
+        const { XRootView } = await import("../src/views/RootView.ts");
+        const view = new XRootView();
+        connectWithoutRendering(view);
+        const task = view.accessForTestingOnly.rt;
+        task.run([{
+          ...view.app,
+          identity: await Identity.fromPassphrase("root-view-visibility-test"),
+        }]);
+        await task.taskComplete;
+        const page = document as unknown as { visibilityState: string };
+
+        page.visibilityState = "hidden";
+        document.dispatchEvent(new Event("visibilitychange"));
+        expect(unreachableRetries).toBe(0);
+
+        page.visibilityState = "visible";
+        document.dispatchEvent(new Event("visibilitychange"));
+        expect(unreachableRetries).toBe(1);
+        view.disconnectedCallback();
+      } finally {
+        RuntimeInternals.create = originalCreate;
+        delete (globalThis as { commonfabric?: unknown }).commonfabric;
+        restore();
+      }
+    });
+  });
+
+  describe("runtime load errors", () => {
+    /** The runtime load errors the view hands the app view. */
+    function loadErrorsOf(view: object): readonly ErrorNotification[] {
+      return (view as unknown as {
+        _runtimeLoadErrors: readonly ErrorNotification[];
+      })._runtimeLoadErrors;
+    }
+
+    it("keeps the latest error of each piece of the space on screen, up to twenty", async () => {
+      const restore = installBrowserGlobals();
+      const originalError = console.error;
+      console.error = () => {};
+      try {
+        const { XRootView } = await import("../src/views/RootView.ts");
+        const view = new XRootView();
+        const space = "did:key:z6Mk-shell-load-error-space";
+        (view as unknown as { space: string }).space = space;
+        const error = (
+          message: string,
+          context: { space?: string; pieceId?: string; patternId?: string },
+        ): ErrorNotification => ({
+          type: NotificationType.ErrorReport,
+          message,
+          ...context,
+        });
+
+        view._handleRuntimeError(error("other space", { space: "did:key:z" }));
+        view._handleRuntimeError(error("no space", {}));
+        expect(loadErrorsOf(view)).toEqual([]);
+
+        const first = error("first", { space, pieceId: "p1" });
+        const other = error("other piece", { space, pieceId: "p2" });
+        const second = error("second", { space, pieceId: "p1" });
+        const pattern = error("pattern", {
+          space,
+          pieceId: "p1",
+          patternId: "pat",
+        });
+        view._handleRuntimeError(first);
+        view._handleRuntimeError(other);
+        view._handleRuntimeError(second);
+        view._handleRuntimeError(pattern);
+        expect(loadErrorsOf(view)).toEqual([other, second, pattern]);
+
+        const many = Array.from(
+          { length: 25 },
+          (_, i) => error(`error ${i}`, { space, pieceId: `piece-${i}` }),
+        );
+        for (const each of many) view._handleRuntimeError(each);
+        expect(loadErrorsOf(view)).toEqual(many.slice(-20));
+      } finally {
+        console.error = originalError;
+        restore();
+      }
+    });
+
+    it("keeps its errors through the one view change asked to preserve them", async () => {
+      const restore = installBrowserGlobals();
+      try {
+        const { XRootView } = await import("../src/views/RootView.ts");
+        const view = new XRootView();
+        const internals = view as unknown as {
+          _runtimeLoadErrors: readonly ErrorNotification[];
+          willUpdate(changed: Map<string, unknown>): void;
+        };
+        const error: ErrorNotification = {
+          type: NotificationType.ErrorReport,
+          message: "the piece failed to load",
+        };
+        const moveTo = (pieceId: string) => {
+          const previous = view.app;
+          view.app = {
+            ...previous,
+            view: { spaceName: "atlas", pieceId } as typeof view.app.view,
+          };
+          internals.willUpdate(new Map([["app", previous]]));
+        };
+        moveTo("piece-1");
+        internals._runtimeLoadErrors = [error];
+
+        view.preserveRuntimeErrorsForNextViewChange();
+        moveTo("piece-2");
+        expect(loadErrorsOf(view)).toEqual([error]);
+
+        moveTo("piece-3");
+        expect(loadErrorsOf(view)).toEqual([]);
+      } finally {
+        restore();
+      }
+    });
+  });
+
+  it("shows what a refresh begun after a dismissal lists, though the dismissal was of the same event", async () => {
+    // A dismissal made while another space was on screen is older than the
+    // refresh that runs on returning, so the refresh's list is the newer word.
+
+    const restore = installBrowserGlobals();
+    try {
+      const { XRootView } = await import("../src/views/RootView.ts");
+      const view = new XRootView();
+      const identity = await Identity.fromPassphrase(
+        "root-view-attention-older-dismissal-test",
+      );
+      const firstSpace = "did:key:z6Mk-shell-older-dismissal-a" as never;
+      const secondSpace = "did:key:z6Mk-shell-older-dismissal-b" as never;
+      const notice: EventAttentionNotice = {
+        space: firstSpace,
+        eventId: "evt-older-dismissal",
+        seq: 3,
+        sidecarId: "of:stream-events:older-dismissal",
+        reason: "listed again after dismissal",
+        attention: {
+          phase: "dispatch-load",
+          failureClass: "connection",
+          code: "delivery-failure-budget-exhausted",
+          firstFailureAt: 10,
+          lastFailureAt: 70_000,
+          accumulatedFailureMs: 60_000,
+          failureCount: 2,
+          recovery: "explicit-retry",
+        },
+      };
+      const refreshOfFirst = Promise.withResolvers<
+        readonly EventAttentionNotice[]
+      >();
+      (view as unknown as { runtime: unknown }).runtime = {
+        listEventAttention: (space: string) =>
+          space === firstSpace ? refreshOfFirst.promise : Promise.resolve([]),
+        resolveEventAttention: () => Promise.resolve({ kind: "dismissed" }),
+      };
+      const setSpace = (space: string) => {
+        const previous = view.app;
+        view.app = {
+          ...view.app,
+          identity,
+          view: { spaceDid: space } as typeof view.app.view,
+        };
+        (view as unknown as {
+          willUpdate(changed: Map<string, unknown>): void;
+        }).willUpdate(new Map([["app", previous]]));
+      };
+
+      setSpace(secondSpace);
+      await view._resolveEventAttention(notice, "dismiss");
+      setSpace(firstSpace);
+      refreshOfFirst.resolve([notice]);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(templateMarkup(view.render())).toContain(
+        "listed again after dismissal",
+      );
     } finally {
       restore();
     }
