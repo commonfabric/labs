@@ -21,7 +21,7 @@
  * ```
  */
 
-import { css, html } from "lit";
+import { css, html, nothing } from "lit";
 import { BaseElement } from "../../core/base-element.ts";
 
 export type SeparatorOrientation = "horizontal" | "vertical";
@@ -101,7 +101,7 @@ export class CFSeparator extends BaseElement {
         class="separator ${this.orientation}"
         part="separator"
         role="${this.decorative ? "none" : "separator"}"
-        aria-orientation="${this.decorative ? null : this.orientation}"
+        aria-orientation="${this.decorative ? nothing : this.orientation}"
       ></div>
     `;
   }

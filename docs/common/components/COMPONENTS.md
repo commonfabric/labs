@@ -325,9 +325,10 @@ array indices, which drift when lists change.
 
 ### Events and best practices
 
-- `cf-submit` — emitted after validation passes and buffers are flushed.
-  Handlers should read from the bound cell directly (type-safe), not from
-  event detail.
+- `cf-submit` — emitted after validation passes and buffers are flushed. It
+  carries no detail: handlers read from the bound cell directly (type-safe).
+  It is cancelable; `preventDefault()` keeps a form with an `action` from
+  submitting natively.
 - `cf-form-invalid` — emitted when submit is attempted but validation fails;
   detail carries `{ errors: Array<{ element, message? }> }`.
 - Fields use HTML5 constraint validation by default.

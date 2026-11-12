@@ -264,6 +264,7 @@ jobs:
             cc-lane-${{ steps.compile-cache-key.outputs.fingerprint }}-
 
       - name: 🧪 Run the lane
+        id: run-lane
         timeout-minutes: *lane-work-timeout
         working-directory: ${{ env.CHECKOUT }}
         # The token is what the `github-api` capability hands to the suites
@@ -273,8 +274,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         # A process in the lane that crashes natively leaves its core under
-        # the job's temporary directory, where the upload of what a failing
-        # lane left behind finds it. The lane replaces the shell, because
+        # the job's temporary directory, where the upload of what a lane
+        # kept finds it. The lane replaces the shell, because
         # GitHub stops a step that reaches its bound by signalling the
         # step's own process, and the lane is what passes that on to the
         # tests it is running. The arguments are a list of words, and
@@ -286,11 +287,14 @@ jobs:
           # shellcheck disable=SC2086
           exec deno run -A tasks/ci-lane.ts $LANE_ARGS --described
 
-      - name: 📋 Upload what a failing lane left behind
-        if: ${{ failure() }}
+      # A lane that failed, or that excused a failure too flaky to fail the
+      # run for, keeps its directory. One that excused a failure passes, so
+      # it says so through the step's `kept` output.
+      - name: 📋 Upload what a lane kept
+        if: ${{ failure() || steps.run-lane.outputs.kept == 'true' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: lane-failure-${{ github.job }}-${{ matrix.lane }}-a${{ github.run_attempt }}
+          name: lane-kept-${{ github.job }}-${{ matrix.lane }}-a${{ github.run_attempt }}
           # Each Toolshed server's store and caches sit in a directory of
           # their own, beside its log. The log says why a suite could not
           # reach it; the store holds every space the suites made.

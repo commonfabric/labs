@@ -698,8 +698,8 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
    * the resolve and update steps, which a test drives directly.
    */
   get accessForTestingOnly(): {
-    state: ProfileBadgeState;
-    seal: IdentitySeal | undefined;
+    readonly state: ProfileBadgeState;
+    readonly seal: IdentitySeal | undefined;
     profileKnown: boolean;
     readonly verified: boolean;
     readonly face: {
@@ -715,14 +715,8 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
       get state() {
         return outerThis._state;
       },
-      set state(value) {
-        outerThis._state = value;
-      },
       get seal() {
         return outerThis._seal;
-      },
-      set seal(value) {
-        outerThis._seal = value;
       },
       get profileKnown() {
         return outerThis.#profileKnown;
@@ -1001,14 +995,14 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
   }
 
   /**
-   * Navigate to the bound profile's page (CT-1750). No-op unless the resolved
-   * cell is a navigable root piece. Mirrors cf-cell-link's navigation; Cmd/Ctrl
-   * opens in a new tab.
+   * Navigate to the bound profile's page (CT-1750). Called only while the
+   * badge is navigable, which it is only when the resolved cell is a root
+   * piece; a no-op once `noNavigate` is set. Mirrors cf-cell-link's
+   * navigation; Cmd/Ctrl opens in a new tab.
    */
   private _navigateToProfile(newTab: boolean): void {
-    if (this.noNavigate) return;
     const cell = this._resolvedCell;
-    if (!cell || cell.ref().path.length > 0) return;
+    if (this.noNavigate || !cell) return;
     const view = { spaceDid: cell.space(), pieceId: cell.id() };
     if (newTab) {
       openInNewTab(view);

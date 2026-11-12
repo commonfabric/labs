@@ -225,16 +225,7 @@ export class CFResizablePanelGroup extends BaseElement {
     }
     this.#hidden.clear();
     this.#laidOut = undefined;
-
-    // Clean up event listeners
-    this._handles.forEach((handle) => {
-      handle.removeEventListener("mousedown", this.handleMouseDown);
-      handle.removeEventListener("touchstart", this.handleTouchStart);
-      handle.removeEventListener(
-        "cf-handle-adjust",
-        this.handleAdjust as EventListener,
-      );
-    });
+    this.#releaseHandles();
   }
 
   override render() {
@@ -292,7 +283,7 @@ export class CFResizablePanelGroup extends BaseElement {
     if (this._activeHandle) this.#cancelResize();
     const previous = new Map(this._panels);
     this._panels.clear();
-    this._handles = [];
+    this.#releaseHandles();
 
     const panels = Array.from(this.querySelectorAll("cf-resizable-panel"))
       .filter((panel) => panel instanceof CFResizablePanel);
@@ -344,6 +335,19 @@ export class CFResizablePanelGroup extends BaseElement {
 
     // Apply initial sizes
     this.applyPanelSizes();
+  }
+
+  /** Stops answering the handles the group last found, and forgets them. */
+  #releaseHandles(): void {
+    for (const handle of this._handles) {
+      handle.removeEventListener("mousedown", this.handleMouseDown);
+      handle.removeEventListener("touchstart", this.handleTouchStart);
+      handle.removeEventListener(
+        "cf-handle-adjust",
+        this.handleAdjust as EventListener,
+      );
+    }
+    this._handles = [];
   }
 
   private handleMouseDown = (e: MouseEvent): void => {
@@ -401,7 +405,6 @@ export class CFResizablePanelGroup extends BaseElement {
     if (!this._activeHandle) return;
 
     const handleIndex = this._handles.indexOf(this._activeHandle);
-    if (handleIndex === -1) return;
 
     const panels = Array.from(this._panels.values());
     const horizontal = this.orientation === "horizontal";
@@ -470,7 +473,6 @@ export class CFResizablePanelGroup extends BaseElement {
   private handleAdjust = (e: CustomEvent<{ delta: number }>): void => {
     const handle = e.target as HTMLElement;
     const handleIndex = this._handles.indexOf(handle);
-    if (handleIndex === -1) return;
 
     const panels = Array.from(this._panels.values());
     const leftPanel = panels[handleIndex];

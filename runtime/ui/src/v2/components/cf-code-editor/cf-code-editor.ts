@@ -3341,7 +3341,6 @@ export class CFCodeEditor extends BaseElement {
       // Handle focus/blur events
       EditorView.domEventHandlers({
         focus: () => {
-          this._cellController.onFocus();
           this.emit("cf-focus");
           this._handlePresenceFocus();
           return false;

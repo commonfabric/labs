@@ -2160,14 +2160,17 @@ function getNormalizedLink(
   if (address.path.length === 0 || address.path[0] !== "value") {
     throw new Error("Unable to create link to non-value address");
   }
-  const { space, id, path } = address;
-  return pinImmutableCell({
-    space,
+  const { space, id } = address;
+  const scope = address.scope ?? "space";
+  const path = address.path.slice(1);
+  // Every link crossing builds two of these links, so each arm is a whole
+  // literal: a spread in an object literal copies its source member by member.
+  return pinImmutableCell(
+    schema === undefined
+      ? { space, id, scope, path }
+      : { space, id, scope, path, schema },
     id,
-    scope: address.scope ?? "space",
-    path: path.slice(1),
-    ...(schema !== undefined && { schema }),
-  }, id);
+  );
 }
 
 // Value traversed must be a DAG, though it may have aliases or cell links
