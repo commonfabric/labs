@@ -286,10 +286,12 @@ keeps, removes, or replaces the picture, and creates the profile with the same
 trusted click as ever. Removing or choosing a picture is recorded on the
 surface itself; the host's suggestion is left as the host stored it. Unlike the
 create, these two choices are not yet gated to a gesture on the surface (see
-the "CFC debt" section of `patterns/system/profile-create/README.md`). The
-profile takes the picture the user chose, or else the one the suggestion holds,
-set through its `setPicture` by the runtime that creates it, so the picture's
-label names the profile's owner, as a reader of a face requires. The suggestion
+the "CFC debt" section of `patterns/system/profile-create/README.md`). A
+picture the user chose becomes the profile's picture, and once they remove the
+picture the profile starts with none. Only when the user made no picture choice
+does the profile take the picture the suggestion holds. Either picture is set
+through the profile's `setPicture` by the runtime that creates it, so its label
+names the profile's owner, as a reader of a face requires. The suggestion
 stays stored for the host to replace; the surface is shown only while the user
 has no profile.
 
