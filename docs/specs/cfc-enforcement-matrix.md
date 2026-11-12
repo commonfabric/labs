@@ -231,8 +231,8 @@ The strict-only delta is:
   [specs#71](https://github.com/commonfabric/specs/pull/71): §4.9.4 reads both
   spellings against that space's ACL. It uses the target's space, not the
   acting principal or an ownership lookup, and adds no clause for another
-  space. The proposal is closed without merging; this implementation follows
-  its proposed rule ahead of a ruling and a reconciled pin. The existing
+  space. The proposal is open and unruled; this implementation follows its
+  proposed rule ahead of a ruling and a reconciled pin. The existing
   residency marker names specs#68; this addition has no separate marker.
   The conformance statement records the semantic gap at the strict default.
   A `user` or `session` document is one principal's instance: its scope key is

@@ -339,8 +339,8 @@ procedure. Its record is the "Runtime-owned-store derived admission" entry in
 
 The own-space residency addition is a nonconforming semantic gap that still
 needs a ruling. Its proposal,
-[specs#71](https://github.com/commonfabric/specs/pull/71), is closed without
-merging. It admits more at the strict default, with no default-off dial and
+[specs#71](https://github.com/commonfabric/specs/pull/71), is open and
+unruled. It admits more at the strict default, with no default-off dial and
 no separate `SPEC-PENDING` marker; the existing residency marker names specs#68.
 This does not satisfy step 4 above. @danfuzz has authorized regular labs pull
 requests ahead of unresolved specs dependencies during this development phase;

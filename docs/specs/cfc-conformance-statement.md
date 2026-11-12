@@ -356,8 +356,8 @@ dials.
 - A space-scoped store's residency ceiling includes its own space as both
   `Space(S)` and `PersonalSpace(S)`, alongside the declared policy. This
   implements the own-space proposal in
-  [specs#71](https://github.com/commonfabric/specs/pull/71), which is closed
-  without merging; no successor ruling is incorporated in the pin. The
+  [specs#71](https://github.com/commonfabric/specs/pull/71), which is open and
+  unruled; no ruling on it is incorporated in the pin. The
   pinned §8.12.4 has no residency term, and the proposed base rule in
   [specs#68](https://github.com/commonfabric/specs/pull/68) admits only the
   `Space(S)` form on an unbound store. The own-space addition admits writes
