@@ -109,6 +109,23 @@ describe("local-jobs/profiles", () => {
       }
     });
 
+    it("keeps a shared cache affinity key a request cannot drop, and refuses an empty one", async () => {
+      const profiles = await read({
+        brief: { ...ASK, cacheAffinityKey: "loom-brief" },
+        ask: ASK,
+      });
+      const brief = profiles.get("brief")!;
+      expect(brief.cacheAffinityKey).toBe("loom-brief");
+      expect("cacheAffinityKey" in profiles.get("ask")!).toBe(false);
+      expect(narrowLocalJobProfile(brief, { maxModelTurns: 4 })).toMatchObject({
+        profile: { cacheAffinityKey: "loom-brief" },
+      });
+      for (const bad of ["", "  ", 7, null]) {
+        await expect(read({ ask: { ...ASK, cacheAffinityKey: bad } })).rejects
+          .toThrow("cacheAffinityKey");
+      }
+    });
+
     it("reads a browser host grant, and leaves a withheld one out", async () => {
       const profiles = await read({
         ask: { ...ASK, browserHost: true },

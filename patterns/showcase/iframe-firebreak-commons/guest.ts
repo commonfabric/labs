@@ -195,8 +195,10 @@ function selectTile(tileId: string): void {
   renderSafely();
 }
 
-function createProjection(tile: TileState): TileProjection | undefined {
-  if (!scene) return undefined;
+function createProjection(
+  scene: Phaser.Scene,
+  tile: TileState,
+): TileProjection {
   const ground = scene.add.rectangle(0, 0, TILE_SIZE - 5, TILE_SIZE - 5);
   const fire = scene.add.rectangle(
     0,
@@ -204,7 +206,6 @@ function createProjection(tile: TileState): TileProjection | undefined {
     TILE_SIZE - 11,
     TILE_SIZE - 11,
     0xff5b32,
-    0,
   );
   const symbol = scene.add.text(0, -2, "", {
     color: "#fff7dd",
@@ -248,8 +249,8 @@ function renderPhaser(): void {
   }
 
   for (const tile of snapshot.tiles) {
-    const projection = projections.get(tile.id) ?? createProjection(tile);
-    if (!projection) continue;
+    const projection = projections.get(tile.id) ??
+      createProjection(scene, tile);
     projection.container.setPosition(
       tile.x * TILE_SIZE + TILE_SIZE / 2,
       tile.y * TILE_SIZE + TILE_SIZE / 2,
@@ -427,7 +428,6 @@ function enqueueMutation(
   description: string,
   operation: () => Promise<void>,
 ): void {
-  if (!hydrated || disposed) return;
   pendingActions += 1;
   pendingDescription = description;
   clearError();
@@ -487,6 +487,7 @@ function saveProfile(): void {
   const name = crewNameInput.value.trim();
   if (!name) {
     showError(new TypeError("Give your crew a name."));
+    renderSafely();
     return;
   }
   const crew = {
@@ -562,6 +563,7 @@ for (
   control.addEventListener("input", () => {
     crewDraftDirty = true;
     clearError();
+    renderSafely();
   }, { signal });
 }
 saveProfileButton.addEventListener("click", saveProfile, { signal });

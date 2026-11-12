@@ -2980,6 +2980,7 @@
         "dependencies": [
           "npm:@opentelemetry/api@^1.9.1",
           "npm:@xyflow/react@^12.11.5",
+          "npm:happy-dom@^20.14.6",
           "npm:typescript@6.0.3"
         ]
       },

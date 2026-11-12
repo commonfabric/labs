@@ -204,7 +204,11 @@ suites collect authored-pattern coverage").
 `tasks/coverage-metrics.ts` scores LCOV reports. It walks the tracked source
 files under the package directories `LAYOUT.md` names and under `tasks`, and
 counts, for each file, how many lines no test covered. The top-level `scripts`
-directory is left out. The same counting serves both readers:
+directory is left out, and so is an iframe pattern's `guest.js`: that file is
+the bundle `deno bundle` writes from the `guest.ts` or `guest.tsx` beside it,
+and the metric counts the source instead. [Testing an iframe
+guest](#testing-an-iframe-guest) says how a test loads that source. The same
+counting serves both readers:
 
 - **The repository-wide figure** merges every report the full run's lanes wrote
   and rolls the counts up into `coverage-debt: <group> uncovered lines` metrics,
@@ -302,6 +306,30 @@ test could pay its debt down, and the browser tests that do drive it report
 into nothing this metric reads. A file a Deno test could load is not such a
 file. Where its member carries a measured set, the measured-set gate is what
 holds it to its tests.
+
+### Testing an iframe guest
+
+An iframe pattern's guest (`guest.ts` or `guest.tsx`) runs in the browser, but
+a Deno test can load it as it is.
+`patterns/tools/test-support/iframe-guest.ts` loads the guest's `guest.html`
+into a simulated document, installs that document's globals, evaluates a fresh
+instance of the guest module against it, and serves the guest the resources a
+test supplies through the host end of the real bridge: in-memory cells,
+presence rooms and SQLite databases. The test drives the document as a person
+would and reads back both the document and what the guest wrote. Deno's
+coverage records the guest module like any other, so the lines its tests run
+count as covered. `patterns/examples/iframe-cursor-canvas/guest.test.ts` is the
+worked example.
+
+A guest's writes cross the bridge, a message channel, before they reach a test's
+cells, so a check that the guest wrote nothing waits for the page's `settled()`
+first: checked straight after the event, it would pass whatever the guest did.
+Engines the simulated document lacks, such as Web Audio, a canvas's drawing
+context, or WebGL, are test doubles the test supplies through the page's
+`globals` and `patchProperty()`. The tests of
+`patterns/showcase/iframe-shared-tape-lab/` (Web Audio),
+`iframe-ring-loops/` (a drawing context) and `iframe-orbital-salvage-yard/`
+(WebGL) supply them.
 
 ### A local run under coverage runs every package
 

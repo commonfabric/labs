@@ -522,17 +522,17 @@ describe("RealmCodecEngine", () => {
       }
     });
 
-    it("returns a `ProblematicValue` for a `RegExp@1` field present as `undefined`", () => {
+    it("returns a `ProblematicValue` for an `Unavailable@1` field present as `undefined`", () => {
       // This format is where a field present as `undefined` can arise:
       // cloning carries `undefined` directly, so a peer can send one on
       // purpose.
 
       const engine = newDefaultRealmCodecEngine({ lenient: true });
       const decoded = engine.decode(
-        wire(tagged("RegExp@1", {
-          source: undefined,
-          flags: "g",
-          flavor: "es2025",
+        wire(tagged("Unavailable@1", {
+          reason: "error",
+          errorKind: "general",
+          errorMessage: undefined,
         })),
         NULL_LIVE_ENVIRONMENT,
       );
@@ -645,18 +645,14 @@ describe("RealmCodecEngine", () => {
       // Bytes wants the transport's own byte carrier and takes nothing else.
       expect(bad("Bytes@1", "nope").error).toMatch(refused);
 
-      // Well-typed fields that still do not make a value. `RegExp@1` is the
-      // one codec here whose construction can fail on data that passed every
-      // type check, so its refusal has to survive a throw rather than only a
-      // shape test: a source and a flag set that `RegExp` itself rejects.
+      // Well-typed fields that still do not make a value. `Unavailable@1`'s
+      // construction can fail on data that passed every type check, so its
+      // refusal has to survive a throw rather than only a shape test: a
+      // transient reason paired with an error kind.
       expect(
-        bad("RegExp@1", { source: "(", flags: "g", flavor: "es2025" })
+        bad("Unavailable@1", { reason: "pending", errorKind: "general" })
           .error,
-      ).toMatch(/Invalid regular expression/);
-      expect(
-        bad("RegExp@1", { source: "a", flags: "zz", flavor: "es2025" })
-          .error,
-      ).toMatch(/Invalid flags/);
+      ).toMatch(/takes neither/);
     });
 
     it("throws when given a symbol or a function untagged", () => {

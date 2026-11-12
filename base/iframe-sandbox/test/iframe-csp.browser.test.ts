@@ -12,6 +12,7 @@ import {
   render,
   waitForEvent,
 } from "./utils.ts";
+import { PROBE_FONT_BASE64 } from "./fixtures/probe-font.ts";
 
 type TestCase = [string, string, string | null | RegExp];
 
@@ -109,6 +110,8 @@ const IMG_URL = "https://commonfabric.com/static/text.png";
 const ORIGIN_URL = new URL(globalThis.location.href).origin;
 const BASE64_IMG_URL =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=";
+const PROBE_FONT_URL = `data:font/ttf;base64,${PROBE_FONT_BASE64}`;
+const FONT_LOADED = "font loaded";
 
 function openWindow(target: string) {
   return `<script>
@@ -122,6 +125,23 @@ function clickAnchor(target: string) {
 <script>
 const anchor = document.querySelector("#anchor-test");
 anchor.click();
+</script>`;
+}
+
+// Loads a font in the guest and posts the outcome as an alarm whether the load
+// succeeds or fails, so a case waits on that alarm rather than on the barrier.
+// `source` is the expression `FontFace` takes as its source: a CSS `url()`
+// string, which `font-src` governs, or the font's bytes, which no fetch
+// directive governs.
+function loadFont(source: string) {
+  return `<script>
+new FontFace("probe", ${source}).load().then(
+  () => "${FONT_LOADED}",
+  (error) => "font refused: " + error.name,
+).then((description) => window.parent.postMessage({
+  type: "error",
+  data: { description, source: "", lineno: 0, colno: 0, stacktrace: "" },
+}, "*"));
 </script>`;
 }
 
@@ -157,6 +177,19 @@ const cases: TestCase[] = [[
   "allows data: img",
   `<img src="${BASE64_IMG_URL}" />`,
   null,
+], [
+  "allows data: font",
+  loadFont(`"url(${PROBE_FONT_URL})"`),
+  FONT_LOADED,
+], [
+  // The control for "allows data: font": the same font handed over as bytes,
+  // which no fetch directive governs, so a failure of that case is the
+  // policy's rather than the font's.
+  "loads the probe font from its bytes",
+  loadFont(
+    `Uint8Array.from(atob("${PROBE_FONT_BASE64}"), (c) => c.charCodeAt(0))`,
+  ),
+  FONT_LOADED,
 ], [
   "allows 1P CSS",
   `<link rel="stylesheet" href="${ORIGIN_URL}/styles.css">`,

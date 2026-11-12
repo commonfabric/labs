@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import type { JSONSchema } from "@commonfabric/api";
 
 import {
   buildCfHarnessBatchSystemPrompt,
@@ -46,6 +47,45 @@ describe("cli structured result prompt", () => {
       expect(prompt).toContain(
         "Object schemas are closed by default: include only properties the schema declares unless it explicitly allows additional properties.",
       );
+    }
+  });
+
+  it("puts the caller's instructions before the result contract, so runs that differ only in schema share the prompt through the instructions", () => {
+    const instructions = "Write the brief.\n\nRead before you write.";
+    const other = {
+      type: "object",
+      properties: { subject: { enum: ["person-1", "person-2"] } },
+    } as const;
+    const resultAt = (schema: JSONSchema) => ({
+      path: "/tmp/project/result.json",
+      sandboxPath: "/workspace/result.json",
+      schema,
+    });
+    const pairs = [
+      [schema, other].map((each) =>
+        buildCfHarnessBatchSystemPrompt({
+          systemPrompt: instructions,
+          structuredResult: resultAt(each),
+        })
+      ),
+      [schema, other].map((each) =>
+        buildCfHarnessOperatorSystemPrompt({
+          workspace: "/tmp/project",
+          focusRoot: "/tmp/project",
+          systemPrompt: instructions,
+          structuredResult: resultAt(each),
+        })
+      ),
+    ];
+    for (const [first, second] of pairs) {
+      const end = first.indexOf(instructions) + instructions.length;
+      expect(first.indexOf(instructions)).toBeGreaterThan(0);
+      expect(second.slice(0, end)).toBe(first.slice(0, end));
+      expect(first.indexOf("Structured result contract:")).toBeGreaterThan(
+        end,
+      );
+      expect(first.endsWith(JSON.stringify(schema))).toBe(true);
+      expect(second.endsWith(JSON.stringify(other))).toBe(true);
     }
   });
 

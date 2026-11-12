@@ -10,10 +10,10 @@
 // which issues them off the isolate thread and awaits them, leaving the request
 // path free.
 //
-// The queue coalesces invalidations, snapshots and clears its pending sets each
-// pass so work queued during an await is not lost, and disables an invalidation
-// kind when libfuse reports it as unsupported (return code -ENOSYS; FUSE-T on
-// macOS accepts the call and does nothing instead).
+// The queue coalesces invalidations, takes each off its pending sets as it
+// sends it, so work queued during an await is sent by the same drain, and
+// disables an invalidation kind when libfuse reports it as unsupported (return
+// code -ENOSYS; FUSE-T on macOS accepts the call and does nothing instead).
 
 /** A reverse-invalidation FFI result: the libfuse return code, sync or async. */
 export type NotifyResult = number | Promise<number>;
@@ -37,6 +37,12 @@ export interface ReverseInvalidationDeps {
 
   /** Whether the mount is tearing down; queued work is dropped once true. */
   isUnmounting(): boolean;
+
+  /**
+   * How many FUSE requests are holding back their replies. The queue sends
+   * nothing while any are, keeping what it has not sent for the next flush.
+   */
+  pendingReplyCount(): number;
 
   /** Emit per-call diagnostics when set. */
   debug: boolean;
@@ -159,20 +165,16 @@ export class ReverseInvalidationQueue {
 
   async #run(): Promise<void> {
     try {
-      // Snapshot each pass and clear the pending sets first, so invalidations
-      // queued while an await is outstanding are picked up by the next loop
-      // iteration rather than lost.
-      while (
-        !this.#shuttingDown() &&
-        (this.#pendingEntry.size > 0 || this.#pendingInode.size > 0)
-      ) {
-        const entryBatch = [...this.#pendingEntry.values()];
-        this.#pendingEntry.clear();
-        const inodeBatch = [...this.#pendingInode];
-        this.#pendingInode.clear();
-
-        if (this.#entrySupported) await this.#flushEntries(entryBatch);
-        if (this.#inodeSupported) await this.#flushInodes(inodeBatch);
+      // Entries and inodes take turns, so a stream of one does not hold up
+      // the other.
+      let inodeTurn = false;
+      while (!this.#shuttingDown() && this.#deps.pendingReplyCount() === 0) {
+        const send = inodeTurn
+          ? this.#takeInode() ?? this.#takeEntry()
+          : this.#takeEntry() ?? this.#takeInode();
+        if (!send) break;
+        inodeTurn = !inodeTurn;
+        await send();
       }
 
       if (this.#shuttingDown()) {
@@ -184,62 +186,133 @@ export class ReverseInvalidationQueue {
     }
   }
 
-  async #flushEntries(
-    batch: { parentIno: bigint; names: Set<string> }[],
-  ): Promise<void> {
-    const log = this.#deps.log ?? console.log;
-    const warn = this.#deps.warn ?? console.warn;
-    for (const { parentIno, names } of batch) {
-      if (!this.#entrySupported || this.#shuttingDown()) break;
+  /** Removes the next entry, if entries are supported, returning its send. */
+  #takeEntry(): (() => Promise<void>) | undefined {
+    if (!this.#entrySupported) {
+      this.#pendingEntry.clear();
+      return undefined;
+    }
+    for (const [key, { parentIno, names }] of this.#pendingEntry) {
       for (const name of names) {
-        if (!this.#entrySupported || this.#shuttingDown()) break;
-        const nameBuf = this.#encoder.encode(name + "\0");
-        try {
-          const rc = await this.#deps.invalidateEntry(
-            parentIno,
-            nameBuf,
-            BigInt(nameBuf.length - 1),
-          );
-          if (rc === NOTIFY_UNSUPPORTED) {
-            log(
-              "notify_inval_entry not supported; skipping entry invalidation",
-            );
-            this.#entrySupported = false;
-            break;
-          }
-          if (this.#deps.debug && rc !== 0) {
-            log(
-              `notify_inval_entry(parent=${parentIno}, name=${name}) => ${rc}`,
-            );
-          }
-        } catch (e) {
-          warn(`notify_inval_entry failed: ${e}`);
-          this.#entrySupported = false;
-          break;
-        }
+        names.delete(name);
+        if (names.size === 0) this.#pendingEntry.delete(key);
+        return () => this.#notifyEntry(parentIno, name);
       }
+    }
+    return undefined;
+  }
+
+  /** Removes the next inode, if inodes are supported, returning its send. */
+  #takeInode(): (() => Promise<void>) | undefined {
+    if (!this.#inodeSupported) {
+      this.#pendingInode.clear();
+      return undefined;
+    }
+    for (const ino of this.#pendingInode) {
+      this.#pendingInode.delete(ino);
+      return () => this.#notifyInode(ino);
+    }
+    return undefined;
+  }
+
+  async #notifyEntry(parentIno: bigint, name: string): Promise<void> {
+    const log = this.#deps.log ?? console.log;
+    const nameBuf = this.#encoder.encode(name + "\0");
+    try {
+      const rc = await this.#deps.invalidateEntry(
+        parentIno,
+        nameBuf,
+        BigInt(nameBuf.length - 1),
+      );
+      if (rc === NOTIFY_UNSUPPORTED) {
+        log("notify_inval_entry not supported; skipping entry invalidation");
+        this.#entrySupported = false;
+      } else if (this.#deps.debug && rc !== 0) {
+        log(`notify_inval_entry(parent=${parentIno}, name=${name}) => ${rc}`);
+      }
+    } catch (e) {
+      (this.#deps.warn ?? console.warn)(`notify_inval_entry failed: ${e}`);
+      this.#entrySupported = false;
     }
   }
 
-  async #flushInodes(batch: bigint[]): Promise<void> {
-    const log = this.#deps.log ?? console.log;
-    const warn = this.#deps.warn ?? console.warn;
-    for (const ino of batch) {
-      if (!this.#inodeSupported || this.#shuttingDown()) break;
-      try {
-        const ret = await this.#deps.invalidateInode(ino);
-        if (ret === NOTIFY_UNSUPPORTED) {
-          this.#inodeSupported = false;
-          break;
-        }
-        if (this.#deps.debug) {
-          log(`notify_inval_inode(ino=${ino}) => ${ret}`);
-        }
-      } catch (e) {
-        warn(`notify_inval_inode failed: ${e}`);
+  async #notifyInode(ino: bigint): Promise<void> {
+    try {
+      const ret = await this.#deps.invalidateInode(ino);
+      if (ret === NOTIFY_UNSUPPORTED) {
         this.#inodeSupported = false;
-        break;
+      } else if (this.#deps.debug) {
+        (this.#deps.log ?? console.log)(
+          `notify_inval_inode(ino=${ino}) => ${ret}`,
+        );
       }
+    } catch (e) {
+      (this.#deps.warn ?? console.warn)(`notify_inval_inode failed: ${e}`);
+      this.#inodeSupported = false;
     }
   }
+}
+
+/** The bridge hooks through which cached entries and inodes go stale. */
+export interface InvalidationSource {
+  onInvalidate: ((parentIno: bigint, names: string[]) => void) | null;
+  onInvalidateInode: ((ino: bigint) => void) | null;
+}
+
+/** A queue fed by a bridge's invalidations; see `connectReverseInvalidation`. */
+export interface ReverseInvalidation {
+  /** Tells the queue the last reply the mount was holding back has gone. */
+  repliesDrained(): void;
+
+  /**
+   * Stops the queue, and settles once a flush already running has finished.
+   * Await it before the session is destroyed.
+   */
+  close(): Promise<void>;
+}
+
+/**
+ * Sends `source`'s invalidations to the kernel through a queue drained off the
+ * isolate thread.
+ *
+ * libfuse reverse invalidation can block while the kernel answers the notify
+ * request. Some bridge paths run while a FUSE request is still awaiting its
+ * reply (for example, lookup -> connectSpace -> syncPieceList). notify takes
+ * the parent directory's inode lock for write, which a concurrent lookup
+ * holds for read until the daemon answers it; the daemon answers on the
+ * isolate thread, so a notify on that thread would block behind a lookup only
+ * that thread can complete. So the queue sends nothing while
+ * `pendingReplyCount()` is above zero, and `repliesDrained()` schedules a drain
+ * of what waited.
+ */
+export function connectReverseInvalidation(
+  source: InvalidationSource,
+  deps: ReverseInvalidationDeps,
+): ReverseInvalidation {
+  const queue = new ReverseInvalidationQueue(deps);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let closed = false;
+  const scheduleFlush = () => {
+    if (closed || timer !== undefined) return;
+    timer = setTimeout(() => {
+      timer = undefined;
+      queue.flush();
+    }, 0);
+  };
+  source.onInvalidate = (parentIno, names) => {
+    if (queue.addEntry(parentIno, names)) scheduleFlush();
+  };
+  source.onInvalidateInode = (ino) => {
+    if (queue.addInode(ino)) scheduleFlush();
+  };
+  return {
+    repliesDrained: scheduleFlush,
+    async close() {
+      closed = true;
+      queue.close();
+      clearTimeout(timer);
+      timer = undefined;
+      await queue.active().catch(() => {});
+    },
+  };
 }
