@@ -270,6 +270,17 @@ type SpaceBranch = {
   docs: Map<string, DocumentEntry>;
 };
 
+/**
+ * A document `#document()` answered recently, with the branch, id and scope
+ * that name it, the parts of an address its key holds.
+ */
+type RecentDocument = {
+  branch: SpaceBranch;
+  id: URI;
+  scope: CellScope;
+  doc: DocumentEntry;
+};
+
 type ReadyState = {
   status: "ready";
 };
@@ -1217,13 +1228,8 @@ export class V2StorageTransaction implements IStorageTransaction {
   #writtenSpaces: MemorySpace[] = [];
 
   #readOnlySource?: string;
-  #lastDocument?: {
-    branch: SpaceBranch;
-    id: URI;
-    type: MediaType;
-    scope: CellScope;
-    doc: DocumentEntry;
-  };
+  #lastDocument?: RecentDocument;
+  #previousDocument?: RecentDocument;
 
   /**
    * Complete the transaction, keeping its result and releasing the state that
@@ -1257,6 +1263,7 @@ export class V2StorageTransaction implements IStorageTransaction {
     this.#writeAttemptLog.length = 0;
     this.#reactivityLogCache = undefined;
     this.#lastDocument = undefined;
+    this.#previousDocument = undefined;
   }
 
   readonly #storage: IStorageManager;
@@ -2118,20 +2125,28 @@ export class V2StorageTransaction implements IStorageTransaction {
     // `set()` call only — CFC boundary-commit reads run after the tx is unmarked
     // and keep their preconditions.
     const skipCommitPrecondition = isUiInputBlindWriteTx(this);
-    const { space: _, ...memoryAddress } = address;
 
     if (!hasInlineCellScheme(address.id)) {
-      const readActivity = {
-        space: address.space,
-        scope: normalizeCellScope(address.scope),
-        id: address.id,
-        path: toDocumentPath(address.path),
-        meta: skipCommitPrecondition
-          ? { ...readMeta, ...ignoreReadForCommit }
-          : readMeta,
-        ...(options?.nonRecursive === true ? { nonRecursive: true } : {}),
-        journalIndex: this.#activityClock++,
-      };
+      const space = address.space;
+      const scope = normalizeCellScope(address.scope);
+      const id = address.id;
+      const path = toDocumentPath(address.path);
+      const meta = skipCommitPrecondition
+        ? { ...readMeta, ...ignoreReadForCommit }
+        : readMeta;
+      // Every read builds this record, so each arm is a whole literal: a
+      // spread in an object literal copies its source member by member.
+      const readActivity: IReadActivity = options?.nonRecursive === true
+        ? {
+          space,
+          scope,
+          id,
+          path,
+          meta,
+          nonRecursive: true,
+          journalIndex: this.#activityClock++,
+        }
+        : { space, scope, id, path, meta, journalIndex: this.#activityClock++ };
       // A sealed record is frozen with metadata that has the scheduler
       // ignore the read and marks no attempted write, so the log never lists
       // it and stands across it. Any other record's metadata can be replaced
@@ -2147,6 +2162,7 @@ export class V2StorageTransaction implements IStorageTransaction {
       return { ok: { address, value: undefined } };
     }
 
+    const { space: _, ...memoryAddress } = address;
     if (usesLocalReads(this) && !hasInlineCellScheme(address.id)) {
       // `patchDetails` is keyed by each write's pointer.
       const patchDetails = doc.patchDetails;
@@ -3759,13 +3775,23 @@ export class V2StorageTransaction implements IStorageTransaction {
     address: Pick<IMemoryAddress, "id" | "type" | "scope">,
   ): { doc: DocumentEntry } {
     const scope = normalizeCellScope(address.scope);
+    const last = this.#lastDocument;
     if (
-      this.#lastDocument?.branch === branch &&
-      this.#lastDocument.id === address.id &&
-      this.#lastDocument.type === (address.type ?? DOCUMENT_MIME) &&
-      this.#lastDocument.scope === scope
+      last?.branch === branch && last.id === address.id && last.scope === scope
     ) {
-      return { doc: this.#lastDocument.doc };
+      return { doc: last.doc };
+    }
+    // A read through links alternates between the document holding a link and
+    // the one it reaches, so the document answered before the last one is
+    // kept as well.
+    const previous = this.#previousDocument;
+    if (
+      previous?.branch === branch && previous.id === address.id &&
+      previous.scope === scope
+    ) {
+      this.#previousDocument = last;
+      this.#lastDocument = previous;
+      return { doc: previous.doc };
     }
 
     const key = this.#docKey(address);
@@ -3778,13 +3804,8 @@ export class V2StorageTransaction implements IStorageTransaction {
       };
       branch.docs.set(key, doc);
     }
-    this.#lastDocument = {
-      branch,
-      id: address.id,
-      type: address.type ?? DOCUMENT_MIME,
-      scope,
-      doc,
-    };
+    this.#previousDocument = last;
+    this.#lastDocument = { branch, id: address.id, scope, doc };
     return { doc };
   }
 

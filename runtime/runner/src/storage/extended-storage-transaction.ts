@@ -425,6 +425,43 @@ function isEmptyPlainRecord(value: unknown): boolean {
     Object.getOwnPropertyNames(value).length === 0;
 }
 
+/**
+ * Freezes `trace` where it stands, as `deepFreeze()` would. A trace and two
+ * addresses holding only the members their types declare are five objects,
+ * frozen by hand without the cache entry `deepFreeze()` adds for each object,
+ * which is most of what recording a trace costs. The types require every
+ * member they declare, so a trace and addresses with as many members as that
+ * hold no other. A trace holding any other member goes through `deepFreeze()`.
+ */
+function freezeDereferenceTrace(
+  trace: CfcDereferenceTrace,
+): CfcDereferenceTrace {
+  const { source, target } = trace;
+  if (
+    ownMemberCount(trace) !== 3 || ownMemberCount(source) !== 4 ||
+    ownMemberCount(target) !== 4
+  ) {
+    return deepFreeze(trace);
+  }
+  Object.freeze(source.path);
+  Object.freeze(source);
+  Object.freeze(target.path);
+  Object.freeze(target);
+  return Object.freeze(trace);
+}
+
+/**
+ * Helper for `freezeDereferenceTrace()`, which counts the own enumerable
+ * members of `record`, the ones `deepFreeze()` freezes.
+ */
+function ownMemberCount(record: object): number {
+  let count = 0;
+  for (const key in record) {
+    if (Object.hasOwn(record, key)) count++;
+  }
+  return count;
+}
+
 // Read-only view of the transaction's CFC state, returned by getCfcState().
 // `Readonly<CfcTxState>` is compile-time only, so handing out the live state
 // object would let code holding the transaction flip
@@ -2270,7 +2307,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     // identity-stable. Mirrors the chokepoint pattern on
     // `recordCfcWritePolicyInput()`; together they ensure every CfcAddress
     // that flows into the digest input lives behind a deep-frozen wrapper.
-    traces.push(deepFreeze(trace));
+    traces.push(freezeDereferenceTrace(trace));
     this.#cfcInstrumentation.onDereferenceTrace?.(traces.length);
     if (changesDigest) {
       this.invalidateCfc("dereference-trace-added");
@@ -3178,17 +3215,17 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       }));
     }
 
-    // The four arrays above hold records frozen where they were made. Every
-    // other member is small, and holds records the transaction deep-froze
-    // when it recorded them or containers built here, which `deepFreeze()`
-    // finishes.
+    // The four arrays above hold records frozen where they were made, and so
+    // do the dereference traces (`freezeDereferenceTrace()`). Every other
+    // member is small, and holds records the transaction deep-froze when it
+    // recorded them or containers built here, which `deepFreeze()` finishes.
     return Object.freeze({
       consumedReads: Object.freeze(consumedReads),
       attemptedWrites: Object.freeze(attemptedWrites),
       writes: Object.freeze(writes),
       writeAttemptLog: Object.freeze(writeAttemptLog),
+      dereferenceTraces: Object.freeze([...this.#cfcState.dereferenceTraces]),
       ...deepFreeze({
-        dereferenceTraces: [...this.#cfcState.dereferenceTraces],
         triggerReads: [...this.#cfcState.triggerReads],
         writePolicyInputs: [...this.#cfcState.writePolicyInputs],
         ...(this.#cfcState.assertedValueRoots.length > 0

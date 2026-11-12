@@ -1836,6 +1836,16 @@ type RouteCrossing = {
   memoKey?: string;
 };
 
+/**
+ * The metadata of the read `TransformObjectCreator.cross()` journals at the
+ * slot a followed link leaves: a link-resolution probe, which CFC takes as the
+ * observation of which reference sits there, and which scheduling ignores.
+ */
+const followedSlotProbe = {
+  ...ignoreReadForScheduling,
+  ...linkResolutionProbe,
+};
+
 class TransformObjectCreator
   implements IObjectCreator<AnyCellWrapping<FabricValue>>, LinkCrossingRoute {
   #runtime: Runtime;
@@ -1891,12 +1901,13 @@ class TransformObjectCreator
     // Following a reference consumes its own restrictions as well as the
     // target observations (§8.2.4). Keep the pointer read and its trace in
     // the transaction even when the returned value cannot carry a label view.
-    // The traversal already records the slot's scheduling dependencies,
-    // including batched array reads; this observation is for CFC alone.
-    this.#tx.runWithAmbientReadMeta(
-      ignoreReadForScheduling,
-      () => readMaybeLink(this.#tx, source),
-    );
+    // The traversal already records the slot's scheduling dependencies and
+    // has the reference in hand; this observation is for CFC alone, so it
+    // loads nothing.
+    this.#tx.readOrThrow(toMemorySpaceAddress(source), {
+      meta: followedSlotProbe,
+      trackReadWithoutLoad: true,
+    });
     this.#tx.recordCfcDereferenceTrace({
       source: cfcAddressFromLink(source),
       target: cfcAddressFromLink(target),
