@@ -2,7 +2,9 @@
  * Labeled SQLite mapped-render scaling fixture. Each render demands the full
  * mapped view at the named row count; seeding precedes the render intervals.
  * Run the same file with --cfc-enforcement-mode disabled --cfc-flow-labels off
- * and with --cfc-shell-posture, adding --verbose --stats-threshold 0 to both.
+ * (with EXPERIMENTAL_SERVER_EXECUTION=false, since the server-execution arm
+ * refuses CFC disabled) and with --cfc-shell-posture, adding --verbose
+ * --stats-threshold 0 to both.
  */
 import {
   action,

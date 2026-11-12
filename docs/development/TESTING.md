@@ -741,7 +741,10 @@ against a caller-supplied `storageHost` is refused on the ON arm,
 since the store is the caller's and there is no memory server to host a loop
 beside. A caller whose check does not depend on the posture, or holds only on
 the OFF arm, sets `storageHost.serverExecution: false`, which runs that file
-on the OFF arm without changing the process's environment.
+on the OFF arm without changing the process's environment. A run with
+`--cfc-enforcement-mode disabled` is refused on the ON arm too: a runtime with
+CFC disabled writes no program closure for the serving loop to load, and
+served handlers run under the serving runtime's CFC posture, not the test's.
 
 On the ON arm, most of the checks `cf test` makes of a run observe the test's
 own runtime and not the serving one: the idempotency check, read budgets,

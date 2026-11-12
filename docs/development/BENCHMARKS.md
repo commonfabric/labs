@@ -1905,8 +1905,9 @@ The file stays identical between arms;
 only the runtime flags change:
 
 ```sh
-# Arm A: enforcement disabled, flow labels off.
-deno task cf test runtime/cli/test/fixtures/cfc-flow-labels/mapped-render.test.tsx --cfc-enforcement-mode disabled --cfc-flow-labels off --verbose --stats-threshold 0 --no-idempotency-check
+# Arm A: enforcement disabled, flow labels off (on the OFF arm, which CFC
+# disabled requires).
+EXPERIMENTAL_SERVER_EXECUTION=false deno task cf test runtime/cli/test/fixtures/cfc-flow-labels/mapped-render.test.tsx --cfc-enforcement-mode disabled --cfc-flow-labels off --verbose --stats-threshold 0 --no-idempotency-check
 
 # Arm B: shell enforcement and flow-label posture.
 deno task cf test runtime/cli/test/fixtures/cfc-flow-labels/mapped-render.test.tsx --cfc-shell-posture --verbose --stats-threshold 0 --no-idempotency-check

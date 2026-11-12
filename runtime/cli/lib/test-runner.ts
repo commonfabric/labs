@@ -1172,6 +1172,18 @@ export async function runTestPattern(
         `process" in \`docs/development/TESTING.md\`.`,
     );
   }
+  if (
+    experimental.serverExecution && options.cfcEnforcementMode === "disabled"
+  ) {
+    throw new Error(
+      `\`cf test\` refuses \`--cfc-enforcement-mode disabled\` on the ` +
+        `server-execution arm: a runtime with CFC disabled writes no program ` +
+        `closure, so the serving loop cannot load the program it is to ` +
+        `serve, and served handlers run under the serving runtime's CFC ` +
+        `posture rather than the test's. Select the OFF arm with ` +
+        `\`EXPERIMENTAL_SERVER_EXECUTION=false\` to run with CFC disabled.`,
+    );
+  }
 
   // A denial logs its warning once per kind, and a denial's warning is what
   // fails a file that does not allow for one, so each file starts with every
