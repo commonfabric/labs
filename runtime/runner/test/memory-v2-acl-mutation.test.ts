@@ -788,11 +788,11 @@ Deno.test("ACLManager removals refuse a missing ACL", async () => {
   const ctx = await withUnGenesisedSpace("remove-no-acl");
   try {
     const marker = ctx.factory.mark();
-    await assertRejects(
+    const error = await assertRejects(
       () => ctx.acl.remove(ctx.space),
       Error,
-      "No ACL initialized for space.",
     );
+    assertEquals(error.message, "No ACL initialized for space.");
     assertEquals(ctx.factory.since(marker), []);
     assertEquals(await ctx.readStoredAcl(), undefined);
   } finally {

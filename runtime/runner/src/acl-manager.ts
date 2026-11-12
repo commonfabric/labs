@@ -85,7 +85,9 @@ export class ACLManager {
     if (!isDID(user) || (capability !== "READ" && capability !== "WRITE")) {
       throw new Error("A grant must be READ or WRITE.");
     }
-    await this.get();
+    if (await this.get() === null) {
+      throw new Error("No ACL initialized for space.");
+    }
     return await this.#write((current) => {
       if (current === null) throw new Error("No ACL initialized for space.");
       const existing = current[user] ?? current["*"];
@@ -99,7 +101,9 @@ export class ACLManager {
   }
 
   async remove(user: ACLUser): Promise<ACL> {
-    await this.get();
+    if (await this.get() === null) {
+      throw new Error("No ACL initialized for space.");
+    }
     return await this.#write((current) => {
       if (current === null) throw new Error("No ACL initialized for space.");
       const { [user]: _removed, ...rest } = current;
