@@ -23,6 +23,10 @@ import {
   waveSettlementOf,
 } from "../executor/wave.ts";
 import {
+  runOutcomeIsWithheld,
+  withholdProcessedClaimOutcome,
+} from "../executor/processed-claim.ts";
+import {
   addressKey,
   areNormalizedLinksSame,
   type NormalizedFullLink,
@@ -2394,6 +2398,24 @@ export async function dispatchQueuedEvent(state: {
     }
   };
 
+  // Whether a served run's outcome is withheld: whether its join carries a
+  // clause its stream's space doesn't admit, so that its processed claim, and
+  // every failure it reports, says the same thing whatever happened
+  // (`runOutcomeIsWithheld()`). Decided once, while the transaction is still
+  // open: before the commit, or before a failed run's transaction is
+  // aborted.
+  let outcomeWithheld: boolean | undefined;
+  const servedOutcomeWithheld = (): boolean => {
+    if (served === undefined) return false;
+    outcomeWithheld ??= runOutcomeIsWithheld(tx, queuedEvent.eventLink.space);
+    return outcomeWithheld;
+  };
+  /** `outcome`, with `withheld` set when the served run's outcome is. */
+  const servedErrorOutcome = (message: string): ServedEventFailureOutcome =>
+    servedOutcomeWithheld()
+      ? { kind: "error", message, withheld: true }
+      : { kind: "error", message };
+
   let failureFinalized = false;
   // A failed setup or handler completes every owner notification once, even
   // when one observer throws. The original failure remains the event outcome.
@@ -2403,6 +2425,8 @@ export async function dispatchQueuedEvent(state: {
     const handlerError = error instanceof Error
       ? error
       : new Error(String(error));
+    // Decided before the abort below takes the observations it reads.
+    servedOutcomeWithheld();
     for (
       const complete of [
         () => {
@@ -2414,10 +2438,10 @@ export async function dispatchQueuedEvent(state: {
         releaseLineage,
         () => state.handleError(handlerError, action, queuedEvent.id),
         () =>
-          reportServedEventFailure(served, {
-            kind: "error",
-            message: handlerError.message,
-          }),
+          reportServedEventFailure(
+            served,
+            servedErrorOutcome(handlerError.message),
+          ),
         runFinalCommitCallback,
         () => tx.abandonStagedWork(eventAbandonError("event execution failed")),
       ]
@@ -3146,6 +3170,14 @@ export async function dispatchQueuedEvent(state: {
         return;
       }
 
+      if (served !== undefined) {
+        outcomeWithheld = withholdProcessedClaimOutcome(
+          state.runtime,
+          tx,
+          queuedEvent.eventLink.space,
+          served.streamEntry,
+        );
+      }
       try {
         state.runtime.prepareTxForCommit(tx);
       } catch (error) {
@@ -3267,7 +3299,9 @@ export async function dispatchQueuedEvent(state: {
 
         // A served event's CFC verdict seals an error consequence (events.md
         // §5: the error IS the consequence — the same honesty as the throw arm
-        // in `finalize` above). Without one the durable entry stays
+        // in `finalize` above), or, for a run whose join is foreign to its
+        // stream's space, the same withheld consequence a commit records
+        // (`servedErrorOutcome`). Without one the durable entry stays
         // unconsequenced and every later drain pass runs it into the identical
         // refusal. Scoped to exactly the class `reportDroppedCfcRejectedWrite`
         // reports; a CFC refusal that is not a verdict defers instead
@@ -3277,10 +3311,7 @@ export async function dispatchQueuedEvent(state: {
         // still-"queued" copy.
         const sealCfcRefusalConsequence = (): void => {
           if (served === undefined || !isCfcRejectedCommitError(error)) return;
-          reportServedEventFailure(served, {
-            kind: "error",
-            message: error.message,
-          });
+          reportServedEventFailure(served, servedErrorOutcome(error.message));
         };
         // The seal's refusal of a write to the space's ACL document is
         // deterministic in the same way, so a run delivering a durable entry
@@ -3293,10 +3324,7 @@ export async function dispatchQueuedEvent(state: {
           ) {
             return;
           }
-          reportServedEventFailure(served, {
-            kind: "error",
-            message: error.message,
-          });
+          reportServedEventFailure(served, servedErrorOutcome(error.message));
         };
         // For a served event, a commit preparation that failed for a cause a
         // fresh attempt may clear (`failedCommitPreparation`) is a delivery
@@ -3378,10 +3406,10 @@ export async function dispatchQueuedEvent(state: {
           if (served === undefined || !isExplicitTransactionAbort(error)) {
             return;
           }
-          reportServedEventFailure(served, {
-            kind: "error",
-            message: "Event handler aborted its transaction",
-          });
+          reportServedEventFailure(
+            served,
+            servedErrorOutcome("Event handler aborted its transaction"),
+          );
         };
 
         let requeue: Promise<void> | undefined;

@@ -437,6 +437,7 @@ Deno.test("event-append admission: declarations and the sidecar write guard", as
           const overrides of [
             { consequenced: true },
             { error: "boo" },
+            { withheld: true as const },
             { status: "dropped" as const, reason: "x" },
           ]
         ) {
