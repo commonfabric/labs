@@ -2,7 +2,8 @@
  * The multi-runtime harness driving the system private inbox: its owner
  * creates it and has their profiles point at it, current and earlier vintages
  * alike, a sender's own handler delivers offers to the inbox the owner's
- * profile points at, and a stranger tries to read them. Two more Homes, whose
+ * profile points at, and a stranger's handler copies them, under the owner's
+ * label. Two more Homes, whose
  * profiles already point at inboxes, are given their inboxes by the host: one
  * adopts an inbox shaped as a loom daemon's rather than creating one, and the
  * other is refused another principal's inbox, holds none, and records the
@@ -40,6 +41,8 @@
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
+import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
+import { hashStringOf } from "@commonfabric/data-model";
 import { aclDocId } from "@commonfabric/memory/acl";
 import {
   MultiRuntimeHarness,
@@ -1342,21 +1345,48 @@ describe("private inbox across runtimes", () => {
     expect(await rows(sender)).toEqual(await rows(owner));
   });
 
-  it("refuses a stranger's served copy of the offers", {
-    ignore: !SERVER_EXECUTION,
-  }, async () => {
+  it("labels a stranger's copy of the offers as the owner's", async () => {
+    // The stranger's handler reads the owner's inbox, whose offers carry the
+    // owner's `User` confidentiality, and writes a copy of them into its own
+    // piece. The copy commits, and what it wrote stays readable only under
+    // that label (`docs/specs/server-side-execution/events.md` §5). This
+    // harness's runtimes read without a ceiling, so the stranger reads the
+    // rows back; the label it stored is what keeps them the owner's. A
+    // stored label names its subject by digest (`commitCfcFieldValue()`).
     await offer("private");
 
-    const refusedBefore = writeRefusals(
-      (await harness.servingDiagnostics()).loggerCounts,
-    );
     await stranger.send("copyOffers");
-    await harness.settle();
-    expect(writeRefusals((await harness.servingDiagnostics()).loggerCounts))
-      .toBeGreaterThan(
-        refusedBefore,
+    await harness.settleUntil(async () =>
+      ((await stranger.read(["copiedOffers"])) as unknown[]).length > 0
+    );
+    const copied = await stranger.link(["copiedOffers"]);
+    const stored = (await stranger.rawRead({ ...copied, path: [] })).value as
+      | {
+        cfc?: {
+          labelMap?: {
+            entries?: {
+              path: string[];
+              label: { confidentiality?: unknown[] };
+            }[];
+          };
+        };
+      }
+      | undefined;
+    const entries = (stored?.cfc?.labelMap?.entries ?? []).filter((entry) =>
+      entry.path[0] === "copiedOffers"
+    );
+    expect(entries.map((entry) => entry.path.join("/"))).toContain(
+      "copiedOffers/0",
+    );
+    const ownersConfidentiality = {
+      type: CFC_ATOM_TYPE.User,
+      subject: { digestOf: hashStringOf(owner.identity.did()) },
+    };
+    for (const entry of entries) {
+      expect(entry.label.confidentiality).toContainEqual(
+        ownersConfidentiality,
       );
-    expect(await stranger.read(["copiedOffers"])).toEqual([]);
+    }
   });
 
   it("replaces an inbox in Home's own private-inbox space with another piece in that space, leaving the refused one's offers in it", async () => {

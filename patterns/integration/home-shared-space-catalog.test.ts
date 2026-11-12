@@ -276,7 +276,13 @@ async function invoke<T>(
   return await receipt.pull();
 }
 
-/** Observes a failed handler's generic terminal result without a value receipt. */
+/**
+ * Observes a failed handler's generic terminal result without a value receipt.
+ * A served run whose handler read data the stream's space doesn't admit
+ * (`withheld`) records its outcome withheld and no error
+ * (`docs/specs/server-side-execution/events.md` §5), so `message` is then
+ * checked only where the caller's own runtime runs the handler.
+ */
 async function rejectInvocation<T>(
   runtime: Runtime,
   stream: Cell<T>,
@@ -284,6 +290,7 @@ async function rejectInvocation<T>(
   server: Server,
   serving: boolean,
   message = "",
+  { withheld = false }: { withheld?: boolean } = {},
 ) {
   if (!serving) {
     await expect(invoke(runtime, stream, event, crypto.randomUUID())).rejects
@@ -301,9 +308,14 @@ async function rejectInvocation<T>(
   sendEvent(stream, event as T);
   await awaitAdmitted(server, () => {
     const entry = entries()[index];
-    return entry?.consequenced === true && typeof entry.error === "string";
+    return entry?.consequenced === true &&
+      (withheld ? entry.withheld === true : typeof entry.error === "string");
   });
-  expect(entries()[index].error).toContain(message);
+  if (withheld) {
+    expect(entries()[index].error).toBeUndefined();
+  } else {
+    expect(entries()[index].error).toContain(message);
+  }
 }
 
 /** Records tentative handler receipts and commit verdicts without extra writes. */
@@ -1151,6 +1163,8 @@ describe("Home shared-space catalog", () => {
         expect((await controlTx.commit().settled).error).toBeUndefined();
         await runtime.idle();
         await control.pull();
+        // The handler reads Home's private observation, which the social
+        // space doesn't admit, so a served run records its outcome withheld.
         await rejectInvocation(
           runtime,
           control.key("send"),
@@ -1165,6 +1179,7 @@ describe("Home shared-space catalog", () => {
           server,
           serving,
           "writer-fit confidentiality misfit",
+          { withheld: true },
         );
         expect(await control.key("messages").pull()).toEqual([]);
       });
