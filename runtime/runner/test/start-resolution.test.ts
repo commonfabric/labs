@@ -102,6 +102,29 @@ describe("start()", () => {
     });
   });
 
+  describe("a field whose document cannot be looked up", () => {
+    it("rejects with the lookup's error, and a later start makes an attempt of its own", async () => {
+      const field = runtime.getCell<{ field: unknown }>(space, "lookup throws")
+        .key("field");
+      const lookupFailure = new Error("lookup failed");
+      const getCellFromLink = stub(runtime, "getCellFromLink", () => {
+        throw lookupFailure;
+      });
+      let started: Promise<boolean>;
+      try {
+        started = runtime.runner.start(field);
+      } finally {
+        getCellFromLink.restore();
+      }
+      await expect(started).rejects.toBe(lookupFailure);
+
+      // The failed attempt is finished, so this start does not join it.
+      await expect(runtime.runner.start(field)).rejects.toThrow(
+        "No data at cell",
+      );
+    });
+  });
+
   describe("a document holding a link", () => {
     it("rejects when the links lead back to a document already followed", async () => {
       const first = runtime.getCell(space, "circular first");

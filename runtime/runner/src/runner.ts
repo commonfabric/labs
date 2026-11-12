@@ -5615,10 +5615,18 @@ export class Runner {
     this.#activeStartAttempts.add(attempt);
     this.#trackStartAttempt(attempt, startKey);
     // A synchronous throw from `#doStart()` settles the attempt the way its
-    // rejection does.
-    const settled = new Promise<boolean>((resolve) =>
-      resolve(this.#doStart(resultCell, new Set(), attempt))
-    )
+    // rejection does. The claim below chains straight onto `#doStart()`'s own
+    // promise, so it runs on the turn that promise settles. Each promise
+    // between them is a turn later, and a piece-start commit that fails in
+    // those turns retires the registration the claim reports on, so the start
+    // would report that a piece it installed is not running.
+    let outcome: Promise<boolean>;
+    try {
+      outcome = this.#doStart(resultCell, new Set(), attempt);
+    } catch (error) {
+      outcome = Promise.reject(error);
+    }
+    const settled = outcome
       .then((started) => {
         // This start gives the result a lifetime of its own, so an enclosing
         // pattern releasing it later leaves it running. An attempt whose
