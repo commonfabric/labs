@@ -2948,33 +2948,29 @@ export async function dispatchQueuedEvent(state: {
         )
         : [];
       if (loadingReads.length > 0) {
-        const reason = `the run read ${loadingReads.length} document(s) ` +
-          `still loading (${loadingReads.join(", ")})`;
-        if (served === undefined) {
-          // The client arm below parks on the run's loads.
-          state.noteLineageRerun(tx);
-          tx.dispatchedHandlerNotRun = { reason };
-        } else {
-          // The served entry is requeued here with its carriage and parked
-          // on those loads, rather than left to the drain, so that it runs
-          // again once they settle and a load that fails defers it as one at
-          // the preflight does. As after a RetryImmediately, the requeued
-          // event carries the final callback and the staged work on to the
-          // run that follows: the drain reads that callback as this copy's
-          // end, and queues the entry again once it has heard it.
-          state.noteLineageRerun(tx);
-          if (tx.status().status === "ready") {
-            tx.abort(new Error(`served run ${reason}`));
-          }
-          state.parkHeadEventForLoads(
-            requeueToRunAgain(),
-            loadingReads,
+        // The event is requeued with its carriage and retry budget as they
+        // stand, and parked on those loads as the preflight park parks a
+        // head: it runs again once they settle, and a load that fails ends
+        // it as one at the preflight does. Waiting on a load is settlement,
+        // so the wait spends none of the retry window a stale-basis
+        // rejection gets. As after a RetryImmediately, the requeued event
+        // carries the final callback and the staged work on to the run that
+        // follows: a serving drain reads that callback as the end of its
+        // copy, and queues the entry again once it has heard it.
+        state.noteLineageRerun(tx);
+        if (tx.status().status === "ready") {
+          tx.abort(
+            new Error(
+              `the run read ${loadingReads.length} document(s) still ` +
+                `loading (${loadingReads.join(", ")})`,
+            ),
           );
-          return;
         }
+        state.parkHeadEventForLoads(requeueToRunAgain(), loadingReads);
+        return;
       }
 
-      if (error && loadingReads.length === 0) {
+      if (error) {
         finalizeFailure(error);
         return;
       }

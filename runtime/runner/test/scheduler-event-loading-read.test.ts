@@ -21,6 +21,9 @@ const space = signer.did();
 const foreignSpace = (await Identity.fromPassphrase(
   "scheduler event loading read, foreign",
 )).did();
+const thirdSpace = (await Identity.fromPassphrase(
+  "scheduler event loading read, third",
+)).did();
 
 const offersSchema = {
   type: "array",
@@ -48,7 +51,7 @@ describe("scheduler-event-loading-read", () => {
   let readerStorage: EmulatedStorageManager;
   let writer: Runtime;
   let reader: Runtime;
-  let releaseHeldSync: (() => void) | undefined;
+  let heldSyncReleases: (() => void)[];
 
   beforeEach(() => {
     server = newSharedServer();
@@ -62,11 +65,11 @@ describe("scheduler-event-loading-read", () => {
       apiUrl: new URL(import.meta.url),
       storageManager: readerStorage,
     });
-    releaseHeldSync = undefined;
+    heldSyncReleases = [];
   });
 
   afterEach(async () => {
-    releaseHeldSync?.();
+    for (const release of heldSyncReleases) release();
     await reader.dispose({ closeStorage: false });
     await writer.dispose({ closeStorage: false });
     await readerStorage.close();
@@ -76,9 +79,13 @@ describe("scheduler-event-loading-read", () => {
 
   /**
    * Holds every load of the document `id` the reader starts until the
-   * returned function is called; every other load passes through.
+   * returned function is called, calling `onRequested` as each one is asked
+   * for; every other load passes through.
    */
-  function holdReaderSyncFor(id: string): () => void {
+  function holdReaderSyncFor(
+    id: string,
+    onRequested: () => void = () => {},
+  ): () => void {
     const { promise, resolve } = Promise.withResolvers<void>();
     const manager = readerStorage as unknown as {
       open: (space: string) => {
@@ -92,7 +99,10 @@ describe("scheduler-event-loading-read", () => {
         get(target, prop, receiver) {
           if (prop === "sync") {
             return async (syncId: unknown, ...rest: unknown[]) => {
-              if (syncId === id) await promise;
+              if (syncId === id) {
+                onRequested();
+                await promise;
+              }
               return (target.sync as (...a: unknown[]) => Promise<unknown>)(
                 syncId,
                 ...rest,
@@ -104,7 +114,7 @@ describe("scheduler-event-loading-read", () => {
         },
       });
     };
-    releaseHeldSync = resolve;
+    heldSyncReleases.push(resolve);
     return resolve;
   }
 
@@ -220,7 +230,7 @@ describe("scheduler-event-loading-read", () => {
   function send(
     eventCell: Cell<number>,
     outcomes?: ServedEventFailureOutcome[],
-    { oneShot = false }: { oneShot?: boolean } = {},
+    { oneShot = false, index = 0 }: { oneShot?: boolean; index?: number } = {},
   ): Promise<string> {
     const settled = Promise.withResolvers<string>();
     const onCommit = (tx: IExtendedStorageTransaction) =>
@@ -243,8 +253,8 @@ describe("scheduler-event-loading-read", () => {
           served: {
             streamEntry: {
               sidecarId: "of:stream-events:loading-read",
-              index: 0,
-              seq: 1,
+              index,
+              seq: index + 1,
             },
             onFailure: (outcome) => outcomes.push(outcome),
           },
@@ -275,9 +285,11 @@ describe("scheduler-event-loading-read", () => {
     });
 
     it("runs the handler again once the load of the document it resolved a cell to lands", async () => {
-      // `resolveAsCell()` itself withdraws a run whose resolution stops at a
-      // document still loading, so this shape never depended on what the run
-      // read afterwards.
+      // Here the cell the run resolves is the store itself, and
+      // `resolveAsCell()` withdraws a run whose resolution stops at a
+      // document still loading, before the run reads anything of it. The
+      // case holds with the loading-read withdrawal removed; it pins the
+      // shape that withdrawal leaves to `resolveAsCell()`.
 
       const { holder, log, eventCell, store } = await standUp(
         "client-resolved",
@@ -342,6 +354,98 @@ describe("scheduler-event-loading-read", () => {
       expect(errors).toEqual([]);
     });
 
+    it("reports, once, an error the handler throws whatever it read, from the run after the load lands", async () => {
+      const { holder, log, eventCell, store } = await standUp(
+        "client-unrelated-throw",
+        ["a", "b", "c"],
+      );
+      const errors: Error[] = [];
+      reader.scheduler.onError((error) => errors.push(error));
+      const runs = { count: 0 };
+      const firstRun = Promise.withResolvers<void>();
+      reader.scheduler.addEventHandler(
+        (tx: IExtendedStorageTransaction) => {
+          runs.count++;
+          firstRun.resolve();
+          holder.withTx(tx).key("inbox").resolveAsCell().key("offers")
+            .asSchema(offersSchema).get();
+          log.withTx(tx).set(["written"]);
+          throw new Error("unrelated failure");
+        },
+        eventCell.getAsNormalizedFullLink(),
+        (depTx) => {
+          holder.withTx(depTx).get();
+        },
+      );
+      const release = holdReaderSyncFor(store.getAsNormalizedFullLink().id);
+
+      const status = send(eventCell);
+      await firstRun.promise;
+      release();
+
+      expect(await status).not.toBe("done");
+      await reader.idle();
+      expect(runs.count).toBe(2);
+      expect(log.get()).toBeUndefined();
+      expect(errors.map((error) => error.message)).toEqual([
+        "unrelated failure",
+      ]);
+    });
+
+    it("runs the handler again for each loading read it reaches, however long the loads take, without spending its retry window", async () => {
+      // The store holds a link to a document in a third space, which the run
+      // reaches only once the store has loaded. Each load is held past the
+      // retry window a stale-basis rejection gets.
+
+      const { holder, log, eventCell, store } = await standUp(
+        "client-two-hops",
+        undefined,
+      );
+      const tail = writer.getCell<string[]>(
+        thirdSpace,
+        "client-two-hops-tail",
+      );
+      {
+        const tx = writer.edit();
+        tail.withTx(tx).set(["a", "b", "c"]);
+        expect((await tx.commit().settled).error).toBeUndefined();
+      }
+      {
+        const tx = writer.edit();
+        writer.getCell<unknown>(foreignSpace, "client-two-hops-store").withTx(
+          tx,
+        ).set(tail.getAsLink());
+        expect((await tx.commit().settled).error).toBeUndefined();
+      }
+      await writerStorage.synced();
+      const errors: Error[] = [];
+      reader.scheduler.onError((error) => errors.push(error));
+      const { reads, firstRun } = addAppendingHandler(holder, log, eventCell);
+      const releaseStore = holdReaderSyncFor(
+        store.getAsNormalizedFullLink().id,
+      );
+      const tailRequested = Promise.withResolvers<void>();
+      const releaseTail = holdReaderSyncFor(
+        tail.getAsNormalizedFullLink().id,
+        () => tailRequested.resolve(),
+      );
+      const window = reader.commitBackpressure.retryWindowMs;
+
+      const status = send(eventCell);
+      await firstRun;
+      await clock.tick(window + 1);
+      releaseStore();
+      await tailRequested.promise;
+      await clock.tick(window + 1);
+      releaseTail();
+
+      expect(await status).toBe("done");
+      await reader.idle();
+      expect(reads.at(-1)).toEqual(["a", "b", "c"]);
+      expect(log.get()).toEqual(["a,b,c"]);
+      expect(errors).toEqual([]);
+    });
+
     it("commits what a one-shot read while the load was in flight, since it runs no second time", async () => {
       // A `retries: false` event is not run again, so withdrawing its run
       // would lose the event; it ends on its one run, as one whose read
@@ -391,7 +495,11 @@ describe("scheduler-event-loading-read", () => {
 
     it("commits only the stored value of a document it read while loading in a space it wrote", async () => {
       // The commit carries the run's reads in the space it wrote, and the
-      // store refuses the one of a document it has a later value of.
+      // store refuses the one of a document it has a later value of, so the
+      // run that follows reads the stored value. The case pins that outcome;
+      // it holds whether or not the loading-read withdrawal counts reads in
+      // a space the commit writes, since either way the stale run is not
+      // the one that commits.
 
       const { holder, log, eventCell, store } = await standUp(
         "client-same-space",
@@ -482,10 +590,13 @@ describe("scheduler-event-loading-read", () => {
     });
 
     it("does not withdraw the run for a loading read in its home space", async () => {
-      // A served run's own handling receipt is a document of its home space
-      // that nothing has written, read while its load is in flight. The wave
-      // holds a served run to its home-space reads, so such a read is no
-      // reason to withdraw it.
+      // The store here is a document of the run's home space that nothing
+      // has written, read while its load is in flight, as a serving
+      // runtime's read of a handling receipt is. A served run's home-space
+      // reads are held to the store's head by the wave
+      // (`serving-handler-stale-read.test.ts`), so such a read is no reason
+      // to withdraw the run. No wave is present here, so the run commits
+      // what it read.
 
       const { holder, log, eventCell, store } = await standUp(
         "served-home-space",
