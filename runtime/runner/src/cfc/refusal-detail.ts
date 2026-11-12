@@ -43,9 +43,10 @@ import type { CfcAddress } from "./types.ts";
 
 /**
  * One read that carried a confidentiality clause into a transaction, paired
- * with the label-map entry path that carried it. The collector in `prepare.ts`
- * builds these; a gate that refuses matches the ones behind its offending
- * clauses into {@link CfcRefusalInput}s.
+ * with the label-map entry path that carried it. `prepare.ts` builds these
+ * from what the refusing gate decided on: the consumed-label collector for a
+ * sink's ceiling, and the flow join for writer-fit. A gate that refuses
+ * matches the ones behind its offending clauses into {@link CfcRefusalInput}s.
  *
  * `atom` is the clause itself rather than a rendering of it, because matching
  * is by `deepEqual` — see the module comment for what a rendered key gets
