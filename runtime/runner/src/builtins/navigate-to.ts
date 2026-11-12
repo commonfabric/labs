@@ -266,7 +266,7 @@ export function navigateTo(
       ...(Array.isArray(currentEntries) ? currentEntries : []),
       intentEntry,
     ] as never);
-    intentTx.recordMergeableOp?.(entriesLink, { op: "append", count: 1 });
+    intentTx.recordMergeableOp(entriesLink, { op: "append", count: 1 });
     // The result cell records the navigation in the ACTING session's
     // instance (the same annotation-keyed addressing) — the client's own
     // speculative write converges on the same instance.

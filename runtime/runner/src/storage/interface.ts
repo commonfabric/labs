@@ -2582,7 +2582,7 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    * (see {@link MergeableOpDelta}), forwarded to the underlying transaction after
    * resolving the link to a memory address.
    */
-  recordMergeableOp?(link: NormalizedFullLink, delta: MergeableOpDelta): void;
+  recordMergeableOp(link: NormalizedFullLink, delta: MergeableOpDelta): void;
 
   /**
    * Record text changes to the string addressed by `link`, forwarded to the
