@@ -260,14 +260,14 @@ type EditorInput = Pick<CellHandle<unknown>, "lastRead" | "pull">;
 /**
  * What `cell` holds, or nothing where the worker refuses its read. A piece
  * found among the mentionable entries is read with `get()`, the one read every
- * such handle answers, and a refusal reads as nothing rather than rejecting:
- * a refusal is the one thing `get()` throws for.
+ * such handle answers, and a refusal reads as nothing rather than rejecting.
  */
 function readUnlessRefused(cell: { get(): unknown }): unknown {
   try {
     return cell.get();
-  } catch {
-    return undefined;
+  } catch (error) {
+    if (error instanceof CellReadRefusedError) return undefined;
+    throw error;
   }
 }
 

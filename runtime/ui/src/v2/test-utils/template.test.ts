@@ -41,6 +41,19 @@ describe("template", () => {
       expect(boundValues(template, ".value")).toEqual(["v"]);
     });
 
+    it("returns the values bound in templates a list renders", () => {
+      const items = ["a", "b"].map((item) => html`<li title=${item}></li>`);
+      const template = html`<ul>${items}</ul>`;
+
+      expect(boundValues(template, "title")).toEqual(["a", "b"]);
+    });
+
+    it("does not match text outside a tag that reads like a binding", () => {
+      const template = html`<p>label=${"text"}</p><a label=${"attr"} x=${1}>`;
+
+      expect(boundValues(template, "label")).toEqual(["attr"]);
+    });
+
     it("does not match a name that only ends with the one asked for", () => {
       const template = html`<div aria-label="${"label"}" data-x=${"x"}></div>`;
 

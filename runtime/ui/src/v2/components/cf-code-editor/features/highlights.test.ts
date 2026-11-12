@@ -174,6 +174,20 @@ describe("highlights", () => {
       expect(markedRanges(state)).toEqual([[3, 6]]);
     });
 
+    it("marks nothing for a highlight the host gave no string id", () => {
+      // The host's entries reach the editor unchecked.
+
+      const state = stateWith("hello world", { a: 0, b: 5 }, [
+        { fromAnchor: "a", toAnchor: "b" },
+        { id: 7, fromAnchor: "a", toAnchor: "b" },
+        { id: "named", fromAnchor: "a", toAnchor: "b" },
+      ] as unknown as EditorHighlight[]);
+
+      expect(marks(state).map(({ spec }) => spec.attributes)).toEqual([
+        { "data-highlight-id": "named" },
+      ]);
+    });
+
     it("brings an anchor past the end of the text back to the end", () => {
       const state = stateWith("hello", { a: 2, b: 40, c: 41 }, [
         { id: "to-end", fromAnchor: "a", toAnchor: "b" },

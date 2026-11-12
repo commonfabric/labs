@@ -144,9 +144,12 @@ describe("dom", () => {
       expect(uncaught).toEqual([problem]);
     });
 
-    it("is not invented for an `error` event that carries none", async () => {
+    it("is not invented for an `error` event a test dispatches itself", async () => {
       const uncaught = await uncaughtFrom(() => {
         window.dispatchEvent(new window.Event("error"));
+        window.dispatchEvent(
+          new window.ErrorEvent("error", { error: new Error("reported") }),
+        );
       });
 
       expect(uncaught).toEqual([]);

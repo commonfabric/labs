@@ -1231,7 +1231,7 @@ describe("CFCodeEditor", () => {
       );
 
       expect(clicks).toEqual([
-        { id: "foo-id", text: "Foo (foo-id)", piece: target },
+        { id: "foo-id", text: "Foo (foo-id)", piece: target.toSigilLink() },
       ]);
     });
 
@@ -1285,15 +1285,16 @@ describe("CFCodeEditor", () => {
         () => pressOn(view, ".cm-mention-ref-pill", 6),
       );
 
-      expect(clicks).toHaveLength(1);
-      const [click] = clicks as {
-        id: string;
-        text: string;
-        piece: CellHandle<unknown>;
-      }[];
-      expect(click.id).toBe(KEY);
-      expect(click.text).toBe("Foo");
-      expect(click.piece.id()).toBe("of:foo-id");
+      // The link carries the schema the reference map reads its destination
+      // under, so only the cell it names is compared.
+      const { id, space, path } = destination.ref();
+      expect(clicks).toEqual([{
+        id: KEY,
+        text: "Foo",
+        piece: {
+          "/": { "link@1": expect.objectContaining({ id, space, path }) },
+        },
+      }]);
     });
 
     it("navigates nowhere from a reference pill pressed outside its label", async () => {

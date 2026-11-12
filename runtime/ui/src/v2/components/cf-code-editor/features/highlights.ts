@@ -88,8 +88,8 @@ const offsetOf = (
 /**
  * Helper for {@link highlightField}, which builds the marks `highlights` draw
  * in a document of `length` code units. A highlight draws nothing when
- * `anchors` lacks either of its anchors, or when its end is not after its
- * start.
+ * `anchors` lacks either of its anchors, when its end is not after its start,
+ * or when it has no string id, as the host's entries arrive unchecked.
  */
 const decorationsOf = (
   anchors: FieldAnchors,
@@ -100,7 +100,12 @@ const decorationsOf = (
   for (const { id, fromAnchor, toAnchor, kind } of highlights) {
     const from = offsetOf(anchors, fromAnchor, length);
     const to = offsetOf(anchors, toAnchor, length);
-    if (from === undefined || to === undefined || to <= from) continue;
+    if (
+      typeof id !== "string" || from === undefined || to === undefined ||
+      to <= from
+    ) {
+      continue;
+    }
     const kindClass = kind !== undefined && KIND.test(kind)
       ? ` cm-highlight-${kind}`
       : "";

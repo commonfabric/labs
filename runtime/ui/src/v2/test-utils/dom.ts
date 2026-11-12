@@ -29,7 +29,7 @@
  * and validity an element reports; {@link internalsOf} reads it back.
  */
 
-import { Window } from "happy-dom";
+import { PropertySymbol, Window } from "happy-dom";
 
 /** The window whose document components are mounted in. */
 export const window = new Window({
@@ -52,12 +52,16 @@ export const window = new Window({
 const REPLACED =
   /^(?:[A-Z]\w*)?Event$|^(location|navigator|localStorage|sessionStorage)$/;
 
-window.addEventListener("error", (event) => {
-  if (!(event instanceof window.ErrorEvent)) return;
+// happy-dom reports every exception it catches, from a listener, a timer, or
+// an inline handler, through this one method, so an `ErrorEvent` a test
+// dispatches itself is left alone.
+const reportError = window[PropertySymbol.dispatchError].bind(window);
+window[PropertySymbol.dispatchError] = (error: Error) => {
+  reportError(error);
   queueMicrotask(() => {
-    throw event.error;
+    throw error;
   });
-});
+};
 
 // A browser fires `selectionchange` once after the calls that changed the
 // selection have returned, however many there were; happy-dom fires it within

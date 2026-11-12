@@ -42,7 +42,9 @@ export function templateText(node: unknown): string {
 /**
  * Every value bound to `name` anywhere in the template tree, in document
  * order. `name` is written as in the template, prefix included: `@click`,
- * `.value`, `?disabled`, or a plain attribute such as `aria-label`.
+ * `.value`, `?disabled`, or a plain attribute such as `aria-label`. A binding
+ * counts when it is the attribute's whole value, as in `name=${value}` or
+ * `name="${value}"` inside a tag.
  */
 export function boundValues(node: unknown, name: string): unknown[] {
   const found: unknown[] = [];
@@ -53,8 +55,13 @@ export function boundValues(node: unknown, name: string): unknown[] {
     if (Array.isArray(value)) {
       value.forEach(visit);
     } else if (isTemplate(value)) {
+      let inTag = false;
       value.values.forEach((inner, index) => {
-        if (binding.test(value.strings[index])) found.push(inner);
+        const part = value.strings[index];
+        const opened = part.lastIndexOf("<");
+        const closed = part.lastIndexOf(">");
+        if (opened !== closed) inTag = opened > closed;
+        if (inTag && binding.test(part)) found.push(inner);
         visit(inner);
       });
     }
