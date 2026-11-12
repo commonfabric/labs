@@ -2915,7 +2915,8 @@ export async function dispatchQueuedEvent(state: {
       // publishes `undefined` until the load lands, so a handler reading
       // through it finds its argument unresolved in exactly that window. A
       // body that did run is withdrawn the same way when it read a document
-      // whose load is still in flight and of which the replica holds nothing
+      // whose load is still in flight and of which the replica holds nothing,
+      // in a space its commit holds no reads in
       // (`withdrawHandlerAfterLoadingRead()`): it reached the document
       // through a link it resolved while it ran, so no dependency the
       // preflight parked on names it, and it read the schema's default in
@@ -2929,7 +2930,19 @@ export async function dispatchQueuedEvent(state: {
       // consequence replaces.
       const withdrawsNotRun = served !== undefined ||
         state.runtime.experimental.serverExecution !== true;
-      if (withdrawsNotRun) withdrawHandlerAfterLoadingRead(state.runtime, tx);
+      if (withdrawsNotRun) {
+        // The wave holds a served run to its reads in the home space; a
+        // client commit holds each space it wrote to the reads it made there.
+        const home = queuedEvent.eventLink.space;
+        withdrawHandlerAfterLoadingRead(
+          state.runtime,
+          tx,
+          served !== undefined
+            ? (space) => space === home
+            : (space) =>
+              tx.tx.getWriteTargetSpaces?.().includes(space) ?? false,
+        );
+      }
       if (tx.dispatchedHandlerNotRun !== undefined && withdrawsNotRun) {
         const reason = tx.dispatchedHandlerNotRun.reason;
         // Taken before the abort, since the read set is what the client arm

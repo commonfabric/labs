@@ -5,6 +5,7 @@ import type { Runtime } from "../runtime.ts";
 import type {
   IExtendedStorageTransaction,
   IMemorySpaceAddress,
+  MemorySpace,
 } from "../storage/interface.ts";
 import {
   isLinkResolutionProbe,
@@ -46,19 +47,25 @@ export function withdrawHandlerWhileLoading(
  * document no dependency of the event names, so nothing parked the event on
  * that load before the run; the read then returns the schema's default, or
  * nothing, in place of what the document holds. The reads that count are the
- * ones the run consumed the document's data with (`consumedReadsOf()`).
+ * ones the run consumed the document's data with (`consumedReadsOf()`), in a
+ * space for which `validated` returns `false`. A read in a space the run's
+ * commit carries its reads to is held to the store's head there, and a stale
+ * one is refused at that commit, so it needs no withdrawal here; a read in
+ * any other space is held to nothing.
  *
  * Does nothing, and reads nothing of the run, while no load is in flight.
  */
 export function withdrawHandlerAfterLoadingRead(
   runtime: Runtime,
   tx: IExtendedStorageTransaction,
+  validated: (space: MemorySpace) => boolean,
 ): void {
   if (tx.dispatchedHandlerNotRun !== undefined) return;
   const { storageManager } = runtime;
   if ((storageManager.pendingLoadAddresses?.() ?? []).length === 0) return;
   const identity = tx.tx.scopeKeyIdentity ?? runtime.scopeKeyIdentity;
   for (const read of consumedReadsOf(tx.tx)) {
+    if (validated(read.space)) continue;
     if (!isLoadingWithoutLocalBasis(runtime, read, identity)) continue;
     tx.dispatchedHandlerNotRun = {
       reason: `the run read \`${read.id}\` while its document was still ` +
