@@ -3061,13 +3061,28 @@ function sourcePosition(
  * Reaches for the container's own document when the walk cannot see the
  * container: behind a link, or where the selection's read stopped above it,
  * which is what a marked collection's rejecting selector does.
+ *
+ * Each document the link chain reaches is loaded by name and awaited until it
+ * has arrived or is known absent. Crossing a link asks for its target only the
+ * first time any read of this storage manager crosses it, and does not wait for
+ * the answer, so a client that runs nothing (`cf` under server execution) can
+ * reach a container whose document no read has loaded and none will. A chain
+ * that ends at a document that stays absent after its load has no container,
+ * and reads as `undefined`.
  */
 async function storedContainer(position: WalkedPosition): Promise<unknown> {
   if (position.stored?.value !== undefined) return position.stored.value;
-  const stored = position.cell.getRaw({ lastNode: "value" });
-  if (stored !== undefined) return stored;
-  await position.cell.asSchema(false).pull();
-  return position.cell.getRaw({ lastNode: "value" });
+  const loaded = new Set<string>();
+  while (true) {
+    const stored = position.cell.getRaw({ lastNode: "value" });
+    if (stored !== undefined) return stored;
+    const reached = position.cell.resolveAsCell().asSchema(false);
+    const { space, scope, id } = reached.getAsNormalizedFullLink();
+    const document = `${space}\0${scope}\0${id}`;
+    if (loaded.has(document)) return undefined;
+    loaded.add(document);
+    await reached.sync();
+  }
 }
 
 /**
