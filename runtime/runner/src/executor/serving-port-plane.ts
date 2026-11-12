@@ -303,9 +303,11 @@ class PlaneWaveCommitSink implements WaveCommitSink, WaveCommitSinkReads {
     // The counters cross ahead of the commit on the same port, whose
     // messages the server's thread handles in order, so it holds what this
     // wave counted before its commit by the time it applies the commit. A
-    // client that has seen the commit then reads counters that include it.
-    // The settle blocks stay behind: their series cost about as much to post
-    // as the commit itself.
+    // client that has seen the commit then reads counters that include those
+    // counts. What the wave counts for the commit itself, such as `waves` and
+    // `derivedCommits`, arrives with the next full post. The settle blocks
+    // stay behind: their series cost about as much to post as the commit
+    // itself.
     this.#reportCounters();
     try {
       return await this.#endpoint.request("sink.commitWave", {
