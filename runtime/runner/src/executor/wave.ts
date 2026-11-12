@@ -84,6 +84,7 @@ import {
   hasPendingWriteElision,
 } from "../storage/transaction-inspection.ts";
 import { markServedDerivationTx } from "../storage/reactivity-log.ts";
+import { waveClaimIsWithheld } from "./processed-claim.ts";
 
 const logger = getLogger("wave-accumulator", {
   enabled: true,
@@ -871,6 +872,11 @@ interface WaveContribution {
   supersededOutputs?: Map<string, SupersededOutput>;
   index: number;
   context: WaveRunContext;
+
+  /** Whether the processed claim this wave writes for the run, a same-wave
+   * copy of an event, records the outcome withheld
+   * (`waveClaimIsWithheld()`). */
+  claimWithheld?: true;
 
   /** Per-space sealed commits, in the tx's commit order (children first,
    * home last — protocol.md §2b). */
@@ -1771,6 +1777,7 @@ export class WaveAccumulator
         spaceAccessChanges,
         discoveredScope: assembly.discoveredScope,
         viewSeqs: this.#viewSeqsAtSeal(assembly.spaces, context),
+        ...(waveClaimIsWithheld(tx) ? { claimWithheld: true as const } : {}),
       };
       this.#contributions.push(contribution);
       waveSettlements.set(
@@ -3942,6 +3949,9 @@ export class WaveAccumulator
     // streamEntry (its re-issued intent dedupes on navigateTo's
     // deterministic nonce at apply), and the effect lands exactly once.
     const survivedEventIds = new Set<string>();
+    // Of those, the runs whose join was foreign to this space, whose entry
+    // records the outcome withheld beside the mark (`processed-claim.ts`).
+    const withheldEventIds = new Set<string>();
     for (const contribution of this.#survivors(requeued, droppedWhole)) {
       if (
         contribution.context.kind === "event-handler" &&
@@ -3949,6 +3959,9 @@ export class WaveAccumulator
         contribution.context.lt1 === true
       ) {
         survivedEventIds.add(contribution.context.eventId);
+        if (contribution.claimWithheld === true) {
+          withheldEventIds.add(contribution.context.eventId);
+        }
       }
     }
     const eventAppends: Array<{ id: string; eventId: string }> = [];
@@ -4045,6 +4058,9 @@ export class WaveAccumulator
             // so the sealed originals stay pristine.
             (list[entryIndex] as { consequenced?: boolean })
               .consequenced = true;
+            if (withheldEventIds.has(entry.eventId)) {
+              (list[entryIndex] as { withheld?: boolean }).withheld = true;
+            }
           }
         }
       }

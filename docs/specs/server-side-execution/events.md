@@ -600,6 +600,27 @@ loop's duty).
   and a fresh attempt may land the write that sealing an error would
   end. An explicit handler abort is a handler-error consequence, not an
   infrastructure retry.
+- **Outcome withheld under a foreign join.** The entry's `consequenced`
+  mark is the event's processed claim (CFC §6.2.2), which takes nothing
+  of what the handler read: the CFC gate neither stamps nor measures it
+  (`runtime/runner/src/executor/processed-claim.ts`;
+  [specs#94](https://github.com/commonfabric/specs/pull/94)). Where the
+  handler's flow join carries a clause the stream's space doesn't admit,
+  the entry also says the same thing however the handling ended: a
+  commit, a throw, a CFC verdict, an explicit abort and an ACL-document
+  refusal each leave `consequenced` and `withheld: true`, and none of
+  `error`, `status` or `reason`. A drain-delivered run writes `withheld`
+  in its own transaction, the wave writes it beside a same-wave copy's
+  mark, and the consequence notice writes it for a failure. The sender's
+  durable-ack coupling reports every such outcome as `done`, on a view
+  `isWithheldDelivery()` names, never as a failure, since the handling
+  may have committed; the overlay signals `withheld`. Neither the sender
+  nor a reader of the stream's space learns whether the handling
+  committed. What the handling wrote stays
+  readable under its own labels. A delivery failure that ends in
+  `needs-attention` made no claim: the event was not handled and stays
+  retryable, and its record holds fixed text and the failure's class,
+  `unknown` for a commit preparation, and nothing of what the run read.
 - **Handler body DID NOT RUN — not a consequence (RULED 2026-08-27;
   mark/effects atomicity, the a04 write-side member).** A served
   dispatch whose handler body never executed — the runner's
