@@ -123,6 +123,7 @@ export class XOmniLayout extends LitElement {
     }
   `;
 
+  /** Whether the sidebar is open, which shows it only while it has content. */
   @property({ type: Boolean })
   accessor sidebarOpen = false;
 
@@ -138,89 +139,62 @@ export class XOmniLayout extends LitElement {
   #resizeStartX = 0;
   #resizeStartWidth = 0;
 
-  override firstUpdated() {
-    const slot = this.shadowRoot?.querySelector(
-      'slot[name="sidebar"]',
-    ) as HTMLSlotElement | null;
-    if (slot) {
-      this.#updateSidebarContent(slot);
-      slot.addEventListener("slotchange", () => {
-        this.#updateSidebarContent(slot);
-      });
-    }
+  /**
+   * Publishes the sidebar's width to the grid as `--sidebar-width`, and gives
+   * the host the `sidebar-open` attribute, which opens the sidebar's grid
+   * column, only while the sidebar is both open and has content.
+   */
+  override updated() {
+    this.style.setProperty("--sidebar-width", `${this.sidebarWidth}px`);
+    this.toggleAttribute(
+      "sidebar-open",
+      this.sidebarOpen && this.hasSidebarContent,
+    );
   }
 
-  override updated(changedProperties: Map<string, unknown>) {
-    super.updated(changedProperties);
-    if (changedProperties.has("sidebarWidth")) {
-      this.style.setProperty("--sidebar-width", `${this.sidebarWidth}px`);
-    }
+  // `slotchange` bubbles, so a slot forwarded into the sidebar's slot sends one
+  // here too, as its target. What is measured is the sidebar slot the listener
+  // is bound on, the event's `currentTarget`.
 
-    // Only show sidebar grid column when both open AND has content
-    if (
-      changedProperties.has("sidebarOpen") ||
-      changedProperties.has("hasSidebarContent")
-    ) {
-      const shouldExpand = this.sidebarOpen && this.hasSidebarContent;
-      if (shouldExpand) {
-        this.setAttribute("sidebar-open", "");
-      } else {
-        this.removeAttribute("sidebar-open");
-      }
-    }
-  }
+  #handleSidebarSlotChange = (
+    { currentTarget: slot }: { currentTarget: HTMLSlotElement },
+  ) => {
+    this.hasSidebarContent = slot.assignedNodes({ flatten: true }).some(
+      (node) =>
+        node.nodeType === Node.ELEMENT_NODE ||
+        (node.nodeType === Node.TEXT_NODE &&
+          (node.textContent ?? "").trim().length > 0),
+    );
+  };
 
-  #updateSidebarContent(slot: HTMLSlotElement) {
-    const nodes = slot.assignedNodes({ flatten: true });
-    const hasContent = nodes.some((node) => {
-      if (node.nodeType === Node.ELEMENT_NODE) return true;
-      if (node.nodeType === Node.TEXT_NODE) {
-        return (node.textContent ?? "").trim().length > 0;
-      }
-      return false;
-    });
-    this.hasSidebarContent = hasContent;
-  }
+  // The handle captures the pointer when a drag starts, so the drag's moves
+  // arrive at the handle wherever the pointer goes, and the drag ends when the
+  // handle loses the capture, which it does when the pointer is released or
+  // the browser cancels the gesture.
 
-  #handleResizeStart = (e: PointerEvent) => {
+  #handleResizeStart = (
+    e: PointerEvent & { currentTarget: Pick<Element, "setPointerCapture"> },
+  ) => {
     e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
     this.isResizing = true;
     this.#resizeStartX = e.clientX;
     this.#resizeStartWidth = this.sidebarWidth;
-
-    const handle = e.target as HTMLElement;
-    handle.setPointerCapture(e.pointerId);
-    handle.classList.add("dragging");
-
-    document.addEventListener("pointermove", this.#handleResizeMove);
-    document.addEventListener("pointerup", this.#handleResizeEnd);
   };
 
   #handleResizeMove = (e: PointerEvent) => {
     if (!this.isResizing) return;
 
+    // The sidebar is on the right, so a drag leftwards widens it.
     const delta = this.#resizeStartX - e.clientX;
-    const newWidth = Math.min(
+    this.sidebarWidth = Math.min(
       MAX_SIDEBAR_WIDTH,
       Math.max(MIN_SIDEBAR_WIDTH, this.#resizeStartWidth + delta),
     );
-
-    this.sidebarWidth = newWidth;
   };
 
-  #handleResizeEnd = (_e: PointerEvent) => {
-    if (!this.isResizing) return;
-
+  #handleResizeEnd = () => {
     this.isResizing = false;
-    const handle = this.shadowRoot?.querySelector(
-      ".resize-handle",
-    ) as HTMLElement;
-    if (handle) {
-      handle.classList.remove("dragging");
-    }
-
-    document.removeEventListener("pointermove", this.#handleResizeMove);
-    document.removeEventListener("pointerup", this.#handleResizeEnd);
   };
 
   override render() {
@@ -233,11 +207,16 @@ export class XOmniLayout extends LitElement {
       <div class="sidebar-container ${showSidebar ? "visible" : ""}">
         <div class="sidebar">
           <div
-            class="resize-handle"
+            class="resize-handle ${this.isResizing ? "dragging" : ""}"
             @pointerdown="${this.#handleResizeStart}"
+            @pointermove="${this.#handleResizeMove}"
+            @lostpointercapture="${this.#handleResizeEnd}"
           ></div>
           <div class="sidebar-content">
-            <slot name="sidebar"></slot>
+            <slot
+              name="sidebar"
+              @slotchange="${this.#handleSidebarSlotChange}"
+            ></slot>
           </div>
         </div>
       </div>
