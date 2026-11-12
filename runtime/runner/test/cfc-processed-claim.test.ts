@@ -14,6 +14,7 @@ import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { isCfcLabelReference } from "../src/cfc/label-documents.ts";
 import {
   CFC_STRUCTURAL_PROVENANCE_PROCESSED_CLAIM,
+  runtimeWritePolicyAuthorization,
   type StoredCfcMetadata,
 } from "../src/cfc/types.ts";
 import { stampWaveRunContext, WaveAccumulator } from "../src/executor/wave.ts";
@@ -297,24 +298,28 @@ describe("cfc-processed-claim", () => {
     // the runtime's mark on any other document names nothing the gate skips.
     // The document holds an entry already, as the entries document does, so
     // that the mark is the only write the gate could skip.
-    const plain = runtime.getCell<{ entries: { note: string }[] }>(
-      space,
-      "plain-document",
-      undefined,
-    );
+    const plainId = runtime.getCell(space, "plain-document", undefined)
+      .getAsNormalizedFullLink().id;
+    const address = { space, scope: "space" as const, id: plainId };
     const seed = runtime.edit();
-    plain.withTx(seed).set({ entries: [{ note: "pending" }] });
-    expect((await seed.commit().settled).error).toBeUndefined();
-    const plainId = plain.getAsNormalizedFullLink().id;
-    const tx = handlerRun("misplaced-handler");
-    writeProcessedClaim(runtime, tx, space, { sidecarId: plainId, index: 0 }, {
-      clearDeferral: false,
+    seed.writeOrThrow({ ...address, path: ["value"] }, {
+      entries: [{ note: "pending" }],
     });
+    expect((await seed.commit().settled).error).toBeUndefined();
+    const tx = handlerRun("misplaced-handler");
+    const path = ["entries", "0", "consequenced"];
+    tx.recordCfcWritePolicyInput({
+      kind: "structural-provenance",
+      target: { ...address, path },
+      claim: CFC_STRUCTURAL_PROVENANCE_PROCESSED_CLAIM,
+      sources: [],
+    }, runtimeWritePolicyAuthorization);
+    tx.writeOrThrow({ ...address, path: ["value", ...path] }, true);
 
     const reasons = preparedWriterFitReasons(tx);
     expect(reasons).toHaveLength(1);
     expect(reasons[0]).toContain(
-      `writer-fit confidentiality misfit for ${plainId}`,
+      `writer-fit confidentiality misfit for ${plainId} at /entries/0/consequenced`,
     );
     tx.abort();
   });
