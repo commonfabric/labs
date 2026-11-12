@@ -245,6 +245,38 @@ describe("handlePieceGet()", () => {
     expect(readerExamined(itemUri)).toBe(false);
   });
 
+  it("rejects with the space's refusal when the refusal is recorded while the piece is being opened", async () => {
+    // The last read the answer waits on is the piece's own open, after every
+    // check made while reading, so only a check made before answering sees
+    // the refusal.
+    const refusal = Object.assign(new Error("Principal lacks READ"), {
+      name: "AuthorizationError",
+    });
+    let refused = false;
+    using _accessError = stub(
+      readerStorage,
+      "spaceAccessError",
+      () => refused ? refusal : undefined,
+    );
+    const open = readerPieces.getPieceCell.bind(readerPieces);
+    using _open = stub(
+      readerPieces,
+      "getPieceCell",
+      (async (...args: Parameters<typeof open>) => {
+        const cell = await open(...args);
+        refused = true;
+        return cell;
+      }) as typeof open,
+    );
+
+    const failure = await get(pieceId).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    expect(failure).toBe(refusal);
+  });
+
   it("rejects with the failed first handshake for a space its connection never reached", async () => {
     const unreachable = firstHandshakeFailedError(
       3,

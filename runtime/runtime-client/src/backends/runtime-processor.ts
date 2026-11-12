@@ -3572,6 +3572,18 @@ export class RuntimeProcessor {
   }
 
   /**
+   * Returns `answer`, built from reads of `spaces`, once each of them is still
+   * readable, and throws as {@link #throwIfUnreadable} does otherwise. A
+   * refusal can be recorded while any read that built the answer waits, so a
+   * handler that checks a space before reading asks this again before it
+   * answers.
+   */
+  #answerIfReadable<T>(answer: T, ...spaces: MemorySpace[]): T {
+    for (const space of spaces) this.#throwIfUnreadable(space);
+    return answer;
+  }
+
+  /**
    * Returns the server's refusal of `space` when the refusal says the space is
    * deleted, and `undefined` when it does not. A read of a deleted space ends
    * with no data rather than failing, so a caller that would report what it
@@ -3611,6 +3623,22 @@ export class RuntimeProcessor {
    *   never completed a handshake, for the same reason.
    */
   async handlePieceGet(
+    request: PieceGetRequest,
+  ): Promise<PieceResponse> {
+    const response = await this.#pieceGet(request);
+    return this.#answerIfReadable(
+      response,
+      request.space,
+      response.piece.cell.space,
+    );
+  }
+
+  /**
+   * Helper for {@link handlePieceGet}, which decides the address. It checks
+   * each space as soon as it has read from it, so that nothing is started
+   * in a space that refused this runtime.
+   */
+  async #pieceGet(
     request: PieceGetRequest,
   ): Promise<PieceResponse> {
     // TODO(danfuzz): Refuse a cell that is not a piece cell in the surviving
@@ -3763,22 +3791,23 @@ export class RuntimeProcessor {
     // A slug a runtime read before the refusal is still in its replica, and
     // names nothing this runtime can open.
     this.#throwIfUnreadable(space);
+    let landed: { piece: Cell<unknown>; pathAfter: string[] };
     try {
-      if (request.member === undefined) {
-        const { piece } = await resolveSlugTargetInPiece(
+      landed = request.member === undefined
+        ? {
+          piece: (await resolveSlugTargetInPiece(
+            this.#runtime,
+            space,
+            request.slug,
+          )).piece,
+          pathAfter: [],
+        }
+        : await resolveSlugReference(
           this.#runtime,
           space,
           request.slug,
+          [request.member],
         );
-        return { piece: createPieceRef(piece), pathAfter: [] };
-      }
-      const { piece, pathAfter } = await resolveSlugReference(
-        this.#runtime,
-        space,
-        request.slug,
-        [request.member],
-      );
-      return { piece: createPieceRef(piece), pathAfter };
     } catch (error) {
       // A reference reaching nothing is what the caller asked about, so it
       // comes back as an answer. Everything else — a transport fault, a
@@ -3795,6 +3824,10 @@ export class RuntimeProcessor {
       }
       throw error;
     }
+    return this.#answerIfReadable(
+      { piece: createPieceRef(landed.piece), pathAfter: landed.pathAfter },
+      space,
+    );
   }
 
   async handlePieceRemove(

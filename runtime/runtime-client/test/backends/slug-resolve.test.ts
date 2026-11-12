@@ -305,6 +305,28 @@ describe("handleSlugResolve()", () => {
     ).rejects.toThrow("the socket went away");
   });
 
+  it("rejects with the space's refusal when the refusal is recorded while the walk reads", async () => {
+    // The check before the walk finds nothing, and the walk then lands on
+    // what the replica holds, so only a check made before answering sees the
+    // refusal.
+    const refusal = Object.assign(new Error("Principal lacks READ"), {
+      name: "AuthorizationError",
+    });
+    let asked = 0;
+    using _accessError = stub(
+      storageManager,
+      "spaceAccessError",
+      () => asked++ === 0 ? undefined : refusal,
+    );
+
+    const failure = await resolve("board").then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    expect(failure).toBe(refusal);
+  });
+
   it("rejects with the failed first handshake rather than a refusal for a space its connection never reached", async () => {
     // A space never reached binds no name only because nothing in it could
     // be read, so the answer is the failure, not "no such name".
