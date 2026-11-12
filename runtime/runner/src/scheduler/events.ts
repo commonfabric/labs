@@ -2912,38 +2912,21 @@ export async function dispatchQueuedEvent(state: {
         return;
       }
 
-      if (error) {
-        finalizeFailure(error);
-        return;
-      }
-
-      // A dispatch whose handler body DID NOT RUN seals nothing (events.md
-      // §5). The runner records the skip when the handler's argument reads
-      // as `undefined`, and on a replica that is still loading what the
-      // argument reaches that is a cold read, not a schema mismatch: a
-      // computation that reads a document the replica does not hold yet
-      // publishes `undefined` until the load lands, so a handler reading
-      // through it finds its argument unresolved in exactly that window.
-      // Both arms below withdraw the transaction and run the handler again
-      // once the replica has moved; what differs is who re-delivers. Under
-      // events-down (server-execution v2 Phase 3) a dispatch without a served
-      // carriage is the client's speculative echo of an entry the server
-      // handles authoritatively and re-drains itself, so it takes neither arm:
-      // its skip seals as an empty speculative commit the authoritative
-      // consequence replaces.
       const withdrawsNotRun = served !== undefined ||
         state.runtime.experimental.serverExecution !== true;
 
       // A body that ran and read a document whose load is still in flight,
-      // and of which the replica holds nothing, read the schema's default in
-      // place of the document's value (events.md §5). It reached the document
-      // through a link it resolved while it ran, so no dependency the
-      // preflight parked on names it. A read the commit holds to the store's
-      // head needs nothing here: the wave holds a served run to its reads in
-      // the home space, and a client commit holds each space it wrote to the
-      // reads it made there. Any other such read withdraws the run, which
-      // runs again once those loads settle, and a load the event already
-      // waited for does not withdraw it twice (`unawaitedLoadKeys`).
+      // and of which the replica holds nothing, read the schema's default, or
+      // nothing, in place of the document's value (events.md §5), so what it
+      // did with that, a throw included, is no consequence of the event. It
+      // reached the document through a link it resolved while it ran, so no
+      // dependency the preflight parked on names it. A read the commit holds
+      // to the store's head needs nothing here: the wave holds a served run
+      // to its reads in the home space, and a client commit holds each space
+      // it wrote to the reads it made there. Any other such read withdraws
+      // the run, which runs again once those loads settle, and a load the
+      // event already waited for does not withdraw it twice
+      // (`unawaitedLoadKeys`).
       const loadingReads =
         withdrawsNotRun && tx.dispatchedHandlerNotRun === undefined
           ? state.unawaitedLoadKeys(
@@ -2988,6 +2971,25 @@ export async function dispatchQueuedEvent(state: {
         }
       }
 
+      if (error && loadingReads.length === 0) {
+        finalizeFailure(error);
+        return;
+      }
+
+      // A dispatch whose handler body DID NOT RUN seals nothing (events.md
+      // §5). The runner records the skip when the handler's argument reads
+      // as `undefined`, and on a replica that is still loading what the
+      // argument reaches that is a cold read, not a schema mismatch: a
+      // computation that reads a document the replica does not hold yet
+      // publishes `undefined` until the load lands, so a handler reading
+      // through it finds its argument unresolved in exactly that window.
+      // Both arms below withdraw the transaction and run the handler again
+      // once the replica has moved; what differs is who re-delivers. Under
+      // events-down (server-execution v2 Phase 3) a dispatch without a served
+      // carriage is the client's speculative echo of an entry the server
+      // handles authoritatively and re-drains itself, so it takes neither arm:
+      // its skip seals as an empty speculative commit the authoritative
+      // consequence replaces.
       if (tx.dispatchedHandlerNotRun !== undefined && withdrawsNotRun) {
         const reason = tx.dispatchedHandlerNotRun.reason;
         // Taken before the abort, since the read set is what the client arm

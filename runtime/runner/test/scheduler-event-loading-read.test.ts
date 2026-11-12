@@ -28,6 +28,12 @@ const offersSchema = {
   default: [],
 } as const satisfies JSONSchema;
 
+/** Like `offersSchema`, except a read of no document returns `undefined`. */
+const offersSchemaWithoutDefault = {
+  type: "array",
+  items: { type: "string" },
+} as const satisfies JSONSchema;
+
 describe("scheduler-event-loading-read", () => {
   // The handler follows a holder's link to an inbox piece, as FabriChat's
   // room reaches a member's inbox, and reads the piece's `offers`, which is a
@@ -160,28 +166,40 @@ describe("scheduler-event-loading-read", () => {
   /**
    * Registers, on the reader, a handler that appends the offers of the inbox
    * `holder` links to onto `log`. It runs in a handler's frame, as a
-   * pattern's handler does, and resolves the link while it runs. Returns the
-   * offers each run read, and a promise of the first run.
+   * pattern's handler does, and resolves the link while it runs. It reads the
+   * offers under `schema`, and throws when they read as `undefined`. Returns
+   * the offers each run that did not throw read, how many runs there were,
+   * and a promise of the first run.
    */
   function addAppendingHandler(
     holder: Cell<{ inbox: unknown }>,
     log: Cell<string[]>,
     eventCell: Cell<number>,
-  ): { reads: string[][]; firstRun: Promise<void> } {
+    schema: JSONSchema = offersSchema,
+  ): {
+    reads: string[][];
+    runs: { count: number };
+    firstRun: Promise<void>;
+  } {
     const reads: string[][] = [];
+    const runs = { count: 0 };
     const firstRun = Promise.withResolvers<void>();
     const handler: EventHandler = (tx: IExtendedStorageTransaction) => {
+      runs.count++;
       const frame = makeFrame({ frameKind: "handler", runtime: reader, tx });
-      runInFrame(frame, () => {
-        const offers = holder.withTx(tx).key("inbox").resolveAsCell()
-          .key("offers").asSchema(offersSchema).get() as string[];
-        reads.push([...offers]);
-        log.withTx(tx).set([
-          ...(log.withTx(tx).get() ?? []),
-          offers.join(","),
-        ]);
-      });
-      firstRun.resolve();
+      try {
+        runInFrame(frame, () => {
+          const offers = holder.withTx(tx).key("inbox").resolveAsCell()
+            .key("offers").asSchema(schema).get() as string[];
+          reads.push([...offers]);
+          log.withTx(tx).set([
+            ...(log.withTx(tx).get() ?? []),
+            offers.join(","),
+          ]);
+        });
+      } finally {
+        firstRun.resolve();
+      }
     };
     reader.scheduler.addEventHandler(
       handler,
@@ -190,7 +208,7 @@ describe("scheduler-event-loading-read", () => {
         holder.withTx(depTx).get();
       },
     );
-    return { reads, firstRun: firstRun.promise };
+    return { reads, runs, firstRun: firstRun.promise };
   }
 
   /**
@@ -295,6 +313,33 @@ describe("scheduler-event-loading-read", () => {
       expect(log.get()).toEqual([""]);
     });
 
+    it("runs the handler again once the load lands, rather than failing, when the run threw on what it read while loading", async () => {
+      const { holder, log, eventCell, store } = await standUp(
+        "client-throws",
+        ["a", "b", "c"],
+      );
+      const errors: Error[] = [];
+      reader.scheduler.onError((error) => errors.push(error));
+      const { reads, runs, firstRun } = addAppendingHandler(
+        holder,
+        log,
+        eventCell,
+        offersSchemaWithoutDefault,
+      );
+      const release = holdReaderSyncFor(store.getAsNormalizedFullLink().id);
+
+      const status = send(eventCell);
+      await firstRun;
+      release();
+
+      expect(await status).toBe("done");
+      await reader.idle();
+      expect(runs.count).toBe(2);
+      expect(reads).toEqual([["a", "b", "c"]]);
+      expect(log.get()).toEqual(["a,b,c"]);
+      expect(errors).toEqual([]);
+    });
+
     it("commits only the stored value of a document it read while loading in a space it wrote", async () => {
       // The commit carries the run's reads in the space it wrote, and the
       // store refuses the one of a document it has a later value of.
@@ -338,6 +383,33 @@ describe("scheduler-event-loading-read", () => {
 
       await reader.idle();
       expect(reads).toEqual([[], ["a", "b", "c"]]);
+      expect(log.get()).toEqual(["a,b,c"]);
+      expect(outcomes).toEqual([]);
+    });
+
+    it("withdraws the run that threw on what it read while loading, and runs it again once, after the load lands", async () => {
+      const { holder, log, eventCell, store } = await standUp(
+        "served-throws",
+        ["a", "b", "c"],
+      );
+      const { reads, runs, firstRun } = addAppendingHandler(
+        holder,
+        log,
+        eventCell,
+        offersSchemaWithoutDefault,
+      );
+      const release = holdReaderSyncFor(store.getAsNormalizedFullLink().id);
+
+      const outcomes: ServedEventFailureOutcome[] = [];
+      const status = send(eventCell, outcomes);
+      await firstRun;
+      expect(await status).not.toBe("done");
+      expect(log.get()).toBeUndefined();
+      release();
+
+      await reader.idle();
+      expect(runs.count).toBe(2);
+      expect(reads).toEqual([["a", "b", "c"]]);
       expect(log.get()).toEqual(["a,b,c"]);
       expect(outcomes).toEqual([]);
     });
