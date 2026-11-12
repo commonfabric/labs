@@ -333,7 +333,7 @@ describe("CFImageInput", () => {
       expect(fake.uploads).toEqual([new TextEncoder().encode("tiny")]);
       expect(image.size).toBe(4);
       expect(log.calls.map((call) => call.args[0])).toEqual([
-        `Compressed cat.png: ${PNG.length} B → 4 B (1x1, q0.92)`,
+        `Compressed cat.png: ${PNG.length} B → 4 B (1x1, q0.95)`,
       ]);
       expect(warn.calls).toEqual([]);
     });

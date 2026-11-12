@@ -41,7 +41,6 @@ export class InputTimingController implements ReactiveController {
   private timeoutId: ReturnType<typeof setTimeout> | null = null;
   private lastCallTime = 0;
   private pendingCallback: (() => void) | null = null;
-  private hasFocus = false;
 
   constructor(
     host: ReactiveControllerHost,
@@ -107,18 +106,9 @@ export class InputTimingController implements ReactiveController {
   }
 
   /**
-   * Notify the controller that the input has gained focus
-   */
-  onFocus(): void {
-    this.hasFocus = true;
-  }
-
-  /**
    * Notify the controller that the input has lost focus
    */
   onBlur(): void {
-    this.hasFocus = false;
-
     // Execute pending callback if using blur strategy
     if (this.options.strategy === "blur" && this.pendingCallback) {
       this.pendingCallback();

@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
 import { FakeTime } from "@std/testing/time";
 
 import {
@@ -182,6 +183,9 @@ describe("CellController", () => {
   });
 
   it("calls onChange when setValue is invoked", () => {
+    // The handle shows the write to its subscribers as it is made, the
+    // controller's own subscription among them; that is not a second change.
+
     const host = createMockHost();
     const changes: Array<{ newVal: string; oldVal: string }> = [];
     const ctrl = new CellController<string>(host, {
@@ -195,11 +199,7 @@ describe("CellController", () => {
     changes.length = 0;
 
     ctrl.setValue("b");
-    // setValue fires onChange directly, and then the cell subscription callback
-    // also fires onChange when it sees the new value.
-    const setValueChange = changes.find((c) => c.newVal === "b");
-    expect(setValueChange).toBeDefined();
-    expect(setValueChange!.oldVal).toBe("a");
+    expect(changes).toEqual([{ newVal: "b", oldVal: "a" }]);
   });
 
   it("announces a 0 -> -0 delivery as a change", async () => {
@@ -423,6 +423,34 @@ describe("CellController", () => {
 // CellController.flush()
 //
 
+describe("CellController — updateValue()", () => {
+  it("computes and announces nothing while nothing is bound", async () => {
+    const changes: unknown[] = [];
+    const ctrl = new CellController<number>(createMockHost(), {
+      onChange: (value) => changes.push(value),
+    });
+    let computed = false;
+    await ctrl.updateValue((held) => {
+      computed = true;
+      return (held ?? 0) + 1;
+    });
+    expect(computed).toBe(false);
+    expect(changes).toEqual([]);
+  });
+
+  it("announces the value computed from a plain value, and nothing for an unchanged one", async () => {
+    const changes: unknown[] = [];
+    const ctrl = new CellController<number>(createMockHost(), {
+      timing: { strategy: "immediate" },
+      onChange: (value, oldValue) => changes.push([value, oldValue]),
+    });
+    ctrl.bind(1);
+    await ctrl.updateValue((held) => (held ?? 0) + 1);
+    await ctrl.updateValue((held) => held ?? 0);
+    expect(changes).toEqual([[2, 1]]);
+  });
+});
+
 describe("CellController — flush", () => {
   it("runs a pending debounced write immediately", () => {
     const cell = createMockCellHandle("initial");
@@ -581,6 +609,47 @@ describe("ArrayCellController", () => {
     ctrl.bind(cell);
     ctrl.updateItem(NaN, 2);
     expect(cell.get()).toEqual([1, 2, 3]);
+  });
+
+  it("announces an item added to a plain array, which it leaves to its host to keep", () => {
+    const changes: unknown[] = [];
+    const ctrl = new ArrayCellController<number>(createMockHost(), {
+      onChange: (value, oldValue) => changes.push([value, oldValue]),
+    });
+    ctrl.bind([1, 2]);
+    ctrl.addItem(3);
+    expect(changes).toEqual([[[1, 2, 3], [1, 2]]]);
+  });
+
+  it("announces an item updated in a plain array, and nothing for an item it does not hold", () => {
+    const changes: unknown[] = [];
+    const ctrl = new ArrayCellController<string>(createMockHost(), {
+      onChange: (value, oldValue) => changes.push([value, oldValue]),
+    });
+    ctrl.bind(["x", "y"]);
+    ctrl.updateItem("z", "Z");
+    ctrl.updateItem("y", "Y");
+    expect(changes).toEqual([[["x", "Y"], ["x", "y"]]]);
+  });
+
+  it("updateItem writes nothing through a handle that has read nothing yet, though the list it last showed holds the item", async () => {
+    const ctrl = new ArrayCellController<string>(createMockHost());
+    ctrl.bind(createMockCellHandle(["x", "y"]));
+    // The same cell under a new label view: a fresh handle, which has read
+    // nothing, while the controller still shows the list it last read.
+    const rebound = createMockCellHandle<string[]>(undefined, {
+      cfcLabelView: {
+        version: 1,
+        entries: [{ path: [], label: { integrity: ["relabeled"] } }],
+      },
+    });
+    holdReads(rebound);
+    ctrl.bind(rebound);
+    expect(ctrl.getValue()).toEqual(["x", "y"]);
+
+    ctrl.updateItem("y", "Y");
+    await settleWrites();
+    expect(writesSent(rebound)).toEqual([]);
   });
 
   it("updateItem replaces item via cell.key().set() and propagates to parent", () => {
@@ -814,6 +883,52 @@ describe("CellController — a handle that has read nothing yet", () => {
 
     expect(ctrl.refusal).toEqual(REFUSAL);
     expect(writesSent(rebound)).toEqual([]);
+  });
+
+  describe("on a rebind to a fresh handle for a refused cell", () => {
+    // The controller asks the worker to read the fresh handle, whose answer
+    // ends the refusal or keeps it.
+
+    const rebindRefused = (answer: (rebound: CellHandle<boolean>) => void) => {
+      const ctrl = new BooleanCellController(createMockHost());
+      const first = createMockCellHandle(true);
+      ctrl.bind(first);
+      pushRefusal(first, REFUSAL);
+      const rebound = createMockCellHandle<boolean>(undefined, {
+        cfcLabelView: RELABELED,
+      });
+      answer(rebound);
+      ctrl.bind(rebound);
+      return ctrl;
+    };
+
+    it("ends the refusal once the worker admits the read", async () => {
+      const ctrl = rebindRefused(() => {});
+      await settleWrites();
+      expect(ctrl.refusal).toBeUndefined();
+    });
+
+    it("keeps the refusal, logging nothing, when the worker refuses the read", async () => {
+      using error = stub(console, "error");
+      const ctrl = rebindRefused((rebound) => refuseReads(rebound, REFUSAL));
+      await settleWrites();
+      expect(ctrl.refusal).toEqual(REFUSAL);
+      expect(error.calls).toEqual([]);
+    });
+
+    it("keeps the refusal, and logs the failure, when the read fails", async () => {
+      using error = stub(console, "error");
+      const failure = new Error("the worker is gone");
+      const ctrl = rebindRefused((rebound) => {
+        const answer = holdReads(rebound);
+        queueMicrotask(() => answer(failure));
+      });
+      await settleWrites();
+      expect(ctrl.refusal).toEqual(REFUSAL);
+      expect(error.calls.map((call) => call.args)).toEqual([
+        ["[CellController] Reading the cell failed:", failure],
+      ]);
+    });
   });
 
   it("computes no toggle until the worker answers the handle's read", () => {
@@ -1055,6 +1170,70 @@ const DRIFTED_LABEL_VIEW: CellRef["cfcLabelView"] = {
 const settleWrites = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 describe("CellController — pending local edits vs stale bound state", () => {
+  it("keeps showing a value set while an update's write was in flight over a stale delivery, until its own write settles", async () => {
+    const ctrl = new StringCellController(createMockHost(), {
+      timing: { strategy: "immediate" },
+    });
+    const cell = createMockCellHandle("before");
+    ctrl.bind(cell);
+    const releaseUpdate = holdWrites(cell);
+    void ctrl.updateValue((value) => `${value}!`);
+    ctrl.setValue("typed");
+    // The update's write is taken; the value set waits behind it, and is
+    // held in turn.
+    releaseUpdate();
+    const releaseSet = holdWrites(cell);
+    await settleWrites();
+
+    pushUpdate(cell, "stale");
+    expect(ctrl.getValue()).toBe("typed");
+
+    releaseSet();
+    await settleWrites();
+    expect(writesSent(cell).map((write) => write.value)).toEqual([
+      "before!",
+      "typed",
+    ]);
+  });
+
+  describe("a write to the cell bound before, still in flight", () => {
+    // The edit made on the newly bound cell is released once its own write
+    // settles, however long the write to the cell bound before takes, so a
+    // later delivery to the new cell shows.
+
+    const editAfterRebind = async (
+      write: (ctrl: StringCellController) => void,
+    ) => {
+      const ctrl = new StringCellController(createMockHost(), {
+        timing: { strategy: "immediate" },
+      });
+      const before = createMockCellHandle("before");
+      ctrl.bind(before);
+      const release = holdWrites(before);
+      write(ctrl);
+      const after = createMockCellHandle("after", { id: "of:another-cell" });
+      ctrl.bind(after);
+      ctrl.setValue("typed");
+      await settleWrites();
+      release();
+      await settleWrites();
+      pushUpdate(after, "remote");
+      return ctrl.getValue();
+    };
+
+    it("leaves a later delivery to the cell bound since shown, after a value set", async () => {
+      expect(await editAfterRebind((ctrl) => ctrl.setValue("set"))).toBe(
+        "remote",
+      );
+    });
+
+    it("leaves a later delivery to the cell bound since shown, after an update", async () => {
+      expect(
+        await editAfterRebind((ctrl) => void ctrl.updateValue((v) => `${v}!`)),
+      ).toBe("remote");
+    });
+  });
+
   it("keeps a settled local edit when a same-cell rebind delivers a not-yet-hydrated handle", async () => {
     // The confirmed lunch-poll trace: commit() resolved (write durable), THEN
     // the host re-render swapped in a fresh handle with no value yet.
@@ -1705,9 +1884,12 @@ describe("CellController — writes land in the order they were made", () => {
       return changes;
     };
 
-    expect(await announced((ctrl) => void ctrl.toggle())).toEqual(
-      await announced((ctrl) => ctrl.setValue(true)),
-    );
+    expect(await announced((ctrl) => void ctrl.toggle())).toEqual([
+      [true, false],
+    ]);
+    expect(await announced((ctrl) => ctrl.setValue(true))).toEqual([
+      [true, false],
+    ]);
   });
 
   it("still writes a toggle whose onChange throws, and hands the failure to its caller", async () => {

@@ -250,7 +250,7 @@ export class CFCheckbox extends BaseElement {
 
     override firstUpdated() {
       // Register with form after first render when context is available
-      this._formField.register(this.name);
+      this._formField.register();
     }
 
     override disconnectedCallback() {

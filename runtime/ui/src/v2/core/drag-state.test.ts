@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { stub } from "@std/testing/mock";
 import {
   $conn,
   type CellHandle,
@@ -186,6 +187,28 @@ describe("drag-state — subscribeToDrag", () => {
     startDrag(createMockDragState());
     expect(received).toEqual([]);
   });
+
+  it("logs a listener's failure, and still notifies the listeners after it", () => {
+    const failure = new Error("listener failed");
+    const unsubFailing = subscribeToDrag((s) => {
+      if (s !== null) throw failure;
+    });
+    const received: (DragState | null)[] = [];
+    const unsub = subscribeToDrag((s) => received.push(s));
+    received.length = 0;
+    using error = stub(console, "error");
+    try {
+      const state = createMockDragState();
+      startDrag(state);
+      expect(received).toEqual([state]);
+      expect(error.calls.map((call) => call.args)).toEqual([
+        ["[drag-state] Error in drag listener:", failure],
+      ]);
+    } finally {
+      unsubFailing();
+      unsub();
+    }
+  });
 });
 
 //
@@ -213,6 +236,29 @@ describe("drag-state — subscribeToEndDrag", () => {
 
     endDrag();
     expect(endStates).toEqual([]);
+  });
+
+  it("logs a listener's failure, and still notifies the listeners after it", () => {
+    const failure = new Error("end listener failed");
+    const unsubFailing = subscribeToEndDrag(() => {
+      throw failure;
+    });
+    const endStates: DragState[] = [];
+    const unsub = subscribeToEndDrag((s) => endStates.push(s));
+    using error = stub(console, "error");
+    try {
+      const state = createMockDragState();
+      startDrag(state);
+      endDrag();
+      expect(endStates).toEqual([state]);
+      expect(isDragging()).toBe(false);
+      expect(error.calls.map((call) => call.args)).toEqual([
+        ["[drag-state] Error in drag end listener:", failure],
+      ]);
+    } finally {
+      unsubFailing();
+      unsub();
+    }
   });
 
   it("unsubscribe stops end notifications", () => {
