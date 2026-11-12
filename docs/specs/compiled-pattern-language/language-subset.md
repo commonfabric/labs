@@ -302,7 +302,7 @@ not make it legal.
 | `computed(f)`, `action(f)`, `assert(f)` | `f` is a function written at the call; its body is tier F, unless the `computed` is promoted ([§6](#6-promotion-of-computed)) | Sandboxed call, or the promoted expression. `assert` is the marker pattern tests use, and yields the test record the API declares |
 | A handler: a `handler(...)` definition called by name, or a value of a handler factory type | One object argument: the state binding ([§4.4.2](#442-patterns-and-handlers-as-callees)) | Stream |
 | A pattern | One object argument ([§4.4.2](#442-patterns-and-handlers-as-callees)) | Sub-pattern |
-| A cell constructor or a method of a cell handle | [§4.7](#47-cell-and-handle-methods) | State cell, path projection, or read |
+| A cell constructor or a method of a cell handle | [§4.7](#47-cell-and-handle-methods) | State cell, path projection, chosen child, or read |
 | A context read, where the built-in inventory makes it legal in the pattern body | As `builtin-inventory.md` specifies | Context read |
 | A structural or effectful built-in (`wish`, `anchorsOf`, `inspectConfLabel`, the fetch family, the language-model built-ins, `navigateTo`, and the others) | As `builtin-inventory.md` specifies | As classified there |
 
@@ -367,7 +367,9 @@ the identity of the element's cell when it is not. An element that moves
 keeps its cone, so reordering, inserting into, or removing from a list does
 not recompute the elements that stayed. Stored per-element state from
 earlier versions of a pattern is not preserved by this rule; it is chosen
-for recomputation cost.
+for recomputation cost. A key derived from a value is salted with a secret
+of the space before it enters a document identifier, so that an identifier
+does not reveal the value (`plan-and-label-templates.md`, §1.3).
 
 **The index parameter costs the author that property.** The index is part
 of an element's key exactly when the callback declares the index parameter
@@ -377,10 +379,16 @@ without the index recomputes one. The compiler reports the use as a hint
 (`collection:index-keyed`). A callback that declares the index and does not
 use it is keyed without it.
 
-A state cell declared inside a collection callback takes its identifier
-from the parent instance, the element's key, and the cell's name, so
-per-element state follows the element when the element moves, and does not
-when the key includes the index.
+**Names inside a callback.** The identifier of a state cell declared inside
+a collection callback derives from the instance, from each compiled-in call
+and each collection callback that encloses the declaration, outermost
+first, and from the cell's name. An enclosing callback contributes the name
+of its collection and the key of the element. So per-element state follows
+the element when the element moves, and does not when the key includes the
+index. The cell's name and the collection's name are given by the naming
+rule of [§4.6](#46-captures), and the same derivation names a child
+instance, a durable operation, and the stream of a handler binding declared
+inside a callback (`plan-and-label-templates.md`, §1.3).
 
 **Equal plain values may not share state.** Two elements with the same
 plain value have the same key, so they share one cone. That is sound for a
@@ -442,6 +450,12 @@ computation elsewhere produced it. The checker treats it as not plain.
 handler without the index compiles, and the cone of an element that arrives
 inline fails at run time (`plan-and-label-templates.md`, §1.3;
 [§13](#13-open-questions)).
+
+The rule covers a state cell and a handler binding. It does not cover a
+body that instantiates a child, as `factories.map((Card) => Card({ donut }))`
+does over a list of factory values. The child's result cell is named by the
+element key, so two equal plain elements share one child and its state.
+*Assumed:* such a body compiles ([§13](#13-open-questions), question 14).
 
 #### 4.4.2 Patterns and handlers as callees
 
@@ -510,8 +524,9 @@ const DonutSearch = pattern<{ donuts: Donut[] }>(({ donuts }) => {
   resolved callee and is compiled in. Called by a receiver, it is a child
   with a plan of its own (`plan-and-label-templates.md`, §3.15).
 - **Tier F.** A function body does not write a pattern closure as a value.
-  An inline `pattern(...)` there remains legal only as the callee of an
-  instantiation (§5.1).
+  An inline `pattern(...)` there is legal only as the callee of an
+  instantiation, in every kind of function body, a `lift` and a `computed`
+  included (§5.1, §5.2).
 
 There is no handler closure of this kind and none is needed: `action` and an
 inline event handler already bind a handler to its captures and yield the
@@ -610,6 +625,51 @@ body. It may not capture a function value declared in an enclosing function
 scope (`ses-callback:callable-capture`); a reference to an authored function
 is not a capture.
 
+**A handler binding made in tier R copies nothing.** The state of an
+`action`, of an inline event handler, and of a handler applied to its state
+in tier R is bound by reference, the body of a collection callback
+included. Every path of the handler's state is an input of the instance, a
+state cell, an element of a collection, or a value the instance computes,
+and the handler reads it from there when an event arrives. In the example
+below `donut` is bound by reference, so the push stores a link to the
+element of `donuts` and does not store a second record.
+[§5.2](#52-runtime-calls) has the rule for a binding made while a function
+body runs, which does copy some values.
+
+```tsx
+// Shown for illustration only.
+const rows = donuts.map((donut) => (
+  <li>
+    {donut.name}
+    <button onClick={() => favorites.push(donut)}>favorite</button>
+  </li>
+));
+```
+
+**Names.** Each declaration of a tier-R body that has stored state, or a
+stream, has a name, and the name is part of what the identifier of that
+state derives from: a state cell, a child instance, a collection, a durable
+operation such as an effect or an aggregate, a use of a function body, and
+a handler binding. `plan-and-label-templates.md` (§1.3) owns the rule. Three
+parts of it are visible in source.
+
+- A declaration assigned to a `const` takes the name of the variable.
+- A declaration assigned to nothing takes a base name from what it is: the
+  callee's name for a call of a pattern or of a function body (an authored
+  function, a `lift` result, `computed`); the built-in's or the method's
+  name for an operation or a collection; the handler's name for a named
+  handler applied to its state; and the attribute's name for an inline
+  event handler.
+- Where two declarations of one pattern body have the same name by these
+  two rules, each takes the name and its ordinal among them, in source
+  order.
+
+So renaming a `const` renames the state declared under it. Adding or
+removing a declaration with another name renames nothing. Adding an
+unassigned declaration ahead of one with the same base name moves the
+ordinals after it, which is the one case where an edit elsewhere in a body
+renames stored state, and assigning the declaration to a `const` avoids it.
+
 `x[SELF]` is valid on the pattern's own input parameter in tier R and nowhere
 else (`pattern-context:self-access`), as today.
 
@@ -634,16 +694,16 @@ to the handle's cell: reads its value, writes it, or neither.
 | `sample()` | `Cell`, `ReadonlyCell` | F | Reads the value without making the body depend on the cell for recomputation. The read is still part of the footprint, for the label |
 | `key(k)` | `Cell`, `ReadonlyCell`, `WriteonlyCell`, `ComparableCell`, `OpaqueCell` | R, F | Neither. Yields a handle of the same kind for the property |
 | `elementById(idKey)` | `Cell`, `ReadonlyCell`, `WriteonlyCell`, `ComparableCell` | R, F | Neither. Yields a handle for the keyed element |
-| `resolveAsCell()` | `Cell` | R, F | Neither. Follows the cell's link and yields the handle it reaches; observes identity |
+| `resolveAsCell()` | `Cell` | R, F | Neither. Follows the links from the handle until it reaches a cell whose value is not a link, and yields the handle of that cell. It observes the reference where the resolution ends, the links followed included, and reads no content |
 | `getArgumentCell()` | `Cell` | F | Neither. Yields the handle of the argument of the piece the cell belongs to |
 | `equals(other)`, `equalLinks(other)` | `Cell`, `ReadonlyCell`, `ComparableCell` | R, F | Neither. Compares identity |
-| `for(cause)` | Every handle type, `Stream` included; and the value a pattern instantiation returns | R, F on a handle. On an instantiation, F in a `handler`, an `action`, or an inline event handler | Neither. On a handle, sets the causal identity of a cell that has none yet. On an instantiation, `Box({ flavor }).for(tag)`, supplies an explicit tag for the instance's identifier |
+| `for(cause)` | Every handle type, `Stream` included; and the value a pattern instantiation returns | R, F on a handle. On an instantiation, F | Neither. On a handle, sets the causal identity of a cell that has none yet. On an instantiation, `Box({ flavor }).for(cause)`, supplies an explicit cause for the instance's identifier |
 | `set(value)`, `update(partial)` | `Cell`, `WriteonlyCell` | F | Writes |
 | `push(...values)`, `pushAll(values)`, `addUnique(...values)`, `remove(...)`, `removeByValue(ref)`, `removeAll(...)` | `Cell`, `WriteonlyCell`, of an array | F | Writes. `push`, `pushAll`, `addUnique`, and `removeByValue` are mergeable |
 | `increment(by?)` | `Cell`, `WriteonlyCell`, of a number | F | Writes, mergeable |
 | `applyChanges(changes)` | `Cell`, `WriteonlyCell`, of a string | F | Writes |
 | `send(event)` | `Cell`, `Stream` | F | Writes: delivers an event |
-| `map`, `filter`, `flatMap`, `some`, `every`, `find`, `findIndex`, `reduce`, `count`, `sum`, `min`, `max`, `minBy`, `maxBy`, `groupBy`, `keyBy` | `Cell`, `OpaqueCell`, of an array | R | Reads, by the operation's label rule (§4.4). In tier F the method on a handle is refused (`cell:collection-method-in-function`): read the value first, `cell.get().map(...)` |
+| `map`, `filter`, `flatMap`, `some`, `every`, `find`, `findIndex`, `reduce`, `count`, `sum`, `min`, `max`, `minBy`, `maxBy`, `groupBy`, `keyBy` | `Cell`, `OpaqueCell`, of an array | R | Reads, by the operation's label rule (§4.4). In tier F the method on a handle is refused (`cell:collection-method-in-function`), with the two corrections of the note below |
 | `lookup(key)`, `keys()`, `keyEntries()` | A collection index handle | R, F | Reads the index |
 | `query(sql, params?)` | A SQLite handle | R | Reads. Sugar for the `sqliteQuery` built-in |
 | `exec(sql, params?)` | A SQLite handle | F | Writes to the database, in the caller's transaction |
@@ -651,12 +711,52 @@ to the handle's cell: reads its value, writes it, or neither.
 | `X.equals(a, b)`, `X.equalLinks(a, b)` | The constructor | R, F | Neither. Compares identity |
 | `asScope(scope)`, `inSpace(space, options)` | A pattern factory | Where the instantiation they modify is legal | Neither |
 
-Five notes on the table.
+Eight notes on the table.
 
-- **`for` on an instantiation.** This document states only that the form
-  exists and where it is legal. What the tag identifies from one event to
-  the next is not defined here: `plan-and-label-templates.md` (§1.3) owns
-  the identifiers of what a function body creates.
+- **`for` on an instantiation.** The form is legal in every kind of
+  function body. Its argument is the explicit cause of the instance, which
+  `plan-and-label-templates.md` calls the tag. In a `lift` or a `computed`
+  it takes the place of the site and the ordinal in the instance's
+  identifier ([§5.2](#52-runtime-calls)). What it identifies from one event
+  to the next in a `handler` or an `action` is not defined here:
+  `plan-and-label-templates.md` (§1.3) owns the identifiers of what a
+  function body creates.
+- **`get`, `key`, and `elementById` in tier R** are operations of the plan
+  and add no rule of their own (`plan-and-label-templates.md`, §3.18).
+  `h.key("glaze")` is a path projection, like `h.glaze`. `h.key(k)` and
+  `h.elementById(k)` with a key that is not a constant are a chosen child,
+  like `a[k]` (§4.4): they observe the key and the one child it selects.
+  `h.get()` reads the value at the handle's path.
+- **`resolveAsCell`** observes a reference and not a value. In tier R, and
+  in a function body where the call is static in the sense of
+  `footprint-analysis.md` §7.1, the plan records it as an `identity`
+  observation of the resolved reference, whose label joins the pointer
+  labels of the links followed (`plan-and-label-templates.md`, §2.5). The
+  handle it yields is the resolved one, so a write through it lands in the
+  cell where the resolution ends.
+- **A collection method on a handle in tier F** is a compile error
+  (`cell:collection-method-in-function`). The compiler does not rewrite the
+  call to a reactive form. The diagnostic names two corrections, and the
+  author chooses. Wrapping the expression in an inline `pattern(...)` and
+  instantiating it keeps it reactive: the body gets a link to an instance
+  whose result follows the cell. Reading first, `cell.get().map(...)`,
+  processes the values the cell holds when the body runs, with the
+  JavaScript `map`. Both are legal in every kind of function body
+  ([§5.2](#52-runtime-calls)).
+
+  ```tsx
+  // Shown for illustration only.
+  // Refused in a function body: `donuts` is a cell handle.
+  const names = donuts.map((donut) => donut.name);
+
+  // Correction 1: an inline pattern, instantiated. `names` is a link to
+  // an instance whose result is the mapped list, and it stays current.
+  const names = pattern(() => donuts.map((donut) => donut.name))({});
+
+  // Correction 2: read first. `names` is a plain array of the names the
+  // cell holds when the body runs.
+  const names = donuts.get().map((donut) => donut.name);
+  ```
 - **Writes are tier F.** A write in a `handler`, an `action`, or an inline
   event handler is the body's purpose. A write in a `lift` or a `computed`
   is a side-write in the overview's sense, and the idempotency contract
@@ -705,7 +805,7 @@ object and array destructuring assignment.
 | `Proxy`, `Reflect`, `Symbol(...)`, `WeakMap`, `WeakSet`, `WeakRef` | `function-body:unsupported-global` | Not typed by the subset ([§9](#9-standard-library-surface)) |
 | A write to a module-scope constant, an import, or a global | `module-scope:frozen-data-write`, `function-body:global-write` | Statelessness ([§3.3](#33-the-statelessness-rule)) |
 | `Date.now()`, `new Date()` with no argument, `Math.random()` in a `lift`, a `computed`, or an authored function they call | `function-body:ambient-read` | A computation is a function of its inputs. The read is allowed in a `handler`, an `action`, and an inline event handler. Written in tier R, the same read is refused under the same identifier (§4.4) |
-| `pattern`, `lift`, `handler`, `computed` called in tier F | `function-body:builder-call` | Builders define nodes at module scope or in tier R. The exceptions are an inline `pattern(...)` used directly as the callee of an instantiation, which the compiler hoists, and `action` (§5.2) |
+| `pattern`, `lift`, `handler`, `computed` called in tier F | `function-body:builder-call` | Builders define nodes at module scope or in tier R. The exceptions hold in every kind of function body: an inline `pattern(...)` used directly as the callee of an instantiation, which the compiler hoists, and `action` (§5.2) |
 
 ### 5.2 Runtime calls
 
@@ -717,27 +817,100 @@ binds.
 
 | Kind | Forms | `handler`, `action`, inline event handler | `lift`, `computed` |
 | --- | --- | --- | --- |
-| Instantiate a pattern | §4.4.2, with a statically resolved pattern or a pattern factory value | Yes | No. Selecting among patterns is done in tier R |
+| Instantiate a pattern | §4.4.2, with a statically resolved pattern or a pattern factory value | Yes | Yes. The instance belongs to the computation (below) |
 | Create a cell | The constructors of §4.7 | Yes, with no cause needed | Yes, with an explicit cause (`X.for(cause)`) |
-| Request an effectful built-in | As `builtin-inventory.md` lists | Yes | No. A `lift` or a `computed` does not instantiate a pattern either, so it has no indirect way to. An effect that depends on computed data is requested in tier R, with the computed value as its input |
+| Request an effectful built-in | As `builtin-inventory.md` lists | Yes | Not directly (*assumed*, below). A pattern the computation instantiates may request effects in its own body. An effect that depends on computed data is written in such a pattern, or in tier R with the computed value as its input |
 | Read context | `eventKey()`, `currentPrincipal()`; `principalOf` and its siblings; `spaceOf` and its siblings; `linksOf`; `equals(a, b)`; `getPatternEnvironment()` | Yes | All except `eventKey()` and `currentPrincipal()`: a computation has no event |
 | Bind a handler | Below | Yes | Yes |
 
-The table is the one in `builtin-inventory.md` ("Which body may make which
-call"), which gives the reasons row by row. Each "No" has a diagnostic in
-[§10.3](#103-function-tier). An authored function is held to the rules of
-the bodies that call it.
+`builtin-inventory.md` ("Which body may make which call") has the same
+table with the pattern body beside it, and gives the reasons row by row.
+Each refusal has a diagnostic in [§10.3](#103-function-tier). An authored
+function is held to the rules of the bodies that call it.
 
 `equals(a, b)` is a context read because it observes the identity of both
 operands and reads neither value (`plan-and-label-templates.md`, §3.16). It
 is the function form of the comparison that §4.7 lists as the methods
 `a.equals(b)` and `X.equals(a, b)`, and the three forms mean the same.
 
-Two causes of the difference between the columns come from the overview. A
+One difference between the two kinds of body explains the columns. A
 handler invocation is a new frame for each event, so what it creates is new
 and is identified by the event and the order of creation. A `lift` or a
-`computed` is re-evaluated, so what it creates needs an identifier that is
-the same on every evaluation.
+`computed` is evaluated again whenever an input changes, so what it creates
+needs an identifier that is the same on every evaluation: an explicit cause
+for a cell, the place of the call for an instance, and the bound state for
+a handler binding.
+
+**Instantiating a pattern in a `lift` or a `computed`.** The callee is one
+of the three that §4.4.2 and §5.1 allow in a function body: a pattern
+declared or imported by name, an inline `pattern(...)` used as the callee,
+or a pattern factory value. The call returns a link to the instance, as it does
+in a handler. The pattern may request effects in its own body.
+
+- **The instance belongs to the computation.** An evaluation that
+  instantiates the same pattern at the same place names the same instance
+  and updates its argument. The instance keeps its state across
+  evaluations.
+- **An instance an evaluation no longer makes is torn down.** A branch that
+  is not taken, or a loop that runs fewer times, ends the instances the
+  last evaluation made there.
+- **An effect in the instance is requested again when its request
+  changes,** as for any effect whose input changed. So a computation has an
+  indirect way to request an effect: what it computes reaches the request
+  through the argument it writes, and the label of the argument reaches
+  the request with it (`plan-and-label-templates.md`, §3.14 and §3.15).
+- **A callee that is a factory value can differ between evaluations.** When
+  it does, the instance at that place is torn down and a new one is started
+  under the same name, as for a child of the reactive tier
+  (`plan-and-label-templates.md`, §3.15).
+
+Two points are assumed, and both are in one question for the project
+owner ([§13](#13-open-questions), question 9).
+
+- *Assumed:* the instance is identified by the enclosing instance, the
+  site, and the ordinal of the instantiation among those the evaluation
+  makes at that site, or by an explicit cause where the author writes
+  `.for(cause)` on the instantiation (§4.7). A site that runs once per
+  evaluation needs no cause. A site in a loop names its instances by the
+  order in which the loop makes them, so removing the first record of a
+  list gives each instance the argument of the next record and tears down
+  the last instance. An author who wants each instance to stay with its
+  record writes `.for(cause)` with a cause taken from the record.
+- *Assumed:* a `lift` or a `computed` does not request an effect directly
+  (`function-body:effect-in-computation`). An effect that depends on
+  computed data is written in a pattern, inline or named, that the
+  computation instantiates, or in tier R with the computed value as its
+  input.
+
+```tsx
+// Shown for illustration only.
+const PriceQuote = pattern<{ url: string }>(({ url }) => fetchJson({ url }));
+
+const quotes = computed(() => {
+  const open = orders.filter((order) => !order.paid); // JavaScript `filter`
+  return open.map((order) =>
+    PriceQuote({ url: priceUrl(order) }).for(order.id)
+  );
+});
+```
+
+**Today.** A `lift` or a `computed` whose result holds a pattern instance
+already keeps the instance across evaluations. The runner turns the frame
+of the run into a synthesized pattern (`patternFromFrame` in
+`runtime/runner/src/builder/pattern.ts`) and runs it into a result cell
+whose cause is the computation's record of its inputs, its outputs, and its
+function source, so every evaluation names the same cell
+(`#instantiateJavaScriptActionNode` and `#writeJavaScriptActionResult` in
+`runtime/runner/src/runner.ts`). The instance inside takes its result cell
+from the place it has in the synthesized pattern (`#mintChildResultCell`).
+On each evaluation the runner hashes the synthesized pattern. When the hash
+is the one of the last evaluation, nothing is set up again. When it
+differs, the runner runs the new synthesized pattern on the same cell,
+which stops the pattern running there and starts the new one (`run`). What
+was started is released when the computation's node is canceled. So an
+instance is named by its place today as well. What differs is that today
+a synthesized pattern that changed is stopped and the new one started,
+where this design updates the argument of an instance that stays.
 
 **Binding a handler.** There are two spellings, and they mean the same.
 
@@ -755,26 +928,72 @@ Either evaluates, at run time, to a stream. These rules apply to the state.
 
 - A state value is a data value or a cell handle. A function value is
   refused (`ses-callback:callable-capture`), as in tier R.
-- A data value is copied into the binding. A cell handle stays a link.
 - For the inline spelling, a captured local is a `const` or a parameter. A
-  captured `let` is refused (`function-body:handler-capture`): the handler
-  would see the value at the time of binding, not later assignments, and the
-  diagnostic says to copy it into a `const` first. The applied spelling has
-  no such rule, because its state expressions are evaluated where they are
-  written.
+  captured `let` is refused (`function-body:handler-capture`): the binding
+  is made from what the variable holds when the binding is made, so the
+  handler would not see a later assignment. The diagnostic says to assign
+  the value to a `const` first and to capture that. The applied spelling
+  has no such rule, because its state expressions are evaluated where they
+  are written.
 - The callee is a module-scope handler called by name, or a value of a
   handler factory type (§4.4.2). The state rules are the same for both.
 
+**What a binding holds.** A binding made while a function body runs holds,
+for each path of the handler's state, a link or a copy. The body is a
+`lift`, a `computed`, a `handler`, an `action`, an inline event handler, or
+an authored function one of them calls.
+
+| What is bound at the path | The binding holds | When the handler reads it |
+| --- | --- | --- |
+| A cell handle | A link to the cell | When an event arrives |
+| A scalar: a primitive, a literal, `null`, `undefined` | A copy, in the binding's state document | The value is the one the body had when it made the binding |
+| A container (an object, an array, or a tuple) that the body read from an input or a cell and passes on unchanged; a reference at a position typed `unknown`, likewise | A link to the address the container is stored at. The body that makes the binding does not read the container's content | When an event arrives, in the event's transaction |
+| A container the body computed: an object or array literal, a spread, the result of a call or of an operator | A copy. A cell handle inside it stays a link, and so does a container inside it that the body read and passes on unchanged | The copy is the value the body computed when it made the binding |
+
+The plan records the first and the third row as a link and the other two
+as a copy (`Binding.state` in `plan-and-label-templates.md`, §1.1).
+
+A container is passed on unchanged when the state expression denotes the
+value as the body received it: a parameter or a captured input, a property
+or an element of one, or the result of `get()` on a handle, with no
+construction or conversion between the read and the binding.
+`{ ...donut }` and `[...donuts]` are computed containers. How much of a
+computed container the copy holds is decided by what the bound handler
+reads of it: the copy holds the paths the handler's footprint names, and
+for a handler received as a factory value, whose body the compiler does not
+have, the paths its declared state type covers (`footprint-analysis.md`,
+§8.5).
+
+A binding made in tier R copies nothing ([§4.6](#46-captures)). The
+difference is that a value of tier R has a place in the instance that the
+handler can read later, and a scalar or a computed container of a function
+body exists only while the body runs.
+
 **The identity of a binding** is derived from the enclosing instance, the
-handler definition, and the bound state: each copied data value, and the
-identity of each cell handle. `builtin-inventory.md` defines it ("A handler
-binding made in a body"), and `plan-and-label-templates.md` (§3.14) gives
-the plan record and the label rule. Three consequences are visible to an
-author. A `lift` or a `computed` evaluated again with the same state names the
-same streams. A binding made in a loop is told from its neighbors by its state
-and not by its position, so reordering the loop does not re-point an event
-already on its way. And two bindings of one handler to equal state are one
-stream, which is harmless because they behave alike.
+handler definition, and the bound state: each copied value, the identity of
+each linked cell, and the address of each container bound by reference. A
+copied value is salted with a secret of the space before it enters the
+identifier, as an element key is. `builtin-inventory.md` defines the
+identity ("A handler binding made in a body"), and
+`plan-and-label-templates.md` (§3.14) gives the plan record and the label
+rule. `footprint-analysis.md` (§8.5) compares the rule with what a binding
+reads today. Five consequences are visible to an author.
+
+- A `lift` or a `computed` evaluated again with the same state names the
+  same streams.
+- A binding made in a loop is told from its neighbors by its state and not
+  by its position, so reordering the loop does not re-point an event
+  already on its way.
+- Two bindings of one handler to equal copied values and the same cells
+  are one stream, which is harmless because they behave alike. Two
+  bindings of one handler to equal records stored in two places are two
+  streams, because the two addresses differ.
+- A handler that passes on a record bound by reference, for example by
+  pushing it onto a list, stores a link to the original record and not a
+  second record.
+- A handler sees a container bound by reference as it is when the event
+  arrives, with every change made since the binding. A scalar and a
+  computed container are as they were when the binding was made.
 
 ```tsx
 // Shown for illustration only.
@@ -786,12 +1005,23 @@ const removeTopping = handler<unknown, RemoveState>(
   (_, { chosen, name }) => chosen.removeByValue(name),
 );
 
+// `name` is a scalar and is copied. `chosen` is a handle and stays a link.
 const toppingButtons = (toppings: string[], chosen: Writable<string[]>) =>
   toppings.map((name) => (
     <span>
       <button onClick={() => chosen.addUnique(name)}>{name}</button>
       <button onClick={removeTopping({ chosen, name })}>remove</button>
     </span>
+  ));
+
+// `donut` is a record read from the cell and passed on unchanged, so it
+// is bound by reference: the push stores a link to the record in `box`.
+const favoriteButtons = (
+  box: Writable<Donut[]>,
+  favorites: Writable<Donut[]>,
+) =>
+  box.get().map((donut) => (
+    <button onClick={() => favorites.push(donut)}>{donut.name}</button>
   ));
 ```
 
@@ -831,11 +1061,15 @@ which takes the following from this document as given (its §1.3).
   full.
 
 The grammar is chosen so that the analysis rarely gives up. Where it does,
-it widens the footprint, and the compiler reports each widening as a hint
-(`footprint:widened`) that names the expression, the cause, and the input
-path the footprint widened to. `footprint-analysis.md` §5.2 lists the
-causes of a widening, and the list is complete: a construct that is not on
-it does not widen.
+it widens the footprint: it replaces the entries it could not name by
+entries that cover them, and reaches no further than the value or the key
+it lost track of (`footprint-analysis.md` §5.1, §5.4). A widening can cover
+several entries, as a key that is not static does, or a cell handle the
+analysis lost track of. The compiler reports each widening as a hint
+(`footprint:widened`) that names the expression, the cause, and what the
+widening covers: the input paths of the widened entries, or the handle.
+`footprint-analysis.md` §5.2 lists the causes of a widening, and the list
+is complete: a construct that is not on it does not widen.
 
 The analysis has two more outcomes that are not widenings and not errors,
 each with a hint: a read through a cell handle that stays dynamic
@@ -926,7 +1160,13 @@ costs no sandboxed call for the operations the body is made of.
      or `.equalLinks(x)` on a cell (§4.7).
 5. **Nothing else occurs in the body.** In particular it creates no cell,
    instantiates no pattern (including by a JSX tag that names one), requests
-   no effect, and writes nothing.
+   no effect, and writes nothing. A `computed` that instantiates a pattern
+   is legal (§5.2) and is not promoted, because the two tiers give the
+   call different meanings. In a function body the instance belongs to the
+   computation and has a result cell of its own, named by the site of the
+   call. In tier R a call of a pattern the compiler can resolve is compiled
+   into the surrounding instance (§4.4.2). Promoting the call would change
+   which documents exist and how the state inside is named.
 
 JSX with host elements is allowed in a promoted body, and so is an inline
 event handler in it, which is then a tier-R handler (§4.5). A call of an
@@ -1126,6 +1366,35 @@ bodies and not in the signatures a subset module imports.
 
 `unknown` is the supported top type. In a data type it declares a reference
 that is not read, and in code it forces a narrowing before use.
+
+The two uses meet where a body receives a data position typed `unknown`.
+The body is handed a reference there, whatever is stored behind it. It can
+test the reference for presence, compare it with `equals`, and pass it on,
+and it cannot read through it.
+
+- **A test of presence** (`=== undefined`, `??`, `?.`, truthiness) returns
+  whether something is stored at the position. A stored `0`, `""`, `false`,
+  or `null` is something, so the position is truthy.
+- **A kind test** (`typeof`, `Array.isArray`, `instanceof`) sees the
+  reference and not the kind of what is stored behind it. A stored string
+  and a stored record give the same result, so a kind test does not narrow
+  such a position to the stored type. A body that needs the value declares
+  the position with the type it reads.
+- **A conversion to a string** (`String(x)`, a template literal) converts
+  the reference. The string is a function of the reference alone and holds
+  nothing of the content.
+
+`footprint-analysis.md` (§2.2) records a test of presence or kind there as
+an observation of the position's shape, and a conversion as an observation
+of the reference's identity. That a kind test sees no more than presence is
+how the runtime reads such a position today: it hands the body an empty
+object that carries the address and nothing else (`createOpaqueReference`
+in `runtime/runner/src/schema.ts`;
+[`unknown`](../../common/concepts/types-and-schemas/unknown.md)). *Assumed:*
+it stays so ([§13](#13-open-questions), question 13). A value typed
+`unknown` that the body computed, such as the result of `JSON.parse` or the
+variable of a `catch` clause, is an ordinary value, and a kind test narrows
+it (§7.6).
 
 The corpus uses `any` for a small number of things
 ([§11.3](#113-what-the-subset-refuses-in-the-corpus)). The subset supports
@@ -1559,7 +1828,8 @@ document assumes the same severities for stored source
 `ts_transformers_current_behavior_spec.md` §6 and the unsupported rows of
 [`ts_transformers_target_pattern_language_spec.md`](../ts-transformer/ts_transformers_target_pattern_language_spec.md)
 §4: **carries** (same identifier and condition), **changes** (same
-identifier, different condition or severity), **new**, or **retired**.
+identifier, different condition or severity), **new**, or **retired** (the
+identifier is not reported).
 
 Message texts are normative in content, not in wording: each must name the
 construct found and the replacement given here.
@@ -1609,7 +1879,7 @@ construct found and the replacement given here.
 | `collection:reduce-accumulator` | error | A `reduce` in tier R whose accumulator type is a code type, such as a `Map`, a `Set`, or a function | Accumulate into an object, an array, or a primitive. To fold into a `Map`, write the loop inside `computed(() => ...)` and return data | new |
 | `collection:index-keyed` | hint | A per-element callback uses its index parameter, so its element cones are keyed by position and recompute when elements move (§4.4.1) | Drop the index if the element can supply what it was used for, such as a stable identifier in place of `key={index}` | new |
 | `cell:unsupported-method` | error | A method of the runtime's cell object that the API does not declare (§4.7), such as `asSchema` or `getAsNormalizedFullLink` | The declared method that does the job, or a declared type in place of a re-typing ([§12.4](#124-replace-the-re-typing-overloads-with-declared-types)) | new |
-| `cell:collection-method-in-function` | error | `map`, `filter`, or another collection method called on a cell handle in tier F | Read first: `cell.get().map(...)` | new |
+| `cell:collection-method-in-function` | error | `map`, `filter`, or another collection method of §4.7 called on a cell handle in tier F. The compiler does not rewrite the call | One of two corrections. To keep the result reactive, wrap the expression in an inline `pattern(...)` and instantiate it: `pattern(() => cell.map(...))({})`. To process the values the cell holds when the body runs, read first: `cell.get().map(...)` | new |
 | `collection:nested-scan` | warning | An inline reactive collection callback scans a captured reactive collection | Measure, and consider an index (`keyBy`, `groupBy`) or an aggregate | carries |
 | `pattern-context:get-call` | — | — | — | retired: a `.get()` on a cell is valid at every tier-R expression site (§4.4); the statement case is `pattern-context:statement` and the non-cell case is `opaque-get:invalid-call` |
 | `pattern-context:optional-chaining` | — | — | — | retired: `?.` is a path projection at every tier-R site |
@@ -1633,21 +1903,21 @@ construct found and the replacement given here.
 | `function-body:global-write` | error | A write to a global or to a member of one | Keep the state in a cell | new |
 | `function-body:ambient-read` | error | `Date.now()`, `new Date()` without arguments, or `Math.random()` in a `lift`, a `computed`, or tier R, directly or through an authored function they call | Read the clock in a `handler` or `action` and store the value in a cell, or take the time as an input | new (the sandbox gate refuses the same read at run time) |
 | `function-body:builder-call` | error | `pattern`, `lift`, `handler`, or `computed` called in tier F, other than an inline `pattern(...)` as the callee of an instantiation | Define the builder at module scope and call its result. A function body that needs a reactive value instantiates a pattern | new |
-| `function-body:handler-capture` | error | An inline event handler or an `action` in tier F captures a `let` binding | Copy the value into a `const` before the handler and capture that | new |
-| `function-body:instantiation-in-computation` | error | A pattern instantiated in a `lift` or a `computed`, directly or through an authored function they call | Select among patterns in the pattern body: `kind === "box" ? Box({ ... }) : Bag({ ... })` | new |
+| `function-body:handler-capture` | error | An inline event handler or an `action` in tier F captures a `let` binding | Assign the value to a `const` before the handler and capture that | new |
 | `function-body:cell-needs-cause` | error | A cell created in a `lift` or a `computed` without an explicit cause | Name it: `Writable.for<T>(cause)`, with a cause that is the same on every evaluation | new (a run-time throw today) |
-| `function-body:effect-in-computation` | error | An effectful built-in requested in a `lift` or a `computed`, directly or through an authored function they call | Request the effect in the pattern body, with the computed value as its input: `const price = computed(...); const quote = fetchJson({ url: priceUrl(price) });` | new |
+| `function-body:effect-in-computation` | error | An effectful built-in requested in a `lift` or a `computed`, directly or through an authored function they call. An effect in the body of a pattern the computation instantiates is not reported | Write the effect in a pattern, inline or named, and instantiate the pattern in the computation: `PriceQuote({ url: priceUrl(order) })`, where the body of `PriceQuote` calls `fetchJson`. Or request the effect in the pattern body, with the computed value as its input: `const price = computed(...); const quote = fetchJson({ url: priceUrl(price) });` | new |
 | `function-body:event-context-in-computation` | error | `eventKey()` or `currentPrincipal()` in a `lift`, a `computed`, or the pattern body | Read it in the `handler` or `action` and pass or store the value | new (a run-time throw today) |
 | `collection:shared-element-state` | error | The body of a per-element construct over a collection of plain values (§4.4.1) declares a state cell or binds a handler without using the index parameter, so elements with equal values would share it | Take the index parameter and use it, for example in the cell's cause. Or make the elements cells: keep the list in a cell that a handler writes records into | new |
 | `verb-result:undeclared-return` | error | A `handler` or `action` without a result type argument returns a plain value from a block body | Declare the result (`action<Event, Result>(...)`, `handler<Event, State, Result>(...)`), or use a bare `return;` | carries |
 | `mergeable-push:read-then-push` | warning | A handler reads a mergeable collection and then pushes to it | Push without reading, or use the merge-safe operation the message names | carries |
-| `footprint:widened` | hint | Footprint analysis gave up on an expression, for one of the causes of `footprint-analysis.md` §5.2 (§5.4) | The rewrite for the cause, as that document's §5.3 gives it: named properties in place of a key that is not static, the properties that are needed in place of a whole value that is converted or passed to an imported function, a copy in place of an update of an input | new |
+| `footprint:widened` | hint | Footprint analysis gave up on an expression, for one of the causes of `footprint-analysis.md` §5.2 (§5.4). The report names what the widening covers: the input paths of the widened entries, which are several for a key that is not static, or the cell handle the analysis lost track of | The rewrite for the cause, as that document's §5.3 gives it: named properties in place of a key that is not static, the properties that are needed in place of a whole value that is converted or passed to an imported function, a copy in place of an update of an input | new |
 | `footprint:dynamic-read` | hint | A read through a cell handle in a function body fails one of the three conditions of `footprint-analysis.md` §7.2, so it is journaled when the body runs and is no static entry of the footprint: the handle is one of several alternatives, the path below it is not static, or the `get()` or `sample()` is conditional | The condition that failed and the static form where one exists: read through one handle in place of a choice between two, use a static key, or move the `get()` ahead of the branch when every path reads the cell | new |
 | `footprint:materializer` | hint | A `lift` or a `computed` has a side-write whose target is dynamic or too broad to predict (`footprint-analysis.md` §6.2), so the body is a materializer for all of its writes (its §6.3) | The write and why its target is not static. Write through a handle the body is given, at a static path (`counts.key("glazed").set(n)`), or move the write into a `handler` or an `action` | new |
-| `side-write:not-idempotent` | warning | A `lift` or a `computed` contains one of the three shapes of `footprint-analysis.md` §6.6, which write something else on a second run whatever the data: `push`, `pushAll`, or `increment`; `send` on a stream; or a read of a path at or below one the body writes, through the same anchored handle | For an append or an increment, `set` the whole value computed from the inputs, or use `addUnique`. For a send, move it into a `handler` or an `action`. For a read of its own target, compute the value from other inputs, or move the update into a `handler` or an `action` (`count.set(count.get() + 1)` belongs there); a write that leaves a settled value unchanged (`name.set(name.get().trim())`) writes the same on the second run and can stay | new (the idempotency validator checks the same contract at run time) |
+| `side-write:not-idempotent` | warning | A `lift` or a `computed` contains one of the three shapes of `footprint-analysis.md` §6.6. Two write something else on a second run whatever the data: `push`, `pushAll`, or `increment`; and `send` on a stream. The third does so unless the write settles: a read of a path at or below one the body writes, through the same anchored handle | For an append or an increment, `set` the whole value computed from the inputs, or use `addUnique`. For a send, move it into a `handler` or an `action`. For a read of its own target, compute the value from other inputs, or move the update into a `handler` or an `action` (`count.set(count.get() + 1)` belongs there); a write that leaves a settled value unchanged (`name.set(name.get().trim())`) writes the same on the second run and can stay | new (the idempotency validator checks the same contract at run time) |
 | `side-write:cycle` | warning | The edges of the plan form a cycle through a static side-write of a `lift` or a `computed`: a cone reads a cell that a cone depending on it writes (`scheduler-and-serving-loop.md` §8.2). A body that reads its own write target is reported as `side-write:not-idempotent` and not here | The side-write and the cells on the cycle. Make the write leave a settled value unchanged, so that the second evaluation writes what the first did, or move it into a `handler` or an `action` | new |
 | `computed:not-promoted` | hint | A `computed` used as a value fails the criterion of §6.1 | The first disqualifying construct and its promotable form, where one exists | new |
 | `computed:redundant` | hint | A `computed` meets the criterion of §6.1, so the wrapper changes nothing | Write the body in place of the call ([§12.2](#122-drop-computed-around-a-promotable-expression)) | new |
+| `function-body:instantiation-in-computation` | — | — | — | retired: a `lift` or a `computed` may instantiate a pattern (§5.2) |
 
 ### 10.4 Types
 
@@ -1758,7 +2028,7 @@ and 2 local type declarations, and nothing else.
 | Mapped type | 1 (1) | `patterns/apps/topics/topic.tsx` | Rewrite as `Readonly<Record<K, number \| undefined>>` |
 | `ifElse`, `when`, `str` | 155 (53); 1 (1); 1 (1). No `unless` | for example `patterns/system/self/self.tsx`, `patterns/system/loom/main.tsx`; `when` in `patterns/system/omnibox-fab/omnibox-fab.tsx`; `str` in `patterns/apps/deep-research/deep-research.tsx` | Accepted for the interim with a warning (§4.4.3). The rewrite is mechanical: all 157 are direct calls with the plain arguments |
 | `patternTool` | 31 (12) | pattern bodies | Rewrite to a pattern closure (§4.4.3) |
-| A collection method called on a cell handle in a handler | 2, as `builtin-inventory.md` counts them | handlers | Rewrite: `cell.get().map(...)` (`cell:collection-method-in-function`) |
+| A collection method called on a cell handle in a handler | 2, as `builtin-inventory.md` counts them | handlers | Rewrite by one of the two corrections of §4.7: an inline `pattern(...)` that is instantiated, or `cell.get().map(...)` (`cell:collection-method-in-function`) |
 | A per-element body over plain values that binds a handler without using the index | 6 (6) where the collection is a module-scope constant or a call result, for example `patterns/apps/weekly-calendar/event.tsx` and `patterns/examples/group-chat-room/group-chat-room.tsx`. A further 95 callbacks over stored lists bind a handler without the index; which of those have a primitive element type needs the type checker. No callback in the corpus declares a state cell | handler bindings in `map` callbacks | Rewrite: use the index, or make the elements cells (`collection:shared-element-state`) |
 | `any` in a type | 126 (see below) | for example `patterns/system/link-tool/link-tool.tsx`, `patterns/system/knowledge-graph/knowledge-graph.tsx` | Rewrite with the explicit forms of §7.8 |
 | `as any` | 52 (21) | for example `patterns/system/notes/daily-journal.tsx`, `patterns/system/agent-queue/agent-queue.tsx` | Remove: the rules of §7.5, §7.6, and §8.6 make most of them unnecessary |
@@ -2063,36 +2333,48 @@ pattern<{ glaze: Default<string, "plain"> }>(({ glaze }) => ({ glaze }));
 
 ## 13. Open questions
 
-Settled since the first draft, and written into the sections above: tier I
-is marked by `"use typescript";` (§5.5); the load-time verifier is retired
-for subset modules and kept for tier-I modules (§3.4); `any` is refused and
+Decided in this document, and written into the sections above: tier I is
+marked by `"use typescript";` (§5.5); the load-time verifier is retired for
+subset modules and kept for tier-I modules (§3.4); `any` is refused and
 each use gets an explicit form (§7.8); an inline event handler in a function
-body is a handler binding (§5.2); and the published typings become identity
-aliases, with no editor plugin (§8.6.1).
+body is a handler binding (§5.2); the published typings become identity
+aliases, with no editor plugin (§8.6.1); and a `computed` that instantiates
+a pattern is not promoted (§6.1).
 
-Also settled, by the project owner through the overview: compiler trust is
-unconditional; `ifElse`, `when`, `unless`, and the `str` tag are removed
-(§4.4.3); a function body may bind a handler and read context (§5.2); a
-`map` element is keyed by its value or its cell identity (§4.4.1); and
-`reduce` and `findIndex` are reactive constructs (§4.4.1).
+Decided by the project owner:
 
-Settled by `plan-and-label-templates.md`: a dynamic key is a chosen child
+- compiler trust is unconditional;
+- `ifElse`, `when`, `unless`, and the `str` tag are removed (§4.4.3);
+- a function body may bind a handler and read context (§5.2);
+- a `map` element is keyed by its value or its cell identity (§4.4.1);
+- `reduce`, `findIndex`, `some`, `every`, and `find` are reactive
+  constructs (§4.4.1);
+- a per-element body over plain values may not declare shared state
+  (§4.4.1);
+- a handler factory may be received as a value and bound (§4.4.2);
+- a handler binding made in a function body copies a scalar and a
+  container the body computed, and binds a container that has a stored
+  address by reference; a binding made in tier R copies nothing (§5.2,
+  §4.6);
+- a collection method on a cell handle in a function body is a compile
+  error with two corrections, and the compiler does not rewrite it (§4.7);
+- a `lift` or a `computed` may instantiate a pattern, and that pattern may
+  request effects (§5.2).
+
+Decided by `plan-and-label-templates.md`: a dynamic key is a chosen child
 that does not observe the container's enumeration (its §3.18); `reduce` and
 `findIndex` have label rules (§3.13); a handler binding made in a body has a
-plan record (§3.14); and stored data that does not match its declared type
-reads as `undefined` exactly where the type admits `undefined` or declares
-a default, and otherwise fails the cone that reads it (§5.2). The last is
-what keeps the strict `null` checks of §7 sound: value code never sees a
-value its type excludes.
+plan record (§3.14); the report `cfc-flow:ui-contract` is a warning (§4.4,
+with the assumption among that document's open questions); and stored data
+that does not match its declared type reads as `undefined` exactly where
+the type admits `undefined` or declares a default, and otherwise fails the
+cone that reads it (§5.2). The last is what keeps the strict `null` checks
+of §7 sound: value code never sees a value its type excludes.
 
-Settled by the project owner in the last round: `some`, `every`, and `find`
-are reactive constructs (§4.4.1); a `lift` or a `computed` may not request
-an effect (§5.2); a per-element body over plain values may not declare
-shared state (§4.4.1); and a handler factory may be received as a value and
-bound (§4.4.2).
-
-None of the remaining questions needs a decision from the project owner
-now. Each names the document it is addressed to.
+Questions 9 and 14 need a decision from the project owner, and the
+[continuation plan](../../plans/compiled-pattern-language.md) lists them as
+its questions 38 and 31. The others do not. Each names the document it is
+addressed to.
 
 1. **Whether declared types can replace every re-typing overload** (to the
    prototype). §12.4 removes the idiom without a new construct, on the
@@ -2137,20 +2419,23 @@ now. Each names the document it is addressed to.
    simple and exact, and it reports an error in a generic helper at each
    call that triggers it. The prototype should confirm that the messages
    stay usable.
-9. **The severity of `cfc-flow:ui-contract`** (to
-   `plan-and-label-templates.md`). That document's §4.4 says the compiler
-   can report a handler whose UI contract no element of the pattern can
-   satisfy, and gives the report no severity. *Assumed:* a warning. The
-   report covers the pattern's own UI only, and whether an event satisfies
-   a contract is decided for each event when it arrives, so the report
-   does not show that every event will be refused.
+9. **An instance made in a `lift` or a `computed`** (to the project owner;
+   the continuation plan's question 38). The ruling allows the
+   instantiation and leaves two points, which §5.2 assumes. *Assumed:* the
+   instance is identified by the enclosing instance, the site, and the
+   ordinal of the instantiation among those the evaluation makes at that
+   site, or by an explicit cause where the author writes `.for(cause)`.
+   And *assumed:* a `lift` or a `computed` does not request an effect
+   directly, so an effect that depends on computed data is written in a
+   pattern, inline or named, that the computation instantiates.
 10. **How an author writes the cache-promotion directive** (from
     `execution-and-storage.md`, §8.5 and open question 26). That document
     assumes the plan records one of three directives for a cone (none,
     always, never) and that this document defines how an author writes
-    them. This document has no form for it. *Assumed:* until one is
-    defined, no program states a directive, every cone has the directive
-    "none", and the runtime decides.
+    them. This document has no form for it. *Assumed,* as
+    `plan-and-label-templates.md` §1.4 has it: until a form is defined, no
+    program states a directive, a compiled plan leaves `Cone.cache` absent,
+    and the runtime decides.
 11. **Whether the inputs of a function body have read-only types** (from
     `footprint-analysis.md`, request 6). If the value a body receives had a
     deeply read-only type, as module-scope data has (§3.3), an update in
@@ -2166,3 +2451,20 @@ now. Each names the document it is addressed to.
     say so, `Cell<Profile | undefined>`, and the checker does not report
     the comparison where the type excludes `undefined`. The prototype has
     to measure how many cells the idiom is used on.
+13. **What a kind test sees at a data position typed `unknown`** (from
+    `footprint-analysis.md`, request 17; to `execution-and-storage.md` and
+    the prototype). §7.8 has a body handed a reference at such a position,
+    whatever is stored behind it, so that a kind test sees presence and no
+    more and a conversion to a string yields nothing of the content.
+    *Assumed:* it stays so, as the runtime reads such a position today. If
+    a kind test could see the stored kind, a position narrowed by it would
+    be read under the narrowed type, and `unknown` would no longer declare
+    a reference that is not read.
+14. **A child instantiated per element over equal plain values** (to the
+    project owner; the continuation plan's question 31). The compile error
+    for shared per-element state covers a body that declares a state cell
+    or binds a handler (§4.4.1). A body that instantiates a child is not
+    covered, and a factory-typed element is a plain value, so
+    `factories.map((Card) => Card({ donut }))` gives two equal factories one
+    child and its state. *Assumed:* the error is as ruled and does not
+    cover it.
