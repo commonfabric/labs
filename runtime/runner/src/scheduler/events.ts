@@ -2969,9 +2969,11 @@ export async function dispatchQueuedEvent(state: {
         // stale-basis rejection gets nor counts as an attempt in it, though a
         // window an earlier rejection opened keeps running while it waits.
         // As after a RetryImmediately, the requeued event carries the final
-        // callback and the staged work on to the run that follows: a serving
-        // drain reads that callback as the end of its copy, and queues the
-        // entry again once it has heard it.
+        // callback on to the run that follows, since a serving drain reads
+        // that callback as the end of its copy and queues the entry again
+        // once it has heard it; and what this run staged is not abandoned,
+        // since the run that follows stages that work again. A drop that no
+        // run follows abandons it (`LoadingReadWithdrawal`).
         state.noteLineageRerun(tx);
         if (tx.status().status === "ready") {
           tx.abort(
