@@ -60,9 +60,9 @@ never admitted, which is the change itself.
 ## The decision
 
 @danfuzz, 2026-11-11, accepting the break: "This changes a type parameter in a
-way that makes it possible to avoid unnecessarily sending large amounts of
-unnecessary data. It doesn't affect the actual stored data, so it's a safe
-change." Home is a required pattern, so its entry carries that ruling as its
+way that makes it possible to avoid sending large amounts of unnecessary data.
+It doesn't affect the actual stored data, so it's a safe change." Home is a
+required pattern, so its entry carries that ruling as its
 `requiredPatternOverride`. FabriChat compatibility breaks are acceptable until
 FabriChat is deployed, per his 2026-10-05 ruling: "in general it's okay to break
 compatibility with pre-existing fabrichat stuff. this system has not yet been

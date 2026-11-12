@@ -2932,7 +2932,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       rulingBy: "Dan",
       on: "2026-11-11",
       reason:
-        "This changes a type parameter in a way that makes it possible to avoid unnecessarily sending large amounts of unnecessary data. It doesn't affect the actual stored data, so it's a safe change.",
+        "This changes a type parameter in a way that makes it possible to avoid sending large amounts of unnecessary data. It doesn't affect the actual stored data, so it's a safe change.",
     },
   },
 ];
