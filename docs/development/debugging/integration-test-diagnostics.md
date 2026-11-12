@@ -62,7 +62,7 @@ load started into a space the session may only read. A serving wave can still
 withdraw a write it accepted, which it logs as
 `compile-cache-writeback-withdrawn` with the entry and the space. A space whose
 piece never runs shows in that log whether its copy was never issued, was issued
-and never ended, failed, or was withdrawn.
+and never ended, failed, was refused, or was withdrawn.
 
 Local full-stack repro for CI-only integration failures (see
 [LOCAL_DEV_SERVERS](../LOCAL_DEV_SERVERS.md) for the dev-server details):
