@@ -468,11 +468,14 @@ export class ServingPortBridge {
     endpoint.onNotice("host.stats", ({ stats }) => {
       this.#stats = stats;
     });
-    // The port delivers in order, so a full post is never older than an
-    // events post that arrived before it: the merged events stand until
+    // The port delivers in order, so a full post is never older than a
+    // counters post that arrived before it: the merged counters stand until
     // the next full post replaces them with everything else.
-    endpoint.onNotice("host.eventStats", ({ events }) => {
-      this.#stats = { ...(this.#stats ?? emptyServingLoopStats()), events };
+    endpoint.onNotice("host.counters", ({ counters }) => {
+      this.#stats = {
+        ...(this.#stats ?? emptyServingLoopStats()),
+        ...counters,
+      };
     });
     endpoint.onNotice("host.activationSettled", ({ space, outcome }) => {
       this.#options.onActivationSettled?.(space, outcome);

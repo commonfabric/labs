@@ -10,10 +10,13 @@ import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { toFileUrl } from "@std/path";
 
+import { defer } from "@commonfabric/async/defer";
 import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
+import { SERVER_EXECUTION_EFFECTS_DOC_ID } from "@commonfabric/memory/v2";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import { withStuckNet } from "@commonfabric/test-support/stuck-net";
 
 import type { JSONSchema } from "../src/builder/types.ts";
 import { type Cell, sendEvent } from "../src/cell.ts";
@@ -24,7 +27,7 @@ import {
 } from "../src/executor/serving-worker-host.ts";
 import type { ServingLoopStats } from "../src/executor/stats.ts";
 import { readWatermarkSeq } from "../src/executor/watermark-engine.ts";
-import { Runtime } from "../src/runtime.ts";
+import { Runtime, type RuntimeOptions } from "../src/runtime.ts";
 import type { MemorySpace } from "../src/storage/interface.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
@@ -68,6 +71,23 @@ export default pattern<
 >(({ value }) => ({ value, bump: bump({ value }) }));
 `;
 
+const NAVIGATE_PATTERN = `
+import { handler, navigateTo, pattern, Stream, Writable } from "commonfabric";
+const Target = pattern<{ label: string }, { label: string }>(
+  ({ label }) => ({ label }),
+);
+const go = handler<unknown, { value: Writable<number> }>(
+  (_event, { value }) => {
+    value.set((value.get() ?? 0) + 1);
+    return navigateTo(Target({ label: "target" }));
+  },
+);
+export default pattern<
+  { value: Writable<number> },
+  { value: number; go: Stream<unknown> }
+>(({ value }) => ({ value, go: go({ value }) }));
+`;
+
 describe("serving-worker", () => {
   let directory: string;
   let server: MemoryV2Server.Server;
@@ -100,13 +120,16 @@ describe("serving-worker", () => {
   };
 
   /** A client runtime in the ON posture, as `alice`. */
-  const newClient = (): Runtime => {
+  const newClient = (
+    over: Pick<RuntimeOptions, "navigateCallback"> = {},
+  ): Runtime => {
     const client = new Runtime({
       apiUrl: new URL(import.meta.url),
       storageManager: EmulatedStorageManager.connectTo(server, {
         as: aliceSigner,
       }),
       experimental: { serverExecution: true },
+      ...over,
     });
     clients.push(client);
     return client;
@@ -182,6 +205,75 @@ describe("serving-worker", () => {
       { stuckLabel: `the reader's total in ${served} to reach ${total}` },
     );
     return reader;
+  };
+
+  /**
+   * Starts the piece `source` defines in `space` from `client`, and once the
+   * space is served sends one event to the piece's `stream`. Resolves with
+   * the worker's own counters just before the send, asked of it, and with
+   * the counters this thread holds when the wave commit covering the first
+   * commit matching `input` is admitted, which is what the health route
+   * would answer then.
+   */
+  const countersAroundInput = async (
+    client: Runtime,
+    source: string,
+    stream: string,
+    input: (notice: MemoryV2Server.AdmittedCommitNotice) => boolean,
+  ): Promise<{ before: ServingLoopStats; atCover: ServingLoopStats }> => {
+    const compiled = await client.patternManager.compilePattern({
+      main: "/main.tsx",
+      files: [{ name: "/main.tsx", contents: source }],
+    }, { space });
+    const argument: Cell<{ value: number }> = client.getCell(
+      space,
+      `${stream}-arg`,
+      undefined,
+    );
+    const result = client.getCell<Record<string, unknown>>(
+      space,
+      `${stream}-result`,
+      compiled.resultSchema,
+    );
+    await argument.sync();
+    await result.sync();
+    const seed = client.edit();
+    argument.withTx(seed).set({ value: 0 });
+    expect((await seed.commit().settled).error).toBeUndefined();
+    const run = client.edit();
+    client.run(run, compiled, argument, result);
+    expect((await run.commit().settled).error).toBeUndefined();
+    const engine = await server.engineForSpace(space);
+    const startedSeq = Engine.serverSeq(engine);
+    const cancelDemand = result.sink(() => {});
+    const covered = defer<ServingLoopStats>();
+    let inputSeq: number | undefined;
+    let atCover: ServingLoopStats | undefined;
+    const unwatch = server.watchAdmittedCommits((notice) => {
+      if (notice.space !== space || atCover !== undefined) return;
+      if (inputSeq === undefined) {
+        if (input(notice)) inputSeq = notice.seq;
+      } else if (readWatermarkSeq(engine) >= inputSeq) {
+        atCover = worker.stats();
+        covered.resolve(atCover);
+      }
+    });
+    try {
+      await activated(space);
+      await awaitAdmitted(server, () => readWatermarkSeq(engine) >= startedSeq);
+      const before = await worker.requestStats();
+      sendEvent(result.key(stream), {});
+      return {
+        before,
+        atCover: await withStuckNet(
+          covered.promise,
+          "the wave commit covering the input",
+        ),
+      };
+    } finally {
+      unwatch();
+      cancelDemand();
+    }
   };
 
   /** The holders the derived commits in `served`'s store name. */
@@ -276,61 +368,37 @@ describe("serving-worker", () => {
 
   it("holds counters on this thread that count an event by the time the wave commit covering it lands", async () => {
     await start();
-    const client = newClient();
-    const bumper = await client.patternManager.compilePattern({
-      main: "/main.tsx",
-      files: [{ name: "/main.tsx", contents: BUMP_PATTERN }],
-    }, { space });
-    const argument: Cell<{ value: number }> = client.getCell(
-      space,
-      "bump-arg",
-      undefined,
+    const { before, atCover } = await countersAroundInput(
+      newClient(),
+      BUMP_PATTERN,
+      "bump",
+      (notice) => (notice.eventAppends?.length ?? 0) > 0,
     );
-    const result = client.getCell<{ value: number; bump: unknown }>(
-      space,
-      "bump-result",
-      bumper.resultSchema,
-    );
-    await argument.sync();
-    await result.sync();
-    const seed = client.edit();
-    argument.withTx(seed).set({ value: 0 });
-    expect((await seed.commit().settled).error).toBeUndefined();
-    const run = client.edit();
-    client.run(run, bumper, argument, result);
-    expect((await run.commit().settled).error).toBeUndefined();
-    const engine = await server.engineForSpace(space);
-    const startedSeq = Engine.serverSeq(engine);
-    const cancelDemand = result.sink(() => {});
-    // What the health route would answer at the moment each commit is
-    // admitted on this thread: the counters the worker last posted.
-    let appendSeq: number | undefined;
-    let countedAtCover: ServingLoopStats | undefined;
-    const unwatch = server.watchAdmittedCommits((notice) => {
-      if (notice.space !== space) return;
-      if ((notice.eventAppends?.length ?? 0) > 0) {
-        appendSeq = notice.seq;
-      } else if (
-        appendSeq !== undefined && countedAtCover === undefined &&
-        readWatermarkSeq(engine) >= appendSeq
-      ) {
-        countedAtCover = worker.stats();
-      }
-    });
-    try {
-      await activated(space);
-      await awaitAdmitted(server, () => readWatermarkSeq(engine) >= startedSeq);
-      sendEvent(result.key("bump"), {});
-      await awaitAdmitted(server, () => countedAtCover !== undefined);
-    } finally {
-      unwatch();
-      cancelDemand();
-    }
 
-    expect(countedAtCover?.events.appended).toBe(1);
-    expect(countedAtCover?.events.processed).toBe(1);
-    // The events post updates the last full copy rather than replacing it.
-    expect(countedAtCover?.activeSpaces).toBe(1);
+    expect(atCover.events.appended).toBe(1);
+    expect(atCover.events.processed).toBe(1);
+    // The append is an authored commit, which the same drain counts.
+    expect(atCover.authoredSeen).toBeGreaterThan(before.authoredSeen);
+    // The counters post updates the last full copy rather than replacing it.
+    expect(atCover.activeSpaces).toBe(1);
+  });
+
+  it("holds counters on this thread that count an effect ack by the time the wave commit covering it lands", async () => {
+    await start();
+    // The client enacts the served navigation and acks it with an authored
+    // write to its own effects instance.
+    const { before, atCover } = await countersAroundInput(
+      newClient({ navigateCallback: () => {} }),
+      NAVIGATE_PATTERN,
+      "go",
+      (notice) =>
+        notice.class === "authored" &&
+        notice.writes.some((write) =>
+          write.id === SERVER_EXECUTION_EFFECTS_DOC_ID
+        ),
+    );
+
+    expect(atCover.effectAcks).toBeGreaterThan(before.effectAcks);
   });
 
   it("reports the memory of each worker's isolate after a collection, which leaves out what this thread holds", async () => {
