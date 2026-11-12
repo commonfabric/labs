@@ -15,6 +15,10 @@ import type {
 } from "../src/storage/interface.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
+import {
+  refusingServer,
+  type SpaceRefusal,
+} from "./support/refusing-server.ts";
 
 const signer = await Identity.fromPassphrase("scheduler event loading read");
 const space = signer.did();
@@ -52,11 +56,20 @@ describe("scheduler-event-loading-read", () => {
   let writer: Runtime;
   let reader: Runtime;
   let heldSyncReleases: (() => void)[];
+  let refuse: (space: string, refusal: SpaceRefusal) => void;
 
   beforeEach(() => {
     server = newSharedServer();
     writerStorage = EmulatedStorageManager.connectTo(server, { as: signer });
-    readerStorage = EmulatedStorageManager.connectTo(server, { as: signer });
+    // The reader reaches the server through a stand-in that can refuse a
+    // space to it, as a memory server refuses a principal its access list
+    // does not admit; the writer reaches it directly.
+    const refusing = refusingServer(server);
+    refuse = refusing.refuse;
+    readerStorage = EmulatedStorageManager.connectTo(
+      refusing.server as MemoryV2Server.Server,
+      { as: signer },
+    );
     writer = new Runtime({
       apiUrl: new URL(import.meta.url),
       storageManager: writerStorage,
@@ -119,19 +132,61 @@ describe("scheduler-event-loading-read", () => {
   }
 
   /**
+   * Makes the reader's loads of the document `id` fail, once `fail` is
+   * called, with a failure of no class but `unknown`, as a transport's would.
+   * Returns `fail`.
+   */
+  function failReaderSyncFor(id: string): () => void {
+    const gate = Promise.withResolvers<void>();
+    const manager = readerStorage as unknown as {
+      open: (space: string) => {
+        sync: (...args: unknown[]) => Promise<unknown>;
+      };
+    };
+    const originalOpen = manager.open.bind(manager);
+    manager.open = (openSpace: string) => {
+      const provider = originalOpen(openSpace);
+      return new Proxy(provider, {
+        get(target, prop, receiver) {
+          if (prop === "sync") {
+            return async (syncId: unknown, ...rest: unknown[]) => {
+              if (syncId === id) {
+                await gate.promise;
+                return {
+                  error: { name: "TransportError", message: "load lost" },
+                };
+              }
+              return (target.sync as (...a: unknown[]) => Promise<unknown>)(
+                syncId,
+                ...rest,
+              );
+            };
+          }
+          const value = Reflect.get(target, prop, receiver);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+    };
+    heldSyncReleases.push(gate.resolve);
+    return gate.resolve;
+  }
+
+  /**
    * Stores, through the writer, a holder in the reader's space linking to an
    * inbox piece, the piece, whose `offers` links to a store document, and the
    * store holding `offers` unless that is `undefined`; the piece and the store
    * are in `inboxSpace`. Without `hop` there is no piece, and the holder links
    * to the store, which holds `{ offers }`. Returns the reader's cells for the
    * holder, the store, the log the handler appends to, and the event stream.
+   * The store is in `storeSpace` where that is given.
    * The reader has loaded the holder and the piece, and not the store.
    */
   async function standUp(
     name: string,
     offers: string[] | undefined,
-    { inboxSpace = foreignSpace, hop = true }: {
+    { inboxSpace = foreignSpace, storeSpace = inboxSpace, hop = true }: {
       inboxSpace?: MemorySpace;
+      storeSpace?: MemorySpace;
       hop?: boolean;
     } = {},
   ): Promise<{
@@ -145,7 +200,7 @@ describe("scheduler-event-loading-read", () => {
       write(tx);
       expect((await tx.commit().settled).error).toBeUndefined();
     };
-    const store = writer.getCell<unknown>(inboxSpace, `${name}-store`);
+    const store = writer.getCell<unknown>(storeSpace, `${name}-store`);
     const piece = writer.getCell<unknown>(inboxSpace, `${name}-piece`);
     if (offers !== undefined) {
       await commit((tx) => store.withTx(tx).set(hop ? offers : { offers }));
@@ -167,7 +222,7 @@ describe("scheduler-event-loading-read", () => {
     if (hop) await reader.getCell(inboxSpace, `${name}-piece`).sync();
     return {
       holder,
-      store: reader.getCell(inboxSpace, `${name}-store`),
+      store: reader.getCell(storeSpace, `${name}-store`),
       log: reader.getCell<string[]>(space, `${name}-log`),
       eventCell: reader.getCell<number>(space, `${name}-events`),
     };
@@ -493,6 +548,32 @@ describe("scheduler-event-loading-read", () => {
       expect(errors.map((error) => error.name)).toEqual(["TypeError"]);
     });
 
+    it("drops the event, reporting the error its run threw, when the load it read fails otherwise than by authorization", async () => {
+      const { holder, log, eventCell, store } = await standUp(
+        "client-load-fails",
+        ["a", "b", "c"],
+      );
+      const errors: Error[] = [];
+      reader.scheduler.onError((error) => errors.push(error));
+      const { runs, firstRun } = addAppendingHandler(
+        holder,
+        log,
+        eventCell,
+        offersSchemaWithoutDefault,
+      );
+      const fail = failReaderSyncFor(store.getAsNormalizedFullLink().id);
+
+      const status = send(eventCell);
+      await firstRun;
+      fail();
+
+      expect(await status).not.toBe("done");
+      await reader.idle();
+      expect(runs.count).toBe(1);
+      expect(log.get()).toBeUndefined();
+      expect(errors.map((error) => error.name)).toEqual(["TypeError"]);
+    });
+
     it("commits only the stored value of a document it read while loading in a space it wrote", async () => {
       // The commit carries the run's reads in the space it wrote, and the
       // store refuses the one of a document it has a later value of, so the
@@ -587,6 +668,84 @@ describe("scheduler-event-loading-read", () => {
       expect(reads).toEqual([["a", "b", "c"]]);
       expect(log.get()).toEqual(["a,b,c"]);
       expect(outcomes).toEqual([]);
+    });
+
+    it("runs a handler that read a document in a space the server refuses, and the next event on its stream after it", async () => {
+      // The server refuses the space to the reader, so a load there delivers
+      // nothing however long it is waited for. Each run reads the store as
+      // absent, as it does with no load in flight, and neither event holds
+      // up the other.
+
+      const { holder, log, eventCell } = await standUp(
+        "served-refused",
+        ["a", "b", "c"],
+      );
+      refuse(foreignSpace, "unauthorized");
+      const { reads } = addAppendingHandler(holder, log, eventCell);
+
+      const outcomes: ServedEventFailureOutcome[] = [];
+      const first = send(eventCell, outcomes, { index: 0 });
+      const second = send(eventCell, outcomes, { index: 1 });
+
+      expect(await first).toBe("done");
+      expect(await second).toBe("done");
+      expect(reads).toEqual([[], []]);
+      expect(log.get()).toEqual(["", ""]);
+      expect(outcomes).toEqual([]);
+    });
+
+    it("runs a handler again, once, when the load it read fails because the server refuses the space, and the next event on its stream after it", async () => {
+      // The reader has never opened the store's space, so its read finds the
+      // load in flight and the refusal still to come: the run is withdrawn,
+      // and the load then fails with an authorization-class failure. The
+      // event runs again on what the replica holds rather than waiting on an
+      // access list that may never change.
+
+      const { holder, log, eventCell } = await standUp(
+        "served-refused-unopened",
+        ["a", "b", "c"],
+        { storeSpace: thirdSpace },
+      );
+      refuse(thirdSpace, "unauthorized");
+      const { reads } = addAppendingHandler(holder, log, eventCell);
+
+      const outcomes: ServedEventFailureOutcome[] = [];
+      const first = send(eventCell, outcomes, { index: 0 });
+      const second = send(eventCell, outcomes, { index: 1 });
+
+      expect(await first).toBe("done");
+      expect(await second).toBe("done");
+      expect(reads).toEqual([[], [], []]);
+      expect(log.get()).toEqual(["", ""]);
+      expect(outcomes).toEqual([]);
+    });
+
+    it("defers the event, and the next one on its stream, when the load its run read fails otherwise than by authorization", async () => {
+      const { holder, log, eventCell, store } = await standUp(
+        "served-load-fails",
+        ["a", "b", "c"],
+      );
+      const { reads, firstRun } = addAppendingHandler(holder, log, eventCell);
+      const fail = failReaderSyncFor(store.getAsNormalizedFullLink().id);
+
+      const outcomes: ServedEventFailureOutcome[] = [];
+      const first = send(eventCell, outcomes, { index: 0 });
+      const second = send(eventCell, outcomes, { index: 1 });
+      await firstRun;
+      fail();
+
+      expect(await first).not.toBe("done");
+      expect(await second).not.toBe("done");
+      expect(reads).toEqual([[]]);
+      expect(log.get()).toBeUndefined();
+      expect(outcomes).toMatchObject([
+        { kind: "deferred", cause: "load-park", role: "failed-head" },
+        { kind: "deferred", cause: "arrival-barrier" },
+      ]);
+      expect(
+        (outcomes[0] as { failure: { failureClass: string } }).failure
+          .failureClass,
+      ).not.toBe("authorization");
     });
 
     it("does not withdraw the run for a loading read in its home space", async () => {

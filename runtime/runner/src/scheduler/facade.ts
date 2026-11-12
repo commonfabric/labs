@@ -4095,6 +4095,13 @@ export class Scheduler {
    * class among them still drops the event, since that document may yet
    * hold what the closure reads.
    *
+   * A park its own run's loading reads put the event in
+   * (`QueuedEvent.withdrawnForLoadingReads`) releases on authorization-class
+   * failures served or not, so that a run reading into a space its principal
+   * cannot read proceeds on the absence and holds no later event behind it,
+   * as it would with no load in flight. Such a park's drop of a client event
+   * also reports the error the withdrawn run threw, which no later run will.
+   *
    * `errors` holds every failed load's error, in the order they failed. A
    * served deferral reports the first; a client drop reports the first of
    * another class than `authorization`, the one that decided it.
@@ -4104,8 +4111,10 @@ export class Scheduler {
     errors: readonly unknown[],
   ): void {
     if (this.#headEventLoadPark?.eventId !== event.id) return;
+    const withdrawn = event.withdrawnForLoadingReads;
     if (
-      event.served === undefined && errors.every(isAuthorizationLoadFailure)
+      (event.served === undefined || withdrawn !== undefined) &&
+      errors.every(isAuthorizationLoadFailure)
     ) {
       this.#releaseHeadEventLoadPark(event.id);
       return;
@@ -4118,12 +4127,18 @@ export class Scheduler {
     this.#endHeadEventLoadPark();
     this.#headEventLoadParkHistory = null;
     const detail = describeFailure(error);
+    const when = withdrawn === undefined
+      ? "before dispatch"
+      : "before the handler ran again";
     if (event.served === undefined) {
       this.#dropEvent(
         event,
-        `Event dropped: required replica load failed before dispatch ` +
+        `Event dropped: required replica load failed ${when} ` +
           `(${keys}: ${detail})`,
       );
+      if (withdrawn?.error !== undefined) {
+        this.#handleError(withdrawn.error, event.action, event.id);
+      }
       return;
     }
     const failure = error instanceof ReplicaLoadFailureError ? error.failure : {
@@ -4136,7 +4151,7 @@ export class Scheduler {
     // the durable checkpoint and terminal attention surface persistent failure.
     this.#dropEvent(
       event,
-      `Event deferred: required replica load failed before dispatch ` +
+      `Event deferred: required replica load failed ${when} ` +
         `(${keys}: ${detail}); the entry stays pending and a later drain ` +
         `re-delivers it`,
       {

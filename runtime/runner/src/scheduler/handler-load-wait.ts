@@ -100,7 +100,10 @@ export function* consumedReadsOf(
 /**
  * Whether the document `address` names, as the instance `identity` reaches,
  * has a load in flight and no local basis in the replica, not even a
- * confirmed absence.
+ * confirmed absence. A document in a space whose access this runtime has
+ * authoritatively lost (`spaceAccessError()`), refused or deleted, has a
+ * known state however its load ends: the load delivers nothing, so it is not
+ * one to wait for.
  */
 function isLoadingWithoutLocalBasis(
   runtime: Runtime,
@@ -108,6 +111,9 @@ function isLoadingWithoutLocalBasis(
   identity: ScopeKeyIdentity,
 ): boolean {
   const { storageManager } = runtime;
+  if (storageManager.spaceAccessError?.(address.space) !== undefined) {
+    return false;
+  }
   const key = entityKey(address, identity);
   if (storageManager.pendingLoadGeneration?.(key) === undefined) return false;
   const { replica } = storageManager.open(address.space);

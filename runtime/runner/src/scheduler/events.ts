@@ -2336,6 +2336,7 @@ export async function dispatchQueuedEvent(state: {
     return;
   }
   state.eventQueue.shift();
+  delete queuedEvent.withdrawnForLoadingReads;
 
   const tx = state.runtime.edit();
   // The attempt's commit outcome is classified once, when it settles, by a
@@ -2950,8 +2951,11 @@ export async function dispatchQueuedEvent(state: {
       if (loadingReads.length > 0) {
         // The event is requeued with its carriage and retry budget as they
         // stand, and parked on those loads as the preflight park parks a
-        // head: it runs again once they settle, and a load that fails ends
-        // it as one at the preflight does. Waiting on a load is settlement,
+        // head: it runs again once they settle, a load that fails with an
+        // authorization-class failure lets it run again on what the replica
+        // holds, and a load that fails otherwise ends it as one at the
+        // preflight does (`withdrawnForLoadingReads`). Waiting on a load is
+        // settlement,
         // so the wait spends none of the retry window a stale-basis
         // rejection gets. As after a RetryImmediately, the requeued event
         // carries the final callback and the staged work on to the run that
@@ -2966,7 +2970,11 @@ export async function dispatchQueuedEvent(state: {
             ),
           );
         }
-        state.parkHeadEventForLoads(requeueToRunAgain(), loadingReads);
+        const requeued = requeueToRunAgain();
+        requeued.withdrawnForLoadingReads = error === undefined ? {} : {
+          error: error instanceof Error ? error : new Error(String(error)),
+        };
+        state.parkHeadEventForLoads(requeued, loadingReads);
         return;
       }
 
