@@ -162,7 +162,7 @@ await input.pressSequentially("user@example.com");
 - `cf-change` - Fired on change with detail: `{ value, name }` **Example**:
 
 ```html
-<cf-textarea rows="4" placeholder="Enter message" auto-resize></cf-textarea>
+<cf-textarea rows="4" placeholder="Enter message" autoResize></cf-textarea>
 ```
 
 ### 4. cf-checkbox
