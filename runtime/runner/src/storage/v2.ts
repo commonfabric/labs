@@ -1862,6 +1862,13 @@ export class StorageManager implements IStorageManager {
    */
   #instanceNames: boolean | undefined;
 
+  /**
+   * Whether `setSyncCidReferences()` declared that this manager's sessions
+   * take schema documents by reference, or `undefined` while nothing has,
+   * when they take every body.
+   */
+  #syncCidReferences: boolean | undefined;
+
   #localSessionDocuments: boolean | undefined;
   #eventAppendQueueStore?: EventAppendQueueStore;
   #eventAppendPacing?: EventAppendPacing | false;
@@ -2464,6 +2471,29 @@ export class StorageManager implements IStorageManager {
     }
     this.#instanceNames = enabled;
     this.#sessionFactory.setInstanceNames?.(enabled);
+  }
+
+  /** See `IStorageManager.setSyncCidReferences`. */
+  setSyncCidReferences(enabled: boolean): void {
+    if (
+      this.#syncCidReferences !== undefined &&
+      this.#syncCidReferences !== enabled
+    ) {
+      throw new Error(
+        "setSyncCidReferences: this manager's runtimes already declared the " +
+          "other choice; one manager's connections cannot serve both",
+      );
+    }
+    if (
+      enabled !== (this.#syncCidReferences ?? false) && this.#providers.size > 0
+    ) {
+      throw new Error(
+        "setSyncCidReferences: a session is already open; declaring the " +
+          "choice now would leave that session's connection on the other",
+      );
+    }
+    this.#syncCidReferences = enabled;
+    this.#sessionFactory.setSyncCidReferences?.(enabled);
   }
 
   /** See `IStorageManager.setSessionReadCeiling`. */

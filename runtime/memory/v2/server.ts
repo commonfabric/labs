@@ -26,6 +26,7 @@ import {
   isCapable,
   isDeletionTombstone,
 } from "../acl.ts";
+import { lookupSchemaDocument } from "../../runner/src/schema-registry.ts";
 import {
   canResolveScopeKey,
   type CellScope,
@@ -250,6 +251,7 @@ import {
   expandClientMessageLabels,
   hasClientMessageLabelMetadata,
 } from "./commit-label-table.ts";
+import { referenceServerMessageSchemaDocuments } from "./sync-cid-references.ts";
 import { compressServerMessageSchemas } from "./sync-schema-table.ts";
 import {
   appendWatchSetPart,
@@ -1411,6 +1413,9 @@ class Connection {
   #syncLabelTable = false;
   #commitLabelTable = false;
 
+  /** Whether both peers advertised `syncCidReferencesV1`. */
+  #syncCidReferences = false;
+
   /**
    * The bounds a sync is split to fit, when the transport bounds its
    * messages and both peers advertised `syncPartsV1`.
@@ -1581,6 +1586,15 @@ class Connection {
   /** Helper for `#send()`, which applies the negotiated table encodings. */
   #prepare(message: ServerMessage): ServerMessage {
     let prepared = message;
+    // First, so the tables below never walk a body the frame leaves out.
+    if (this.#syncCidReferences) {
+      const referenceStart = performance.now();
+      prepared = referenceServerMessageSchemaDocuments(
+        prepared,
+        lookupSchemaDocument,
+      );
+      timing.time(referenceStart, "memory", "response", "prepareReferences");
+    }
     if (this.#syncLabelTable) {
       const labelStart = performance.now();
       prepared = compressServerMessageLabels(prepared);
@@ -2500,6 +2514,8 @@ class Connection {
           serverFlags?.syncPartsV1 === true
         ? this.#syncPartLimits
         : undefined;
+      this.#syncCidReferences = clientFlags?.syncCidReferencesV1 === true &&
+        serverFlags?.syncCidReferencesV1 === true;
       this.#ready = true;
       return;
     }
@@ -3733,6 +3749,16 @@ export class Server {
       inviteHost?: string;
 
       /**
+       * Whether this server advertises `syncCidReferencesV1`, delivering
+       * `cid:` schema documents by reference to a client that advertises it
+       * too (`docs/specs/content-addressed-schemas.md`, "Delivery by
+       * reference"). On unless `false`: a client takes references only when
+       * it opts in, so a server that offers them changes nothing for one
+       * that does not, and `false` is how a deployment turns them off.
+       */
+      syncCidReferences?: boolean;
+
+      /**
        * Whether this server's posture names instances (INV-16): the
        * deployment's value of the `instanceNames` experimental flag. Asked at
        * every `session.open` that declares `instanceNames: true` of a space
@@ -3978,6 +4004,7 @@ export class Server {
       spaceInvites: this.options.inviteHost !== undefined,
       routedAuthV1: false,
       routedCompressionV1: false,
+      syncCidReferencesV1: this.options.syncCidReferences !== false,
     };
   }
 

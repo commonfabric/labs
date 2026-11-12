@@ -411,6 +411,19 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
   setInstanceNames?(enabled: boolean): void;
 
   /**
+   * Chooses whether the sessions this manager opens from here on take `cid:`
+   * schema documents by reference (`ConnectOptions.syncCidReferences` of the
+   * memory client). A `Runtime` calls this at construction. A manager
+   * without the method, or one no runtime has called it on, takes every
+   * body.
+   *
+   * @throws If another choice is already declared, or if a session is
+   * already open and the choice would change: the manager's connections are
+   * its runtimes' alike, so they cannot serve both.
+   */
+  setSyncCidReferences?(enabled: boolean): void;
+
+  /**
    * Keeps session-scoped documents in the local replica when enabled.
    * Repeated configuration must agree across runtimes sharing this manager.
    * @throws If a different policy has already been configured.

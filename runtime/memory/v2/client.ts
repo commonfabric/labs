@@ -107,6 +107,13 @@ import {
   expandServerMessageLabels,
   hasServerMessageLabelMetadata,
 } from "./sync-label-table.ts";
+import {
+  assertCidReferencesWellFormed,
+  fetchedSchemaDocument,
+  hasServerMessageCidReferences,
+  namesPrincipal,
+  resolveServerMessageCidReferences,
+} from "./sync-cid-references.ts";
 import { containsReservedSchemaRefSubstring } from "./sync-schema-ref.ts";
 import { expandServerMessageSchemas } from "./sync-schema-table.ts";
 import {
@@ -119,6 +126,10 @@ import {
   wholeLimits,
 } from "./message-parts.ts";
 import { type ArmedTurn, armTurn } from "./turn.ts";
+import {
+  lookupSchemaDocument,
+  registerSchemaDocument,
+} from "../../runner/src/schema-registry.ts";
 
 /**
  * Passed to `SpaceSession.watchSetSync()` by `restore()` alone, marking the
@@ -187,6 +198,34 @@ const logger = getLogger("memory.v2.client", {
   enabled: true,
   level: "warn",
 });
+
+/** The key a session's reference hold is filed under in its client. */
+const cidReferenceHoldKey = (
+  session: { readonly space: string; readonly sessionId: string },
+): string => JSON.stringify([session.space, session.sessionId]);
+
+/**
+ * A session's syncs held until the schema document bodies the first of them
+ * lacks have arrived, in arrival order, with the hashes whose fetch failed.
+ */
+type CidReferenceHold = {
+  /** The session the held syncs are for. */
+  readonly session: SyncPartSession;
+  readonly queue: unknown[];
+  readonly unresolvable: Set<string>;
+
+  /**
+   * The hashes whose bodies this hold's own space returned verified, which a
+   * schema that names a principal needs before it resolves.
+   */
+  readonly fetched: Set<string>;
+
+  /** The turn the next held message is handed on in, while one is armed. */
+  turn?: ArmedTurn;
+
+  /** Resolved once the hold ends, its syncs handed on or discarded. */
+  readonly ended: PromiseWithResolvers<void>;
+};
 
 /**
  * Names an error by its name and message, for a log line. The message is
@@ -314,6 +353,17 @@ export type ConnectOptions = {
    * client declares nothing and its sessions are positional.
    */
   instanceNames?: boolean;
+
+  /**
+   * Whether this client takes `cid:` schema documents by reference
+   * (`syncCidReferencesV1`; `docs/specs/content-addressed-schemas.md`,
+   * "Delivery by reference"). When `true`, its `hello` advertises the
+   * capability, and a server that advertises it too names the schema
+   * documents its registry holds by id, leaving this client to resolve or
+   * fetch their bodies. Absent or `false`, the client advertises nothing and
+   * receives every body.
+   */
+  syncCidReferences?: boolean;
 
   /**
    * How many handshakes the connect may make, one when absent. Each after the
@@ -777,10 +827,31 @@ export class Client {
   /** Whether every open declares `instanceNames: true` (`ConnectOptions`). */
   readonly #instanceNames: boolean;
 
+  /** Whether this client's `hello` offers `syncCidReferencesV1` (`ConnectOptions`). */
+  readonly #offersCidReferences: boolean;
+
   #syncLabelTable = false;
   #commitLabelTable = false;
   /** Whether both peers advertised `syncPartsV1`. */
   #syncParts = false;
+  /** Whether both peers advertised `syncCidReferencesV1`. */
+  #syncCidReferences = false;
+  /**
+   * The syncs held for schema document bodies, by session
+   * (`cidReferenceHoldKey()`). A session with an entry has every later sync
+   * appended to it, so its frames still reach it in the order they arrived.
+   */
+  #cidReferenceHolds = new Map<string, CidReferenceHold>();
+  /**
+   * The schema document body fetches in flight on this connection, by
+   * `#cidBodyFetchKey()`, each settling `true` once its body has verified and
+   * registered. A frame naming a hash already being fetched from the same
+   * host waits for that fetch rather than starting one. The wait is bounded
+   * by this connection: every request on it is answered, or the connection
+   * closes (`docs/specs/content-addressed-schemas.md`, "Delivery by
+   * reference").
+   */
+  #cidBodyFetches = new Map<string, Promise<boolean>>();
   /**
    * The bounds a watch set is staged in parts to fit on this connection: on
    * a routed connection, the frame cap and the 4 MiB a request may take, in
@@ -896,9 +967,11 @@ export class Client {
     transport: Transport,
     clientInfo: Readonly<ClientInfo>,
     instanceNames: boolean,
+    offersCidReferences: boolean,
   ) {
     this.#clientInfo = clientInfo;
     this.#instanceNames = instanceNames;
+    this.#offersCidReferences = offersCidReferences;
     this.#transport = transport;
     this.#transport.setReceiver((payload) => this.#onMessage(payload));
     this.#transport.setCloseReceiver?.((error) => this.#onClose(error));
@@ -919,6 +992,7 @@ export class Client {
       options.transport,
       Object.freeze(info),
       options.instanceNames === true,
+      options.syncCidReferences === true,
     );
     const abortError = (): Error =>
       options.signal?.reason instanceof Error
@@ -983,11 +1057,23 @@ export class Client {
 
   /**
    * Resolves once every server frame the transport held at the call has
-   * reached this client. What a frame goes on to do from there — a response resolving, a
-   * sync frame handed to its session — is microtask work after that.
+   * reached this client, and every sync then held for the schema documents
+   * it names has been handed on or discarded: every such sync, or with
+   * `session`, only that session's, so one space's barrier does not wait on
+   * another space's body fetch. What a frame goes on to do from there — a
+   * response resolving, a sync frame handed to its session — is microtask
+   * work after that.
    */
-  delivered(): Promise<void> {
-    return this.#transport.delivered?.() ?? Promise.resolve();
+  async delivered(
+    session?: { readonly space: string; readonly sessionId: string },
+  ): Promise<void> {
+    await this.#transport.delivered?.();
+    const holds = session === undefined
+      ? [...this.#cidReferenceHolds.values()]
+      : [this.#cidReferenceHolds.get(cidReferenceHoldKey(session))].filter(
+        (hold) => hold !== undefined,
+      );
+    await Promise.all(holds.map((hold) => hold.ended.promise));
   }
 
   /**
@@ -1029,6 +1115,7 @@ export class Client {
     this.#cancelRenewals();
     this.#endRenewals(new Error("memory client closed"));
     this.#endHeldMounts(new Error("memory client closed"));
+    this.#dropCidReferenceHolds();
     this.#rejectPending(new Error("memory client closed"));
     // Session background sends may be waiting for peer upload credit. Closing
     // the transport rejects those waits before session teardown awaits them.
@@ -1229,7 +1316,10 @@ export class Client {
     // observes the rejection.
     pending.promise.catch(() => {});
     this.#pending.set(requestId, pending);
-    if (this.#syncParts && typeof message.space === "string") {
+    if (
+      (this.#syncParts || this.#syncCidReferences) &&
+      typeof message.space === "string"
+    ) {
       const descriptor = message.session;
       const sessionId = typeof message.sessionId === "string"
         ? message.sessionId
@@ -2222,6 +2312,8 @@ export class Client {
     this.#syncLabelTable = false;
     this.#commitLabelTable = false;
     this.#syncParts = false;
+    this.#syncCidReferences = false;
+    this.#dropCidReferenceHolds();
     this.#syncPartAssembler.clear();
     this.#requestLimits = undefined;
     this.#transport.setMessageCompressionEnabled?.(false);
@@ -2274,6 +2366,7 @@ export class Client {
             this.#transport.supportsMessageCompression === true,
           // End-to-end compression of streamed bodies through a router.
           routedCompressionV1: offerRoutedCompression,
+          syncCidReferencesV1: this.#offersCidReferences,
         },
       };
       const encoded = encodeMemoryBoundary(hello);
@@ -2362,6 +2455,14 @@ export class Client {
           message as ServerMessage,
           this.#messageSession(message),
         );
+        if (message === undefined) return;
+      }
+      if (!this.#syncCidReferences) {
+        if (hasServerMessageCidReferences(message)) {
+          throw protocolError("Unnegotiated `syncCidReferencesV1` reference");
+        }
+      } else {
+        message = this.#admitCidReferences(message);
         if (message === undefined) return;
       }
     } catch (cause) {
@@ -2473,6 +2574,8 @@ export class Client {
           helloOk.flags.commitLabelTableV1;
         this.#syncParts = expectedFlags.syncPartsV1 &&
           helloOk.flags.syncPartsV1;
+        this.#syncCidReferences = this.#offersCidReferences &&
+          helloOk.flags.syncCidReferencesV1;
         this.#requestLimits = routed
           ? {
             bytes: ROUTED_PART_BYTES,
@@ -2508,6 +2611,15 @@ export class Client {
       return;
     }
 
+    this.#dispatchMessage(message);
+  }
+
+  /**
+   * Helper for `#onMessage()` and `#drainCidReferenceHold()`, which hands a
+   * decoded message on a ready connection to the session or request it is
+   * for.
+   */
+  #dispatchMessage(message: unknown): void {
     if (isObjectNotArray(message) && message.type === "connection/challenge") {
       const principal = typeof message.principal === "string"
         ? this.#routedSigners.get(message.principal)
@@ -2643,6 +2755,322 @@ export class Client {
     return request === undefined || sessionId === undefined
       ? undefined
       : { space: request.space, sessionId };
+  }
+
+  /**
+   * Helper for `#onMessage()`, which resolves the schema document
+   * references in a decoded message's sync from the realm registry. Returns
+   * the message to handle now, or `undefined` when it is held: because it
+   * names a body the registry lacks, which is then fetched, or because an
+   * earlier sync of its session is held. A held session's syncs are handed
+   * on in order once the bodies arrive (`#drainCidReferenceHold()`).
+   *
+   * @throws TypeError on a malformed reference, as a decode failure.
+   */
+  #admitCidReferences(message: unknown): unknown {
+    if (serverMessageSync(message) === undefined) return message;
+    const session = this.#messageSession(message);
+    // A sync no session claims answers no request this client holds, and is
+    // dropped as it is handed on, so nothing is fetched for it.
+    if (session === undefined) return message;
+    const key = cidReferenceHoldKey(session);
+    const held = this.#cidReferenceHolds.get(key);
+    if (held !== undefined) {
+      // Checked now, so that a malformed sync fails as it arrives, as any
+      // undecodable message does, rather than when the hold hands it on.
+      assertCidReferencesWellFormed(message);
+      held.queue.push(message);
+      return undefined;
+    }
+    const resolved = resolveServerMessageCidReferences(
+      message,
+      lookupSchemaDocument,
+    );
+    if (resolved.missing.length === 0) return resolved.message;
+    const hold: CidReferenceHold = {
+      session,
+      queue: [message],
+      unresolvable: new Set(),
+      fetched: new Set(),
+      ended: Promise.withResolvers(),
+    };
+    this.#cidReferenceHolds.set(key, hold);
+    this.#fetchHeldCidBodies(key, hold, resolved.missing);
+    return undefined;
+  }
+
+  /**
+   * Helper for the reference hold, which fetches the bodies `hashes` name
+   * for the first held sync, then hands on what the hold can now resolve.
+   * The fetch goes only on the connection current now, the one the hold
+   * belongs to, since a later connection discards the hold.
+   */
+  #fetchHeldCidBodies(
+    key: string,
+    hold: CidReferenceHold,
+    hashes: readonly string[],
+  ): void {
+    void this.#fetchCidBodies(hold.session, hashes, this.#connectionEpoch).then(
+      ({ unresolved, fetched, lost }) => {
+        // A hold its connection's end already discarded has nothing to hand
+        // on.
+        if (this.#cidReferenceHolds.get(key) !== hold) return;
+        for (const hash of fetched) hold.fetched.add(hash);
+        if (lost) {
+          this.#dropCidReferenceHold(key, hold);
+          return;
+        }
+        if (unresolved.size > 0) {
+          // The server recorded these documents as delivered, and a dropped
+          // reference leaves them unheld, so the next restore declares what the
+          // session actually holds rather than leaving them elided.
+          const error = new Error(
+            "Schema documents named by reference could not be fetched",
+          );
+          for (const session of this.#spaces) {
+            if (cidReferenceHoldKey(session) === key) {
+              session.invalidateDelivery(error);
+            }
+          }
+        }
+        for (const hash of unresolved) hold.unresolvable.add(hash);
+        this.#drainCidReferenceHold(key, hold);
+      },
+    );
+  }
+
+  /**
+   * Helper for the reference hold, which discards one session's hold when the
+   * connection its fetch went out on is lost. The server recorded the held
+   * syncs as delivered, so the session's next restore declares what its
+   * replica actually holds, and the resume delivers them again.
+   */
+  #dropCidReferenceHold(key: string, hold: CidReferenceHold): void {
+    this.#cidReferenceHolds.delete(key);
+    hold.turn?.cancel();
+    hold.ended.resolve();
+    const error = connectionError(
+      "Memory connection closed while syncs waited for schema documents",
+    );
+    for (const session of this.#spaces) {
+      if (cidReferenceHoldKey(session) === key) {
+        session.invalidateDelivery(error);
+      }
+    }
+  }
+
+  /**
+   * Helper for the reference hold, which hands on the held syncs of one
+   * session in order, one a turn, as far as the registry now resolves them,
+   * and fetches again for the first that names a body still missing. A
+   * reference whose fetch failed is dropped, so arrival validation
+   * quarantines what reaches it. A hold the connection outlived is
+   * discarded by `#hello()`, and every hold by `close()`.
+   */
+  #drainCidReferenceHold(key: string, hold: CidReferenceHold): void {
+    hold.turn = undefined;
+    // Every held sync was checked as it arrived (`#admitCidReferences()`),
+    // so resolving one cannot throw.
+    const resolved = resolveServerMessageCidReferences(
+      hold.queue[0],
+      lookupSchemaDocument,
+      hold.unresolvable,
+      hold.fetched,
+    );
+    if (resolved.missing.length > 0) {
+      this.#fetchHeldCidBodies(key, hold, resolved.missing);
+      return;
+    }
+    hold.queue.shift();
+    this.#dispatchMessage(resolved.message);
+    if (hold.queue.length === 0) {
+      this.#cidReferenceHolds.delete(key);
+      hold.ended.resolve();
+      return;
+    }
+    // One held message a turn, as a transport hands messages over: a
+    // message's continuations — a watch answer's, which installs the view an
+    // effect after it applies to — run before the next one is handled.
+    hold.turn = armTurn(() => this.#drainCidReferenceHold(key, hold));
+  }
+
+  /**
+   * Helper for `#hello()` and `close()`, which discards the holds of a
+   * connection being replaced or closed. Its server recorded their syncs as
+   * delivered, so each held session's next restore declares what its replica
+   * actually holds.
+   */
+  #dropCidReferenceHolds(): void {
+    if (this.#cidReferenceHolds.size === 0) return;
+    const error = connectionError(
+      "Memory connection closed while syncs waited for schema documents",
+    );
+    for (const session of this.#spaces) {
+      if (this.#cidReferenceHolds.has(cidReferenceHoldKey(session))) {
+        session.invalidateDelivery(error);
+      }
+    }
+    for (const hold of this.#cidReferenceHolds.values()) {
+      hold.turn?.cancel();
+      hold.ended.resolve();
+    }
+    this.#cidReferenceHolds.clear();
+  }
+
+  /**
+   * Fetches the schema document bodies `hashes` name from `session`'s space
+   * with one query, and registers each that verifies. A hash another fetch
+   * from the same host is already fetching is waited for instead, and only a
+   * body that verified ends that wait: on any other outcome the hash is
+   * fetched again from this space. A schema that names a principal is always
+   * fetched from this space, never waited for and never taken from the
+   * registry, so whether it is fetched says nothing about what this client
+   * holds. Returns the hashes still unresolved afterward, each logged, the
+   * hashes this space returned verified, and whether a fetch went unanswered
+   * because the connection was lost. Every request goes on the connection
+   * `epoch` names, and one that would go on another counts as lost. Never
+   * rejects.
+   */
+  async #fetchCidBodies(
+    session: SyncPartSession,
+    hashes: readonly string[],
+    epoch: number,
+  ): Promise<
+    { unresolved: Set<string>; fetched: Set<string>; lost: boolean }
+  > {
+    const namesPrincipalHere = (hash: string): boolean => {
+      const schema = lookupSchemaDocument(hash);
+      return schema !== undefined &&
+        namesPrincipal(schema, lookupSchemaDocument);
+    };
+    const own: string[] = [];
+    const shared: [string, Promise<boolean>][] = [];
+    for (const hash of hashes) {
+      const inFlight = namesPrincipalHere(hash)
+        ? undefined
+        : this.#cidBodyFetches.get(this.#cidBodyFetchKey(session, hash));
+      if (inFlight === undefined) own.push(hash);
+      else shared.push([hash, inFlight]);
+    }
+    const fetched = new Set<string>();
+    let answered = true;
+    if (own.length > 0) {
+      const request = this.#requestCidBodies(session, own, epoch);
+      for (const hash of own) {
+        const done = request.then((reply) =>
+          reply.answered && reply.verified.has(hash)
+        );
+        const key = this.#cidBodyFetchKey(session, hash);
+        this.#cidBodyFetches.set(key, done);
+        void done.then(() => {
+          if (this.#cidBodyFetches.get(key) === done) {
+            this.#cidBodyFetches.delete(key);
+          }
+        });
+      }
+      const reply = await request;
+      answered = reply.answered;
+      for (const hash of reply.verified) fetched.add(hash);
+    }
+    const retry: string[] = [];
+    for (const [hash, done] of shared) {
+      // A shared body that names a principal is fetched again from this
+      // space too, so that this space sees the same fetch either way.
+      if (
+        (!await done && lookupSchemaDocument(hash) === undefined) ||
+        namesPrincipalHere(hash)
+      ) {
+        retry.push(hash);
+      }
+    }
+    if (answered && retry.length > 0) {
+      const reply = await this.#requestCidBodies(session, retry, epoch);
+      answered = reply.answered;
+      for (const hash of reply.verified) fetched.add(hash);
+    }
+    if (!answered) return { unresolved: new Set(), fetched, lost: true };
+    const unresolved = new Set(
+      hashes.filter((hash) =>
+        lookupSchemaDocument(hash) === undefined ||
+        (namesPrincipalHere(hash) && !fetched.has(hash))
+      ),
+    );
+    if (unresolved.size > 0) {
+      logger.error("schema-doc-reference-unresolved", () => [
+        `Schema documents named by reference could not be fetched from ${
+          backtickQuote(session.space)
+        }; the documents whose refs reach them are quarantined:`,
+        [...unresolved].map((hash) => `cid:${hash}`).join(", "),
+      ]);
+    }
+    return { unresolved, fetched, lost: false };
+  }
+
+  /**
+   * Helper for `#fetchCidBodies()`, which names the fetch of `hash` for
+   * `session` in `#cidBodyFetches`, so that frames share a fetch only when
+   * one host answers both. A direct connection reaches one host for every
+   * space, so a hash names one fetch. A routed connection (`routedAuthV1`)
+   * reaches a host per space, so a fetch is shared only within its space: a
+   * host that leaves a fetch unanswered then holds back only frames that
+   * came from it.
+   */
+  #cidBodyFetchKey(session: SyncPartSession, hash: string): string {
+    return this.#serverFlags?.routedAuthV1 === true
+      ? JSON.stringify([session.space, hash])
+      : hash;
+  }
+
+  /**
+   * Helper for `#fetchCidBodies()`, which asks `session`'s space for the
+   * `cid:` documents `hashes` name with a one-shot query, and registers
+   * each returned body that verifies as the schema document its id names.
+   * The query goes only on the connection `epoch` names. Returns whether the
+   * query was answered, `false` when that connection was lost, and the
+   * hashes whose bodies it returned verified. Never rejects: a refused query
+   * is logged and registers nothing.
+   */
+  async #requestCidBodies(
+    session: SyncPartSession,
+    hashes: readonly string[],
+    epoch: number,
+  ): Promise<{ answered: boolean; verified: Set<string> }> {
+    const verified = new Set<string>();
+    try {
+      const result = await this.request<GraphQueryResult>({
+        type: "graph.query",
+        requestId: crypto.randomUUID(),
+        space: session.space,
+        sessionId: session.sessionId,
+        query: {
+          roots: hashes.map((hash) => ({
+            id: `cid:${hash}`,
+            selector: { path: [], schema: false },
+          })),
+        },
+      }, { epoch });
+      for (const entity of result.entities) {
+        // Only a `cid:` document is a body: an entity under any other id is
+        // not one, whatever its content hashes to.
+        if (!entity.id.startsWith("cid:")) continue;
+        const hash = entity.id.slice("cid:".length);
+        const schema = fetchedSchemaDocument(hash, entity.document);
+        if (schema === undefined) continue;
+        registerSchemaDocument(hash, schema);
+        verified.add(hash);
+      }
+      return { answered: true, verified };
+    } catch (error) {
+      if (this.#closed || isConnectionError(error)) {
+        return { answered: false, verified };
+      }
+      logger.warn("schema-doc-fetch-failed", () => [
+        `Fetching ${hashes.length} schema document bodies from ${
+          backtickQuote(session.space)
+        } failed: ${describeError(error)}`,
+      ]);
+      return { answered: true, verified };
+    }
   }
 
   #nextRequestId(): string {
