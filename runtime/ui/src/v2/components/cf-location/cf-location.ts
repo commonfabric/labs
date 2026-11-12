@@ -54,6 +54,15 @@ type _ValidateLocationData = Schema<
 > extends LocationData ? true : never;
 const _validateLocationData: _ValidateLocationData = true;
 
+/** The error reported where the browser offers no geolocation. */
+const UNSUPPORTED: GeolocationPositionError = {
+  code: 2,
+  message: "Geolocation is not supported by this browser",
+  PERMISSION_DENIED: 1,
+  POSITION_UNAVAILABLE: 2,
+  TIMEOUT: 3,
+};
+
 /**
  * CFLocation - Browser Geolocation API wrapper component
  *
@@ -265,12 +274,28 @@ export class CFLocation extends BaseElement {
 
   private _watchId: number | null = null;
 
+  #geolocation: Geolocation | null;
+
+  /** The one-shot request the element is waiting on, if any. */
+  #request: object | undefined;
+
   private _cellController = createCellController<LocationData | null>(this, {
     timing: { strategy: "immediate" },
     onChange: (newValue) => {
       this.emit("cf-change", { location: newValue });
     },
   });
+
+  /**
+   * Constructs an element that asks `geolocation` for positions, or that says
+   * geolocation is unsupported when it is `null`, as in a browser without it.
+   */
+  constructor(
+    geolocation: Geolocation | null = navigator.geolocation ?? null,
+  ) {
+    super();
+    this.#geolocation = geolocation;
+  }
 
   override firstUpdated(changedProperties: Map<string, unknown>) {
     super.firstUpdated(changedProperties);
@@ -291,15 +316,18 @@ export class CFLocation extends BaseElement {
   }
 
   override disconnectedCallback() {
-    this._cleanup();
+    // A watch stops; a one-shot request is left to answer, which it applies
+    // if the element is back in the page by then, as when it moves.
+    if (this._watchId !== null) this._cleanup();
     super.disconnectedCallback();
   }
 
   private _cleanup() {
     if (this._watchId !== null) {
-      navigator.geolocation.clearWatch(this._watchId);
+      this.#geolocation?.clearWatch(this._watchId);
       this._watchId = null;
     }
+    this.#request = undefined;
     this._state = "idle";
   }
 
@@ -307,29 +335,26 @@ export class CFLocation extends BaseElement {
    * Request the current location (one-shot)
    */
   requestLocation(): Promise<LocationData | null> {
-    if (!navigator.geolocation) {
-      this._handleError({
-        code: 2,
-        message: "Geolocation is not supported by this browser",
-        PERMISSION_DENIED: 1,
-        POSITION_UNAVAILABLE: 2,
-        TIMEOUT: 3,
-      } as GeolocationPositionError);
+    const geolocation = this.#geolocation;
+    if (!geolocation) {
+      this._handleError(UNSUPPORTED, UNSUPPORTED.message);
       return Promise.resolve(null);
     }
 
-    if (this._state === "requesting") {
+    if (this._state === "requesting" || this._state === "watching") {
       return Promise.resolve(null);
     }
 
+    const request = {};
+    this.#request = request;
     this._state = "requesting";
     this._errorMessage = "";
     this.emit("cf-location-start", { timestamp: Date.now() });
 
     return new Promise((resolve) => {
-      navigator.geolocation.getCurrentPosition(
+      geolocation.getCurrentPosition(
         (position) => {
-          if (!this.isConnected) return;
+          if (!this.#ends(request)) return resolve(null);
           const locationData = this._positionToLocationData(position);
           this._cellController.setValue(locationData);
           this._state = "idle";
@@ -337,7 +362,7 @@ export class CFLocation extends BaseElement {
           resolve(locationData);
         },
         (error) => {
-          if (!this.isConnected) return;
+          if (!this.#ends(request)) return resolve(null);
           this._handleError(error);
           this._state = "error";
           resolve(null);
@@ -355,14 +380,9 @@ export class CFLocation extends BaseElement {
    * Start watching location (continuous mode)
    */
   startWatching(): void {
-    if (!navigator.geolocation) {
-      this._handleError({
-        code: 2,
-        message: "Geolocation is not supported by this browser",
-        PERMISSION_DENIED: 1,
-        POSITION_UNAVAILABLE: 2,
-        TIMEOUT: 3,
-      } as GeolocationPositionError);
+    const geolocation = this.#geolocation;
+    if (!geolocation) {
+      this._handleError(UNSUPPORTED, UNSUPPORTED.message);
       return;
     }
 
@@ -370,19 +390,20 @@ export class CFLocation extends BaseElement {
       return; // Already watching
     }
 
+    this.#request = undefined;
     this._state = "watching";
     this._errorMessage = "";
     this.emit("cf-location-start", { timestamp: Date.now() });
 
-    this._watchId = navigator.geolocation.watchPosition(
+    this._watchId = geolocation.watchPosition(
       (position) => {
-        if (!this.isConnected) return;
+        if (this._state !== "watching") return;
         const locationData = this._positionToLocationData(position);
         this._cellController.setValue(locationData);
         this.emit("cf-location-update", { location: locationData });
       },
       (error) => {
-        if (!this.isConnected) return;
+        if (this._state !== "watching") return;
         this._handleError(error);
         this._cleanup();
         this._state = "error";
@@ -402,6 +423,19 @@ export class CFLocation extends BaseElement {
     this._cleanup();
   }
 
+  /**
+   * Ends `request` as its answer arrives, and returns whether the answer
+   * applies: not when the element stopped waiting for it, by watching or by
+   * stopping, and not when the element is out of the page.
+   */
+  #ends(request: object): boolean {
+    if (this.#request !== request) return false;
+    this.#request = undefined;
+    if (this.isConnected) return true;
+    this._state = "idle";
+    return false;
+  }
+
   private _positionToLocationData(position: GeolocationPosition): LocationData {
     const coords = position.coords;
     return {
@@ -417,36 +451,21 @@ export class CFLocation extends BaseElement {
     };
   }
 
-  private _handleError(error: GeolocationPositionError) {
-    let message: string;
-
-    switch (error.code) {
-      case error.PERMISSION_DENIED:
-        message = "Location permission denied";
-        break;
-      case error.POSITION_UNAVAILABLE:
-        message = "Location unavailable";
-        break;
-      case error.TIMEOUT:
-        message = "Location request timed out";
-        break;
-      default:
-        message = `Location error: ${error.message}`;
-    }
-
+  private _handleError(
+    error: GeolocationPositionError,
+    message = describeGeolocationError(error),
+  ) {
     this._errorMessage = message;
     this.emit("cf-location-error", { error, message });
   }
 
   private _handleButtonClick() {
     if (this.disabled) return;
-
-    if (this.continuous) {
-      if (this._state === "watching") {
-        this.stopWatching();
-      } else {
-        this.startWatching();
-      }
+    // A running watch stops, even after `continuous` is turned off.
+    if (this._state === "watching") {
+      this.stopWatching();
+    } else if (this.continuous) {
+      this.startWatching();
     } else {
       this.requestLocation();
     }
@@ -469,9 +488,6 @@ export class CFLocation extends BaseElement {
   }
 
   private _getButtonIcon(): string {
-    if (this._state === "requesting") {
-      return ""; // Will show spinner instead
-    }
     if (this._state === "watching") {
       return "\u{23F9}"; // Stop
     }
@@ -485,9 +501,6 @@ export class CFLocation extends BaseElement {
   }
 
   private _formatAccuracy(accuracy: number): string {
-    if (accuracy < 10) {
-      return `\u00B1${accuracy.toFixed(0)}m`;
-    }
     if (accuracy < 100) {
       return `\u00B1${accuracy.toFixed(0)}m`;
     }
@@ -539,5 +552,19 @@ export class CFLocation extends BaseElement {
           : ""}
       </div>
     `;
+  }
+}
+
+/** The message shown for a geolocation error. */
+function describeGeolocationError(error: GeolocationPositionError): string {
+  switch (error.code) {
+    case error.PERMISSION_DENIED:
+      return "Location permission denied";
+    case error.POSITION_UNAVAILABLE:
+      return "Location unavailable";
+    case error.TIMEOUT:
+      return "Location request timed out";
+    default:
+      return `Location error: ${error.message}`;
   }
 }
