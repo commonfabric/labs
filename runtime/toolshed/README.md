@@ -343,13 +343,14 @@ transport failures. Malformed error responses use `service-error`.
 Admission uses private tables in the target space's SQLite engine, inside the
 same serialized transaction as its ACL-only public commit. A suggested profile
 is a private row of its own, beside the invitation's, and so is what its preview
-shows: the access, the issuer, and any names. A unique receipt pair consumes one
-use, including when the recipient already has sufficient access. Stronger
-explicit or wildcard access remains intact. Exhaustion, revocation, and
-expiration remove the active verifier; successful receipt pairs remain.
-Expiration is checked on each operation, with lazy physical cleanup. Unredeemed
-retired IDs have secret-free rejection markers for 361 seconds, covering replay
-of every still-fresh accepted create proof.
+reads: the access and any names it returns, and the issuing DID, kept only to
+check that its issuer still owns the space and never returned. A unique receipt
+pair consumes one use, including when the recipient already has sufficient
+access. Stronger explicit or wildcard access remains intact. Exhaustion,
+revocation, and expiration remove the active verifier; successful receipt pairs
+remain. Expiration is checked on each operation, with lazy physical cleanup.
+Unredeemed retired IDs have secret-free rejection markers for 361 seconds,
+covering replay of every still-fresh accepted create proof.
 
 A full SQLite backup includes private invite tables and receipts atomically.
 Restore the complete store; restoring only the graph must not be used to
