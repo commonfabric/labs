@@ -365,6 +365,11 @@ outside both models.
   while the response to a later request, a transact verdict among them, is
   not. Neither model represents request responses, so a response processed
   ahead of an earlier request's is outside both.
+- **A barrier taken from a later response.** `pullToServerHead()` and
+  `serverHeadSeq()` treat an empty-root `graph.query` response as proof that
+  every frame sent before it has been applied. That response carries no sync
+  and is never held, so it can return while those frames still wait for a
+  body (top/2980). It is a request response, and so outside both models.
 - **Recovery after a dropped body.** A frame dropped because its body could
   not be fetched leaves the session behind until its next reconnect, and
   nothing forces one. `SteadyConverges` excludes that state, and the model
