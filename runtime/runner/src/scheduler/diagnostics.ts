@@ -297,7 +297,3 @@ export function handleSchedulerError(
     ...(error.stack ? [`\n${error.stack}`] : []),
   );
 }
-
-export function queueTask(fn: () => void): ReturnType<typeof setTimeout> {
-  return setTimeout(fn, 0);
-}
