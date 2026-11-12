@@ -87,8 +87,8 @@ const ownWriteErrorOf = (error: Error): Error => {
     : new Error(error.message, { cause: error.cause });
 };
 
-/** A request made through a `ResendQueue` that has no answer yet. */
-type Unanswered = {
+/** A request made through a `ResendQueue` that the queue still holds. */
+type Queued = {
   /** Makes the request of the session once. */
   attempt: () => Promise<unknown>;
   answer: PromiseWithResolvers<unknown>;
@@ -101,6 +101,17 @@ type Unanswered = {
    * can take it again.
    */
   ready: Promise<void> | undefined;
+  /**
+   * Whether the session has answered the request, and its caller has that
+   * answer. A queue that repeats keeps such a request while one before it is
+   * unanswered.
+   */
+  answered: boolean;
+  /**
+   * Whether an answered request is owed to the session once more, a request
+   * before it having been made again, until that repeat is answered.
+   */
+  repeat: boolean;
   failures: { ownWrite: number };
 };
 
@@ -113,10 +124,22 @@ type Unanswered = {
  * answer to it, with an error that is no lost connection, with what
  * `readyToRetry()` rejects with, or with the write's own error once its own
  * payload has failed the write `MAX_OWN_WRITE_FAILURES` times.
+ *
+ * A queue that `repeats` is for requests that each build on the ones before,
+ * as watch changes do. Where requests overlap, a later one can be answered
+ * while an earlier one is not. When that earlier one is made again, it lands
+ * after the later one and would undo it, so the queue makes the later one
+ * again behind it. That repeat's answer goes to nobody, the caller having
+ * had the first.
  */
 class ResendQueue {
-  /** The requests not yet answered, in increasing `order`. */
-  readonly #unanswered: Unanswered[] = [];
+  readonly #repeats: boolean;
+
+  /**
+   * The requests not yet answered, and for a queue that repeats the answered
+   * ones behind them, in increasing `order`.
+   */
+  readonly #queue: Queued[] = [];
 
   /**
    * Set while a request the connection lost waits to be made again. Requests
@@ -124,52 +147,61 @@ class ResendQueue {
    */
   #resending: Promise<void> | undefined;
 
+  /** Constructs an instance, which repeats as `options.repeats` says. */
+  constructor(options: { repeats?: boolean } = {}) {
+    this.#repeats = options.repeats === true;
+  }
+
   /**
    * Makes the request `attempt` makes, in its place by `order` among the
    * requests not yet answered, and returns the session's answer to it.
    */
   make<T>(order: number, attempt: () => Promise<T>): Promise<T> {
-    const unanswered: Unanswered = {
+    const queued: Queued = {
       attempt,
       answer: Promise.withResolvers<unknown>(),
       order,
       sent: false,
       ready: undefined,
+      answered: false,
+      repeat: false,
       failures: { ownWrite: 0 },
     };
-    const later = this.#unanswered.findIndex((other) => other.order > order);
-    this.#unanswered.splice(
-      later === -1 ? this.#unanswered.length : later,
-      0,
-      unanswered,
-    );
-    if (this.#resending === undefined) this.#send(unanswered);
-    return unanswered.answer.promise as Promise<T>;
+    const later = this.#queue.findIndex((other) => other.order > order);
+    this.#queue.splice(later === -1 ? this.#queue.length : later, 0, queued);
+    if (this.#resending === undefined) this.#send(queued);
+    return queued.answer.promise as Promise<T>;
   }
 
   /**
-   * Helper for `make()`, which hands `unanswered` to the session and settles
-   * it with the answer, or keeps it to be made again when the connection
-   * lost it.
+   * Helper for `make()`, which hands `queued` to the session and settles it
+   * with the answer, or keeps it to be made again when the connection lost
+   * it. A request made again after its caller had an answer settles nothing.
    */
-  #send(unanswered: Unanswered): void {
-    unanswered.sent = true;
-    unanswered.attempt().then(
+  #send(queued: Queued): void {
+    queued.sent = true;
+    queued.attempt().then(
       (answer) => {
-        this.#forget(unanswered);
-        unanswered.answer.resolve(answer);
+        queued.sent = false;
+        queued.answered = true;
+        queued.repeat = false;
+        queued.answer.resolve(answer);
+        this.#forgetAnswered();
       },
       (error) => {
-        unanswered.sent = false;
+        queued.sent = false;
         try {
-          unanswered.ready = readyAfter(error, unanswered.failures);
+          queued.ready = readyAfter(error, queued.failures);
         } catch (final) {
-          this.#forget(unanswered);
-          unanswered.answer.reject(final);
+          // A repeat that fails for good leaves its caller with the answer
+          // it has.
+          this.#drop(queued);
+          queued.answer.reject(final);
+          this.#forgetAnswered();
           return;
         }
         // `#resendLost()` reads how the wait ends.
-        unanswered.ready.catch(() => {});
+        queued.ready.catch(() => {});
         this.#resending ??= this.#resendLost();
       },
     );
@@ -178,36 +210,64 @@ class ResendQueue {
   /**
    * Helper for `#send()`, which waits until the session can take the
    * requests the connection lost and then sends every request that is not
-   * with the session, in order: those it lost, and those made while they
-   * waited. A drop fails every request it carried before the session is
-   * ready again, so a request lost while another waits joins that wait.
+   * with the session, in order: those it lost, those made while they
+   * waited, and, in a queue that repeats, the answered ones behind them. A
+   * drop fails every request it carried before the session is ready again,
+   * so a request lost while another waits joins that wait.
    */
   async #resendLost(): Promise<void> {
     for (;;) {
-      const lost = this.#unanswered.filter((unanswered) =>
-        unanswered.ready !== undefined
-      );
+      const lost = this.#queue.filter((queued) => queued.ready !== undefined);
       if (lost.length === 0) break;
-      await Promise.all(lost.map(async (unanswered) => {
+      await Promise.all(lost.map(async (queued) => {
         try {
-          await unanswered.ready;
+          await queued.ready;
         } catch (error) {
-          this.#forget(unanswered);
-          unanswered.answer.reject(error);
+          this.#drop(queued);
+          queued.answer.reject(error);
         }
-        unanswered.ready = undefined;
+        queued.ready = undefined;
       }));
     }
     this.#resending = undefined;
-    for (const unanswered of [...this.#unanswered]) {
-      if (!unanswered.sent) this.#send(unanswered);
+    this.#forgetAnswered();
+    // An answered request is made again only behind one made again here.
+    let madeAgain = false;
+    for (const queued of [...this.#queue]) {
+      if (queued.sent) continue;
+      if (queued.answered) {
+        if (!madeAgain && !queued.repeat) continue;
+        queued.repeat = true;
+      }
+      madeAgain = true;
+      this.#send(queued);
     }
   }
 
-  /** Removes `unanswered` from the requests still to be answered. */
-  #forget(unanswered: Unanswered): void {
-    const index = this.#unanswered.indexOf(unanswered);
-    if (index !== -1) this.#unanswered.splice(index, 1);
+  /** Removes `queued` from the queue. */
+  #drop(queued: Queued): void {
+    const index = this.#queue.indexOf(queued);
+    if (index !== -1) this.#queue.splice(index, 1);
+  }
+
+  /**
+   * Drops the answered requests the queue has no more use for: all of them,
+   * unless it repeats, and then those with no unanswered request before
+   * them, which nothing made again can land ahead of. A request owed once
+   * more is kept until that repeat is answered: the session holds what its
+   * latest answer left, so a repeat the connection lost is still owed.
+   */
+  #forgetAnswered(): void {
+    const done = (queued: Queued): boolean => queued.answered && !queued.repeat;
+    if (this.#repeats) {
+      while (this.#queue.length > 0 && done(this.#queue[0])) {
+        this.#queue.shift();
+      }
+      return;
+    }
+    for (let index = this.#queue.length - 1; index >= 0; index--) {
+      if (done(this.#queue[index])) this.#queue.splice(index, 1);
+    }
   }
 }
 
@@ -228,7 +288,9 @@ class ResendQueue {
  * changes in the order they were made, those made again included: none is
  * sent while an earlier one waits to be made again. A watch change replaces
  * or builds on the ones before it, so one made again late would undo a newer
- * one.
+ * one. Where watch changes overlap, a later one answered before an earlier
+ * one is made again behind it, and what its caller passed to take the answer
+ * takes that second answer too.
  *
  * Everything else a session offers passes straight through to `session`.
  */
@@ -241,8 +303,11 @@ export class ResendingSession {
   /** The answer awaited for each commit not yet answered, by `localSeq`. */
   readonly #committing = new Map<number, Promise<AppliedCommit>>();
 
-  /** The session's watch changes, in the order they were made. */
-  readonly #watchChanges = new ResendQueue();
+  /**
+   * The session's watch changes, in the order they were made. A change
+   * answered while an earlier one is not is made again behind that one.
+   */
+  readonly #watchChanges = new ResendQueue({ repeats: true });
 
   /** How many watch changes have been made. */
   #watchChangesMade = 0;

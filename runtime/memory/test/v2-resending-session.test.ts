@@ -432,6 +432,33 @@ describe("resending-session", () => {
       }
     });
 
+    it("leaves the server watching the newer of two overlapping watch sets when the older one's answer was lost and it is made again", async () => {
+      // With watch changes overlapping, the newer set is answered while the
+      // older one is not. The older one made again would be the last word,
+      // so the newer one is made again behind it.
+
+      const t = await connected("watch-overlap");
+      try {
+        t.session.setConcurrentWatchRefresh(true);
+        t.host.loseAnswerToNext("session.watch.set");
+        const olderHandled = t.host.whenHandled("session.watch.set");
+        const older = t.resending.watchSetSync([watch("of:old")]);
+        await olderHandled;
+        const newerHandled = t.host.whenHandled("session.watch.set");
+        const newer = t.resending.watchSetSync([watch("of:new")]);
+        await newerHandled;
+        t.host.drop();
+        await Promise.all([older, newer]);
+
+        expect(t.host.watchSetsSent().at(-1)).toEqual(["of:new"]);
+        expect(
+          t.host.watchSetsSent().filter((set) => set?.[0] === "of:old"),
+        ).toHaveLength(2);
+      } finally {
+        await t.close();
+      }
+    });
+
     it("rejects a commit waiting for the host to come back with the session's close error once the session closes", async () => {
       const t = await connected("closed");
       try {
@@ -601,6 +628,97 @@ describe("resending-session", () => {
 
       expect([await setting, await adding]).toEqual(["set", "added"]);
       expect(t.changed()).toEqual(["set of:old", "set of:old", "add of:new"]);
+    });
+
+    it("makes a watch change that was answered while an earlier one was not again behind that one, and resolves it with its first answer", async () => {
+      const t = scripted();
+      const ready = readiness();
+      const setting = t.resending.watchSetSync([watch("of:old")]);
+      const adding = t.resending.watchAddSync([watch("of:new")]);
+      t.changes[1].answer.resolve("added");
+      expect(await adding).toBe("added");
+      t.changes[0].answer.reject(unanswered(ready.wait));
+      await ready.asked;
+      ready.resolve();
+      await t.whenChanged(4);
+      t.changes[2].answer.resolve("set");
+      t.changes[3].answer.resolve("added again");
+
+      expect(await setting).toBe("set");
+      expect(t.changed()).toEqual([
+        "set of:old",
+        "add of:new",
+        "set of:old",
+        "add of:new",
+      ]);
+    });
+
+    it("makes a repeated watch change once more when the connection loses the repeat", async () => {
+      // The session holds what its latest answer left, which is the earlier
+      // change's, so the repeat is still owed after the drop.
+
+      const t = scripted();
+      const ready = [readiness(), readiness()];
+      void t.resending.watchSetSync([watch("of:old")]).catch(() => {});
+      void t.resending.watchAddSync([watch("of:new")]).catch(() => {});
+      t.changes[1].answer.resolve("added");
+      t.changes[0].answer.reject(unanswered(ready[0].wait));
+      await ready[0].asked;
+      ready[0].resolve();
+      await t.whenChanged(4);
+      t.changes[2].answer.resolve("set");
+      t.changes[3].answer.reject(unanswered(ready[1].wait));
+      await ready[1].asked;
+      ready[1].resolve();
+      await t.whenChanged(5);
+
+      expect(t.changed()).toEqual([
+        "set of:old",
+        "add of:new",
+        "set of:old",
+        "add of:new",
+        "add of:new",
+      ]);
+    });
+
+    it("makes no repeat of a watch change whose earlier neighbor was answered after it", async () => {
+      const t = scripted();
+      const ready = readiness();
+      const setting = t.resending.watchSetSync([watch("of:old")]);
+      const adding = t.resending.watchAddSync([watch("of:new")]);
+      t.changes[1].answer.resolve("added");
+      t.changes[0].answer.resolve("set");
+      await Promise.all([setting, adding]);
+      void t.resending.watchAddSync([watch("of:newest")]).catch(() => {});
+      t.changes[2].answer.reject(unanswered(ready.wait));
+      await ready.asked;
+      ready.resolve();
+      await t.whenChanged(4);
+
+      expect(t.changed()).toEqual([
+        "set of:old",
+        "add of:new",
+        "add of:newest",
+        "add of:newest",
+      ]);
+    });
+
+    it("sends an answered commit no second time behind an earlier commit that is sent again", async () => {
+      // The server answers a commit by its `localSeq` whatever else has
+      // landed, so nothing sent again ahead of it changes its answer.
+
+      const t = scripted();
+      const ready = readiness();
+      void t.resending.transact(commit(1)).catch(() => {});
+      const second = t.resending.transact(commit(2));
+      t.sent[1].answer.resolve(applied(2));
+      await second;
+      t.sent[0].answer.reject(unanswered(ready.wait));
+      await ready.asked;
+      ready.resolve();
+      await t.whenSent(3);
+
+      expect(t.order()).toEqual([1, 2, 1]);
     });
 
     it("sends a commit while a watch change waits to be made again", async () => {
