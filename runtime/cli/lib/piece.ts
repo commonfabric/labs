@@ -1934,6 +1934,18 @@ async function createWithReceipt(
 }
 
 /**
+ * The error reporting that `cf piece new` found no space where it was pointed,
+ * naming the command that creates one.
+ */
+function noSpaceAnswers(error: SpaceNotFoundError): Error {
+  return new Error(
+    `${error.message}. Opening a space never creates one; create one ` +
+      `with: ${cliCommand(["space", "create"])}`,
+    { cause: error },
+  );
+}
+
+/**
  * Creates a new piece from source code and optional input.
  *
  * A `slug` that already points somewhere is refused the way `set-slug`
@@ -1982,13 +1994,7 @@ export async function newPiece(
       );
     }
   } catch (error) {
-    if (error instanceof SpaceNotFoundError) {
-      throw new Error(
-        `${error.message}. Opening a space never creates one; create one ` +
-          `with: ${cliCommand(["space", "create"])}`,
-        { cause: error },
-      );
-    }
+    if (error instanceof SpaceNotFoundError) throw noSpaceAnswers(error);
     throw new Error(
       `Could not initialize the space's default pattern: ${
         describeFailure(error)
@@ -2059,7 +2065,27 @@ export async function newPiece(
           deps,
           boundStart,
         ),
-    );
+    ).catch(async (error) => {
+      // The serving side refuses a space with no history as `forbidden`,
+      // the answer it gives a caller without WRITE, so that the verb is not
+      // an existence oracle. Whether a space exists is an ordinary read, so
+      // the refusal is told apart here, where it is reported, and a name that
+      // reaches no space reads as it does when the client ensures the root.
+      // A read that fails tells nothing apart, and the refusal stands.
+      if (
+        served && error instanceof ServedLifecycleError &&
+        error.code === "forbidden" &&
+        await pieces.runtime.spaceExists(pieces.getSpace()).then(
+          (exists) => !exists,
+          () => false,
+        )
+      ) {
+        throw noSpaceAnswers(
+          new SpaceNotFoundError(pieces.getSpace(), pieces.getSpaceName()),
+        );
+      }
+      throw error;
+    });
     noteWroteTo(config.space);
     return id;
   }
