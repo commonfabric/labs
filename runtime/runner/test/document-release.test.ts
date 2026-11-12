@@ -148,6 +148,7 @@ describe("document-release", () => {
     const lines = stdout.trim().split("\n");
     expect(JSON.parse(lines[lines.length - 1])).toEqual({
       keptWhileHeld: true,
+      keptByKey: true,
       keptOnceCollected: false,
     });
   });

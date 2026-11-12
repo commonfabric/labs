@@ -42,10 +42,13 @@ export const cfcSchemaIsTrue = (schema: JSONSchema): boolean => {
   if (schema === true) {
     return true;
   }
-  return isObjectOrArray(schema) &&
-    Object.keys(schema).every((key) =>
-      cfcSchemaIsInternalKey(key) || key === "default" || key === "$defs"
-    );
+  if (!isObjectOrArray(schema)) return false;
+  for (const key in schema) {
+    if (!cfcSchemaIsInternalKey(key) && key !== "default" && key !== "$defs") {
+      return false;
+    }
+  }
+  return true;
 };
 
 /**
