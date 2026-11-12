@@ -103,6 +103,34 @@ describe("space-invites", () => {
     await client.create(failure.retry);
     expect(requests[1]).toEqual(requests[0]);
   });
+  it("sends an invitation's names in the signed create body and keeps them for an exact retry", async () => {
+    const signer = await Identity.generate();
+    const names = { spaceName: "Garden plans", issuerName: "Pat Example" };
+    const requests: Record<string, unknown>[] = [];
+    const client = new SpaceInviteClient({
+      host: "https://example.com",
+      space: signer.did(),
+      signer,
+      fetch: async (input, init) => {
+        const body = await new Request(input, init).json();
+        requests.push(body);
+        if (requests.length === 1) throw new TypeError("connection closed");
+        return Response.json({ inviteId: body.inviteId, remainingUses: 1 });
+      },
+    });
+    let failure: unknown;
+    try {
+      await client.create({ access: "READ", ttlSeconds: 60, ...names });
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(SpaceInviteCreateError);
+    if (!(failure instanceof SpaceInviteCreateError)) throw failure;
+    expect(requests[0]).toMatchObject(names);
+    expect(failure.retry).toMatchObject(names);
+    await client.create(failure.retry);
+    expect(requests[1]).toEqual(requests[0]);
+  });
   it("retains supplied credentials and refusal codes without enumerating secrets", async () => {
     const signer = await Identity.generate();
     const credentials = createInviteCredentials();
@@ -380,6 +408,15 @@ describe("space-invites", () => {
       expect(posted).toEqual(["redeem"]);
     });
 
+    it("previews over HTTP even with a session, which a previewer has none of", async () => {
+      const { client, sent, posted } = await clientWith(() =>
+        Promise.reject(new Error("a preview must not go on a session"))
+      );
+      const credentials = createInviteCredentials();
+      await client.preview(credentials);
+      expect(sent).toEqual([]);
+      expect(posted).toEqual(["preview"]);
+    });
     it("redeems over HTTP whatever session it was given", async () => {
       const { client, sent, posted } = await clientWith(() =>
         Promise.resolve({})

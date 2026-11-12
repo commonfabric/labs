@@ -5342,7 +5342,9 @@ export class Server {
     return await this.#withSpacePublicationLock(request.space, async () => {
       if (!(await this.#spaceStoreExists(request.space))) {
         throw new SpaceInviteError(
-          request.operation === "redeem" ? "invite-unavailable" : "not-owner",
+          request.operation === "redeem" || request.operation === "preview"
+            ? "invite-unavailable"
+            : "not-owner",
         );
       }
       const engine = await this.#openEngine(request.space);
@@ -13381,12 +13383,16 @@ const parseDecodedClientMessage = (
     typeof parsed.sessionId === "string" &&
     isFabricPlainObject(parsed.invite)
   ) {
-    // Redemption is refused here: it has no session to arrive on.
+    // Redemption and preview are refused here: neither has a session to
+    // arrive on.
     const invite = parseInviteOperation(
       parsed.invite.operation,
       parsed.invite.body,
     );
-    if (invite === null || invite.operation === "redeem") return null;
+    if (
+      invite === null || invite.operation === "redeem" ||
+      invite.operation === "preview"
+    ) return null;
     return {
       type: "space.invite",
       requestId: parsed.requestId,

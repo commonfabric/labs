@@ -1938,12 +1938,15 @@ interface SpaceInviteRequest {
 
 Semantics:
 
-- `redeem` is not among the operations: the identity redeeming holds no grant
-  on the space yet, and opening a session needs READ, so redemption travels
-  as the `invite` of a `session.open` (section 4.1.2). A `space.invite` naming
-  `redeem`, an unknown operation, or a body that is not exactly the
-  operation's fields gets the refusal any unreadable message gets (section
-  4.2.1)
+- `redeem` and `preview` are not among the operations. The identity redeeming
+  holds no grant on the space yet, and opening a session needs READ, so
+  redemption travels as the `invite` of a `session.open` (section 4.1.2). A
+  preview always travels as its signed HTTP route, whoever sends it, including
+  a principal that has a session or has already redeemed, so one transport
+  serves the client deciding whether to redeem. A `space.invite` naming
+  `redeem` or `preview`, an unknown operation, or a body that is not exactly
+  the operation's fields gets the refusal any unreadable message gets
+  (section 4.2.1)
 - a request naming a session the connection does not hold gets a
   `SessionError`
 - the service runs the operation as the DID the session was opened as, with
