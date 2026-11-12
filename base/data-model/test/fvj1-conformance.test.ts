@@ -45,7 +45,11 @@ const STUB_CODEC_CLASSES: ReadonlySet<string> = new Set([
   "FabricSet",
 ]);
 
-/** The classes that bind no codec, and so have no text. */
+/**
+ * The classes that bind no codec, and so have no text.
+ *
+ * TODO(danfuzz): Remove, with its use below, once `FabricRegExp` is deleted.
+ */
 const NO_CODEC_CLASSES: ReadonlySet<string> = new Set(["FabricRegExp"]);
 
 /** One entry of the fixture, as `fvj1-conformance.md` defines it. */

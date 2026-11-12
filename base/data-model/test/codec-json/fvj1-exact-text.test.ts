@@ -63,7 +63,12 @@ type StubbedClass = {
   readonly stubbed: () => FabricValue;
 };
 
-/** A class that binds no codec, so that a value of it has no text. */
+/**
+ * A class that binds no codec, so that a value of it has no text.
+ *
+ * TODO(danfuzz): Remove, with the `noCodec` branch of the class cases, once
+ * `FabricRegExp` is deleted.
+ */
 type NoCodecClass = {
   /** Makes a value of the class. */
   readonly noCodec: () => FabricValue;

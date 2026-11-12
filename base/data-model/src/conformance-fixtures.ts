@@ -161,7 +161,12 @@ export type ClassCase = {
 // Cases
 //
 
-/** Why the classes that bind no codec have no cases. */
+/**
+ * Why the classes that bind no codec have no cases.
+ *
+ * TODO(danfuzz): Remove, with the `excluded` entries naming it, once
+ * `FabricRegExp` is deleted.
+ */
 export const NO_CODEC_EXCLUSION = "It binds no codec.";
 
 /** Why the classes whose codecs are stubs have no cases. */
@@ -858,6 +863,8 @@ function mutableEngineUnclaiming(
     for (const cls of claiming) leftOut.add(cls);
   }
   const kept = (cls: Constructor) => !leftOut.has(cls);
+  // TODO(danfuzz): Once `FabricRegExp` is deleted, filter the two
+  // `codecClasses()` lists here directly.
   const registry = createBaseJsonRegistry().extend(
     codecClassesFor(JSON_FORMAT).filter(kept),
   );
@@ -872,6 +879,8 @@ function mutableEngineUnclaiming(
  */
 function classesClaiming(tag: string): Constructor[] {
   const base = createBaseJsonRegistry();
+  // TODO(danfuzz): Once `FabricRegExp` is deleted, filter the two
+  // `codecClasses()` lists here directly.
   return codecClassesFor(JSON_FORMAT).filter((cls) =>
     base.extend(cls).codecFromTag(tag) !== base.codecFromTag(tag)
   );

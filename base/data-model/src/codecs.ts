@@ -47,6 +47,9 @@ import { codecClasses as instanceClasses } from "./fabric-instances/impl.ts";
  * codec for `format`, under `[CODEC]` or under the format's own symbol. A class
  * supplying neither is left out, where `CodecRegistry.registerClass()` would
  * refuse it.
+ *
+ * TODO(danfuzz): Once `FabricRegExp` is deleted, drop this, and have each
+ * caller register the two `codecClasses()` lists directly.
  */
 export function codecClassesFor(
   format: WireFormat<unknown>,

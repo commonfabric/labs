@@ -127,6 +127,9 @@ function expectEveryPathHolds(value: FabricValue, other: FabricValue): void {
 
 describe("codecs", () => {
   describe("codecClassesFor()", () => {
+    // TODO(danfuzz): Remove, with `codecClassesFor()`, once `FabricRegExp` is
+    // deleted.
+
     for (
       const [name, format, base] of [
         ["JSON", JSON_FORMAT, createBaseJsonRegistry()],

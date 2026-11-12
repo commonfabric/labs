@@ -47,7 +47,11 @@ const FIXTURE_URL = new URL(
  */
 const STUB_CODEC_CLASSES = ["FabricMap", "FabricSet"] as const;
 
-/** The classes that bind no codec, and so have no text. */
+/**
+ * The classes that bind no codec, and so have no text.
+ *
+ * TODO(danfuzz): Remove, with its use below, once `FabricRegExp` is deleted.
+ */
 const NO_CODEC_CLASSES = ["FabricRegExp"] as const;
 
 /** One entry of the fixture, as `hash-conformance.md` defines it. */

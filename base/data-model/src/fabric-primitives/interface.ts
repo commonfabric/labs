@@ -6,6 +6,9 @@
  * not match its entry in another. Adding a primitive means adding to each, and
  * they sit together so that one visit does it.
  *
+ * TODO(danfuzz): Once `FabricRegExp` is deleted, say that each vocabulary holds
+ * one entry per class.
+ *
  * The schema `type` vocabulary is the one that is elsewhere, in `api.ts`. A
  * pattern compiles against that module, which can import nothing, and the
  * `FabricPrimitive` declaration there names the vocabulary's type.
