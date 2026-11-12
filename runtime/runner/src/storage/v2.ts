@@ -7194,16 +7194,15 @@ export class SpaceReplica
     try {
       await this.#operationWatchRemovals.get(watchId);
       const { session } = await this.#activeSessionHandle();
-      const { view, precedingSyncs, sync } = await session.watchAddSync([{
+      const { view } = await session.watchAddSync([{
         id: watchId,
         kind: "operation",
         query,
-      }]);
+      }], (mutation) => this.#integrateWatchMutation(mutation));
       if (this.#closed) {
         view.close();
         throw new Error("memory replica closed");
       }
-      this.#integrateWatchMutation(view, precedingSyncs, sync);
     } catch (error) {
       callbacks.delete(callback);
       if (callbacks.size === 0) this.#operationSinks.delete(watchId);
@@ -7245,14 +7244,11 @@ export class SpaceReplica
   async #removeOperationWatch(watchId: string): Promise<void> {
     try {
       const { session } = await this.#activeSessionHandle();
-      const { view, precedingSyncs, sync } = await session.watchRemoveSync([
-        watchId,
-      ]);
-      if (this.#closed) {
-        view.close();
-        return;
-      }
-      this.#integrateWatchMutation(view, precedingSyncs, sync);
+      const { view } = await session.watchRemoveSync(
+        [watchId],
+        (mutation) => this.#integrateWatchMutation(mutation),
+      );
+      if (this.#closed) view.close();
     } catch (error) {
       if (!this.#closed) {
         console.warn("failed to remove operation watch", error);
@@ -8526,22 +8522,19 @@ export class SpaceReplica
     const roots = released.map((root) => root.address);
     this.#onWatchesReleased?.(roots);
     try {
-      const { view, precedingSyncs, sync } = await session.watchRemoveSync(
-        watchIds,
-      );
-      if (this.#closed) {
-        view.close();
-        return { released: roots, deferred };
-      }
-      // A document something began to hold while the removal was on its way
-      // keeps its value and is watched again on its own; the answer to that
-      // watch brings it up to date.
-      const { sync: applied, held } = this.#keepHeld(
-        this.#withoutLocalSessionDocuments(sync),
-      );
-      this.#integrateWatchMutation(view, precedingSyncs, applied);
-      this.#forgetRemoved(applied.removes);
-      for (const remove of held) this.#watchAgain(remove);
+      const { view } = await session.watchRemoveSync(watchIds, (mutation) => {
+        if (this.#closed) return;
+        // A document something began to hold while the removal was on its
+        // way keeps its value and is watched again on its own; the answer to
+        // that watch brings it up to date.
+        const { sync: applied, held } = this.#keepHeld(
+          this.#withoutLocalSessionDocuments(mutation.sync),
+        );
+        this.#integrateWatchMutation({ ...mutation, sync: applied });
+        this.#forgetRemoved(applied.removes);
+        for (const remove of held) this.#watchAgain(remove);
+      });
+      if (this.#closed) view.close();
     } catch (error) {
       if (!this.#closed) {
         logger.warn("release-watches-failed", () => [
@@ -8671,17 +8664,17 @@ export class SpaceReplica
   }
 
   /**
-   * Integrates the answer to a watch mutation: the frames that arrived ahead
-   * of it, then its own by way of `applyResponse`, then the view's later frames
-   * as they come.
+   * Integrates the answer to a watch mutation, unless the replica has closed:
+   * the frames that arrived ahead of it, then its own by way of
+   * `applyResponse`, then the view's later frames as they come. The mutation's
+   * `consume` calls this, so that the later frames follow the answer.
    */
   #integrateWatchMutation(
-    view: MemoryV2Client.WatchView,
-    precedingSyncs: readonly SessionSync[],
-    sync: SessionSync,
+    { view, precedingSyncs, sync }: MemoryV2Client.WatchMutationResult,
     applyResponse: (frame: SessionSync) => void = (frame) =>
       this.#applySessionSync(frame, "integrate"),
   ): void {
+    if (this.#closed) return;
     this.#watchView = view;
     for (const precedingSync of precedingSyncs) {
       this.#applySessionSync(precedingSync, "integrate");
@@ -9276,56 +9269,66 @@ export class SpaceReplica
         },
       }));
 
-      // Both sub-spans record in `finally` blocks, as `total` below does: a
-      // refresh that fails inside the request or inside application still
-      // paid for it, and a success-only span would leave that share in
-      // `total` alone, so the halves would not add up across outcomes.
+      // The request's span ends where application begins, and both record
+      // whatever the outcome, as `total` below does: a refresh that fails
+      // inside the request or inside application still paid for it, and a
+      // success-only span would leave that share in `total` alone, so the
+      // halves would not add up across outcomes.
       const watchAddStart = performance.now();
-      let mutation: MemoryV2Client.WatchMutationResult;
+      let answered = false;
+      const integrate = (
+        { view, precedingSyncs, sync }: MemoryV2Client.WatchMutationResult,
+      ): void => {
+        answered = true;
+        logger.time(watchAddStart, "watchRefresh", "watchAddSync");
+        if (this.#closed) return;
+        this.#watchView = view;
+        const applyStart = performance.now();
+        try {
+          for (const precedingSync of precedingSyncs) {
+            this.#applySessionSync(precedingSync, "integrate");
+          }
+          this.#applySessionSync(sync, type);
+          // deno-coverage-ignore-start -- the client's own view has applied
+          // every frame handed over here, so only an apply bug lands here
+        } catch (error) {
+          // The frame failed to apply, so this refresh's view never gets a
+          // consumer; without a close it leaks when a later refresh
+          // overwrites `#watchView`.
+          view.close();
+          throw error;
+        } finally {
+          // deno-coverage-ignore-stop
+          logger.time(applyStart, "watchRefresh", "applySessionSync");
+        }
+        this.#consumeWatchView(view);
+      };
+      let view: MemoryV2Client.WatchView;
       try {
-        mutation = await session.watchAddSync(watches);
+        ({ view } = await session.watchAddSync(watches, integrate));
       } catch (error) {
         // An ACL verdict can terminate the session while this request is in
         // flight, and the request may be the only load the space sees, so its
         // failure is what consumes the remount. The request is made once more
         // on the remounted session, which admits or refuses it against the
-        // ACL as it now stands.
-        if (!this.#remountedSince(session)) throw error;
+        // ACL as it now stands. A failure to integrate the answer is no such
+        // failure.
+        if (answered || !this.#remountedSince(session)) throw error;
         ({ session } = await this.#activeSessionHandle());
         session.setConcurrentWatchRefresh?.(
           this.#settings.experimentalConcurrentWatchRefresh === true,
         );
-        mutation = await session.watchAddSync(watches);
+        ({ view } = await session.watchAddSync(watches, integrate));
       } finally {
-        logger.time(watchAddStart, "watchRefresh", "watchAddSync");
+        if (!answered) {
+          logger.time(watchAddStart, "watchRefresh", "watchAddSync");
+        }
       }
-      const { view, precedingSyncs, sync } = mutation;
 
       if (this.#closed) {
         view.close();
         return { error: toConnectionError(new Error("memory replica closed")) };
       }
-
-      this.#watchView = view;
-      const applyStart = performance.now();
-      try {
-        for (const precedingSync of precedingSyncs) {
-          this.#applySessionSync(precedingSync, "integrate");
-        }
-        this.#applySessionSync(sync, type);
-        // deno-coverage-ignore-start -- the client's own view has applied
-        // every frame handed over here, so only an apply bug lands here
-      } catch (error) {
-        // The frame failed to apply, so this refresh's view never gets a
-        // consumer; without a close it leaks when a later refresh
-        // overwrites `#watchView`.
-        view.close();
-        throw error;
-      } finally {
-        // deno-coverage-ignore-stop
-        logger.time(applyStart, "watchRefresh", "applySessionSync");
-      }
-      this.#consumeWatchView(view);
       return { ok: {} };
     } catch (error) {
       return { error: toPullError(error) };
@@ -11458,24 +11461,27 @@ export class SpaceReplica
           }
           // Read when the request goes out, since an earlier mutation can hold
           // it back while a frame changes what this replica holds.
-          const { view, precedingSyncs, sync } = await session.watchSetSync(
+          const { view } = await session.watchSetSync(
             undefined,
             () => this.holdings(),
+            undefined,
+            undefined,
+            (mutation) => {
+              if (this.#closed) return;
+              this.#noteAuthorizationStatus({ ok: {} });
+              for (const upsert of mutation.sync.upserts) {
+                carried.add(this.#docKeyOf(upsertAddress(upsert)));
+              }
+              this.#integrateWatchMutation(
+                mutation,
+                (frame) => this.#applyPushedFrame(frame),
+              );
+            },
           );
           if (this.#closed) {
             view.close();
             return;
           }
-          this.#noteAuthorizationStatus({ ok: {} });
-          for (const upsert of sync.upserts) {
-            carried.add(this.#docKeyOf(upsertAddress(upsert)));
-          }
-          this.#integrateWatchMutation(
-            view,
-            precedingSyncs,
-            sync,
-            (frame) => this.#applyPushedFrame(frame),
-          );
         } catch (error) {
           if (this.#closed) return;
           const pullError = toPullError(error);
