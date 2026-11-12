@@ -213,12 +213,14 @@ describe("scheduler-event-loading-read", () => {
 
   /**
    * Queues `eventCell`'s event on the reader, served when `outcomes` is
-   * given, which then collects the failure outcomes the event reports.
+   * given, which then collects the failure outcomes the event reports. A
+   * client event is sent with `retries: false` when `oneShot` is set.
    * Resolves with the status of the transaction the event first settles on.
    */
   function send(
     eventCell: Cell<number>,
     outcomes?: ServedEventFailureOutcome[],
+    { oneShot = false }: { oneShot?: boolean } = {},
   ): Promise<string> {
     const settled = Promise.withResolvers<string>();
     const onCommit = (tx: IExtendedStorageTransaction) =>
@@ -227,7 +229,7 @@ describe("scheduler-event-loading-read", () => {
       reader.scheduler.queueEvent(
         eventCell.getAsNormalizedFullLink(),
         1,
-        undefined,
+        oneShot ? false : undefined,
         onCommit,
       );
     } else {
@@ -340,6 +342,53 @@ describe("scheduler-event-loading-read", () => {
       expect(errors).toEqual([]);
     });
 
+    it("commits what a one-shot read while the load was in flight, since it runs no second time", async () => {
+      // A `retries: false` event is not run again, so withdrawing its run
+      // would lose the event; it ends on its one run, as one whose read
+      // nothing was loading for does.
+
+      const { holder, log, eventCell, store } = await standUp(
+        "client-one-shot",
+        ["a", "b", "c"],
+      );
+      const errors: Error[] = [];
+      reader.scheduler.onError((error) => errors.push(error));
+      const { reads, firstRun } = addAppendingHandler(holder, log, eventCell);
+      holdReaderSyncFor(store.getAsNormalizedFullLink().id);
+
+      const status = send(eventCell, undefined, { oneShot: true });
+      await firstRun;
+
+      expect(await status).toBe("done");
+      expect(reads).toEqual([[]]);
+      expect(log.get()).toEqual([""]);
+      expect(errors).toEqual([]);
+    });
+
+    it("reports the error a one-shot threw on what it read while the load was in flight", async () => {
+      const { holder, log, eventCell, store } = await standUp(
+        "client-one-shot-throws",
+        ["a", "b", "c"],
+      );
+      const errors: Error[] = [];
+      reader.scheduler.onError((error) => errors.push(error));
+      const { runs, firstRun } = addAppendingHandler(
+        holder,
+        log,
+        eventCell,
+        offersSchemaWithoutDefault,
+      );
+      holdReaderSyncFor(store.getAsNormalizedFullLink().id);
+
+      const status = send(eventCell, undefined, { oneShot: true });
+      await firstRun;
+
+      expect(await status).not.toBe("done");
+      expect(runs.count).toBe(1);
+      expect(log.get()).toBeUndefined();
+      expect(errors.map((error) => error.name)).toEqual(["TypeError"]);
+    });
+
     it("commits only the stored value of a document it read while loading in a space it wrote", async () => {
       // The commit carries the run's reads in the space it wrote, and the
       // store refuses the one of a document it has a later value of.
@@ -364,6 +413,22 @@ describe("scheduler-event-loading-read", () => {
   });
 
   describe("a served dispatch", () => {
+    // A served event's final callback is what tells the drain its copy has
+    // ended, and the drain queues the entry again once it has. So a run
+    // withdrawn and parked must not settle the callback until the run that
+    // follows it does.
+
+    /**
+     * Whether `status` has settled once every turn the runtime has queued
+     * has run, with no time passing.
+     */
+    const settledYet = async (status: Promise<string>): Promise<boolean> => {
+      let settled = false;
+      status.then(() => (settled = true), () => (settled = true));
+      await clock.settle();
+      return settled;
+    };
+
     it("withdraws the run that read a loading document through the piece, and runs it again once, after the load lands", async () => {
       const { holder, log, eventCell, store } = await standUp("served", [
         "a",
@@ -376,11 +441,12 @@ describe("scheduler-event-loading-read", () => {
       const outcomes: ServedEventFailureOutcome[] = [];
       const status = send(eventCell, outcomes);
       await firstRun;
-      expect(await status).not.toBe("done");
+      expect(await settledYet(status)).toBe(false);
       expect(reads).toEqual([[]]);
       expect(log.get()).toBeUndefined();
       release();
 
+      expect(await status).toBe("done");
       await reader.idle();
       expect(reads).toEqual([[], ["a", "b", "c"]]);
       expect(log.get()).toEqual(["a,b,c"]);
@@ -403,10 +469,11 @@ describe("scheduler-event-loading-read", () => {
       const outcomes: ServedEventFailureOutcome[] = [];
       const status = send(eventCell, outcomes);
       await firstRun;
-      expect(await status).not.toBe("done");
+      expect(await settledYet(status)).toBe(false);
       expect(log.get()).toBeUndefined();
       release();
 
+      expect(await status).toBe("done");
       await reader.idle();
       expect(runs.count).toBe(2);
       expect(reads).toEqual([["a", "b", "c"]]);

@@ -2929,33 +2929,39 @@ export async function dispatchQueuedEvent(state: {
       // it wrote to the reads it made there. Any other such read withdraws
       // the run, which runs again once those loads settle, and a load the
       // event already waited for does not withdraw it twice
-      // (`unawaitedLoadKeys`).
-      const loadingReads =
-        withdrawsNotRun && tx.dispatchedHandlerNotRun === undefined
-          ? state.unawaitedLoadKeys(
-            queuedEvent,
-            loadingReadKeysIn(
-              state.runtime,
-              tx,
-              served !== undefined
-                ? (space) => space === queuedEvent.eventLink.space
-                : (space) =>
-                  tx.tx.getWriteTargetSpaces?.().includes(space) ?? false,
-            ),
-          )
-          : [];
+      // (`unawaitedLoadKeys`). A client one-shot (`retries: false`) is not
+      // run again, so withdrawing it would lose the event: it ends on this
+      // run, as it would have with nothing in flight.
+      const loadingReads = withdrawsNotRun &&
+          tx.dispatchedHandlerNotRun === undefined &&
+          (served !== undefined || retry)
+        ? state.unawaitedLoadKeys(
+          queuedEvent,
+          loadingReadKeysIn(
+            state.runtime,
+            tx,
+            served !== undefined
+              ? (space) => space === queuedEvent.eventLink.space
+              : (space) =>
+                tx.tx.getWriteTargetSpaces?.().includes(space) ?? false,
+          ),
+        )
+        : [];
       if (loadingReads.length > 0) {
         const reason = `the run read ${loadingReads.length} document(s) ` +
           `still loading (${loadingReads.join(", ")})`;
         if (served === undefined) {
           // The client arm below parks on the run's loads.
-          if (retry) state.noteLineageRerun(tx);
+          state.noteLineageRerun(tx);
           tx.dispatchedHandlerNotRun = { reason };
         } else {
           // The served entry is requeued here with its carriage and parked
           // on those loads, rather than left to the drain, so that it runs
           // again once they settle and a load that fails defers it as one at
-          // the preflight does.
+          // the preflight does. As after a RetryImmediately, the requeued
+          // event carries the final callback and the staged work on to the
+          // run that follows: the drain reads that callback as this copy's
+          // end, and queues the entry again once it has heard it.
           state.noteLineageRerun(tx);
           if (tx.status().status === "ready") {
             tx.abort(new Error(`served run ${reason}`));
@@ -2963,12 +2969,6 @@ export async function dispatchQueuedEvent(state: {
           state.parkHeadEventForLoads(
             requeueToRunAgain(),
             loadingReads,
-          );
-          runFinalCommitCallback();
-          tx.abandonStagedWork(
-            eventAbandonError(
-              "served run re-runs once the documents it read have loaded",
-            ),
           );
           return;
         }
