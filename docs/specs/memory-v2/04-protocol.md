@@ -902,7 +902,7 @@ descriptor's `invite`. Both sides refuse anything else there, and the refusal
 is the one a string or a number in that position gets.
 
 The value codec that decodes a frame builds class instances as well as
-records: a `FabricBytes`, a `FabricLink`, a `FabricRegExp`, a
+records: a `FabricBytes`, a `FabricLink`, a `FabricHash`, a
 `FabricError`. None of those carries properties, so reading named fields
 off one reads nothing at all. The shape check at the position is what
 settles whether a value belongs there; the field checks that follow it
