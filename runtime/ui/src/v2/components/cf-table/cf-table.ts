@@ -204,11 +204,12 @@ export class CFTable extends BaseElement {
   override connectedCallback() {
     super.connectedCallback();
     const document = this.ownerDocument;
+    const window = document.defaultView ?? globalThis;
     const root = this.getRootNode();
-    const styled = root instanceof ShadowRoot ? root : document;
+    const styled = root instanceof window.ShadowRoot ? root : document;
     let sheet = rowStyleSheets.get(document);
     if (!sheet) {
-      sheet = new (document.defaultView ?? globalThis).CSSStyleSheet();
+      sheet = new window.CSSStyleSheet();
       sheet.replaceSync(ROW_STYLES);
       rowStyleSheets.set(document, sheet);
     }

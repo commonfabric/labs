@@ -129,6 +129,19 @@ describe("CFToolCall", () => {
       );
     });
 
+    it("shows a `content` output as indented JSON of its parts", async () => {
+      const parts = [{ type: "text", text: "Sunny" }];
+      const element = await toolCallWith({
+        expanded: true,
+        // @ts-expect-error The AI SDK's `content` output, which the declared
+        // output type omits.
+        result: resultWith({ type: "content", value: parts }),
+      });
+      expect(text(element, ".tool-section-content")[1]).toBe(
+        JSON.stringify(parts, null, 2),
+      );
+    });
+
     it("shows an output that is not a `{ type, value }` wrapper as indented JSON of itself", async () => {
       const output = { type: "forecast", temperature: 21 };
       const element = await toolCallWith({

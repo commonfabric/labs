@@ -13,7 +13,13 @@ import { applyThemeToElement, type CFTheme } from "../theme-context.ts";
  * result in `value`. The runner wraps a result as `json`, and a failure as
  * `error-text`.
  */
-const OUTPUT_TYPES = new Set(["text", "json", "error-text", "error-json"]);
+const OUTPUT_TYPES = new Set([
+  "text",
+  "json",
+  "error-text",
+  "error-json",
+  "content",
+]);
 
 /**
  * CFToolCall - Expandable tool call display component
