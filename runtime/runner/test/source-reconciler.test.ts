@@ -1262,21 +1262,35 @@ describe("piece source reconciliation", () => {
           });
         });
 
-        it("loads the source it runs once to decide an offer that confirmation makes earlier", async () => {
-          // The offer is later than the running source when this pass begins,
-          // so whether this runtime can load that source is asked only once the
-          // commit finds the offer earlier, and that commit is made again with
-          // the answer.
+        it("loads the source it runs once to decide an offer that confirmation makes earlier only at its commit", async () => {
+          // The confirmation lands after the pass has read the history and
+          // before its commit, so the pass has not asked whether this runtime
+          // can load the running source. The commit that finds the offer
+          // earlier declines, and is made again with the answer.
 
           const { piece, identities, offer } = await followingPiece();
           await offer({ marker: "v2", releasedAt: EARLIER });
+          let prepared = false;
+          let confirmed = false;
           const sync = runtime.runner.syncStoredPieceCells.bind(runtime.runner);
-          using _overtaken = stub(
+          using _prepared = stub(
             runtime.runner,
             "syncStoredPieceCells",
             async (...args: Parameters<typeof sync>) => {
-              await confirmElsewhere(piece, identities.v2, LATER);
-              return sync(...args);
+              await sync(...args);
+              prepared = true;
+            },
+          );
+          const edit = runtime.editWithRetry.bind(runtime);
+          using _overtaken = stub(
+            runtime,
+            "editWithRetry",
+            async (...args: Parameters<typeof edit>) => {
+              if (prepared && !confirmed) {
+                confirmed = true;
+                await confirmElsewhere(piece, identities.v2, LATER);
+              }
+              return edit(...args);
             },
           );
           using loads = spy(runtime.patternManager, "loadPatternByIdentity");
@@ -1285,6 +1299,7 @@ describe("piece source reconciliation", () => {
             outcome: "ahead",
             running: "v2",
           });
+          expect(confirmed).toBe(true);
           expect(
             loads.calls.filter((call) => call.args[0] === identities.v2),
           ).toHaveLength(1);
