@@ -315,6 +315,16 @@ answer goes to the specification with the document.
     are withdrawn, which leaves it visible that the write did not happen,
     as it is today; a child's argument and an effect's request take the
     error state.
+38. **What a handler binding copies** (`footprint-analysis.md`, owner
+    question 3 and §8.5). The language subset copies a captured data value
+    into the binding. Today an inline handler's lowering copies the scalar
+    paths the handler reads, which is equal, but a handler applied to its
+    state is bound by reference, and a container the handler uses whole
+    stays a link. With the copy, the binding body reads those paths and
+    their label joins everything else it returns and writes. This is wider
+    than today and is not one of the two exceptions. *Assumed:* the copy
+    stands. Binding a container by reference is equal to today, and makes
+    two bindings to equal records stored in two places two streams.
 
 ## Open, and not needing the owner
 
@@ -348,31 +358,20 @@ documents asked for, and five rulings written in. The other six documents
 do not agree with it yet. Each list is the brief for that document's pass,
 beside the findings of the cross-read record that name the document.
 
-**`footprint-analysis.md`**
+**`plan-and-label-templates.md`**, from the footprint pass
+(`footprint-analysis.md`, request 16): six things the analysis produces
+that the record cannot express.
 
-- §1.1 and the requests of §13: the body record has `computed` and
-  `envelopes`, and an entry of `handles` carries the read envelope.
-- §1.4, §3.7, §7.2: "never wider than today" holds over runs that return
-  normally; a run that fails carries the static entries (ruled).
-- Notation and §12.3: a hop through a link is not a path segment in the
-  plan. A slot path crosses a link (§2.5 of the plan document).
-- §7.1, §8.4: `resolveAsCell()`, `spaceOf`, `equals`, `principalOf`, and
-  the operand of an access-list read record a resolved `identity` when the
-  conditions of §7.2 hold. The document has to state that condition.
-- §7.3, §7.5: the envelope is a schema on the `handles` entry; `sample()`
-  sets the slot's sampled flag.
-- §5.1, §5.3: a widening lists several slots and can name a handle.
-- §6.2 to §6.5: the write target through a handle, the two forms of write
-  envelope, a reference inside a written value, and a materializer's
-  result read through an `operation` slot.
-- §3.8, §8.3: an effect request keeps the reference rule and cites §3.14
-  of the plan document for the egress check.
-- §8.1, §8.4: a computed `inSpace` value has a form; `spaceDeleted` is a
-  dynamic read; `resultOwnerOf` has a row; a journaled label-metadata
-  observation is its own kind of dynamic read.
-- §9.2: body narrowing holds for computed inputs.
-- Findings F10, F11, F13, and F16 to F21, which are internal to the
-  document or wait on nothing.
+- A `shape` observation at a position that holds a handle: whether a
+  handle is present observes the position, and every class but `identity`
+  resolves through a link at the last segment.
+- A widening on a computed input, which `Widening.slots` cannot name.
+- A write through `h.resolveAsCell()`, which lands where the resolution
+  ends and not in the cell `h` links to.
+- A handle found by a dynamic read, which has no slot for an entry of
+  `handles` to name.
+- The captures of an inline pattern instantiated in a body (K12).
+- `equalLinks`, which has no row among the context reads.
 
 **`execution-and-storage.md`**
 
@@ -405,6 +404,10 @@ beside the findings of the cross-read record that name the document.
   unsound and is replaced there.
 - Section 3 of the record: findings 1, 2, 3, 5, 6, 7, 10, 11, 12, 13, 18,
   21, and 26.
+- From the footprint pass: the body is handed every handle its record
+  names, and the resolved reference for a resolved entry; stand-ins for
+  `shape`, `enumeration`, `identity`, and reference positions in an
+  argument and in a binding's copy.
 
 **`scheduler-and-serving-loop.md`**
 
@@ -427,6 +430,8 @@ beside the findings of the cross-read record that name the document.
 - §2.5, §6.7: `navigateTo` on a client (ruled).
 - §7: a materializer's result through an `operation` slot.
 - Section 3 of the record: findings 1, 3, 8, 9, 14, 19, 20, 23, and 24.
+- From the footprint pass: open question 24 is answered in
+  `footprint-analysis.md` §8.5; §5.3 does not order by a read envelope.
 
 **`builtin-inventory.md`**
 
@@ -438,6 +443,8 @@ beside the findings of the cross-read record that name the document.
 - "Context reads": `resultOwnerOf`, the resolved reads, `spaceDeleted`,
   and journaled label-metadata reads.
 - Open questions 10 and 11, which the plan document answers.
+- "An instantiation request from a handler": "whether the value is copied
+  or is a cell handle" against the reference rule.
 
 **`language-subset.md`**
 
@@ -446,6 +453,10 @@ beside the findings of the cross-read record that name the document.
 - §5.4, §10.3: a widening covers the entries it replaced.
 - §4.4.1, §4.6: the naming rule of §1.3 of the plan document.
 - Open questions 9 and 10.
+- §5.2: whether a binding copies the whole value or the paths the handler
+  reads (see question 38). §7.8: what a kind test or a string conversion
+  sees at an `unknown` data position. §10.3: `footprint:widened` names one
+  input path where a widening covers several entries or a handle.
 
 **The overview**
 
@@ -455,6 +466,9 @@ beside the findings of the cross-read record that name the document.
 - "Pull and dependency cones": the widening sentence.
 - "What is stored" and the example: several documents.
 - Clients: the `navigateTo` exception.
+- "Where footprint analysis gives up it widens a static slot, and no
+  dynamic tracking is involved" does not hold for a handle the analysis
+  loses.
 
 ### Found while correcting the first four documents
 
@@ -464,10 +478,6 @@ These are not in the cross-read record. Each is left as it was found.
   catalog entry. That document also does not say whether a cell handle
   type is a data type or a code type, which its rule for imported
   signatures depends on.
-- **A computation that reads its own write target.**
-  `footprint-analysis.md` §6.6 says it breaks idempotency whatever the
-  data; `scheduler-and-serving-loop.md` §8.2 says a write that normalizes
-  the value it reads settles in two evaluations.
 - **The overview** still says a `map` element is a cone with a key, where
   an element body is one or more cones; that the scheduler's rule P7
   applies to cycles, where the proposal fails the cone at the bound; that
@@ -478,10 +488,8 @@ These are not in the cross-read record. Each is left as it was found.
 - **Wording that the pass left uneven.** `plan-and-label-templates.md` now
   calls the callback of `minBy`, `maxBy`, and the indexes the key
   function; `language-subset.md` and `builtin-inventory.md` say selector.
-  `footprint-analysis.md` §8.3 quotes a sentence the inventory no longer
-  has, and its request 13 names bodies B2 and B3 of an example that is
-  renumbered. `language-subset.md` cites open questions of the newer
-  documents by number.
+  `language-subset.md` cites open questions of the newer documents by
+  number.
 
 ## Known limits of what exists
 
@@ -527,11 +535,13 @@ These are not in the cross-read record. Each is left as it was found.
 2. **The remaining reconciliation passes,** each document by one author,
    from the lists under
    [What each document changes](#what-each-document-changes-to-agree-with-plan-and-label-templatesmd)
-   and the findings of the record: `footprint-analysis.md` first; then
-   `execution-and-storage.md` and `scheduler-and-serving-loop.md`, by
-   authors who each read the other in full; then `builtin-inventory.md`
-   and `language-subset.md`; the overview last. A pass keeps the stated
-   assumption wherever a question above is still open.
+   and the findings of the record: `execution-and-storage.md` and
+   `scheduler-and-serving-loop.md`, by authors who each read the other in
+   full; then `plan-and-label-templates.md` for what the footprint pass
+   found it cannot express, with the specification; then
+   `builtin-inventory.md` and `language-subset.md`; the overview last. A
+   pass keeps the stated assumption wherever a question above is still
+   open.
 3. **Bring specs pull request #91 up to `plan-and-label-templates.md`**
    (section 2 of the record), and add the label rules listed above.
 4. **One corpus measurement** with one stated method, so that the three
