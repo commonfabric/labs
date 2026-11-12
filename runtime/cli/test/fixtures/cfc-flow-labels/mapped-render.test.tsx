@@ -22,9 +22,11 @@ interface Row {
 }
 
 const MappedRows = pattern<{ db: SqliteDb; count: number }>(({ db, count }) => {
+  // `reactOn: db` re-runs the query after the seed's writes. Without it a
+  // query that ran before the seed keeps the empty result it read then.
   const query = db.query<Row>(
     "SELECT id, title FROM messages ORDER BY id LIMIT ?",
-    { params: [count] },
+    { params: [count], reactOn: db },
   );
   return {
     query,
