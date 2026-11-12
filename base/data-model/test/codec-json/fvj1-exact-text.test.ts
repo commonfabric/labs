@@ -64,6 +64,19 @@ type StubbedClass = {
 };
 
 /**
+ * A class whose type is disabled for codecs (`1-fabric-values.md` Section
+ * 1.4.5), so that it binds no codec. A value of it has no text, and a text
+ * under its tag decodes as an unknown tag.
+ */
+type DisabledClass = {
+  /** Makes a value of the class. */
+  readonly disabled: () => FabricValue;
+
+  /** A text under the tag the type would have. */
+  readonly text: string;
+};
+
+/**
  * Asserts that `actual` is the value `expected` is: equal by `valueEqual()`,
  * and an instance of the same class where `expected` is an object. The second
  * is not implied by the first, which holds between an instance and an
@@ -210,7 +223,7 @@ const FORMAT_TAG_CASES: Readonly<
 const CLASS_CASES: Readonly<
   Record<
     keyof FabricPrimitiveClassesByName | keyof FabricInstanceClassesByName,
-    readonly TextCase[] | StubbedClass
+    readonly TextCase[] | StubbedClass | DisabledClass
   >
 > = {
   FabricBytes: [
@@ -262,19 +275,10 @@ const CLASS_CASES: Readonly<
         'fvj1:{"/KeyPair@1":{"algorithm":"Ed25519","privateKey":"BAU","publicKey":"AQID"}}',
     },
   ],
-  FabricRegExp: [
-    {
-      what: "an `es2025` regular expression",
-      make: () => new FabricRegExp(/ab+c/gi),
-      text:
-        'fvj1:{"/RegExp@1":{"flags":"gi","flavor":"es2025","source":"ab+c"}}',
-    },
-    {
-      what: "a regular expression of another flavor",
-      make: () => new FabricRegExp("pcre2", "a++", "x"),
-      text: 'fvj1:{"/RegExp@1":{"flags":"x","flavor":"pcre2","source":"a++"}}',
-    },
-  ],
+  FabricRegExp: {
+    disabled: () => new FabricRegExp(/ab+c/gi),
+    text: 'fvj1:{"/RegExp@1":{"flags":"gi","flavor":"es2025","source":"ab+c"}}',
+  },
   FabricUnavailable: [
     {
       what: "a transient reason",
@@ -364,6 +368,18 @@ describe("fvj1-exact-text", () => {
             expect(() => jsonFromFabricValue(cases.stubbed())).toThrow(
               "not yet implemented",
             );
+          });
+        } else if ("disabled" in cases) {
+          it("refuses to encode a value, its type being disabled for codecs", () => {
+            expect(() => jsonFromFabricValue(cases.disabled())).toThrow(
+              "No codec registered",
+            );
+          });
+
+          it("decodes a text under its tag to an `UnknownValue`", () => {
+            const decoded = fabricFromJsonValue(cases.text);
+            expect(decoded).toBeInstanceOf(UnknownValue);
+            expect(jsonFromFabricValue(decoded)).toBe(cases.text);
           });
         } else {
           describeTextCases(cases);

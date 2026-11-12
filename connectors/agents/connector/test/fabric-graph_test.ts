@@ -8,7 +8,6 @@ import { isLinkRef, linkRefFrom } from "@commonfabric/data-model/cell-rep";
 import {
   FabricBytes,
   FabricEpochNsec,
-  FabricRegExp,
 } from "@commonfabric/data-model/fabric-primitives";
 import { FabricError } from "@commonfabric/data-model/fabric-instances";
 import { Identity } from "@commonfabric/identity";
@@ -163,7 +162,6 @@ Deno.test("stable graph writes preserve native `FabricValue`s", async () => {
       cell: root,
       value: () => ({
         date: new Date("2026-07-27T12:34:56.000Z"),
-        expression: /agent-data/gi,
         bytes: new Uint8Array([1, 2, 3]),
       }),
     }]);
@@ -173,17 +171,13 @@ Deno.test("stable graph writes preserve native `FabricValue`s", async () => {
       root,
     ) as Record<string, unknown>;
     const date = stored.date as FabricEpochNsec;
-    const expression = stored.expression as FabricRegExp;
     const bytes = stored.bytes as FabricBytes;
     assertEquals(date instanceof FabricEpochNsec, true);
-    assertEquals(expression instanceof FabricRegExp, true);
     assertEquals(bytes instanceof FabricBytes, true);
     assertEquals(
       date.value,
       BigInt(new Date("2026-07-27T12:34:56.000Z").getTime()) * 1_000_000n,
     );
-    assertEquals(expression.source, "agent-data");
-    assertEquals(expression.flags, "gi");
     assertEquals(bytes.slice(), new Uint8Array([1, 2, 3]));
   } finally {
     await runtime.dispose();

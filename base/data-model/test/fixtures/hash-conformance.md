@@ -119,6 +119,9 @@ which this package does not yet produce: their codecs are stubs, pending general
 cases, and `test/hash-conformance.test.ts` fails once hashing one succeeds, so
 that their cases are added then.
 
+A `FabricRegExp` has a byte form (section 4.16) but no text, its type being
+disabled for codecs, so the cases hold none.
+
 A key pair holding `CryptoKey` handles, which section 8 refuses, has no text.
 The refusals the file records are those of unregistered symbols, alone and
 inside containers.

@@ -3,24 +3,9 @@ import type {
   FabricRegExpConstructor as ApiFabricRegExpConstructor,
 } from "@/api.ts";
 import { backtickQuote } from "@commonfabric/text/markdown";
-import { describeFailure } from "@commonfabric/js-values/describe-failure";
-import { isPlainObject } from "@commonfabric/js-values/types";
 
 import { BaseFabricPrimitive, VALUE_TAG } from "@/fabric-bases";
 import { BLESSING_TOKEN } from "@/fabric-bases/blessing.ts";
-import { ProblematicValue } from "@/codec-common";
-import { BaseNonterminalCodec } from "@/codec-interface/BaseNonterminalCodec.ts";
-import { BaseTerminalCodec } from "@/codec-interface/BaseTerminalCodec.ts";
-import { CODEC_TYPE_TAGS } from "@/codec-interface/codec-type-tags.ts";
-import {
-  JSON_CODEC,
-  type LiveEnvironment,
-  type NonterminalCodec,
-  REALM_CODEC,
-  type TerminalCodec,
-} from "@/codec-interface/interface.ts";
-import type { RealmCodecValue } from "@/codec-realm";
-import type { FabricValue } from "@/interface.ts";
 import {
   FABRIC_PRIMITIVE_VALUE_TAGS,
   type FabricPrimitiveValueTag,
@@ -31,16 +16,6 @@ import {
  * one.
  */
 const JS_FLAVOR = "es2025";
-
-/**
- * The encoded state of a {@link FabricRegExp}. All three fields are required,
- * and the format has no default flavor.
- */
-type FabricRegExpState = {
-  flavor: string;
-  source: string;
-  flags: string;
-};
 
 /**
  * Immutable regular-expression value in the fabric type system.
@@ -61,6 +36,10 @@ type FabricRegExpState = {
  * a JS `RegExp`, so `value` throws for them -- leaving room to represent
  * other regex syntaxes in the future. See Section 1.4.5 of
  * `1-fabric-values.md`.
+ *
+ * The type is disabled for codecs: this class binds no codec, so no wire
+ * format carries an instance, and encoding one throws as it does for any class
+ * no registry knows.
  */
 export class FabricRegExp extends BaseFabricPrimitive
   implements ApiFabricRegExp {
@@ -173,163 +152,6 @@ export class FabricRegExp extends BaseFabricPrimitive
     Object.freeze(this);
     Object.freeze(this.prototype);
   }
-
-  static #jsonCodec = Object.freeze(
-    new (class RegExpCodec
-      extends BaseNonterminalCodec<never, FabricRegExpState> {
-      /** Constructs an instance. */
-      constructor() {
-        super(CODEC_TYPE_TAGS.RegExp, FabricRegExp);
-      }
-
-      /** @inheritDoc */
-      encode(value: FabricRegExp, _env: LiveEnvironment): FabricRegExpState {
-        return Object.freeze({
-          source: value.#source,
-          flags: value.#flags,
-          flavor: value.#flavor,
-        });
-      }
-
-      /**
-       * @inheritDoc
-       *
-       * All three fields are required, each a string; the format fills in
-       * none of them, a `flavor` above all, since an absent one would leave
-       * the dialect of the pattern unstated.
-       *
-       * The check matters more than it looks. The constructor stores a
-       * non-`es2025` flavor's `source` and `flags` without touching them, so
-       * an unchecked object here reaches the public getters, which are typed
-       * `string`, and takes an unfrozen reference into a frozen instance with
-       * it.
-       */
-      canDecode(state: FabricValue): state is FabricRegExpState {
-        return isPlainObject(state) && hasStringFields(state);
-      }
-
-      /**
-       * @inheritDoc
-       *
-       * Beyond the three fields being strings, this class does not enforce
-       * regex syntax as part of its wire participation: only the `es2025`
-       * flavor is validated, eagerly, by the constructor building a JS
-       * `RegExp`. Another flavor's `source` and `flags` are stored faithfully
-       * and may be any strings at all, that dialect being one this runtime
-       * cannot check.
-       */
-      decode(
-        typeTag: string,
-        state: FabricRegExpState,
-        _env: LiveEnvironment,
-        mutable = false,
-      ): FabricValue {
-        const { flavor, source, flags } = state;
-
-        try {
-          return new FabricRegExp(flavor, source, flags);
-        } catch (e) {
-          return ProblematicValue.make(
-            typeTag,
-            state,
-            `RegExp: ${describeFailure(e)}`,
-            mutable,
-          );
-        }
-      }
-    })(),
-  );
-
-  static #realmCodec = Object.freeze(
-    new (class RegExpCodec extends BaseTerminalCodec<RealmCodecValue> {
-      /** Constructs an instance. */
-      constructor() {
-        super(CODEC_TYPE_TAGS.RegExp, FabricRegExp);
-      }
-
-      /** @inheritDoc */
-      encode(value: FabricRegExp, _env: LiveEnvironment): RealmCodecValue {
-        return Object.freeze({
-          source: value.#source,
-          flags: value.#flags,
-          flavor: value.#flavor,
-        });
-      }
-
-      /** @inheritDoc */
-      canDecode(state: RealmCodecValue): state is FabricRegExpState {
-        return isPlainObject(state) &&
-          hasStringFields(state as Record<string, unknown>);
-      }
-
-      /**
-       * @inheritDoc
-       *
-       * As on the JSON side, regex syntax is not enforced as part of wire
-       * participation beyond what the constructor validates eagerly for the
-       * `es2025` flavor, which is why a pattern that fails to build is
-       * reported here rather than refused by {@link #canDecode}.
-       */
-      decode(
-        typeTag: string,
-        state: FabricRegExpState,
-        _env: LiveEnvironment,
-        mutable = false,
-      ): FabricValue {
-        const { flavor, source, flags } = state;
-
-        try {
-          return new FabricRegExp(flavor, source, flags);
-        } catch (e) {
-          return ProblematicValue.make(
-            typeTag,
-            state,
-            describeFailure(e),
-            mutable,
-          );
-        }
-      }
-    })(),
-  );
-
-  /** The codec for instances of this class. */
-  static get [JSON_CODEC](): NonterminalCodec {
-    return this.#jsonCodec;
-  }
-
-  /**
-   * The codec for instances of this class in the realm-crossing format.
-   *
-   * Terminal, where JSON's is nonterminal, and the essential state is the same
-   * `{ source, flags, flavor }` either way. A record of strings sits in both
-   * domains at once -- it is a `FabricValue`, and it is also a value this
-   * format carries as it stands -- so the shape of the state does not decide
-   * the kind, and each format says which it means. Terminal is what this one
-   * has to gain by: the walk hands the record to the transport rather than
-   * descending into three strings whose shape it already knows.
-   *
-   * Structured cloning carrying a JS `RegExp` is not the reason, and would
-   * not have been a good one. `flavor` has no JS carrier, and a flavor
-   * other than `es2025` has no JS `RegExp` at all, so a state of that
-   * shape would drop the first and be unreachable for the second.
-   */
-  static get [REALM_CODEC](): TerminalCodec<RealmCodecValue> {
-    return this.#realmCodec;
-  }
-}
-
-/**
- * Indicates whether `state` holds the three fields of a `RegExp@1` state as own
- * properties, each a string, so that nothing inherited stands in for one. A
- * field present as `undefined`, which the realm format carries, is refused like
- * an absent one.
- */
-function hasStringFields(
-  state: Readonly<Record<string, unknown>>,
-): state is FabricRegExpState {
-  return (["flavor", "source", "flags"] as const).every((key) =>
-    Object.hasOwn(state, key) && (typeof state[key] === "string")
-  );
 }
 
 /**

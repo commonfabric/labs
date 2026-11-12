@@ -116,14 +116,19 @@ export type FabricPrimitiveClassesByName = typeof CLASSES_BY_NAME;
 export type FabricPrimitiveClass =
   FabricPrimitiveClassesByName[keyof FabricPrimitiveClassesByName];
 
-const CODEC_CLASSES: readonly FabricPrimitiveClass[] = Object.freeze(
+const CLASSES: readonly FabricPrimitiveClass[] = Object.freeze(
   Object.values(CLASSES_BY_NAME),
+);
+
+// `FabricRegExp`'s type is disabled for codecs, so the class binds none.
+const CODEC_CLASSES: readonly FabricPrimitiveClass[] = Object.freeze(
+  CLASSES.filter((cls) => cls !== FabricRegExp),
 );
 
 // Each name is read off its class's `prototype`. The contract of `.schemaType`
 // is what makes that sound: the getter reads no instance state.
 const CLASS_OF_SCHEMA_TYPE: ReadonlyMap<string, FabricPrimitiveClass> = new Map(
-  CODEC_CLASSES.map((cls) => [cls.prototype.schemaType, cls]),
+  CLASSES.map((cls) => [cls.prototype.schemaType, cls]),
 );
 
 /**
@@ -132,5 +137,5 @@ const CLASS_OF_SCHEMA_TYPE: ReadonlyMap<string, FabricPrimitiveClass> = new Map(
  */
 export const FABRIC_PRIMITIVE_SCHEMA_TYPES:
   readonly FabricPrimitiveSchemaType[] = Object.freeze(
-    CODEC_CLASSES.map((cls) => cls.prototype.schemaType),
+    CLASSES.map((cls) => cls.prototype.schemaType),
   );

@@ -96,8 +96,8 @@ const fabricCodecs = createDefaultJsonRegistry();
  * place, within the same node budget. The view is what the class's own
  * codec encodes it to, one level deep, which shares the instance's strings
  * and values and allocates a wrapper around them; so an `UnknownValue` or
- * `ProblematicValue` hands over the state it preserves, a `FabricRegExp`
- * its source, flags and flavor, a `FabricLink` its payload. Four classes
+ * `ProblematicValue` hands over the state it preserves, a
+ * `FabricUnavailable` its reason and error fields, a `FabricLink` its payload. Four classes
  * are measured otherwise: a `FabricBytes` counts its bytes outright; a
  * `FabricError` hands over its fields and its extras as the lazy iterator
  * `extraEntries()` returns, so a budget runs out inside a large extras bag

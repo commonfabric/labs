@@ -67,9 +67,6 @@ export const FABRIC_PRIMITIVE_CODEC_TYPE_TAGS = Object.freeze(
     /** Constant for class `FabricKeyPair`. */
     KeyPair: "KeyPair@1",
 
-    /** Constant for class `FabricRegExp`. */
-    RegExp: "RegExp@1",
-
     /** Constant for class `FabricUnavailable`. */
     Unavailable: "Unavailable@1",
   } as const,

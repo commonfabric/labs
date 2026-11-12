@@ -124,8 +124,10 @@ mark rather than leaving it to mislead.
 ## What is not among the cases
 
 `Map` and `Set` values are not among the cases, their codecs being stubs pending
-general `FabricInstance` support. Nor is a value holding a cycle, which the mods
-can state and which re-encodes to a refusal.
+general `FabricInstance` support. Nor is a `FabricRegExp`, its type being
+disabled for codecs; one case holds a `RegExp@1` text, which decodes as an
+unknown tag. Nor is a value holding a cycle, which the mods can state and which
+re-encodes to a refusal.
 
 Nor is any value as large as a floor that section 12 of
 [`3-json-encoding.md`](../../../../docs/specs/space-model-formal-spec/3-json-encoding.md#12-implementation-guarantees)

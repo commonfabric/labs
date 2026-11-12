@@ -1,16 +1,17 @@
 /**
  * What `fabric-primitives/impl.ts` derives from its set of classes, and that
  * set's agreement with the vocabularies that range over the classes. Nothing
- * here names a class: each case ranges over `codecClasses()`, over one of
- * those vocabularies, or over the primitives the shared corpus holds, so a
- * class added to the package is covered without an edit here.
+ * here names a class: each case ranges over `codecClasses()`, over
+ * `fabricPrimitiveClassesByName()`, over one of those vocabularies, or over the
+ * primitives the shared corpus holds, so a class added to the package is
+ * covered without an edit here.
  */
 
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { FabricPrimitive, type FabricPrimitiveSchemaType } from "@";
-import { JSON_CODEC } from "@/codec-common";
+import { JSON_CODEC, REALM_CODEC } from "@/codec-common";
 import {
   codecClasses,
   FABRIC_PRIMITIVE_CODEC_TYPE_TAGS,
@@ -20,6 +21,9 @@ import {
   isFabricPrimitiveSchemaType,
 } from "@/fabric-primitives";
 import { LAYER_CORPUS } from "../fabric-value-corpus.ts";
+
+/** Every primitive class, whether or not it binds a codec. */
+const ALL_CLASSES = Object.values(fabricPrimitiveClassesByName());
 
 /**
  * The `FabricPrimitive`s among the corpus, labeled as the corpus labels them.
@@ -36,16 +40,25 @@ describe("fabric-primitives/impl", () => {
       expect(new Set(names).size).toBe(names.length);
     });
 
-    it("lists classes whose reported `.schemaType`s are exactly `FABRIC_PRIMITIVE_SCHEMA_TYPES`", () => {
-      const names = codecClasses().map((cls) => cls.prototype.schemaType);
-      expect(new Set<string>(names)).toEqual(
-        new Set<string>(FABRIC_PRIMITIVE_SCHEMA_TYPES),
+    it("lists exactly the classes which bind a codec for each format", () => {
+      const bindsCodecs = (cls: object) =>
+        (JSON_CODEC in cls) && (REALM_CODEC in cls);
+      expect(new Set<unknown>(codecClasses())).toEqual(
+        new Set<unknown>(ALL_CLASSES.filter(bindsCodecs)),
       );
+    });
+
+    it("leaves out only classes which bind a codec for no format", () => {
+      const listed = new Set<unknown>(codecClasses());
+      for (const cls of ALL_CLASSES.filter((cls) => !listed.has(cls))) {
+        expect(JSON_CODEC in cls).toBe(false);
+        expect(REALM_CODEC in cls).toBe(false);
+      }
     });
 
     it("lists classes whose JSON codecs' type tags are exactly `FABRIC_PRIMITIVE_CODEC_TYPE_TAGS`", () => {
       const tags = codecClasses().map((cls) =>
-        cls[JSON_CODEC].recognizedTypeTag
+        (JSON_CODEC in cls) ? cls[JSON_CODEC].recognizedTypeTag : undefined
       );
       expect(new Set(tags).size).toBe(tags.length);
       expect(new Set(tags)).toEqual(
@@ -54,21 +67,22 @@ describe("fabric-primitives/impl", () => {
         ),
       );
     });
-
-    it("lists the class of every `FabricPrimitive` in the corpus", () => {
-      expect(PRIMITIVES.length).toBeGreaterThan(0);
-      const classes = new Set<unknown>(codecClasses());
-      for (const [, value] of PRIMITIVES) {
-        expect(classes.has(value.constructor)).toBe(true);
-      }
-    });
   });
 
   describe("fabricPrimitiveClassesByName()", () => {
-    it("returns exactly the classes `codecClasses()` lists", () => {
-      const named = Object.values(fabricPrimitiveClassesByName());
-      expect(new Set<unknown>(named)).toEqual(new Set<unknown>(codecClasses()));
-      expect(named.length).toBe(codecClasses().length);
+    it("returns every class `codecClasses()` lists", () => {
+      const named = new Set<unknown>(ALL_CLASSES);
+      for (const cls of codecClasses()) {
+        expect(named.has(cls)).toBe(true);
+      }
+    });
+
+    it("returns classes whose reported `.schemaType`s are exactly `FABRIC_PRIMITIVE_SCHEMA_TYPES`", () => {
+      const names = ALL_CLASSES.map((cls) => cls.prototype.schemaType);
+      expect(new Set(names).size).toBe(names.length);
+      expect(new Set<string>(names)).toEqual(
+        new Set<string>(FABRIC_PRIMITIVE_SCHEMA_TYPES),
+      );
     });
 
     it("returns a frozen record", () => {
@@ -97,13 +111,13 @@ describe("fabric-primitives/impl", () => {
   describe("FABRIC_PRIMITIVE_SCHEMA_TYPES", () => {
     it("is a frozen array with one entry per listed class", () => {
       expect(Object.isFrozen(FABRIC_PRIMITIVE_SCHEMA_TYPES)).toBe(true);
-      expect(FABRIC_PRIMITIVE_SCHEMA_TYPES.length).toBe(codecClasses().length);
+      expect(FABRIC_PRIMITIVE_SCHEMA_TYPES.length).toBe(ALL_CLASSES.length);
     });
   });
 
   describe("fabricPrimitiveClassOfSchemaType()", () => {
     it("returns each listed class given the `.schemaType` it reports", () => {
-      for (const cls of codecClasses()) {
+      for (const cls of ALL_CLASSES) {
         expect(fabricPrimitiveClassOfSchemaType(cls.prototype.schemaType))
           .toBe(cls);
       }
@@ -125,7 +139,7 @@ describe("fabric-primitives/impl", () => {
 
   describe("isFabricPrimitiveSchemaType()", () => {
     it("returns `true` for the `.schemaType` of every listed class", () => {
-      for (const cls of codecClasses()) {
+      for (const cls of ALL_CLASSES) {
         expect(isFabricPrimitiveSchemaType(cls.prototype.schemaType))
           .toBe(true);
       }

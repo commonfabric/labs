@@ -158,6 +158,10 @@ export type ClassCase = {
 // Cases
 //
 
+/** Why the classes whose types are disabled for codecs have no cases. */
+export const DISABLED_CODEC_EXCLUSION = "Its type is disabled for codecs, " +
+  "so it binds no codec (1-fabric-values.md section 1.4.5).";
+
 /** Why the classes whose codecs are stubs have no cases. */
 export const STUB_CODEC_EXCLUSION = "Its codec is a stub, pending general " +
   "`FabricInstance` support (1-fabric-values.md sections 1.4.3 and 1.4.4).";
