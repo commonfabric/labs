@@ -122,6 +122,13 @@ relitigated.
 - `map`, `filter`, `flatMap`, `reduce`, `findIndex`, `some`, `every`, and
   `find` are reactive constructs. The callback of `reduce` is an expression
   and its accumulator is a data type.
+- A collection method called on a cell handle in a function body, such as
+  `aCell.map(...)`, is a compile error. The compiler does not rewrite it
+  to a reactive form. The diagnostic names two corrections: wrap the
+  expression in an inline `pattern(...)`, which keeps it reactive, or read
+  first, `aCell.get().map(...)`, which processes the values synchronously.
+  *(Pending. Question 38 is what the first correction means in a `lift` or
+  a `computed`.)*
 - `any` is refused. Published label typings are identity aliases, and no
   editor plugin is part of the design.
 - `streamData` and `llm` are removed. `wish` is structural.
@@ -322,6 +329,19 @@ answer goes to the specification with the document.
     are withdrawn, which leaves it visible that the write did not happen,
     as it is today; a child's argument and an effect's request take the
     error state.
+38. **A reactive `map` in a `lift` or a `computed`**
+    (`language-subset.md` §5.2 and §10.3). The correction "wrap it in
+    `pattern(...)`" is an instantiation. A `handler` or an `action` may
+    write it. A `lift` or a `computed` does not instantiate a pattern
+    (decided above; `function-body:instantiation-in-computation`), so the
+    wrap is refused there too. *Assumed:* that rule stands, and in a
+    `lift` or a `computed` the diagnostic says to move the `map` to the
+    pattern body, where a computation that chooses the list passes it on
+    as a reference. The alternative lets a computation instantiate an
+    inline pattern that requests no effect, directly or through what it
+    instantiates, which the compiler can check because it has the body;
+    the instance is then identified by its site, and a re-evaluation
+    names the same instance.
 
 ## Open, and not needing the owner
 
@@ -472,6 +492,9 @@ And from the ruling on what a handler binding copies:
 - §5.4, §10.3: a widening covers the entries it replaced.
 - §4.4.1, §4.6: the naming rule of §1.3 of the plan document.
 - Open questions 9 and 10.
+- §4.7, §10.2: `cell:collection-method-in-function` names both
+  corrections, the inline `pattern(...)` and `get()` first (ruled; see
+  question 38 for a `lift` or a `computed`).
 - §5.2: a binding made in a function body copies a scalar and a computed
   value and binds a stored container by reference (ruled). The identity of
   a binding takes the address of a container bound by reference, so two
