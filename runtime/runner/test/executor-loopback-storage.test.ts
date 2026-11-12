@@ -209,5 +209,89 @@ describe("loopback-storage", () => {
         await server.close();
       }
     });
+
+    for (const method of ["close", "closeNow"] as const) {
+      it(`closes the connection to a routed space whose mount is waiting for an owner that stays down, on \`${method}()\``, async () => {
+        // The connection drops while the mount's open is being signed, so
+        // the mount is never sent and waits for the owner. Destroying the
+        // storage ends that wait and closes the connection, rather than
+        // leaving it dialing an owner nobody is waiting for any more.
+
+        const server = new Server(TEST_MEMORY_SERVER_AUTH);
+        const host = hostTransport(server);
+        const identity = await Identity.fromPassphrase("loopback-routed-close");
+        const signing = Promise.withResolvers<void>();
+        const release = Promise.withResolvers<void>();
+        let redialed = Promise.withResolvers<void>();
+        let first = true;
+        let closes = 0;
+        const signer: Signer = {
+          did: () => identity.did(),
+          verifier: identity.verifier,
+          async sign(bytes) {
+            if (first) {
+              first = false;
+              signing.resolve();
+              await release.promise;
+            }
+            return await identity.sign(bytes);
+          },
+        };
+        const transport = {
+          ...host.transport,
+          async send(payload: string) {
+            try {
+              await host.transport.send(payload);
+            } catch (error) {
+              redialed.resolve();
+              throw error;
+            }
+          },
+          close() {
+            closes++;
+            return host.transport.close();
+          },
+        };
+        const storage = LoopbackStorageManager.connect(server, {
+          as: signer,
+          servingHomeSpace: "did:key:z6Mk-loopback-routed-close-home",
+          route: { createTransport: () => transport },
+        });
+        const reading = storage.open("did:key:z6Mk-loopback-routed-close")
+          .serverHeadSeq!().then(() => "read", () => "failed");
+        let closing: Promise<void> | undefined;
+        try {
+          await signing.promise;
+          host.hostDown();
+          release.resolve();
+          // The mount has failed as never sent, and the client has tried
+          // the owner again and found it down.
+          await redialed.promise;
+          if (method === "closeNow") {
+            await storage.closeNow();
+
+            expect(closes).toBeGreaterThan(0);
+          } else {
+            redialed = Promise.withResolvers<void>();
+            closing = storage.close();
+            const outcome = await Promise.race([
+              closing.then(() => "closed"),
+              redialed.promise.then(() => "dialed again"),
+            ]);
+
+            expect(outcome).toBe("closed");
+          }
+          expect(await reading).toBe("failed");
+        } finally {
+          // A close left waiting for the owner ends once the owner is back.
+          release.resolve();
+          host.hostUp();
+          await reading;
+          await closing;
+          await storage.closeNow();
+          await server.close();
+        }
+      });
+    }
   });
 });

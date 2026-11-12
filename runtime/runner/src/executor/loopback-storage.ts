@@ -206,11 +206,17 @@ class LoopbackSessionFactory implements SessionFactory {
     space: MemorySpace,
     signer: Signer,
     mountOptions: MemoryClient.MountOptions = {},
+    signal?: AbortSignal,
   ) {
+    const cancelled = (): Error =>
+      signal?.reason instanceof Error
+        ? signal.reason
+        : new Error("memory replica route replaced");
     // A routed session dials the owner over the network, with the handshake
     // attempts the routed plane gives its own sessions.
     const client = await MemoryClient.connect({
       transport: this.#transport(space, signer),
+      signal,
       client: this.#clientInfo,
       instanceNames: this.#instanceNames,
       syncCidReferences: this.#syncCidReferences,
@@ -218,6 +224,13 @@ class LoopbackSessionFactory implements SessionFactory {
         ? {}
         : { firstHandshakeAttempts: MEMORY_FIRST_HANDSHAKE_ATTEMPTS }),
     });
+    // The mount below can wait for an owner that cannot be reached. `signal`
+    // aborts once the provider has no more use for the session, and closing
+    // the connection then is what ends that wait and stops the redialing.
+    const closeForAbort = (): void => {
+      void client.close().catch(() => {});
+    };
+    signal?.addEventListener("abort", closeForAbort, { once: true });
     try {
       // A routed connection can drop while the mount is made, and a mount
       // that was not sent is made again once the connection is back, as the
@@ -237,15 +250,19 @@ class LoopbackSessionFactory implements SessionFactory {
               descriptor,
               context,
             ),
+          signal,
         )
       );
+      if (signal?.aborted) throw cancelled();
       return { client, session };
     } catch (error) {
       // A failed mount must not leak the in-process connection (repeated
       // auth/transient failures would accumulate server-side sessions) —
       // the same close-before-rethrow RemoteSessionFactory.create does.
       await client.close().catch(() => {});
-      throw error;
+      throw signal?.aborted ? cancelled() : error;
+    } finally {
+      signal?.removeEventListener("abort", closeForAbort);
     }
   }
 }
