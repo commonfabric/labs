@@ -45,42 +45,48 @@ export interface PlaidLinkEnvironment {
 const PLAID_LINK_SCRIPT =
   "https://cdn.plaid.com/link/v2/stable/link-initialize.js";
 
-/** The part of a document that `loadPlaidLink()` finds or adds a script in. */
+/** The part of a document that `loadPlaidLink()` adds a script to. */
 export interface ScriptDocument {
-  querySelector(selectors: string): Element | null;
   createElement(tagName: "script"): HTMLScriptElement;
   readonly head: { appendChild(node: Node): unknown };
 }
 
 /**
- * Loads Plaid's Link script into `document`, unless it is there already, and
- * resolves with the SDK it installs on `scope`. Rejects when the script fails
- * to load or installs nothing.
+ * The load of Plaid's script each document has under way or has finished,
+ * observed from the moment the script was added, so that later callers share
+ * its outcome rather than wait on events that have already fired.
+ */
+const plaidLoads = new WeakMap<ScriptDocument, Promise<PlaidLink>>();
+
+/**
+ * Loads Plaid's Link script into `document`, unless it is loading or loaded
+ * there already, and resolves with the SDK it installs on `scope`. Rejects
+ * when the script fails to load or installs nothing; the next call then adds
+ * the script afresh.
  */
 export function loadPlaidLink(
   document: ScriptDocument,
   scope: { readonly Plaid?: PlaidLink } = globalThis,
 ): Promise<PlaidLink> {
   if (scope.Plaid) return Promise.resolve(scope.Plaid);
+  const loading = plaidLoads.get(document);
+  if (loading) return loading;
 
-  let script = document.querySelector(
-    'script[src*="plaid.com/link/v2/stable/link-initialize.js"]',
-  );
-  if (!script) {
-    const created = document.createElement("script");
-    created.src = PLAID_LINK_SCRIPT;
-    created.async = true;
-    document.head.appendChild(created);
-    script = created;
-  }
-  return new Promise((resolve, reject) => {
-    const settle = () =>
-      scope.Plaid
-        ? resolve(scope.Plaid)
-        : reject(new Error("Failed to load Plaid Link script"));
+  const script = document.createElement("script");
+  script.src = PLAID_LINK_SCRIPT;
+  script.async = true;
+  const load = new Promise<PlaidLink>((resolve, reject) => {
+    const settle = () => {
+      if (scope.Plaid) return resolve(scope.Plaid);
+      plaidLoads.delete(document);
+      reject(new Error("Failed to load Plaid Link script"));
+    };
     script.addEventListener("load", settle);
     script.addEventListener("error", settle);
   });
+  plaidLoads.set(document, load);
+  document.head.appendChild(script);
+  return load;
 }
 
 export interface PlaidAuthData {

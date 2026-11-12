@@ -136,74 +136,84 @@ describe("cf-plaid-link", () => {
     // A script added to the real document would be fetched from Plaid's CDN,
     // so each case hands the function a document of its own.
 
-    /** A script element, a document holding `existing`, and what it added. */
-    function scriptDocument(existing: Element | null = null) {
-      const appended: Node[] = [];
-      const selectors: string[] = [];
-      const script = document.createElement("script");
+    /** A document of its own, and the scripts added to it, in order. */
+    function scriptDocument() {
+      const appended: HTMLScriptElement[] = [];
       const scripts: ScriptDocument = {
-        querySelector: (selector: string) => {
-          selectors.push(selector);
-          return existing;
+        createElement: () => document.createElement("script"),
+        head: {
+          appendChild: (node: Node) => {
+            if (node instanceof HTMLScriptElement) appended.push(node);
+          },
         },
-        createElement: () => script,
-        head: { appendChild: (node: Node) => appended.push(node) },
       };
-      return { document: scripts, script, appended, selectors };
+      return { document: scripts, appended };
     }
 
     it("returns the SDK already installed without touching the document", async () => {
       const plaid = new FakeEnvironment().plaid;
-      const { document, appended, selectors } = scriptDocument();
+      const { document, appended } = scriptDocument();
 
       expect(await loadPlaidLink(document, { Plaid: plaid })).toBe(plaid);
-      expect(appended).toEqual([]);
-      expect(selectors).toEqual([]);
+      expect(appended.length).toBe(0);
     });
 
     it("adds Plaid's script and returns the SDK it installs once loaded", async () => {
       const plaid = new FakeEnvironment().plaid;
       const scope: { Plaid?: PlaidLink } = {};
-      const { document, script, appended } = scriptDocument();
+      const { document, appended } = scriptDocument();
 
       const loaded = loadPlaidLink(document, scope);
       scope.Plaid = plaid;
-      script.dispatchEvent(new Event("load"));
+      appended[0].dispatchEvent(new Event("load"));
 
       expect(await loaded).toBe(plaid);
-      expect(appended).toEqual([script]);
-      expect(script.src).toBe(
+      expect(appended.length).toBe(1);
+      expect(appended[0].src).toBe(
         "https://cdn.plaid.com/link/v2/stable/link-initialize.js",
       );
-      expect(script.async).toBe(true);
+      expect(appended[0].async).toBe(true);
     });
 
-    it("waits on a script already in the document rather than adding another", async () => {
+    it("shares one script between loads asked for while it is loading", async () => {
       const plaid = new FakeEnvironment().plaid;
       const scope: { Plaid?: PlaidLink } = {};
-      const existing = document.createElement("script");
-      const { document: scripts, appended, selectors } = scriptDocument(
-        existing,
-      );
+      const { document, appended } = scriptDocument();
 
-      const loaded = loadPlaidLink(scripts, scope);
+      const first = loadPlaidLink(document, scope);
+      const second = loadPlaidLink(document, scope);
       scope.Plaid = plaid;
-      existing.dispatchEvent(new Event("load"));
+      appended[0].dispatchEvent(new Event("load"));
 
-      expect(await loaded).toBe(plaid);
-      expect(appended).toEqual([]);
-      expect(selectors).toEqual([
-        'script[src*="plaid.com/link/v2/stable/link-initialize.js"]',
-      ]);
+      expect(await first).toBe(plaid);
+      expect(await second).toBe(plaid);
+      expect(appended.length).toBe(1);
     });
 
     it("rejects when the script fails to load", async () => {
-      const { document, script } = scriptDocument();
+      const { document, appended } = scriptDocument();
 
-      const loaded = loadPlaidLink(document, {});
-      script.dispatchEvent(new Event("error"));
+      const waiting = loadPlaidLink(document, {});
+      appended[0].dispatchEvent(new Event("error"));
 
-      await expect(loaded).rejects.toThrow("Failed to load Plaid Link script");
+      await expect(waiting).rejects.toThrow("Failed to load Plaid Link script");
+      expect(appended.length).toBe(1);
+    });
+
+    it("adds the script afresh after a failed load, and returns the SDK it installs", async () => {
+      const plaid = new FakeEnvironment().plaid;
+      const scope: { Plaid?: PlaidLink } = {};
+      const { document, appended } = scriptDocument();
+      const failed = loadPlaidLink(document, scope);
+      appended[0].dispatchEvent(new Event("error"));
+      await expect(failed).rejects.toThrow("Failed to load Plaid Link script");
+
+      const retried = loadPlaidLink(document, scope);
+      scope.Plaid = plaid;
+      appended[1].dispatchEvent(new Event("load"));
+
+      expect(await retried).toBe(plaid);
+      expect(appended.length).toBe(2);
     });
   });
 

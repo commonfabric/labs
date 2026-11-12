@@ -413,6 +413,17 @@ describe("CFLocation", () => {
 
       expect(geolocation.requests).toEqual([]);
     });
+
+    it("does nothing on a click that arrives after it is disabled, before the button shows it", async () => {
+      const geolocation = new FakeGeolocation();
+      const { element } = await locationElement(geolocation);
+
+      element.disabled = true;
+      expect(button(element).disabled).toBe(false);
+      button(element).click();
+
+      expect(geolocation.requests).toEqual([]);
+    });
   });
 
   describe("continuous tracking", () => {

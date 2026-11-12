@@ -460,6 +460,7 @@ export class CFLocation extends BaseElement {
   }
 
   private _handleButtonClick() {
+    if (this.disabled) return;
     // A running watch stops, even after `continuous` is turned off.
     if (this._state === "watching") {
       this.stopWatching();
