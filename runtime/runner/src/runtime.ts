@@ -5,6 +5,7 @@ import {
   fabricFromConvertibleJsValue,
   type FabricValue,
 } from "@commonfabric/data-model";
+import { SERVER_EXECUTION_DEFAULT_ENABLED } from "@commonfabric/memory/v2/server-execution-default";
 import {
   getModernCellRepConfig,
   resetModernCellRepConfig,
@@ -2119,8 +2120,14 @@ export class Runtime {
     // Not console.error/warn either: the cf test console enforcement fails
     // tests on those. Direct process stderr in Deno; plain console in browser
     // realms (no stdout contract there).
+    // `serverExecution` at the first-party default is no override: a deployed
+    // entry point and every serving runtime state it explicitly, and only
+    // the other arm, selected per deployment, is worth announcing.
     const overrideFlags = Object.entries(this.experimental)
-      .filter(([_, v]) => v !== undefined)
+      .filter(([k, v]) =>
+        v !== undefined &&
+        !(k === "serverExecution" && v === SERVER_EXECUTION_DEFAULT_ENABLED)
+      )
       .map(([k, v]) => `${k}=${v}`);
     if (overrideFlags.length > 0) {
       const banner = `Experimental flag overrides: ${overrideFlags.join(", ")}`;

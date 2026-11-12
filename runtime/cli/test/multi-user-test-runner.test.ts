@@ -30,27 +30,21 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { resolve } from "@std/path";
 import { Identity, realmValueFromKeyPair } from "@commonfabric/identity";
-import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
 import { Runtime } from "@commonfabric/runner";
 import { CFC_ENFORCEMENT_MODES } from "@commonfabric/runner/cfc";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
-import {
-  namesInstancesByDefault,
-  StorageManager,
-} from "@commonfabric/runner/storage/cache.deno";
-import { terminateWorker } from "@commonfabric/platform/worker-lifetime";
+import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { runTestPattern, runTests } from "../lib/test-runner.ts";
 import {
   assertParticipantRung,
   multiUserDescriptorMeta,
   participantAccess,
+  type ParticipantServer,
+  ParticipantWorker,
+  startParticipantServer,
 } from "../lib/multi-user-test-runner.ts";
-import type {
-  ParticipantInitResult,
-  WorkerLifetimeNotice,
-  WorkerRequest,
-  WorkerResponse,
-} from "../lib/multi-user-test-worker.ts";
+import type { ParticipantInitResult } from "../lib/multi-user-test-worker.ts";
+import { patternTestExperimentalOptions } from "../lib/pattern-test-experimental-options.ts";
 
 const FIXTURES = resolve(import.meta.dirname!, "fixtures/multi-user-markers");
 
@@ -60,69 +54,39 @@ function fixture(name: string): string {
 
 /**
  * One participant worker, driven by hand over the same request/response
- * protocol the orchestrator uses.
+ * protocol the orchestrator uses, beside a server `startParticipantServer()`
+ * started, as the orchestrator's are: a worker on the server-execution arm
+ * waits for that server's serving loop through it.
  *
  * The orchestrator issues `awaitMarker` only for a marker it has already seen
  * announced, so through it a wait always begins on a marker the announcer has
  * committed and settled — which of the wait's two paths runs is then left to
- * how fast the announcement reaches the awaiting replica. This client leaves a
- * call in flight while it drives another worker, which is what lets a test
- * choose the order instead.
+ * how fast the announcement reaches the awaiting replica. Driving a worker by
+ * hand leaves a call in flight while the test drives another worker, which is
+ * what lets a test choose the order instead.
  */
-class ParticipantWorkerClient {
-  readonly name: string;
-  #worker: Worker;
-  #lifetimeLock?: string;
-  #nextId = 1;
-  #pending = new Map<
-    number,
-    { resolve: (value: unknown) => void; reject: (error: Error) => void }
-  >();
+function participantWorker(
+  name: string,
+  server?: ParticipantServer,
+): ParticipantWorker {
+  // A worker-level failure rejects every pending call with it, so a test
+  // reports the error rather than waiting on an answer that will not come.
+  const worker: ParticipantWorker = new ParticipantWorker(
+    name,
+    (error) => void worker.terminate(error),
+    server?.servedQuiescence,
+  );
+  return worker;
+}
 
-  constructor(name: string) {
-    this.name = name;
-    this.#worker = new Worker(
-      new URL("../lib/multi-user-test-worker.ts", import.meta.url),
-      { type: "module", name: `marker-wait:${name}` },
-    );
-    this.#worker.onmessage = (
-      event: MessageEvent<WorkerResponse | WorkerLifetimeNotice>,
-    ) => {
-      if ("lifetimeLock" in event.data) {
-        this.#lifetimeLock = event.data.lifetimeLock;
-        return;
-      }
-      const pending = this.#pending.get(event.data.id);
-      if (!pending) return;
-      this.#pending.delete(event.data.id);
-      if ("error" in event.data) {
-        pending.reject(new Error(`[${this.name}] ${event.data.error}`));
-      } else {
-        pending.resolve(event.data.ok);
-      }
-    };
-    // Without this a worker-level failure would leave every call pending, and
-    // a test that reports nothing is worse than one that reports the error.
-    this.#worker.onerror = (event) => {
-      const error = new Error(`[${this.name}] worker error: ${event.message}`);
-      for (const pending of this.#pending.values()) pending.reject(error);
-      this.#pending.clear();
-    };
-  }
+async function closeWorker(worker: ParticipantWorker): Promise<void> {
+  await worker.call("dispose").catch(() => {});
+  await worker.terminate();
+}
 
-  call(cmd: string, args: Record<string, unknown> = {}): Promise<unknown> {
-    const id = this.#nextId++;
-    const request: WorkerRequest = { id, cmd, args };
-    return new Promise((resolve, reject) => {
-      this.#pending.set(id, { resolve, reject });
-      this.#worker.postMessage(request);
-    });
-  }
-
-  async close(): Promise<void> {
-    await this.call("dispose").catch(() => {});
-    await terminateWorker(this.#worker, this.#lifetimeLock);
-  }
+/** The server `cf test` starts for a run at this environment's posture. */
+function startServer(): Promise<ParticipantServer> {
+  return startParticipantServer(patternTestExperimentalOptions(Deno.env.get));
 }
 
 describe(
@@ -185,17 +149,15 @@ describe(
       // wait starts on a marker alice has not been asked for — that request
       // goes out a round trip later — and alice's other marker wakes the wait
       // onto a document that still lacks the one it wants.
-      const server = StandaloneMemoryServer.start({
-        namesInstances: namesInstancesByDefault,
-      });
+      const server = await startServer();
       // This server enforces no ACL, so a DID nothing has written to is a space
       // both participants may use.
       const spaceDid = (await Identity.generate()).did();
       const names = ["alice", "bob"];
-      const workers = new Map<string, ParticipantWorkerClient>();
+      const workers = new Map<string, ParticipantWorker>();
       try {
         for (const [index, name] of names.entries()) {
-          const client = new ParticipantWorkerClient(name);
+          const client = participantWorker(name, server);
           workers.set(name, client);
           const identity = await Identity.fromPassphrase(
             `test-runner ${name}`,
@@ -246,17 +208,17 @@ describe(
         if (failure !== undefined) throw failure;
         expect(order).toEqual(["saw the other marker", "released"]);
       } finally {
-        for (const client of workers.values()) await client.close();
+        for (const client of workers.values()) await closeWorker(client);
         await server.close().catch(() => {});
       }
     });
 
     /** One participant's `init`, driven directly so its answer is readable. */
     async function initParticipant(
-      server: StandaloneMemoryServer,
+      server: ParticipantServer,
       args: Record<string, unknown>,
     ): Promise<ParticipantInitResult> {
-      const client = new ParticipantWorkerClient("alice");
+      const client = participantWorker("alice", server);
       try {
         const identity = await Identity.fromPassphrase("test-runner alice", {
           implementation: "noble",
@@ -273,7 +235,7 @@ describe(
           ...args,
         }) as ParticipantInitResult;
       } finally {
-        await client.close();
+        await closeWorker(client);
       }
     }
 
@@ -316,9 +278,7 @@ describe(
       // whatever it was asked would satisfy a single-rung reading, and
       // `disabled` is the rung that turns CFC off altogether.
 
-      const server = StandaloneMemoryServer.start({
-        namesInstances: namesInstancesByDefault,
-      });
+      const server = await startServer();
       try {
         for (const rung of CFC_ENFORCEMENT_MODES) {
           const init = await initParticipant(server, {
@@ -338,9 +298,7 @@ describe(
     });
 
     it("builds every requested flow-label mode into the participant runtime", async () => {
-      const server = StandaloneMemoryServer.start({
-        namesInstances: namesInstancesByDefault,
-      });
+      const server = await startServer();
       // Disposal retains both errors if the assertion and shutdown fail.
       await using cleanup = new AsyncDisposableStack();
       cleanup.defer(() => server.close());
@@ -355,13 +313,33 @@ describe(
       );
     });
 
+    it(
+      "fails a server-execution participant whose server has no serving loop",
+      // Only a worker on the server-execution arm asks for the loop, and it
+      // resolves its arm from the environment, as the orchestrator does.
+      { ignore: !patternTestExperimentalOptions(Deno.env.get).serverExecution },
+      async () => {
+        // A worker paired with a server started for the other arm waits on
+        // the loop at its first settle; the answer names what is missing
+        // instead of never arriving.
+        const server = await startParticipantServer({});
+        try {
+          await expect(initParticipant(server, {})).rejects.toThrow(
+            "its storage server has no serving loop to wait for",
+          );
+        } finally {
+          await server.close();
+        }
+      },
+    );
+
     it("rejects an invalid flow-label mode before initializing a participant", async () => {
-      const client = new ParticipantWorkerClient("alice");
+      const client = participantWorker("alice");
       try {
         await expect(client.call("init", { cfcFlowLabels: "typo" }))
           .rejects.toThrow("cfcFlowLabels is typo");
       } finally {
-        await client.close();
+        await closeWorker(client);
       }
     });
 
@@ -369,7 +347,7 @@ describe(
       // The name is read before anything else `init` is given, so this needs
       // no space, no server and no test file.
 
-      const client = new ParticipantWorkerClient("alice");
+      const client = participantWorker("alice");
       try {
         await expect(
           client.call("init", { cfcEnforcementMode: "enforce-ish" }),
@@ -377,7 +355,7 @@ describe(
           "`cfcEnforcementMode` is enforce-ish, not one of ",
         );
       } finally {
-        await client.close();
+        await closeWorker(client);
       }
     });
 
@@ -386,13 +364,20 @@ describe(
       // the caller's store and observer come back empty while their
       // assertions pass. Saying so is what keeps the vintage capture from
       // reading the same run as a pattern that instantiated nothing.
+      //
+      // On the OFF arm: a run that resolves ON refuses the store before the
+      // file is compiled, so it never learns the test is a multi-user one.
+      // `test-runner-server-execution.serial.test.ts` checks that refusal.
 
       const identity = await Identity.fromPassphrase("multi-user storage host");
       const storageManager = StorageManager.emulate({ as: identity });
       try {
         const result = await runTestPattern(
           fixture("marker-barrier.test.tsx"),
-          { root: FIXTURES, storageHost: { identity, storageManager } },
+          {
+            root: FIXTURES,
+            storageHost: { identity, storageManager, serverExecution: false },
+          },
         );
         expect(result.error).toContain("is a multi-user test");
         expect(result.error).toContain("`storageHost`");
@@ -407,6 +392,9 @@ describe(
       // space, which is the caller's store when one is supplied. A multi-user
       // test is only recognized once compiled, and refuses that store, so the
       // write has to wait until the test is known not to be one.
+      //
+      // On the OFF arm, for the reason the case above gives: a run that
+      // resolves ON refuses the store before it compiles or writes anything.
 
       const identity = await Identity.fromPassphrase("multi-user untouched");
       const storageManager = StorageManager.emulate({ as: identity });
@@ -414,7 +402,7 @@ describe(
       try {
         const result = await runTestPattern(path, {
           root: FIXTURES,
-          storageHost: { identity, storageManager },
+          storageHost: { identity, storageManager, serverExecution: false },
         });
         expect(result.error).toContain("is a multi-user test");
 
@@ -490,6 +478,16 @@ describe(
         expect(results[0].runtimeErrors[0]).toContain(
           "[bob] Error: Bob's action is refused",
         );
+      });
+
+      it("reports a participant's CFC-refused commit as a warning it allows, not a runtime error", async () => {
+        const { passed, failed, results } = await runTests(
+          fixture("cfc-refusal-warning.test.tsx"),
+          { root: FIXTURES },
+        );
+        expect(results[0].runtimeErrors).toEqual([]);
+        expect(failed).toBe(0);
+        expect(passed).toBe(1);
       });
 
       it("fails a run where a participant's expectation is malformed, naming the value", async () => {
