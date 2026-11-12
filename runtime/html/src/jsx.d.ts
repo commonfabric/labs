@@ -3263,9 +3263,9 @@ interface CFPromptInputAttributes<T> extends CFHTMLAttributes<T> {
 
 interface CFAttachmentsBarAttributes<T> extends CFHTMLAttributes<T> {
   "removable"?: boolean;
-  "pinnedCells"?: any;
-  "oncf-remove"?: EventHandler<{ id: string }>;
-  "oncf-click"?: EventHandler<{ id: string; attachment: any }>;
+  "pinnedCells"?: CellLike<Array<{ path: string; name: string }>>;
+  "oncf-remove"?: EventHandler<{ path: string }>;
+  "oncf-click"?: EventHandler<{ path: string; name: string }>;
 }
 
 interface CFTagsAttributes<T> extends CFHTMLAttributes<T> {

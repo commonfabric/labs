@@ -18,6 +18,7 @@
     "@codemirror/collab": "npm:@codemirror/collab@^6.1.1",
     "@codemirror/commands": "npm:@codemirror/commands@^6.10.4",
     "@lit/context": "npm:@lit/context@^1.1.6",
+    "happy-dom": "npm:happy-dom@^20.14.6",
     "marked": "npm:marked@^18.0.6",
     "@codemirror/state": "npm:@codemirror/state@^6.7.1",
     "@codemirror/view": "npm:@codemirror/view@^6.43.6",

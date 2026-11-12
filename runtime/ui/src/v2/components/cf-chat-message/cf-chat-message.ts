@@ -303,15 +303,13 @@ export class CFChatMessage extends BaseElement {
   private _extractTextContent(): string {
     if (isCellHandle<string>(this.content)) {
       return this.content.get() ?? "";
-    } else if (typeof this.content === "string") {
-      return this.content;
     } else if (Array.isArray(this.content)) {
       const textParts = this.content.filter(
         (part): part is BuiltInLLMTextPart => part.type === "text",
       );
       return textParts.map((part) => part.text).join(" ");
     }
-    return "";
+    return typeof this.content === "string" ? this.content : "";
   }
 
   private _renderAvatar() {
@@ -319,13 +317,11 @@ export class CFChatMessage extends BaseElement {
       return null;
     }
 
-    const initials = this.name
-      ? this.name
-        .split(" ")
-        .map((word) => word.charAt(0).toUpperCase())
-        .join("")
-        .slice(0, 2)
-      : "?";
+    const initials = (this.name ?? "")
+      .split(" ")
+      .map((word) => word.charAt(0).toUpperCase())
+      .join("")
+      .slice(0, 2);
 
     return html`
       <div class="message-avatar">
