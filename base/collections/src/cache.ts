@@ -239,7 +239,6 @@ export class LRUCache<K, V> {
    * stay within the capacity and weight bounds.
    */
   put(key: K, value: V): void {
-    const evicted: LRUNode<K, V>[] = [];
     const weight = this.#weigh?.(key, value) ?? 0;
     const existingNode = this.#map.get(key);
     if (existingNode !== undefined) {
@@ -247,11 +246,7 @@ export class LRUCache<K, V> {
       existingNode.value = value;
       existingNode.weight = weight;
       this.#moveToTail(existingNode);
-      this.#evictToFit(evicted);
     } else {
-      if (this.#map.size >= this.#capacity) {
-        this.#evictHead(evicted);
-      }
       const node: LRUNode<K, V> = {
         key,
         value,
@@ -262,11 +257,13 @@ export class LRUCache<K, V> {
       this.#map.set(key, node);
       this.#addToTail(node);
       this.#weight += weight;
-      this.#evictToFit(evicted);
     }
+    const evicted = this.#evictToFit();
     const onEvict = this.#onEvict;
     if (onEvict !== undefined) {
-      for (const node of evicted) onEvict(node.key, node.value);
+      for (let node = evicted; node !== null; node = node.next) {
+        onEvict(node.key, node.value);
+      }
     }
   }
 
@@ -292,14 +289,40 @@ export class LRUCache<K, V> {
 
   /**
    * Helper for `put()`, which drops entries from the oldest end until the
-   * weight budget is met. The newest entry stays even when it alone exceeds
-   * the budget, so a single oversized value cannot leave the cache empty on
-   * every `put()`.
+   * capacity and the weight budget are both met, and returns the first entry
+   * it dropped, oldest first and linked through `next`, or `null` if it
+   * dropped none. The newest entry stays even when it alone exceeds the
+   * budget, so a single oversized value cannot leave the cache empty on every
+   * `put()`.
    */
-  #evictToFit(evicted: LRUNode<K, V>[]): void {
-    while (this.#weight > this.#maxWeight && this.#map.size > 1) {
-      this.#evictHead(evicted);
+  #evictToFit(): LRUNode<K, V> | null {
+    if (this.#map.size <= this.#capacity && this.#weight <= this.#maxWeight) {
+      return null;
     }
+    const first = this.#head;
+    let last: LRUNode<K, V> | null = null;
+    let kept = first;
+    while (
+      kept !== null &&
+      (this.#map.size > this.#capacity ||
+        (this.#weight > this.#maxWeight && this.#map.size > 1))
+    ) {
+      this.#map.delete(kept.key);
+      this.#weight -= kept.weight;
+      last = kept;
+      kept = kept.next;
+    }
+    if (last === null) {
+      return null;
+    }
+    last.next = null;
+    this.#head = kept;
+    if (kept === null) {
+      this.#tail = null;
+    } else {
+      kept.prev = null;
+    }
+    return first;
   }
 
   /** Unlinks `node` from the recency list. */
@@ -337,20 +360,5 @@ export class LRUCache<K, V> {
     }
     this.#removeNode(node);
     this.#addToTail(node);
-  }
-
-  /**
-   * Drops the entry at the oldest end, if there is one, and adds it to
-   * `evicted`, which `put()` reports once it has finished.
-   */
-  #evictHead(evicted: LRUNode<K, V>[]): void {
-    if (this.#head === null) {
-      return;
-    }
-    const node = this.#head;
-    this.#map.delete(node.key);
-    this.#removeNode(node);
-    this.#weight -= node.weight;
-    evicted.push(node);
   }
 }

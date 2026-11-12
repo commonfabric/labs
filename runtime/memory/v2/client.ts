@@ -125,7 +125,7 @@ import {
   type SyncPartSession,
   wholeLimits,
 } from "./message-parts.ts";
-import { type ArmedTurn, armTurn } from "./turn.ts";
+import { type ArmedTurn, armTurn } from "@commonfabric/async/turn";
 import {
   lookupSchemaDocument,
   registerSchemaDocument,

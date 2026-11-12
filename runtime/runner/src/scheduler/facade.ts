@@ -1,4 +1,5 @@
 import type { CellScope, ScopeKeyIdentity } from "@commonfabric/memory/v2";
+import { type ArmedTurn, armTurn } from "@commonfabric/async/turn";
 import { BoundedKeyMap } from "@commonfabric/collections/cache";
 import { ensureNotRenderThread } from "@commonfabric/platform/env";
 import { getLogger } from "@commonfabric/logger";
@@ -89,7 +90,6 @@ import {
   getSchedulerActionId,
   getSchedulerActionTelemetryInfo,
   handleSchedulerError,
-  queueTask,
   recordTriggerTrace as recordTriggerTraceState,
   type SchedulerActionIdentityState,
 } from "./diagnostics.ts";
@@ -448,7 +448,7 @@ export class Scheduler {
   #diagnosisControlState!: SchedulerDiagnosisControlState;
 
   // Debounce infrastructure for throttling slow actions
-  #pendingQueueTaskTimer: ReturnType<typeof setTimeout> | null = null;
+  #queuedPass: ArmedTurn | null = null;
   #eventQueueState!: SchedulerEventQueueState;
   #eventExecutionState!: SchedulerEventExecutionState;
   readonly #gates = new SchedulerGates({
@@ -668,7 +668,7 @@ export class Scheduler {
     readonly gates: SchedulerGates;
     readonly nodes: NodeRegistry;
     readonly pending: Set<Action>;
-    pendingQueueTaskTimer: ReturnType<typeof setTimeout> | null;
+    queuedPass: ArmedTurn | null;
     scheduled: boolean;
     readonly settlingTracker: SettlingTracker;
     clearBackoffForCleanNodes(): void;
@@ -702,11 +702,11 @@ export class Scheduler {
       gates: this.#gates,
       nodes: this.#nodes,
       pending: this.#pending,
-      get pendingQueueTaskTimer() {
-        return outerThis.#pendingQueueTaskTimer;
+      get queuedPass() {
+        return outerThis.#queuedPass;
       },
-      set pendingQueueTaskTimer(value) {
-        outerThis.#pendingQueueTaskTimer = value;
+      set queuedPass(value) {
+        outerThis.#queuedPass = value;
       },
       get scheduled() {
         return outerThis.#scheduled;
@@ -1664,13 +1664,13 @@ export class Scheduler {
   queueExecution(): void {
     if (this.#disposed) return;
     if (this.#scheduled) {
-      if (this.#pendingQueueTaskTimer === null) {
+      if (this.#queuedPass === null) {
         this.#rerunAfterCurrentExecute = true;
       }
       return;
     }
-    this.#pendingQueueTaskTimer = queueTask(() => {
-      this.#pendingQueueTaskTimer = null;
+    this.#queuedPass = armTurn(() => {
+      this.#queuedPass = null;
       this.#execute();
     });
     this.#scheduled = true;
@@ -2732,10 +2732,8 @@ export class Scheduler {
       record.cancelLocalReadWake = undefined;
     }
     this.#gates.cancelWake();
-    if (this.#pendingQueueTaskTimer !== null) {
-      clearTimeout(this.#pendingQueueTaskTimer);
-      this.#pendingQueueTaskTimer = null;
-    }
+    this.#queuedPass?.cancel();
+    this.#queuedPass = null;
     this.#triggerIndex.clear();
     this.#wakeShaper.dispose();
     // Release waiters already parked when dispose arrived. The disposed check
@@ -2790,7 +2788,7 @@ export class Scheduler {
   async #execute(): Promise<void> {
     if (this.#disposed) return;
     logger.timeStart("scheduler", "execute");
-    // Each execute pass starts in a fresh macrotask (queueTask): restart
+    // Each execute pass starts in a fresh macrotask (armTurn): restart
     // the serving posture's yield slice so idle time between passes never
     // reads as spent work (stage C tuning T3).
     this.#cooperativeYield?.noteMacrotaskBoundary();
@@ -3463,8 +3461,8 @@ export class Scheduler {
       resetConvergenceHoldPasses: () => {
         this.#resetConvergenceHoldPasses();
       },
-      setPendingQueueTaskTimer: (timer) => {
-        this.#pendingQueueTaskTimer = timer;
+      setQueuedPass: (turn) => {
+        this.#queuedPass = turn;
       },
       execute: () => this.#execute(),
     };
