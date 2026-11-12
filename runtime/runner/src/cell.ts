@@ -792,31 +792,6 @@ const doneStatusTxView = (
   }) as IExtendedStorageTransaction;
 };
 
-/** The done-status views {@link withheldStatusTxView} made. */
-const withheldDeliveries = new WeakSet<IExtendedStorageTransaction>();
-
-/**
- * A done-status view of `tx` for a delivery whose handling read data its
- * stream's space doesn't admit, so that its outcome is withheld (events.md
- * §5): the handling may have committed or not, and the view says neither.
- */
-export const withheldStatusTxView = (
-  tx: IExtendedStorageTransaction,
-): IExtendedStorageTransaction => {
-  const view = doneStatusTxView(tx);
-  withheldDeliveries.add(view);
-  return view;
-};
-
-/**
- * Whether `tx`, the transaction a sender's commit callback reads, reports a
- * delivery whose outcome is withheld: its handling read data its stream's
- * space doesn't admit, so whether it committed is not told (events.md §5).
- * Such a transaction reports `done`.
- */
-export const isWithheldDelivery = (tx: IExtendedStorageTransaction): boolean =>
-  withheldDeliveries.has(tx);
-
 /**
  * Whether `tx` is a speculative echo that withdrew: its run named an
  * `inSpace(...)` target this runtime leaves unresolved, so the transaction
@@ -2722,15 +2697,6 @@ export class CellImpl<T extends FabricValue>
                       consequence.reason ?? consequence.kind,
                     ),
                   ));
-                  return;
-                }
-                // A handling whose outcome is withheld may have committed or
-                // not. It is reported `done`, never as a failure, so that
-                // nothing retries or reports an error for a delivery that may
-                // have landed, and `isWithheldDelivery()` is what tells the
-                // view apart from a handling that committed.
-                if (consequence.kind === "withheld") {
-                  callerOnCommit(withheldStatusTxView(echoTx));
                   return;
                 }
                 // Only a consequence the overlay observed is the served
