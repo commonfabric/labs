@@ -1013,6 +1013,105 @@ describe("sync-cid-references", () => {
       }
     });
 
+    it("applies a write held behind a watch answer after that answer installs its view", async () => {
+      // A write lands while the watch's answer waits for a body, and the
+      // write needs no body of its own, so nothing but the hold's order
+      // stands between the two once the body arrives. The answer's
+      // continuations install the view the write applies to, so the write
+      // survives only if they run before the write is handed on.
+      const server = new Server({
+        ...testSessionOpenServerOptions,
+        store: new URL("memory://sync-cid-references-held-write"),
+        subscriptionRefreshDelayMs: 0,
+      });
+      const referenced = Promise.withResolvers<void>();
+      const effected = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      let effectNamedBody = false;
+      const inner = loopback(server);
+      const transport: Transport = {
+        ...inner,
+        send: (payload: string) => inner.send(payload),
+        close: () => inner.close(),
+        setReceiver(receiver: (payload: string) => void) {
+          inner.setReceiver((payload: string) => {
+            if (payload.includes('"byReference":true')) {
+              acquireSchemaRegistryLease()();
+              referenced.resolve();
+            }
+            if (payload.includes('"session/effect"')) {
+              if (payload.includes('"byReference":true')) {
+                effectNamedBody = true;
+              }
+              effected.resolve();
+            }
+            if (payload.includes('"entities"')) {
+              void release.promise.then(() => receiver(payload));
+            } else {
+              receiver(payload);
+            }
+          });
+        },
+      };
+      const writerClient = await connect({ transport: loopback(server) });
+      const watcherClient = await connect({
+        transport,
+        syncCidReferences: true,
+      });
+      const space = "did:key:z6Mk-sync-cid-references-held-write";
+      const carrier = "of:sync-cid-references-held-write";
+      try {
+        const writer = await writerClient.mount(
+          space,
+          {},
+          testSessionOpenAuthFactory,
+        );
+        await writer.transact({
+          localSeq: 1,
+          reads: { confirmed: [], pending: [] },
+          operations: closureOperations(carrier),
+        });
+        const watcher = await watcherClient.mount(
+          space,
+          {},
+          testSessionOpenAuthFactory,
+        );
+        const watching = watcher.watchSet([{
+          id: "carrier",
+          kind: "graph",
+          query: {
+            roots: [{ id: carrier, selector: { path: [], schema: false } }],
+          },
+        }]);
+        await referenced.promise;
+        await writer.transact({
+          localSeq: 2,
+          reads: { confirmed: [], pending: [] },
+          operations: [{
+            op: "set",
+            id: carrier,
+            value: { value: { x: linkWithSchemaRef(outerHash), n: 2 } },
+          }],
+        });
+        await effected.promise;
+        release.resolve();
+        await watching;
+        await watcherClient.delivered(watcher);
+        const view = (await watcher.watchAddSync([])).view;
+        // The control: the effect needed no body, so the hold's order is
+        // the only thing that kept it behind the answer.
+        expect(effectNamedBody).toBe(false);
+        expect(documentIn(view, carrier)?.value).toEqual({
+          x: linkWithSchemaRef(outerHash),
+          n: 2,
+        });
+      } finally {
+        await writerClient.close();
+        await watcherClient.close();
+        await server.close();
+      }
+    });
+
     it("ends a sync's wait for a body when the client closes", async () => {
       const server = new Server({
         ...testSessionOpenServerOptions,
