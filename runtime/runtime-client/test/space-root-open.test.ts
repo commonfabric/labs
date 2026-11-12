@@ -210,8 +210,12 @@ async function rootlessSpace(grants: ACL = { "*": "WRITE" }) {
       return id;
     },
 
-    /** A space that goes on existing, which the owner alone belongs to. */
-    otherSpace: () => ownerParty.runtime.createSpace({}),
+    /**
+     * A space that goes on existing, which grants `grants` beside the owner's
+     * `OWNER`, and nobody else anything by default.
+     */
+    otherSpace: (grants: ACL = {}) =>
+      ownerParty.runtime.createSpace({ grants }),
 
     /** Whether a space answers to `did`, asked as the owner. */
     spaceExists: (did: MemorySpace) => ownerParty.runtime.spaceExists(did),
@@ -392,34 +396,67 @@ describe("space-root-open", () => {
 
   describe("a space that refuses the runtime", () => {
     /**
-     * Each read of `space` that `client` can ask the worker for which fails
-     * for a space that refuses it.
+     * Each read of `space` that `client` can ask the worker for, none of
+     * which resolves for a space that refuses it. `piece` names a piece the
+     * space holds.
      */
-    const reads = (client: RuntimeClient, space: MemorySpace) => [
+    const reads = (
+      client: RuntimeClient,
+      space: MemorySpace,
+      piece: string,
+    ) => [
       () => fieldsIn(client, space),
       () => client.getSpaceRootPattern(space),
       () => client.getSpaceRootPattern(space, { start: false }),
+      () => client.getPiece(piece, space),
+      () => client.getPiece(piece, space, true),
+      () => client.resolveSlug("top", space),
     ];
 
     it("fails each read with `SpaceAccessRefused` for a principal it never admitted", async () => {
       await using room = await rootlessSpace({});
-      await room.owner.getSpaceRootPattern(room.space);
+      const root = await room.owner.getSpaceRootPattern(room.space);
 
-      for (const read of reads(room.visitor, room.space)) {
+      for (const read of reads(room.visitor, room.space, root!.id())) {
         expect(await codeOf(read())).toBe(RuntimeErrorCode.SpaceAccessRefused);
       }
     });
 
     it("fails each read with `SpaceAccessRefused` for a principal it stopped admitting", async () => {
       await using room = await rootlessSpace({ [visitor.did()]: "READ" });
-      await room.owner.getSpaceRootPattern(room.space);
+      const root = await room.owner.getSpaceRootPattern(room.space);
+      await room.pointSlug("held", root!.id());
       expect(await fieldsIn(room.visitor, room.space)).toBeUndefined();
+      expect(await room.visitor.getPiece(root!.id(), room.space)).toBeDefined();
+      const before = await room.visitor.resolveSlug("held", room.space);
+      expect(before.refusal).toBeUndefined();
 
       await room.revokeVisitor();
 
-      for (const read of reads(room.visitor, room.space)) {
+      for (const read of reads(room.visitor, room.space, root!.id())) {
         expect(await codeOf(read())).toBe(RuntimeErrorCode.SpaceAccessRefused);
       }
+      expect(await codeOf(room.visitor.resolveSlug("held", room.space)))
+        .toBe(RuntimeErrorCode.SpaceAccessRefused);
+    });
+
+    it("fails a slug's resolution with `SpaceAccessRefused` when it is the first read of the space", async () => {
+      // Nothing has been refused before the resolution asks, so the refusal
+      // arrives while the walk reads, which then finds nothing.
+      await using room = await rootlessSpace({});
+
+      expect(await codeOf(room.visitor.resolveSlug("top", room.space)))
+        .toBe(RuntimeErrorCode.SpaceAccessRefused);
+    });
+
+    it("fails a redirect into it from a space that admits the principal with `SpaceAccessRefused`", async () => {
+      await using room = await rootlessSpace({});
+      const root = await room.owner.getSpaceRootPattern(room.space);
+      const live = await room.otherSpace({ [visitor.did()]: "READ" });
+      const redirect = await room.pointSlug("into", root!.id(), live);
+
+      expect(await codeOf(room.visitor.getPiece(redirect, live, true)))
+        .toBe(RuntimeErrorCode.SpaceAccessRefused);
     });
 
     it("fails a denied operation with no code while the space stays readable", async () => {

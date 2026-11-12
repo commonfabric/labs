@@ -224,9 +224,13 @@ was before the retry. The placeholder's `data-space-access-retries` attribute
 counts the space's settled retries, which is what a test waits on to know that
 a retry has been decided.
 
-A request to the worker that fails because its space refused the runtime, such
-as opening the space's root or listing a record's fields with
-`CellHandle.fields()`, fails with
+Asking the worker to read a space that refused the runtime, whether opening
+its root or a piece in it, resolving a slug in it, or listing a record's fields
+with `CellHandle.fields()`, fails, rather than answering as though the space
+held nothing: a piece or a slug the runtime read before the refusal is still
+in its replica, and a slug resolution reaching nothing says nothing about the
+name. A redirect from another space landing in it fails the same way. Such a
+request fails with
 `RuntimeErrorCode.SpaceAccessRefused`, so a host that missed the space's one
 `spaceaccesslost` still tells the refusal from other failures, and can show the
 space as out of reach rather than wait on it. The shell does not read the code:
