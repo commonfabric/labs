@@ -21,6 +21,7 @@ import {
 } from "../cfc/types.ts";
 import type { Runtime } from "../runtime.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
+import { getTransactionReadActivities } from "../storage/transaction-inspection.ts";
 
 /** Where an event's entry sits: its stream's entries document, and its index. */
 export interface ProcessedClaimEntry {
@@ -96,10 +97,40 @@ export const writeWithheldOutcome = (
 ): void => writeClaimField(runtime, tx, space, entry, "withheld", true);
 
 /**
+ * Whether the outcome of the served event-handler run `tx`, whose event's
+ * stream lives in `space`, is withheld: whether its join carries a clause the
+ * stream's space doesn't admit (`processedClaimJoinIsForeign()`). A run whose
+ * transaction has already ended, as one the handler aborted has, no longer
+ * holds the label observations its join is derived from; it is taken as
+ * foreign when it read any document of another space, which withholds more
+ * rather than less.
+ */
+export const runOutcomeIsWithheld = (
+  tx: IExtendedStorageTransaction,
+  space: MemorySpace,
+): boolean => {
+  if (tx.status().status === "ready") {
+    try {
+      return processedClaimJoinIsForeign(tx, space);
+    } catch {
+      // Fall through to what the run's reads say.
+    }
+  }
+  try {
+    for (const read of getTransactionReadActivities(tx)) {
+      if (read.space !== space) return true;
+    }
+    return false;
+  } catch {
+    return true;
+  }
+};
+
+/**
  * Decides, for the served event-handler run `tx` whose event's stream lives in
  * `space`, whether its processed claim withholds the outcome: whether the
  * run's join carries a clause the stream's space doesn't admit
- * (`processedClaimJoinIsForeign()`). When it does, a run delivered from its
+ * (`runOutcomeIsWithheld()`). When it does, a run delivered from its
  * event's durable entry (`entry`) records `withheld` on that entry beside the
  * mark, in its own transaction, and a run the wave delivers beside its event's
  * append is noted for the wave to record it (`waveClaimIsWithheld()`). Returns
@@ -111,7 +142,8 @@ export const withholdProcessedClaimOutcome = (
   space: MemorySpace,
   entry: ProcessedClaimEntry | undefined,
 ): boolean => {
-  if (!processedClaimJoinIsForeign(tx, space)) return false;
+  if (!runOutcomeIsWithheld(tx, space)) return false;
+  if (tx.status().status !== "ready") return true;
   if (entry === undefined) {
     withheldWaveClaims.add(tx);
   } else {

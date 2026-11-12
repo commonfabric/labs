@@ -2481,11 +2481,12 @@ describe("Phase 3 events-down (serving side)", () => {
     }
   });
 
-  it("records the same withheld outcome for a served handling that read another space's label, whether it committed or was refused, and tells its sender it is withheld", async () => {
+  it("records the same withheld outcome for a served handling that read another space's label, whether it committed, was refused or threw, and tells its sender it is withheld", async () => {
     // A probe on the pattern's stream reads a document of another space whose
     // label this space doesn't admit. For `commits` it writes nothing more;
     // for `refuses` it also copies the value into this space, which the
-    // writer-fit gate refuses; for `plain` it reads nothing labeled. The
+    // writer-fit gate refuses; for `throws` it throws; for `plain` it reads
+    // nothing labeled. The
     // processed claim (`processed-claim.ts`) takes nothing of the join, so
     // the two foreign-read handlings are delivered, and each records the
     // outcome withheld, not how it ended.
@@ -2586,6 +2587,7 @@ describe("Phase 3 events-down (serving side)", () => {
           undefined,
           tx,
         ).getRaw() as { secret?: string } | undefined;
+        if (kind === "throws") throw new Error("the probe threw");
         if (kind !== "refuses") return;
         servingRuntime!.getCell<{ copied?: string }>(
           space,
@@ -2608,13 +2610,14 @@ describe("Phase 3 events-down (serving side)", () => {
       const fired = {
         commits: fireVerb(result, "bump", { kind: "commits" }, "withheld-1"),
         refuses: fireVerb(result, "bump", { kind: "refuses" }, "withheld-2"),
+        throws: fireVerb(result, "bump", { kind: "throws" }, "withheld-4"),
         plain: fireVerb(result, "bump", { kind: "plain" }, "withheld-3"),
       };
       await clientRuntime.idle();
       await awaitAdmitted(
         server,
         () =>
-          ["commits", "refuses", "plain"].every((kind) =>
+          ["commits", "refuses", "throws", "plain"].every((kind) =>
             entryByKind(kind)?.consequenced === true
           ),
       );
@@ -2649,11 +2652,12 @@ describe("Phase 3 events-down (serving side)", () => {
       };
       expect(outcomeOf("commits")).toEqual(withheld);
       expect(outcomeOf("refuses")).toEqual(withheld);
+      expect(outcomeOf("throws")).toEqual(withheld);
       expect(outcomeOf("plain")).toEqual({ ...withheld, withheld: undefined });
 
       // Each sender is told the same: done, with the outcome withheld,
       // whether the handling committed or not.
-      for (const kind of ["commits", "refuses"] as const) {
+      for (const kind of ["commits", "refuses", "throws"] as const) {
         await fired[kind].reached(1);
         const { status, tx } = fired[kind].entries[0];
         expect([kind, status, isWithheldDelivery(tx)]).toEqual([

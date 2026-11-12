@@ -2725,10 +2725,10 @@ export class CellImpl<T extends FabricValue>
                   return;
                 }
                 // A handling whose outcome is withheld may have committed or
-                // not, so it is reported neither as done nor as a failure: a
-                // done-status view the sender can tell apart
-                // (`isWithheldDelivery()`), so that nothing retries or
-                // reports an error for a delivery that may have landed.
+                // not. It is reported `done`, never as a failure, so that
+                // nothing retries or reports an error for a delivery that may
+                // have landed, and `isWithheldDelivery()` is what tells the
+                // view apart from a handling that committed.
                 if (consequence.kind === "withheld") {
                   callerOnCommit(withheldStatusTxView(echoTx));
                   return;

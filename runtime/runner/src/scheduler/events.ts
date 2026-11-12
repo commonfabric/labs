@@ -6,10 +6,7 @@ import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import { createRef } from "../create-ref.ts";
 import { toURI } from "../uri-utils.ts";
-import {
-  loadStoredCfcEnvelope,
-  processedClaimJoinIsForeign,
-} from "../cfc/prepare.ts";
+import { loadStoredCfcEnvelope } from "../cfc/prepare.ts";
 import {
   recordTrustedEventPolicyInputs,
   type StoredSchemaResolver,
@@ -25,7 +22,10 @@ import {
   waveRunContextOf,
   waveSettlementOf,
 } from "../executor/wave.ts";
-import { withholdProcessedClaimOutcome } from "../executor/processed-claim.ts";
+import {
+  runOutcomeIsWithheld,
+  withholdProcessedClaimOutcome,
+} from "../executor/processed-claim.ts";
 import {
   addressKey,
   areNormalizedLinksSame,
@@ -2387,22 +2387,13 @@ export async function dispatchQueuedEvent(state: {
   // Whether a served run's outcome is withheld: whether its join carries a
   // clause its stream's space doesn't admit, so that its processed claim, and
   // every failure it reports, says the same thing whatever happened
-  // (`withholdProcessedClaimOutcome()`). Decided once, before the commit, or
-  // by the first failure arm to ask. A join that can't be derived withholds,
-  // which hides more rather than less.
+  // (`runOutcomeIsWithheld()`). Decided once, while the transaction is still
+  // open: before the commit, or before a failed run's transaction is
+  // aborted.
   let outcomeWithheld: boolean | undefined;
   const servedOutcomeWithheld = (): boolean => {
     if (served === undefined) return false;
-    if (outcomeWithheld === undefined) {
-      try {
-        outcomeWithheld = processedClaimJoinIsForeign(
-          tx,
-          queuedEvent.eventLink.space,
-        );
-      } catch {
-        outcomeWithheld = true;
-      }
-    }
+    outcomeWithheld ??= runOutcomeIsWithheld(tx, queuedEvent.eventLink.space);
     return outcomeWithheld;
   };
   /** `outcome`, with `withheld` set when the served run's outcome is. */
@@ -2420,6 +2411,8 @@ export async function dispatchQueuedEvent(state: {
     const handlerError = error instanceof Error
       ? error
       : new Error(String(error));
+    // Decided before the abort below takes the observations it reads.
+    servedOutcomeWithheld();
     for (
       const complete of [
         () => {
@@ -3211,7 +3204,9 @@ export async function dispatchQueuedEvent(state: {
 
         // A served event's CFC verdict seals an error consequence (events.md
         // §5: the error IS the consequence — the same honesty as the throw arm
-        // in `finalize` above). Without one the durable entry stays
+        // in `finalize` above), or, for a run whose join is foreign to its
+        // stream's space, the same withheld consequence a commit records
+        // (`servedErrorOutcome`). Without one the durable entry stays
         // unconsequenced and every later drain pass runs it into the identical
         // refusal. Scoped to exactly the class `reportDroppedCfcRejectedWrite`
         // reports; a CFC refusal that is not a verdict defers instead
