@@ -158,7 +158,7 @@ export type EventIntentOutcome = {
   eventId: string;
   seq?: number;
   sidecarId?: string;
-  kind: "dropped" | "errored" | "refused" | "needs-attention" | "withheld";
+  kind: "dropped" | "errored" | "refused" | "needs-attention";
   retryable?: boolean;
   reason: string;
   attention?: DeliveryAttention;
@@ -178,7 +178,6 @@ export type IntentConsequence = {
     | "dropped"
     | "refused"
     | "needs-attention"
-    | "withheld"
     | "unsettled";
   reason?: string;
   attention?: DeliveryAttention;
@@ -304,8 +303,7 @@ export class SpeculationOverlayDestination
   readonly #arrivalObserverReleases = new Map<MemorySpace, () => void>();
 
   /** Intents whose TERMINAL consequence this overlay has observed
-   * (consequenced / errored / dropped / refused / needs-attention /
-   * withheld), keyed by eventId (a
+   * (consequenced / errored / dropped / refused), keyed by eventId (a
    * per-fire mint — event-identity.ts — unique across spaces), bounded and
    * insertion-ordered (oldest pruned). Stage C tuning T2's
    * LATE-ECHO rule reads it at seal: an event-handler echo whose intent is
@@ -1452,8 +1450,8 @@ export class SpeculationOverlayDestination
   ): void {
     const key = `${space}\0${eventId}`;
     // The late-echo rule's memory (stage C tuning T2): every terminal
-    // signal — consequenced, errored, dropped, refused, needs-attention,
-    // withheld — makes a later echo of this intent jobless.
+    // signal — consequenced, errored, dropped, refused — makes a later
+    // echo of this intent jobless.
     this.#noteJoblessIntent(eventId);
     const waiters = this.#intentConsequenceWaiters.get(key);
     if (waiters !== undefined && waiters.length > 0) {
@@ -1596,15 +1594,11 @@ export class SpeculationOverlayDestination
   }
 
   /** Today's arms, in today's order, on ONE tracked entry (design
-   * contract point 4): `status === "needs-attention"` → untrack, retire,
-   * settle and notify `needs-attention`; `status === "dropped"` → untrack,
-   * retire, settle `dropped`, notify; `consequenced === true` with
-   * `withheld` → untrack, retire, settle and notify `withheld` (the
-   * handling read data this space doesn't admit, so the entry says the same
-   * thing however it ended, events.md §5); else `consequenced === true` →
-   * untrack, retire, settle `errored` (if `error`) or `consequenced`,
-   * notify `errored` if `error`. Anything else (the entry present but not
-   * yet processed) leaves the intent tracked. */
+   * contract point 4): `status === "dropped"` → untrack, retire, settle
+   * `dropped`, notify; else `consequenced === true` → untrack, retire,
+   * settle `errored` (if `error`) or `consequenced`, notify `errored`
+   * if `error`. Anything else (the entry present but not yet processed)
+   * leaves the intent tracked. */
   #applyIntentEntry(
     space: MemorySpace,
     sidecarId: string,
@@ -1650,24 +1644,6 @@ export class SpeculationOverlayDestination
         eventId: entry.eventId,
         kind: "dropped",
         reason: entry.reason ?? "dropped",
-      });
-    } else if (entry.consequenced === true && entry.withheld === true) {
-      // The handling read data this space doesn't admit, so the entry says
-      // the same thing however it ended (events.md §5): the echo retires,
-      // and subscribers hear only that the outcome is withheld.
-      const reason = "the outcome is withheld: the handling read data this " +
-        "space does not admit";
-      this.#untrackIntent(space, sidecarId, entry.eventId);
-      this.retireIntent(space, entry.eventId);
-      this.#settleIntentConsequence(space, entry.eventId, {
-        kind: "withheld",
-        reason,
-      });
-      this.#notifyIntentOutcome({
-        space,
-        eventId: entry.eventId,
-        kind: "withheld",
-        reason,
       });
     } else if (entry.consequenced === true) {
       if (entry.error !== undefined) {
@@ -1784,8 +1760,7 @@ export class SpeculationOverlayDestination
    * that wave lands, a visible flicker. Counted: `cascade-echo-retired`
    * per retired cascade echo, and — when the caller arms the witness
    * with the MARK's sidecar (the consequenced, non-error arm: the one
-   * case known to have a server cascade child on its way; a withheld
-   * entry says nothing of that, and arms nothing) —
+   * case where a server cascade child is on its way) —
    * `cascade-echo-retired-unarrived` when NO doc the echo wrote holds a
    * confirmed value at or after the mark frame's seq (read as the
    * sidecar's confirmed seq at the check: the mark and a same-wave

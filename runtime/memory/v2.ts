@@ -584,12 +584,6 @@ export type StreamEventEntry = {
    * (events.md §5). */
   error?: string;
 
-  /** Processing-side: the handling read data this space doesn't admit, so
-   * the entry records the outcome withheld, the same whether it committed,
-   * errored or was refused, and records none of `error`, `status` or `reason`
-   * (events.md §5). */
-  withheld?: true;
-
   /** Processing-side: how the entry ended, where it did not simply run.
    * `"dropped"` is the dropped-event notice (events.md §5 T7);
    * `"needs-attention"` has its detail in `attention` below. */

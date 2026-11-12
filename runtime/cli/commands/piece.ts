@@ -1182,13 +1182,6 @@ export function renderPieceCallOutcome(
     // Invocation JSON — settled, or stopped at "committed" under --no-wait —
     // prose stays on stderr via hint().
     renderOut(JSON.stringify(invocationJson(result.invocation), null, 2));
-    if (result.invocation.withheld) {
-      hintOut(cliText(
-        "Handled; outcome withheld: the handler read data this space does " +
-          "not admit, so whether it committed, and what it returned, is not " +
-          "told.",
-      ));
-    }
     // The address the envelope published, when the runtime wrote a receipt.
     // It leads the detached next steps because it collects the outcome
     // without running the verb again, and it composes into the command named
@@ -1242,8 +1235,7 @@ export function renderPieceCallOutcome(
  * the receipt carried one — a value-less verb omits it rather than reporting
  * `null`, which would be indistinguishable from a verb that returned null.
  * `links` appears only under --show-links: provenance beside the value,
- * never inline in it. `withheld` appears only for a handling whose outcome is
- * withheld, which carries no `result`.
+ * never inline in it.
  *
  * `receipt` is the one key that does not depend on a readback or a flag: it
  * is the address of the cell holding this outcome, known at commit, so it
@@ -1257,7 +1249,6 @@ export function invocationJson(
     invocation: outcome.id,
     status: outcome.status,
     ...(outcome.deduplicated ? { deduplicated: true } : {}),
-    ...(outcome.withheld ? { withheld: true } : {}),
     ...(outcome.receipt !== undefined ? { receipt: outcome.receipt } : {}),
     ...("result" in outcome && outcome.result !== undefined
       ? { result: outcome.result }

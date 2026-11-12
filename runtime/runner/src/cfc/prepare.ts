@@ -251,7 +251,6 @@ import { createTrustResolver } from "./trust.ts";
 import {
   CFC_ENFORCING_STRICTNESS,
   CFC_STRUCTURAL_PROVENANCE_PIECE_SETUP_STORE,
-  CFC_STRUCTURAL_PROVENANCE_PROCESSED_CLAIM,
   CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE,
   CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION,
   type CfcAddress,
@@ -1532,28 +1531,6 @@ const structuralProvenanceForPath = (
     arraysEqual(canonicalizeLogicalPath(input.target.path), logicalPath)
   );
 };
-
-/**
- * Whether `path` of `target` is a served event's processed claim, as an
- * authorized `CFC_STRUCTURAL_PROVENANCE_PROCESSED_CLAIM` marker on `tx` names
- * it. Only a stream's entries document holds one.
- */
-const isProcessedClaimPath = (
-  tx: IExtendedStorageTransaction,
-  target: {
-    space: MemorySpace;
-    id: URI;
-    scope: ReturnType<typeof normalizeCellScope>;
-  },
-  path: readonly string[],
-): boolean =>
-  target.id.startsWith(STREAM_ENTRIES_DOC_PREFIX) &&
-  structuralProvenanceForPath(
-      tx,
-      target,
-      path,
-      CFC_STRUCTURAL_PROVENANCE_PROCESSED_CLAIM,
-    ) !== undefined;
 
 const setupProjectionSourceMatchesValue = (
   tx: IExtendedStorageTransaction,
@@ -12924,12 +12901,7 @@ export function* prepareBoundaryCommitSteps(
       ]),
     );
     const flowTarget = flowPersist ? flowTargets?.get(key) : undefined;
-    // A served event's processed claim takes nothing of the attempt's reads
-    // (§6.2.2; `CFC_STRUCTURAL_PROVENANCE_PROCESSED_CLAIM`), so its path is
-    // neither stamped with the join nor measured against the store.
-    const flowWrittenPaths = (flowTarget?.paths ?? []).filter((path) =>
-      !isProcessedClaimPath(tx, target, path)
-    );
+    const flowWrittenPaths = flowTarget?.paths ?? [];
     const flowWrittenPrefixes = new PathPrefixIndex();
     for (const path of flowWrittenPaths) flowWrittenPrefixes.add(path);
     const flowWrittenValues = flowTarget?.valuesByPath;
@@ -13165,7 +13137,14 @@ export function* prepareBoundaryCommitSteps(
     // the pinned specs commit, and runs by default rather than behind a dial,
     // on the CFC owner's ruling for this case. Remove this marker once the pin
     // holds that ruling.
-    const residencyCeiling = residencyCeilingOf(tx, space, scope);
+    const scopedReader = scope === "user" || scope === "session"
+      ? scopedResidencyPrincipal(tx)
+      : undefined;
+    const residencyCeiling: readonly CfcConfClause[] = [
+      cfcAtom.space(space),
+      ...(scope === "space" ? [cfcAtom.personalSpace(space)] : []),
+      ...(scopedReader === undefined ? [] : [cfcAtom.user(scopedReader)]),
+    ];
     // Whole-value write destinations stamped as written
     // (`assertedValueRootPaths`). They join the written prefixes here, so the
     // per-value entries beneath them are replaced and the attribution of any
@@ -14833,50 +14812,6 @@ export const writeStoredCfcEnvelope = (
     // user-surface reads/writes plus explicit policy inputs, not by recursive
     // attempted-target tracking of this internal metadata update.
   }, storedEnvelope);
-};
-
-/**
- * The §8.12.4 residency clauses a document of `scope` in `space` admits beside
- * its declared policy: the space's own audience, its personal space for an
- * unbound document, and a scoped instance's own principal. The writer-fit
- * measurement's comments say what each clause rests on.
- */
-const residencyCeilingOf = (
-  tx: IExtendedStorageTransaction,
-  space: MemorySpace,
-  scope: ReturnType<typeof normalizeCellScope>,
-): readonly CfcConfClause[] => {
-  const scopedReader = scope === "user" || scope === "session"
-    ? scopedResidencyPrincipal(tx)
-    : undefined;
-  return [
-    cfcAtom.space(space),
-    ...(scope === "space" ? [cfcAtom.personalSpace(space)] : []),
-    ...(scopedReader === undefined ? [] : [cfcAtom.user(scopedReader)]),
-  ];
-};
-
-/**
- * Whether the flow join of `tx` is foreign to a served event's processed
- * claim on a stream in `space`: whether it carries a clause the stream's
- * entries document, whose ceiling is its residency alone, doesn't admit.
- * §6.2.2 claims the processed cell apart from the handler, so its claim says
- * the same thing whatever the handler then does; the serving loop keeps that
- * where the claim shares the handler's transaction by recording, under a
- * foreign join, the same withheld outcome for every outcome
- * (https://github.com/commonfabric/specs/pull/94). Which labels the handler's
- * reads found is label metadata, so this reads no value the join protects.
- */
-export const processedClaimJoinIsForeign = (
-  tx: IExtendedStorageTransaction,
-  space: MemorySpace,
-): boolean => {
-  const { confidentiality } = deriveFlowJoin(tx);
-  return confidentiality.length > 0 &&
-    atomsOutsideCeiling(
-        confidentiality,
-        residencyCeilingOf(tx, space, "space"),
-      ).length > 0;
 };
 
 const cfcLogger = getLogger("cfc", { enabled: false });

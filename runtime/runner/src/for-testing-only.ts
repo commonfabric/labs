@@ -12,7 +12,6 @@ import { WebSocket } from "ws";
 import { instancePartialCause } from "./builder/instance-name.ts";
 import { freezePartialCauses } from "./builder/pattern.ts";
 import type { JSONObject, Pattern } from "./builder/types.ts";
-import { withheldStatusTxView } from "./cell.ts";
 import { observeCompilerStackDemandsForTestingOnly } from "./harness/deferred-compiler-stack.ts";
 import { ExtendedStorageTransaction } from "./storage/extended-storage-transaction.ts";
 
@@ -67,11 +66,3 @@ export function patternLiteralForTestingOnly<T extends Pattern>(
 export function instancePartialCauseForTestingOnly(name: string): JSONObject {
   return deepFreeze(instancePartialCause(name));
 }
-
-/**
- * The view a sender's commit callback reads for a served handling whose
- * outcome is withheld (`isWithheldDelivery()`), for a test in another package
- * that stands in for a sender's `sendEvent`. Reaching one through the runtime
- * takes a serving loop and a handler that read another space's labeled data.
- */
-export const withheldStatusTxViewForTestingOnly = withheldStatusTxView;

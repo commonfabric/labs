@@ -19,7 +19,6 @@ import {
   type EventAppendDeliveryOutcome,
   type IExtendedStorageTransaction,
   isStream,
-  isWithheldDelivery,
   type NormalizedFullLink,
   type Runtime,
   sendEvent,
@@ -112,14 +111,9 @@ export interface VerbEventCommitted {
   /**
    * Waits for the handling itself to land — under server execution the
    * served handling's consequence, otherwise the commit already in hand — and
-   * returns its failure, if it failed there, or `withheld` for a handling
-   * whose outcome is withheld: one that read data its stream's space doesn't
-   * admit, which reports the same thing whether it committed or not
-   * (`isWithheldDelivery()`).
+   * returns its failure, if it failed there.
    */
-  handled(): Promise<
-    { status: "handled" } | { status: "withheld" } | VerbHandlingFailed
-  >;
+  handled(): Promise<{ status: "handled" } | VerbHandlingFailed>;
 }
 
 const defaultTime = <T>(
@@ -255,7 +249,6 @@ export async function sendVerbEvent(
       ) {
         return { status: "failed", error: handledStatus.error };
       }
-      if (isWithheldDelivery(handledTx)) return { status: "withheld" };
       return { status: "handled" };
     },
   };
@@ -296,10 +289,6 @@ export type VerbCall =
   | { status: "refused"; message: string }
   /** Sent, and the handling failed: nothing it wrote was kept. */
   | { status: "failed"; message: string }
-  /** Sent, and the handling's outcome is withheld: it read data its stream's
-   * space doesn't admit, so whether it committed, and what it returned, is
-   * not told. */
-  | { status: "withheld"; message: string }
   | VerbCallSettled;
 
 /** A call whose handling landed. */
@@ -371,7 +360,7 @@ export async function callVerb(
   piece: NormalizedFullLink,
   verb: string,
   event: unknown,
-  options: Pick<SendVerbEventOptions, "invocation" | "sendEvent"> = {},
+  options: { invocation?: VerbInvocation } = {},
 ): Promise<VerbCall> {
   const cell = runtime.getCellFromLink({ ...piece, schema: undefined });
   let pattern: Pattern;
@@ -438,14 +427,6 @@ export async function callVerb(
       status: "failed",
       message: `the handler for "${verb}" failed, and nothing it wrote was ` +
         `kept: ${transactionFailureMessage(handling.error)}`,
-    };
-  }
-  // Its receipt may never have been written, and is not read.
-  if (handling.status === "withheld") {
-    return {
-      status: "withheld",
-      message: `the event for "${verb}" was handled, and its outcome is ` +
-        "withheld: the handler read data this space does not admit",
     };
   }
   const committed = sent as VerbEventCommitted;
