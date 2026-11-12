@@ -170,14 +170,46 @@ describe("cfc-anchors-label", () => {
         .toEqual(["field", certified("p")]);
     });
 
-    it("returns no atom of an entry of another observation class", () => {
+    it("returns the atoms of the entries a value read consumes, and none of a link entry with no class, a `followRef` entry or an unknown class", () => {
+      // Each entry is of its own component, so none replaces another.
+
       const stored = anchorsEnvelope([
-        { path: ["text"], observes: "shape", label: { integrity: ["shape"] } },
-        { path: ["text"], observes: "value", label: { integrity: ["value"] } },
+        { path: ["text"], origin: "a", label: { integrity: ["covering"] } },
+        {
+          path: ["text"],
+          origin: "b",
+          observes: "value",
+          label: { integrity: ["value"] },
+        },
+        {
+          path: ["text"],
+          origin: "c",
+          observes: "shape",
+          label: { integrity: ["shape"] },
+        },
+        {
+          path: ["text"],
+          origin: "d",
+          observes: "enumerate",
+          label: { integrity: ["enumerate"] },
+        },
+        { path: ["text"], origin: "link", label: { integrity: ["pointer"] } },
+        {
+          path: ["text"],
+          origin: "e",
+          observes: "followRef",
+          label: { integrity: ["followRef"] },
+        },
+        {
+          path: ["text"],
+          origin: "f",
+          observes: "unknown",
+          label: { integrity: ["unknown"] },
+        },
       ]);
 
       expect(integrityOver([stored], ["text"], "of:field", () => undefined))
-        .toEqual(["value"]);
+        .toEqual(["covering", "value", "shape", "enumerate"]);
     });
   });
 

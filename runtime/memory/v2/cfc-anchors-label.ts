@@ -20,6 +20,7 @@
 import type { FabricValue } from "@commonfabric/api";
 import { taggedHashStringOf, valueEqual } from "@commonfabric/data-model";
 import { atomPropagationClass } from "./cfc-atom-classes.ts";
+import { readConsumesEntry } from "./cfc-observation-classes.ts";
 import {
   isCfcLabelDocumentContent,
   isCfcLabelReference,
@@ -201,10 +202,11 @@ export const confidentialityOver = (
 /**
  * The integrity a read of the value at `path` carries, from the stored
  * envelopes `envelopes`, the same ones {@link confidentialityOver} reads: in
- * each, for each component, the deepest payload entry of the value class or
- * of none at the path or above it, and across those every atom any of them
- * holds, each once. An entry inside the value is not counted, since its claim
- * holds for part of the value only.
+ * each, for each component, the deepest payload entry a value read consumes
+ * ({@link readConsumesEntry}) at the path or above it, and across those every
+ * atom any of them holds, each once. A link entry with no class labels the
+ * pointer rather than the value, so it is not counted, and neither is an
+ * entry inside the value, whose claim holds for part of the value only.
  *
  * @throws AnchorsLabelError as {@link confidentialityOver} does.
  */
@@ -224,7 +226,7 @@ export const integrityOver = (
       if (entry.path.length > path.length || !bearsOn(entry.path, path)) {
         continue;
       }
-      if (entry.observes !== undefined && entry.observes !== "value") continue;
+      if (!readConsumesEntry("value", entry)) continue;
       const component = typeof entry.origin === "string"
         ? entry.origin
         : "legacy";

@@ -412,8 +412,11 @@ Within the apply steps of §7.7.1:
    every path, and not for a field named `cfc`. A label an entry names by
    document is read from that document. It also takes the field's
    integrity, what a read of the whole field carries: in each instance and
-   for each component, the deepest entry of the value class or of no class
-   at the field's path or above it, and every atom those hold. For each
+   for each component, the deepest entry at the field's path or above it
+   that a read of the field's value consumes, by the runner's rule
+   (`readConsumesEntry()` in `cfc-observation-classes.ts`), and every atom
+   those hold. That excludes a link entry with no class, which labels the
+   pointer rather than the value. For each
    anchor, the engine joins the field's label into the entry at the anchor's
    path of origin `derived` and class `value`, so that the path holds one
    such entry. The join keeps every clause either label held, since the

@@ -23,6 +23,7 @@
     "./v2/cfc-atom-classes": "./v2/cfc-atom-classes.ts",
     "./v2/cfc-clause-identity": "./v2/cfc-clause-identity.ts",
     "./v2/cfc-label-fields": "./v2/cfc-label-fields.ts",
+    "./v2/cfc-observation-classes": "./v2/cfc-observation-classes.ts",
     "./v2/cfc-owner-release-by-intent": "./v2/cfc-owner-release-by-intent.ts",
     "./v2/cfc-release-authority": "./v2/cfc-release-authority.ts",
     "./v2/cfc-stored-envelope": "./v2/cfc-stored-envelope.ts",
