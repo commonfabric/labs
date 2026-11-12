@@ -78,6 +78,10 @@ import {
 import { ExecutableRegistry } from "./executable-registry.ts";
 import { FabricAwareResolver } from "./fabric-resolver.ts";
 import {
+  resolveRuntimeProgram,
+  resolveWithSourceRoots,
+} from "./program-resolution.ts";
+import {
   authoredSourceForCompile,
   compileModulesHere,
   coverageFilenameFor,
@@ -105,10 +109,7 @@ import type {
   RuntimeProgram,
   TypeScriptHarnessProcessOptions,
 } from "./types.ts";
-import {
-  attachDeclaredDataFiles,
-  sourcePackageOwners,
-} from "./declared-data-files.ts";
+import { sourcePackageOwners } from "./declared-data-files.ts";
 import {
   getDefiningModule,
   readBindingIdentity,
@@ -202,37 +203,6 @@ export class EngineProgramResolver extends InMemoryProgram {
       }
     }
     return super.resolveSource(identifier);
-  }
-}
-
-class RootedProgramResolver implements ProgramResolver {
-  readonly #inner: ProgramResolver;
-  readonly #root: string;
-
-  constructor(
-    inner: ProgramResolver,
-    root: string,
-  ) {
-    this.#inner = inner;
-    this.#root = root;
-  }
-
-  async main(): Promise<Source> {
-    const source = await this.#inner.resolveSource(this.#root);
-    if (source === undefined) {
-      throw new Error(`Source root "${this.#root}" could not be resolved.`);
-    }
-    return source;
-  }
-
-  resolveDataFile(name: string): Promise<Source | undefined> {
-    return this.#inner.resolveDataFile
-      ? this.#inner.resolveDataFile(name)
-      : this.#inner.resolveSource(name);
-  }
-
-  resolveSource(identifier: string): Promise<Source | undefined> {
-    return this.#inner.resolveSource(identifier);
   }
 }
 
@@ -478,79 +448,14 @@ export class Engine extends EventTarget {
 
   /**
    * Resolves a `ProgramResolver` into a program: the entry, each supplied
-   * source root and their import closures, and the declared data files.
-   *
-   * This is how a program is assembled from a source of truth — a directory, a
-   * web address, the fabric — so it is where a declaration in the source is
-   * acted on. Re-resolving a program the engine already holds goes through
-   * `#resolveModules()`, which follows imports and nothing else.
+   * source root and their import closures, and the declared data files. See
+   * `resolveRuntimeProgram()`, which resolves without an engine.
    */
-  async resolve(
+  resolve(
     program: ProgramResolver,
     options: { sourceRoots?: readonly string[] } = {},
   ): Promise<RuntimeProgram> {
-    const roots = [...new Set(options.sourceRoots ?? [])];
-    const resolved = roots.length === 0
-      ? await this.#resolveModules(program)
-      : {
-        ...await this.#resolveWithSourceRoots(program, roots),
-        sourceRoots: roots,
-      };
-    return await attachDeclaredDataFiles(resolved, program);
-  }
-
-  /**
-   * Resolve the module closure an entry's imports reach. Resolution only
-   * scans imports, so it takes the resolver from the compiler stack without
-   * building this engine's compiler, whose TypeScript environment types a
-   * runtime that compiles elsewhere would otherwise hold for nothing. The
-   * options are the ones `TypeScriptCompiler.resolveProgram()` passes.
-   */
-  async #resolveModules(
-    program: ProgramResolver,
-  ): Promise<RuntimeProgram> {
-    const { resolveProgram, TARGET } = await ensureCompilerStack();
-    logger.timeStart("resolve");
-    try {
-      return await resolveProgram(program, {
-        unresolvedModules: {
-          type: "allow",
-          identifiers: Engine.runtimeModuleNames(),
-        },
-        resolveUnresolvedModuleTypes: true,
-        target: TARGET,
-      });
-    } finally {
-      logger.timeEnd("resolve");
-    }
-  }
-
-  async #resolveWithSourceRoots(
-    resolver: ProgramResolver,
-    sourceRoots: readonly string[],
-  ): Promise<RuntimeProgram> {
-    const programs = [await this.#resolveModules(resolver)];
-    for (const root of new Set(sourceRoots)) {
-      if (root === programs[0].main) continue;
-      programs.push(
-        await this.#resolveModules(new RootedProgramResolver(resolver, root)),
-      );
-    }
-
-    const files = new Map<string, Source>();
-    for (const program of programs) {
-      for (const file of program.files) {
-        const existing = files.get(file.name);
-        if (existing !== undefined && existing.contents !== file.contents) {
-          throw new Error(
-            `Resolved source roots produced conflicting files named ` +
-              `"${file.name}".`,
-          );
-        }
-        files.set(file.name, file);
-      }
-    }
-    return { main: programs[0].main, files: [...files.values()] };
+    return resolveRuntimeProgram(program, options);
   }
 
   /**
@@ -615,7 +520,7 @@ export class Engine extends EventTarget {
         })
         : undefined;
       const resolver = fabricResolver ?? engineResolver;
-      const resolvedProgram = await this.#resolveWithSourceRoots(
+      const resolvedProgram = await resolveWithSourceRoots(
         resolver,
         sourceRoots,
       );
@@ -1052,7 +957,7 @@ export class Engine extends EventTarget {
         { ...mapped, files: partitionDataFiles(mapped).codeFiles },
         this.#ctRuntime.staticCache,
       );
-      const resolved = await this.#resolveWithSourceRoots(
+      const resolved = await resolveWithSourceRoots(
         resolver,
         mapped.sourceRoots ?? [],
       );
@@ -1267,7 +1172,7 @@ export class Engine extends EventTarget {
     const resolver = fabricResolver ?? engineResolver;
     // Resolution may perform storage/network I/O for fabric mounts. Its
     // failures are intentionally left unmarked and therefore retryable.
-    const resolvedProgram = await this.#resolveWithSourceRoots(
+    const resolvedProgram = await resolveWithSourceRoots(
       resolver,
       sourceRoots,
     );
