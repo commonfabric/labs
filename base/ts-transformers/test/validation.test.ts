@@ -5323,8 +5323,11 @@ Deno.test("JSX Prop Name Validation", async (t) => {
       );
       const errors = misnamed(diagnostics);
       assertEquals(errors.length, 2);
-      assertStringIncludes(errors[0]!.message, "write `defaultSize`");
-      assertStringIncludes(errors[1]!.message, "write `minSize`");
+      assertStringIncludes(
+        errors[0]!.message,
+        "Rename it to `defaultSize` (`default-size=` → `defaultSize=`)",
+      );
+      assertStringIncludes(errors[1]!.message, "Rename it to `minSize`");
     },
   );
 
@@ -5337,7 +5340,8 @@ Deno.test("JSX Prop Name Validation", async (t) => {
       );
       const errors = misnamed(diagnostics);
       assertEquals(errors.length, 1);
-      assertStringIncludes(errors[0]!.message, "declares no `noSuchProp`");
+      assertStringIncludes(errors[0]!.message, "declares no `noSuchProp` prop");
+      assertStringIncludes(errors[0]!.message, "`data-no-such-prop`");
     },
   );
 

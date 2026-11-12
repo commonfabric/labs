@@ -55,17 +55,24 @@ export class JsxPropNameValidationTransformer extends HelpersOnlyTransformer {
       severity: "error",
       type: "jsx:misnamed-prop",
       message: known
-        ? `\`${name}\` names no property of <${tag.text}>, so it would ` +
-          `do nothing. A JSX prop sets the property of its name: write ` +
-          `\`${property}\`.`
-        : `\`${name}\` names no property of <${tag.text}>, so it would ` +
-          `do nothing, and <${tag.text}> declares no \`${property}\` ` +
-          `either. A JSX prop sets the property of its name; only ` +
-          `\`data-*\`, \`aria-*\` and event (\`on…\`) props hold a hyphen.`,
+        ? `\`${name}\` on <${tag.text}> sets nothing: a JSX prop sets the ` +
+          `element's property of that name, and no property name holds a ` +
+          `hyphen. Rename it to \`${property}\` (\`${name}=\` → ` +
+          `\`${property}=\`). ${HYPHENATED_KINDS}`
+        : `\`${name}\` on <${tag.text}> sets nothing: a JSX prop sets the ` +
+          `element's property of that name, and no property name holds a ` +
+          `hyphen. <${tag.text}> declares no \`${property}\` prop either: ` +
+          `use one of the props its JSX type declares, or write ` +
+          `\`data-${name}\` for a data attribute. ${HYPHENATED_KINDS}`,
       node: attribute,
     });
   }
 }
+
+/** The props that may hold a hyphen, as the message states them. */
+const HYPHENATED_KINDS =
+  "Only `data-*` and `aria-*` attributes and `on…` event props, such as " +
+  "`oncf-change`, keep a hyphen.";
 
 /** Whether a JSX tag names an element rather than a component, as
  * TypeScript decides it: a lower-case first letter, or a hyphen. */
