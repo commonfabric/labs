@@ -190,17 +190,24 @@ export const redactCaveatSourcesForDisplay = (
   }),
 });
 
-const sortEntries = (entries: CfcLabelViewEntry[]): CfcLabelViewEntry[] => {
-  if (entries.length < 2) return entries;
-  // Encoding belongs to the entry, so each path is encoded once per sort.
-  // Equal keys retain input order, including separate observation classes.
-  return entries.map((entry) => ({
-    entry,
-    key: cfcLabelViewPathKey(entry.path),
-  })).sort((left, right) =>
-    left.key < right.key ? -1 : left.key > right.key ? 1 : 0
-  ).map(({ entry }) => entry);
-};
+/**
+ * The entries, each given with the key of its path, in the order of those
+ * keys. Equal keys retain input order, including separate observation
+ * classes.
+ */
+const sortKeyedEntries = (
+  keyed: { entry: CfcLabelViewEntry; key: string }[],
+): CfcLabelViewEntry[] =>
+  (keyed.length < 2
+    ? keyed
+    : keyed.sort((left, right) =>
+      left.key < right.key ? -1 : left.key > right.key ? 1 : 0
+    )).map(({ entry }) => entry);
+
+const sortEntries = (entries: CfcLabelViewEntry[]): CfcLabelViewEntry[] =>
+  entries.length < 2 ? entries : sortKeyedEntries(
+    entries.map((entry) => ({ entry, key: cfcLabelViewPathKey(entry.path) })),
+  );
 
 export const mergeLabel = (
   left: IFCLabel | undefined,
@@ -212,6 +219,7 @@ export const mergeLabel = (
       ...(Array.isArray(left?.[key]) ? left[key] : []),
       ...(Array.isArray(right[key]) ? right[key] : []),
     ];
+    if (values.length === 0) continue;
     // Confidentiality is CNF clauses (Epic A3): the join is clause
     // CONCATENATION — `[[A∨B]] ⊔ [C] = [[A∨B], C]` — the OR stays clause-local
     // and `C` remains an independent gate. Normalizing each clause on ingest
@@ -234,10 +242,9 @@ export const mergeLabel = (
     // observe as both `confidentiality` bloat and -- since downstream
     // entry-merging compares labels structurally -- as label entries
     // failing to coalesce at the right path.
-    const unique = uniqueCfcAtoms(normalized);
-    if (unique.length > 0) {
-      merged[key] = unique;
-    }
+    merged[key] = normalized.length === 1
+      ? normalized
+      : uniqueCfcAtoms(normalized);
   }
   return merged;
 };
@@ -336,34 +343,56 @@ export const cloneCfcLabelView = (
 
 export const mergeCfcLabelViews = (
   views: Array<CfcLabelView | undefined>,
+): CfcLabelView | undefined => carryOrigins(mergeEntriesOf(views), views);
+
+/**
+ * Helper for `mergeCfcLabelViews()` and `rebaseCfcLabelView()`, which merges
+ * the entries of `views` and leaves the spaces they were derived from to the
+ * caller.
+ */
+const mergeEntriesOf = (
+  views: Array<CfcLabelView | undefined>,
 ): CfcLabelView | undefined => {
   // Keyed per (class, path): entries of different observation classes stay
   // separate so class-aware consumers (C4) keep their precision; merging a
   // `shape` entry into a covering one would re-smear the container-shape
   // label onto every value read below it.
-  const byKey = new Map<string, CfcLabelViewEntry>();
+  // Each entry keeps its path's key, so a sort by path encodes no path again.
+  const byKey = new Map<string, { entry: CfcLabelViewEntry; key: string }>();
   for (const view of views) {
     if (!view) {
       continue;
     }
     for (const entry of view.entries) {
-      const path = canonicalizeCfcLogicalPath(entry.path);
-      const key = `${entry.observes ?? ""}\u0000${cfcLabelViewPathKey(path)}`;
+      const pathKey = cfcLabelViewPathKey(entry.path);
+      const key = `${entry.observes ?? ""}\u0000${pathKey}`;
       const existing = byKey.get(key);
-      byKey.set(key, {
-        path,
-        label: mergeLabel(existing?.label, entry.label),
-        ...(entry.observes !== undefined ? { observes: entry.observes } : {}),
-      });
+      if (existing !== undefined) {
+        existing.entry.label = mergeLabel(existing.entry.label, entry.label);
+        continue;
+      }
+      const merged: CfcLabelViewEntry = {
+        path: canonicalizeCfcLogicalPath(entry.path),
+        label: mergeLabel(undefined, entry.label),
+      };
+      if (entry.observes !== undefined) merged.observes = entry.observes;
+      byKey.set(key, { entry: merged, key: pathKey });
     }
   }
-  const entries = sortEntries(
-    [...byKey.values()].filter((entry) => hasCfcLabelValues(entry.label)),
+  const entries = sortKeyedEntries(
+    [...byKey.values()].filter(({ entry }) => hasCfcLabelValues(entry.label)),
   );
-  return carryOrigins(
-    entries.length > 0 ? { version: 1, entries } : undefined,
-    views,
-  );
+  return entries.length > 0 ? { version: 1, entries } : undefined;
+};
+
+/** Helper for `rebaseCfcLabelView()`, which moves `entry` to `path`. */
+const withPath = (
+  entry: CfcLabelViewEntry,
+  path: readonly string[],
+): CfcLabelViewEntry => {
+  const moved: CfcLabelViewEntry = { path, label: entry.label };
+  if (entry.observes !== undefined) moved.observes = entry.observes;
+  return moved;
 };
 
 export const rebaseCfcLabelView = (
@@ -374,20 +403,13 @@ export const rebaseCfcLabelView = (
     return undefined;
   }
 
-  const logicalPath = canonicalizeCfcLogicalPath(path);
   const entries: CfcLabelViewEntry[] = [];
   for (const entry of view.entries) {
-    const entryPath = canonicalizeCfcLogicalPath(entry.path);
-    if (cfcLabelPathPrefixMatches(logicalPath, entryPath)) {
-      const label = entry.label;
-      if (hasCfcLabelValues(label)) {
-        entries.push({
-          path: entryPath.slice(logicalPath.length),
-          label,
-          ...(entry.observes !== undefined ? { observes: entry.observes } : {}),
-        });
+    if (cfcLabelPathPrefixMatches(path, entry.path)) {
+      if (hasCfcLabelValues(entry.label)) {
+        entries.push(withPath(entry, entry.path.slice(path.length)));
       }
-    } else if (cfcLabelPathPrefixMatches(entryPath, logicalPath)) {
+    } else if (cfcLabelPathPrefixMatches(entry.path, path)) {
       // A STRICT ancestor collapsing into the sliced view: content labels
       // (covering / `value`) inherit down — the slice is part of the
       // ancestor's content. Node-anchored channels do not: an ancestor's
@@ -400,19 +422,12 @@ export const rebaseCfcLabelView = (
       ) {
         continue;
       }
-      const label = entry.label;
-      if (hasCfcLabelValues(label)) {
-        entries.push({
-          path: [],
-          label,
-          ...(entry.observes !== undefined ? { observes: entry.observes } : {}),
-        });
-      }
+      if (hasCfcLabelValues(entry.label)) entries.push(withPath(entry, []));
     }
   }
 
   return carryOrigins(
-    mergeCfcLabelViews([
+    mergeEntriesOf([
       entries.length > 0 ? { version: 1, entries } : undefined,
     ]),
     [view],
