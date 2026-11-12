@@ -846,6 +846,13 @@ ORDER BY r.seq ASC, r.op_index ASC
 LIMIT 1
 `;
 
+const SELECT_ACTIVE_OPERATION_FIELDS = `
+SELECT path, materialized
+FROM op_field_epoch
+WHERE branch = :branch AND id = :id AND scope_key = :scope_key
+  AND active = 1
+`;
+
 const SELECT_SET_DELETE_CONFLICT = `
 SELECT seq
 FROM revision
@@ -1002,6 +1009,7 @@ interface PreparedStatements {
   insertInvocation: PreparedStatement;
   insertRevision: PreparedStatement;
   insertSnapshot: PreparedStatement;
+  selectActiveOperationFields: PreparedStatement;
   selectAtSeqLocal: PreparedStatement;
   selectAuthoredSeqThrough: PreparedStatement;
   selectBlob: PreparedStatement;
@@ -1822,6 +1830,9 @@ const prepareStatements = (database: Database): PreparedStatements => ({
   insertInvocation: database.prepare(INSERT_INVOCATION),
   insertRevision: database.prepare(INSERT_REVISION),
   insertSnapshot: database.prepare(INSERT_SNAPSHOT),
+  selectActiveOperationFields: database.prepare(
+    SELECT_ACTIVE_OPERATION_FIELDS,
+  ),
   selectAtSeqLocal: database.prepare(SELECT_AT_SEQ_LOCAL),
   selectAuthoredSeqThrough: database.prepare(SELECT_AUTHORED_SEQ_THROUGH),
   selectBlob: database.prepare(SELECT_BLOB),
@@ -6137,12 +6148,11 @@ const assertOperationFieldsPreserved = (
   const { branch, operation, principal, sessionId } = options;
   const scopeKey = options.scopeKeyOverride ??
     resolveScopeKey(operation.scope, { principal, sessionId });
-  const activeFields = engine.database.prepare(`
-    SELECT path, materialized
-    FROM op_field_epoch
-    WHERE branch = :branch AND id = :id AND scope_key = :scope_key
-      AND active = 1
-  `).all({ branch, id: operation.id, scope_key: scopeKey }) as Array<{
+  const activeFields = engine.statements.selectActiveOperationFields.all({
+    branch,
+    id: operation.id,
+    scope_key: scopeKey,
+  }) as Array<{
     path: string;
     materialized: string;
   }>;
