@@ -15,20 +15,82 @@
  * stands for the window an event in the document bubbles to: a listener added
  * to it is added to the window as well, and a window event dispatched on it is
  * dispatched on the window. Deno's own events, such as `load`, still reach it
- * as before.
+ * as before. An `error` listener is the exception, added to Deno alone, as
+ * the window's reports of an exception are thrown again to Deno.
+ *
+ * An exception a listener or a window timer throws is reported as a browser
+ * reports it, as an `error` event on the window, and the code that dispatched
+ * the event carries on. The exception is then thrown again as an uncaught
+ * error, which fails the test file: Deno reports it against the file, and
+ * cancels the test that was running and every test after it.
  *
  * happy-dom offers no `ElementInternals`, so this module also gives
  * `HTMLElement` an `attachInternals()` whose result records the form value
  * and validity an element reports; {@link internalsOf} reads it back.
  */
 
-import { Window } from "happy-dom";
+import { PropertySymbol, Window } from "happy-dom";
 
 /** The window whose document components are mounted in. */
-export const window = new Window({ url: "http://localhost/" });
+export const window = new Window({
+  url: "http://localhost/",
+  // A test's page never leaves this URL or loads anything: following a link
+  // would leave the tests after it on another page.
+  settings: {
+    disableJavaScriptFileLoading: true,
+    disableCSSFileLoading: true,
+    disableIframePageLoading: true,
+    navigation: {
+      disableMainFrameNavigation: true,
+      disableChildFrameNavigation: true,
+      disableChildPageNavigation: true,
+      disableFallbackToSetURL: true,
+    },
+  },
+});
 
 const REPLACED =
   /^(?:[A-Z]\w*)?Event$|^(location|navigator|localStorage|sessionStorage)$/;
+
+// happy-dom reports every exception it catches, from a listener, a timer, or
+// an inline handler, through this one method, so an `ErrorEvent` a test
+// dispatches itself is left alone.
+const reportError = window[PropertySymbol.dispatchError].bind(window);
+window[PropertySymbol.dispatchError] = (error: Error) => {
+  reportError(error);
+  queueMicrotask(() => {
+    throw error;
+  });
+};
+
+// A browser fires `selectionchange` once after the calls that changed the
+// selection have returned, however many there were; happy-dom fires it within
+// each such call, which reaches an editor's listener in the middle of its own
+// update.
+const { document: pageDocument } = window;
+const dispatchOnDocument = pageDocument.dispatchEvent.bind(pageDocument);
+const deferred = new WeakSet<object>();
+let selectionChangePending = false;
+pageDocument.dispatchEvent = (event) => {
+  // happy-dom also calls this to carry an event dispatched elsewhere through
+  // the document, which it marks with the phase it is in.
+  if (
+    event.type !== "selectionchange" ||
+    event.eventPhase !== window.Event.NONE ||
+    deferred.has(event)
+  ) {
+    return dispatchOnDocument(event);
+  }
+  deferred.add(event);
+  if (!selectionChangePending) {
+    selectionChangePending = true;
+    queueMicrotask(() => {
+      selectionChangePending = false;
+      dispatchOnDocument(event);
+    });
+  }
+  return true;
+};
 
 const names = new Set<string>();
 for (
@@ -66,11 +128,15 @@ const deno = {
 Object.assign(globalThis, {
   addEventListener(...args: Parameters<typeof deno.addEventListener>) {
     deno.addEventListener(...args);
-    Reflect.apply(window.addEventListener, window, args);
+    if (args[0] !== "error") {
+      Reflect.apply(window.addEventListener, window, args);
+    }
   },
   removeEventListener(...args: Parameters<typeof deno.removeEventListener>) {
     deno.removeEventListener(...args);
-    Reflect.apply(window.removeEventListener, window, args);
+    if (args[0] !== "error") {
+      Reflect.apply(window.removeEventListener, window, args);
+    }
   },
   dispatchEvent(event: Event): boolean {
     return event instanceof window.Event
@@ -91,6 +157,24 @@ const VALIDITY_FLAGS = [
   "typeMismatch",
   "valueMissing",
 ] as const satisfies readonly (keyof ValidityStateFlags)[];
+
+// A failed assertion prints its operands. Printed as plain objects, a node
+// and the window reach the whole document and every DOM class, megabytes of
+// text that take minutes to diff, so they print as markup instead.
+const LONGEST_PRINTED_NODE = 200;
+Object.defineProperty(window.Node.prototype, Symbol.for("Deno.customInspect"), {
+  value(this: Node): string {
+    const text = this instanceof Element
+      ? this.outerHTML
+      : `${this.nodeName} ${JSON.stringify(this.textContent)}`;
+    return text.length > LONGEST_PRINTED_NODE
+      ? `${text.slice(0, LONGEST_PRINTED_NODE)}…`
+      : text;
+  },
+});
+Object.defineProperty(window, Symbol.for("Deno.customInspect"), {
+  value: () => "Window",
+});
 
 /**
  * What an element reported through its `ElementInternals`: the value it
@@ -169,8 +253,12 @@ export async function mount<
 }
 
 /**
- * Resolves once every timer, animation frame, and fetch the window has
- * pending has run.
+ * Resolves once every task the happy-dom window has pending has run: the
+ * global `requestAnimationFrame` callbacks and `XMLHttpRequest` requests, which
+ * are the window's, and whatever the window schedules itself or is asked for
+ * by name (`window.setTimeout`, `window.fetch`). The global `setTimeout`,
+ * `setInterval`, and `fetch` stay Deno's, so their timers and requests are not
+ * waited for.
  */
 export function settle(): Promise<void> {
   return window.happyDOM.waitUntilComplete();

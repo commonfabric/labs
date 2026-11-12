@@ -74,8 +74,9 @@ mark/replace decorations:
 - **`TaskCheckboxWidget`** — renders an `<input type="checkbox">` that toggles
   `[x]`/`[ ]` in the document on click.
 
-Singletons (`bulletWidget`, `hrWidget`) are used where possible since their
-`eq()` methods always return `true`.
+Singletons (`bulletWidget`, `hrWidget`) are used where possible: CodeMirror
+keeps a widget's element when the widget replacing it is the same object, so one
+instance serves every bullet and every rule.
 
 ## Integration with cf-code-editor
 
