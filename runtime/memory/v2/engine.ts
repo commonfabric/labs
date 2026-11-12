@@ -26,6 +26,7 @@ import {
   anchorsSchemaDocument,
   anchorsSchemaHash,
   confidentialityOver,
+  integrityOver,
 } from "./cfc-anchors-label.ts";
 import {
   judgeOwnerReleaseByIntent,
@@ -5352,6 +5353,34 @@ const fieldConfidentiality = (
 };
 
 /**
+ * The integrity a read of the field `field` carries, from its document's
+ * stored CFC envelopes in the same scope instances
+ * {@link fieldConfidentiality} reads.
+ *
+ * @throws AnchorsLabelError for an envelope the engine cannot read.
+ */
+const fieldIntegrity = (
+  engine: Engine,
+  options: {
+    branch: BranchName;
+    field: OperationFieldAddress;
+    scopeKey: string;
+  },
+): FabricValue[] => {
+  const { branch, field, scopeKey } = options;
+  const envelopes = [scopeKey, ...broaderScopeKeys(scopeKey)].map((key) =>
+    readStateForScopeKey(engine, { branch, id: field.id, scopeKey: key })
+      ?.document?.cfc
+  );
+  return integrityOver(
+    envelopes,
+    field.path,
+    `the document ${field.id}`,
+    labelDocumentOf(engine, branch),
+  );
+};
+
+/**
  * Reads the value of the label document stored under a hash, in `branch`,
  * or `undefined` where the store holds none. A label document is
  * content-addressed and lives at space scope.
@@ -6005,6 +6034,7 @@ const writeAnchorsDocument = (
       readAnchorsDocument(engine, { branch: write.branch, field, scopeKey })
         ?.cfc,
       fieldConfidentiality(engine, { branch: write.branch, field, scopeKey }),
+      fieldIntegrity(engine, { branch: write.branch, field, scopeKey }),
       Object.keys(anchors),
       `the anchors document ${id}`,
       labelDocumentOf(engine, write.branch),

@@ -2,10 +2,12 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { FabricValue } from "@commonfabric/api";
 import { taggedHashStringOf } from "@commonfabric/data-model";
+import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import {
   anchorsEnvelopeWith,
   AnchorsLabelError,
   confidentialityOver,
+  integrityOver,
 } from "../v2/cfc-anchors-label.ts";
 import { storedCfcEnvelopeDefect } from "../v2/cfc-stored-envelope.ts";
 
@@ -48,6 +50,7 @@ const withAnchor = (envelope: unknown): unknown =>
   anchorsEnvelopeWith(
     envelope as FabricValue,
     ["secret"],
+    [],
     ["anchor-1"],
     "of:anchors",
     () => undefined,
@@ -69,10 +72,17 @@ const movingEnd = (
   anchorsEnvelopeWith(
     envelope,
     ["alice"],
+    [],
     ["end"],
     "of:anchors",
     labelDocument,
   );
+
+/** A `PolicyCertified` atom, the hereditary family, for `policy`. */
+const certified = (policy: string) => ({
+  type: CFC_ATOM_TYPE.PolicyCertified,
+  policy,
+});
 
 /** The label-map entries of `envelope`. */
 const entriesOf = (envelope: unknown) =>
@@ -131,6 +141,43 @@ describe("cfc-anchors-label", () => {
       expect(
         confidentialityOver([stored], [], "of:field", () => undefined),
       ).toEqual(["field"]);
+    });
+  });
+
+  describe("integrityOver()", () => {
+    it("returns the atoms of the deepest entry of each component at or above the path, and none of an entry inside it", () => {
+      const stored = anchorsEnvelope([
+        { path: [], origin: "declared", label: { integrity: ["root"] } },
+        {
+          path: ["text"],
+          origin: "declared",
+          label: { integrity: ["field"] },
+        },
+        {
+          path: ["*"],
+          origin: "derived",
+          label: { integrity: [certified("p")] },
+        },
+        {
+          path: ["text", "0"],
+          origin: "declared",
+          label: { integrity: ["inside"] },
+        },
+        { path: ["title"], label: { integrity: ["beside"] } },
+      ]);
+
+      expect(integrityOver([stored], ["text"], "of:field", () => undefined))
+        .toEqual(["field", certified("p")]);
+    });
+
+    it("returns no atom of an entry of another observation class", () => {
+      const stored = anchorsEnvelope([
+        { path: ["text"], observes: "shape", label: { integrity: ["shape"] } },
+        { path: ["text"], observes: "value", label: { integrity: ["value"] } },
+      ]);
+
+      expect(integrityOver([stored], ["text"], "of:field", () => undefined))
+        .toEqual(["value"]);
     });
   });
 
@@ -300,6 +347,40 @@ describe("cfc-anchors-label", () => {
           label: { $ref: "cid:missing" },
         }], 2))
       ).toThrow(AnchorsLabelError);
+    });
+
+    it("returns a moved anchor's entry holding the hereditary atoms its writer and the field both hold", () => {
+      const result = anchorsEnvelopeWith(
+        anchorsEnvelope([{
+          path: ["end"],
+          origin: "derived",
+          observes: "value",
+          label: { integrity: [certified("p"), certified("q"), "writer"] },
+        }]),
+        [],
+        [certified("p"), "writer"],
+        ["end"],
+        "of:anchors",
+        () => undefined,
+      );
+
+      expect(entriesOf(result)).toEqual([{
+        path: ["end"],
+        origin: "derived",
+        observes: "value",
+        label: { integrity: [certified("p")] },
+      }]);
+    });
+
+    it("returns `undefined` for an envelope it cannot read where the field holds no confidentiality", () => {
+      expect(anchorsEnvelopeWith(
+        { version: 1, labelMap: { version: 1, entries: [] } },
+        [],
+        [],
+        ["end"],
+        "of:anchors",
+        () => undefined,
+      )).toBeUndefined();
     });
 
     it("returns an envelope keeping members it does not define", () => {

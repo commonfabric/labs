@@ -4,6 +4,7 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import { toFileUrl } from "@std/path";
 import type { FabricValue } from "@commonfabric/api";
+import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import { taggedHashStringOf } from "@commonfabric/data-model";
 import {
   applyCommit,
@@ -2774,6 +2775,11 @@ describe("v2-operation-engine", () => {
         observes: "value",
         label: { confidentiality },
       });
+      /** A `PolicyCertified` atom, the hereditary family, for `policy`. */
+      const certified = (policy: string) => ({
+        type: CFC_ATOM_TYPE.PolicyCertified,
+        policy,
+      });
       const labelEntries = (engine: Engine, id: string) =>
         (read(engine, { id: anchorsDoc(id) })?.cfc as {
           labelMap: { entries: FabricValue[] };
@@ -3076,6 +3082,102 @@ describe("v2-operation-engine", () => {
 
           expect(labelEntries(engine, "of:written")).toEqual([
             moved("end", ["carol", "secret"]),
+            moved("b", ["secret"]),
+          ]);
+        } finally {
+          close(engine);
+          await Deno.remove(path);
+        }
+      });
+
+      it("drops the integrity an anchor's writer gave it on an edit to a field that holds no label", async () => {
+        const { engine, path } = await openTestEngine();
+        try {
+          seed(engine, "of:public", envelope([]));
+          commit(engine, [{
+            op: "set",
+            id: anchorsDoc("of:public"),
+            value: {
+              value: { b: 1, end: 3 },
+              cfc: envelope([{
+                path: ["end"],
+                origin: "derived",
+                observes: "value",
+                label: { integrity: ["trusted-writer", certified("p")] },
+              }]),
+            },
+          }]);
+
+          insert(engine, "of:public");
+
+          expect(read(engine, { id: anchorsDoc("of:public") })).toEqual({
+            value: { b: 1, end: 4 },
+            cfc: envelope([{
+              path: ["end"],
+              origin: "derived",
+              observes: "value",
+              label: {},
+            }]),
+          });
+        } finally {
+          close(engine);
+          await Deno.remove(path);
+        }
+      });
+
+      it("keeps a hereditary atom the anchor's writer and the field both hold, and no other", async () => {
+        // `reviewed` is not hereditary, and the field holds `q` only inside
+        // its value, which a read of the whole field does not carry.
+
+        const { engine, path } = await openTestEngine();
+        try {
+          seed(
+            engine,
+            "of:certified",
+            envelope([
+              {
+                path: ["body"],
+                origin: "declared",
+                label: {
+                  confidentiality: ["secret"],
+                  integrity: [certified("p"), "reviewed"],
+                },
+              },
+              {
+                path: ["body", "0"],
+                origin: "declared",
+                label: { integrity: [certified("q")] },
+              },
+            ]),
+          );
+          commit(engine, [{
+            op: "set",
+            id: anchorsDoc("of:certified"),
+            value: {
+              value: { b: 1, end: 3 },
+              cfc: envelope([{
+                path: ["end"],
+                origin: "derived",
+                observes: "value",
+                label: {
+                  integrity: [certified("p"), certified("q"), "reviewed"],
+                },
+              }]),
+            },
+          }]);
+
+          insert(engine, "of:certified");
+
+          expect(labelEntries(engine, "of:certified")).toEqual([
+            {
+              path: ["end"],
+              origin: "derived",
+              observes: "value",
+              label: {
+                confidentiality: ["secret"],
+                integrity: [certified("p")],
+              },
+            },
             moved("b", ["secret"]),
           ]);
         } finally {

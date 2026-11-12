@@ -19,6 +19,7 @@
 
 import type { FabricValue } from "@commonfabric/api";
 import { taggedHashStringOf, valueEqual } from "@commonfabric/data-model";
+import { atomPropagationClass } from "./cfc-atom-classes.ts";
 import {
   isCfcLabelDocumentContent,
   isCfcLabelReference,
@@ -161,18 +162,17 @@ const bearsOn = (
  * The confidentiality the stored envelopes `envelopes` hold over the value
  * at `path`: every clause of every payload entry that bears on the path,
  * each once, in the order found. A label-metadata template entry is not a
- * payload entry and bears on no path here. `envelopes` are those of the document the value is in,
- * one per scope instance a reader of the value answers to. Integrity is left
- * out: it speaks for whoever wrote a value, and nobody wrote an offset the
- * engine computed.
+ * payload entry and bears on no path here. `envelopes` are those of the
+ * document the value is in, one per scope instance a reader of the value
+ * answers to.
  *
  * A version-2 envelope may hold a label as `{ $ref: "cid:<hash>" }`, which
  * `labelDocument` resolves to the value of the document stored under that
  * hash, or `undefined` where the store holds none.
  *
  * @throws AnchorsLabelError for an envelope the engine cannot read
- *   ({@link readableEnvelopeOf}), for a label reference nothing stored backs, and
- *   for a label document that does not hold a label.
+ *   ({@link readableEnvelopeOf}), for a label reference nothing stored backs,
+ *   and for a label document that does not hold a label.
  */
 export const confidentialityOver = (
   envelopes: readonly Stored[],
@@ -195,7 +195,54 @@ export const confidentialityOver = (
       for (const clause of label.confidentiality ?? []) clauses.push(clause);
     }
   }
-  return distinctClauses(clauses);
+  return distinctValues(clauses);
+};
+
+/**
+ * The integrity a read of the value at `path` carries, from the stored
+ * envelopes `envelopes`, the same ones {@link confidentialityOver} reads: in
+ * each, for each component, the deepest payload entry of the value class or
+ * of none at the path or above it, and across those every atom any of them
+ * holds, each once. An entry inside the value is not counted, since its claim
+ * holds for part of the value only.
+ *
+ * @throws AnchorsLabelError as {@link confidentialityOver} does.
+ */
+export const integrityOver = (
+  envelopes: readonly Stored[],
+  path: readonly string[],
+  holder: string,
+  labelDocument: (hash: string) => Stored,
+): FabricValue[] => {
+  const atoms: FabricValue[] = [];
+  for (const envelope of envelopes) {
+    const entries: readonly ReadEntry[] =
+      readableEnvelopeOf(envelope, holder)?.labelMap.entries ?? [];
+    const deepest = new Map<string, { depth: number; entries: ReadEntry[] }>();
+    for (const entry of entries) {
+      if (isLabelMetadataTemplateEntry(entry)) continue;
+      if (entry.path.length > path.length || !bearsOn(entry.path, path)) {
+        continue;
+      }
+      if (entry.observes !== undefined && entry.observes !== "value") continue;
+      const component = typeof entry.origin === "string"
+        ? entry.origin
+        : "legacy";
+      const match = deepest.get(component);
+      if (match === undefined || match.depth < entry.path.length) {
+        deepest.set(component, { depth: entry.path.length, entries: [entry] });
+      } else if (match.depth === entry.path.length) {
+        match.entries.push(entry);
+      }
+    }
+    for (const match of deepest.values()) {
+      for (const entry of match.entries) {
+        const label = resolvedLabel(entry.label, holder, labelDocument);
+        for (const atom of label.integrity ?? []) atoms.push(atom);
+      }
+    }
+  }
+  return distinctValues(atoms);
 };
 
 /**
@@ -231,33 +278,39 @@ const resolvedLabel = (
 
 // SPEC-PENDING https://github.com/commonfabric/specs/pull/93 The label an
 // edit gives a field's anchors is a store-performed derivation, which the
-// pull request adds a section to rule on: the field's confidentiality with no
-// integrity, joined into every anchor's derived value entry, moved or not.
-// It changes what is stored, and runs by default rather than behind a
-// setting that keeps the old behavior until the ruling, an exception to the
-// pending-marker procedure that Robin McCollum accepted in the review of
-// labs#9667: anchors are already persisted, and the label narrows what a
-// reader of them learns.
+// pull request adds a section to rule on: the field's confidentiality joined
+// into every anchor's derived value entry, moved or not, and the entry's
+// integrity met with the field's. It changes what is stored, and runs by
+// default rather than behind a setting that keeps the old behavior until the
+// ruling, an exception to the pending-marker procedure that Robin McCollum
+// accepted in the review of labs#9667: anchors are already persisted, and the
+// label narrows what a reader of them learns.
 
 /**
- * The envelope an anchors document stores once each anchor of `anchorIds`
- * carries `confidentiality` beside what `envelope`, the one it stores now,
- * held for that anchor's offset. Returns `undefined` where nothing is to be
- * written: `confidentiality` is empty, or the envelope already holds every
- * label this would write.
+ * The envelope an anchors document stores once an edit to the field has
+ * labeled each anchor of `anchorIds` with the field's label, the
+ * `confidentiality` and `integrity` the field's document holds over it,
+ * beside what `envelope`, the one it stores now, held for that anchor's
+ * offset. Returns `undefined` where the envelope already holds every label
+ * this would write, which includes a document with no envelope when
+ * `confidentiality` is empty.
  *
  * Each anchor's offset is labeled by one derived entry of the value class at
  * the anchor's own path, which is what ties the label to the offset. The
- * edit's own label is `confidentiality` with no integrity, since no
- * principal produced the offset, and the engine joins it
- * into that entry. The join keeps every clause either label held, as the new
- * offset is computed from the old one, and meets their integrity, which with
- * the edit's empty integrity leaves none. Where the envelope holds no such
- * entry, the edit's label is the entry. A derived entry of no class at the
- * path is consumed by a read of the offset as well, so its integrity meets
- * the edit's too; its confidentiality, which reads of the other classes
- * consume, stays. Every other entry, a declared one at the anchor's path
- * among them, stays as its writer left it.
+ * engine joins the field's label into that entry: every clause either label
+ * held stays, since a moved offset is computed from the old one, and the
+ * integrity is the class-aware meet of the entry's and the field's, which
+ * keeps a hereditary atom both hold and drops every other. That holds for an
+ * anchor the edit did not move as well. Its offset is the one its writer
+ * chose, but against text the edit has changed, so what its writer vouched
+ * for holds only where the field vouches for it too. Where the envelope
+ * holds no such entry, the anchor's writer vouched for nothing, so the entry
+ * written holds the field's confidentiality alone, and none is written where
+ * that is empty. A derived entry of no class at the path is consumed by a
+ * read of the offset as well, so its integrity is met with the field's too;
+ * its confidentiality, which reads of the other classes consume, stays.
+ * Every other entry, a declared one at the anchor's path among them, stays
+ * as its writer left it.
  *
  * A writer's envelope pass drops a derived value-class entry at a path the
  * writer replaces, and a writer of the document writes the anchors that
@@ -267,40 +320,97 @@ const resolvedLabel = (
  * label an entry at an anchor's path holds by reference is read through
  * `labelDocument`, as {@link confidentialityOver} reads one.
  *
+ * Where `confidentiality` is empty, an envelope the engine cannot read, or a
+ * label at an anchor's path it cannot resolve, is left as it is rather than
+ * refused: there is no clause to add, and a reader honors no integrity in an
+ * envelope it cannot read.
+ *
  * @throws AnchorsLabelError for an envelope the engine cannot read, and for
- *   a label at an anchor's path that it cannot resolve.
+ *   a label at an anchor's path that it cannot resolve, where
+ *   `confidentiality` is not empty.
  */
 export const anchorsEnvelopeWith = (
   envelope: Stored,
   confidentiality: readonly FabricValue[],
+  integrity: readonly FabricValue[],
   anchorIds: readonly string[],
   holder: string,
   labelDocument: (hash: string) => Stored,
 ): FabricValue | undefined => {
-  if (confidentiality.length === 0) return undefined;
+  const label = () =>
+    labeledAnchorsEnvelope(
+      envelope,
+      confidentiality,
+      integrity,
+      anchorIds,
+      holder,
+      labelDocument,
+    );
+  if (confidentiality.length > 0) return label();
+  try {
+    return label();
+  } catch (cause) {
+    if (cause instanceof AnchorsLabelError) return undefined;
+    throw cause;
+  }
+};
+
+/**
+ * Helper for {@link anchorsEnvelopeWith}, which builds the envelope it
+ * returns, and refuses whatever it cannot read.
+ *
+ * @throws AnchorsLabelError for an envelope the engine cannot read, and for
+ *   a label at an anchor's path that it cannot resolve.
+ */
+const labeledAnchorsEnvelope = (
+  envelope: Stored,
+  confidentiality: readonly FabricValue[],
+  integrity: readonly FabricValue[],
+  anchorIds: readonly string[],
+  holder: string,
+  labelDocument: (hash: string) => Stored,
+): FabricValue | undefined => {
   const stored = readableEnvelopeOf(envelope, holder);
+  if (stored === undefined && confidentiality.length === 0) return undefined;
   const held: readonly ReadEntry[] = stored?.labelMap.entries ?? [];
   const labeled = new Set(anchorIds);
   const resolved = (entry: ReadEntry) =>
     resolvedLabel(entry.label, holder, labelDocument);
 
-  // The clauses each anchor's offset already carried, from every
-  // derived value-class entry at its path, which the one written replaces.
-  const carried = new Map<string, FabricValue[]>();
+  // The label each anchor's offset already carried, from every derived
+  // value-class entry at its path, which the one written replaces: their
+  // clauses, and the meet of their integrity.
+  const carried = new Map<
+    string,
+    { confidentiality: FabricValue[]; integrity: FabricValue[] }
+  >();
   for (const entry of held) {
     const anchor = labeledAnchorOf(entry, labeled);
     if (anchor === undefined || entry.observes !== "value") continue;
-    carried.set(anchor, [
-      ...(carried.get(anchor) ?? []),
-      ...(resolved(entry).confidentiality ?? []),
-    ]);
+    const label = resolved(entry);
+    const prior = carried.get(anchor);
+    carried.set(anchor, {
+      confidentiality: [
+        ...(prior?.confidentiality ?? []),
+        ...(label.confidentiality ?? []),
+      ],
+      integrity: prior === undefined
+        ? [...(label.integrity ?? [])]
+        : meetIntegrity(prior.integrity, label.integrity ?? []),
+    });
   }
-  const labelFor = (anchor: string) => ({
-    confidentiality: distinctClauses([
-      ...(carried.get(anchor) ?? []),
+  const labelFor = (anchor: string) => {
+    const prior = carried.get(anchor);
+    const clauses = distinctValues([
+      ...(prior?.confidentiality ?? []),
       ...confidentiality,
-    ]),
-  });
+    ]);
+    const atoms = meetIntegrity(prior?.integrity ?? [], integrity);
+    return {
+      ...(clauses.length === 0 ? {} : { confidentiality: clauses }),
+      ...(atoms.length === 0 ? {} : { integrity: atoms }),
+    };
+  };
 
   const written = new Set<string>();
   const entries: FabricValue[] = [];
@@ -314,27 +424,33 @@ export const anchorsEnvelopeWith = (
       entries.push({ ...entry, label: labelFor(anchor) });
     } else if (entry.observes === undefined) {
       const label = resolved(entry);
+      const atoms = meetIntegrity(label.integrity ?? [], integrity);
       entries.push(
-        (label.integrity ?? []).length === 0 ? entry : {
+        valueEqual(atoms, label.integrity ?? []) ? entry : {
           ...entry,
-          label: label.confidentiality === undefined
-            ? {}
-            : { confidentiality: label.confidentiality },
+          label: {
+            ...(label.confidentiality === undefined
+              ? {}
+              : { confidentiality: label.confidentiality }),
+            ...(atoms.length === 0 ? {} : { integrity: atoms }),
+          },
         },
       );
     } else {
       entries.push(entry);
     }
   }
-  for (const anchor of anchorIds) {
-    if (written.has(anchor)) continue;
-    written.add(anchor);
-    entries.push({
-      path: [anchor],
-      origin: "derived",
-      observes: "value",
-      label: labelFor(anchor),
-    });
+  if (confidentiality.length > 0) {
+    for (const anchor of anchorIds) {
+      if (written.has(anchor)) continue;
+      written.add(anchor);
+      entries.push({
+        path: [anchor],
+        origin: "derived",
+        observes: "value",
+        label: labelFor(anchor),
+      });
+    }
   }
 
   if (stored === undefined) {
@@ -376,12 +492,27 @@ const labeledAnchorOf = (
     ? entry.path[0]
     : undefined;
 
-/** `clauses` with each clause once, in the order first found. */
-const distinctClauses = (clauses: readonly FabricValue[]): FabricValue[] => {
+/**
+ * The class-aware meet of the integrity `a` and `b` (§3.1.6.2): each atom of
+ * `a` whose propagation class is hereditary and that `b` holds too, once.
+ */
+const meetIntegrity = (
+  a: readonly FabricValue[],
+  b: readonly FabricValue[],
+): FabricValue[] =>
+  distinctValues(
+    a.filter((atom) =>
+      atomPropagationClass(atom) === "hereditary" &&
+      b.some((other) => valueEqual(other, atom))
+    ),
+  );
+
+/** `values` with each value once, in the order first found. */
+const distinctValues = (values: readonly FabricValue[]): FabricValue[] => {
   const distinct: FabricValue[] = [];
-  for (const clause of clauses) {
-    if (!distinct.some((held) => valueEqual(held, clause))) {
-      distinct.push(clause);
+  for (const value of values) {
+    if (!distinct.some((held) => valueEqual(held, value))) {
+      distinct.push(value);
     }
   }
   return distinct;

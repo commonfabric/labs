@@ -410,17 +410,21 @@ Within the apply steps of §7.7.1:
    against the stored document rather than the value, so it is never one of
    these: not for a field that is the whole value, whose path is a prefix of
    every path, and not for a field named `cfc`. A label an entry names by
-   document is read from that document. Integrity is not taken. Where that
-   confidentiality is not empty, the move's label is that confidentiality
-   with no integrity, since the engine rather than the anchor's writer
-   produced the offset. For each anchor, the engine joins it into the
-   entry at the anchor's path of origin `derived` and class `value`, or makes
-   it that entry where the envelope holds none, so that the path holds one
+   document is read from that document. It also takes the field's
+   integrity, what a read of the whole field carries: in each instance and
+   for each component, the deepest entry of the value class or of no class
+   at the field's path or above it, and every atom those hold. For each
+   anchor, the engine joins the field's label into the entry at the anchor's
+   path of origin `derived` and class `value`, so that the path holds one
    such entry. The join keeps every clause either label held, since the
-   moved offset is computed from the old one, and meets their integrity,
-   which with the move's empty integrity leaves none. A `derived` entry of
-   no class at that path is consumed by a read of the offset too, so its
-   integrity meets the move's as well, and its confidentiality stays. A
+   moved offset is computed from the old one, and its integrity is the
+   class-aware meet of the entry's and the field's, which keeps a hereditary
+   atom both hold. Where the envelope holds no such entry, the anchor's
+   writer vouched for nothing, so the engine makes one holding the field's
+   confidentiality, and none where that is empty. A `derived` entry of no
+   class at that path is consumed by a read of the offset too, so its
+   integrity is met with the field's as well, and its confidentiality
+   stays. A
    label one of these entries names by document is read from that
    document. Where the envelope already holds every label this would write, it
    is not written. Where no anchor moved and the envelope is not written, the
@@ -430,8 +434,11 @@ Within the apply steps of §7.7.1:
    envelope holds is left as its writer wrote it.
 
 The engine refuses the operation, and so the commit, where the field has
-anchors and it cannot read the field's envelope, or, where it has a label to
-add, the anchors document's. It checks an envelope with the checks the runner uses,
+anchors and it cannot read the field's envelope, or, where the field holds a
+confidentiality to add, the anchors document's. Where the field holds none,
+an anchors envelope the engine cannot read is left as it is: there is no
+clause to add, and no reader honors integrity in an envelope it cannot read.
+It checks an envelope with the checks the runner uses,
 so that an envelope the runner would not produce labels from is one the
 engine does not copy a label out of: it refuses one of a version other than
 1 and 2, one with no `schemaHash`, one with no label map, an entry with no

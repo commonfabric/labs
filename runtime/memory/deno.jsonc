@@ -20,6 +20,7 @@
     "./v2/invites": "./v2/invites.ts",
     "./space-invites": "./space-invites.ts",
     "./acl": "./acl.ts",
+    "./v2/cfc-atom-classes": "./v2/cfc-atom-classes.ts",
     "./v2/cfc-clause-identity": "./v2/cfc-clause-identity.ts",
     "./v2/cfc-label-fields": "./v2/cfc-label-fields.ts",
     "./v2/cfc-owner-release-by-intent": "./v2/cfc-owner-release-by-intent.ts",

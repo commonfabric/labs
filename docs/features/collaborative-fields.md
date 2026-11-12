@@ -227,24 +227,29 @@ other anchors in the document keep the labels they had.
 
 The second is Memory. An offset Memory computed from an edit says where the
 field was edited and by how much, and, for an anchor written past the end of
-the text, how long the field is, and which anchors an edit moves says where
+the text, how long the field is. Which anchors an edit moves also says where
 it fell. So when an edit integrates, Memory labels every anchor of the
-field, moved or not, with the confidentiality the field's document holds
-over the field at that edit, in the same transaction. It reads the label entries
+field, moved or not, with the label the field's document holds over the
+field at that edit, in the same transaction. It reads the label entries
 of the field's stored envelope that lie at, above or inside the field's path,
 in the field's scope instance and in each broader instance of the same
 document. The label-metadata templates are left out: they are keyed against
 the stored document rather than its value, so none labels the field, not
 even a field that is the whole value, whose path is a prefix of every path,
-or one named `cfc`. The move's own label is the confidentiality of the
-entries it read, with no integrity, since Memory rather than the anchor's
-writer produced the offset. Memory joins it into the label of each
-anchor's offset, the one derived entry of the value class at the anchor's
-path, or makes it that entry where there is none. The join keeps every
-clause either label held, since the new offset is computed from the old one,
-and meets their integrity, which with the move's empty integrity leaves none.
-A derived entry of no class at the path is consumed by a read of the offset
-too, so its integrity meets the move's as well, and its clauses stay. Every
+or one named `cfc`. The field's integrity is what a read of the whole field
+carries: from the entries at or above its path, not those inside it, whose
+claims hold for part of the text only. Memory joins the field's label into
+the label of each anchor's offset, the one derived entry of the value class
+at the anchor's path. The join keeps every clause either label held, since
+a moved offset is computed from the old one. Its integrity is the meet of
+the two: a hereditary claim both the anchor's writer and the field hold
+stays, and every other is dropped, for an anchor the edit did not move too,
+since its offset now points into text the edit changed. Where there is no
+such entry, the anchor's writer vouched for nothing, so Memory makes one
+holding the field's confidentiality, and none where the field holds no
+confidentiality. A derived entry of no class at the path is consumed by a
+read of the offset too, so its integrity is met with the field's as well,
+and its clauses stay. Every
 other label at the path stays as it was. A later reader
 of that offset is tainted as a reader of the field was, whoever wrote the
 anchor. An anchor the edit left where it was is labeled too: labeling only
@@ -278,8 +283,12 @@ document's envelope only when it has a label to add to it, and refuses the
 edit when that envelope cannot be read, or when a label it holds by
 reference at an anchor's path has no stored label document behind it.
 
-The anchors take none of the field's integrity, from either source, and the
-field's write policy does not govern them: a pattern that wants only certain
+An edit can only narrow the integrity an anchor carries: a claim survives
+it only where the anchor's writer made it and the field holds it too. Where
+the field holds no confidentiality and Memory cannot read the anchors
+document's envelope, it leaves that envelope as it is rather than refuse the
+edit, since there is no clause to add and no reader honors an envelope it
+cannot read. The field's write policy does not govern the anchors: a pattern that wants only certain
 handlers to move anchors declares a write policy on the anchors cell.
 
 ## Checkpoints, reconnect, and reset
