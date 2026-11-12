@@ -291,4 +291,22 @@ describe("cfc-processed-claim", () => {
     expect(reasons[0]).toContain(FOREIGN_ATOM);
     tx.abort();
   });
+
+  it("counts a processed claim naming a document other than a stream's entries for nothing", () => {
+    // Only a stream's entries document holds an event's processed claim, so
+    // the runtime's mark on any other document names nothing the gate skips.
+    const tx = handlerRun("misplaced-handler");
+    const plainId = runtime.getCell(space, "plain-document", undefined)
+      .getAsNormalizedFullLink().id;
+    writeProcessedClaim(runtime, tx, space, { sidecarId: plainId, index: 0 }, {
+      clearDeferral: false,
+    });
+
+    const reasons = preparedWriterFitReasons(tx);
+    expect(reasons).toHaveLength(1);
+    expect(reasons[0]).toContain(
+      `writer-fit confidentiality misfit for ${plainId}`,
+    );
+    tx.abort();
+  });
 });
