@@ -3602,6 +3602,13 @@ export class RuntimeProcessor {
    * sigil-shaped payload with broken internals throws into a typed refusal.
    * These are one walk with two implementations, and this is the copy to
    * retire.
+   *
+   * @throws The server's refusal when this runtime's identity may not read
+   *   the piece's space, or the space a redirect lands in, deleted or not: a
+   *   load it refused resolves as one that found nothing, and a piece held
+   *   from before the refusal is no piece anyone here can open.
+   * @throws The failure to reach either space when its first connection
+   *   never completed a handshake, for the same reason.
    */
   async handlePieceGet(
     request: PieceGetRequest,
@@ -3624,8 +3631,7 @@ export class RuntimeProcessor {
     // arrives, plus what the server resolves at the address itself when the
     // value stored there is a link.
     await requestedCell.sync();
-    const deletion = this.#spaceDeletion(request.space);
-    if (deletion !== undefined) throw deletion;
+    this.#throwIfUnreadable(request.space);
     // A piece's root is the piece, even when its value is a redirect, as it is
     // for a pattern that returns a sub-pattern's result whole. Only a
     // document that is no piece names one.
@@ -3656,8 +3662,7 @@ export class RuntimeProcessor {
           path: [],
         });
       await landing.sync();
-      const landingDeletion = this.#spaceDeletion(targetLink.space);
-      if (landingDeletion !== undefined) throw landingDeletion;
+      this.#throwIfUnreadable(targetLink.space);
       const hasPattern = getPatternIdentityRef(landing) !== undefined;
       const viewScoped = this.#runtime.viewScopedReplicationRequested &&
         await this.#runtime.viewReplication.enable(target.space);
@@ -3743,16 +3748,21 @@ export class RuntimeProcessor {
    * Fails as the runner's resolution fails — `missing-member` for a member
    * the collection does not hold, naming both, and `not-piece` for a target
    * that is neither a piece nor a member of one.
+   *
+   * @throws The server's refusal when this runtime's identity may not read
+   *   the space, deleted or not, rather than any answer about the name:
+   *   nothing can be read from the space, which says nothing about the name.
+   * @throws The failure to reach the space when its first connection never
+   *   completed a handshake, for the same reason.
    */
   async handleSlugResolve(
     request: SlugResolveRequest,
   ): Promise<SlugReferenceResponse> {
     const cc = this.#getSpaceCtx(request.space);
     const space = cc.getSpace();
-    // A slug a runtime read before the deletion is still in its replica, and
-    // names nothing anyone can open.
-    const held = this.#spaceDeletion(space);
-    if (held !== undefined) throw held;
+    // A slug a runtime read before the refusal is still in its replica, and
+    // names nothing this runtime can open.
+    this.#throwIfUnreadable(space);
     try {
       if (request.member === undefined) {
         const { piece } = await resolveSlugTargetInPiece(
@@ -3774,10 +3784,10 @@ export class RuntimeProcessor {
       // comes back as an answer. Everything else — a transport fault, a
       // document that will not decode — stays an error, which is the only
       // way a caller can tell "this name is not bound" from "ask again". A
-      // deleted space binds no name because nothing can be read from it, which
-      // says nothing about the name.
-      const deletion = this.#spaceDeletion(space);
-      if (deletion !== undefined) throw deletion;
+      // space that refuses this runtime, or was never reached, binds no name
+      // only because nothing can be read from it, which says nothing about
+      // the name.
+      this.#throwIfUnreadable(space);
       if (error instanceof SlugResolutionError) {
         return {
           refusal: { code: error.code ?? "unresolved", message: error.message },

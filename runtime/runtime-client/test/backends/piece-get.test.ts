@@ -8,16 +8,19 @@
  * runtime on the same server is what makes "never asked for" observable: the
  * reader's replica holds a record for every document it examined and none for
  * the rest. Nothing runs: the handler only asks whether a document carries a
- * pattern pointer, which a stamped `patternIdentity` is.
+ * pattern pointer, which a stamped `patternIdentity` is. A space the reader
+ * cannot read fails the request instead, whatever its replica holds.
  */
 
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
 
 import type { JSONSchema } from "@commonfabric/api";
 import { entityRefToString } from "@commonfabric/data-model/cell-rep";
 import { createSession, Identity } from "@commonfabric/identity";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
+import { firstHandshakeFailedError } from "@commonfabric/memory/v2/client";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { assignSlug, setSlugLink } from "@commonfabric/piece";
 import { PiecesController } from "@commonfabric/piece/ops";
@@ -240,5 +243,25 @@ describe("handlePieceGet()", () => {
     expect(response.piece.cell.schema).toBeUndefined();
     expect(readerExamined(listUri)).toBe(false);
     expect(readerExamined(itemUri)).toBe(false);
+  });
+
+  it("rejects with the failed first handshake for a space its connection never reached", async () => {
+    const unreachable = firstHandshakeFailedError(
+      3,
+      "wss://memory.test/",
+      new Error("connection refused"),
+    );
+    using _sessionError = stub(
+      readerStorage,
+      "spaceSessionError",
+      () => unreachable,
+    );
+
+    const failure = await get(pieceId).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    expect(failure).toBe(unreachable);
   });
 });

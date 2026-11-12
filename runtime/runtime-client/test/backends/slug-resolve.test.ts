@@ -10,9 +10,11 @@
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { stub } from "@std/testing/mock";
 
 import { entityRefFromString } from "@commonfabric/data-model/cell-rep";
 import { Identity } from "@commonfabric/identity";
+import { firstHandshakeFailedError } from "@commonfabric/memory/v2/client";
 import {
   type Cell,
   entityIdFrom,
@@ -290,6 +292,7 @@ describe("handleSlugResolve()", () => {
         getCellFromEntityId: () => {
           throw new Error("the socket went away");
         },
+        storageManager: {},
       },
     });
     await expect(
@@ -300,6 +303,28 @@ describe("handleSlugResolve()", () => {
         member: "2",
       }),
     ).rejects.toThrow("the socket went away");
+  });
+
+  it("rejects with the failed first handshake rather than a refusal for a space its connection never reached", async () => {
+    // A space never reached binds no name only because nothing in it could
+    // be read, so the answer is the failure, not "no such name".
+    const unreachable = firstHandshakeFailedError(
+      3,
+      "wss://memory.test/",
+      new Error("connection refused"),
+    );
+    using _sessionError = stub(
+      storageManager,
+      "spaceSessionError",
+      () => unreachable,
+    );
+
+    const failure = await resolve("nowhere").then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    expect(failure).toBe(unreachable);
   });
 
   it("routes a slug reference request to the resolution", async () => {

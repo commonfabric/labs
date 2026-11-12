@@ -2717,6 +2717,7 @@ describe("runtime-processor", () => {
           },
         },
         runtime: {
+          storageManager: {},
           runner: noSessionPointers,
           getCellFromEntityId: (_space: unknown, entityId: unknown) => {
             lookedUp.push(String(entityId));
@@ -2755,6 +2756,7 @@ describe("runtime-processor", () => {
       target: unknown,
     ) {
       return {
+        storageManager: {},
         runner: noSessionPointers,
         getCellFromEntityId: () => slugCell,
         getCellFromLink: (link: CellRef) =>
@@ -3043,6 +3045,7 @@ describe("runtime-processor", () => {
       };
       const processor = buildProcessor({
         runtime: {
+          storageManager: {},
           runner: noSessionPointers,
           getCellFromEntityId: () => slugCell,
           getCellFromLink: () => pieceCell,
@@ -3096,6 +3099,7 @@ describe("runtime-processor", () => {
       };
       const processor = buildProcessor({
         runtime: {
+          storageManager: {},
           runner: noSessionPointers,
           getCellFromEntityId: () => slugCell,
           getCellFromLink: () => targetCell,
@@ -3134,6 +3138,7 @@ describe("runtime-processor", () => {
       const calls: unknown[][] = [];
       const processor = buildProcessor({
         runtime: {
+          storageManager: {},
           runner: {
             sessionPatternPointerFor: (cell: unknown) =>
               cell === pieceCell
