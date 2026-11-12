@@ -1240,9 +1240,6 @@ export class CfcWritebackStore {
       if (e instanceof Deno.errors.NotFound) return;
       throw e;
     }
-    // The store holds labels its readers may not see, so a store left
-    // readable by others is made private, as `#persist()` writes it.
-    Deno.chmodSync(storagePath, 0o600);
     if (text.trim() === "") return;
     const refuse = (reason: string): never => {
       throw new Error(
@@ -1270,6 +1267,12 @@ export class CfcWritebackStore {
       const cloned = cloneRecoveryRecord(record, false);
       this.#records.set(cloned.key, cloned);
       if (cloned.prepared) this.#prepared.set(cloned.key, cloned.prepared);
+    }
+    // The store holds labels its readers may not see. One that others can
+    // read is replaced by a private copy, written as every change is, which
+    // replaces a link at the store's path rather than changing its target.
+    if (((Deno.statSync(storagePath).mode ?? 0) & 0o077) !== 0) {
+      this.#persist();
     }
   }
 

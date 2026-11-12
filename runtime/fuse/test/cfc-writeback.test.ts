@@ -862,13 +862,31 @@ describe("cfc-writeback", () => {
           .toEqual([]);
       });
 
-      it("makes an existing store readable and writable by its owner alone", () => {
-        Deno.writeTextFileSync(storagePath, "");
-        Deno.chmodSync(storagePath, 0o644);
+      it("replaces a store others can read with a private copy of its records, leaving a linked file alone", () => {
+        const store = JSON.stringify({ version: 1, records: [] });
+        const linked = `${directory}/linked.json`;
+        Deno.writeTextFileSync(linked, store);
+        Deno.chmodSync(linked, 0o644);
+        Deno.symlinkSync(linked, storagePath);
 
         new CfcWritebackStore({ storagePath });
 
+        expect(Deno.lstatSync(storagePath).isFile).toBe(true);
         expect(Deno.statSync(storagePath).mode! & 0o777).toBe(0o600);
+        expect(JSON.parse(Deno.readTextFileSync(storagePath))).toEqual(
+          JSON.parse(store),
+        );
+        expect(Deno.statSync(linked).mode! & 0o777).toBe(0o644);
+        expect(Deno.readTextFileSync(linked)).toBe(store);
+      });
+
+      it("leaves a private store as it was", () => {
+        const store = JSON.stringify({ version: 1, records: [] });
+        Deno.writeTextFileSync(storagePath, store, { mode: 0o600 });
+
+        new CfcWritebackStore({ storagePath });
+
+        expect(Deno.readTextFileSync(storagePath)).toBe(store);
       });
 
       it("throws for a file that is not a version 1 store, and leaves the file as it was", () => {
@@ -980,6 +998,7 @@ describe("cfc-writeback", () => {
           Deno.writeTextFileSync(
             storagePath,
             JSON.stringify({ version: 1, records: [] }),
+            { mode: 0o600 },
           );
           const store = new CfcWritebackStore({ storagePath });
           Deno.linkSync(storagePath, `${directory}/before.json`);
