@@ -686,3 +686,34 @@ Deno.test("a handle moves the nearest panel on each side of it, and one at an en
   expect(page.first.style.width).toBe("37%");
   expect(page.second.style.width).toBe("63%");
 });
+
+Deno.test("a handle that leaves takes none of the group's orientation with it", async () => {
+  using page = await mounted("horizontal");
+  page.handle.remove();
+  expect(page.handle.dataset.orientation).toBe(undefined);
+  expect(page.handle.hasAttribute("aria-orientation")).toBe(false);
+});
+
+Deno.test("a member moved to another group belongs to that group alone", async () => {
+  using a = await mounted("horizontal");
+  using b = await mounted("vertical");
+  b.group.append(a.second);
+  await laidOut(b.group);
+  expect(a.second.style.width).toBe("");
+  expect(a.second.dataset.orientation).toBe("vertical");
+  expect(a.second.style.height).not.toBe("");
+  a.handle.focus();
+  await pressKey("ArrowRight");
+  expect(a.first.style.width).toBe("36%");
+});
+
+Deno.test("a group taken out and put back with its panels lays them out again", async () => {
+  using page = await mounted("horizontal");
+  page.group.remove();
+  document.body.append(page.group);
+  await laidOut(page.group);
+  expect(page.first.style.width).toBe("36%");
+  page.handle.focus();
+  await pressKey("ArrowRight");
+  expect(page.first.style.width).toBe("37%");
+});

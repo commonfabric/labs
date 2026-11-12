@@ -276,6 +276,7 @@ export class CFResizablePanelGroup extends BaseElement
     // A member leaves as this group found it: unsized and unoriented.
     if (this.#sizedDimension) member.style[this.#sizedDimension] = "";
     delete member.dataset.orientation;
+    member.removeAttribute("aria-orientation");
     // The members leave after the group when it is taken out with them.
     if (this.isConnected) this.updatePanels();
   }
@@ -304,11 +305,14 @@ export class CFResizablePanelGroup extends BaseElement
     this._panels.clear();
 
     const members = this.#ordered();
+    // A member is a panel or a handle by its element name. A panel not yet
+    // upgraded has no sizes to read and takes no room until it upgrades: its
+    // first update reports its sizes, and the group reads its panels again.
     const panels = members.filter((member) =>
       member instanceof CFResizablePanel
     );
     this._handles = members.filter((member) =>
-      !(member instanceof CFResizablePanel)
+      member.localName === "cf-resizable-handle"
     );
 
     // A panel's sizes are its properties, which its attributes set too: a
@@ -342,14 +346,15 @@ export class CFResizablePanelGroup extends BaseElement
     let before = -1;
     let pending: HTMLElement[] = [];
     for (const member of members) {
-      if (member instanceof CFResizablePanel) {
+      if (member.localName === "cf-resizable-handle") pending.push(member);
+      else if (member instanceof CFResizablePanel) {
         const index = panels.indexOf(member);
         for (const handle of pending) {
           if (before !== -1) this.#handleNeighbors.set(handle, [before, index]);
         }
         pending = [];
         before = index;
-      } else pending.push(member);
+      }
     }
 
     for (const handle of this._handles) this.#orient(handle);
