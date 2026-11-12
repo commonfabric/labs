@@ -7,6 +7,7 @@ import {
   type FabricBytes,
   handler,
   ifElse,
+  lift,
   linksOf,
   NAME,
   pattern,
@@ -715,12 +716,21 @@ export type ProfileCreateInput = {
    * to replace, and the wish shows this surface only while the user has no
    * profile.
    */
-  // Defaults to null: for a user no host made a suggestion for, the link the
-  // wish passes reaches a document nobody wrote, and a server-side read of
-  // that would wait for it forever (speculation.md), stalling every computed
-  // here that reads the suggestion.
-  profileSuggestion?: Writable<ProfileSuggestion | null | Default<null>>;
+  profileSuggestion?: Writable<ProfileSuggestion | undefined>;
 };
+
+// The suggestion as the surface shows it: `null` when there is none. For a
+// user no host made a suggestion for, the link the wish passes reaches a
+// document nobody wrote, and a read whose schema declares no default waits for
+// that document forever (speculation.md), stalling everything here that reads
+// the suggestion. This read's declared default ends the wait. It sits here
+// rather than on `profileSuggestion` itself because a default added to that
+// input could not be proved compatible with the pieces already running this
+// pattern (`deno task pattern-compat`).
+const shownSuggestion = lift<
+  { suggestion?: Default<ProfileSuggestion | null, null> },
+  ProfileSuggestion | null
+>(({ suggestion }) => suggestion ?? null);
 
 export type ProfileCreateOutput = {
   [NAME]: string;
@@ -754,11 +764,10 @@ export default pattern<ProfileCreateInput, ProfileCreateOutput>(
       profiles,
       seedName,
     });
-    const startingName = computed(() =>
-      profileSuggestion?.get()?.name ?? defaultName ?? ""
-    );
+    const suggestion = shownSuggestion({ suggestion: profileSuggestion });
+    const startingName = computed(() => suggestion?.name ?? defaultName ?? "");
     const shownPicture = computed(() =>
-      pictureToApply(pictureChoice.get(), profileSuggestion?.get())
+      pictureToApply(pictureChoice.get(), suggestion)
     );
     const chooseOwnPicture = choosePicture({ pictureChoice });
     const removePicture = choosePicture({ pictureChoice, remove: true });
