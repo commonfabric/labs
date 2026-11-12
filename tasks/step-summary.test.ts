@@ -6,6 +6,7 @@ import {
   drawTables,
   fit,
   say,
+  setStepOutput,
   SUMMARY_LIMIT,
   writeWhole,
 } from "./step-summary.ts";
@@ -194,6 +195,46 @@ describe("step-summary", () => {
       } finally {
         if (before === undefined) Deno.env.delete("GITHUB_STEP_SUMMARY");
         else Deno.env.set("GITHUB_STEP_SUMMARY", before);
+        await Deno.remove(at);
+      }
+    });
+  });
+
+  describe("setStepOutput()", () => {
+    /**
+     * Runs `body` with the step output file pointed at `at`, or at none
+     * for `undefined`, and puts the variable back afterwards.
+     */
+    const withOutput = (at: string | undefined, body: () => void) => {
+      const before = Deno.env.get("GITHUB_OUTPUT");
+      if (at === undefined) Deno.env.delete("GITHUB_OUTPUT");
+      else Deno.env.set("GITHUB_OUTPUT", at);
+      try {
+        body();
+      } finally {
+        if (before === undefined) Deno.env.delete("GITHUB_OUTPUT");
+        else Deno.env.set("GITHUB_OUTPUT", before);
+      }
+    };
+
+    it("appends a line naming the output to the file the environment names", async () => {
+      const at = await Deno.makeTempFile({ prefix: "step-output-" });
+      try {
+        await Deno.writeTextFile(at, "earlier=yes\n");
+        withOutput(at, () => setStepOutput("kept", "true"));
+        expect(await Deno.readTextFile(at)).toBe("earlier=yes\nkept=true\n");
+      } finally {
+        await Deno.remove(at);
+      }
+    });
+
+    it("sets nothing where no output file is named", async () => {
+      const at = await Deno.makeTempFile({ prefix: "step-output-" });
+      try {
+        withOutput(undefined, () => setStepOutput("kept", "true"));
+        withOutput("", () => setStepOutput("kept", "true"));
+        expect(await Deno.readTextFile(at)).toBe("");
+      } finally {
         await Deno.remove(at);
       }
     });

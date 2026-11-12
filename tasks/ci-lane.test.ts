@@ -231,6 +231,13 @@ function outsideJob(): () => void {
   return setEnv({ RUNNER_TEMP: undefined });
 }
 
+/** The work directories lanes left in `temp`, a job's temporary directory. */
+async function laneDirectoriesIn(temp: string): Promise<string[]> {
+  return (await Array.fromAsync(Deno.readDir(temp)))
+    .map((entry) => entry.name)
+    .filter((name) => name.startsWith("ci-lane-"));
+}
+
 describe("reading the lane's command line", () => {
   it("names the seed it settled on even when it refuses the command line", async () => {
     // The lane settles one seed for every command it builds, and says
@@ -3756,7 +3763,9 @@ describe("the lane's own housekeeping", () => {
    * Runs the only lane of a full run over `suites` in `root`, quietly,
    * and says whether it passed. It runs as it would outside a job unless
    * `env` sets `RUNNER_TEMP`, with the other variables `env` names set
-   * around it (or unset, for `undefined`).
+   * around it (or unset, for `undefined`). It writes no step output or
+   * summary unless `env` names a file for it, so a lane run here inside a
+   * job never writes into the job's own step.
    */
   async function onlyLane(
     root: string,
@@ -3764,7 +3773,12 @@ describe("the lane's own housekeeping", () => {
     env: Record<string, string | undefined> = {},
     capabilities?: ReadonlyMap<CapabilityId, Capability>,
   ): Promise<boolean> {
-    const restore = setEnv({ RUNNER_TEMP: undefined, ...env });
+    const restore = setEnv({
+      RUNNER_TEMP: undefined,
+      GITHUB_OUTPUT: undefined,
+      GITHUB_STEP_SUMMARY: undefined,
+      ...env,
+    });
     const log = console.log;
     console.log = () => {};
     try {
@@ -3891,10 +3905,7 @@ describe("the lane's own housekeeping", () => {
         }];
       },
     })];
-    const lanes = async () =>
-      (await Array.fromAsync(Deno.readDir(temp)))
-        .map((entry) => entry.name)
-        .filter((name) => name.startsWith("ci-lane-"));
+    const lanes = () => laneDirectoriesIn(temp);
     try {
       expect(await onlyLane(root, [], { RUNNER_TEMP: temp })).toBe(true);
       expect(await lanes()).toEqual([]);
@@ -5656,15 +5667,29 @@ describe("what a lane does with the batches it was given", () => {
    * records about itself stays here rather than reaching the spool of
    * the run testing it. Its coverage directory is private too: the lane
    * converts every profile it finds there, including an enclosing CI
-   * run's profiles if it shares that run's directory.
+   * run's profiles if it shares that run's directory. It runs as it would
+   * outside a job unless `runnerTemp` names the job's temporary directory,
+   * writes step outputs only to `githubOutput`, and writes no step summary,
+   * so that a lane run here inside a job never writes into the job's own
+   * step.
    */
   async function run(
     command: readonly string[],
-    over: { full?: boolean; manifest?: Manifest; stop?: LaneStop } = {},
+    over: {
+      full?: boolean;
+      manifest?: Manifest;
+      stop?: LaneStop;
+      runnerTemp?: string;
+      githubOutput?: string;
+    } = {},
   ): Promise<{ ok: boolean; measured: TestRecord[]; annotations: string[] }> {
     const spool = await Deno.makeTempDir({ prefix: "lane-spool-" });
-    const { stop } = over;
-    const restore = outsideJob();
+    const { stop, runnerTemp, githubOutput } = over;
+    const restore = setEnv({
+      RUNNER_TEMP: runnerTemp,
+      GITHUB_OUTPUT: githubOutput,
+      GITHUB_STEP_SUMMARY: undefined,
+    });
     const log = console.log;
     const annotations: string[] = [];
     console.log = (line: string) => {
@@ -6080,6 +6105,40 @@ describe("what a lane does with the batches it was given", () => {
     // And that it excused the failure, which is what a report of the run
     // reads to say the run was not failed by it.
     expect(excusedIn(measured)).toEqual([glaze]);
+  });
+
+  it("keeps its work directory for a failure too flaky to judge a change by", async () => {
+    // The servers' logs are the only account of why such a test failed,
+    // and the run does not fail, so the lane keeps them and tells the job's
+    // upload step through its `kept` output. A lane whose withheld test
+    // passed keeps nothing and says nothing.
+
+    const temp = await Deno.makeTempDir({ prefix: "lane-tmp-" });
+    const outputs = `${temp}/github-output`;
+    const said = () => Deno.readTextFile(outputs).catch(() => "");
+    try {
+      const passing = await run(recording(""), {
+        full: true,
+        manifest: withholding(),
+        runnerTemp: temp,
+        githubOutput: outputs,
+      });
+      expect(passing.ok).toBe(true);
+      expect(await laneDirectoriesIn(temp)).toEqual([]);
+      expect(await said()).toBe("");
+      const failing = await run(recording("Deno.exit(1);", "fail"), {
+        full: true,
+        manifest: withholding(),
+        runnerTemp: temp,
+        githubOutput: outputs,
+      });
+      expect(failing.ok).toBe(true);
+      expect(excusedIn(failing.measured)).toEqual([glaze]);
+      expect(await laneDirectoriesIn(temp)).toHaveLength(1);
+      expect(await said()).toBe("kept=true\n");
+    } finally {
+      await Deno.remove(temp, { recursive: true });
+    }
   });
 
   it("fails for that same failure on a pull request", async () => {

@@ -923,12 +923,19 @@ Deno.test("a lane uploads what Status and a reader of a failure need", async () 
     `tasks/coverage-report.ts --reports ${download.with?.path}`,
   );
 
-  // A failing lane keeps its working directory under the job's temporary
-  // directory, which is where this reaches for it, and a process in the lane
-  // that crashes natively leaves its core beside it. Each Toolshed server's
-  // store is left out, and its log, which sits beside the store, is not.
-  const failure = namedStep(job, "📋 Upload what a failing lane left behind");
-  assertEquals(failure.if, "${{ failure() }}");
+  // A lane that failed, or that excused a failure, keeps its working
+  // directory under the job's temporary directory, which is where this
+  // reaches for it, and a process in the lane that crashes natively leaves
+  // its core beside it. A lane that excused a failure passes, and says it
+  // kept its directory through the lane step's `kept` output. Each Toolshed
+  // server's store is left out, and its log, which sits beside the store, is
+  // not.
+  const failure = namedStep(job, "📋 Upload what a lane kept");
+  assertEquals(
+    failure.if,
+    "${{ failure() || steps.run-lane.outputs.kept == 'true' }}",
+  );
+  assertEquals(namedStep(job, "🧪 Run the lane").id, "run-lane");
   assertEquals(
     failure.with?.path,
     "${{ runner.temp }}/ci-lane-*\n!${{ runner.temp }}/ci-lane-*/toolshed-*/\n",
