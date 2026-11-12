@@ -281,15 +281,17 @@ export class CFResizablePanelGroup extends BaseElement
 
   memberLeft(member: HTMLElement): void {
     if (!this.#members.delete(member)) return;
-    // A member leaves as this group found it: unsized and unoriented. Only
-    // panels are sized; a handle's own size is the author's.
+    // Taken out of the page with the group, a member is still inside it, and
+    // keeps its layout for when the group is put back.
+    if (!this.isConnected) return;
+    // A member that leaves goes as this group found it: unsized and
+    // unoriented. Only panels are sized; a handle's own size is the author's.
     if (this.#sizedDimension && this._panels.has(member)) {
       member.style[this.#sizedDimension] = "";
     }
     delete member.dataset.orientation;
     member.removeAttribute("aria-orientation");
-    // The members leave after the group when it is taken out with them.
-    if (this.isConnected) this.updatePanels();
+    this.updatePanels();
   }
 
   panelSizesChanged(panel: HTMLElement): void {

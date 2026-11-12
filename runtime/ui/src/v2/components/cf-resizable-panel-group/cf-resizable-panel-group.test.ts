@@ -147,8 +147,7 @@ function resizes(group: CFResizablePanelGroup): number[][] {
   const sizes: number[][] = [];
   group.addEventListener("cf-resize", (event) => {
     if (!(event instanceof CustomEvent)) return;
-    const { panels } = event.detail;
-    sizes.push(panels.map(({ size }: { size: number }) => size));
+    sizes.push(event.detail.sizes);
   });
   return sizes;
 }
@@ -212,7 +211,7 @@ describe("CFResizablePanelGroup", () => {
       const page = built("horizontal");
       page.first.style.height = "50px";
       await mount(page.group);
-      page.first.dispatchEvent(new CustomEvent("cf-panel-sizes"));
+      page.group.panelSizesChanged(page.first);
       expect(page.first.style.height).toBe("50px");
     });
   });
@@ -293,9 +292,7 @@ describe("CFResizablePanelGroup", () => {
       document.body.append(outside);
       outside.append(page.handle);
       await settle();
-      page.handle.dispatchEvent(
-        new CustomEvent("cf-handle-adjust", { detail: { delta: 1 } }),
-      );
+      expect(press(page.handle, "ArrowRight")).toBe(false);
       expect(page.first.style.width).toBe("36%");
     });
   });
@@ -764,9 +761,13 @@ describe("CFResizablePanelGroup", () => {
     it("stops answering its handles", async () => {
       const page = await mounted("horizontal");
       page.group.remove();
-      page.handle.dispatchEvent(
-        new CustomEvent("cf-handle-adjust", { detail: { delta: 1 } }),
-      );
+      const key = new KeyboardEvent("keydown", {
+        key: "ArrowRight",
+        bubbles: true,
+        cancelable: true,
+      });
+      page.handle.dispatchEvent(key);
+      expect(key.defaultPrevented).toBe(false);
       expect(mouse(page.handle, "mousedown", 100, 0)).toBe(false);
       expect(touch(page.handle, "touchstart", { clientX: 100, clientY: 0 }))
         .toBe(false);
