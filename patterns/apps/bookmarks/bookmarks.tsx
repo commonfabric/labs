@@ -74,7 +74,7 @@ export const Bookmarks = pattern<BookmarksInput, BookmarksOutput>(
           {/* Add URL input */}
           <cf-message-input
             placeholder="Add a URL..."
-            button-text="Add"
+            buttonText="Add"
             oncf-send={(e: { detail?: { message?: string } }) => {
               const url = e.detail?.message;
               if (url) addBookmark.send({ url });

@@ -42,7 +42,7 @@ export default pattern<CopyButtonStoryInput, CopyButtonStoryOutput>(() => {
           <cf-copy-button
             text="Hello, world!"
             variant={variant}
-            icon-only={iconOnly}
+            iconOnly={iconOnly}
           >
             Copy text
           </cf-copy-button>
@@ -61,7 +61,7 @@ export default pattern<CopyButtonStoryInput, CopyButtonStoryOutput>(() => {
           <cf-copy-button
             text="Copied from icon button"
             variant="ghost"
-            icon-only
+            iconOnly
           />
         </div>
         <div>
@@ -93,7 +93,7 @@ export default pattern<CopyButtonStoryInput, CopyButtonStoryOutput>(() => {
             <cf-copy-button
               text="npm install @commonfabric/ui"
               variant="ghost"
-              icon-only
+              iconOnly
             />
           </div>
         </div>
