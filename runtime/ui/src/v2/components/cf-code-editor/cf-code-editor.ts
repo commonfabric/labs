@@ -73,7 +73,7 @@ import {
 } from "@commonfabric/runtime-client";
 import { GFM } from "@lezer/markdown";
 import { consume } from "@lit/context";
-import { html, PropertyValues } from "lit";
+import { html, PropertyValues, unsafeCSS } from "lit";
 import { property } from "lit/decorators.js";
 
 import { BaseElement } from "../../core/base-element.ts";
@@ -140,7 +140,9 @@ import {
   setRefShortNames,
   shortNameQueryAt,
 } from "./features/mention-refs.ts";
+import { KATEX_STYLES } from "./features/katex-styles.ts";
 import { createProseMarkdownPlugin } from "./features/prose-markdown.ts";
+import { mathMarkdown, proseMath } from "./features/prose-math.ts";
 import { styles } from "./styles.ts";
 import {
   CodeMirrorCollaborationController,
@@ -233,11 +235,18 @@ export type MimeType = (typeof MimeType)[keyof typeof MimeType];
 
 // Language registry
 const langRegistry = new Map<MimeType, LanguageSupport>();
+const markdownCodeLang = createJavaScript({ jsx: true });
 const markdownLang = createMarkdown({
-  defaultCodeLanguage: createJavaScript({ jsx: true }),
+  defaultCodeLanguage: markdownCodeLang,
   extensions: GFM,
 });
 const defaultLang = markdownLang;
+
+/** Markdown with `$…$` and `$$…$$` formulas, for prose mode's math. */
+const markdownMathLang = createMarkdown({
+  defaultCodeLanguage: markdownCodeLang,
+  extensions: [GFM, mathMarkdown],
+});
 
 langRegistry.set(MimeType.javascript, createJavaScript());
 langRegistry.set(MimeType.jsx, createJavaScript({ jsx: true }));
@@ -250,7 +259,12 @@ langRegistry.set(MimeType.html, createHtml());
 langRegistry.set(MimeType.markdown, markdownLang);
 langRegistry.set(MimeType.json, createJson());
 
-const getLangExtFromMimeType = (mime: MimeType) => {
+/**
+ * The language for `mime`. Markdown parses formulas as well when `math`, for
+ * an editor that draws them.
+ */
+const getLangExtFromMimeType = (mime: MimeType, math: boolean) => {
+  if (math && mime === MimeType.markdown) return markdownMathLang;
   return langRegistry.get(mime) ?? defaultLang;
 };
 
@@ -304,6 +318,9 @@ function readUnlessRefused(cell: { get(): unknown }): unknown {
  *   follows the nearest `<cf-theme>`'s color scheme, light or dark; wrap the
  *   editor in its own `<cf-theme>` to give it a different scheme from the page.
  * @attr {"code"|"prose"} mode - Editor mode; "prose" enables markdown prose editing.
+ * @attr {boolean} math - In prose mode with Markdown, draw `$…$` and `$$…$$`
+ *   TeX formulas with KaTeX, showing a formula's TeX where the selection
+ *   touches it (default: false). See `docs/prose-markdown.md`.
  * @attr {CellHandle<string>} pattern - Optional pattern piece used for backlink context.
  * @attr {boolean} collaborative - Use Memory's operation protocol for concurrent editing.
  * @attr {string} presenceRoom - Optional opaque room override for ephemeral
@@ -363,7 +380,11 @@ function readUnlessRefused(cell: { get(): unknown }): unknown {
  * <cf-code-editor language="text/javascript" placeholder="Enter code..."></cf-code-editor>
  */
 export class CFCodeEditor extends BaseElement {
-  static override styles = [BaseElement.baseStyles, styles];
+  static override styles = [
+    BaseElement.baseStyles,
+    styles,
+    unsafeCSS(KATEX_STYLES),
+  ];
 
   static override properties = {
     value: { type: String },
@@ -394,6 +415,7 @@ export class CFCodeEditor extends BaseElement {
     tabIndent: { type: Boolean },
     theme: { type: String, reflect: true },
     mode: { type: String, reflect: true },
+    math: { type: Boolean },
     autofocus: { type: Boolean },
     cursorPosition: { type: String },
     collaborative: { type: Boolean },
@@ -438,6 +460,13 @@ export class CFCodeEditor extends BaseElement {
   declare tabIndent: boolean;
   declare theme: "light" | "dark";
   declare mode: "code" | "prose";
+
+  /**
+   * Whether prose mode draws `$…$` and `$$…$$` TeX formulas in Markdown with
+   * KaTeX. Ignored in code mode and for other languages.
+   */
+  declare math: boolean;
+
   declare autofocus: boolean;
   declare cursorPosition: "start" | "end";
   declare collaborative: boolean;
@@ -678,6 +707,7 @@ export class CFCodeEditor extends BaseElement {
     this.tabIndent = true;
     this.theme = "light";
     this.mode = "code";
+    this.math = false;
     this.autofocus = false;
     this.cursorPosition = "start";
     this.collaborative = false;
@@ -2789,11 +2819,13 @@ export class CFCodeEditor extends BaseElement {
       this._reportHighlightFaults(this._editorView);
     }
 
-    // Update language
-    if (changedProperties.has("language") && this._editorView) {
-      const lang = getLangExtFromMimeType(this.language);
+    // Update language, which parses formulas only for an editor drawing them
+    if (
+      (changedProperties.has("language") || changedProperties.has("math") ||
+        changedProperties.has("mode")) && this._editorView
+    ) {
       this._editorView.dispatch({
-        effects: this._lang.reconfigure(lang),
+        effects: this._lang.reconfigure(this.#languageExtension()),
       });
     }
 
@@ -2895,10 +2927,12 @@ export class CFCodeEditor extends BaseElement {
         effects: [
           this._setupComp.reconfigure(this._getSetupExtensions()),
           this._modeComp.reconfigure(this._getModeExtension()),
-          this._proseMarkdownComp.reconfigure(
-            this.mode === "prose" ? createProseMarkdownPlugin() : [],
-          ),
+          this._proseMarkdownComp.reconfigure(this.#proseExtension()),
         ],
+      });
+    } else if (changedProperties.has("math") && this._editorView) {
+      this._editorView.dispatch({
+        effects: this._proseMarkdownComp.reconfigure(this.#proseExtension()),
       });
     }
 
@@ -3110,6 +3144,25 @@ export class CFCodeEditor extends BaseElement {
     );
   }
 
+  /** Whether the editor draws formulas: `math` set, in prose mode. */
+  get #drawsMath(): boolean {
+    return this.math && this.mode === "prose";
+  }
+
+  /** The language extension for `language`, with formulas when drawn. */
+  #languageExtension(): Extension {
+    return getLangExtFromMimeType(this.language, this.#drawsMath);
+  }
+
+  /** Prose mode's Markdown rendering, with formulas when drawn. */
+  #proseExtension(): Extension {
+    if (this.mode !== "prose") return [];
+    return [
+      createProseMarkdownPlugin(),
+      this.#drawsMath ? proseMath(this._editorView?.hasFocus ?? false) : [],
+    ];
+  }
+
   private _getModeExtension(): Extension {
     if (this.mode !== "prose") return [];
 
@@ -3159,7 +3212,7 @@ export class CFCodeEditor extends BaseElement {
       refShortNameField,
       // Tab indentation keymap (toggleable)
       this._tabIndentComp.of(this.tabIndent ? keymap.of([indentWithTab]) : []),
-      this._lang.of(getLangExtFromMimeType(this.language)),
+      this._lang.of(this.#languageExtension()),
       this._readonly.of(EditorState.readOnly.of(this.readonly)),
       // Word wrapping
       this._wrap.of(this.wordWrap ? EditorView.lineWrapping : []),
@@ -3193,9 +3246,7 @@ export class CFCodeEditor extends BaseElement {
       this._themeComp.of(this._themeExtension()),
       // Prose/code mode extensions
       this._modeComp.of(this._getModeExtension()),
-      this._proseMarkdownComp.of(
-        this.mode === "prose" ? createProseMarkdownPlugin() : [],
-      ),
+      this._proseMarkdownComp.of(this.#proseExtension()),
       this._collaborationComp.of([]),
       this._presenceComp.of([]),
       highlightsExtension((id) => this.emit("cf-highlight-click", { id })),

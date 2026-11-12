@@ -496,6 +496,24 @@ native bindings, and an install script, which the pager never uses; its
 dependencies are the two `tree-sitter-python` already brings. Roll it with the
 runtime, then run the `cf view` shell tests and `cf view` against a `.sh` file.
 
+### KaTeX
+
+`runtime/ui` pins `katex` exactly, because `tasks/generate-katex-assets.ts`
+writes the editor's math assets from that release: the layout rules in
+`runtime/ui/src/v2/components/cf-code-editor/features/katex-styles.ts`, and the
+fonts and their faces in `runtime/shell/public/fonts/katex/` and
+`runtime/shell/public/styles/katex-fonts.css`. Markup from one release laid out
+by another's rules can draw wrong. To roll it, change the pin in
+`runtime/ui/deno.jsonc` and the two `npm:katex` specifiers in the generator,
+then run it from the repository root:
+
+```bash
+deno run --allow-read --allow-write --allow-run tasks/generate-katex-assets.ts
+```
+
+`features/prose-math.test.ts` fails while the generated layout rules come from
+another release than the one the editor imports.
+
 ### Viz.js
 
 The scripts workspace pins `@viz-js/viz` exactly. `scripts/docs-links.ts`

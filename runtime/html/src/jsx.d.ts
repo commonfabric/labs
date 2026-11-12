@@ -4113,6 +4113,13 @@ interface CFCodeEditorAttributes<T> extends CFHTMLAttributes<T> {
   "tabIndent"?: boolean;
   "theme"?: "light" | "dark";
   "mode"?: "code" | "prose";
+
+  /**
+   * In prose mode with Markdown, draws `$…$` and `$$…$$` TeX formulas with
+   * KaTeX, showing a formula's TeX where the selection touches it.
+   */
+  "math"?: boolean;
+
   "autofocus"?: boolean;
   "cursorPosition"?: "start" | "end";
   "oncf-change"?: any;

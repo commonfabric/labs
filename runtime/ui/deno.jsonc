@@ -33,6 +33,9 @@
     "@codemirror/search": "npm:@codemirror/search@^6.7.1",
     "@codemirror/lint": "npm:@codemirror/lint@^6.9.7",
     "@lezer/markdown": "npm:@lezer/markdown@^1.7.2",
+    // Exact: `tasks/generate-katex-assets.ts` writes KaTeX's stylesheet and
+    // fonts from this release. See DEPENDENCIES.md, "KaTeX".
+    "katex": "npm:katex@0.19.1",
     "leaflet": "npm:leaflet@^1.9.4",
     "@types/leaflet": "npm:@types/leaflet@^1.9.21",
     "d3-scale": "npm:d3-scale@^4.0.2",
