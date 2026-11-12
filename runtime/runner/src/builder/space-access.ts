@@ -242,6 +242,43 @@ export function spaceOf(
 }
 
 /**
+ * Returns the DID of the space `target`'s own link names, without following
+ * it or any link it reaches, so that nothing in that space is read: what a
+ * pattern holding cells by link, such as a list of entries read as handles,
+ * names their spaces by. `undefined` means there is no answer yet, as for
+ * {@link spaceOf}: `target` is `undefined`, or the run has named an `inSpace()`
+ * target whose space has not resolved.
+ *
+ * @throws If called outside a handler or a reactive computation, with no
+ *   `target`, or with a `target` that is neither a cell nor `undefined`.
+ */
+export function spaceOfLink(
+  // Optional here, though the declared API requires it, so that the runtime
+  // check below has a case to catch from untyped callers.
+  ...args: [target?: unknown]
+): MemorySpace | undefined {
+  const frame = topFrame();
+  const kind = frame?.frameKind;
+  if (kind !== "lift" && kind !== "handler") {
+    throw new Error(
+      "`spaceOfLink(target)` can only be called from a handler or a " +
+        "reactive computation; a pattern body's references name no space yet.",
+    );
+  }
+  if (args.length === 0) {
+    throw new Error(
+      "`spaceOfLink()` requires a `target`: a cell whose link names a space.",
+    );
+  }
+  const [target] = args;
+
+  if (target === undefined) return undefined;
+  const cell = cellOfTarget(target, "spaceOfLink(target)");
+  if ((frame!.pendingSpaceNames?.size ?? 0) > 0) return undefined;
+  return cell.getAsNormalizedFullLink().space;
+}
+
+/**
  * Returns whether the space `target` names is deleted
  * (`docs/features/space-access.md`, "A deleted space"): `true` once the memory
  * server has refused this runtime the space with the `deleted` marker, and

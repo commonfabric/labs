@@ -98,6 +98,53 @@ describe("materializer envelope collection", () => {
     expect(envelopes).toEqual([]);
   });
 
+  for (const scope of ["space", "user", "session"] as const) {
+    it(`collects scoped writable ${scope} handles and excludes non-writable ones`, () => {
+      const resultCell = runtime.getCell(space, `scoped-result-${scope}`);
+      const kinds = [
+        "cell",
+        "writeonly",
+        "readonly",
+        "opaque",
+        "stream",
+      ] as const;
+      const targets = kinds.map((kind) =>
+        runtime.getCell(
+          space,
+          `scoped-target-${scope}-${kind}`,
+          undefined,
+          undefined,
+          scope,
+        )
+      );
+      const argumentSchema = {
+        type: "object",
+        properties: Object.fromEntries(kinds.map((kind) => [kind, {
+          type: "number",
+          asCell: [{ kind, scope }],
+        }])),
+      };
+      const inputs = Object.fromEntries(kinds.map((kind, index) => [
+        kind,
+        targets[index].getAsWriteRedirectLink({ base: resultCell }),
+      ]));
+      const envelopes = collect(
+        argumentSchema,
+        inputs,
+        resultCell,
+        kinds.map((kind) => [kind]),
+      );
+      expect(envelopes.map(({ id, scope }) => ({ id, scope }))).toEqual(
+        targets.slice(0, 2).map((cell) => {
+          const { id, scope } = cell.getAsNormalizedFullLink();
+          return { id, scope };
+        }),
+      );
+      expect(collect(argumentSchema, inputs, resultCell, [["readonly"]]))
+        .toEqual([]);
+    });
+  }
+
   it("collects the cell-branded path when the metadata names it alone", () => {
     const { resultCell, targetCell, argumentSchema, inputs } = setup();
     const envelopes = collect(argumentSchema, inputs, resultCell, [

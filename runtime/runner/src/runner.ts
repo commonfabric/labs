@@ -250,6 +250,7 @@ import {
 import {
   isCfcEnforcementRejection,
   isConflictRejection,
+  isDeadDependencyRejection,
   isPermanentAuthorizationRefusal,
   isStaleReadConflict,
   isStorageTransactionInconsistent,
@@ -1987,6 +1988,18 @@ export interface RunSyncedOptions {
    * caller-owned transaction, which keeps its owner's.
    */
   cfcTrustSnapshot?: TrustSnapshot;
+
+  /**
+   * The principal, and for a session-scoped piece the session, whose
+   * instance of a scoped piece the run addresses: the result cell's own
+   * document and every document its pattern reads are loaded, read and
+   * written as that principal's instances, and the owned setup transaction
+   * and its run stamp carry the identity. A serving runtime acting on a
+   * requester's piece held at a user or session scope supplies the
+   * requester's. Absent, the run addresses what the result cell's
+   * transaction or the runtime's own identity names.
+   */
+  scopeKeyIdentity?: ScopeKeyIdentity;
 
   /** See `RunnerRunOptions.attributeInitialization`. */
   attributeInitialization?: boolean;
@@ -4757,8 +4770,11 @@ export class Runner {
         new Set(droppedArgumentFields),
       );
     } else {
+      // Read under no schema: what is wanted is the stored bytes, and a load
+      // under the link's schema, the outgoing pattern's, would deliver all it
+      // reaches, in other spaces too, which nothing here reads.
       const previousArgumentCell = this.#runtime.getCellFromLink(
-        argumentLink,
+        { ...argumentLink, schema: undefined },
         undefined,
         tx,
       );
@@ -6779,9 +6795,13 @@ export class Runner {
                 // this replica's own consistency check: the retry reads the
                 // replica once the refusal's catch-up has brought the
                 // conflicting documents into it, whichever side wrote them.
+                // And so does a read through another commit's layer that was
+                // refused or dropped meanwhile, as the commits a lost start
+                // left behind are: the retry reads without that layer.
                 if (
                   isStaleReadConflict(error) ||
-                  isStorageTransactionInconsistent(error)
+                  isStorageTransactionInconsistent(error) ||
+                  isDeadDependencyRejection(error)
                 ) {
                   return await recoverInstantiation(error, "basis");
                 }
@@ -6825,10 +6845,8 @@ export class Runner {
               }
               // A WHOLE contribution drop is recoverable in the same sense the
               // stale-read refusal is, and the helper reports only if its one
-              // retry also loses. A partial drop is not: part of the
-              // contribution stands, so there is no rolled-back view to
-              // re-instantiate against, and it takes the same terminal arm a
-              // second failure takes.
+              // retry also loses. Any other withdrawal takes the same
+              // terminal arm a second failure takes.
               return await recoverInstantiation(
                 settled.error,
                 waveWithdrawalCause === "contribution-dropped"
@@ -8568,19 +8586,21 @@ export class Runner {
    * A piece whose only absences are defaults its instances are owed
    * (`ownedCellOwesSeed`), each one the store read-through reported holding
    * nothing for, needs no name-sync, which could deliver none of them. Its
-   * run is held for the seeds alone, which `seeds` names, and not at all in
-   * a caller-owned setup, which seeds them in the caller's transaction. A
+   * run is held for the seeds alone, which `seeds` names. A caller-owned
+   * setup seeds them in its transaction unless `prepareScopedDefaults` asks
+   * for the recorded defaults' preparation before the run resumes. A
    * piece of a family no pre-sync named, whose other absences are user- or
    * session-scoped cells the store reported holding nothing at, is held the
-   * same way, and so not in a caller-owned setup either: their instances
-   * join `seeds`, so that outside such a setup its start runs apart from the
-   * caller's transaction (`#familyAbsent` says why).
+   * same way: their instances join `seeds`, so that outside a caller-owned
+   * setup its start runs apart from the caller's transaction
+   * (`#familyAbsent` says why).
    */
   #patternToNameBeforeRun(
     patternOrModule: Pattern | Module | undefined,
     argument: unknown,
     tx: IExtendedStorageTransaction,
     resultCell: Cell<any>,
+    prepareScopedDefaults = false,
   ): {
     pattern: Pattern;
     entryKey: string;
@@ -8640,7 +8660,8 @@ export class Runner {
         seeds,
       )
     ) return { pattern: resolved.pattern, entryKey, identity };
-    return seeds.length === 0 || this.#callerOwnedSetupTransactions.has(tx)
+    return seeds.length === 0 ||
+        (!prepareScopedDefaults && this.#callerOwnedSetupTransactions.has(tx))
       ? undefined
       : { pattern: resolved.pattern, entryKey, identity, seeds };
   }
@@ -9413,18 +9434,19 @@ export class Runner {
 
   /**
    * The catch-up recovery a commit-gated start earns when its transaction
-   * is refused for a STALE CONFIRMED READ under server execution. Returns
-   * whether a recovery was scheduled — `false` leaves the caller's terminal
-   * arm to run exactly as it does for every other refusal.
+   * is refused for a STALE CONFIRMED READ. Returns whether a recovery was
+   * scheduled — `false` leaves the caller's terminal arm to run exactly as it
+   * does for every other refusal.
    *
-   * WHY a start earns one at all. Under the flag a piece is materialized
-   * SERVER-side, and the client's navigate-deferred start reads that
-   * piece's computed documents to base its own transaction on. At first
-   * hydration those two acts race by construction: the serving loop's
-   * derived commits for the just-born piece are in flight exactly while
-   * the client reads their targets as absent, so the client's basis is
-   * stale whenever the interleaving is tight — the EXPECTED outcome of
-   * losing the race, not an exceptional one. Terminating there would make
+   * WHY a start earns one at all. Another participant can set the same piece
+   * up first: under the flag the serving side, and without it another client,
+   * a second tab of the same user among them. The client's navigate-deferred
+   * start reads that piece's computed documents to base its own transaction
+   * on. At first hydration those two acts race by construction: the other
+   * participant's derived commits for the just-born piece are in flight
+   * exactly while the client reads their targets as absent, so the client's
+   * basis is stale whenever the interleaving is tight — the EXPECTED outcome
+   * of losing the race, not an exceptional one. Terminating there would make
    * the race fatal: `#startWithTx()` has already installed the
    * client-side piece inside the transaction when the refusal lands, the
    * error arm's cancel tears that install down, and nothing re-runs it —
@@ -9433,27 +9455,33 @@ export class Runner {
    * holds every append.
    *
    * WHAT the recovery does — and deliberately does not. The refusal is treated
-   * as "the server won the race": await the conflict's readiness (the session
-   * catch-up the wire attaches as `readyToRetry`, plus the named document's
-   * pull — `Runtime.awaitCommitRetryReadiness`), then START the piece from the
-   * served documents through the ordinary load walk (`#doStart`), the same walk
-   * a reload runs. The recovery arm COMMITS NOTHING: it does not re-mint and
-   * re-commit the refused materialization, and it mints no transaction of its
-   * own. The load walk's own instantiation transaction keeps its sanctioned
-   * `bookkeeping` stamp exactly as a reload's does (serving-loop.md §3d's
-   * piece-start site), and for a piece the server materialized it has nothing
-   * left to write. A document still in flight reads as PENDING and re-triggers
-   * on arrival (speculation.md §2's unresolved-input semantics) — the entirely
-   * reactive flow that catches up with the server.
+   * as "the other participant won the race": await the conflict's readiness
+   * (the session catch-up the wire attaches as `readyToRetry`, plus the named
+   * document's pull — `Runtime.awaitCommitRetryReadiness`), then START the
+   * piece from the stored documents through the ordinary load walk
+   * (`#doStart`), the same walk a reload runs. The recovery arm COMMITS
+   * NOTHING: it does not re-mint and re-commit the refused materialization,
+   * and it mints no transaction of its own. The load walk's own
+   * instantiation transaction keeps its sanctioned `bookkeeping` stamp
+   * exactly as a reload's does (serving-loop.md §3d's piece-start site),
+   * and for a piece another participant materialized it
+   * has nothing left to write. That transaction can still read through the
+   * layers of the commits the refused start's run left behind, which are
+   * refused in turn; its own retry covers that ({@link
+   * isDeadDependencyRejection}). A document still in flight reads as PENDING
+   * and re-triggers on arrival (speculation.md §2's unresolved-input
+   * semantics) — the entirely reactive flow that catches up with the store.
    *
-   * ON-ONLY: under OFF a stale confirmed read on a deferred start means another
-   * CLIENT raced, and the cross-tab mutex semantics own that story — the OFF
-   * arm of a commit-gated start stays terminal. A named piece's run refused
-   * over a policy manifest another participant installed first is not that
-   * story either, and neither is one whose every conflicting read claimed a
-   * document absent that the store holds: `#retryPieceRunStart()` runs those
-   * again in a fresh transaction, under either arm, when this recovery
-   * declines.
+   * BOTH ARMS. With the flag off the participant that won is another client,
+   * and the client that lost needs the piece's context exactly as much. A
+   * named piece's run refused over a policy manifest another participant
+   * installed first is not this story, and neither is one whose every
+   * conflicting read claimed a document absent that the store holds:
+   * `#retryPieceRunStart()` runs those again in a fresh transaction when this
+   * recovery declines, and with the flag off it declines them. There no
+   * serving side commits what the start carries, a source transition's
+   * creator record among them, so only a run made again lands it. A refusal
+   * over a revision another writer moved past is this story in both arms.
    *
    * WHAT stays terminal. Only the engine's stale-read family recovers —
    * `stale confirmed read` and its `stale pending read` sibling
@@ -9500,15 +9528,23 @@ export class Runner {
    * continuation, whose sweep could not see this scheduling.
    */
   #catchUpAndStartOnStaleRead<T>(
-    error: { name?: string; message?: string },
+    error: CommitError,
     resultCell: Cell<T>,
     label: string,
     scheduledLifecycleEpoch: number,
     ownership: DeferredCancelOwnership,
     installedRegistration: Cancel | undefined,
   ): boolean {
-    if (this.#runtime.experimental.serverExecution !== true) return false;
     if (!isStaleReadConflict(error)) return false;
+    // Without the flag nothing else commits what this start carries, such as
+    // a source transition's record, so a refusal a fresh run lands is left to
+    // that run.
+    if (
+      this.#runtime.experimental.serverExecution !== true &&
+      (refusalNamesPolicyManifest(error) || refusalClaimsOnlyAbsence(error))
+    ) {
+      return false;
+    }
     if (scheduledLifecycleEpoch !== this.#lifecycleEpoch) return false;
     if (ownership.isCancelled()) return false;
     const key = this.#getDocKey(resultCell);
@@ -9527,7 +9563,7 @@ export class Runner {
     logger.warn(
       "deferred-start-catchup",
       `Deferred ${label} transaction lost its first-hydration basis to ` +
-        "the serving side; starting from the served documents instead",
+        "another participant; starting from the stored documents instead",
       error,
     );
     // Tear the refused install down exactly as the token's own cancel
@@ -9884,28 +9920,44 @@ export class Runner {
    * stored dependencies need loading, resolves that load and throws
    * `RetryImmediately` so the scheduler retries with a fresh transaction.
    * No deferred setup transaction can outlive the caller's resolution writes.
+   * A list can request preparation of recorded scoped defaults during that
+   * load; `#seedOwedDefaults()` verifies their durable owner and manifest,
+   * and the caller's transaction must still be active for a seed to run.
    */
   runInTransaction<T, R>(
     tx: IExtendedStorageTransaction,
     pattern: Pattern,
     argument: T,
     resultCell: Cell<R>,
-    options: RunnerRunOptions = {},
+    options: RunnerRunOptions & {
+      /**
+       * Prepare recorded scoped defaults during non-speculative dependency
+       * loading. List reconciles use the ordinary named-family preparation;
+       * speculative runs keep every seed in their caller's transaction.
+       */
+      prepareScopedDefaults?: boolean;
+    } = {},
   ): Cell<R> | Promise<never> {
     this.#callerOwnedSetupTransactions.add(tx);
+    const context = speculationRunContextOf(tx);
+    const speculative = context?.kind === "derivation" ||
+      context?.kind === "event-handler";
+    const prepareScopedDefaults = options.prepareScopedDefaults === true &&
+      !speculative;
     const toName = this.#patternToNameBeforeRun(
       pattern,
       argument,
       tx,
       resultCell,
+      prepareScopedDefaults,
     );
     if (toName !== undefined) {
       return this.#nameFamilyBeforeRun(
         resultCell,
         toName,
         argument,
-        () => true,
-        false,
+        () => !prepareScopedDefaults || tx.status().status === "ready",
+        prepareScopedDefaults,
       ).then(
         () => {
           throw new RetryImmediately(
@@ -10261,18 +10313,31 @@ export class Runner {
     // pre-sync names what that node reads: `inputs` under the module's
     // argument schema.
     const presyncPattern = this.#resolveToPattern(pattern);
-    await resultCell.sync();
+    const identity = options?.scopeKeyIdentity;
+    await syncCellForIdentity(resultCell, identity);
 
     const synced = await this.#syncCellsForRunningPattern(
       resultCell,
       presyncPattern,
       inputs,
+      identity ?? cellTx(resultCell)?.tx.scopeKeyIdentity,
     );
 
     const transition = options?.pieceSourceTransition;
     const candidateRef = this.#runtime.patternManager.getArtifactEntryRef(
       pattern,
     );
+    if (transition !== undefined) {
+      // Applying the transition verifies the current and the candidate source
+      // closures synchronously, inside the setup transaction.
+      await this.#runtime.patternManager.prepareSourceClosureVerification(
+        resultCell.space,
+        [
+          transition.expected.pattern.identity,
+          ...(candidateRef === undefined ? [] : [candidateRef.identity]),
+        ],
+      );
+    }
     const sourceUpdate = transition?.baseline.kind === "retain" && candidateRef
       ? await this.#runtime.patternManager.prepareSourceUpdate(
         resultCell.space,
@@ -10369,10 +10434,12 @@ export class Runner {
           // that a later withdrawal can undo; bookkeeping commits to storage.
           // A receipt minted from an overlay seal would claim durability it
           // does not have, so re-stamping this one is not a naming change.
+          if (identity !== undefined) tx.tx.scopeKeyIdentity = identity;
           this.#runtime.stampServerRun(tx, {
             actionId: `piece-run-synced/${resultCell.sourceURI}`,
             kind: "bookkeeping",
             ...(options?.directCommit === true ? { directCommit: true } : {}),
+            ...(identity === undefined ? {} : { scopeKeyIdentity: identity }),
           });
           if (options?.cfcTrustSnapshot !== undefined) {
             setCfcTrustSnapshot(tx, options.cfcTrustSnapshot);
@@ -10464,7 +10531,12 @@ export class Runner {
         if (givenTx) {
           await this.#syncCellsForRunningPattern(resultCell, presyncPattern);
         } else {
-          await this.#prepareCellsForRunningPattern(resultCell, presyncPattern);
+          await this.#prepareCellsForRunningPattern(
+            resultCell,
+            presyncPattern,
+            undefined,
+            identity === undefined ? {} : { identity },
+          );
         }
       }
 
@@ -10796,30 +10868,40 @@ export class Runner {
   }
 
   /**
-   * Names, root-only, each document the stored argument at `argumentCell`
-   * links to directly, and the result document of the piece that owns each,
-   * reached through the `result` backlink the linked document carries once
-   * it is local. Setup's proof that a supplied link stays compatible reads
-   * both, a setup re-staging the argument under another pattern's schema
-   * reads each linked document to judge the slot holding the link, and the
-   * gate that decides whether a run over a stored piece must name its family
-   * first probes them. `argumentCell` is local already. The argument and each
-   * linked document are read, and named, as `identity`, so a scoped argument
-   * is read in the instance that identity's setup reads.
+   * Names, root-only, each document in the space and scope of the stored
+   * argument at `argumentCell` that the argument links to directly, and the
+   * result document of the piece that owns each, reached through the `result`
+   * backlink the linked document carries once it is local. Setup's proof that
+   * a supplied link stays compatible reads both, a setup re-staging the
+   * argument under another pattern's schema reads each linked document to
+   * judge the slot holding the link, and the gate that decides whether a run
+   * over a stored piece must name its family first probes them. A link into
+   * another space or scope is left unnamed: setup judges it as a link without
+   * reading what it reaches, which is another piece's or another audience's
+   * data, and the reads that follow it load it. `argumentCell` is local
+   * already. The argument and each linked document are read, and named, as
+   * `identity`, so a scoped argument is read in the instance that identity's
+   * setup reads.
    */
   async #syncStoredArgumentLinkTargets(
     argumentCell: Cell<unknown>,
     identity?: ScopeKeyIdentity,
   ): Promise<void> {
+    const home = argumentCell.getAsNormalizedFullLink();
     const targets: Cell<unknown>[] = [];
     const seen = new Set<unknown>();
     const collect = (value: unknown): void => {
       if (seen.has(value)) return;
       const link = parseLink(value, argumentCell);
       if (link !== undefined) {
-        targets.push(
-          this.#runtime.getCellFromLink({ ...link, schema: undefined }),
-        );
+        if (
+          link.space === home.space &&
+          (link.scope ?? "space") === (home.scope ?? "space")
+        ) {
+          targets.push(
+            this.#runtime.getCellFromLink({ ...link, schema: undefined }),
+          );
+        }
         return;
       }
       // TODO(danfuzz): the walk stops at a `FabricSpecialObject`, so a link
@@ -13240,7 +13322,10 @@ export class Runner {
       const asCell = schema.asCell;
       if (
         Array.isArray(asCell) &&
-        (asCell.includes("cell") || asCell.includes("writeonly"))
+        asCell.some((entry) => {
+          const kind = ContextualFlowControl.getAsCellKind(entry);
+          return kind === "cell" || kind === "writeonly";
+        })
       ) {
         if (shouldCollectPath(path)) {
           const redirectLinks = findAllWriteRedirectCells(
@@ -13958,19 +14043,31 @@ export class Runner {
       resultSchema,
     );
     this.#handlerResultPatterns.add(resultPattern);
-    if (
-      subPatternNodes(resultPattern).some(({ module }) =>
-        isPattern(module.implementation) &&
-        this.#childSystemOrigin(
-            tx,
-            patternResultCell,
-            module.implementation,
-          ) !== undefined
-      )
-    ) {
-      // A tracked child retains a verified source revision during its setup.
-      // Its compiled module can be loaded without the parser that verifies it.
-      await prepareSourceClosureVerification();
+    // A tracked child retains a verified source revision during its setup,
+    // which verifies the child's source closure synchronously, in the space
+    // the child is placed in.
+    const trackedChildIdentities = new Map<MemorySpace, string[]>();
+    for (const { module } of subPatternNodes(resultPattern)) {
+      const child = module.implementation;
+      if (
+        !isPattern(child) ||
+        this.#childSystemOrigin(tx, patternResultCell, child) === undefined
+      ) {
+        continue;
+      }
+      const ref = this.#runtime.patternManager.getArtifactEntryRef(child);
+      if (ref === undefined) continue;
+      const space = module.targetSpace ?? patternResultCell.space;
+      trackedChildIdentities.set(space, [
+        ...(trackedChildIdentities.get(space) ?? []),
+        ref.identity,
+      ]);
+    }
+    for (const [space, identities] of trackedChildIdentities) {
+      await this.#runtime.patternManager.prepareSourceClosureVerification(
+        space,
+        identities,
+      );
     }
     // navigateTo result patterns must start after the handler's transaction
     // commits so the navigation target is durable. Every other handler result
@@ -15681,7 +15778,11 @@ export class Runner {
             }
             : {}),
         } satisfies RawNodeCause,
-        resultCell,
+        // The parent cell under the pattern's result schema, whatever schema
+        // the caller started the piece with: builtins copy it into the
+        // `result` back-links of the cells they mint, and every runtime
+        // running the piece writes those links.
+        resultCell.asSchema(pattern.resultSchema),
         this.#runtime,
         outputBinding,
         // The resumed-from-synced-state flag is passed out-of-band (a behavioral
@@ -17666,7 +17767,13 @@ export function samePieceSourceSnapshot(
     left.revisionId === right.revisionId;
 }
 
-function normalizePieceSourceOrigin(
+/**
+ * The origin as a piece stores it, which a source transition writes: a rooted
+ * path becomes the absolute URL it names on the host serving the piece's
+ * space, keeping the string as entered as `recordedOrigin`; anything else is
+ * stored as it is.
+ */
+export function normalizePieceSourceOrigin(
   runtime: Runtime,
   resultCell: Cell<unknown>,
   origin: string | null,
@@ -17758,14 +17865,27 @@ function keylessTransitionSessionPattern(
  * Verify that a source transition can restore the current source. Recovery
  * paths may omit an unavailable legacy baseline and retain the displaced
  * executable identity outside the restorable history instead.
+ *
+ * This also prepares the synchronous verification
+ * {@link applyPieceSourceTransition} makes of the current source closure and
+ * of the candidate's. `candidateIdentity` names the candidate when the caller
+ * knows it; without it the candidate is unknown here, so the parser that
+ * verification may need is loaded.
  */
 export async function preparePieceSourceTransitionBaseline(
   runtime: Runtime,
   resultCell: Cell<unknown>,
   expected: PieceSourceSnapshot,
-  options: { allowUnavailable?: boolean } = {},
+  options: { allowUnavailable?: boolean; candidateIdentity?: string } = {},
 ): Promise<PieceSourceTransitionBaseline> {
-  await prepareSourceClosureVerification();
+  if (options.candidateIdentity === undefined) {
+    await prepareSourceClosureVerification();
+  } else {
+    await runtime.patternManager.prepareSourceClosureVerification(
+      resultCell.space,
+      [expected.pattern.identity, options.candidateIdentity],
+    );
+  }
   const current = getPieceSourceSnapshot(
     resultCell,
     keylessTransitionSessionPattern(runtime, resultCell, expected.pattern),
@@ -17782,7 +17902,7 @@ export async function preparePieceSourceTransitionBaseline(
   };
   // Load and verify the current closure before opening the write transaction.
   // The write transaction verifies it again and keeps those reads in its OCC
-  // set. This first pass synchronizes the recursive closure and compiler stack.
+  // set; the preparation above covers that second verification.
   const program = await runtime.patternManager
     .getPatternSourceProgramByIdentity(
       expected.pattern.identity,

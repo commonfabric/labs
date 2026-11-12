@@ -30,9 +30,10 @@ import {
 import type { CollectedMemory } from "../collected-memory.ts";
 import type { ExperimentalOptions } from "../runtime.ts";
 import type { MemorySpace, Result } from "../storage/interface.ts";
+import type { HostOccupancy } from "./host.ts";
 import type { ServedAclChangeData } from "./served-acl-change.ts";
 import type { SpaceServerPolicy } from "./space-server.ts";
-import type { ServingLoopStats } from "./stats.ts";
+import type { ServingLoopCounters, ServingLoopStats } from "./stats.ts";
 import { LifecycleVerbFailure } from "./lifecycle-verb.ts";
 import type {
   LifecyclePhaseTiming,
@@ -238,27 +239,31 @@ export type PlaneNotices = {
   "worker.ready": null;
 
   /**
-   * The worker's thread still runs. It says nothing else: the watchdog on the
-   * server's thread reads any message from the worker the same way
-   * (serving-loop.md §2).
+   * The worker's thread still runs, which the watchdog on the server's thread
+   * reads from any message of the worker's the same way (serving-loop.md §2).
+   * `heapUsed` is the worker's JavaScript heap as it stands, in bytes, which
+   * the pool's heap budget adds up.
    */
-  "worker.heartbeat": null;
+  "worker.heartbeat": { heapUsed: number };
 
   "server.noteExecutorCommit": { notice: AdmittedCommitNotice };
   "loopback.close": { transport: number };
   "host.stats": { stats: ServingLoopStats };
 
   /**
-   * The `events` block of the counters alone, posted ahead of each wave
-   * commit. It updates the copy the last `host.stats` left, which the next
-   * `host.stats` replaces whole.
+   * The counters without the settle blocks, posted ahead of each wave
+   * commit. They update the copy the last `host.stats`
+   * left, which the next `host.stats` replaces whole.
    */
-  "host.eventStats": { events: ServingLoopStats["events"] };
+  "host.counters": { counters: ServingLoopCounters };
   "host.activationSettled": {
     space: MemorySpace;
     outcome: "active" | "refused" | "failed";
   };
   "host.spaceParked": { space: MemorySpace; reason: string };
+
+  /** What the worker's host holds, posted each time the host reports it. */
+  "host.occupancy": { occupancy: HostOccupancy };
 };
 
 /** What the server's thread asks of the worker. */
@@ -277,6 +282,20 @@ export type BridgeRequests = {
     result: LifecycleVerbRun;
   };
   "host.close": { params: null; result: void };
+
+  /**
+   * Closes the worker's host if it holds nothing by the time the request is
+   * handled, every message posted ahead of it handled first: nothing at all,
+   * or with `evenIfParked` nothing but runtimes kept from idle parks. The
+   * answer is what the host counted and its realm logged, final since the
+   * host has closed, or `null` from a host that holds more and stays open.
+   */
+  "host.retire": {
+    params: { evenIfParked: boolean };
+    result:
+      | { stats: ServingLoopStats; diagnostics: ServingLoopDiagnostics }
+      | null;
+  };
 };
 
 /** What the server's thread tells the worker without waiting on an answer. */
@@ -291,6 +310,13 @@ export type BridgeNotices = {
   };
   "observer.viewsChanged": { space: string; sessionId: string };
   "observer.sessionChanged": { event: SessionLifecycleEvent };
+
+  /**
+   * An admitted commit wrote `space`'s access-list document. Sent to the
+   * workers that do not serve `space`, which hear of its commits no other
+   * way and may hold a session on it as a cross-space replica.
+   */
+  "observer.spaceAclChanged": { space: string };
   "loopback.frame": { transport: number; frame: string };
 };
 

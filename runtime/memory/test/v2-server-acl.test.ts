@@ -4778,6 +4778,170 @@ describe("v2-server-acl", () => {
     }
 
     for (const mode of ["off", "enforce"] as const) {
+      for (const command of commands) {
+        it(`refuses ${command.label} sent on a session the deletion revoked, as deleted, in \`${mode}\` mode`, async () => {
+          // A command its client sent before the revocation reached it
+          // arrives after the session has gone, and is refused as the space
+          // is, not as a session this connection never opened.
+
+          await withSpace(
+            `revoked-${command.label.replaceAll(" ", "-")}-${mode}`,
+            mode,
+            async ({ server, space }) => {
+              const alice = await connect(server);
+              const opened = await openSession(alice, space, ALICE);
+              expectExists(opened.ok);
+              const other = await connect(server);
+              const otherOpened = await openSession(other, space, ALICE);
+              expectExists(otherOpened.ok);
+              const deleted = await writeAcl(
+                alice,
+                space,
+                opened.ok.sessionId,
+                { deleted: { by: ALICE } },
+              );
+              expectExists(deleted.ok, deleted.error?.message);
+              expect(shiftMessage(other.messages)).toMatchObject({
+                type: "session/revoked",
+                sessionId: otherOpened.ok.sessionId,
+                reason: "deleted",
+              });
+
+              const response = await command.send(
+                other,
+                space,
+                otherOpened.ok.sessionId,
+              );
+              expect(response.error).toEqual(
+                deletedRefusal(space, deleted.ok.seq),
+              );
+            },
+          );
+        });
+      }
+    }
+
+    it("settles a query in flight when the deletion revokes its session with the deleted `AuthorizationError`", async () => {
+      const server = createAclServer("memory://acl-deleted-query-race", {
+        mode: "enforce",
+      });
+      const space = "did:key:z6Mk-acl-deleted-query-race";
+      const alice = await connect(server);
+      const other = await connect(server);
+      try {
+        await initializeSpaceAcl(server, space, { [ALICE]: "OWNER" });
+        const opened = await openSession(alice, space, ALICE);
+        const otherOpened = await openSession(other, space, ALICE);
+        expectExists(opened.ok);
+        expectExists(otherOpened.ok);
+
+        const aliceSessionId = opened.ok.sessionId;
+        const deleteSpace = () =>
+          server.transact({
+            type: "transact",
+            requestId: nextRequestId("deleted-query-race-delete"),
+            space,
+            sessionId: aliceSessionId,
+            commit: {
+              localSeq: 1,
+              reads: { confirmed: [], pending: [] },
+              operations: [{
+                op: "set",
+                id: `of:${space}`,
+                value: { value: { deleted: { by: ALICE } } },
+              }],
+            },
+          });
+        let deletion: ReturnType<typeof deleteSpace> | undefined;
+        // The deletion lands once the connection has found the session open
+        // and handed the query on, before the query reads anything.
+        const graphQuery = server.graphQuery.bind(server);
+        server.graphQuery = async (message) => {
+          deletion = deleteSpace();
+          await deletion;
+          return await graphQuery(message);
+        };
+
+        const queryRequestId = nextRequestId("deleted-query-race");
+        await other.connection.receive(encodeMemoryBoundary({
+          type: "graph.query",
+          requestId: queryRequestId,
+          space,
+          sessionId: otherOpened.ok.sessionId,
+          query: {
+            roots: [{
+              id: `of:${space}`,
+              selector: { path: [], schema: false },
+            }],
+          },
+        }));
+        expectExists(deletion);
+        const deleted = await deletion;
+        expectExists(deleted.ok, deleted.error?.message);
+
+        expect(other.messages).toEqual([
+          {
+            type: "session/revoked",
+            space,
+            sessionId: otherOpened.ok.sessionId,
+            reason: "deleted",
+          },
+          {
+            type: "response",
+            requestId: queryRequestId,
+            error: deletedRefusal(space, deleted.ok.seq),
+          },
+        ]);
+      } finally {
+        await server.close();
+      }
+    });
+
+    it("refuses a command on a session the deletion revoked as deleted only on the connection that held it", async () => {
+      // The session that committed the deletion is revoked after its
+      // transact's response, and is refused as deleted from then on too.
+
+      await withSpace(
+        "revoked-elsewhere",
+        "enforce",
+        async ({ server, space }) => {
+          const alice = await connect(server);
+          const opened = await openSession(alice, space, ALICE);
+          expectExists(opened.ok);
+          const deleted = await writeAcl(alice, space, opened.ok.sessionId, {
+            deleted: { by: ALICE },
+          });
+          expectExists(deleted.ok, deleted.error?.message);
+          expect(shiftMessage(alice.messages)).toMatchObject({
+            type: "session/revoked",
+            sessionId: opened.ok.sessionId,
+            reason: "deleted",
+          });
+
+          expect(
+            (await graphQuery(
+              alice,
+              space,
+              opened.ok.sessionId,
+              "of:doc:after",
+            ))
+              .error,
+          ).toEqual(deletedRefusal(space, deleted.ok.seq));
+          const response = await graphQuery(
+            await connect(server),
+            space,
+            opened.ok.sessionId,
+            "of:doc:after",
+          );
+          expect(response.error).toEqual({
+            name: "SessionError",
+            message: "Session is not open on this connection",
+          });
+        },
+      );
+    });
+
+    for (const mode of ["off", "enforce"] as const) {
       it(`refuses a deletion tombstone that names anyone but its committer, or holds anything more, in \`${mode}\` mode`, async () => {
         await withSpace(
           `tombstone-${mode}`,

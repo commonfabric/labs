@@ -3,8 +3,17 @@ import { expect } from "@std/expect";
 import type { EventIntentOutcome, Runtime } from "@commonfabric/runner";
 import {
   collectServedErrors,
+  servedCfcRefusalWarnings,
   servedRuntimeErrors,
+  servedThrows,
 } from "../lib/served-errors.ts";
+
+/** A served error of a commit CFC enforcement refused, as a serving run seals it. */
+const REFUSAL = {
+  eventId: "event-1",
+  message: "CFC enforcement rejected commit: relevant transaction was not " +
+    "prepared: writeAuthorizedBy requires a trusted verified binding identity",
+};
 
 /**
  * A stand-in runtime whose event outcomes the test delivers, through the
@@ -122,6 +131,29 @@ describe("served-errors", () => {
           [{ eventId: "event-1", message: "the handler threw" }],
         ),
       ).toStrictEqual(["[served] the handler threw"]);
+    });
+  });
+
+  describe("servedCfcRefusalWarnings()", () => {
+    it("returns each served commit CFC enforcement refused, marked as served", () => {
+      expect(servedCfcRefusalWarnings([REFUSAL])).toStrictEqual([
+        `[served] ${REFUSAL.message}`,
+      ]);
+    });
+
+    it("returns nothing for a served run that threw", () => {
+      expect(
+        servedCfcRefusalWarnings([
+          { eventId: "event-1", message: "the served run threw" },
+        ]),
+      ).toStrictEqual([]);
+    });
+  });
+
+  describe("servedThrows()", () => {
+    it("returns the served runs that threw and none whose commit CFC enforcement refused", () => {
+      const thrown = { eventId: "event-2", message: "the served run threw" };
+      expect(servedThrows([REFUSAL, thrown])).toStrictEqual([thrown]);
     });
   });
 });

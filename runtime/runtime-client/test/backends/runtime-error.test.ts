@@ -1,12 +1,14 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fabricFromRealmValue } from "@commonfabric/data-model/codecs";
+import { firstHandshakeFailedError } from "@commonfabric/memory/v2/client";
 import { CompilerStackLoadError } from "@commonfabric/runner";
 
 import { NotificationType, RuntimeErrorCode } from "@/protocol/mod.ts";
 import {
   postContextualRuntimeError,
   postRuntimeError,
+  runtimeErrorCode,
 } from "@/backends/runtime-error.ts";
 
 describe("runtime error notifications", () => {
@@ -70,5 +72,41 @@ describe("runtime error notifications", () => {
           originalPostMessage;
       }
     }
+  });
+
+  it("returns `SpaceUnreachable` for a space whose first connection never completed a handshake", () => {
+    const unreachable = firstHandshakeFailedError(
+      3,
+      "wss://memory.test/",
+      new Error("connection refused"),
+    );
+    expect(runtimeErrorCode(unreachable)).toBe(
+      RuntimeErrorCode.SpaceUnreachable,
+    );
+    expect(runtimeErrorCode(new Error("connection refused"))).toBe(undefined);
+  });
+
+  it("returns no code for an authorization denial no storage manager reported as a space's refusal", () => {
+    // The memory server's refusal of one operation, which leaves the space
+    // readable, and a denial it marked `retriable`, which a fresh handshake
+    // heals. Neither says the space is gone.
+    const denial = (message: string, marks: object = {}) =>
+      Object.assign(new Error(message), {
+        name: "AuthorizationError",
+        ...marks,
+      });
+
+    expect(runtimeErrorCode(
+      denial("Only the original acting user may resolve this event"),
+    )).toBe(undefined);
+    expect(runtimeErrorCode(
+      denial("Principal P lacks WRITE on space S", {
+        permanentEvidence: true,
+        aclRevision: 1,
+      }),
+    )).toBe(undefined);
+    expect(runtimeErrorCode(
+      denial("memory authentication lease has run out", { retriable: true }),
+    )).toBe(undefined);
   });
 });

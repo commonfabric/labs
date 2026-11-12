@@ -28,6 +28,21 @@ Deno.test("MEMORY_ACL_DELEGATIONS parses strictly: on by default, off only for '
   expect(() => admits("off")).toThrow();
 });
 
+Deno.test("MEMORY_SYNC_CID_REFERENCES parses strictly: on by default, off only for 'false'/'0', and any other spelling refuses", () => {
+  const enabled = (v: string | undefined) =>
+    EnvSchema.parse(v === undefined ? {} : { MEMORY_SYNC_CID_REFERENCES: v })
+      .MEMORY_SYNC_CID_REFERENCES;
+
+  assertEquals(enabled(undefined), true);
+  assertEquals(enabled("false"), false);
+  assertEquals(enabled("0"), false);
+  assertEquals(enabled("true"), true);
+  assertEquals(enabled("1"), true);
+  // A misspelled setting must not silently leave the deployment either way.
+  expect(() => enabled("TRUE")).toThrow();
+  expect(() => enabled("on")).toThrow();
+});
+
 Deno.test("OTEL_ENABLED parses strictly: only 'true'/'1' enable telemetry", () => {
   // Regression guard for the z.coerce.boolean() footgun: Boolean("false") ===
   // true, which would silently enable telemetry (and, with the all-span

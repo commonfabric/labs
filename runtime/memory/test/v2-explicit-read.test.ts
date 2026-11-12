@@ -50,10 +50,14 @@ const shiftMessage = (messages: ServerMessage[]): ServerMessage => {
   return message;
 };
 
-/** A connection to `server`: from another process unless `inProcess`. */
+/**
+ * A connection to `server`: from another process unless `inProcess`, and
+ * then of the realm's own lease holder unless `leaseHolderInstance` names a
+ * serving worker's.
+ */
 const connect = async (
   server: Server,
-  options: { inProcess?: boolean } = {},
+  options: { inProcess?: boolean; leaseHolderInstance?: string } = {},
 ): Promise<Harness> => {
   const messages: ServerMessage[] = [];
   const connection = server.connect(
@@ -259,6 +263,80 @@ Deno.test("explicit entity_scope_key reads: the space's serving session and a se
       offFlag.error?.message.includes("EXPERIMENTAL_SERVER_EXECUTION"),
       true,
     );
+  } finally {
+    resetServerExecutionConfig();
+    await server.close();
+  }
+});
+
+Deno.test("explicit entity_scope_key reads: among in-process sessions of the service identity, the space's serving session is the one whose connection names the holder component the lease is held under (protocol.md §2's read row)", async () => {
+  const server = newServer("memory://explicit-read-worker-holder");
+  setServerExecutionConfig(true);
+  try {
+    const alice = await connect(server);
+    const { sessionId: aliceSession } = await openSession(alice, ALICE);
+    await writeAliceProfile(server, aliceSession, 1, { name: "alice" });
+    const aliceKey = resolveScopeKey("user", { principal: ALICE });
+
+    // Three loopback sessions, all in process and all as the service
+    // identity: one from the worker that serves the space, one from a worker
+    // that serves another, and one from a host on the server's own thread.
+    const openAs = async (leaseHolderInstance?: string) =>
+      (await openSession(
+        await connect(server, {
+          inProcess: true,
+          ...(leaseHolderInstance === undefined ? {} : { leaseHolderInstance }),
+        }),
+        SERVICE,
+      )).sessionId;
+    const serving = await openAs("worker-serving");
+    const elsewhere = await openAs("worker-elsewhere");
+    const ownThread = await openAs();
+    const engine = await server.engineForSpace(SPACE);
+    assertEquals(
+      engine.executionLeases.acquire(
+        SPACE,
+        executionLeaseHolder(SERVICE, "worker-serving"),
+      ),
+      true,
+    );
+    const readAlice = (sessionId: string, label: string) =>
+      server.graphQuery({
+        type: "graph.query",
+        requestId: nextRequestId(label),
+        space: SPACE,
+        sessionId,
+        query: {
+          roots: [{
+            id: "of:profile",
+            scope: "user",
+            entityScopeKey: aliceKey,
+            selector: { path: [], schema: false },
+          }],
+        },
+      });
+
+    const held = await readAlice(serving, "worker-held");
+    assertExists(held.ok, JSON.stringify(held.error));
+    assertEquals(held.ok.entities[0].document?.value, { name: "alice" });
+
+    // The other two serve the space no more than a session from another
+    // process does: their named read is a foreign one, admitted under
+    // alice's own READ grant, which a space with no list gives nobody.
+    for (
+      const [sessionId, label] of [[elsewhere, "worker-elsewhere"], [
+        ownThread,
+        "own-thread",
+      ]]
+    ) {
+      const foreign = await readAlice(sessionId, label);
+      assertEquals(foreign.error?.name, "ProtocolError", label);
+      assertEquals(
+        foreign.error?.message.includes("grant-scoped read"),
+        true,
+        JSON.stringify(foreign.error),
+      );
+    }
   } finally {
     resetServerExecutionConfig();
     await server.close();

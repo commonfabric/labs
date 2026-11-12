@@ -1,8 +1,9 @@
 # Pattern lifecycle verbs on the serving runtime
 
-Under server execution, the three verbs that give a space a pattern — upload a
-program, instantiate a piece from it, and replace a piece's source — run on the
-space's serving runtime. The client's part is to resolve the program from disk
+Under server execution, the verbs that give a space a pattern — upload a
+program, instantiate a piece from it, replace a piece's source, and point a
+piece at an origin it follows from then on — run on the space's serving
+runtime. The client's part is to resolve the program from disk
 and request; the serving side compiles, materializes or replaces, and commits.
 This document is the contract for that: how a client sends a verb, the
 authority it needs, where the verb runs, what comes back, and what still happens
@@ -43,7 +44,8 @@ request takes at most 4 MiB, the router's request bound, and the client refuses
 a larger one before sending it.
 
 The request is `{ type: "pattern.lifecycle", requestId, space, sessionId, verb,
-body }`, where `verb` is `upload`, `instantiate`, or `setsrc`, and `body` holds
+body }`, where `verb` is `upload`, `instantiate`, `setsrc`, or `follow`, and
+`body` holds
 the verb's arguments, [below](#arguments-and-receipts); the session supplies the
 space. The response's `ok` is the verb's receipt.
 
@@ -71,13 +73,25 @@ A verb that takes a pattern takes it one of two ways, and exactly one: `program`
 — the program as the client resolved it, every file by name, with `main`, an
 optional `mainExport`, optional `sourceRoots`, and optional `dataFiles` — or
 `pattern`, a `{ identity, symbol }` pointer to a closure the space already
-holds. A body naming both or neither fails validation.
+holds. A body naming both or neither fails validation. `follow` takes neither:
+it takes an `origin`, a `system:` ref or a fabric URL, which the serving runtime
+resolves ([Following an origin](#following-an-origin) below).
 
-| verb          | arguments                                                                                                                | receipt                                                                                                                                          |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `upload`      | `program`                                                                                                                | `{ pattern }` — the pointer the space now holds the program under                                                                                |
-| `instantiate` | `program` or `pattern`; optional `argument`, `repository`, `slug`, `force`, `register`, `start`, `requestKey`            | `{ pieceId, pattern, slug?, requestKey, registration: { status, error?, attempt?, terminal? }, timings? }`                                       |
-| `setsrc`      | `piece`; `program` or `pattern`; optional `repository`, `dangerouslyAllowIncompatibleSchema`, `expectedPattern`, `start` | `{ pieceId, pattern, revisionId, seq, detachedOrigin }` — the accepted setup transaction's receipt, `seq` its position in the space's commit log |
+| verb          | arguments                                                                                                                                                  | receipt                                                                                                                                                                                                                                                                                              |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `upload`      | `program`                                                                                                                                                  | `{ pattern }` — the pointer the space now holds the program under                                                                                                                                                                                                                                    |
+| `instantiate` | `program` or `pattern`; optional `argument`, `repository`, `slug`, `force`, `register`, `start`, `requestKey`                                              | `{ pieceId, pattern, slug?, requestKey, registration: { status, error?, attempt?, terminal? }, timings? }`                                                                                                                                                                                           |
+| `setsrc`      | `piece`; `program` or `pattern`; optional `scope`, `repository`, `dangerouslyAllowIncompatibleSchema`, `expectedPattern`, `origin`, `start`                | `{ pieceId, pattern, revisionId, seq, detachedOrigin, origin?, scope? }` — the accepted setup transaction's receipt, `seq` its position in the space's commit log, `origin` the origin it records when the request named one, `scope` the scope of the instance it changed when that was not `space` |
+| `follow`      | `piece`, `origin`; optional `scope`, `expectedPattern`, `expectedRevision` (`null` for an empty source log), `dangerouslyAllowIncompatibleSchema`, `start` | `{ pieceId, pattern, origin, revisionId, acceptedIncompatibility?, scope? }` — the pointer and the origin the piece now holds, the revision the transition appended, the incompatibility the override accepted, and `scope` as for `setsrc`                                                          |
+
+`scope` is the scope the client addresses the piece at: `space`, the default,
+`user`, or `session`. For `user` and `session` the verb reads and writes the
+requester's instance of the piece rather than its space instance: the
+principal's, and for `session` the one keyed by the memory session the request
+came on, which is the session the client's own scoped reads and writes resolve
+against. A requester who holds no such instance is refused `piece-not-found`. A
+memory server takes `scope` while it advertises `patternLifecycleScopes`; an
+older one reads past it and changes the space instance.
 
 Once creation commits, a preparation or completion refusal returns the created
 receipt with failed registration and its retained request key. It makes no new
@@ -105,18 +119,21 @@ failure keeps its refusal code across the worker port.
 A refusal is an error response named `PatternLifecycleRefusal`. Its `code` is
 stable and is what a client branches on; its `message` is prose for a person.
 
-| code                                             | meaning                                                                                                                                                       |
-| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `lifecycle-unsupported`                          | raised by the client before sending: the memory server does not advertise `patternLifecycle`                                                                  |
-| `payload-too-large`                              | the message takes more than 8 MiB in UTF-8; the client refuses before sending past that, or past 4 MiB on a routed connection                                 |
-| `invalid-request`                                | `body` does not match the verb's schema, including a body naming both `program` and `pattern`, or neither                                                     |
-| `forbidden`                                      | the caller is not a writer of the space, or there is no such space                                                                                            |
-| `pattern-not-found`, `piece-not-found`           | the named pattern, or the named piece, is not in the space                                                                                                    |
-| `slug-taken`, `source-moved`                     | the slug names something and `force` was not set; the piece is not on the pattern the update was proved against                                               |
-| `compile-failed`, `setup-failed`, `incompatible` | the program did not compile; setup refused the pattern or the argument; the candidate cannot run over the piece's retained state and the override was not set |
-| `server-execution-off`                           | the memory server has no handler installed: no serving loop runs on this deployment                                                                           |
-| `space-not-served`                               | the serving loop on this process cannot serve the space                                                                                                       |
-| `internal`                                       | the handler threw, or the serving side failed for a reason it does not name                                                                                   |
+| code                                             | meaning                                                                                                                                                                                                                |
+| ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `lifecycle-unsupported`                          | raised by the client before sending: the memory server does not advertise `patternLifecycle`                                                                                                                           |
+| `origin-unsupported`                             | raised by the client before sending: the memory server does not advertise `patternLifecycleOrigins`, so a `follow`, or a `setsrc` carrying an origin, is not sent                                                      |
+| `scope-unsupported`                              | raised by the client before sending: the memory server does not advertise `patternLifecycleScopes`, so a `setsrc` or `follow` for a piece addressed at a user or session scope is not sent                             |
+| `payload-too-large`                              | the message takes more than 8 MiB in UTF-8; the client refuses before sending past that, or past 4 MiB on a routed connection                                                                                          |
+| `invalid-request`                                | `body` does not match the verb's schema, including a body naming both `program` and `pattern`, or neither                                                                                                              |
+| `forbidden`                                      | the caller is not a writer of the space, or there is no such space                                                                                                                                                     |
+| `pattern-not-found`, `piece-not-found`           | the named pattern, or the named piece, is not in the space                                                                                                                                                             |
+| `slug-taken`, `source-moved`                     | the slug names something and `force` was not set; the piece is not on the pattern the update was proved against, or for `follow` not at the source-log head it was pinned to, or moved between the follow's two cycles |
+| `origin-unreachable`                             | the origin a `follow` or a `setsrc` names is not one a piece can follow; for `follow`, also when the source it names could not be read or compiled                                                                     |
+| `compile-failed`, `setup-failed`, `incompatible` | the program did not compile; setup refused the pattern or the argument; the candidate cannot run over the piece's retained state and the override was not set                                                          |
+| `server-execution-off`                           | the memory server has no handler installed: no serving loop runs on this deployment                                                                                                                                    |
+| `space-not-served`                               | the serving loop on this process cannot serve the space                                                                                                                                                                |
+| `internal`                                       | the handler threw, or the serving side failed for a reason it does not name                                                                                                                                            |
 
 `cf` takes every refusal but `internal` and `space-not-served` as a decision
 that the verb did not run. It takes those two, and a connection lost before the
@@ -140,7 +157,10 @@ memory server would admit writing directly is admitted, and no other. A
 deployment with ACL enforcement off admits every authenticated caller, as its
 memory server does. One denial covers a malformed DID, a space the deployment does not host,
 an absent ACL, and a caller without a grant, so the check is not an existence
-oracle over the deployment's spaces.
+oracle over the deployment's spaces. Whether a space exists is an ordinary read,
+so `cf piece new` asks it when `instantiate` is refused `forbidden`, and reports
+a space with no history the way it does without server execution: no space
+answers to the name, and `cf space create` makes one.
 
 The hosted authority check reads the ACL through the memory server's internal
 document reader. It grants no graph READ or WRITE to the process identity: a
@@ -286,10 +306,13 @@ when it has read dependencies, submits a zero-operation store commit to validate
 them before reporting success. Effect-completion writebacks retain their
 authoritative whole-document writes.
 
-The serving runtime's scope identity resolves a direct commit's scoped read
-dependencies and entity preconditions, as it resolves the commit's write
-annotations. This is an addressing context for the store's strict validators;
-it adds no acting principal or user attribution to the bookkeeping operation.
+A direct commit's scoped read dependencies, entity preconditions and write
+annotations resolve against the scope identity its transaction names, when it
+names one: a served source change to the requester's instance of a scoped piece
+names the requester, and for session scope the requester's session. Otherwise
+they resolve against the serving runtime's own scope identity. This is an
+addressing context for the store's strict validators; it adds no acting
+principal or user attribution to the bookkeeping operation.
 
 A wave open when the direct commit lands learns of it once the replica has
 applied it. Its commit step treats a document the direct commit wrote, sitting
@@ -315,8 +338,43 @@ retained-argument validators, the source revision, and the delegation the
 successor inherits — carrying the requester's trust snapshot as a creation's
 does, committed directly, with the piece not started here. A piece the loop runs
 is swapped by its pointer watcher; a piece nothing runs waits for demand, and
-unless `start` is `false` the verb names the piece's root as its demand so the
-cycle after derives it.
+unless `start` is `false` the verb names the root of a piece's space instance
+as its demand so the cycle after derives it. The requester's instance of a
+scoped piece derives when the requester demands it.
+
+### Following an origin
+
+The served `follow` verb makes the `repoint` that `cf piece follow` makes off
+the flag (`PieceController.changeSource`): it points the piece at the origin,
+adopts what the origin serves now, and records the origin with the revision, so
+the piece follows each later release from then on
+([`piece-source-lifecycle.md`](../specs/piece-source-lifecycle.md)). It runs
+over two cycles of the serving loop, as `setsrc` runs an upload ahead of its
+update. In the first, the handler's `follow-prepare` verb resolves the origin
+against the host serving the space, compiles the candidate into the space, and
+reviews it against the piece as a client's follow does
+(`PieceController.prepareSourceChange`); the candidate's closure seals into that
+cycle's wave. The request's pins are checked there. A candidate that cannot run
+over the piece's retained state is refused `incompatible` there, and the second
+cycle does not run, unless `dangerouslyAllowIncompatibleSchema` is set. In the
+next cycle, with the closure durable, the `follow` verb makes the reviewed
+change as a confirmed one (`changeSource` with `confirmedChange` and `served`).
+It is checked again against the piece as it then stands, pinned to the pattern
+and source-log head the review read, so a piece whose source moved between the
+two cycles is refused `source-moved` whether or not the request pinned it. The
+transition commits directly, with the requester's trust snapshot and the writer
+delegation a `setsrc` carries, and the piece is not started there. What
+following the origin concluded is then recorded on the piece as the serving
+loop's bookkeeping, as the source reconciler records its own. Unless `start` is
+`false`, the verb names the root of a piece's space instance as its demand, as
+`setsrc` does; the requester's instance of a scoped piece derives when the
+requester demands it.
+
+A served `setsrc` that names an `origin` records it with the update's revision
+instead of detaching the piece. The source it writes is the request's program
+either way, and the origin's own source reaches the piece the next time the
+serving loop opens it, as any origin's does. The origin is checked as `follow`
+checks one, without being read.
 
 The `servingLoop.lifecycleVerbs` block of `/api/health/stats` counts verbs whose
 run completed (`runs`) and verbs whose run threw or whose durable confirmation
@@ -354,8 +412,30 @@ while the serving loop serves the derived values, and reports that refresh's
 outcome beside the receipt — a failed refresh is a non-zero exit over a durable
 commit. The start waits for the commit of the started graph's setup writes,
 since a refused one retires the graph in the command's process, whatever the
-serving loop goes on serving; that refusal is a failed refresh too. A piece addressed at a scope keeps the
-client-side path, since the verb takes the piece's id alone.
+serving loop goes on serving; that refusal is a failed refresh too. A piece
+addressed at a user or session scope is sent with its `scope` to a memory server
+that advertises `patternLifecycleScopes`. Against one that does not, the
+command refuses as `scope-unsupported` before sending, since such a server would
+change the piece's space instance. Neither `setsrc` nor `follow` changes a
+piece's source in the command's process under the flag.
+`cf piece setsrc --origin <origin>` sends the origin with the program to a
+memory server that advertises `patternLifecycleOrigins`. Against one that does
+not, it refuses as `origin-unsupported` before sending, since such a server
+drops the field and detaches the piece. Where the connection cannot report the
+flag, a receipt naming no origin fails the command, saying the source update
+committed but the piece follows nothing.
+
+`cf piece follow` sends the `follow` verb against a serving deployment, with the
+piece's id, the origin, and the pins and override it was given, and answers as a
+client-side follow does: an `incompatible` refusal is the incompatible result it
+reports, and `source-moved` the refusal of a piece off its pin. What stays in
+its process is the refresh: it asks the server for the piece's result, and
+reports a failure of that over the durable follow. A piece addressed at a user
+or session scope is sent with its `scope`, as `setsrc` sends it. Against a
+memory server that does not advertise `patternLifecycleOrigins` the command
+says, before sending, that the deployment does not serve `follow` yet; one that
+cannot report the flag and does not know the verb answers the request as
+unreadable, with the same result.
 
 Another client of the piece controller, the browser shell, keeps the client-side
 shape. Moving it is its own change; the served operations and the
@@ -376,7 +456,11 @@ shape. Moving it is its own change; the served operations and the
   a real memory server and serving host, read back through a client runtime
   opened afterwards; for `setsrc`, the successor's authority over the
   predecessor registered on the serving runtime and stored in the closure a
-  later runtime reads.
+  later runtime reads; for `follow`, the origin, revision and reconciliation a
+  later client reads, each refusal, and the second cycle held to the source
+  state the first reviewed; for both, a user- or session-scoped piece changed
+  on the requester's instance with its space instance left alone, and an
+  instance the requester does not hold refused.
 - `runtime/piece/test/ops/pieces-controller.test.ts` — `startPiece()` given
   `awaitSetupCommit` rejects when storage refuses the start's setup commit,
   and a plain `startPiece()` resolves over the same refusal;
@@ -386,12 +470,16 @@ shape. Moving it is its own change; the served operations and the
   `pattern.lifecycle` request: the `patternLifecycle` flag, the session and
   WRITE checks, each refusal code, the size bound on both sides, and a frame
   handled while the verb still runs.
-- `runtime/toolshed/lib/pattern-lifecycle.test.ts` — the writer check against
-  a real ACL document, the code each refusal carries, and a session request's
-  validation and outcome; `runtime/toolshed/lib/pattern-lifecycle-handler.test.ts`
-  — the handler reading a hosted space's ACL through the memory server.
+- `runtime/toolshed/lib/pattern-lifecycle.test.ts` — the writer check against a
+  real ACL document, the code each refusal carries, and a session request's
+  validation and outcome, including the requester's instance a scoped `setsrc`
+  or `follow` names; `runtime/toolshed/lib/pattern-lifecycle-handler.test.ts` —
+  the handler reading a hosted space's ACL through the memory server.
 - `runtime/cli/test/pattern-lifecycle.test.ts` — the client's arguments on the
-  session and its refusal handling against a stubbed session;
+  session and its refusal handling against a stubbed session, including a
+  scope sent only where the server takes one;
+  `runtime/cli/test/piece-follow.test.ts` — `cf piece follow`'s served path, its
+  refusals, a scoped piece, and the deployment that does not know the verb;
   `runtime/cli/test/piece-integration.test.ts` and
   `runtime/cli/integration/integration.sh` drive the real verbs against a
   toolshed in both CI arms.

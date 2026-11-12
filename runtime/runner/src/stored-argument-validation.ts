@@ -317,7 +317,9 @@ function admitsOnlyAbsence(branch: unknown): boolean {
  * access, so validation only reads the graph it inspects. A container off
  * `keep` read under the same schema twice is the same view, so shared
  * containers and cycles keep their identity for the validator's recursion
- * guard.
+ * guard. A container under `true` is viewed too: that is the schema at a path
+ * one branch of a union declares and another leaves open, and the default
+ * merge picks the branch and reads below it.
  */
 function viewStoredLinksAsHandles(
   materialized: unknown,
@@ -326,7 +328,7 @@ function viewStoredLinksAsHandles(
   context: HandleViewContext,
 ): unknown {
   if (
-    typeof schema === "boolean" || !isCellResult(materialized) ||
+    schema === false || !isCellResult(materialized) ||
     isFabricInstanceOrView(materialized)
   ) {
     return materialized;

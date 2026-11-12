@@ -1,10 +1,10 @@
 /**
- * The main-thread side of the serving port (serving-loop-worker.md): serves
- * the worker's requests against the memory server it holds, forwards the
- * server's observer events, owns one server connection per loopback transport
- * the worker opens, applies the worker's wave commits through a sink of its
- * own per session, and keeps the latest counters the worker posted for the
- * health route.
+ * The main-thread side of one serving port (serving-loop-worker.md): serves
+ * the worker's requests against the memory server it holds, carries to the
+ * worker the server's observer events its owner routes there, owns one
+ * server connection per loopback transport the worker opens, applies the
+ * worker's wave commits through a sink of its own per session, and keeps the
+ * latest counters the worker posted.
  */
 
 import type { FabricValue } from "@commonfabric/data-model";
@@ -14,11 +14,15 @@ import {
   encodeMemoryBoundary,
 } from "@commonfabric/memory/v2";
 import type { Engine } from "@commonfabric/memory/v2/engine";
-import type { Server } from "@commonfabric/memory/v2/server";
+import type {
+  Server,
+  ServerExecutionObserver,
+} from "@commonfabric/memory/v2/server";
 import { getLogger } from "@commonfabric/logger";
 import type { CollectedMemory } from "../collected-memory.ts";
 import type { MemorySpace } from "../storage/interface.ts";
 import { EngineWaveCommitSink } from "./engine-wave-sink.ts";
+import type { HostOccupancy } from "./host.ts";
 import type { LoopbackConnection } from "./host-memory-server.ts";
 import {
   type BridgeNotices,
@@ -34,11 +38,7 @@ import {
   type ServingWorkerInit,
 } from "./serving-port-protocol.ts";
 import { servedAclChangeOf } from "./served-acl-change.ts";
-import {
-  emptyServingLoopStats,
-  registerServingLoopStatsProvider,
-  type ServingLoopStats,
-} from "./stats.ts";
+import { emptyServingLoopStats, type ServingLoopStats } from "./stats.ts";
 import type { WaveSpaceCommit } from "./wave.ts";
 
 const logger = getLogger("serving-port-bridge", {
@@ -62,6 +62,14 @@ export type ServingPortBridgeOptions = {
   port: PortLike;
 
   /**
+   * The process-instance component of the lease holder the worker's host
+   * acquires under, which the worker's loopback connections name to the
+   * server (`ServerConnectOptions.leaseHolderInstance`). Absent, the
+   * component this realm mints holders with.
+   */
+  leaseHolderInstance?: string;
+
+  /**
    * DIAGNOSTIC (tests): the worker's activation outcomes, as its host reports
    * them.
    */
@@ -73,24 +81,29 @@ export type ServingPortBridgeOptions = {
   /** DIAGNOSTIC (tests): the worker's parks, as its host reports them. */
   onSpaceParked?: (space: MemorySpace, reason: string) => void;
 
-  /** Called each time a wave commit the worker sent lands in the store. */
-  onWaveCommitted?: () => void;
-
   /**
-   * How many leases the watchdog has taken from this bridge's predecessors,
-   * which the counters a worker posts cannot include.
+   * Called each time a wave commit the worker sent lands in the store, with
+   * the space it landed in.
    */
-  leasesLostEarlier?: () => number;
+  onWaveCommitted?: (space: MemorySpace) => void;
+
+  /** Called with what the worker's host holds, each time the host says. */
+  onOccupancy?: (occupancy: HostOccupancy) => void;
+
+  /** Called with the worker's heap size, in bytes, at each heartbeat. */
+  onHeartbeat?: (heapUsed: number) => void;
 };
 
+/** The observer events a bridge carries to its worker. */
+export type ForwardedObserver = Required<ServerExecutionObserver>;
+
 /**
- * The server's end of the port. Constructing one installs the process's
- * serving-loop stats provider and claims the process's ambient
- * server-execution flag, which the memory server's admission of derived
- * commits reads and which the host, in its own realm, cannot claim for this
- * one; `attach()`, which `init()` calls once the worker's host serves,
- * installs the server's execution observer. One bridge serves per process, as
- * one in-process host does.
+ * The server's end of one worker's port. Constructing one claims the
+ * process's ambient server-execution flag, which the memory server's
+ * admission of derived commits reads and which the host, in its own realm,
+ * cannot claim for this one. The server takes one execution observer, so a
+ * bridge installs none: whoever holds the bridges installs it and hands each
+ * event to the bridge of the worker it concerns, through `observer`.
  */
 export class ServingPortBridge {
   readonly #options: ServingPortBridgeOptions;
@@ -104,8 +117,8 @@ export class ServingPortBridge {
   readonly #sinks = new Map<string, BridgeSink>();
   readonly #workerReady = Promise.withResolvers<void>();
   readonly #releaseServerExecution: () => void;
+  readonly #observer: ForwardedObserver;
   #stats: ServingLoopStats | undefined;
-  #attached = false;
   #closed = false;
 
   constructor(options: ServingPortBridgeOptions) {
@@ -115,14 +128,42 @@ export class ServingPortBridge {
     });
     this.#installHandlers();
     this.#releaseServerExecution = acquireServerExecutionEnabler();
-    registerServingLoopStatsProvider(() =>
-      this.#withEarlierLosses(this.#stats ?? emptyServingLoopStats())
-    );
+    const endpoint = this.#endpoint;
+    this.#observer = {
+      commitAdmitted: (notice) =>
+        endpoint.notify("observer.commitAdmitted", { notice }),
+      sessionOpened: (space) =>
+        endpoint.notify("observer.sessionOpened", { space }),
+      demandChanged: (space, reason, principal, sessionId) =>
+        endpoint.notify("observer.demandChanged", {
+          space,
+          reason,
+          principal,
+          sessionId,
+        }),
+      viewsChanged: (space, sessionId) =>
+        endpoint.notify("observer.viewsChanged", { space, sessionId }),
+      sessionChanged: (event) =>
+        endpoint.notify("observer.sessionChanged", { event }),
+    };
   }
 
   /** How many messages of any kind have arrived from the worker. */
   get messagesReceived(): number {
     return this.#endpoint.messagesReceived;
+  }
+
+  /**
+   * Carries the server's observer events to the worker. The worker's host
+   * has to be serving, with its own observer installed on its plane, or an
+   * event has nowhere to go: a notice posted before the worker listens is
+   * dropped, and one that arrives before the host exists finds no observer.
+   * So nothing is sent through here before `init()` has settled. The
+   * worker's session mirror starts empty, and `sessionChanged` is what
+   * brings it up to date and keeps it current.
+   */
+  get observer(): ForwardedObserver {
+    return this.#observer;
   }
 
   /**
@@ -134,65 +175,28 @@ export class ServingPortBridge {
     init: ServingWorkerInit,
   ): Promise<{ lifetimeLock: string | undefined }> {
     await this.#workerReady.promise;
-    const answer = await this.#endpoint.request("worker.init", init);
-    this.attach();
-    return answer;
+    return await this.#endpoint.request("worker.init", init);
   }
 
   /**
-   * Installs the server's execution observer, forwarding its events to the
-   * worker from here on. The worker's host has to be serving, with its own
-   * observer installed on its plane, or the events have nowhere to go: a
-   * notice posted before the worker listens is dropped, and one that arrives
-   * before the host exists finds no observer.
-   *
-   * Installing the observer replays the server's sessions, which brings the
-   * worker's session mirror up to date; the sessions that opened before this
-   * then get the activation trigger their opens would have been, once per
-   * space, since the host gates each on the sessions the mirror holds.
+   * Tells the worker's host that an admitted commit wrote `space`'s
+   * access-list document, for a space whose commits this worker does not
+   * hear of.
    */
-  attach(): void {
-    if (this.#attached || this.#closed) return;
-    this.#attached = true;
-    const replayed = new Set<string>();
-    let replaying = true;
-    this.#options.server.setServerExecutionObserver({
-      commitAdmitted: (notice) =>
-        this.#endpoint.notify("observer.commitAdmitted", { notice }),
-      sessionOpened: (space) =>
-        this.#endpoint.notify("observer.sessionOpened", { space }),
-      demandChanged: (space, reason, principal, sessionId) =>
-        this.#endpoint.notify("observer.demandChanged", {
-          space,
-          reason,
-          principal,
-          sessionId,
-        }),
-      viewsChanged: (space, sessionId) =>
-        this.#endpoint.notify("observer.viewsChanged", { space, sessionId }),
-      sessionChanged: (event) => {
-        if (replaying && event.kind === "opened") replayed.add(event.space);
-        this.#endpoint.notify("observer.sessionChanged", { event });
-      },
-    });
-    replaying = false;
-    for (const space of replayed) {
-      this.#endpoint.notify("observer.sessionOpened", { space });
-    }
+  noteSpaceAclChanged(space: string): void {
+    this.#endpoint.notify("observer.spaceAclChanged", { space });
   }
 
   /** The counters the worker last posted, or none before its first. */
   stats(): ServingLoopStats | undefined {
-    return this.#stats === undefined
-      ? undefined
-      : this.#withEarlierLosses(this.#stats);
+    return this.#stats;
   }
 
   /** The worker's counters as of now. */
   async requestStats(): Promise<ServingLoopStats> {
     const stats = await this.#endpoint.request("host.stats", null);
     this.#stats = stats;
-    return this.#withEarlierLosses(stats);
+    return stats;
   }
 
   /** What the worker's realm logged, as of now. */
@@ -222,6 +226,23 @@ export class ServingPortBridge {
   }
 
   /**
+   * Asks the worker's host to close if it holds nothing, or with
+   * `evenIfParked` nothing but runtimes kept from idle parks, as of every
+   * message sent before this call. Settles with whether it closed; the
+   * counters of a host that did are its last.
+   */
+  async retireHost(
+    { evenIfParked }: { evenIfParked: boolean },
+  ): Promise<ServingLoopDiagnostics | undefined> {
+    const retired = await this.#endpoint.request("host.retire", {
+      evenIfParked,
+    });
+    if (retired === null) return undefined;
+    this.#stats = retired.stats;
+    return retired.diagnostics;
+  }
+
+  /**
    * Detaches from the server and the port, closing every loopback connection
    * the worker still holds. The worker's host is not closed by this; a caller
    * that wants it closed asks first through `closeHost()`.
@@ -229,8 +250,6 @@ export class ServingPortBridge {
   close(): void {
     if (this.#closed) return;
     this.#closed = true;
-    this.#options.server.setServerExecutionObserver(undefined);
-    registerServingLoopStatsProvider(undefined);
     for (const connection of this.#connections.values()) connection.close();
     this.#connections.clear();
     const closed = new Error("the serving port bridge closed");
@@ -249,15 +268,6 @@ export class ServingPortBridge {
    */
   releaseLeasesOf(holder: string): number {
     return this.#options.server.executionLeases.releaseAllOf(holder);
-  }
-
-  /** Helper for reading the counters, which adds the earlier workers' losses. */
-  #withEarlierLosses(stats: ServingLoopStats): ServingLoopStats {
-    const earlier = this.#options.leasesLostEarlier?.() ?? 0;
-    return earlier === 0 ? stats : {
-      ...stats,
-      lease: { ...stats.lease, lost: stats.lease.lost + earlier },
-    };
   }
 
   /** The sink for `sessionId`, built on first use. */
@@ -395,7 +405,9 @@ export class ServingPortBridge {
         // under the same session may be in flight.
         entry.localSeq.value = localSeq - 1;
         const result = await entry.sink.commitWave(batch);
-        if (result.error === undefined) this.#options.onWaveCommitted?.();
+        if (result.error === undefined) {
+          this.#options.onWaveCommitted?.(batch.space);
+        }
         return result;
       },
     );
@@ -419,7 +431,12 @@ export class ServingPortBridge {
           });
         },
         undefined,
-        { inProcess: true },
+        {
+          inProcess: true,
+          ...(this.#options.leaseHolderInstance === undefined ? {} : {
+            leaseHolderInstance: this.#options.leaseHolderInstance,
+          }),
+        },
       );
       this.#connections.set(transport, connection);
     });
@@ -441,16 +458,24 @@ export class ServingPortBridge {
     endpoint.onNotice("worker.ready", () => {
       this.#workerReady.resolve();
     });
-    // The endpoint has already counted it, which is all a heartbeat is for.
-    endpoint.onNotice("worker.heartbeat", () => {});
+    // The endpoint has already counted it, which is all the watchdog reads.
+    endpoint.onNotice("worker.heartbeat", ({ heapUsed }) => {
+      this.#options.onHeartbeat?.(heapUsed);
+    });
+    endpoint.onNotice("host.occupancy", ({ occupancy }) => {
+      this.#options.onOccupancy?.(occupancy);
+    });
     endpoint.onNotice("host.stats", ({ stats }) => {
       this.#stats = stats;
     });
-    // The port delivers in order, so a full post is never older than an
-    // events post that arrived before it: the merged events stand until
+    // The port delivers in order, so a full post is never older than a
+    // counters post that arrived before it: the merged counters stand until
     // the next full post replaces them with everything else.
-    endpoint.onNotice("host.eventStats", ({ events }) => {
-      this.#stats = { ...(this.#stats ?? emptyServingLoopStats()), events };
+    endpoint.onNotice("host.counters", ({ counters }) => {
+      this.#stats = {
+        ...(this.#stats ?? emptyServingLoopStats()),
+        ...counters,
+      };
     });
     endpoint.onNotice("host.activationSettled", ({ space, outcome }) => {
       this.#options.onActivationSettled?.(space, outcome);

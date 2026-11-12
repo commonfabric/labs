@@ -7,6 +7,7 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import {
+  followPieceOnServer,
   instantiatePieceOnServer,
   type LifecycleClientConfig,
   ServedLifecycleError,
@@ -151,6 +152,182 @@ describe("pattern-lifecycle client", () => {
       }).then(() => undefined, (error) => error);
       expect(failure).toBeInstanceOf(ServedLifecycleError);
       expect(failure.code).toBe("source-moved");
+    });
+  });
+
+  describe("followPieceOnServer", () => {
+    it("names the piece and the origin, and carries each pin, the override, and the start flag only when set", async () => {
+      const { cfg, sent } = sessionConfig(() =>
+        Promise.resolve({
+          pieceId: "p1",
+          pattern: { identity: "i", symbol: "s" },
+          origin: "system:x.tsx",
+          revisionId: "r2",
+        })
+      );
+      const receipt = await followPieceOnServer(cfg, {
+        space: SPACE_DID,
+        piece: "p1",
+        origin: "system:x.tsx",
+      });
+      expect(receipt.origin).toBe("system:x.tsx");
+      expect(receipt.revisionId).toBe("r2");
+      await followPieceOnServer(cfg, {
+        space: SPACE_DID,
+        piece: "p1",
+        origin: "system:x.tsx",
+        expectedPattern: { identity: "i0", symbol: "s" },
+        expectedRevision: null,
+        dangerouslyAllowIncompatibleSchema: true,
+        start: false,
+      });
+      expect(sent).toEqual([{
+        space: SPACE_DID,
+        verb: "follow",
+        body: { piece: "p1", origin: "system:x.tsx" },
+      }, {
+        space: SPACE_DID,
+        verb: "follow",
+        body: {
+          piece: "p1",
+          origin: "system:x.tsx",
+          expectedPattern: { identity: "i0", symbol: "s" },
+          // A pin to an empty source log, which is not an absent pin.
+          expectedRevision: null,
+          dangerouslyAllowIncompatibleSchema: true,
+          start: false,
+        },
+      }]);
+    });
+
+    it("refuses before sending to a deployment whose verbs take no origin, and sends where they do or it cannot tell", async () => {
+      const { cfg, sent } = sessionConfig(() =>
+        Promise.resolve({
+          pieceId: "p1",
+          pattern: { identity: "i", symbol: "s" },
+          origin: "system:x.tsx",
+          revisionId: "r2",
+          seq: 3,
+          detachedOrigin: null,
+        })
+      );
+      let takes: boolean | undefined = false;
+      const config = { ...cfg, takesOrigins: () => Promise.resolve(takes) };
+      const follow = () =>
+        followPieceOnServer(config, {
+          space: SPACE_DID,
+          piece: "p1",
+          origin: "system:x.tsx",
+        });
+      const setsrc = (origin?: string) =>
+        setPieceSourceOnServer(config, {
+          space: SPACE_DID,
+          piece: "p1",
+          program: PROGRAM,
+          ...(origin === undefined ? {} : { origin }),
+        });
+
+      for (const refused of [follow(), setsrc("system:x.tsx")]) {
+        const failure = await refused.then(() => undefined, (error) => error);
+        expect(failure).toBeInstanceOf(ServedLifecycleError);
+        expect(failure.code).toBe("origin-unsupported");
+        expect(failure.refused).toBe(true);
+      }
+      expect(sent).toEqual([]);
+      // An update naming no origin does not depend on the capability.
+      await setsrc();
+      expect(sent.map(({ verb }) => verb)).toEqual(["setsrc"]);
+
+      takes = true;
+      await follow();
+      takes = undefined;
+      await setsrc("system:x.tsx");
+      expect(sent.map(({ verb }) => verb)).toEqual([
+        "setsrc",
+        "follow",
+        "setsrc",
+      ]);
+    });
+
+    it("sends the scope of a piece addressed at one only to a deployment whose verbs say they take it", async () => {
+      const { cfg, sent } = sessionConfig(() =>
+        Promise.resolve({
+          pieceId: "p1",
+          pattern: { identity: "i", symbol: "s" },
+          origin: "system:x.tsx",
+          revisionId: "r2",
+          seq: 3,
+          detachedOrigin: null,
+          scope: "session",
+        })
+      );
+      let takes: boolean | undefined = false;
+      const config = {
+        ...cfg,
+        takesOrigins: () => Promise.resolve(true),
+        takesScopes: () => Promise.resolve(takes),
+      };
+      const follow = () =>
+        followPieceOnServer(config, {
+          space: SPACE_DID,
+          piece: "p1",
+          scope: "session",
+          origin: "system:x.tsx",
+        });
+      const setsrc = (scope?: "user") =>
+        setPieceSourceOnServer(config, {
+          space: SPACE_DID,
+          piece: "p1",
+          ...(scope === undefined ? {} : { scope }),
+          program: PROGRAM,
+        });
+
+      // An older server reads past the scope and changes the space
+      // instance, and one that cannot be asked might: neither is sent to.
+      for (const answer of [false, undefined]) {
+        takes = answer;
+        for (const refused of [follow(), setsrc("user")]) {
+          const failure = await refused.then(() => undefined, (e) => e);
+          expect(failure).toBeInstanceOf(ServedLifecycleError);
+          expect(failure.code).toBe("scope-unsupported");
+          expect(failure.refused).toBe(true);
+        }
+      }
+      expect(sent).toEqual([]);
+      // A space piece does not depend on the capability.
+      await setsrc();
+      expect(sent).toEqual([{
+        space: SPACE_DID,
+        verb: "setsrc",
+        body: { piece: "p1", program: PROGRAM },
+      }]);
+
+      takes = true;
+      expect((await follow()).scope).toBe("session");
+      await setsrc("user");
+      expect(sent.slice(1)).toEqual([{
+        space: SPACE_DID,
+        verb: "follow",
+        body: { piece: "p1", scope: "session", origin: "system:x.tsx" },
+      }, {
+        space: SPACE_DID,
+        verb: "setsrc",
+        body: { piece: "p1", scope: "user", program: PROGRAM },
+      }]);
+    });
+
+    it("raises the server's refusal with its code, which settles the verb", async () => {
+      const { cfg } = sessionConfig(() =>
+        Promise.reject(refusal("origin-unreachable", "Failed to fetch: 404"))
+      );
+      const failure = await followPieceOnServer(cfg, {
+        space: SPACE_DID,
+        piece: "p1",
+        origin: "system:absent.tsx",
+      }).then(() => undefined, (error) => error);
+      expect(failure).toBeInstanceOf(ServedLifecycleError);
+      expect(failure.code).toBe("origin-unreachable");
+      expect(failure.refused).toBe(true);
     });
   });
 

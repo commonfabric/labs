@@ -238,6 +238,14 @@ export interface SessionFactory {
    */
   setInstanceNames?(enabled: boolean): void;
 
+  /**
+   * Chooses whether the connections opened from here on take `cid:` schema
+   * documents by reference (`ConnectOptions.syncCidReferences` of the
+   * memory client). Until it is called, a factory's connections take every
+   * body.
+   */
+  setSyncCidReferences?(enabled: boolean): void;
+
   /** Closes every connection the factory keeps open between sessions. */
   close?(): Promise<void>;
 
@@ -1318,7 +1326,9 @@ class SharedSessionConnection implements SessionConnection {
 
   /** @inheritDoc */
   delivered(): Promise<void> {
-    return this.#client.delivered();
+    // The connection carries other spaces' sessions too; this share waits
+    // only for what is held for its own.
+    return this.#client.delivered(this.#session);
   }
 
   /** Ends the session and leaves the connection to its other sessions. */
@@ -1364,6 +1374,12 @@ export class RemoteSessionFactory implements SessionFactory {
    * build's default.
    */
   #instanceNames = namesInstancesByDefault();
+
+  /**
+   * Whether this factory's connections take `cid:` schema documents by
+   * reference: what `setSyncCidReferences()` last chose, and until then not.
+   */
+  #syncCidReferences = false;
 
   /** Transports closed so far. */
   #closedTransports = 0;
@@ -1460,6 +1476,11 @@ export class RemoteSessionFactory implements SessionFactory {
   /** @inheritDoc */
   setInstanceNames(enabled: boolean): void {
     this.#instanceNames = enabled;
+  }
+
+  /** @inheritDoc */
+  setSyncCidReferences(enabled: boolean): void {
+    this.#syncCidReferences = enabled;
   }
 
   /** @inheritDoc */
@@ -1649,6 +1670,7 @@ export class RemoteSessionFactory implements SessionFactory {
         transport,
         client: this.#clientInfo,
         instanceNames: this.#instanceNames,
+        syncCidReferences: this.#syncCidReferences,
         address: transport.address.href,
         firstHandshakeAttempts: MEMORY_FIRST_HANDSHAKE_ATTEMPTS,
       }).then((client) => {
@@ -1690,6 +1712,7 @@ export class RemoteSessionFactory implements SessionFactory {
         signal,
         client: this.#clientInfo,
         instanceNames: this.#instanceNames,
+        syncCidReferences: this.#syncCidReferences,
       });
       return client.serverFlags;
     } finally {
@@ -1712,6 +1735,7 @@ export class RemoteSessionFactory implements SessionFactory {
         signal,
         client: this.#clientInfo,
         instanceNames: this.#instanceNames,
+        syncCidReferences: this.#syncCidReferences,
         address: transport.address.href,
         firstHandshakeAttempts: MEMORY_FIRST_HANDSHAKE_ATTEMPTS,
       });
@@ -1790,6 +1814,7 @@ export class RemoteSessionFactory implements SessionFactory {
         signal,
         client: this.#clientInfo,
         instanceNames: this.#instanceNames,
+        syncCidReferences: this.#syncCidReferences,
         address: transport.address.href,
         firstHandshakeAttempts: MEMORY_FIRST_HANDSHAKE_ATTEMPTS,
       });

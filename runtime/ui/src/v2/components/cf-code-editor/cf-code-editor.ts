@@ -342,12 +342,21 @@ function readUnlessRefused(cell: { get(): unknown }): unknown {
  *   `{ id }` naming the highlight: on the release of a primary-button press
  *   that leaves nothing selected, so a press that drags out a selection fires
  *   nothing. The caret still lands where the click was.
- * @fires backlink-click - Fired when a backlink is clicked with Cmd/Ctrl+Enter with detail: { text, piece }
+ * @fires backlink-click - Fired when a backlink is clicked with Cmd/Ctrl+Enter with detail: { id, text, piece: SigilLink }
  * @fires backlink-create - Fired when a novel backlink is activated (Cmd/Ctrl+Click)
  *   or confirmed with Enter during autocomplete with no matches. Detail:
- *   { text: string, pieceId: any, piece: Cell<MentionablePiece>, navigate: boolean }
+ *   { text: string, pieceId: any, piece: SigilLink, navigate: boolean }
  * @fires mention-ref-label-changed - Fired when a mention's label is edited in
- *   reference mode, with detail: { key, label, modifiedTitle, destination }
+ *   reference mode, with detail: { key, label, modifiedTitle, destination:
+ *   SigilLink | null }
+ * @fires backlink-name-changed - Fired when a backlink's text renames its
+ *   piece, with detail: { pieceId, oldName, newName, piece: SigilLink }
+ *
+ * Every piece in a detail is a link to its cell, not the cell's handle. A
+ * detail crosses to the worker as a `FabricValue`, and `toSerializableValue()`
+ * in `runtime/html/src/main/events.ts` converts a handle only when it is the
+ * whole detail. A handler that declares the member as `Writable<T>` receives
+ * the cell.
  *
  * @example
  * <cf-code-editor language="text/javascript" placeholder="Enter code..."></cf-code-editor>
@@ -1496,7 +1505,7 @@ export class CFCodeEditor extends BaseElement {
       this.emit("backlink-create", {
         text: label,
         pieceId: piece.id(),
-        piece: piece.cell(),
+        piece: piece.cell().toSigilLink(),
         navigate: false,
       });
 
@@ -1622,7 +1631,7 @@ export class CFCodeEditor extends BaseElement {
         this.emit("backlink-click", {
           id,
           text: innerText,
-          piece: cell,
+          piece: cell.toSigilLink(),
         });
         return;
       }
@@ -1668,7 +1677,7 @@ export class CFCodeEditor extends BaseElement {
       this.emit("backlink-click", {
         id: ref.key,
         text: ref.label,
-        piece: destination,
+        piece: destination.toSigilLink(),
       });
       return;
     }
@@ -1709,7 +1718,7 @@ export class CFCodeEditor extends BaseElement {
           this.emit("backlink-click", {
             id: backlinkId,
             text: backlinkText,
-            piece,
+            piece: piece.toSigilLink(),
           });
           return true;
         }
@@ -1755,7 +1764,7 @@ export class CFCodeEditor extends BaseElement {
       this.emit("backlink-create", {
         text: backlinkText,
         pieceId,
-        piece: piece.cell(),
+        piece: piece.cell().toSigilLink(),
         navigate,
       });
     } catch (error) {
@@ -4004,7 +4013,7 @@ export class CFCodeEditor extends BaseElement {
         key: ref.key,
         label: ref.label,
         modifiedTitle,
-        destination: this._refDestination(ref.key),
+        destination: this._refDestination(ref.key)?.toSigilLink() ?? null,
       });
     }
 
@@ -4383,7 +4392,7 @@ export class CFCodeEditor extends BaseElement {
       pieceId,
       oldName,
       newName,
-      piece: pieceCell,
+      piece: pieceCell.toSigilLink(),
     });
   }
 }

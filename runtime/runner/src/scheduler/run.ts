@@ -1505,7 +1505,8 @@ function finalizeReactiveActionCommit(
                 fanOutRun.instance.key,
             ) === instanceRecord;
     };
-    const superseded = outcome.error?.supersededOutputs;
+    const superseded = outcome.error?.supersededOutputs ??
+      outcome.ok?.supersededOutputs;
     let owed: boolean | Promise<boolean> =
       outcome.error?.readDependencyWithdrawn === true &&
       outcome.error?.waveWithdrawalCause === "contribution-dropped";

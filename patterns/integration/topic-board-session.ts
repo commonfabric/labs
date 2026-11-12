@@ -17,6 +17,7 @@ import {
   waitForSettledText,
 } from "./cfc-browser-helpers.ts";
 import {
+  clickCardOpenLink,
   clickCellLink,
   waitForPieceView,
 } from "./topics-navigation-helpers.ts";
@@ -79,23 +80,19 @@ export class BoardSession {
     await waitForRuntimeIdle(this.#page);
   }
 
-  /**
-   * Wait for the board's cards. The list is ordered by last activity, so the
-   * first topic seeded is the last card rendered, and its title appearing means
-   * every card is there.
-   */
+  /** Waits for the first seeded topic's title and settles the board's view. */
   async showBoard(): Promise<void> {
     await waitForSettledText(this.#page, "body", topicTitle(0));
     await settleView(this.#page);
   }
 
   /**
-   * Open the topmost topic and wait for its page: the topic's own title, the
-   * text `expected` names as the last thing the page has to form, and a settled
-   * view. Waiting for that text is what keeps a segment boundary sharp. A
-   * topic's body and its connections arrive separately, so a wait that stopped
-   * at the title would leave the connections to finish inside the next segment
-   * and charge that segment for them.
+   * Opens the newest seeded topic by its card title and waits for the topic's
+   * title, the text `expected` names as the last thing the page has to form,
+   * and a settled view. Waiting for that text keeps a segment
+   * boundary sharp. A topic's body and its connections arrive separately, so a
+   * wait that stopped at the title would leave the connections to finish inside
+   * the next segment and charge that segment for them.
    *
    * Returns the opened piece's id.
    *
@@ -106,7 +103,10 @@ export class BoardSession {
   async openTopic(
     expected: (openedPieceId: string) => readonly string[],
   ): Promise<string> {
-    const pieceId = await clickCellLink(this.#page, "Open");
+    const pieceId = await clickCardOpenLink(
+      this.#page,
+      topicTitle(this.#target.fixture.topics.length - 1),
+    );
     await waitForPieceView(this.#page, this.#target.fixture.spaceDid, pieceId);
     try {
       for (const text of expected(pieceId)) {

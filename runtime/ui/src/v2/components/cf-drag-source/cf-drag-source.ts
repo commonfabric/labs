@@ -21,8 +21,12 @@ import {
  * @property {string} type - Optional: type identifier for filtering drop zones
  * @property {boolean} disabled - Disable dragging
  *
- * @fires cf-drag-start - Fired when drag starts with { cell: CellHandle }
- * @fires cf-drag-end - Fired when drag ends with { cell: CellHandle, dropped: boolean }
+ * @fires cf-drag-start - Fired when drag starts with { cell: SigilLink }
+ * @fires cf-drag-end - Fired when drag ends with { cell: SigilLink }
+ *
+ * Each detail carries the dragged cell's link rather than its `CellHandle`,
+ * so that the detail is a `FabricValue` and can cross to a handler in the
+ * worker; `cf-drop-zone` says the same of its events.
  *
  * @slot - Default slot for draggable content
  *
@@ -209,7 +213,7 @@ export class CFDragSource extends BaseElement {
     });
 
     // Emit drag start event
-    this.emit("cf-drag-start", { cell });
+    this.emit("cf-drag-start", { cell: cell.toSigilLink() });
   }
 
   private _endDrag() {
@@ -226,7 +230,7 @@ export class CFDragSource extends BaseElement {
     endDrag();
 
     // Emit drag end event
-    this.emit("cf-drag-end", { cell });
+    this.emit("cf-drag-end", { cell: cell.toSigilLink() });
 
     this._preview = undefined;
   }

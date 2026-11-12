@@ -1,6 +1,9 @@
 import { toCompactDebugString } from "@commonfabric/data-model";
 import {
+  type Cell,
+  cellTx,
   compileAndSavePattern,
+  type IExtendedStorageTransaction,
   isCfcEnforcementRejection,
   type RuntimeProgram,
 } from "@commonfabric/runner";
@@ -63,4 +66,20 @@ export function commitFailure(error: object): Error {
   const wrapped = new Error(message, { cause: error });
   if (typeof named.name === "string") wrapped.name = named.name;
   return wrapped;
+}
+
+/**
+ * The transaction `cell` is read through, when it is open and names the
+ * principal whose instance of a scoped document the cell addresses
+ * (`scopeKeyIdentity`); `undefined` otherwise, for a caller to read through
+ * a transaction of its own as it did before.
+ */
+export function instanceTx(
+  cell: Cell<unknown>,
+): IExtendedStorageTransaction | undefined {
+  const tx = cellTx(cell);
+  return tx !== undefined && tx.status().status === "ready" &&
+      tx.tx.scopeKeyIdentity !== undefined
+    ? tx
+    : undefined;
 }

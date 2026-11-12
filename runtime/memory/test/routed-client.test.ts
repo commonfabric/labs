@@ -4,6 +4,8 @@ import { expect } from "@std/expect";
 import { FakeTime } from "@std/testing/time";
 import { Identity } from "@commonfabric/identity";
 import { setModernCellRepConfig } from "@commonfabric/data-model/cell-rep";
+import { internSchema } from "@commonfabric/data-model-schema";
+import { registerSchemaDocument } from "../../runner/src/schema-registry.ts";
 import { getMemoryProtocolFlags, type SessionSync } from "../v2.ts";
 import {
   connect,
@@ -2616,4 +2618,442 @@ Deno.test("handshake refusals retain the server error and signature custody prop
     Error,
     "Key unavailable",
   );
+});
+
+Deno.test("on a routed connection a space's unanswered body fetch holds back no other space's frames", async () => {
+  setModernCellRepConfig(true);
+  // Two spaces behind one routed connection name the same schema document
+  // by reference. Space A's host never answers its body fetch until space B
+  // has asked its own; B asking first is what keeps A's host from holding
+  // B's frames.
+  const schema = { type: "string", title: "routed-cid-reference" } as const;
+  const hash = internSchema(schema, true).taggedHashString;
+  const spaceA = "did:key:z6Mk-routed-cid-reference-a";
+  const spaceB = "did:key:z6Mk-routed-cid-reference-b";
+  const asked: string[] = [];
+  let askedBeforeMarker: string[] | undefined;
+  let answerA: (() => void) | undefined;
+  const aAsked = Promise.withResolvers<void>();
+  const bFramed = Promise.withResolvers<void>();
+  const offering = { ...flags(), syncCidReferencesV1: true };
+  const p = peer(frame(hello(metadata(), offering)), (body, push) => {
+    const respond = (rest: Record<string, unknown>) =>
+      push({ type: "response", requestId: body.requestId, ...rest });
+    const space = String(body.space);
+    if (body.type === "connection.auth") {
+      respond({
+        ok: {
+          principal: String(body.statement).split("|")[0],
+          expiresAt: Math.floor(Date.now() / 1000) + 600,
+        },
+      });
+    } else if (body.type === "session.open") {
+      respond({
+        ok: { sessionId: `session-${space}`, sessionToken: "t", serverSeq: 0 },
+      });
+    } else if (body.type === "session.watch.set") {
+      respond({
+        ok: {
+          serverSeq: 1,
+          sync: {
+            type: "sync",
+            fromSeq: 0,
+            toSeq: 1,
+            upserts: [{
+              branch: "",
+              id: `cid:${hash}`,
+              seq: 1,
+              byReference: true,
+            }],
+            removes: [],
+          },
+        },
+      });
+      if (space === spaceB) bFramed.resolve();
+    } else if (body.type === "graph.query") {
+      const roots = (body.query as { roots: unknown[] }).roots;
+      const answered = (entities: unknown[]) =>
+        respond({ ok: { serverSeq: 1, entities } });
+      if (roots.length === 0) {
+        // The test's marker: whatever was asked before it was asked when
+        // B's frame was admitted.
+        askedBeforeMarker = [...asked];
+        answered([]);
+        answerA?.();
+      } else if (space === spaceA) {
+        asked.push(space);
+        answerA = () => answered([]);
+        aAsked.resolve();
+      } else {
+        asked.push(space);
+        answered([{
+          branch: "",
+          id: `cid:${hash}`,
+          seq: 1,
+          document: { value: schema },
+        }]);
+      }
+    } else respond({ ok: {} });
+  });
+  const client = await connect({
+    transport: p.transport,
+    syncCidReferences: true,
+  });
+  try {
+    const a = await client.mount(spaceA, {}, namedSigner(identity.did()));
+    const b = await client.mount(spaceB, {}, namedSigner(identity.did()));
+    const watch = [{
+      id: "schema",
+      kind: "graph" as const,
+      query: {
+        roots: [{ id: `cid:${hash}`, selector: { path: [], schema: false } }],
+      },
+    }];
+    const watchingA = a.watchSet(watch);
+    await aAsked.promise;
+    const watchingB = b.watchSet(watch);
+    await bFramed.promise;
+    await b.queryGraph({ roots: [] });
+    const viewB = await watchingB;
+    await watchingA;
+    expect(askedBeforeMarker).toStrictEqual([spaceA, spaceB]);
+    expect(
+      viewB.entities.find((entity) => entity.id === `cid:${hash}`)?.document,
+    ).toEqual({ value: schema });
+  } finally {
+    await client.close();
+  }
+});
+
+Deno.test("a client fetches a schema that names a principal from the space that named it, though it holds the body", async () => {
+  setModernCellRepConfig(true);
+  // A server that names such a schema by reference is one probing for it: an
+  // honest one sends the body. The client holds the body already, and asks
+  // the naming space for it anyway, so the fetch says nothing about whether
+  // it holds it.
+  const schema = {
+    type: "string",
+    title: "routed-cid-reference-bound",
+    ifc: {
+      confidentiality: [{
+        type: "User",
+        subject: "did:key:z6MkhRoutedCidReferenceBoundPrincipal",
+      }],
+    },
+  } as const;
+  const hash = internSchema(schema, true).taggedHashString;
+  registerSchemaDocument(hash, schema as never);
+  const space = "did:key:z6Mk-routed-cid-reference-bound";
+  const asked: string[] = [];
+  const offering = { ...flags(), syncCidReferencesV1: true };
+  const p = peer(frame(hello(metadata(), offering)), (body, push) => {
+    const respond = (rest: Record<string, unknown>) =>
+      push({ type: "response", requestId: body.requestId, ...rest });
+    if (body.type === "connection.auth") {
+      respond({
+        ok: {
+          principal: String(body.statement).split("|")[0],
+          expiresAt: Math.floor(Date.now() / 1000) + 600,
+        },
+      });
+    } else if (body.type === "session.open") {
+      respond({
+        ok: { sessionId: "session-bound", sessionToken: "t", serverSeq: 0 },
+      });
+    } else if (body.type === "session.watch.set") {
+      respond({
+        ok: {
+          serverSeq: 1,
+          sync: {
+            type: "sync",
+            fromSeq: 0,
+            toSeq: 1,
+            upserts: [{
+              branch: "",
+              id: `cid:${hash}`,
+              seq: 1,
+              byReference: true,
+            }],
+            removes: [],
+          },
+        },
+      });
+    } else if (body.type === "graph.query") {
+      const roots = (body.query as { roots: { id: string }[] }).roots;
+      for (const root of roots) asked.push(root.id);
+      respond({
+        ok: {
+          serverSeq: 1,
+          entities: [{
+            branch: "",
+            id: `cid:${hash}`,
+            seq: 1,
+            document: { value: schema },
+          }],
+        },
+      });
+    } else respond({ ok: {} });
+  });
+  const client = await connect({
+    transport: p.transport,
+    syncCidReferences: true,
+  });
+  try {
+    const session = await client.mount(
+      space,
+      {},
+      namedSigner(identity.did()),
+    );
+    const view = await session.watchSet([{
+      id: "schema",
+      kind: "graph" as const,
+      query: {
+        roots: [{ id: `cid:${hash}`, selector: { path: [], schema: false } }],
+      },
+    }]);
+    expect(asked).toStrictEqual([`cid:${hash}`]);
+    expect(
+      view.entities.find((entity) => entity.id === `cid:${hash}`)?.document,
+    ).toEqual({ value: schema });
+  } finally {
+    await client.close();
+  }
+});
+
+/**
+ * A scripted router for one space whose watch answers name the schema
+ * document `hash` by reference, with `offering` greeting each hello and
+ * `answer` answering each body fetch. Returns the peer and the ids each
+ * fetch asked for.
+ */
+function referencingPeer(
+  hash: string,
+  offering: ReturnType<typeof flags>,
+  answer: (respond: (rest: Record<string, unknown>) => void) => void,
+) {
+  const asked: string[] = [];
+  const p = peer(frame(hello(metadata(), offering)), (body, push) => {
+    const respond = (rest: Record<string, unknown>) =>
+      push({ type: "response", requestId: body.requestId, ...rest });
+    if (body.type === "connection.auth") {
+      respond({
+        ok: {
+          principal: String(body.statement).split("|")[0],
+          expiresAt: Math.floor(Date.now() / 1000) + 600,
+        },
+      });
+    } else if (body.type === "session.open") {
+      respond({
+        ok: { sessionId: "session-ref", sessionToken: "t", serverSeq: 0 },
+      });
+    } else if (body.type === "session.watch.set") {
+      respond({
+        ok: {
+          serverSeq: 1,
+          sync: {
+            type: "sync",
+            fromSeq: 0,
+            toSeq: 1,
+            upserts: [
+              { branch: "", id: `cid:${hash}`, seq: 1, byReference: true },
+              {
+                branch: "",
+                id: "of:routed-cid-reference-carrier",
+                seq: 1,
+                doc: { value: { carried: true } },
+              },
+            ],
+            removes: [],
+          },
+        },
+      });
+    } else if (body.type === "graph.query") {
+      for (const root of (body.query as { roots: { id: string }[] }).roots) {
+        asked.push(root.id);
+      }
+      answer(respond);
+    } else respond({ ok: {} });
+  });
+  return { p, asked };
+}
+
+for (
+  const [outcome, answerFor] of [
+    [
+      "a refused body fetch",
+      () => (respond: (rest: Record<string, unknown>) => void) =>
+        respond({
+          error: { name: "AuthorizationError", message: "refused" },
+        }),
+    ],
+    [
+      "a body answered under an id that is not `cid:`",
+      (hash: string) => (respond: (rest: Record<string, unknown>) => void) =>
+        respond({
+          ok: {
+            serverSeq: 1,
+            entities: [{
+              branch: "",
+              // As long as `cid:`, so the hash is all that follows it.
+              id: `rid:${hash}`,
+              seq: 1,
+              document: {
+                value: {
+                  type: "string",
+                  title:
+                    "routed-cid-reference-unresolved-a body answered under an id that is not `cid:`",
+                },
+              },
+            }],
+          },
+        }),
+    ],
+    [
+      "a fetched body that does not verify",
+      (hash: string) => (respond: (rest: Record<string, unknown>) => void) =>
+        respond({
+          ok: {
+            serverSeq: 1,
+            entities: [{
+              branch: "",
+              id: `cid:${hash}`,
+              seq: 1,
+              document: { value: { type: "number", title: "forged" } },
+            }],
+          },
+        }),
+    ],
+  ] as const
+) {
+  Deno.test(`after ${outcome}, a client applies the frame without the reference`, async () => {
+    setModernCellRepConfig(true);
+    // The reference resolves to nothing, so the frame applies without it:
+    // the client's view holds the frame's other documents and not the schema
+    // document, which arrival validation then treats as any missing ref.
+    const schema = {
+      type: "string",
+      title: `routed-cid-reference-unresolved-${outcome}`,
+    } as const;
+    const hash = internSchema(schema, true).taggedHashString;
+    const { p, asked } = referencingPeer(
+      hash,
+      { ...flags(), syncCidReferencesV1: true },
+      answerFor(hash),
+    );
+    const client = await connect({
+      transport: p.transport,
+      syncCidReferences: true,
+    });
+    try {
+      const session = await client.mount(
+        "did:key:z6Mk-routed-cid-reference-unresolved",
+        {},
+        namedSigner(identity.did()),
+      );
+      const view = await session.watchSet([{
+        id: "schema",
+        kind: "graph" as const,
+        query: {
+          roots: [{
+            id: "of:routed-cid-reference-carrier",
+            selector: { path: [], schema: false },
+          }],
+        },
+      }]);
+      expect(asked).toStrictEqual([`cid:${hash}`]);
+      expect(view.entities.map((entity) => entity.id)).toStrictEqual([
+        "of:routed-cid-reference-carrier",
+      ]);
+    } finally {
+      await client.close();
+    }
+  });
+}
+
+Deno.test("a client that did not negotiate references refuses a sync carrying one", async () => {
+  setModernCellRepConfig(true);
+  const schema = { type: "string", title: "routed-cid-unnegotiated" } as const;
+  const hash = internSchema(schema, true).taggedHashString;
+  // The server offers nothing, and sends a reference anyway: the frame is
+  // refused as one the client cannot parse, and nothing of it is applied.
+  const { p, asked } = referencingPeer(
+    hash,
+    flags(),
+    (respond) => respond({ ok: { serverSeq: 1, entities: [] } }),
+  );
+  const client = await connect({ transport: p.transport });
+  try {
+    const session = await client.mount(
+      "did:key:z6Mk-routed-cid-unnegotiated",
+      {},
+      namedSigner(identity.did()),
+    );
+    let refusal: unknown;
+    await session.watchSet([{
+      id: "schema",
+      kind: "graph" as const,
+      query: {
+        roots: [{
+          id: "of:routed-cid-reference-carrier",
+          selector: { path: [], schema: false },
+        }],
+      },
+    }]).catch((error) => {
+      refusal = error;
+    });
+    expect((refusal as Error | undefined)?.name).toBe("InvalidMessageError");
+    expect(asked).toStrictEqual([]);
+  } finally {
+    await client.close();
+  }
+});
+
+Deno.test("a client hands on a sync no session claims without fetching for it", async () => {
+  setModernCellRepConfig(true);
+  // A response to no request this client made names a body by reference.
+  // No session takes it, so nothing is fetched, and the session the client
+  // does hold goes on as before.
+  const schema = { type: "string", title: "routed-cid-unclaimed" } as const;
+  const hash = internSchema(schema, true).taggedHashString;
+  const { p, asked } = referencingPeer(
+    hash,
+    { ...flags(), syncCidReferencesV1: true },
+    (respond) => respond({ ok: { serverSeq: 1, entities: [] } }),
+  );
+  const client = await connect({
+    transport: p.transport,
+    syncCidReferences: true,
+  });
+  try {
+    const session = await client.mount(
+      "did:key:z6Mk-routed-cid-unclaimed",
+      {},
+      namedSigner(identity.did()),
+    );
+    p.push({
+      type: "response",
+      requestId: "unclaimed",
+      ok: {
+        serverSeq: 1,
+        sync: {
+          type: "sync",
+          fromSeq: 0,
+          toSeq: 1,
+          upserts: [{
+            branch: "",
+            id: `cid:${hash}`,
+            seq: 1,
+            byReference: true,
+          }],
+          removes: [],
+        },
+      },
+    });
+    await client.delivered();
+    expect(asked).toStrictEqual([]);
+    expect(client.isConnected()).toBe(true);
+    expect(session.sessionId).toBe("session-ref");
+  } finally {
+    await client.close();
+  }
 });

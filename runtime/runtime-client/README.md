@@ -192,6 +192,14 @@ turns an event down throws, which fails its run and rejects the send. Under
 server execution the run it waits for is the served one, whose outcome reaches
 the worker as the consequence the serving loop recorded for the event.
 
+Each of these delivers its event to the stream the handle's stored links lead
+to, such as a nested pattern's stream that the result it is reached through
+passes on. The worker first loads each document those links pass through that it
+has not loaded yet, as a worker that has just started has loaded none, and a
+load that fails refuses the send. Events reach their streams in the order they
+were sent, so a send whose documents are loading holds back the ones sent after
+it, and `RuntimeClient.idle()` waits for those sends too.
+
 `CellHandle.sendReviewed(event, { surface, action })` sends a reviewed action
 from a control the host draws itself, bound to one trusted surface and one
 action. The worker stamps the event with `native` provenance for them, replacing
@@ -245,6 +253,11 @@ worker; its placeholder reads "Retrying…" while any retry of its space is in
 flight. The shell calls it when the person navigates into a space
 `spaceaccesslost` named, and when the page regains focus or becomes visible.
 
+A request that fails because its space refused the runtime fails with the code
+`RuntimeErrorCode.SpaceAccessRefused`, or with `RuntimeErrorCode.SpaceDeleted`
+where the space is deleted, so a host that missed the space's `spaceaccesslost`
+learns of the loss from the request it made.
+
 A `spaceaccesslost` for a deleted space carries `deleted: true`. No retry can
 admit anyone to such a space, so its placeholder reads "Deleted" and has no
 Retry button, and the shell does not ask for it again. The worker also sends the
@@ -277,7 +290,15 @@ principal, as `spaceaccesslost` reported, has admitted it again. It carries the
 `space`. It is sent for every admission, whoever asked for the retry that
 decided it: the runtime itself, on the memory server's `session/admissible`; the
 renderer's Retry button on a refused space's placeholder; or a host through
-`retrySpaceAccess()`.
+`retrySpaceAccess()`. It is also sent for a space whose first connection never
+completed a handshake, as when its memory host was down or out of the network's
+reach, once a retry reaches it, even when a load the retry repeats fails again.
+The runtime dials such a space again only when asked: through
+`retrySpaceAccess(space)`, or through `retryUnreachableSpaces()`, which retries
+every such space and is the call for a host that learns the network may have
+changed. A load that failed for want of the connection fails with the code
+`RuntimeErrorCode.SpaceUnreachable`, which is how a host tells it from other
+failures and offers a retry.
 
 `RuntimeInternals` in `@commonfabric/lib-shell` drops the loads it remembers as
 failed, every space's on `connectionrestored` and the one space's on

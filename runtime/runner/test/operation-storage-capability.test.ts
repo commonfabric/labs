@@ -27,6 +27,22 @@ import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 
 const signer = await Identity.fromPassphrase("operation storage capability");
 
+/** What a watch mutation hands its `consume`, and answers with. */
+type WatchMutation = MemoryV2Client.WatchMutationResult;
+
+/**
+ * A fake session's answer to a watch mutation: `result`, which it hands to
+ * the mutation's `consume` as it settles, as `SpaceSession` does.
+ */
+const answer = (
+  consume: ((mutation: WatchMutation) => void) | undefined,
+  result: Promise<WatchMutation>,
+): Promise<WatchMutation> =>
+  result.then((mutation) => {
+    consume?.(mutation);
+    return mutation;
+  });
+
 /** Builds a verdict and materialized delivery the test releases separately. */
 async function operationSettlementFixture(
   {
@@ -67,7 +83,10 @@ async function operationSettlementFixture(
     });
   const session = {
     subscribeTermination: () => () => {},
-    watchAddSync: () => Promise.resolve({ view, sync, precedingSyncs: [] }),
+    watchAddSync: (
+      _watches: WatchSpec[],
+      consume?: (m: WatchMutation) => void,
+    ) => answer(consume, Promise.resolve({ view, sync, precedingSyncs: [] })),
     transact: (commit: ClientCommit) => {
       localSeq = commit.localSeq;
       if (deliverAtVerdict) deliver();
@@ -236,20 +255,32 @@ describe("operation storage capability", () => {
               } as unknown as MemoryV2Client.Client;
               const session = {
                 subscribeTermination: () => () => {},
-                watchAddSync: () => {
+                watchAddSync: (
+                  _watches: WatchSpec[],
+                  consume?: (m: WatchMutation) => void,
+                ) => {
                   watchAdds++;
-                  return Promise.resolve({
-                    view: MemoryV2Client.WatchView.fromSync(sync),
-                    sync,
-                    precedingSyncs: [],
-                  });
+                  return answer(
+                    consume,
+                    Promise.resolve({
+                      view: MemoryV2Client.WatchView.fromSync(sync),
+                      sync,
+                      precedingSyncs: [],
+                    }),
+                  );
                 },
-                watchRemoveSync: () =>
-                  Promise.resolve({
-                    view: MemoryV2Client.WatchView.fromSync(sync),
-                    sync,
-                    precedingSyncs: [],
-                  }),
+                watchRemoveSync: (
+                  _ids: readonly string[],
+                  consume?: (m: WatchMutation) => void,
+                ) =>
+                  answer(
+                    consume,
+                    Promise.resolve({
+                      view: MemoryV2Client.WatchView.fromSync(sync),
+                      sync,
+                      precedingSyncs: [],
+                    }),
+                  ),
                 transact: (commit: {
                   operations: (ApplyOpOperation | ReleaseOpFieldOperation)[];
                 }) => {
@@ -356,25 +387,37 @@ describe("operation storage capability", () => {
               } as unknown as MemoryV2Client.Client;
               const session = {
                 subscribeTermination: () => () => {},
-                watchAddSync: () => {
+                watchAddSync: (
+                  _watches: WatchSpec[],
+                  consume?: (m: WatchMutation) => void,
+                ) => {
                   additions++;
                   if (sessionNumber === 1) {
                     firstAdditionStarted.resolve();
-                    return firstAddition.promise;
+                    return answer(consume, firstAddition.promise);
                   }
-                  return Promise.resolve({
-                    view: MemoryV2Client.WatchView.fromSync(sync),
-                    sync,
-                    precedingSyncs: [],
-                  });
+                  return answer(
+                    consume,
+                    Promise.resolve({
+                      view: MemoryV2Client.WatchView.fromSync(sync),
+                      sync,
+                      precedingSyncs: [],
+                    }),
+                  );
                 },
-                watchRemoveSync: () => {
+                watchRemoveSync: (
+                  _ids: readonly string[],
+                  consume?: (m: WatchMutation) => void,
+                ) => {
                   removals++;
-                  return Promise.resolve({
-                    view: MemoryV2Client.WatchView.fromSync(sync),
-                    sync,
-                    precedingSyncs: [],
-                  });
+                  return answer(
+                    consume,
+                    Promise.resolve({
+                      view: MemoryV2Client.WatchView.fromSync(sync),
+                      sync,
+                      precedingSyncs: [],
+                    }),
+                  );
                 },
               } as unknown as MemoryV2Client.SpaceSession;
               return Promise.resolve({ client, session });
@@ -632,13 +675,21 @@ describe("operation storage capability", () => {
     let attempts = 0;
     const session = {
       subscribeTermination: () => () => {},
-      watchAddSync: () => {
+      watchAddSync: (
+        _watches: WatchSpec[],
+        consume?: (m: WatchMutation) => void,
+      ) => {
         attempts++;
         if (attempts === 1) return Promise.reject(new Error("watch failed"));
-        return Promise.resolve({ view, sync, precedingSyncs: [] });
+        return answer(
+          consume,
+          Promise.resolve({ view, sync, precedingSyncs: [] }),
+        );
       },
-      watchRemoveSync: () =>
-        Promise.resolve({ view, sync, precedingSyncs: [] }),
+      watchRemoveSync: (
+        _ids: readonly string[],
+        consume?: (m: WatchMutation) => void,
+      ) => answer(consume, Promise.resolve({ view, sync, precedingSyncs: [] })),
     } as unknown as MemoryV2Client.SpaceSession;
     const client = {
       serverFlags: { applyOp: true, operationCodecs: ["test@1"] },
@@ -790,16 +841,24 @@ describe("operation storage capability", () => {
     let removalCount = 0;
     const session = {
       subscribeTermination: () => () => {},
-      watchAddSync: (_watches: WatchSpec[]) =>
-        Promise.resolve({ view, sync, precedingSyncs: [] }),
-      watchRemoveSync: (watchIds: readonly string[]) => {
+      watchAddSync: (
+        _watches: WatchSpec[],
+        consume?: (m: WatchMutation) => void,
+      ) => answer(consume, Promise.resolve({ view, sync, precedingSyncs: [] })),
+      watchRemoveSync: (
+        watchIds: readonly string[],
+        consume?: (m: WatchMutation) => void,
+      ) => {
         removalCount++;
         if (removalCount === 1) removed.resolve(watchIds);
-        return Promise.resolve({
-          view,
-          sync,
-          precedingSyncs: removalCount === 1 ? [precedingRemovalSync] : [],
-        });
+        return answer(
+          consume,
+          Promise.resolve({
+            view,
+            sync,
+            precedingSyncs: removalCount === 1 ? [precedingRemovalSync] : [],
+          }),
+        );
       },
     } as unknown as MemoryV2Client.SpaceSession;
     const client = {
@@ -904,24 +963,36 @@ describe("operation storage capability", () => {
     let additions = 0;
     const session = {
       subscribeTermination: () => () => {},
-      watchAddSync: () => {
+      watchAddSync: (
+        _watches: WatchSpec[],
+        consume?: (m: WatchMutation) => void,
+      ) => {
         additions++;
-        return Promise.resolve(
-          additions === 1
-            ? { view: firstView, sync: empty, precedingSyncs: [] }
-            : {
-              view: secondView,
-              sync: empty,
-              precedingSyncs: [delivery(1)],
-            },
+        return answer(
+          consume,
+          Promise.resolve(
+            additions === 1
+              ? { view: firstView, sync: empty, precedingSyncs: [] }
+              : {
+                view: secondView,
+                sync: empty,
+                precedingSyncs: [delivery(1)],
+              },
+          ),
         );
       },
-      watchRemoveSync: () =>
-        Promise.resolve({
-          view: secondView,
-          sync: empty,
-          precedingSyncs: [],
-        }),
+      watchRemoveSync: (
+        _ids: readonly string[],
+        consume?: (m: WatchMutation) => void,
+      ) =>
+        answer(
+          consume,
+          Promise.resolve({
+            view: secondView,
+            sync: empty,
+            precedingSyncs: [],
+          }),
+        ),
     } as unknown as MemoryV2Client.SpaceSession;
     const client = {
       serverFlags: {
@@ -996,9 +1067,12 @@ describe("operation storage capability", () => {
     const lateAdditionView = MemoryV2Client.WatchView.fromSync(sync);
     const addingStorage = createStorage({
       subscribeTermination: () => () => {},
-      watchAddSync: () => {
+      watchAddSync: (
+        _watches: WatchSpec[],
+        consume?: (m: WatchMutation) => void,
+      ) => {
         additionStarted.resolve();
-        return addition.promise;
+        return answer(consume, addition.promise);
       },
     } as unknown as MemoryV2Client.SpaceSession);
     const addingReplica = addingStorage.open(signer.did()).replica;
@@ -1026,9 +1100,18 @@ describe("operation storage capability", () => {
     const lateRemovalView = MemoryV2Client.WatchView.fromSync(sync);
     const removingStorage = createStorage({
       subscribeTermination: () => () => {},
-      watchAddSync: () =>
-        Promise.resolve({ view: activeView, sync, precedingSyncs: [] }),
-      watchRemoveSync: () => removal.promise,
+      watchAddSync: (
+        _watches: WatchSpec[],
+        consume?: (m: WatchMutation) => void,
+      ) =>
+        answer(
+          consume,
+          Promise.resolve({ view: activeView, sync, precedingSyncs: [] }),
+        ),
+      watchRemoveSync: (
+        _ids: readonly string[],
+        consume?: (m: WatchMutation) => void,
+      ) => answer(consume, removal.promise),
     } as unknown as MemoryV2Client.SpaceSession);
     const removingReplica = removingStorage.open(signer.did()).replica;
     if (!hasOperationStorageCapability(removingReplica)) return;
@@ -1059,7 +1142,10 @@ describe("operation storage capability", () => {
     const view = MemoryV2Client.WatchView.fromSync(sync);
     const session = {
       subscribeTermination: () => () => {},
-      watchAddSync: () => Promise.resolve({ view, sync, precedingSyncs: [] }),
+      watchAddSync: (
+        _watches: WatchSpec[],
+        consume?: (m: WatchMutation) => void,
+      ) => answer(consume, Promise.resolve({ view, sync, precedingSyncs: [] })),
       watchRemoveSync: () => Promise.reject(new Error("remove failed")),
     } as unknown as MemoryV2Client.SpaceSession;
     const client = {

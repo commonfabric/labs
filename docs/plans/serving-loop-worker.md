@@ -14,11 +14,13 @@ the `ExecutorHost` inside the toolshed process and leaves its thread unsaid;
 budgets, and the one that exists is the 100 ms flush deadline, a timer that
 cannot cut a synchronous action.
 
-This plan moves the host, and with it every serving runtime, into a Web Worker
-of the toolshed process. The memory server, the routes, and the store's one
-writer stay on the main thread. The worker reads the store through its own
-SQLite connections and reaches the server for everything else over a
-`MessagePort`.
+This plan moves the serving runtimes into Web Workers of the toolshed process,
+one worker and one host per served space. The memory server, the routes, and
+the store's one writer stay on the main thread. A worker reads the store
+through its own SQLite connections and reaches the server for everything else
+over a `MessagePort`. The sections below place each crossing for one worker;
+[One worker per space](#one-worker-per-space) says how the main thread shares
+the memory server among several.
 
 ## What crosses the boundary, and what does not
 
@@ -99,12 +101,15 @@ the read-row admission's holder matching intact.
 **The server's observer crosses as events, its queries as requests.** The main
 thread installs the `ServerExecutionObserver` and forwards `commitAdmitted`,
 `sessionOpened`, `demandChanged`, `viewsChanged` and `sessionChanged` to the
-worker. The last is
+worker a space is placed on. The last is
 the session registry's own lifecycle, an open, a detach with its expiry, or a
-removal, replayed in full when the observer is installed; the worker keeps a
+removal. A worker is sent a space's sessions as the server holds them when the
+space is placed on it (`Server.sessionSnapshot()`), and every change after;
+the worker keeps a
 mirror from it and serves the three lookups the loop makes without waiting,
 `hasLiveSessionsForSpace`, `hasLiveSessionFor` and `sessionReadCeiling`, as the
-registry would. The worker asks the main thread for `demandForSessions`,
+registry would. Each of the three is asked about the space a tenure serves, so
+a worker's mirror holds its own spaces' sessions and no others. The worker asks the main thread for `demandForSessions`,
 `viewInterestsForSpace`, `setViewSelection`, `foreignWriteAuthorityFor`,
 `checkServedAclChange`, `commitDelegatedAppend`, `idle` and `flushSessions`, and
 tells it of `noteExecutorCommit` without waiting. The
@@ -130,49 +135,69 @@ as data, a structured clone on the port, so a verb hands back plain values: a
 cell read with no schema returns nested objects as proxies over the store,
 which the port cannot clone.
 
-**Stats cross on every cycle.** The worker posts the host's `ServingLoopStats`
+**Stats cross on every cycle.** A worker posts its host's `ServingLoopStats`
 at the end of each wave cycle, at each activation and park, and on request;
-the main thread registers a stats provider that returns the latest copy, so
-`/api/health/stats` keeps its shape and waits on nothing. Just ahead of each
-wave commit the worker also posts the `events` block alone, which the main
-thread merges into that copy: the whole counters, settle series included,
-cost about as much to post as a commit. The events post travels on the port
-the commit does, whose messages the main thread handles in order, so a client
-that has seen a wave's commit reads event counters that include what that
-wave's drain counted, and a later full post, never older than an events post
-before it, replaces the merged block with everything else. The loop's own
-logger counts and timing statistics are the worker realm's, so they cross on
-request (`ServingLoopHandle.diagnostics()`), and a request waits for the
-worker's turn: `/api/health/serving-loop-realm` is the route that asks, kept
-apart from `stats` so that a worker in a long settle, or one that is hung,
-delays only the caller who asked for its loggers. A test that reads a refusal
+the main thread registers a stats provider that returns the workers' latest
+copies taken together with the last copy of each worker that has closed
+(`stats-merge.ts`), so `/api/health/stats` keeps its shape and waits on
+nothing. Just ahead of each
+wave commit the worker also posts its counters without the settle blocks
+(`ServingLoopCounters`), which the main thread merges into that copy: the
+settle series cost about as much to post as a commit. The counters post
+travels on the port the commit does, whose messages the main thread handles
+in order, so a client that has seen a wave's commit reads counters that
+include what that wave counted before its commit, and a later full post,
+never older than a counters post before it, replaces the merged counters
+with everything else. The loop's own
+logger counts and timing statistics are each worker realm's own, so they
+cross on request (`ServingLoopHandle.diagnostics()`), each serving worker's
+with those of the compile worker it starts under `compile-worker:` logger
+names (`servingLoopDiagnostics()`, a snapshot read without waiting on the
+compile worker), added up across the serving workers (`diagnostics-merge.ts`:
+counts add, and a timing key's distribution is the mixture of the workers'
+distributions), and a request waits for each serving worker's turn:
+`/api/health/serving-loop-realm` is the route that asks, kept apart from
+`stats` so that a worker in a long settle, or one that is hung, delays only
+the caller who asked for the loggers. A worker that closes hands back what
+its realm logged, which stays in the sum; one that fails takes it along. A
+test that reads a refusal
 the loop's own CFC gate logged asks the handle rather than its own process's
 loggers.
 
-**The main thread holds two things on the worker's behalf.** The ambient
+**The main thread holds two things on the workers' behalf.** The ambient
 server-execution flag, which the memory server's admission of derived
-commits reads and which the host claims in its own realm, is claimed by the
-bridge for the server's realm while it serves. The serving-loop stats
-provider the health route reads is the bridge's, returning the counters the
-worker last posted. The pattern environment a served handler's `fetch`
+commits reads and which a host claims in its own realm, is claimed by the
+pool for the server's realm for as long as it is open, whether or not a
+worker runs, and by each bridge while it serves. The serving-loop stats
+provider the health route reads is the pool's. The pattern environment a served handler's `fetch`
 resolves against is the worker realm's own, set from the address the worker is
 started with, as the process sets its own from the same address.
 
 **The lease holder's process component is minted per worker start.** The
 holder a space's lease and derived commits name is the service identity plus
-a component the process mints once. With the loop in a worker, the main
-thread mints the component as it starts each worker and both realms adopt it
-(`adoptProcessInstanceId`): the holder the server's synchronous lease read
-computes then matches the one the worker acquired under, and a worker started in
-place of one that died
-carries a fresh component, so its commits never meet its predecessor's under
-the engine's replay keying, which keys on the holder and the counter.
+a component the process mints once. With the loop in workers, the main
+thread mints a component as it starts each worker. The worker's realm adopts
+it (`adoptProcessInstanceId`), and the worker's loopback connections name it
+to the memory server (`ServerConnectOptions.leaseHolderInstance`): the holder
+the server's synchronous lease read computes for a session then is the one
+that session's worker acquired under, so the server tells a space's serving
+session from another worker's session of the same principal. No two workers
+share a component, so a worker's commits never share a key with another's, or
+with those of a predecessor that served the same space, under the engine's
+replay keying, which keys on the holder and the counter.
 
 **The runtime's other needs are already remote.** Pattern sources come from
 `/api/patterns` over HTTP, which the main thread answers; the compiled-module
 byte cache is per worker, and that worker's runtimes take turns at a cold compile
-so that a program compiles once; external effects (`fetch`, LLM calls, the
-outbox) run where the runtime runs. A Worker started without a permission
+so that a program compiles once per worker, which with a worker per space is
+once per space whose own storage closure does not hold it; the type-check,
+transform and emit step of a serving runtime's compiles runs in a compile
+worker the serving worker starts (`ModuleCompileWorker`), so its CPU and its
+heap are off the thread that serving worker's loops run on, except for a
+compile instrumented for pattern coverage or one that asks for its
+transformed program, which runs on that thread; external effects (`fetch`,
+LLM calls, the outbox) run where the runtime runs. A Worker started without
+a permission
 descriptor inherits the process's permissions, FFI for SQLite included.
 
 ## Ordering and failure
@@ -216,24 +241,68 @@ because the verb's receipt reads the outcome. The port round trip then costs
 the loop only what the next drain and settle do not cover, which
 `executor/wave/commit-wait` reports against `executor/wave/commit`.
 
-A worker that dies takes every serving runtime with it. The main thread's
-bridge treats its exit as a park of every space with the failure-park backoff
-the host already applies. A rejected worker initialization enters the same
+A worker that dies takes the serving runtimes of its own spaces with it, and
+no other worker's. The pool treats its exit as a park of each of those spaces
+with the failure-park backoff the host already applies, counted per space. A
+rejected worker initialization enters the same
 recovery path. Once the dead worker is gone, the main thread releases every lease
 its holder held: a host leaves a space parked on another holder's lease rather
-than contending for it. Replacement waits for both the backoff and teardown/lease
-release, then starts under a fresh holder unless the host has closed. With the
+than contending for it. A space is placed again after both the backoff and the
+teardown and lease release, on a worker under a fresh holder, if it still has
+something to serve and the pool has not closed. With the
 leases released, the successor acquires them as it activates, which is the
 recovery `serving-loop.md` §6 specifies for a lost tenure. A main thread that
-closes closes the port, and the worker's host closes as it does today.
+closes closes each port, and each worker's host closes as it does today.
 
-A worker that stalls is replaced the same way, except that nothing waits for its
+A worker that stalls is handled the same way, except that nothing waits for its
 teardown, since a stalled thread may never release its lifetime lock. It posts a
 heartbeat every 10 s, and the main thread kills it after six consecutive 10 s
 intervals with no message of any kind from it (`serving-loop.md` §2, "The
 watchdog"), counting the leases the kill releases in `lease.lost`. A commit it left
 in flight reaches admission naming a holder the map no longer holds, and is
 refused.
+
+## One worker per space
+
+`ServingWorkerPool` (`serving-worker-host.ts`) is the main thread's side of
+all of the above for several workers, and
+[`serving-loop.md`](../specs/server-side-execution/serving-loop.md) §1,
+"Workers", is its normative statement. What it adds to one worker's
+crossings:
+
+**Placement.** The memory server takes one execution observer, so the pool
+installs it and each worker's `ServingPortBridge` carries what the pool hands
+it. A space is placed on a worker when it first has something to serve, by the
+admission-side criteria a host applies (`admissionActivates`), or when a
+lifecycle verb names it. Its events then go to that worker alone, and the
+worker's host, which is the host a single worker ran, decides what to
+activate. Commits admitted for a space before its worker serves are held and
+handed over, in order, behind the space's sessions.
+
+**Closing a worker.** A host reports what it holds, and the pool asks a worker
+whose host holds nothing to close (`host.retire`). The port is ordered and a
+request handler runs as its message is read, so the host decides after every
+trigger the pool sent ahead of the request, and a host that has started
+something by then stays. What the pool sends while the request is in flight
+reaches a host that may have closed, so the commits among it that would start
+a tenure are kept for the space's next placement, and a lifecycle verb waits
+for the answer. A closed worker is terminated, and its space's next trigger
+places it on a fresh one.
+
+**Bounds.** A worker is an isolate holding the serving runtime's whole module
+graph: on a four-core machine one takes about half a second to load, and holds
+about 45 MB of JavaScript heap, about 110 MB of the process's memory, before
+it serves anything, where a kept runtime in a shared host holds about 3 MB.
+A serving worker whose runtimes compile also starts a compile worker of its
+own (`ModuleCompileWorker`), a second isolate that lasts until the serving
+worker's host closes.
+Three knobs bound that: `maxWorkers`, past which a space joins a worker that
+already serves one; `spareWorkers`, which hides the load time from a
+placement; and the cap on workers kept only for parked runtimes, with the
+heap budget that closes such workers under memory pressure.
+
+**Failure.** A worker that fails affects its own spaces. The watchdog, the
+lease release and the backoff are the ones above, per worker and per space.
 
 ## What does not change
 
@@ -260,11 +329,11 @@ between the two.
    framing `serving-port-protocol.ts` defines: requests and replies with ids,
    observer events, loopback frames multiplexed by transport id, wave commits
    applied through a main-thread sink, stats relay. `serving-worker.ts` is the
-   worker entry and `ServingWorker` (`serving-worker-host.ts`) starts one and
-   replaces one that dies. A unit test runs a host in a Worker against a
+   worker entry and `ServingWorkerPool` (`serving-worker-host.ts`) starts
+   workers and recovers the spaces of one that dies. A unit test runs a host in a Worker against a
    file-backed memory server and settles an authored commit through it.
 3. [x] **Toolshed wiring under `SERVER_EXECUTION_WORKER`.** The bootstrap
-   (`runtime/toolshed/lib/server-execution.ts`) starts a `ServingWorker`
+   (`runtime/toolshed/lib/server-execution.ts`) starts a `ServingWorkerPool`
    over the toolshed's own entry (`lib/serving-worker.ts`) when the variable
    is `true`, or is unset or empty over a file memory store, and the
    in-process host otherwise. It hands the rest of the process a
@@ -299,3 +368,36 @@ between the two.
    `SERVER_EXECUTION_WORKER=false` keeps it on the request thread (done).
    After a soak, the in-process path goes, with the flag, and a lane runs the
    ON arm under the worker.
+7. [x] **One worker per space.** `ServingWorkerPool` places each space on a
+   worker of its own, routes the server's observer by placement, closes a
+   worker whose host holds nothing, keeps spares, bounds the workers placed
+   on and those kept for parked runtimes, closes parked workers under a heap
+   budget, and recovers a failed worker's spaces alone. Each worker acquires
+   under a holder component of its own, which its loopback connections name
+   to the server. The counters and the realm diagnostics of several workers
+   are reported as one. `SERVER_EXECUTION_MAX_WORKERS=1` serves every space
+   from one worker.
+8. [ ] **A heap limit per worker.** A worker that reaches V8's heap limit
+   takes the whole process down, since the limit is the process's flag
+   applied to each isolate. A worker started through `node:worker_threads`
+   with `resourceLimits` is terminated alone at its own limit, which the pool
+   would handle as it handles any failed worker. Such a worker has no `self`,
+   so the serving entry modules, which take the port from `self`, need a
+   port that works under both.
+9. [ ] **Release a placement before its worker closes.** A space stays
+   placed on its worker until the worker is gone. A worker that serves
+   several spaces and never holds nothing, as the one worker of
+   `maxWorkers: 1` on a busy server does, keeps a placement for every space
+   it has served. Releasing one needs the host to say that it holds nothing
+   for that space, and the same ordered request the worker-level close makes,
+   per space.
+10. [ ] **Measure.** The vote probe and the Topics seed with a worker per
+    space against one worker for every space on the same box: activation
+    latency with and without a spare, the process's memory by active space
+    count, and the wave timings of two spaces settling at once.
+11. [ ] **Compile workers the serving workers share.** Each serving worker
+    starts a compile worker of its own at its first compile and keeps it
+    until its host closes, so with a worker per space a space that has
+    compiled holds two isolates. Compiles handed to a set of compile workers
+    on the main thread, reached over the serving port, would let every
+    serving worker share them, and a serving worker's own would go.

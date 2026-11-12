@@ -5100,10 +5100,13 @@ export class SchemaObjectTraverser<V extends FabricValue>
     // whatever is there, whatever shape it has: the declaration names a
     // reference rather than a value, so a stored string is as opaque as a
     // stored object, and one uniform answer is what lets a reader test,
-    // compare and pass on any of them the same way. A link is exempt — it is
-    // followed first, because the reference is to what it names and not to the
-    // link. Answering here descends into nothing, so it is also not part of a
-    // cycle and registers nothing with the tracker.
+    // compare and pass on any of them the same way. A link within the space
+    // is exempt — it is followed first, because the reference is to what it
+    // names and not to the link. A link into another space at a position
+    // typed `unknown` alone is answered without being followed, by
+    // `#traversePointerWithSchema()`, naming its target. Answering here
+    // descends into nothing, so it is also not part of a cycle and registers
+    // nothing with the tracker.
     const jsonType = getJsonType(doc.value);
     if (
       jsonType !== null && !isSigilLink(doc.value) &&
@@ -6183,6 +6186,24 @@ export class SchemaObjectTraverser<V extends FabricValue>
       const cellLink = getNextCellLink(this.tx, this.context, doc, schema);
       return { ok: this.objectCreator.createObject(cellLink, undefined) };
     }
+    // A link into another space found at a position typed `unknown` without
+    // `asCell` is not followed, by a read or by a query-shaped walk: it is
+    // the form an unknown-valued handle takes once a link's schema is
+    // stripped of its `asCell` (`sanitizeSchemaForLinks()`), and the position
+    // declares nothing of the target to read or select. A read there answers
+    // the opaque presence an `unknown` position answers for whatever is
+    // there, naming the target as the link does, without loading it; a
+    // reader that reads through it loads the target then.
+    if (
+      pointerLink !== undefined && pointerLink.space !== doc.address.space &&
+      !isWriteRedirectLink(doc.value) && isUnknownValueSchema(schema)
+    ) {
+      const targetLink = getNextCellLink(this.tx, this.context, doc, schema);
+      return {
+        ok: this.objectCreator.createOpaquePresence?.(targetLink) ??
+          this.objectCreator.createObject(targetLink, undefined),
+      };
+    }
 
     if (
       this.traverseCells && alreadyTracked &&
@@ -6575,6 +6596,16 @@ export function getJsonType(value: unknown): JSONSchemaTypes | null {
   return (typeof value === "number")
     ? getJsonNumberType(value)
     : getPlainJsonType(value);
+}
+
+/**
+ * Whether `schema`, its references resolved, types its position `unknown` and
+ * nothing else: a union naming `unknown` beside other types decides by them.
+ */
+function isUnknownValueSchema(schema: JSONSchema | undefined): boolean {
+  if (!isObjectOrArray(schema)) return false;
+  const resolved = resolveSchemaRefsCanonical(schema);
+  return isObjectOrArray(resolved) && resolved.type === "unknown";
 }
 
 /** Returns whether a schema requests a cell handle with no declared value shape. */

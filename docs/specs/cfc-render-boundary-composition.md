@@ -37,10 +37,13 @@ module-policy providers a decision watches), so that every display sink in
 the worker decides by the same code. Each read that a value reaches the
 page through is decided on the labels of the cell the read starts from and on
 the labels the read consumed, and the ceiling has to admit each. The cell's
-labels are its own, which include a label its handle carries, and, when its
-path resolves through links to another place, the label there, which gathers
-every link the resolution followed (spec §8.2.7). A label that cannot be read
-is refused. The consumed labels are those of
+labels are those at its own node, which include a label its handle carries and
+what its ancestors' labels cover, and, when its path resolves through links to
+another place, the labels at the node there, which gather every link the
+resolution followed (spec §8.2.7). A field labeled below the node decides the
+read only where the read reaches it and so consumes its label, since a
+dereference is decided on the observations actually made (spec §8.2.4). A
+label that cannot be read is refused. The consumed labels are those of
 every document the read passed through, including one behind a link crossed
 part way along the path and one a link inside the value leads to, and those of
 each slot holding a link the read followed, which a dereference retains
@@ -74,10 +77,20 @@ each slot holding a link the read followed, which a dereference retains
   and picture, which a viewer may see even when the profile's private share
   inbox pointer is refused. `cf-code-editor`'s mention lists are not, since
   the editor reads each mention's destination, a cell its read hands it, for
-  the name it shows. A nested render root is decided on
-  the reads its component makes as well, as the nested-render paragraphs
-  below describe. The worker keeps reading the bound cell and removes the
-  binding when a write leaves that read consuming a label the ceiling
+  the name it shows. The entry decides whether the component is handed the
+  handle; each read the component makes through it is decided again by the
+  host read gate, as the next item says, so a read beyond the entry is
+  refused where the root ceiling refuses it. Inside a boundary that lowers
+  the ceiling, or under an authorship boundary, a complete binding is
+  decided on everything the bound cell reaches instead, as a nested render
+  root there is, since the host read gate does not hold the component's
+  reads to that boundary. A browser test mounts each complete entry's
+  component over a handle that records what it reads, and fails on a read
+  outside the entry that it does not list with its reason, as it lists the
+  badge's read of its space's root for the seal. A nested render root is
+  decided on the reads its component makes as well, as the nested-render
+  paragraphs below describe. The worker keeps reading the bound cell and
+  removes the binding when a write leaves that read consuming a label the ceiling
   refuses, or while the read cannot complete, as when a space it reads is out
   of reach: a read that cannot complete is never taken for an empty one. While
   a `cf-render` or `cf-picker` binding is withheld because the space of the
@@ -86,12 +99,28 @@ each slot holding a link the read followed, which a dereference retains
   reach space renders as, and the component shows its children while it holds
   no value for the binding. The placeholder carries nothing read from the
   space, and goes once the read completes and decides the binding again. A
-  binding withheld for any other reason leaves the element empty. The
-  binding hands the host a live
-  handle, and the worker answers the host's reads through it without the
-  ceiling: a read that follows a link the worker's read did not, and the
-  host's own subscription to the cell, which can deliver the write that causes
-  a removal before the removal arrives.
+  binding withheld for any other reason leaves the element empty.
+- The binding hands the host a live handle. Each read the host makes through
+  it, and through any cell it opens by address, is answered by the worker's
+  host read gate (`runtime/runtime-client/src/backends/host-read-gate.ts`),
+  which decides it as a render at the root is decided: on the labels the
+  read consumed, under the root ceiling, with the same exchange-rule resolver
+  and membership and module-policy providers. That covers a get, a pull, an
+  initialization that finds a stored value, a subscription, decided again as
+  a render is, a record's field list, and a metadata read. A refused read
+  reaches the host as a refusal, never as an empty value. A read answered
+  once first loads the access lists and policy manifests its decision
+  consults and does not already admit, since nothing would decide it again
+  when one arrived; it waits on the spaces holding them, and one that fails
+  to load leaves the decision to what the replica holds. The gate holds a
+  read to the root ceiling, not to a boundary around the element, which is
+  why a complete or nested-render binding inside a boundary that lowers the
+  ceiling is decided on everything its cell reaches. Two host reads are
+  still answered without the gate, and each is an open gap, since each
+  consumes labels (spec §8.2.4): resolving a cell's links to the address
+  they land on, which is how the profile badge reads its space's root for
+  the seal, and a cell's label view, including one carried on a ref or a
+  link inside a value, which names the paths of its labeled fields.
 
 Each decision is made again when what its read consumed changes, labels
 included, and when the membership those labels name changes, and only a
@@ -175,9 +204,10 @@ The exceptions hold for every reference a nested render root decides:
 
 - The binding is withheld while the ceiling refuses the reference: when the
   viewer may not see the entry holding it, when a document along its chain of
-  links is refused, and when the piece's own document is refused, because
-  resolving the reference reads that document's label, a conservative
-  over-approximation (CFC §8.2.5). A label the slot's schema declares decides
+  links is refused, and when the piece's own node is refused, because
+  resolving the reference reads the labels there. A field of the piece
+  labeled below its node is decided by the nested render, when that render
+  reads it. A label the slot's schema declares decides
   only where the read consumed no stored label. A `cf-render` or `cf-picker`
   whose binding is withheld shows nothing, and a `cf-map` whose binding is
   withheld shows no value, where opening a refused piece shows the

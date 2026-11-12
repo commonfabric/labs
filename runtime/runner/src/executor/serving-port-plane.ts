@@ -33,6 +33,7 @@ import {
   EngineWaveCommitSink,
   waveCommitFailureResult,
 } from "./engine-wave-sink.ts";
+import type { HostOccupancy } from "./host.ts";
 import type { HostMemoryServer } from "./host-memory-server.ts";
 import type { LoopbackPlane } from "./loopback-storage.ts";
 import {
@@ -48,7 +49,7 @@ import {
 } from "./serving-port-protocol.ts";
 import { servedAclChangeData } from "./served-acl-change.ts";
 import type { WaveCommitSinkDeps } from "./space-server.ts";
-import type { ServingLoopStats } from "./stats.ts";
+import type { ServingLoopCounters, ServingLoopStats } from "./stats.ts";
 import { ViewInterestCache } from "./view-interests.ts";
 import type {
   WaveCommitRejection,
@@ -79,13 +80,20 @@ export const servingPlaneEndpoint = (port: PortLike): ServingPlaneEndpoint =>
 /** What the worker's host answers the server's thread with. */
 export type ServingPlaneHost = {
   stats: () => ServingLoopStats;
-  eventStats: () => ServingLoopStats["events"];
+  counters: () => ServingLoopCounters;
   diagnostics: () => ServingLoopDiagnostics;
   collectedMemory: () => CollectedMemory;
   runLifecycleVerb: (
     space: MemorySpace,
     verb: LifecycleVerbDescriptor,
   ) => Promise<LifecycleVerbRun>;
+
+  /** What the host holds, as `ExecutorHost.occupancy` reports it. */
+  occupancy: () => HostOccupancy;
+
+  /** @see ExecutorHost.noteSpaceAclChanged */
+  noteSpaceAclChanged: (space: MemorySpace) => void;
+
   close: () => Promise<void>;
 };
 
@@ -207,22 +215,22 @@ type WaveCommitSinkReads = Required<
  * The tenure's wave commit sink on the worker: the reads run on the worker's
  * engines, and each commit crosses to the sink the server's thread keeps for
  * this session, carrying the number this side's counter minted for it.
- * `reportEventStats` runs just before each commit is posted.
+ * `reportCounters` runs just before each commit is posted.
  */
 class PlaneWaveCommitSink implements WaveCommitSink, WaveCommitSinkReads {
   readonly #endpoint: ServingPlaneEndpoint;
   readonly #deps: WaveCommitSinkDeps;
-  readonly #reportEventStats: () => void;
+  readonly #reportCounters: () => void;
   readonly #reads: EngineWaveCommitSink;
 
   constructor(
     endpoint: ServingPlaneEndpoint,
     deps: WaveCommitSinkDeps,
-    reportEventStats: () => void,
+    reportCounters: () => void,
   ) {
     this.#endpoint = endpoint;
     this.#deps = deps;
-    this.#reportEventStats = reportEventStats;
+    this.#reportCounters = reportCounters;
     // Its counter never advances: only the reads are called on it.
     this.#reads = new EngineWaveCommitSink({
       engineFor: (space) =>
@@ -292,13 +300,15 @@ class PlaneWaveCommitSink implements WaveCommitSink, WaveCommitSinkReads {
     batch: WaveSpaceCommit,
   ): Promise<Result<{ seq: number }, WaveCommitRejection>> {
     const localSeq = ++this.#deps.localSeqRef.value;
-    // The event counters cross ahead of the commit on the same port, whose
+    // The counters cross ahead of the commit on the same port, whose
     // messages the server's thread handles in order, so it holds what this
-    // wave's drain counted before it applies the commit. A client that has
-    // seen the commit then reads counters that include it. Only the `events`
-    // block crosses here: the whole counters, settle series included, cost
-    // about as much to post as the commit itself.
-    this.#reportEventStats();
+    // wave counted before its commit by the time it applies the commit. A
+    // client that has seen the commit then reads counters that include those
+    // counts. What the wave counts for the commit itself, such as `waves` and
+    // `derivedCommits`, arrives with the next full post. The settle blocks
+    // stay behind: their series cost about as much to post as the commit
+    // itself.
+    this.#reportCounters();
     try {
       return await this.#endpoint.request("sink.commitWave", {
         sessionId: this.#deps.sessionId,
@@ -668,8 +678,8 @@ export class ServingPlane {
   createWaveCommitSink(deps: WaveCommitSinkDeps): WaveCommitSink {
     return new PlaneWaveCommitSink(this.#endpoint, deps, () => {
       if (this.#host === undefined) return;
-      this.#endpoint.notify("host.eventStats", {
-        events: this.#host.eventStats(),
+      this.#endpoint.notify("host.counters", {
+        counters: this.#host.counters(),
       });
     });
   }
@@ -688,6 +698,19 @@ export class ServingPlane {
       ({ space, verb }) => host.runLifecycleVerb(space, verb),
     );
     this.#endpoint.onRequest("host.close", () => host.close());
+    // The check and the start of the close run in this one turn, so no
+    // message read after this one finds a host that is neither.
+    this.#endpoint.onRequest("host.retire", async ({ evenIfParked }) => {
+      const occupancy = host.occupancy();
+      if (occupancy === "busy" || (occupancy === "parked" && !evenIfParked)) {
+        return null;
+      }
+      await host.close();
+      return { stats: host.stats(), diagnostics: host.diagnostics() };
+    });
+    this.#endpoint.onNotice("observer.spaceAclChanged", ({ space }) => {
+      host.noteSpaceAclChanged(space as MemorySpace);
+    });
   }
 
   /** Posts the host's counters for the server's thread to keep. */
@@ -706,6 +729,11 @@ export class ServingPlane {
   /** Posts a space's park and its reason for the server's thread to report. */
   reportSpaceParked(space: MemorySpace, reason: string): void {
     this.#endpoint.notify("host.spaceParked", { space, reason });
+  }
+
+  /** Posts what the host holds for the server's thread to decide by. */
+  reportOccupancy(occupancy: HostOccupancy): void {
+    this.#endpoint.notify("host.occupancy", { occupancy });
   }
 
   /**

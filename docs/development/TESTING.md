@@ -739,7 +739,14 @@ for. A cascade that never ends leaves the settle waiting, as a client's own
 non-converging graph leaves `runtime.idle()` waiting on the OFF arm. A run
 against a caller-supplied `storageHost` is refused on the ON arm,
 since the store is the caller's and there is no memory server to host a loop
-beside.
+beside. A caller whose check does not depend on the posture, or holds only on
+the OFF arm, sets `storageHost.serverExecution: false`, which runs that
+single-user file on the OFF arm without changing the process's environment. A
+multi-user file refuses every `storageHost`, this one included, since its
+participants write against a storage server of the runner's own. A run with
+`--cfc-enforcement-mode disabled` is refused on the ON arm too: a runtime with
+CFC disabled writes no program closure for the serving loop to load, and
+served handlers run under the serving runtime's CFC posture, not the test's.
 
 On the ON arm, most of the checks `cf test` makes of a run observe the test's
 own runtime and not the serving one: the idempotency check, read budgets,
@@ -749,7 +756,10 @@ reaches it as an `errored` outcome of the event, which the runner records as
 a runtime error marked `[served]`, under the same policy as any other —
 `allowRuntimeErrors` tolerates it, and `expectRuntimeErrors` counts it. It is
 left out when the same event's speculative run recorded an error with the
-same text, so a throw both runs hit is counted once. Logger warnings and
+same text, so a throw both runs hit is counted once. A served commit that
+CFC enforcement refuses is a denial, not a throw: it is reported as a console
+warning marked `[served]`, under `allowConsoleWarnings`, as the test's own
+refused commits are, in single-user and multi-user runs alike. Logger warnings and
 errors are counted per process, and a single-user run's serving loop shares
 the test's process, so the runner tells the loop's apart by the serving
 context described below. A logger error the loop logs fails the file as a
@@ -792,12 +802,15 @@ loop keeps for tests. `prepareStorageManager` hands the test each serving
 runtime's storage manager before the runtime is built, which is where a stub on
 one of its providers goes.
 
-Either shape runs its loop in a Worker of the test's process when
+Either shape runs its loop in Workers of the test's process, one per served
+space, when
 `SERVER_EXECUTION_WORKER` is `true` in the environment, where a toolshed over a
-file store runs it in a worker unless that variable is `false`
+file store runs it in workers unless that variable is `false`
 ([`EXPERIMENTAL_OPTIONS.md`](EXPERIMENTAL_OPTIONS.md#server_execution_worker)),
 unless its `worker` option says otherwise, over a store in a temporary
-directory, since a worker cannot open a non-persistent one. `serving.host` is
+directory, since a worker cannot open a non-persistent one. Its `maxWorkers`
+option, or `SERVER_EXECUTION_MAX_WORKERS` in the environment, caps the workers
+spaces are placed on, and `1` serves every space from one. `serving.host` is
 then the loop's handle, with `stats()` and `close()`, and its `host` is
 `undefined`; on this thread `serving.host.host` is the `ExecutorHost`. Either
 way `serving.host.diagnostics()` returns the logger counts and timing statistics

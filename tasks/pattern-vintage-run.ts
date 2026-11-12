@@ -1188,6 +1188,11 @@ export async function captureVintage(
       storageHost: {
         identity: roots.signer,
         storageManager: vintage.storageManager as never,
+        // A fixture records the state a version's handlers write, which does
+        // not depend on which side runs them, and a run that resolves ON
+        // refuses this store. So the capture runs on the OFF arm whatever the
+        // environment selects.
+        serverExecution: false,
         // Pin the test's root so the replay can find it; the runner otherwise
         // causes it with Date.now().
         resultCause: vintageRootCause(),

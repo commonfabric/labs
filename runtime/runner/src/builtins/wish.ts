@@ -1,4 +1,10 @@
-import type { VNode, WishParams, WishState, WishTag } from "@commonfabric/api";
+import type {
+  VNode,
+  WishErrorCode,
+  WishParams,
+  WishState,
+  WishTag,
+} from "@commonfabric/api";
 import { internSchema } from "@commonfabric/data-model-schema";
 import {
   debugStr,
@@ -77,6 +83,7 @@ import {
 } from "../document-readiness.ts";
 import { wishStateSchemaForResult } from "./wish-schema.ts";
 import { setResultCell } from "../result-utils.ts";
+import { profileSuggestionCell } from "../profile-suggestion.ts";
 
 const wishFlowLogger = getLogger("runner.wish-flow", {
   enabled: true,
@@ -117,10 +124,19 @@ const profileElementListSchema = internSchema(
 );
 
 class WishError extends Error {
-  constructor(message: string) {
+  /** The `errorCode` a wish reports for this error. */
+  readonly code: WishErrorCode;
+
+  constructor(message: string, code: WishErrorCode = "failed") {
     super(message);
     this.name = "WishError";
+    this.code = code;
   }
+}
+
+/** The `errorCode` a wish reports for a thrown `error`. */
+function errorCodeOf(error: unknown): WishErrorCode {
+  return error instanceof WishError ? error.code : "failed";
 }
 
 /** The error a wish reports when the profile roster is confirmed empty. */
@@ -129,7 +145,7 @@ const NO_PROFILE_ERROR = "No profile exists yet";
 /** A confirmed empty profile roster, for which Wish offers creation. */
 class NoProfileError extends WishError {
   constructor() {
-    super(NO_PROFILE_ERROR);
+    super(NO_PROFILE_ERROR, "no-match");
   }
 }
 
@@ -362,6 +378,7 @@ type SharedHashtagState = {
   result?: Cell<unknown>;
   candidates: Cell<unknown>[];
   error?: unknown;
+  errorCode?: WishErrorCode;
   [UI]?: VNode | Cell<unknown>;
 };
 
@@ -738,18 +755,22 @@ function requireDiscoveryCandidate(
 function throwNoDiscoveryMatch(ctx: WishContext, message: string): never {
   const failure = ctx.candidateFailures.values().next().value;
   if (failure) throw failure;
-  throw new WishError(message);
+  throw new WishError(message, "no-match");
 }
 
-/** Searches favorites in home space for pieces matching a hashtag. */
+/**
+ * Searches favorites in home space for pieces matching a hashtag, or returns
+ * `undefined` when there is no home space to search: a serving runtime whose
+ * run carries no requesting identity (see `homeSpaceUserDID`).
+ */
 function searchFavoritesForHashtag(
   ctx: WishContext,
   searchTermWithoutHash: string,
   pathPrefix: string[],
-): BaseResolution[] {
+): BaseResolution[] | undefined {
   const queryKey = sanitizeQueryKey(`#${searchTermWithoutHash}`);
   const userDID = homeSpaceUserDID(ctx);
-  if (!userDID) return [];
+  if (!userDID) return undefined;
 
   const favoritesCell = measureWishPhase(
     "favorites-cell",
@@ -961,6 +982,9 @@ function searchByHashtag(
   const searchProfile = ctx.scope?.includes("profile");
 
   const allMatches: BaseResolution[] = [];
+  // Whether a searched scope could not be looked at, so that finding nothing
+  // is not reported as confirmed none.
+  let favoritesUnsearched = false;
 
   if (searchFavorites) {
     const matches = searchFavoritesForHashtag(
@@ -968,7 +992,8 @@ function searchByHashtag(
       searchTermWithoutHash,
       parsed.path,
     );
-    for (const match of matches) allMatches.push(match);
+    if (matches === undefined) favoritesUnsearched = true;
+    for (const match of matches ?? []) allMatches.push(match);
   }
 
   if (searchMentionables) {
@@ -1003,6 +1028,17 @@ function searchByHashtag(
   }
 
   if (allMatches.length === 0) {
+    if (favoritesUnsearched) {
+      // A scope that was searched and could not load a candidate names the
+      // real failure; the missing identity is reported only when nothing
+      // else went wrong.
+      const failure = ctx.candidateFailures.values().next().value;
+      if (failure) throw failure;
+      throw new WishError(
+        `User identity DID not available to search favorites for ` +
+          `"${searchTerm}"`,
+      );
+    }
     const parts: string[] = [];
     if (searchFavorites) parts.push("favorites");
     if (searchMentionables) parts.push("mentionables");
@@ -1866,6 +1902,7 @@ function createSharedHashtagResolver(
         result: undefined,
         candidates: [],
         error: errorMessage,
+        errorCode: errorCodeOf(error),
         [UI]: errorUI(errorMessage),
       });
     } finally {
@@ -2396,6 +2433,7 @@ export function wish(
     input?: {
       profiles: unknown;
       privateInbox: unknown;
+      profileSuggestion: unknown;
       inputId: string;
       buttonId: string;
     };
@@ -2604,9 +2642,10 @@ export function wish(
   }
 
   /**
-   * Write `{error, [UI]}` into the wish state doc in its own committed
-   * bookkeeping transaction, presenting the two fields it writes and nothing
-   * else. The commit it reports was refused with the whole wish-state
+   * Write `{error, errorCode, [UI]}` into the wish state doc in its own
+   * committed bookkeeping transaction, presenting the fields it writes and
+   * nothing else. `errorCode` is written so that a state that held a
+   * `"no-match"` before does not go on saying so beside this failure. The commit it reports was refused with the whole wish-state
    * envelope in play, and that envelope is the document's stored one.
    *
    * Bounded retries for the transient classes only: a stale-basis conflict
@@ -2650,16 +2689,17 @@ export function wish(
     // there, and that link persists a label entry under `[UI]/props/$cell`,
     // so on such a document `[UI]` is one of those paths.
     //
-    // The schema named is `true`. The wish-state schema declares no value
-    // shape and no label at either path: `error` is `true` there, and `[UI]`
-    // is an opaque handle. `true` declares nothing, so a stored claim at
-    // either path is not checked against this write; and a candidate
+    // The schema named is `true`. The wish-state schema declares no label at
+    // these paths and no value shape a report could break: `error` is `true`
+    // there, `errorCode` a string, and `[UI]` an opaque handle. `true`
+    // declares nothing, so a stored claim at any of them is not checked
+    // against this write; and a candidate
     // declaring nothing is covered by whatever the document has stored,
     // which keeps the report out of the schema merge.
     //
     // The requirement is decided per document rather than per path. What
     // bounds the report is this transaction: it is created here, carries
-    // these two writes and no others, and the transaction whose refusal it
+    // these three writes and no others, and the transaction whose refusal it
     // reports is a separate one that has already settled.
     const report = (
       path: readonly string[],
@@ -2678,6 +2718,7 @@ export function wish(
       });
     };
     report([...stateLink.path, "error"], message);
+    report([...stateLink.path, "errorCode"], "failed");
     report(
       [...stateLink.path, UI],
       errorUI(message) as unknown as Parameters<
@@ -3015,6 +3056,12 @@ export function wish(
       privateInbox: createSigilLinkFromParsedLink(
         homeDefaultPattern.key("privateInbox").getAsNormalizedFullLink(),
       ),
+      // The profile the user's host suggests, which the surface offers;
+      // nothing is stored there when the host suggests none. The link is derived from the user's home space here,
+      // so a serving runtime hands its demander's suggestion to its surface.
+      profileSuggestion: createSigilLinkFromParsedLink(
+        profileSuggestionCell(runtime, ctx.tx).getAsNormalizedFullLink(),
+      ),
       inputId: "wish-profile-name-input",
       buttonId: "wish-profile-create-button",
     };
@@ -3051,6 +3098,7 @@ export function wish(
         ...slot.input,
         profiles: bindInputCell(slot.input.profiles),
         privateInbox: bindInputCell(slot.input.privateInbox),
+        profileSuggestion: bindInputCell(slot.input.profileSuggestion),
       };
     };
 
@@ -3348,6 +3396,7 @@ export function wish(
                   result: undefined,
                   candidates: [],
                   error: errorMsg,
+                  errorCode: "failed",
                   [UI]: errorUI(errorMsg),
                 } satisfies WishState<any>,
                 outputScope,
@@ -3656,6 +3705,7 @@ export function wish(
                     result: undefined,
                     candidates: [],
                     error: errorMsg,
+                    errorCode: errorCodeOf(e),
                     [UI]: ui,
                   } satisfies WishState<any>,
                   wishOutputScope(
@@ -3725,6 +3775,7 @@ export function wish(
                 result: undefined,
                 candidates: [],
                 error: errorMsg,
+                errorCode: "failed",
                 [UI]: errorUI(errorMsg),
               } satisfies WishState<any>,
               inputScope,

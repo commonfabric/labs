@@ -1,6 +1,10 @@
-import { isDeletedSpaceError } from "@commonfabric/memory/v2/client";
+import {
+  isDeletedSpaceError,
+  isFirstHandshakeFailure,
+} from "@commonfabric/memory/v2/client";
 import {
   CompilerStackLoadError,
+  isSpaceAccessRefusal,
   SpaceNotFoundError,
 } from "@commonfabric/runner";
 import {
@@ -17,13 +21,20 @@ export function runtimeErrorCode(
   | RuntimeErrorCode.CompilerStackLoadFailed
   | RuntimeErrorCode.SpaceNotFound
   | RuntimeErrorCode.SpaceDeleted
+  | RuntimeErrorCode.SpaceAccessRefused
+  | RuntimeErrorCode.SpaceUnreachable
   | undefined {
+  // A deleted space's refusal is a refusal too, and takes the narrower code.
   return error instanceof CompilerStackLoadError
     ? RuntimeErrorCode.CompilerStackLoadFailed
     : error instanceof SpaceNotFoundError
     ? RuntimeErrorCode.SpaceNotFound
     : isDeletedSpaceError(error)
     ? RuntimeErrorCode.SpaceDeleted
+    : isSpaceAccessRefusal(error)
+    ? RuntimeErrorCode.SpaceAccessRefused
+    : isFirstHandshakeFailure(error)
+    ? RuntimeErrorCode.SpaceUnreachable
     : undefined;
 }
 

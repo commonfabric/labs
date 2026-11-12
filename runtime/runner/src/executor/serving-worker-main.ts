@@ -12,16 +12,14 @@ import { Identity, keyPairFromRealmValue } from "@commonfabric/identity";
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import type { ClientBuild } from "@commonfabric/memory/v2/client-info";
 import { adoptProcessInstanceId } from "@commonfabric/memory/v2/execution-lease";
-import {
-  getLoggerCountsBreakdown,
-  getTimingStatsBreakdown,
-} from "@commonfabric/logger";
 import { holdWorkerLifetimeLock } from "@commonfabric/platform/worker-lifetime";
 import { setPatternEnvironment } from "../builder/env.ts";
 import { collectedMemory } from "../collected-memory.ts";
+import type { ModuleCompileWorker } from "../harness/module-compile-worker.ts";
 import type { ModuleByteCache, RuntimeFetch } from "../runtime.ts";
 import { ExecutorHost } from "./host.ts";
 import { webSocketRoute } from "./routed-plane.ts";
+import { servingLoopDiagnostics } from "./serving-loop-diagnostics.ts";
 import { ServingPlane, servingPlaneEndpoint } from "./serving-port-plane.ts";
 import type {
   LifecycleVerbDescriptor,
@@ -52,6 +50,13 @@ export type ServingWorkerMainOptions = {
 
   /** A compiled-module cache every serving runtime of this worker shares. */
   moduleByteCache?: ModuleByteCache;
+
+  /**
+   * The compile worker every serving runtime of this worker compiles in. It
+   * closes just before the host does, so a compile an activation still awaits
+   * fails at once.
+   */
+  moduleCompiler?: ModuleCompileWorker;
 };
 
 /**
@@ -69,7 +74,10 @@ export function serveFromPort(
     // A timer on this thread, so that the watchdog on the server's thread hears
     // nothing once this thread stops (serving-loop.md §2).
     const heartbeat = setInterval(
-      () => endpoint.notify("worker.heartbeat", null),
+      () =>
+        endpoint.notify("worker.heartbeat", {
+          heapUsed: Deno.memoryUsage().heapUsed,
+        }),
       init.heartbeatIntervalMs,
     );
     // The environment a served handler's `fetch` resolves against is this
@@ -95,6 +103,9 @@ export function serveFromPort(
         ...(options.moduleByteCache === undefined
           ? {}
           : { moduleByteCache: options.moduleByteCache }),
+        ...(options.moduleCompiler === undefined
+          ? {}
+          : { moduleCompiler: options.moduleCompiler }),
       }),
       ...(init.policy === undefined ? {} : { policy: init.policy }),
       ...(init.ensureSpaceRoots === undefined
@@ -109,9 +120,10 @@ export function serveFromPort(
       }),
       createWaveCommitSink: (deps) => plane.createWaveCommitSink(deps),
       // The counters cross on the loop's own edges: every wave cycle, and
-      // each tenure's start and end. The sink also posts the `events` block
-      // ahead of each wave commit, so the server's thread holds what a
-      // wave's drain counted before it applies that wave's commit.
+      // each tenure's start and end. The sink also posts the counters other
+      // than the settle blocks ahead of each wave commit, so the server's
+      // thread holds what a wave counted before its commit by the time it
+      // applies that commit.
       onWaveCycle: () => plane.reportStats(host.stats()),
       onActivationSettled: (space, outcome) => {
         plane.reportActivationSettled(space, outcome);
@@ -121,16 +133,17 @@ export function serveFromPort(
         plane.reportSpaceParked(space, reason);
         plane.reportStats(host.stats());
       },
+      onOccupancyChanged: (occupancy) => plane.reportOccupancy(occupancy),
     });
     plane.serve({
       stats: () => host.stats(),
-      eventStats: () => host.eventStats(),
-      // This realm's loggers: the serving loop's own counts and timings.
-      diagnostics: () => ({
-        loggerCounts: getLoggerCountsBreakdown(),
-        timingStats: getTimingStatsBreakdown(),
-      }),
+      counters: () => host.counters(),
+      // This realm's loggers, the serving loop's own counts and timings, and
+      // the compile worker's timings, which hold the compiler's phases.
+      diagnostics: () => servingLoopDiagnostics(options.moduleCompiler),
       collectedMemory,
+      occupancy: () => host.occupancy,
+      noteSpaceAclChanged: (space) => host.noteSpaceAclChanged(space),
       runLifecycleVerb: (space, verb) => {
         if (options.runLifecycleVerb === undefined) {
           return Promise.reject(
@@ -143,6 +156,9 @@ export function serveFromPort(
         return options.runLifecycleVerb(host, space, verb, identity);
       },
       close: async () => {
+        // The compile worker closes first, so a compile an activation still
+        // awaits fails at once rather than holding the host's close.
+        options.moduleCompiler?.close();
         try {
           await host.close();
         } finally {

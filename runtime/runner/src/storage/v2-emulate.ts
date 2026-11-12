@@ -110,6 +110,12 @@ class EmulatedSessionFactory implements SessionFactory {
    */
   #instanceNames = namesInstancesByDefault();
 
+  /**
+   * Whether this factory's connections take `cid:` schema documents by
+   * reference: what `setSyncCidReferences()` last chose, and until then not.
+   */
+  #syncCidReferences = false;
+
   constructor(
     getServer: () => MemoryV2Server.Server,
   ) {
@@ -127,6 +133,7 @@ class EmulatedSessionFactory implements SessionFactory {
     const client = await MemoryV2Client.connect({
       transport,
       instanceNames: this.#instanceNames,
+      syncCidReferences: this.#syncCidReferences,
     });
     const session = await client.mount(
       space,
@@ -139,6 +146,11 @@ class EmulatedSessionFactory implements SessionFactory {
   /** @inheritDoc */
   setInstanceNames(enabled: boolean): void {
     this.#instanceNames = enabled;
+  }
+
+  /** @inheritDoc */
+  setSyncCidReferences(enabled: boolean): void {
+    this.#syncCidReferences = enabled;
   }
 
   /** @inheritDoc */

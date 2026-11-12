@@ -183,6 +183,20 @@ path of `v2-transaction.ts`, and the local rejection is
 retryable. The two forms are equivalent in what reaches the server; they
 differ in when a change under an open transaction is discovered.
 
+One change passes the check: a stream sidecar (`of:stream-events:`) whose
+only change is entries appended after its last one, under a transaction that
+read and wrote nothing in its `value.entries` log but entries it held, and
+sends its writes as patches rather than as the whole document
+(`commutesWithTailAppends()` in
+`runtime/runner/src/storage/transaction/sidecar-appends.ts`). Every read
+the transaction made still has the content it had at its snapshot, so the
+read set built from the newer local state names seqs whose content each read
+saw. The serving loop's delivery writes this way: it marks the delivered
+entry `consequenced` in the handler's own transaction, and a client may append
+the stream's next event while that transaction is open, most often while a
+served `.inSpace()` create waits on its new space's close before its home
+space's check.
+
 A reactive computation opts into `validateReactiveReads`, which checks its
 scheduling dependencies before accepting an empty commit or seal. Deep reads
 compare the value at the read path; shallow reads compare container structure.

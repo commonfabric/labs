@@ -53,6 +53,10 @@ rewrite. In particular:
 - watch-set mutations return inline `sync` payloads; a pushed frame retracts a
   document a write left no watch reaching, and a client shrinks its watch set
   explicitly
+- delivering schema documents by reference (`syncCidReferencesV1`, sections
+  4.1.1 and 4.2.3) is implemented as an experimental option that servers offer
+  by default and clients take only when they opt in, so a client that has not
+  receives each schema document with its body
 
 ## 4.1 Transport
 
@@ -116,6 +120,8 @@ If the server accepts the protocol, it returns:
     "admissionNotice": true,
     "sessionReportV1": true,
     "patternLifecycle": true,
+    "patternLifecycleOrigins": true,
+    "patternLifecycleScopes": true,
     "servedRequests": true,
     "spaceInvites": true,
     "syncCrossingsV1": true,
@@ -275,6 +281,21 @@ compacts labels and paths only
 when both peers advertise it. A client refuses a sync carrying either table
 unless the connection negotiated the capability.
 
+`syncCidReferencesV1` advertises that the peer delivers, or takes, schema
+documents by reference
+([content-addressed-schemas.md](../content-addressed-schemas.md#delivery-by-reference)).
+It defaults to `false` when absent. The server sends an upsert marked
+`byReference` (section 4.2.3) only on a connection where both peers advertised
+it, and a client refuses a sync carrying one otherwise. A client connected to
+an older server, and an older client connected to any server, receive every
+schema document with its body, as without the flag. It is an experimental
+option ([`EXPERIMENTAL_OPTIONS.md`](../../development/EXPERIMENTAL_OPTIONS.md))
+with a switch on each side: a server advertises it unless its deployment turns
+it off, and a client advertises it only when its runtime, or the host
+embedding it, opts in. Since both must advertise it, a client that does not
+opt in sees no change, and a deployment that turns it off delivers bodies to
+every client.
+
 `commitLabelTableV1` independently advertises label and label-path tables for
 client `transact` requests and server transaction acknowledgments. This build
 advertises `true`; omission means `false`. Both peers must advertise it before
@@ -400,6 +421,20 @@ while it runs the serving loop. It defaults to `false` when absent: a client
 then sends no `pattern.lifecycle` request, and sends the verb some other way
 or not at all. Only the server advertises it, and a client's `hello` leaves it
 out.
+
+`patternLifecycleOrigins` advertises that the lifecycle verbs take an origin:
+the `follow` verb, and `origin` on `setsrc` (section 4.3.10). It is
+build-inherent. It defaults to `false` when absent, from an older server that
+refuses `follow` unread and drops a `setsrc` origin, detaching the piece; a
+client then sends neither. Only the server advertises it, and a client's
+`hello` leaves it out.
+
+`patternLifecycleScopes` advertises that `setsrc` and `follow` take `scope`, the
+scope a piece is addressed at, and change the requester's instance of a piece
+held at a user or session scope (section 4.3.10). It is build-inherent. It
+defaults to `false` when absent, from an older server that ignores `scope` and
+changes the piece's space instance; a client then sends no scoped request. Only
+the server advertises it, and a client's `hello` leaves it out.
 
 `servedRequests` advertises that the server takes `served` requests (section
 4.3.12), the crossings another process of its deployment sends it as the owner
@@ -714,8 +749,10 @@ Rules:
   session and apply them as they arrive
 - a resuming client that advertises `sessionHoldings` (and whose server does)
   sends `holdings`: the documents its replica holds, each at the seq it holds
-  it at. The server replaces its memory of what the session was delivered with
-  that statement before computing the catch-up, so the delta re-delivers every
+  it at, a schema document delivered by reference (section 4.2.3) at the seq
+  its reference carried. The server replaces its memory of what the session
+  was delivered with that statement before computing the catch-up, so the
+  delta re-delivers every
   document the client does not hold — one it never absorbed, or lost with a
   replaced replica — and elides every one it does. A session with no watches
   covers nothing: the catch-up retracts as `removes` whatever the declaration
@@ -794,6 +831,8 @@ interface HelloMessage {
     elidedVerdicts?: boolean;
     sessionReportV1?: boolean;
     patternLifecycle?: boolean;
+    patternLifecycleOrigins?: boolean;
+    patternLifecycleScopes?: boolean;
     servedRequests?: boolean;
     spaceInvites?: boolean;
     spaceKind?: boolean;
@@ -1073,6 +1112,9 @@ interface SessionSync {
     seq: number;
     doc?: EntityDocument;
     deleted?: true;
+    // A schema document named without its `doc` (connections negotiating
+    // `syncCidReferencesV1`; see below).
+    byReference?: true;
   }>;
   removes: Array<{
     branch: BranchId;
@@ -1097,6 +1139,15 @@ Semantics:
 - `upserts` carry the latest state each watched entity should have after
   integrating `toSeq`
 - `deleted: true` means the entity is currently tombstoned
+- `byReference: true` marks a `cid:` schema document the server names without
+  its `doc`: its space's store holds the document at `seq`, verified as the
+  schema document its id names, and the client takes the content from its own
+  verified store, fetching with `graph.query` (section 4.3.3) any body it
+  lacks. Only a schema document the server's realm registry holds travels
+  this way, never with `deleted`. The frame applies once every body it lacks
+  has arrived
+  ([content-addressed-schemas.md](../content-addressed-schemas.md#delivery-by-reference)
+  states the client's rules)
 - `removes` are not deletions in storage; they mean the entity is no longer in
   the session's relevant watch-set result
 - `crossings` are the value links a watch's schema traversal followed into
@@ -1506,6 +1557,12 @@ The selector path is relative to `document.value`, not the full stored document
 root. The server converts it to a document path by prepending `"value"` before
 running shared traversal.
 
+A `graph.query` result carries every entity with its document, whatever the
+connection negotiated: delivery by reference (section 4.2.3) applies to
+session sync frames only. A query whose roots are `cid:` schema documents is
+how a client fetches the bodies a frame named by reference, and it adds
+nothing to the session's watch set.
+
 When `includeAuthoredSeq` is true, `authoredSeq` is the highest authored commit
 sequence in the query's branch at or below `atSeq` (or `serverSeq` when omitted),
 and is zero when none exists. This metadata requires the same authenticated READ
@@ -1715,8 +1772,9 @@ Semantics:
   documents as delivered: a response to a watch mutation or a resume and a
   `session/effect` each go out in the step that records them, so a frame that
   leaves out a `cid:` document because the session holds it never precedes the
-  frame carrying that document. A session's own accepted write is the one
-  document no frame carries, and the marker covering it can follow a frame that
+  frame carrying that document, with its body or by reference. A session's
+  own accepted write is the one document no frame carries, and the marker
+  covering it can follow a frame that
   leaves it out, so a client resolves such a frame's references through its own
   pending writes
 
@@ -1798,7 +1856,8 @@ Semantics:
 ### 4.3.10 `pattern.lifecycle` — Run a Pattern-Lifecycle Verb
 
 `pattern.lifecycle` runs one of the pattern-lifecycle verbs — `upload`,
-`instantiate`, `setsrc` — in the session's space, as the session's principal.
+`instantiate`, `setsrc`, `follow` — in the session's space, as the session's
+principal.
 A server advertises it with the `patternLifecycle` capability flag. The verbs,
 their arguments, and their receipts are defined in
 [`server-pattern-lifecycle.md`](../../features/server-pattern-lifecycle.md).
@@ -1815,7 +1874,7 @@ interface PatternLifecycleRequest {
   requestId: string;
   space: SpaceId;
   sessionId: SessionId;
-  verb: "upload" | "instantiate" | "setsrc";
+  verb: "upload" | "instantiate" | "setsrc" | "follow";
   /** The verb's arguments; the session supplies the space. */
   body: Record<string, unknown>;
 }
@@ -1838,8 +1897,8 @@ Semantics:
   grant reached only through a proof chain's root issuer (section 4.5.1) does
   not count, since the verb commits with the requester's own trust. An
   anonymous session, or a principal without WRITE, is refused with `forbidden`
-- the server hands the verb, its `body` unread, and the principal to the
-  handler its host installed; a server with no handler refuses with
+- the server hands the verb, its `body` unread, the principal and the session to
+  the handler its host installed; a server with no handler refuses with
   `server-execution-off`, and a handler that throws is refused with `internal`.
   The handler validates `body` and refuses one that does not match the verb's
   schema with `invalid-request`
@@ -1883,12 +1942,15 @@ interface SpaceInviteRequest {
 
 Semantics:
 
-- `redeem` is not among the operations: the identity redeeming holds no grant
-  on the space yet, and opening a session needs READ, so redemption travels
-  as the `invite` of a `session.open` (section 4.1.2). A `space.invite` naming
-  `redeem`, an unknown operation, or a body that is not exactly the
-  operation's fields gets the refusal any unreadable message gets (section
-  4.2.1)
+- `redeem` and `preview` are not among the operations. The identity redeeming
+  holds no grant on the space yet, and opening a session needs READ, so
+  redemption travels as the `invite` of a `session.open` (section 4.1.2). A
+  preview always travels as its signed HTTP route, whoever sends it, including
+  a principal that has a session or has already redeemed, so one transport
+  serves the client deciding whether to redeem. A `space.invite` naming
+  `redeem` or `preview`, an unknown operation, or a body that is not exactly
+  the operation's fields gets the refusal any unreadable message gets
+  (section 4.2.1)
 - a request naming a session the connection does not hold gets a
   `SessionError`
 - the service runs the operation as the DID the session was opened as, with
@@ -2244,8 +2306,13 @@ server checks for deletion once it has routed the command and, for a command
 that names a session, found that session open, and before every other check, so
 a command to a deleted space reports the deletion and never a shape, capability
 or genesis failure. The server revokes the sessions open on the space with the
-`session/revoked` reason `deleted`. The session that committed the deletion
-receives its transact response first and its revocation after, as a member's
+`session/revoked` reason `deleted`. Every command on one of those sessions, on
+the connection that held it and while that connection is routed to the space,
+reports the deletion too, whether it was in flight at the revocation or arrived
+after it, as a command its client sent before the revocation reached it does.
+Any other connection naming the session is told only that it holds no such
+session. The session that committed the deletion receives its transact response
+first and its revocation after, as a member's
 session does when it removes its own entry. The server admits no further commit
 to the space on any write path, engine-direct writes from the serving plane
 included, so no principal can undo the deletion. These checks run before a

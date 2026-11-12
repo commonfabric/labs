@@ -622,8 +622,9 @@ export class RuntimeInternals extends EventTarget {
    * A space with no root is asked again on the next request, since its owner
    * can create the root at any time. A lookup that fails is kept, as a
    * failed {@link RuntimeInternals.getPattern} is, and dropped when the
-   * space recovers: a lost connection comes back, or the space admits the
-   * runtime's principal again.
+   * space recovers: a lost connection comes back, the space admits the
+   * runtime's principal again, or a retry reaches the space after its first
+   * connection never did.
    */
   getSpaceRootPattern(
     space: DID,
@@ -691,7 +692,8 @@ export class RuntimeInternals extends EventTarget {
    * recovers. A space recovers when a connection of the runtime's to a
    * memory server comes back after it was lost, which reaches every space
    * and dispatches `connectionrestored`, and when the space admits the
-   * runtime's principal again after refusing it, which dispatches
+   * runtime's principal again after refusing it, or a retry reaches it after
+   * its first connection never did, which dispatches
    * `spaceaccessrestored` with the space as `detail.space`. Either drops the
    * failed loads it reaches before its event goes out, so a caller showing
    * one asks again on the event and reaches the worker. So a failing piece
@@ -1028,8 +1030,9 @@ export class RuntimeInternals extends EventTarget {
 
   /**
    * Like {@link RuntimeInternals.#onConnectionRestored}, except for the one
-   * space that admitted the runtime's principal again, whose failed loads
-   * alone are dropped. Its event carries the space as `detail.space`.
+   * space that admitted the runtime's principal again, or that a retry
+   * reached after its first connection never did, whose failed loads alone
+   * are dropped. Its event carries the space as `detail.space`.
    */
   #onSpaceAccessRestored = ({ space }: { space: DID }) => {
     this.#accessRestored.set(space, (this.#accessRestored.get(space) ?? 0) + 1);
@@ -1041,8 +1044,9 @@ export class RuntimeInternals extends EventTarget {
 
   /**
    * How many recoveries the runtime has seen that reach `space`: every
-   * restored connection, and every time the space admitted the runtime's
-   * principal again.
+   * restored connection, every time the space admitted the runtime's
+   * principal again, and every retry that reached the space after its first
+   * connection never did.
    */
   #recoveriesOf(space: DID): number {
     return this.#connectionsRestored + (this.#accessRestored.get(space) ?? 0);

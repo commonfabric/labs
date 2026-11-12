@@ -188,8 +188,7 @@ past the floor section 12 sets for its measure, which every conforming reader
 guarantees.
 
 This package meets every requirement either fixture names. It constructs
-`es2025` patterns, and its own guarantees, which its README states, are past
-every floor.
+`es2025` patterns, and no entry names a size.
 
 ## Checking with a codec of known behavior
 

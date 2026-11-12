@@ -292,6 +292,12 @@ export enum RequestType {
   JoinVisitedRoom = "runtime:joinVisitedRoom",
 
   /**
+   * Stores a profile the host suggests for its user's first profile, which
+   * the `#profile` wish's create surface offers.
+   */
+  OfferProfileSuggestion = "runtime:offerProfileSuggestion",
+
+  /**
    * Waits for reactive quiescence *and* for every issued commit to be durable.
    * The client reads that pair as the point at which navigating or reloading
    * is safe, so quiescence alone is a weaker condition than this reports.
@@ -613,7 +619,9 @@ export enum NotificationType {
 
   /**
    * Reports that a space which refused the runtime principal has admitted it
-   * again, so a load that the refusal failed may succeed if asked again.
+   * again, or that a retry reached a space whose first connection never
+   * completed a handshake, so a load that the refusal or the failed
+   * connection failed may succeed if asked again.
    */
   SpaceAccessRestored = "callback:space-access-restored",
 
@@ -751,6 +759,30 @@ export enum RuntimeErrorCode {
    * tell the reader that the space was deleted.
    */
   SpaceDeleted = "space-deleted",
+
+  /**
+   * The request needed a space that refused this runtime's session for good,
+   * as when the space's access list does not admit its principal or stopped
+   * admitting it, and that is not deleted, which is `SpaceDeleted` instead.
+   * The runtime has already posted `SpaceAccessLost` for the space, once; a
+   * client that missed that notice learns of the loss from this code. A
+   * refusal of one operation in a space the session may still read, such as a
+   * write the principal has no grant for, carries no code. Only a change to
+   * the access list admits the principal again, so the client's remedy is to
+   * tell the reader the space is gone to them rather than to wait; an
+   * admission is announced as `SpaceAccessRestored`.
+   */
+  SpaceAccessRefused = "space-access-refused",
+
+  /**
+   * The request needed a space whose first connection to its memory host
+   * never completed a handshake, as when the host is down or out of the
+   * network's reach. The runtime does not dial it again on its own, so the
+   * client's remedy is to ask it to (`RetryUnreachableSpaces`) once the host
+   * may be reachable, such as when a person asks to try again; a retry that
+   * connects is announced as `SpaceAccessRestored`.
+   */
+  SpaceUnreachable = "space-unreachable",
 }
 
 /**
@@ -955,6 +987,14 @@ export type InitializationData = {
      * Default on; an explicit `false` is the rollback override.
      */
     readerSchemaPrecedence?: boolean;
+
+    /**
+     * Whether the worker's memory connections take `cid:` schema documents
+     * by reference from a server that offers them (`syncCidReferencesV1`).
+     * Client-authoritative: the host's own opt-in, which the shell takes
+     * from its per-profile host toggle. Defaults to off.
+     */
+    syncCidReferences?: boolean;
   };
 
   /**
@@ -1981,6 +2021,22 @@ export type EnsureHomePatternRunningRequest = BaseRequest & {
    * it has no root.
    */
   existingOnly?: boolean;
+};
+
+/**
+ * The {@link RequestType.OfferProfileSuggestion} request: a name and,
+ * optionally, a picture, which the worker's runtime stores as the profile
+ * suggested for its user (`offerProfileSuggestion` in the runner).
+ */
+export type OfferProfileSuggestionRequest = BaseRequest & {
+  type: RequestType.OfferProfileSuggestion;
+  name: string;
+
+  /**
+   * The picture's bytes, which the envelope carries whole and decodes back
+   * into a `FabricBytes`, as for `UploadBlobRequest.body`.
+   */
+  picture?: FabricBytes;
 };
 
 /** The {@link RequestType.JoinVisitedRoom} request. */
@@ -3552,6 +3608,7 @@ export type IPCClientRequest =
   | GetHomeSpaceCellRequest
   | EnsureHomePatternRunningRequest
   | JoinVisitedRoomRequest
+  | OfferProfileSuggestionRequest
   | ListEventAttentionRequest
   | ResolveEventAttentionRequest
   | GetGraphSnapshotRequest
@@ -4211,9 +4268,11 @@ export type SpaceAccessLostNotification = {
 };
 
 /**
- * The runtime principal admitted again to one space that had refused it, as
- * a retry of the space's access decides: one the memory server's
- * `session/admissible` notice started, or one a client asked for.
+ * One space usable again: the runtime principal admitted to it again after
+ * it refused it, as a retry of the space's access decides (one the memory
+ * server's `session/admissible` notice started, or one a client asked for),
+ * or a space a client's retry reached after its first connection never
+ * completed a handshake.
  */
 export type SpaceAccessRestoredNotification = {
   type: NotificationType.SpaceAccessRestored;
@@ -4582,6 +4641,10 @@ export type Commands = {
   [RequestType.JoinVisitedRoom]: {
     request: JoinVisitedRoomRequest;
     response: JoinVisitedRoomResponse;
+  };
+  [RequestType.OfferProfileSuggestion]: {
+    request: OfferProfileSuggestionRequest;
+    response: EmptyResponse;
   };
   [RequestType.Idle]: {
     request: IdleRequest;

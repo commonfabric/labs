@@ -14,12 +14,15 @@ import {
   type Cell,
   entityIdFrom,
   getPatternIdentityRef,
+  getPatternSource,
+  getPieceReconciliation,
   getPieceSourceRevisions,
   type NormalizedFullLink,
   Runtime,
   type RuntimeProgram,
 } from "@commonfabric/runner";
 import type { ExecutorHost } from "@commonfabric/runner/executor/host";
+import { observeCompilerStackDemandsForTestingOnly } from "@commonfabric/runner/for-testing-only";
 import { LifecycleVerbFailure } from "@commonfabric/runner/executor/lifecycle-verb";
 import {
   type ServingMemoryServer,
@@ -36,15 +39,22 @@ import { pieceId } from "../src/piece-id.ts";
 import { resolveSlugTargetCell } from "../src/slugs.ts";
 import {
   completeServedRegistration,
+  confirmServedFollow,
   confirmServedInstantiate,
   confirmServedRegistration,
   confirmServedSetSource,
   finishServedRegistration,
   prepareServedRegistration,
+  servedFollowPieceSource,
+  type ServedFollowPreparation,
+  type ServedFollowReceipt,
+  type ServedFollowRequest,
+  type ServedInstance,
   servedInstantiatePiece,
   type ServedInstantiateReceipt,
   ServedLifecycleRefusal,
   type ServedPatternSource,
+  servedPrepareFollow,
   type ServedRegistrationPreparation,
   servedSetPieceSource,
   type ServedSetSourceRequest,
@@ -77,6 +87,18 @@ const BASE_PROGRAM = programOf([
 const BROKEN_PROGRAM = programOf(
   "import { pattern } from 'commonfabric';\nexport default pattern<{}, {}>(() => ({ label: undefinedName }));\n",
 );
+
+/** A release of `BASE_PROGRAM`'s contract, as a patterns route serves it. */
+const RELEASED_SOURCE = [
+  "import { NAME, pattern } from 'commonfabric';",
+  "export default pattern<{ seed?: string }, { label: string }>(",
+  "  ({ seed }) => ({",
+  "    [NAME]: 'Served lifecycle',",
+  "    label: seed ?? 'released',",
+  "  }),",
+  ");",
+  "",
+].join("\n");
 
 /** `BASE_PROGRAM` with its `seed` argument narrowed to a number. */
 const NUMERIC_SEED_PROGRAM = programOf([
@@ -222,6 +244,64 @@ describe("served lifecycle verbs", () => {
       (runtime, receipt) =>
         confirmServedInstantiate(runtime, space, receipt, aliceSigner.did()),
     );
+
+  /**
+   * A piece whose `scope` instance for alice runs `program`, its space
+   * instance holding none, and the instance a served verb names for alice.
+   * The fixture sets the instance up from alice's own runtime, since no
+   * served verb creates a scoped piece.
+   */
+  const scopedPiece = async (
+    program: RuntimeProgram,
+    scope: ServedInstance["scope"],
+  ) => {
+    const pieces = await clientPieces();
+    const runtime = pieces.runtime;
+    const pattern = await runtime.patternManager.compilePattern(program, {
+      space,
+    });
+    const id = runtime.getCell(space, `scoped-${crypto.randomUUID()}`)
+      .getAsNormalizedFullLink().id;
+    await runtime.runSynced(
+      runtime.getCellFromEntityId(space, id, [], undefined, undefined, scope),
+      pattern,
+      {},
+    );
+    const instance: ServedInstance = {
+      scope,
+      identity: scope === "user" ? { principal: aliceSigner.did() } : {
+        principal: aliceSigner.did(),
+        sessionId: runtime.scopeKeyIdentity.sessionId,
+      },
+    };
+    /** The pattern alice's runtime reads at the instance, after a pull. */
+    const readPattern = async () => {
+      const cell = runtime.getCellFromEntityId(
+        space,
+        id,
+        [],
+        undefined,
+        undefined,
+        scope,
+      );
+      await cell.pull();
+      return getPatternIdentityRef(cell);
+    };
+    return {
+      id,
+      instance,
+      readPattern,
+      pattern: runtime.patternManager.getArtifactEntryRef(pattern)!,
+    };
+  };
+
+  /** The pattern the space instance of `id` holds, read by a fresh client. */
+  const spacePattern = async (id: string) => {
+    const reader = await clientPieces();
+    const cell = reader.runtime.getCellFromEntityId(space, id);
+    await cell.sync();
+    return getPatternIdentityRef(cell);
+  };
 
   const refusalOf = async (work: Promise<unknown>) => {
     try {
@@ -1019,6 +1099,38 @@ export default pattern(() => {
       );
     };
 
+    it("asks for no compiler to move a piece onto a pattern the space holds compiled", async () => {
+      const created = await instantiate({
+        program: authorizedWriterProgram("v1"),
+      });
+      const candidate = await patternOf({
+        program: authorizedWriterProgram("v2"),
+      });
+      let demands = 0;
+
+      const receipt = await served(
+        "setsrc",
+        async (pieces) => {
+          const stop = observeCompilerStackDemandsForTestingOnly(() =>
+            demands++
+          );
+          try {
+            return await servedSetPieceSource(pieces, {
+              pieceId: created.pieceId,
+              pattern: candidate,
+              actingUser: aliceSigner.did(),
+            });
+          } finally {
+            stop();
+          }
+        },
+        (runtime, receipt) => confirmServedSetSource(runtime, space, receipt),
+      );
+
+      expect(receipt.pattern).toEqual(candidate);
+      expect(demands).toBe(0);
+    });
+
     it("replaces the source a later client reads, with the revision the receipt names, and authorizes the successor over the predecessor", async () => {
       const created = await instantiate({
         program: authorizedWriterProgram("v1"),
@@ -1133,6 +1245,125 @@ export default pattern(() => {
       expect(refusal.code).toBe("pattern-not-found");
     });
 
+    it("records the origin the update names, so the piece follows it from then on", async () => {
+      const created = await instantiate({ program: BASE_PROGRAM });
+      const receipt = await setSource(
+        created.pieceId,
+        { program: programOf(RELEASED_SOURCE) },
+        { origin: "system:followed.tsx" },
+      );
+      expect(receipt.origin).toBe("system:followed.tsx");
+      expect(receipt.detachedOrigin).toBeNull();
+
+      const pieces = await clientPieces();
+      const cell = (await pieces.get(created.pieceId)).getCell();
+      expect(getPatternIdentityRef(cell)).toEqual(receipt.pattern);
+      expect(getPatternSource(cell)).toBe("system:followed.tsx");
+      expect(getPieceSourceRevisions(cell).at(-1)).toMatchObject({
+        revisionId: receipt.revisionId,
+        operation: "edit",
+        origin: "system:followed.tsx",
+      });
+    });
+
+    it("refuses an origin no piece can follow, and leaves the piece as it was", async () => {
+      const created = await instantiate({ program: BASE_PROGRAM });
+      const refusal = await refusalOf(
+        setSource(
+          created.pieceId,
+          { program: programOf(RELEASED_SOURCE) },
+          { origin: "https://source.test/pattern.tsx" },
+        ),
+      );
+      expect(refusal.code).toBe("origin-unreachable");
+      const pieces = await clientPieces();
+      const cell = (await pieces.get(created.pieceId)).getCell();
+      expect(getPatternIdentityRef(cell)).toEqual(created.pattern);
+      expect(getPatternSource(cell)).toBeUndefined();
+    });
+
+    it("leaves a client with server execution on able to change a user-scoped piece's source itself", async () => {
+      // What `cf piece setsrc` does for a piece addressed at a scope, which
+      // the served verb, taking the piece's id alone, cannot address.
+      const pieces = await clientPieces();
+      const runtime = pieces.runtime;
+      const pattern = await runtime.patternManager.compilePattern(
+        BASE_PROGRAM,
+        { space },
+      );
+      const id = runtime.getCell(space, "a user-scoped piece")
+        .getAsNormalizedFullLink().id;
+      await runtime.runSynced(
+        runtime.getCellFromEntityId(
+          space,
+          id,
+          [],
+          undefined,
+          undefined,
+          "user",
+        ),
+        pattern,
+        {},
+      );
+      const piece = await pieces.get(id, false, undefined, "user");
+
+      const receipt = await piece.setPattern(programOf(RELEASED_SOURCE));
+
+      expect(receipt.refresh).toEqual({ status: "completed" });
+      const reader = await clientPieces();
+      const read = await reader.get(id, false, undefined, "user");
+      expect(getPatternIdentityRef(read.getCell())).toEqual(receipt.ref);
+    });
+
+    for (const scope of ["user", "session"] as const) {
+      it(`replaces the source of a ${scope}-scoped piece on the requester's instance, leaving the space instance alone`, async () => {
+        const { id, instance, readPattern, pattern } = await scopedPiece(
+          BASE_PROGRAM,
+          scope,
+        );
+        const candidate = await patternOf({
+          program: programOf(RELEASED_SOURCE),
+        });
+
+        const receipt = await served(
+          "setsrc",
+          (pieces) =>
+            servedSetPieceSource(pieces, {
+              pieceId: id,
+              instance,
+              pattern: candidate,
+              actingUser: aliceSigner.did(),
+            }),
+          (runtime, receipt) =>
+            confirmServedSetSource(runtime, space, receipt, instance),
+        );
+
+        expect(receipt.scope).toBe(scope);
+        expect(receipt.pattern).toEqual(candidate);
+        expect(receipt.pattern).not.toEqual(pattern);
+        expect(await readPattern()).toEqual(candidate);
+        expect(await spacePattern(id)).toBeUndefined();
+      });
+    }
+
+    it("refuses an instance the requester does not hold", async () => {
+      const { id } = await scopedPiece(BASE_PROGRAM, "user");
+      const candidate = await patternOf({
+        program: programOf(RELEASED_SOURCE),
+      });
+      const bob = await Identity.fromPassphrase("served lifecycle bob");
+      const refusal = await refusalOf(
+        served("setsrc", (pieces) =>
+          servedSetPieceSource(pieces, {
+            pieceId: id,
+            instance: { scope: "user", identity: { principal: bob.did() } },
+            pattern: candidate,
+            actingUser: bob.did(),
+          })),
+      );
+      expect(refusal.code).toBe("piece-not-found");
+    });
+
     it("reports the refresh as deferred on the receipt the served update is built on", async () => {
       // The served option on the client's own runtime: the commit is the
       // store's as always there, and the piece is left to whoever runs it.
@@ -1149,6 +1380,294 @@ export default pattern(() => {
       expect(receipt.status).toBe("committed");
       expect(receipt.refresh).toEqual({ status: "deferred" });
       expect(getPatternIdentityRef(piece.getCell())).toEqual(receipt.ref);
+    });
+  });
+
+  describe("follow", () => {
+    // A follow resolves its origin on the serving runtime, so the origin's
+    // patterns route is what this stubs: `followed.tsx` serves a release
+    // `BASE_PROGRAM` can take, `numeric.tsx` one it cannot, and the route
+    // answers every other path, and every identity request, with a 404.
+    const routes: Record<string, string> = {
+      "/api/patterns/followed.tsx": RELEASED_SOURCE,
+      "/api/patterns/numeric.tsx": NUMERIC_SEED_PROGRAM.files[0].contents,
+      "/api/patterns/broken.tsx": BROKEN_PROGRAM.files[0].contents,
+    };
+    let restoreFetch: () => void;
+
+    beforeEach(() => {
+      const original = globalThis.fetch;
+      globalThis.fetch =
+        ((input: string | URL | Request, init?: RequestInit) => {
+          const url = new URL(
+            typeof input === "string"
+              ? input
+              : input instanceof URL
+              ? input.href
+              : input.url,
+          );
+          if (!url.pathname.startsWith("/api/patterns/")) {
+            return original(input, init);
+          }
+          const contents = url.searchParams.has("identity")
+            ? undefined
+            : routes[url.pathname];
+          return Promise.resolve(
+            contents === undefined
+              ? new Response("not found", { status: 404 })
+              : new Response(contents, {
+                status: 200,
+                headers: { "content-type": "text/typescript-jsx" },
+              }),
+          );
+        }) as typeof globalThis.fetch;
+      restoreFetch = () => {
+        globalThis.fetch = original;
+      };
+    });
+
+    afterEach(() => {
+      restoreFetch();
+    });
+
+    const prepare = (
+      pieceId: string,
+      origin: string,
+      options: Omit<ServedFollowRequest, "pieceId" | "origin"> = {},
+    ): Promise<ServedFollowPreparation> =>
+      served(
+        "follow-prepare",
+        (pieces) =>
+          servedPrepareFollow(pieces, { pieceId, origin, ...options }),
+      );
+
+    const apply = (
+      preparation: ServedFollowPreparation,
+    ): Promise<ServedFollowReceipt> =>
+      served(
+        "follow",
+        (pieces) =>
+          servedFollowPieceSource(pieces, preparation, aliceSigner.did()),
+        (runtime, receipt) => confirmServedFollow(runtime, space, receipt),
+      );
+
+    // The two halves in consecutive cycles, the way the route runs them.
+    const follow = async (
+      pieceId: string,
+      origin: string,
+      options: Omit<ServedFollowRequest, "pieceId" | "origin"> = {},
+    ): Promise<ServedFollowReceipt> =>
+      await apply(await prepare(pieceId, origin, options));
+
+    /** The piece as a client opened afterwards reads it. */
+    const stored = async (pieceId: string) => {
+      const pieces = await clientPieces();
+      const cell = (await pieces.get(pieceId)).getCell();
+      return {
+        pattern: getPatternIdentityRef(cell),
+        origin: getPatternSource(cell),
+        revisions: getPieceSourceRevisions(cell),
+        reconciliation: getPieceReconciliation(cell),
+      };
+    };
+
+    it("points a detached piece at the origin and adopts what it serves, as a later client reads it", async () => {
+      const created = await instantiate({ program: BASE_PROGRAM });
+      const before = await stored(created.pieceId);
+      expect(before.origin).toBeUndefined();
+      const receipt = await follow(created.pieceId, "system:followed.tsx", {
+        expectedPattern: created.pattern,
+        expectedRevision: before.revisions.at(-1)!.revisionId,
+      });
+      expect(receipt.pieceId).toBe(created.pieceId);
+      expect(receipt.origin).toBe("system:followed.tsx");
+      expect(receipt.pattern.identity).not.toBe(created.pattern.identity);
+      expect(receipt.acceptedIncompatibility).toBeUndefined();
+
+      const after = await stored(created.pieceId);
+      expect(after.pattern).toEqual(receipt.pattern);
+      expect(after.origin).toBe("system:followed.tsx");
+      expect(after.revisions.at(-1)).toMatchObject({
+        revisionId: receipt.revisionId,
+        operation: "repoint",
+        origin: "system:followed.tsx",
+        pattern: receipt.pattern,
+      });
+      // What following the origin last did, written as the serving loop's
+      // own bookkeeping beside the direct commit.
+      expect(after.reconciliation).toMatchObject({
+        outcome: "followed",
+        origin: "system:followed.tsx",
+        offered: receipt.pattern,
+      });
+      expect(host.stats().lifecycleVerbs).toEqual({ runs: 3, failures: 0 });
+    });
+
+    it("refuses a candidate the piece cannot take, and follows under the dangerous override", async () => {
+      // Created without a seed, so the stored argument satisfies either
+      // schema and only the declared contract stands between the two.
+      const created = await instantiate({ program: BASE_PROGRAM });
+      const refusal = await refusalOf(
+        prepare(created.pieceId, "system:numeric.tsx"),
+      );
+      expect(refusal.code).toBe("incompatible");
+      expect(refusal.message).toContain("not backward compatible");
+      expect(await stored(created.pieceId)).toMatchObject({
+        pattern: created.pattern,
+        origin: undefined,
+      });
+
+      const receipt = await follow(created.pieceId, "system:numeric.tsx", {
+        dangerouslyAllowIncompatibleSchema: true,
+      });
+      expect(receipt.acceptedIncompatibility).toContain(
+        "not backward compatible",
+      );
+      expect(await stored(created.pieceId)).toMatchObject({
+        pattern: receipt.pattern,
+        origin: "system:numeric.tsx",
+      });
+    });
+
+    it("refuses a follow pinned to a pattern or a revision the piece is off", async () => {
+      const created = await instantiate({ program: BASE_PROGRAM });
+      const offPattern = await refusalOf(
+        prepare(created.pieceId, "system:followed.tsx", {
+          expectedPattern: { identity: "elsewhere", symbol: "default" },
+        }),
+      );
+      expect(offPattern.code).toBe("source-moved");
+      // The creation appended a revision, so a pin to an empty log is off.
+      const offRevision = await refusalOf(
+        prepare(created.pieceId, "system:followed.tsx", {
+          expectedRevision: null,
+        }),
+      );
+      expect(offRevision.code).toBe("source-moved");
+      expect(await stored(created.pieceId)).toMatchObject({
+        pattern: created.pattern,
+        origin: undefined,
+      });
+    });
+
+    it("refuses to make a prepared follow once the piece's source has moved, though the request named no pin", async () => {
+      const created = await instantiate({ program: BASE_PROGRAM });
+      // Unpinned: the change is held to the source state its review read.
+      const preparation = await prepare(created.pieceId, "system:followed.tsx");
+      const moved = (await served(
+        "upload",
+        (pieces) =>
+          servedUploadPattern(
+            pieces,
+            programOf(RELEASED_SOURCE.replace("'released'", "'moved'")),
+          ),
+      )).ref;
+      await served(
+        "setsrc",
+        (pieces) =>
+          servedSetPieceSource(pieces, {
+            pieceId: created.pieceId,
+            pattern: moved,
+            actingUser: aliceSigner.did(),
+          }),
+        (runtime, receipt) => confirmServedSetSource(runtime, space, receipt),
+      );
+
+      const refusal = await refusalOf(apply(preparation));
+      expect(refusal.code).toBe("source-moved");
+      expect(await stored(created.pieceId)).toMatchObject({
+        pattern: moved,
+        origin: undefined,
+      });
+    });
+
+    it("refuses an origin no piece can follow, one whose route serves nothing, and one whose source does not compile", async () => {
+      const created = await instantiate({ program: BASE_PROGRAM });
+      const unusable = await refusalOf(
+        prepare(created.pieceId, "https://source.test/pattern.tsx"),
+      );
+      expect(unusable.code).toBe("origin-unreachable");
+      const absent = await refusalOf(
+        prepare(created.pieceId, "system:absent.tsx"),
+      );
+      expect(absent.code).toBe("origin-unreachable");
+      expect(absent.message).toContain("404");
+      const broken = await refusalOf(
+        prepare(created.pieceId, "system:broken.tsx"),
+      );
+      expect(broken.code).toBe("origin-unreachable");
+      expect(broken.message).toContain("undefinedName");
+      expect(await stored(created.pieceId)).toMatchObject({
+        pattern: created.pattern,
+        origin: undefined,
+      });
+    });
+
+    it("refuses a piece the space does not hold", async () => {
+      const refusal = await refusalOf(
+        prepare("no-such-piece", "system:followed.tsx"),
+      );
+      expect(refusal.code).toBe("piece-not-found");
+    });
+
+    it("follows an origin on the requester's instance of a user-scoped piece", async () => {
+      const { id, instance, readPattern, pattern } = await scopedPiece(
+        BASE_PROGRAM,
+        "user",
+      );
+      const preparation = await prepare(id, "system:followed.tsx", {
+        instance,
+      });
+      const receipt = await served(
+        "follow",
+        (pieces) =>
+          servedFollowPieceSource(pieces, preparation, aliceSigner.did()),
+        (runtime, receipt) =>
+          confirmServedFollow(runtime, space, receipt, instance),
+      );
+
+      expect(receipt.scope).toBe("user");
+      expect(receipt.origin).toBe("system:followed.tsx");
+      expect(receipt.pattern).not.toEqual(pattern);
+      expect(await readPattern()).toEqual(receipt.pattern);
+      expect(await spacePattern(id)).toBeUndefined();
+    });
+
+    it("runs both halves from descriptors, and demands the piece's root when asked", async () => {
+      const runner = servedLifecycleRunner(host, serviceSigner);
+      const created = await instantiate({ program: BASE_PROGRAM });
+      const preparing = await runner.runLifecycleVerb(space, {
+        name: "follow-prepare",
+        request: { pieceId: created.pieceId, origin: "system:followed.tsx" },
+      });
+      expect(preparing.timings.map((timing) => timing.phase)).toEqual([
+        "follow-prepare.session",
+        "follow-prepare.queue",
+        "follow-prepare.run",
+        "follow-prepare.commit",
+      ]);
+      const following = await runner.runLifecycleVerb(space, {
+        name: "follow",
+        request: {
+          preparation: preparing.receipt as ServedFollowPreparation,
+          actingUser: aliceSigner.did(),
+          start: true,
+        },
+      });
+      const receipt = following.receipt as ServedFollowReceipt;
+      expect(following.timings.map((timing) => timing.phase)).toEqual([
+        "follow.session",
+        "follow.queue",
+        "follow.run",
+        "follow.commit",
+        "follow.confirm",
+      ]);
+      const root = `of:${created.pieceId.replace(/^of:/, "")}`;
+      expect(host.spaceServer(space)?.warmDemandIds.has(root)).toBe(true);
+      expect(await stored(created.pieceId)).toMatchObject({
+        pattern: receipt.pattern,
+        origin: "system:followed.tsx",
+      });
     });
   });
 });

@@ -1538,7 +1538,7 @@ export class SourceReconciler {
       runtime,
       resultCell,
       state.snapshot,
-      { allowUnavailable: true },
+      { allowUnavailable: true, candidateIdentity: candidateRef.identity },
     );
     // A release re-mints every handler identity in the file, so a field the
     // running pattern's handler protects would refuse the successor's write
@@ -1585,8 +1585,21 @@ export class SourceReconciler {
     // the piece keeps its running source against an earlier candidate is
     // decided there too, by the history the commit reads.
     const ordered = origin.kind === "system";
-    const loadable = ordered &&
+    // Whether this runtime can load the source the piece runs matters only
+    // against an earlier offer, and finding out loads that pattern, which for
+    // one this runtime has not loaded means compiling its whole closure. So it
+    // is asked here only when the history read now makes the offer earlier. A
+    // commit whose own read makes it earlier where this one did not declines
+    // instead, and is made again once the answer is in.
+    const loadRunning = async () =>
       await this.#loadPattern(state.running, state.space) !== undefined;
+    let loadable = ordered &&
+        isEarlierRelease(
+          advertised?.releasedAt,
+          knownPieceReleasedAt(resultCell, state.running),
+        )
+      ? await loadRunning()
+      : undefined;
     // The transition reads the candidate's closure, which the compile above
     // wrote back. A serving runtime sealed that write into a wave, and the
     // direct commit a source update takes may read only state the store
@@ -1596,24 +1609,35 @@ export class SourceReconciler {
       if (signal.aborted) return "unavailable";
     }
     let overtaken = false;
-    const failure = await this.#commit(resultCell, state, signal, (tx) => {
+    let undecided = false;
+    const write = (
+      tx: Parameters<typeof applyPieceSourceTransition>[2],
+    ): boolean => {
       overtaken = false;
+      undecided = false;
       if (!argumentUnchanged(resultCell.withTx(tx))) return false;
       if (
         ordered &&
         isEarlierRelease(
           advertised?.releasedAt,
           knownPieceReleasedAt(resultCell.withTx(tx), state.running),
-        ) &&
-        keepsRunningSource(
-          resultCell.withTx(tx),
-          state.running,
-          candidateRef,
-          loadable,
         )
       ) {
-        overtaken = true;
-        return false;
+        if (loadable === undefined) {
+          undecided = true;
+          return false;
+        }
+        if (
+          keepsRunningSource(
+            resultCell.withTx(tx),
+            state.running,
+            candidateRef,
+            loadable,
+          )
+        ) {
+          overtaken = true;
+          return false;
+        }
       }
       if (sourceUpdate !== undefined) {
         runtime.patternManager.stageSourceUpdate(
@@ -1641,7 +1665,24 @@ export class SourceReconciler {
         prepareForResume: true,
       });
       return true;
-    }, sourceUpdate);
+    };
+    let failure = await this.#commit(
+      resultCell,
+      state,
+      signal,
+      write,
+      sourceUpdate,
+    );
+    if (undecided && !signal.aborted) {
+      loadable = await loadRunning();
+      failure = await this.#commit(
+        resultCell,
+        state,
+        signal,
+        write,
+        sourceUpdate,
+      );
+    }
     if (overtaken) {
       // The piece keeps what it runs, as an earlier offer leaves it, and the
       // record confirms that source at the release time that overtook this
@@ -1803,7 +1844,7 @@ export class SourceReconciler {
       runtime,
       resultCell,
       state.snapshot,
-      { allowUnavailable: true },
+      { allowUnavailable: true, candidateIdentity: state.running.identity },
     );
     const transition: PieceSourceTransition = {
       revisionId: crypto.randomUUID(),

@@ -1,6 +1,8 @@
 /**
- * A manager discovers declared container chats through real space roots and
- * keeps each conversation's membership separate from its container's.
+ * A manager lists a container's declared chat, found through a real space
+ * root, once it joins the chat, as a visit and Home's bring-up adoption of the
+ * catalog's rooms do, and keeps each conversation's membership separate from
+ * its container's.
  */
 
 import { expect } from "@std/expect";
@@ -75,7 +77,7 @@ describe("fabrichat-container-index", () => {
     await server.close();
   });
 
-  it("discovers a declared chat added later, forgets only that conversation, and restores it with a fresh revision", async () => {
+  it("lists a declared chat once joined, forgets only that conversation, and restores it with a fresh revision", async () => {
     const social = await runtime.createSpace({ spaceKind: "photo-album" });
     let tx = runtime.edit();
     const container = runtime.getCell<Record<string, unknown>>(
@@ -147,28 +149,42 @@ describe("fabrichat-container-index", () => {
     const entries = manager.key("rooms").asSchema<Entry[]>(entriesSchema);
     expect(entries.get()).toEqual([]);
 
+    // A declaration lists nothing until the chat is joined: the manager reads
+    // no room's space, its container's included, to list its rooms.
     const declareTx = runtime.edit();
     container.withTx(declareTx).key("chatRoom").set(roomAlias);
     expect((await declareTx.commit().settled).error).toBeUndefined();
     await runtime.idle();
     await manager.pull();
+    expect(entries.get()).toEqual([]);
+    sendEvent(manager.key("joinRoom"), {
+      room: container.key("chatRoom").resolveAsCell(),
+      container,
+      requestId: "first-join",
+    });
+    await runtime.idle();
+    await manager.pull();
+    expect(manager.key("requests").key("first-join").key("status").get())
+      .toBe("done");
     expect(entries.get()).toHaveLength(1);
     expect(entries.get()[0].room.equals(room)).toBe(true);
-    const discoveredRevision = entries.get()[0].revision;
+    const joinedRevision = entries.get()[0].revision;
     sendEvent(manager.key("forget"), {
       room: other,
-      revision: discoveredRevision,
+      revision: joinedRevision,
       requestId: "mismatched-room",
     });
     await runtime.idle();
     await manager.pull();
     expect(manager.key("requests").key("mismatched-room").key("status").get())
       .toBe("refused");
-    expect(manager.key("roomMembership").get()).toEqual([]);
+    expect(manager.key("roomMembership").key(0).key("state").get()).toBe(
+      "saved",
+    );
     expect(entries.get()).toHaveLength(1);
     sendEvent(manager.key("forget"), {
       room: entries.get()[0].room,
-      revision: discoveredRevision,
+      revision: joinedRevision,
       requestId: "forget",
     });
     await runtime.idle();
@@ -179,15 +195,14 @@ describe("fabrichat-container-index", () => {
     expect(entries.get()).toEqual([]);
     expect(catalog.key("entries").key(social).key("state").get()).toBe("saved");
 
-    // A membership choice names a conversation, even when the declaration
-    // reaches it through an alias whose target can change.
+    // A membership names a conversation, not the declaration that reached
+    // it, so an alias retargeted to another conversation lists nothing.
     const retargetTx = runtime.edit();
     roomAlias.withTx(retargetTx).set(other);
     expect((await retargetTx.commit().settled).error).toBeUndefined();
     await runtime.idle();
     await manager.pull();
-    expect(entries.get()).toHaveLength(1);
-    expect(entries.get()[0].room.equals(other)).toBe(true);
+    expect(entries.get()).toEqual([]);
     const restoreAliasTx = runtime.edit();
     roomAlias.withTx(restoreAliasTx).set(room);
     expect((await restoreAliasTx.commit().settled).error).toBeUndefined();
@@ -237,10 +252,10 @@ describe("fabrichat-container-index", () => {
       "done",
     );
     expect(entries.get()).toHaveLength(1);
-    expect(entries.get()[0].revision).not.toBe(discoveredRevision);
+    expect(entries.get()[0].revision).not.toBe(joinedRevision);
     sendEvent(manager.key("forget"), {
       room,
-      revision: discoveredRevision,
+      revision: joinedRevision,
       requestId: "stale",
     });
     await runtime.idle();
@@ -266,8 +281,8 @@ describe("fabrichat-container-index", () => {
     expect((await replaceTx.commit().settled).error).toBeUndefined();
     await runtime.idle();
     await manager.pull();
-    expect(entries.get()).toHaveLength(2);
-    expect(entries.get().some((entry) => entry.room.equals(other))).toBe(true);
+    expect(entries.get()).toHaveLength(1);
+    expect(entries.get()[0].room.equals(room)).toBe(true);
     expect(catalog.key("entries").get()).toEqual({
       [social]: {
         space: social,
@@ -278,39 +293,8 @@ describe("fabrichat-container-index", () => {
         since: 123,
       },
     });
-    const directTx = runtime.edit();
-    const directRoom = runtime.getCell(
-      social,
-      "direct conversation",
-      undefined,
-      directTx,
-    );
-    directRoom.set({ about: { kind: "direct" } });
-    container.withTx(directTx).key("chatRoom").set(directRoom);
-    expect((await directTx.commit().settled).error).toBeUndefined();
-    await runtime.idle();
-    await manager.pull();
-    const directEntry = entries.get().find((entry) =>
-      entry.room.equals(directRoom)
-    );
-    expect(directEntry?.kind).toBe("direct");
-    sendEvent(manager.key("forget"), {
-      room: directRoom,
-      revision: directEntry?.revision,
-      requestId: "forget-direct",
-    });
-    await runtime.idle();
-    await manager.pull();
-    expect(manager.key("requests").key("forget-direct").key("status").get())
-      .toBe("done");
-    expect(entries.get().some((entry) => entry.room.equals(directRoom))).toBe(
-      false,
-    );
-    expect(
-      manager.key("roomMembership").asSchema<Entry[]>(entriesSchema).get()
-        .find((entry) => entry.room.equals(directRoom))?.kind,
-    ).toBe("direct");
   });
+
   it("lists a room once through standalone and container entries and keeps forgetting it independent of its container", async () => {
     const standalone = await runtime.createSpace({
       spaceKind: "fabrichat-room",
@@ -387,9 +371,7 @@ describe("fabrichat-container-index", () => {
     expect((await tx.commit().settled).error).toBeUndefined();
     await manager.pull();
     const entries = manager.key("rooms").asSchema<Entry[]>(entriesSchema);
-    expect(entries.get()).toHaveLength(1);
-    expect(entries.get()[0].room.equals(room)).toBe(true);
-    const containerRevision = entries.get()[0].revision;
+    expect(entries.get()).toEqual([]);
     sendEvent(manager.key("joinRoom"), {
       room,
       container,
@@ -398,6 +380,8 @@ describe("fabrichat-container-index", () => {
     await runtime.idle();
     await manager.pull();
     expect(entries.get()).toHaveLength(1);
+    expect(entries.get()[0].room.equals(room)).toBe(true);
+    const joinedRevision = entries.get()[0].revision;
     expect(catalog.key("entries").key(standalone).key("kind").get()).toBe(
       "fabrichat-room",
     );
@@ -436,13 +420,13 @@ describe("fabrichat-container-index", () => {
     expect(entries.get()).toHaveLength(1);
     sendEvent(manager.key("forget"), {
       room,
-      revision: containerRevision,
-      requestId: "stale-container-source",
+      revision: joinedRevision,
+      requestId: "stale-first-join",
     });
     await runtime.idle();
     await manager.pull();
     expect(
-      manager.key("requests").key("stale-container-source").key("status").get(),
+      manager.key("requests").key("stale-first-join").key("status").get(),
     ).toBe("refused");
     expect(entries.get()).toHaveLength(1);
     sendEvent(manager.key("forget"), {
@@ -719,6 +703,14 @@ describe("fabrichat-container-index", () => {
     runtime.prepareTxForCommit(tx);
     expect((await tx.commit().settled).error).toBeUndefined();
     await runtime.idle();
+    // The join names the room as Home's bring-up adoption does: the room the
+    // container's declaration resolves to.
+    sendEvent(manager.key("joinRoom"), {
+      room: container.key("chatRoom").resolveAsCell(),
+      container,
+      requestId: "join-ensured",
+    });
+    await runtime.idle();
     await manager.pull();
     await runtime.idle();
 
@@ -727,6 +719,8 @@ describe("fabrichat-container-index", () => {
       .getAsNormalizedFullLink();
     expect(readStoredCfcMetadata(readTx, rooms)).toBeDefined();
     expect(refusals).toEqual([]);
+    expect(manager.key("requests").key("join-ensured").key("status").get())
+      .toBe("done");
     expect(entries.get()).toHaveLength(1);
     expect(entries.get()[0].room.equals(room)).toBe(true);
     // `equals()` resolves links, so the stored link is read as written: it

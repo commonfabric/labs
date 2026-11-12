@@ -2213,6 +2213,36 @@ describe("stage D seal-into-wave", () => {
       expect(outcome.requeuedEventIds).toEqual([]);
     });
 
+    it("leaves the serving runtime reading the consequence's other writes when the wave drops a doc the firing session overwrote", async () => {
+      const lease = await liveLease();
+      const docs = await seedDocs();
+      overwriteDraft(docs, firing.session, "/value", typed);
+      await takeFromStore(docs.draft, docs.editing);
+      const drafts: Draft[] = [];
+      const cancel = docs.draft.sink((draft) => {
+        drafts.push({ ...draft });
+      });
+
+      const wave = newWave({ lease });
+      await sealConsequence(wave, docs);
+      await runtime.idle();
+      expect(drafts.at(-1)).toEqual({ name: "Ada", bio: "Countess" });
+      const outcome = await wave.commitWave(newSink());
+      await wave.settled();
+      await runtime.idle();
+      cancel();
+
+      expect(outcome.dispositions[0]).toEqual({
+        kind: "partially-dropped",
+        droppedOps: 1,
+      });
+      expect(stored(docs.editing)).toEqual({ value: true });
+      expect(docs.draft.get()).toEqual(typed);
+      expect(docs.editing.get()).toBe(true);
+      // A reader of the dropped draft is told it rolled back.
+      expect(drafts.at(-1)).toEqual(typed);
+    });
+
     it("requeues the consequence when the firing session overwrote a doc it read mid-wave, and drops that write when the replay lands", async () => {
       const lease = await liveLease();
       const docs = await seedDocs();
@@ -2282,6 +2312,29 @@ describe("stage D seal-into-wave", () => {
         droppedOps: 1,
       });
       expect(outcome.committedEventIds).toEqual(["e-edit"]);
+    });
+
+    it("leaves the serving runtime reading the consequence's other patches when the wave drops a patch the firing session overwrote", async () => {
+      const lease = await liveLease();
+      const docs = await seedDocs();
+      overwriteDraft(docs, firing.session, "/value/name", "Grace");
+      await takeFromStore(docs.draft, docs.editing);
+
+      const wave = newWave({ lease });
+      await sealConsequence(wave, docs);
+      const outcome = await wave.commitWave(newSink());
+      await wave.settled();
+      await runtime.idle();
+
+      expect(outcome.dispositions[0]).toEqual({
+        kind: "partially-dropped",
+        droppedOps: 1,
+      });
+      expect(stored(docs.draft)).toEqual({
+        value: { name: "Grace", bio: "Countess" },
+      });
+      expect(docs.draft.get()).toEqual({ name: "Grace", bio: "Countess" });
+      expect(docs.editing.get()).toBe(true);
     });
 
     it("requeues the consequence when the firing session overwrote one of its paths mid-wave, and drops only that patch when the replay lands", async () => {
@@ -3526,17 +3579,20 @@ describe("stage D seal-into-wave", () => {
       kind: "partially-dropped",
       droppedOps: 1,
     });
-    expect(settled.error).toBeDefined();
-    expect(
-      (settled.error as { waveWithdrawalCause?: unknown })
-        .waveWithdrawalCause,
-    ).toBeUndefined();
+    // The derivation's other write committed, so its settlement succeeds,
+    // naming the document it lost.
+    expect(settled.error).toBeUndefined();
+    expect(settled.ok?.supersededOutputs?.map(({ id }) => id)).toEqual([
+      xLink.id,
+    ]);
     const stored = Engine.readState(engine, { id: xLink.id });
     expect(stored?.document).toEqual({ value: { value: 99 } });
     const keepLink = keep.getAsNormalizedFullLink();
     expect(
       Engine.selectDocHead(engine, { id: keepLink.id, scopeKey: "space" }),
     ).toBe(outcome.seq);
+    await runtime.idle();
+    expect(keep.get()).toEqual({ value: 2 });
   });
 
   it("resolves a sink-reported precondition failure per owning contribution, never whole-wave", async () => {
@@ -5495,6 +5551,46 @@ describe("stage D seal-into-wave", () => {
         expect(witness.lastRunInstantiation()).toBe(3);
       });
     });
+
+    // The two refusals this replica makes of a commit that read through
+    // another commit's layer once that commit is refused or dropped.
+    for (
+      const message of [
+        "pending dependency rejected: localSeq=7",
+        "pending dependency dropped locally: localSeq=7",
+      ]
+    ) {
+      it(`reinstantiates a piece once after a ${JSON.stringify(message.split(":")[0])} refusal`, async () => {
+        await withOffRuntime(async (offRuntime) => {
+          const witness = await stoppedWitnessPiece(
+            `off-piece-instantiate-${
+              message.split(":")[0].replaceAll(" ", "-")
+            }`,
+            { on: offRuntime },
+          );
+          const deadDependency = {
+            name: "ConflictError" as const,
+            message,
+            readyToRetry: () => Promise.resolve(),
+          };
+          const counts = interceptInstantiateCommits(
+            offRuntime,
+            (attempt, tx, original) =>
+              attempt === 1 ? refuseCommit(tx, deadDependency) : original(),
+          );
+
+          expect(await offRuntime.start(witness.cell)).toBe(true);
+          await offRuntime.idle();
+          await offRuntime.runner.idlePieceInstantiationSettlements();
+
+          expect(counts.attempts()).toBe(2);
+          expect(counts.readinessCalls()).toBe(1);
+          expect(counts.failures).toEqual([]);
+          expect(witness.instantiations()).toBe(3);
+          expect(witness.lastRunInstantiation()).toBe(3);
+        });
+      });
+    }
 
     it("reinstantiates a piece after successive stale-read refusals while rounds remain", async () => {
       await withOffRuntime(async (offRuntime) => {
