@@ -625,13 +625,20 @@ loop's duty).
   walks names, and the read returned the schema's default, or
   nothing, in place of the stored value. That entry is not left to
   the drain: the serving scheduler requeues it with its carriage and
-  parks it on those loads as the preflight park parks a head, so it
-  runs again once they settle, a failed load defers it as a failed
-  preflight load does, and a load it already waited for does not
-  withdraw it again. A read in the home space needs none of this,
-  since the wave holds the run's home-space reads to the store's head
-  (serving-loop.md §3d), and the run that reads a document its load
-  confirms absent proceeds with that absence. Sealing the skip is the
+  parks it on those loads as the preflight park parks a head, and the
+  copy's final callback waits for the run that follows, so it runs
+  again once they settle and a load it already waited for does not
+  withdraw it again. A load that fails with an authorization-class
+  failure lets it run again on what the replica holds, and a load that
+  fails otherwise defers it as a failed preflight load does. A read in
+  the home space needs none of this, since the wave holds the run's
+  home-space reads to the store's head (serving-loop.md §3d), and the
+  run that reads a document its load confirms absent proceeds with
+  that absence. So does a run reading a document in a space the
+  server refuses the serving identity, which commits the schema's
+  default: a load in a space whose access the runtime has lost
+  (`spaceAccessError()`) delivers nothing, so no run waits on one.
+  Sealing the skip is the
   defect this rule prevents: the mark committed ALONE — a 1-op derived
   commit, the user's event permanently consumed with zero effects and
   no error (the b1-lifts a04 red, seqs 53/56). Consequence atomicity
@@ -680,10 +687,16 @@ loop's duty).
   through it finds its argument unresolved in exactly that window. A
   body that did run is withdrawn the same way, a throw from it
   included, when it read a document still loading, as the served rule
-  above describes, in a space its commit does not write, and its
-  re-run is parked on that load; a read in a space the commit writes
-  travels with that commit, which the store refuses when the read is
-  stale. Sealing the skip would fire the commit callback on a transaction that
+  above describes, in a space its commit does not write. Its re-run is
+  parked on that load, spending none of the retry window below, since
+  waiting on a load is settlement; a load that fails otherwise than by
+  authorization drops it, reporting the error the withdrawn run threw.
+  A read in a space the commit writes travels with that commit, which
+  the store refuses when the read is stale. A one-shot
+  (`retries: false`) is not withdrawn, since it is never run again: one
+  that read a document still loading commits what it read, the
+  schema's default, as one with nothing in flight does. Sealing the skip
+  would fire the commit callback on a transaction that
   wrote nothing, which a caller reads as a completed handling. The
   finalize withdraws the transaction and requeues the event within the
   retry window a stale-basis rejection gets, drawing on the same budget:
