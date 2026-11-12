@@ -440,6 +440,15 @@ describe("space-root-open", () => {
         .toBe(RuntimeErrorCode.SpaceAccessRefused);
     });
 
+    it("fails a slug's resolution with `SpaceAccessRefused` when it is the first read of the space", async () => {
+      // Nothing has been refused before the resolution asks, so the refusal
+      // arrives while the walk reads, which then finds nothing.
+      await using room = await rootlessSpace({});
+
+      expect(await codeOf(room.visitor.resolveSlug("top", room.space)))
+        .toBe(RuntimeErrorCode.SpaceAccessRefused);
+    });
+
     it("fails a redirect into it from a space that admits the principal with `SpaceAccessRefused`", async () => {
       await using room = await rootlessSpace({});
       const root = await room.owner.getSpaceRootPattern(room.space);
