@@ -1,10 +1,10 @@
 /**
  * Covers what makes a request again after its memory connection lost it:
- * `untilAnswered()`, `untilSent()`, and the session that applies them to
- * every request, `ResendingSession`. The cases on a real server show a
+ * `untilSent()`, and the session that makes every request again as that
+ * request allows, `ResendingSession`. The cases on a real server show a
  * caller's requests outlasting a host that goes down; the cases on a
- * scripted session pin the order commits are sent again in, which a real
- * connection settles too quickly to hold open.
+ * scripted session pin the order commits and watch changes are sent again
+ * in, which a real connection settles too quickly to hold open.
  */
 
 import { expect } from "@std/expect";
@@ -23,7 +23,6 @@ import type { AppliedCommit } from "../v2/engine.ts";
 import {
   MAX_OWN_WRITE_FAILURES,
   ResendingSession,
-  untilAnswered,
   untilSent,
 } from "../v2/resending-session.ts";
 import { Server } from "../v2/server.ts";
@@ -109,6 +108,18 @@ function scripted() {
     answer: PromiseWithResolvers<AppliedCommit>;
   }[] = [];
   const counts = new Map<number, PromiseWithResolvers<void>>();
+  const changes: { change: string; answer: PromiseWithResolvers<unknown> }[] =
+    [];
+  const changeCounts = new Map<number, PromiseWithResolvers<void>>();
+  const changing = (kind: string) => (watches: { id: string }[]) => {
+    const answer = Promise.withResolvers<unknown>();
+    changes.push({
+      change: `${kind} ${watches.map(({ id }) => id).join(",")}`,
+      answer,
+    });
+    changeCounts.get(changes.length)?.resolve();
+    return answer.promise;
+  };
   const session = {
     transact(commit: ClientCommit, beforeIssue?: () => void) {
       beforeIssue?.();
@@ -117,9 +128,22 @@ function scripted() {
       counts.get(sent.length)?.resolve();
       return answer.promise;
     },
+    watchSetSync: changing("set"),
+    watchAddSync: changing("add"),
   };
   return {
     resending: new ResendingSession(session as unknown as SpaceSession),
+    /** Each watch change handed to the session so far, in order. */
+    changes,
+    /** What each watch change handed to the session so far asked for. */
+    changed: () => changes.map(({ change }) => change),
+    /** Resolves once the session has been handed `count` watch changes. */
+    whenChanged(count: number) {
+      if (changes.length >= count) return Promise.resolve();
+      const reached = Promise.withResolvers<void>();
+      changeCounts.set(count, reached);
+      return reached.promise;
+    },
     /** Each commit handed to the session so far, in order. */
     sent,
     /** The `localSeq` of each commit handed to the session so far. */
@@ -235,11 +259,11 @@ function answering(name: string, outcomes: unknown[]) {
 }
 
 describe("resending-session", () => {
-  describe("untilAnswered()", () => {
-    it("returns what the request settles with once it has been made again after a lost connection", async () => {
+  describe("untilSent()", () => {
+    it("returns what a request that was never sent settles with once it has been made again", async () => {
       let attempts = 0;
-      const result = await untilAnswered(() =>
-        ++attempts === 1 ? Promise.reject(unanswered()) : Promise.resolve("ok")
+      const result = await untilSent(() =>
+        ++attempts === 1 ? Promise.reject(neverSent()) : Promise.resolve("ok")
       );
 
       expect(result).toBe("ok");
@@ -249,7 +273,7 @@ describe("resending-session", () => {
     it("makes the request again only once its failure's `readyToRetry()` has resolved", async () => {
       const ready = readiness();
       let attempts = 0;
-      const result = untilAnswered(() =>
+      const result = untilSent(() =>
         ++attempts === 1
           ? Promise.reject(neverSent(ready.wait))
           : Promise.resolve("ok")
@@ -262,71 +286,6 @@ describe("resending-session", () => {
       expect(await result).toBe("ok");
     });
 
-    it("rejects with an error that is no lost connection, after one attempt", async () => {
-      let attempts = 0;
-      const refusal = new Error("test refusal");
-
-      await expect(untilAnswered(() => {
-        attempts++;
-        return Promise.reject(refusal);
-      })).rejects.toBe(refusal);
-      expect(attempts).toBe(1);
-    });
-
-    it("rejects with a lost connection's error that carries no `readyToRetry()`", async () => {
-      const lost = notSentError("test request not sent");
-
-      await expect(untilAnswered(() => Promise.reject(lost))).rejects.toBe(
-        lost,
-      );
-    });
-
-    it("rejects with what the failure's `readyToRetry()` rejects with", async () => {
-      const ended = new Error("test session ended");
-
-      await expect(
-        untilAnswered(() =>
-          Promise.reject(neverSent(() => Promise.reject(ended)))
-        ),
-      ).rejects.toBe(ended);
-    });
-
-    it("rejects with the write's own error once the request's own write has failed `MAX_OWN_WRITE_FAILURES` times", async () => {
-      const own = new TypeError("test payload cannot be written");
-      let attempts = 0;
-
-      await expect(untilAnswered(() => {
-        attempts++;
-        return Promise.reject(
-          unanswered(undefined, writeFailedError("test write failed", own)),
-        );
-      })).rejects.toBe(own);
-      expect(attempts).toBe(MAX_OWN_WRITE_FAILURES);
-    });
-
-    it("rejects with a plain error carrying the write failure's message when the transport named no cause for it", async () => {
-      const error = await untilAnswered(() =>
-        Promise.reject(
-          unanswered(undefined, writeFailedError("test write failed")),
-        )
-      ).catch((e) => e);
-
-      expect(error.name).toBe("Error");
-      expect(error.message).toBe("test request not answered");
-    });
-  });
-
-  describe("untilSent()", () => {
-    it("returns what a request that was never sent settles with once it has been made again", async () => {
-      let attempts = 0;
-      const result = await untilSent(() =>
-        ++attempts === 1 ? Promise.reject(neverSent()) : Promise.resolve("ok")
-      );
-
-      expect(result).toBe("ok");
-      expect(attempts).toBe(2);
-    });
-
     it("rejects with the `ConnectionError` of a request that was sent and not answered, after one attempt", async () => {
       let attempts = 0;
       const lost = unanswered();
@@ -336,6 +295,31 @@ describe("resending-session", () => {
         return Promise.reject(lost);
       })).rejects.toBe(lost);
       expect(attempts).toBe(1);
+    });
+
+    it("rejects with an error that is no lost connection, after one attempt", async () => {
+      let attempts = 0;
+      const refusal = new Error("test refusal");
+
+      await expect(untilSent(() => {
+        attempts++;
+        return Promise.reject(refusal);
+      })).rejects.toBe(refusal);
+      expect(attempts).toBe(1);
+    });
+
+    it("rejects with a lost connection's error that carries no `readyToRetry()`", async () => {
+      const lost = notSentError("test request not sent");
+
+      await expect(untilSent(() => Promise.reject(lost))).rejects.toBe(lost);
+    });
+
+    it("rejects with what the failure's `readyToRetry()` rejects with", async () => {
+      const ended = new Error("test client closed");
+
+      await expect(
+        untilSent(() => Promise.reject(neverSent(() => Promise.reject(ended)))),
+      ).rejects.toBe(ended);
     });
   });
 
@@ -423,6 +407,26 @@ describe("resending-session", () => {
         await t.resending.watchAddSync([watch("of:doc-1")]);
 
         expect(t.host.sentOfType("session.watch.add")).toBe(2);
+      } finally {
+        await t.close();
+      }
+    });
+
+    it("sends a watch set made while the host was down ahead of the one made as the session restores, which the server is left watching", async () => {
+      // A set replaces what the server watches, so the older one sent late
+      // would leave the server watching what its caller had since replaced.
+
+      const t = await connected("watch-order");
+      try {
+        t.host.hostDown();
+        const older = t.resending.watchSetSync([watch("of:old")]);
+        const newer = t.session.whenRestored().then(() =>
+          t.resending.watchSetSync([watch("of:new")])
+        );
+        t.host.hostUp();
+        await Promise.all([older, newer]);
+
+        expect(t.host.watchSetsSent()).toEqual([["of:old"], ["of:new"]]);
       } finally {
         await t.close();
       }
@@ -562,6 +566,59 @@ describe("resending-session", () => {
       await committing;
 
       expect(issues).toBe(2);
+    });
+
+    it("rejects a commit with a plain error carrying the failure's message when the transport named no cause for its failed write", async () => {
+      const t = scripted();
+      const committing = t.resending.transact(commit(1));
+      committing.catch(() => {});
+      for (let attempt = 1; attempt <= MAX_OWN_WRITE_FAILURES; attempt++) {
+        await t.whenSent(attempt);
+        t.sent[attempt - 1].answer.reject(
+          unanswered(undefined, writeFailedError("test write failed")),
+        );
+      }
+      const error = await committing.catch((e) => e);
+
+      expect(error.name).toBe("Error");
+      expect(error.message).toBe("test request not answered");
+    });
+
+    it("holds a watch change made while an earlier one of another kind waits to be made again, and makes both in the order they were first made", async () => {
+      const t = scripted();
+      const ready = readiness();
+      const setting = t.resending.watchSetSync([watch("of:old")]);
+      t.changes[0].answer.reject(unanswered(ready.wait));
+      await ready.asked;
+      const adding = t.resending.watchAddSync([watch("of:new")]);
+
+      expect(t.changed()).toEqual(["set of:old"]);
+
+      ready.resolve();
+      await t.whenChanged(3);
+      t.changes[1].answer.resolve("set");
+      t.changes[2].answer.resolve("added");
+
+      expect([await setting, await adding]).toEqual(["set", "added"]);
+      expect(t.changed()).toEqual(["set of:old", "set of:old", "add of:new"]);
+    });
+
+    it("sends a commit while a watch change waits to be made again", async () => {
+      // Commits and watch changes each keep their own order, and neither
+      // waits for the other.
+
+      const t = scripted();
+      const ready = readiness();
+      void t.resending.watchSetSync([watch("of:old")]).catch(() => {});
+      t.changes[0].answer.reject(neverSent(ready.wait));
+      await ready.asked;
+      const committing = t.resending.transact(commit(1));
+      t.sent[0].answer.resolve(applied(1));
+
+      expect((await committing).seq).toBe(1);
+      expect(t.changed()).toEqual(["set of:old"]);
+      ready.resolve();
+      await t.whenChanged(2);
     });
 
     for (const name of WATCH_CHANGES) {

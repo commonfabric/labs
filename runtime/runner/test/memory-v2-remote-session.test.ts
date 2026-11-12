@@ -19,7 +19,7 @@ import {
   RouterAssembler,
 } from "@commonfabric/memory/v2/router-protocol";
 import { routedFrameOf } from "../../memory/test/support/routed-slots.ts";
-import { untilAnswered } from "@commonfabric/memory/v2/resending-session";
+import { ResendingSession } from "@commonfabric/memory/v2/resending-session";
 import type { Server as MemoryServer } from "@commonfabric/memory/v2/server";
 import {
   decodeCompressedMemoryMessage,
@@ -86,6 +86,25 @@ function urlWithThrowingHref(cause: Error): URL {
   });
   return host;
 }
+
+/** The `ResendingSession` these cases commit through for each session. */
+const resendingSessions = new WeakMap<
+  MemoryClient.SpaceSession,
+  ResendingSession
+>();
+
+/**
+ * Returns the `ResendingSession` around `session`, the same one each time, as
+ * a replica commits through one for its session.
+ */
+const resending = (session: MemoryClient.SpaceSession): ResendingSession => {
+  let wrapped = resendingSessions.get(session);
+  if (wrapped === undefined) {
+    wrapped = new ResendingSession(session);
+    resendingSessions.set(session, wrapped);
+  }
+  return wrapped;
+};
 
 describe("memory v2 remote session websocket address", () => {
   it("upgrades http and https urls to websocket protocols", () => {
@@ -3121,8 +3140,8 @@ describe("WebSocketTransport failure signaling", () => {
       const sentBefore = dropped.sent.length;
       holdNextTransact = true;
       const outcomes = Promise.allSettled([
-        untilAnswered(() => session.transact(commitAt(1, "of:first"))),
-        untilAnswered(() => session.transact(commitAt(2, "of:second"))),
+        resending(session).transact(commitAt(1, "of:first")),
+        resending(session).transact(commitAt(2, "of:second")),
       ]);
       await dropped.whenSent(sentBefore + 1);
       dropped.close();
@@ -3173,7 +3192,7 @@ describe("WebSocketTransport failure signaling", () => {
       const sentBefore = closing.sent.length;
       holdNextTransact = true;
       const outcomes = Promise.allSettled([
-        untilAnswered(() => session.transact(commitAt(1, "of:closing"))),
+        resending(session).transact(commitAt(1, "of:closing")),
       ]);
       await closing.whenSent(sentBefore + 1);
       closing.readyState = DrivableWebSocket.CLOSING;
@@ -3223,12 +3242,8 @@ describe("WebSocketTransport failure signaling", () => {
       const silent = DrivableWebSocket.instances.at(-1)!;
       failNextTransact = true;
       const settled = { first: false, second: false };
-      const first = untilAnswered(() =>
-        session.transact(commitAt(1, "of:first"))
-      );
-      const second = untilAnswered(() =>
-        session.transact(commitAt(2, "of:second"))
-      );
+      const first = resending(session).transact(commitAt(1, "of:first"));
+      const second = resending(session).transact(commitAt(2, "of:second"));
       first.then(() => settled.first = true, () => settled.first = true);
       second.then(() => settled.second = true, () => settled.second = true);
 
@@ -3305,9 +3320,7 @@ describe("WebSocketTransport failure signaling", () => {
       );
       const closing = DrivableWebSocket.instances.at(-1)!;
       duplicateNextTransact = true;
-      const first = untilAnswered(() =>
-        session.transact(commitAt(1, "of:duplicate"))
-      );
+      const first = resending(session).transact(commitAt(1, "of:duplicate"));
       first.catch(() => {});
       await clock.settle();
       closing.close();
@@ -3316,7 +3329,7 @@ describe("WebSocketTransport failure signaling", () => {
       expect(await first).toMatchObject({ seq: 1, replayed: true });
       // Applied twice, the first commit would have taken seq 2 as well.
       expect(
-        (await untilAnswered(() => session.transact(commitAt(2, "of:after"))))
+        (await resending(session).transact(commitAt(2, "of:after")))
           .seq,
       ).toBe(2);
       expect(localSeqsSeenByServer).toEqual([1, 1, 2]);
@@ -3360,12 +3373,8 @@ describe("WebSocketTransport failure signaling", () => {
         testSessionOpenAuthFactory,
       );
       const settled = { first: false, second: false };
-      const first = untilAnswered(() =>
-        session.transact(commitAt(1, "of:refused"))
-      );
-      const second = untilAnswered(() =>
-        session.transact(commitAt(2, "of:behind"))
-      );
+      const first = resending(session).transact(commitAt(1, "of:refused"));
+      const second = resending(session).transact(commitAt(2, "of:behind"));
       first.then(() => settled.first = true, () => settled.first = true);
       second.then(() => settled.second = true, () => settled.second = true);
 
@@ -3417,9 +3426,7 @@ describe("WebSocketTransport failure signaling", () => {
         testSessionOpenAuthFactory,
       );
       const outcome = Promise.allSettled([
-        untilAnswered(() =>
-          session.transact(commitAt(1, "of:refused-while-closing"))
-        ),
+        resending(session).transact(commitAt(1, "of:refused-while-closing")),
       ]);
 
       await clock.settle();

@@ -20,53 +20,36 @@ import type { AppliedCommit } from "./engine.ts";
 export const MAX_OWN_WRITE_FAILURES = 5;
 
 /**
- * Calls `attempt`, a request to the memory client, until it settles with
- * something other than a lost connection, and returns what it settles with.
- * A request its connection lost, before it was sent or after, is made again
- * once its `readyToRetry()` resolves. A request that was sent may have
- * landed, so this is for one that is harmless to make twice: a read, or a
- * watch change, which sets what a repeat sets again.
+ * Calls `attempt`, a request to the memory client, until it is sent, and
+ * returns what it settles with. A request the connection lost before it was
+ * sent is made again once its `readyToRetry()` resolves. One that was sent
+ * and not answered fails with its `ConnectionError`, since it may have
+ * landed: this is for a request that must not apply twice, such as a mount
+ * that redeems an invitation.
  *
- * @throws What `attempt` rejects with, when that is no lost connection; what
- *   `readyToRetry()` rejects with, as it does once the session has closed;
- *   and the write's own error, once the request's own payload has failed the
- *   write `MAX_OWN_WRITE_FAILURES` times.
+ * Requests made this way are each made again on their own, in no order
+ * among them. A session's requests go through a `ResendingSession`, which
+ * keeps the order of those that have one.
+ *
+ * @throws What `attempt` rejects with, when that is not a lost connection
+ *   that never sent the request, and what `readyToRetry()` rejects with, as
+ *   it does once the client has closed.
  */
-export function untilAnswered<T>(attempt: () => Promise<T>): Promise<T> {
-  return madeAgain(attempt, true);
-}
-
-/**
- * Like `untilAnswered()`, except that only a request that was never sent is
- * made again. One that was sent and not answered fails with its
- * `ConnectionError`, since it may have landed. This is for a request that
- * must not apply twice, such as a mount that redeems an invitation.
- */
-export function untilSent<T>(attempt: () => Promise<T>): Promise<T> {
-  return madeAgain(attempt, false);
-}
-
-/** Helper for `untilAnswered()` and `untilSent()`; see there. */
-async function madeAgain<T>(
-  attempt: () => Promise<T>,
-  whenUnacknowledged: boolean,
-): Promise<T> {
-  const failures = { ownWrite: 0 };
+export async function untilSent<T>(attempt: () => Promise<T>): Promise<T> {
   for (;;) {
     try {
       return await attempt();
     } catch (error) {
-      if (
-        !whenUnacknowledged && connectionDeliveryOf(error) === "unacknowledged"
-      ) throw error;
-      await readyAfter(error, failures);
+      if (connectionDeliveryOf(error) === "unacknowledged") throw error;
+      await readyAfter(error);
     }
   }
 }
 
 /**
  * Returns the wait after which the request that failed with `error` can be
- * made again, counting a failure of its own write in `failures`.
+ * made again, counting a failure of its own write in `failures`, the count
+ * its caller keeps for that request.
  *
  * @throws `error`, when it is no lost connection or says nothing of when to
  *   try again, and the write's own error once `failures` reaches
@@ -74,7 +57,7 @@ async function madeAgain<T>(
  */
 function readyAfter(
   error: unknown,
-  failures: { ownWrite: number },
+  failures: { ownWrite: number } = { ownWrite: 0 },
 ): Promise<void> {
   if (connectionDeliveryOf(error) === undefined) throw error;
   if (
@@ -104,20 +87,129 @@ const ownWriteErrorOf = (error: Error): Error => {
     : new Error(error.message, { cause: error.cause });
 };
 
-/** A commit made through a `ResendingSession` that has no answer yet. */
-type UnansweredCommit = {
-  commit: ClientCommit;
-  beforeIssue: (() => void) | undefined;
-  answer: PromiseWithResolvers<AppliedCommit>;
-  /** Whether the commit is with the session, sent and not yet settled. */
+/** A request made through a `ResendQueue` that has no answer yet. */
+type Unanswered = {
+  /** Makes the request of the session once. */
+  attempt: () => Promise<unknown>;
+  answer: PromiseWithResolvers<unknown>;
+  /** Where the request sorts among the queue's: lower is sent first. */
+  order: number;
+  /** Whether the request is with the session, sent and not yet settled. */
   sent: boolean;
   /**
-   * Set once the connection has lost the commit: resolves when the session
+   * Set once the connection has lost the request: resolves when the session
    * can take it again.
    */
   ready: Promise<void> | undefined;
   failures: { ownWrite: number };
 };
+
+/**
+ * Requests that reach a session in a set order, those made again after a
+ * lost connection included: none is sent while an earlier one waits to be
+ * made again. A request the connection lost, before it was sent or after,
+ * is made again once its `readyToRetry()` resolves, so this is for a request
+ * that is harmless to make twice. A request settles with the session's
+ * answer to it, with an error that is no lost connection, with what
+ * `readyToRetry()` rejects with, or with the write's own error once its own
+ * payload has failed the write `MAX_OWN_WRITE_FAILURES` times.
+ */
+class ResendQueue {
+  /** The requests not yet answered, in increasing `order`. */
+  readonly #unanswered: Unanswered[] = [];
+
+  /**
+   * Set while a request the connection lost waits to be made again. Requests
+   * made meanwhile wait behind it.
+   */
+  #resending: Promise<void> | undefined;
+
+  /**
+   * Makes the request `attempt` makes, in its place by `order` among the
+   * requests not yet answered, and returns the session's answer to it.
+   */
+  make<T>(order: number, attempt: () => Promise<T>): Promise<T> {
+    const unanswered: Unanswered = {
+      attempt,
+      answer: Promise.withResolvers<unknown>(),
+      order,
+      sent: false,
+      ready: undefined,
+      failures: { ownWrite: 0 },
+    };
+    const later = this.#unanswered.findIndex((other) => other.order > order);
+    this.#unanswered.splice(
+      later === -1 ? this.#unanswered.length : later,
+      0,
+      unanswered,
+    );
+    if (this.#resending === undefined) this.#send(unanswered);
+    return unanswered.answer.promise as Promise<T>;
+  }
+
+  /**
+   * Helper for `make()`, which hands `unanswered` to the session and settles
+   * it with the answer, or keeps it to be made again when the connection
+   * lost it.
+   */
+  #send(unanswered: Unanswered): void {
+    unanswered.sent = true;
+    unanswered.attempt().then(
+      (answer) => {
+        this.#forget(unanswered);
+        unanswered.answer.resolve(answer);
+      },
+      (error) => {
+        unanswered.sent = false;
+        try {
+          unanswered.ready = readyAfter(error, unanswered.failures);
+        } catch (final) {
+          this.#forget(unanswered);
+          unanswered.answer.reject(final);
+          return;
+        }
+        // `#resendLost()` reads how the wait ends.
+        unanswered.ready.catch(() => {});
+        this.#resending ??= this.#resendLost();
+      },
+    );
+  }
+
+  /**
+   * Helper for `#send()`, which waits until the session can take the
+   * requests the connection lost and then sends every request that is not
+   * with the session, in order: those it lost, and those made while they
+   * waited. A drop fails every request it carried before the session is
+   * ready again, so a request lost while another waits joins that wait.
+   */
+  async #resendLost(): Promise<void> {
+    for (;;) {
+      const lost = this.#unanswered.filter((unanswered) =>
+        unanswered.ready !== undefined
+      );
+      if (lost.length === 0) break;
+      await Promise.all(lost.map(async (unanswered) => {
+        try {
+          await unanswered.ready;
+        } catch (error) {
+          this.#forget(unanswered);
+          unanswered.answer.reject(error);
+        }
+        unanswered.ready = undefined;
+      }));
+    }
+    this.#resending = undefined;
+    for (const unanswered of [...this.#unanswered]) {
+      if (!unanswered.sent) this.#send(unanswered);
+    }
+  }
+
+  /** Removes `unanswered` from the requests still to be answered. */
+  #forget(unanswered: Unanswered): void {
+    const index = this.#unanswered.indexOf(unanswered);
+    if (index !== -1) this.#unanswered.splice(index, 1);
+  }
+}
 
 /**
  * A session whose requests are made again after a lost connection, so that a
@@ -132,22 +224,28 @@ type UnansweredCommit = {
  * - Any other request that was sent and not answered fails with its
  *   `ConnectionError`, since it may have landed.
  *
- * Commits reach the session in increasing `localSeq` order, those made again
- * included: none is sent while an earlier one waits to be made again.
+ * Commits reach the session in increasing `localSeq` order, and watch
+ * changes in the order they were made, those made again included: none is
+ * sent while an earlier one waits to be made again. A watch change replaces
+ * or builds on the ones before it, so one made again late would undo a newer
+ * one.
  *
  * Everything else a session offers passes straight through to `session`.
  */
 export class ResendingSession {
   readonly #session: SpaceSession;
 
-  /** The commits not yet answered, in increasing `localSeq` order. */
-  readonly #unanswered: UnansweredCommit[] = [];
+  /** The session's commits, in increasing `localSeq` order. */
+  readonly #commits = new ResendQueue();
 
-  /**
-   * Set while a commit the connection lost waits to be made again. Commits
-   * made meanwhile wait behind it.
-   */
-  #resending: Promise<void> | undefined;
+  /** The answer awaited for each commit not yet answered, by `localSeq`. */
+  readonly #committing = new Map<number, Promise<AppliedCommit>>();
+
+  /** The session's watch changes, in the order they were made. */
+  readonly #watchChanges = new ResendQueue();
+
+  /** How many watch changes have been made. */
+  #watchChangesMade = 0;
 
   /** Constructs an instance which makes its requests of `session`. */
   constructor(session: SpaceSession) {
@@ -216,28 +314,20 @@ export class ResendingSession {
     beforeIssue?: () => void,
   ): Promise<AppliedCommit> {
     const { localSeq } = commit;
-    const existing = this.#unanswered.find((unanswered) =>
-      unanswered.commit.localSeq === localSeq
+    const existing = this.#committing.get(localSeq);
+    if (existing !== undefined) return existing;
+    const answer = this.#commits.make(
+      localSeq,
+      () => this.#session.transact(commit, beforeIssue),
     );
-    if (existing !== undefined) return existing.answer.promise;
-    const unanswered: UnansweredCommit = {
-      commit,
-      beforeIssue,
-      answer: Promise.withResolvers<AppliedCommit>(),
-      sent: false,
-      ready: undefined,
-      failures: { ownWrite: 0 },
+    this.#committing.set(localSeq, answer);
+    const settled = () => {
+      if (this.#committing.get(localSeq) === answer) {
+        this.#committing.delete(localSeq);
+      }
     };
-    const later = this.#unanswered.findIndex((other) =>
-      other.commit.localSeq > localSeq
-    );
-    this.#unanswered.splice(
-      later === -1 ? this.#unanswered.length : later,
-      0,
-      unanswered,
-    );
-    if (this.#resending === undefined) this.#send(unanswered);
-    return unanswered.answer.promise;
+    answer.then(settled, settled);
+    return answer;
   }
 
   //
@@ -247,37 +337,37 @@ export class ResendingSession {
   watchSet(
     ...request: Parameters<SpaceSession["watchSet"]>
   ): ReturnType<SpaceSession["watchSet"]> {
-    return untilAnswered(() => this.#session.watchSet(...request));
+    return this.#changeWatches(() => this.#session.watchSet(...request));
   }
 
   watchSetSync(
     ...request: Parameters<SpaceSession["watchSetSync"]>
   ): ReturnType<SpaceSession["watchSetSync"]> {
-    return untilAnswered(() => this.#session.watchSetSync(...request));
+    return this.#changeWatches(() => this.#session.watchSetSync(...request));
   }
 
   watchAdd(
     ...request: Parameters<SpaceSession["watchAdd"]>
   ): ReturnType<SpaceSession["watchAdd"]> {
-    return untilAnswered(() => this.#session.watchAdd(...request));
+    return this.#changeWatches(() => this.#session.watchAdd(...request));
   }
 
   watchAddSync(
     ...request: Parameters<SpaceSession["watchAddSync"]>
   ): ReturnType<SpaceSession["watchAddSync"]> {
-    return untilAnswered(() => this.#session.watchAddSync(...request));
+    return this.#changeWatches(() => this.#session.watchAddSync(...request));
   }
 
   watchRemoveSync(
     ...request: Parameters<SpaceSession["watchRemoveSync"]>
   ): ReturnType<SpaceSession["watchRemoveSync"]> {
-    return untilAnswered(() => this.#session.watchRemoveSync(...request));
+    return this.#changeWatches(() => this.#session.watchRemoveSync(...request));
   }
 
   viewSetSync(
     ...request: Parameters<SpaceSession["viewSetSync"]>
   ): ReturnType<SpaceSession["viewSetSync"]> {
-    return untilAnswered(() => this.#session.viewSetSync(...request));
+    return this.#changeWatches(() => this.#session.viewSetSync(...request));
   }
 
   //
@@ -395,65 +485,10 @@ export class ResendingSession {
   //
 
   /**
-   * Helper for `transact()`, which hands `unanswered` to the session and
-   * settles it with the answer, or keeps it to be made again when the
-   * connection lost it.
+   * Helper for the watch changes, which makes `change` in its turn among
+   * them.
    */
-  #send(unanswered: UnansweredCommit): void {
-    unanswered.sent = true;
-    this.#session.transact(unanswered.commit, unanswered.beforeIssue).then(
-      (applied) => {
-        this.#forget(unanswered);
-        unanswered.answer.resolve(applied);
-      },
-      (error) => {
-        unanswered.sent = false;
-        try {
-          unanswered.ready = readyAfter(error, unanswered.failures);
-        } catch (final) {
-          this.#forget(unanswered);
-          unanswered.answer.reject(final);
-          return;
-        }
-        // `#resendLost()` reads how the wait ends.
-        unanswered.ready.catch(() => {});
-        this.#resending ??= this.#resendLost();
-      },
-    );
-  }
-
-  /**
-   * Helper for `#send()`, which waits until the session can take the commits
-   * the connection lost and then sends every commit that is not with the
-   * session, in `localSeq` order: those it lost, and those made while they
-   * waited. A drop fails every commit it carried before the session is ready
-   * again, so a commit lost while another waits joins that wait.
-   */
-  async #resendLost(): Promise<void> {
-    for (;;) {
-      const lost = this.#unanswered.filter((unanswered) =>
-        unanswered.ready !== undefined
-      );
-      if (lost.length === 0) break;
-      await Promise.all(lost.map(async (unanswered) => {
-        try {
-          await unanswered.ready;
-        } catch (error) {
-          this.#forget(unanswered);
-          unanswered.answer.reject(error);
-        }
-        unanswered.ready = undefined;
-      }));
-    }
-    this.#resending = undefined;
-    for (const unanswered of [...this.#unanswered]) {
-      if (!unanswered.sent) this.#send(unanswered);
-    }
-  }
-
-  /** Removes `unanswered` from the commits still to be answered. */
-  #forget(unanswered: UnansweredCommit): void {
-    const index = this.#unanswered.indexOf(unanswered);
-    if (index !== -1) this.#unanswered.splice(index, 1);
+  #changeWatches<T>(change: () => Promise<T>): Promise<T> {
+    return this.#watchChanges.make(this.#watchChangesMade++, change);
   }
 }
