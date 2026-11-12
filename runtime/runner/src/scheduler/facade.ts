@@ -3539,6 +3539,7 @@ export class Scheduler {
       backpressure: this.runtime.commitBackpressure,
       collectPendingLoadParkKeys: (event, deps) =>
         this.#collectPendingLoadParkKeys(event, deps),
+      unawaitedLoadKeys: (event, keys) => this.#unawaitedLoadKeys(event, keys),
       capturePendingLoadGenerations: () =>
         this.#capturePendingLoadGenerations(),
       parkHeadEventForLoads: (event, keys) =>
@@ -3944,9 +3945,25 @@ export class Scheduler {
       pendingLoadAddresses,
       log,
     );
-    if (keys.length === 0) return keys;
+    return this.#unawaitedLoadKeys(event, keys);
+  }
+
+  /**
+   * The members of `keys`, keys of documents whose loads are in flight, that
+   * `event` has not already waited for. A key whose load the event parked on
+   * and saw settle is left out, unless the load in flight now was already in
+   * flight when the current preflight began, which makes it a refresh rather
+   * than a load the event's own reads kicked again. A load that settles
+   * leaving the replica no basis for its document, as one in a deleted space
+   * does, is kicked again by every read, so without this the event would park
+   * on it every time it ran.
+   */
+  #unawaitedLoadKeys(
+    event: QueuedEvent,
+    keys: readonly string[],
+  ): string[] {
     const history = this.#headEventLoadParkHistory;
-    if (!history || history.eventId !== event.id) return keys;
+    if (!history || history.eventId !== event.id) return [...keys];
     return keys.filter((key) => {
       const currentGeneration =
         this.runtime.storageManager.pendingLoadGeneration?.(key) ?? 0;

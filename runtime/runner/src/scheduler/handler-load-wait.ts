@@ -40,39 +40,35 @@ export function withdrawHandlerWhileLoading(
 }
 
 /**
- * Withdraws the handler that ran in `tx` when it read, anywhere in its run,
- * a document `withdrawHandlerWhileLoading()` would have withdrawn it for: one
- * whose load is in flight and for which the replica has no local basis. A
- * read the run makes through a link it resolves while it runs reaches a
- * document no dependency of the event names, so nothing parked the event on
- * that load before the run; the read then returns the schema's default, or
- * nothing, in place of what the document holds. The reads that count are the
- * ones the run consumed the document's data with (`consumedReadsOf()`), in a
- * space for which `validated` returns `false`. A read in a space the run's
- * commit carries its reads to is held to the store's head there, and a stale
- * one is refused at that commit, so it needs no withdrawal here; a read in
- * any other space is held to nothing.
+ * The keys (`entityKey()`) of the documents the handler that ran in `tx` read
+ * that `withdrawHandlerWhileLoading()` would have withdrawn it for: each one's
+ * load is in flight and the replica has no local basis for it. A read the run
+ * makes through a link it resolves while it runs reaches a document no
+ * dependency of the event names, so nothing parked the event on that load
+ * before the run, and the read returned the schema's default, or nothing, in
+ * place of what the document holds. The reads that count are the ones the run
+ * consumed the document's data with (`consumedReadsOf()`), in a space for
+ * which `validated` returns `false`. A read in a space the run's commit
+ * carries its reads to is held to the store's head there, and a stale one is
+ * refused at that commit; a read in any other space is held to nothing.
  *
- * Does nothing, and reads nothing of the run, while no load is in flight.
+ * Returns none, having read nothing of the run, while no load is in flight.
  */
-export function withdrawHandlerAfterLoadingRead(
+export function loadingReadKeysIn(
   runtime: Runtime,
   tx: IExtendedStorageTransaction,
   validated: (space: MemorySpace) => boolean,
-): void {
-  if (tx.dispatchedHandlerNotRun !== undefined) return;
+): string[] {
   const { storageManager } = runtime;
-  if ((storageManager.pendingLoadAddresses?.() ?? []).length === 0) return;
+  if ((storageManager.pendingLoadAddresses?.() ?? []).length === 0) return [];
   const identity = tx.tx.scopeKeyIdentity ?? runtime.scopeKeyIdentity;
+  const keys = new Set<string>();
   for (const read of consumedReadsOf(tx.tx)) {
     if (validated(read.space)) continue;
     if (!isLoadingWithoutLocalBasis(runtime, read, identity)) continue;
-    tx.dispatchedHandlerNotRun = {
-      reason: `the run read \`${read.id}\` while its document was still ` +
-        "loading",
-    };
-    return;
+    keys.add(entityKey(read, identity));
   }
+  return [...keys];
 }
 
 /**

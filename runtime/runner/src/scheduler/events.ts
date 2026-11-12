@@ -73,10 +73,7 @@ import {
 import { createEventPreflightTraceContext } from "./diagnostics.ts";
 import { mintEventId } from "./event-identity.ts";
 import { planEventInvalidDependencyScheduling } from "./execution.ts";
-import {
-  consumedReadsOf,
-  withdrawHandlerAfterLoadingRead,
-} from "./handler-load-wait.ts";
+import { consumedReadsOf, loadingReadKeysIn } from "./handler-load-wait.ts";
 import type { OriginStatus } from "./lineage.ts";
 import type { NodeRegistry } from "./node-record.ts";
 import {
@@ -1415,6 +1412,12 @@ export interface SchedulerEventExecutionState {
     event: QueuedEvent,
     deps: ReactivityLog,
   ) => string[];
+
+  /** The members of `keys`, loading documents, `event` has not waited for. */
+  readonly unawaitedLoadKeys: (
+    event: QueuedEvent,
+    keys: readonly string[],
+  ) => string[];
   readonly capturePendingLoadGenerations: () => void;
   readonly parkHeadEventForLoads: (
     event: QueuedEvent,
@@ -2251,6 +2254,7 @@ export async function processPullQueuedEventDuringExecute(
       state.getOriginLocalSeq(originTx, space),
     collectPendingLoadParkKeys: (event, log) =>
       state.collectPendingLoadParkKeys(event, log),
+    unawaitedLoadKeys: (event, keys) => state.unawaitedLoadKeys(event, keys),
     parkHeadEventForLoads: (event, keys) =>
       state.parkHeadEventForLoads(event, keys),
   }, queuedEvent);
@@ -2296,6 +2300,12 @@ export async function dispatchQueuedEvent(state: {
   readonly collectPendingLoadParkKeys: (
     event: QueuedEvent,
     log: ReactivityLog,
+  ) => string[];
+
+  /** The members of `keys`, loading documents, `event` has not waited for. */
+  readonly unawaitedLoadKeys: (
+    event: QueuedEvent,
+    keys: readonly string[],
   ) => string[];
   readonly parkHeadEventForLoads: (
     event: QueuedEvent,
@@ -2913,14 +2923,7 @@ export async function dispatchQueuedEvent(state: {
       // argument reaches that is a cold read, not a schema mismatch: a
       // computation that reads a document the replica does not hold yet
       // publishes `undefined` until the load lands, so a handler reading
-      // through it finds its argument unresolved in exactly that window. A
-      // body that did run is withdrawn the same way when it read a document
-      // whose load is still in flight and of which the replica holds nothing,
-      // in a space its commit holds no reads in
-      // (`withdrawHandlerAfterLoadingRead()`): it reached the document
-      // through a link it resolved while it ran, so no dependency the
-      // preflight parked on names it, and it read the schema's default in
-      // place of the document's value.
+      // through it finds its argument unresolved in exactly that window.
       // Both arms below withdraw the transaction and run the handler again
       // once the replica has moved; what differs is who re-delivers. Under
       // events-down (server-execution v2 Phase 3) a dispatch without a served
@@ -2930,19 +2933,61 @@ export async function dispatchQueuedEvent(state: {
       // consequence replaces.
       const withdrawsNotRun = served !== undefined ||
         state.runtime.experimental.serverExecution !== true;
-      if (withdrawsNotRun) {
-        // The wave holds a served run to its reads in the home space; a
-        // client commit holds each space it wrote to the reads it made there.
-        const home = queuedEvent.eventLink.space;
-        withdrawHandlerAfterLoadingRead(
-          state.runtime,
-          tx,
-          served !== undefined
-            ? (space) => space === home
-            : (space) =>
-              tx.tx.getWriteTargetSpaces?.().includes(space) ?? false,
-        );
+
+      // A body that ran and read a document whose load is still in flight,
+      // and of which the replica holds nothing, read the schema's default in
+      // place of the document's value (events.md §5). It reached the document
+      // through a link it resolved while it ran, so no dependency the
+      // preflight parked on names it. A read the commit holds to the store's
+      // head needs nothing here: the wave holds a served run to its reads in
+      // the home space, and a client commit holds each space it wrote to the
+      // reads it made there. Any other such read withdraws the run, which
+      // runs again once those loads settle, and a load the event already
+      // waited for does not withdraw it twice (`unawaitedLoadKeys`).
+      const loadingReads =
+        withdrawsNotRun && tx.dispatchedHandlerNotRun === undefined
+          ? state.unawaitedLoadKeys(
+            queuedEvent,
+            loadingReadKeysIn(
+              state.runtime,
+              tx,
+              served !== undefined
+                ? (space) => space === queuedEvent.eventLink.space
+                : (space) =>
+                  tx.tx.getWriteTargetSpaces?.().includes(space) ?? false,
+            ),
+          )
+          : [];
+      if (loadingReads.length > 0) {
+        const reason = `the run read ${loadingReads.length} document(s) ` +
+          `still loading (${loadingReads.join(", ")})`;
+        if (served === undefined) {
+          // The client arm below parks on the run's loads.
+          if (retry) state.noteLineageRerun(tx);
+          tx.dispatchedHandlerNotRun = { reason };
+        } else {
+          // The served entry is requeued here with its carriage and parked
+          // on those loads, rather than left to the drain, so that it runs
+          // again once they settle and a load that fails defers it as one at
+          // the preflight does.
+          state.noteLineageRerun(tx);
+          if (tx.status().status === "ready") {
+            tx.abort(new Error(`served run ${reason}`));
+          }
+          state.parkHeadEventForLoads(
+            requeueForNameResolution(),
+            loadingReads,
+          );
+          runFinalCommitCallback();
+          tx.abandonStagedWork(
+            eventAbandonError(
+              "served run re-runs once the documents it read have loaded",
+            ),
+          );
+          return;
+        }
       }
+
       if (tx.dispatchedHandlerNotRun !== undefined && withdrawsNotRun) {
         const reason = tx.dispatchedHandlerNotRun.reason;
         // Taken before the abort, since the read set is what the client arm
