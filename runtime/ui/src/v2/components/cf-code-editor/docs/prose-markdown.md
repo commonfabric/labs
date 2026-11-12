@@ -64,8 +64,8 @@ activation: the cursor position is compared to the element's `from`/`to` span.
 ## Math
 
 With the `math` property set, prose mode also draws TeX formulas in Markdown:
-`$…$` inline and `$$…$$` display. It lives in `features/prose-math.ts`, in three
-parts:
+`$…$` inline and `$$…$$` display. The syntax is `features/math-syntax.ts`, and
+what draws it is `features/prose-math.ts`:
 
 - **`mathMarkdown`**, a Markdown parser extension, makes each formula a node of
   the syntax tree, `InlineMath` or `DisplayMath`, with `MathMark` children for
@@ -97,13 +97,20 @@ KaTeX runs with `trust` off, so `\href`, `\url`, `\includegraphics` and the
 `\html…` commands draw nothing of the author's choosing; with `maxSize` 10 (em)
 and `maxExpand` 1000.
 
-KaTeX's layout rules are adopted into the editor's shadow root from
-`features/katex-styles.ts`. Its fonts cannot be declared there, since a shadow
-root ignores `@font-face`: the shell serves them from `/fonts/katex/` and
-declares them in `/styles/katex-fonts.css`, which its page loads, and the
-browser fetches a face only when a formula uses it. A page without that
-stylesheet draws formulas in fallback faces. `tasks/generate-katex-assets.ts`
-writes all three from the pinned KaTeX release;
+`prose-math.ts` brings KaTeX and its layout rules, so the editor imports it
+dynamically, the first time an editor draws math, and the shell's bundle carries
+it in a chunk of its own; `runtime/shell/integration/page-boot-graph.test.ts`
+holds KaTeX off the page's static imports. Until it arrives, formulas show as
+their TeX, and the editor's `updateComplete` waits for it. A load that fails is
+reported as `cf-error`.
+
+KaTeX's layout rules, `features/katex-styles.ts`, are added to the editor's
+shadow root once loaded. Its fonts cannot be declared there, since a shadow root
+ignores `@font-face`: the shell serves them from `/fonts/katex/` and declares
+them in `/styles/katex-fonts.css`, which its page loads, and the browser fetches
+a face only when a formula uses it. A page without that stylesheet draws
+formulas in fallback faces. `tasks/generate-katex-assets.ts` writes all three
+from the pinned KaTeX release;
 [DEPENDENCIES.md](../../../../../../../docs/development/DEPENDENCIES.md#katex)
 says how to roll it.
 

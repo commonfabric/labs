@@ -7,7 +7,8 @@ import { GFM } from "@lezer/markdown";
 import katex from "katex";
 
 import { KATEX_STYLES_VERSION } from "./katex-styles.ts";
-import { buildMathDecorations, mathMarkdown } from "./prose-math.ts";
+import { mathMarkdown } from "./math-syntax.ts";
+import { buildMathDecorations } from "./prose-math.ts";
 
 //
 // Helpers

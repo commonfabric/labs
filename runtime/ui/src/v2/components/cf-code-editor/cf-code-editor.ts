@@ -73,7 +73,7 @@ import {
 } from "@commonfabric/runtime-client";
 import { GFM } from "@lezer/markdown";
 import { consume } from "@lit/context";
-import { html, PropertyValues, unsafeCSS } from "lit";
+import { type CSSResult, html, PropertyValues } from "lit";
 import { property } from "lit/decorators.js";
 
 import { BaseElement } from "../../core/base-element.ts";
@@ -140,9 +140,8 @@ import {
   setRefShortNames,
   shortNameQueryAt,
 } from "./features/mention-refs.ts";
-import { KATEX_STYLES } from "./features/katex-styles.ts";
+import { mathMarkdown } from "./features/math-syntax.ts";
 import { createProseMarkdownPlugin } from "./features/prose-markdown.ts";
-import { mathMarkdown, proseMath } from "./features/prose-math.ts";
 import { styles } from "./styles.ts";
 import {
   CodeMirrorCollaborationController,
@@ -268,6 +267,13 @@ const getLangExtFromMimeType = (mime: MimeType, math: boolean) => {
   return langRegistry.get(mime) ?? defaultLang;
 };
 
+// What drawing formulas needs: KaTeX, its layout rules and the editor
+// extension around them. KaTeX is a large share of the shell's bundle and
+// only an editor with `math` set draws with it, so it loads when such an
+// editor first asks, from a chunk of its own.
+// deno-lint-ignore cf-imports/no-inline-module-import
+const loadProseMath = () => import("./features/prose-math.ts");
+
 /** What the editor needs of a handle it computes writes from. */
 type EditorInput = Pick<CellHandle<unknown>, "lastRead" | "pull">;
 
@@ -380,11 +386,7 @@ function readUnlessRefused(cell: { get(): unknown }): unknown {
  * <cf-code-editor language="text/javascript" placeholder="Enter code..."></cf-code-editor>
  */
 export class CFCodeEditor extends BaseElement {
-  static override styles = [
-    BaseElement.baseStyles,
-    styles,
-    unsafeCSS(KATEX_STYLES),
-  ];
+  static override styles = [BaseElement.baseStyles, styles];
 
   static override properties = {
     value: { type: String },
@@ -515,6 +517,15 @@ export class CFCodeEditor extends BaseElement {
   private _setupComp = new Compartment();
   private _modeComp = new Compartment();
   private _proseMarkdownComp = new Compartment();
+
+  /**
+   * What drawing formulas needs, once loaded. It loads the first time this
+   * editor draws math.
+   */
+  #proseMath: Awaited<ReturnType<typeof loadProseMath>> | undefined;
+
+  /** The load of `#proseMath`, from when it starts; it never rejects. */
+  #proseMathLoad: Promise<void> | undefined;
   private _collaborationComp = new Compartment();
   private _presenceComp = new Compartment();
   /**
@@ -2819,6 +2830,13 @@ export class CFCodeEditor extends BaseElement {
       this._reportHighlightFaults(this._editorView);
     }
 
+    if (
+      (changedProperties.has("math") || changedProperties.has("mode")) &&
+      this.#drawsMath
+    ) {
+      this.#loadProseMath();
+    }
+
     // Update language, which parses formulas only for an editor drawing them
     if (
       (changedProperties.has("language") || changedProperties.has("math") ||
@@ -3154,13 +3172,66 @@ export class CFCodeEditor extends BaseElement {
     return getLangExtFromMimeType(this.language, this.#drawsMath);
   }
 
-  /** Prose mode's Markdown rendering, with formulas when drawn. */
+  /**
+   * Prose mode's Markdown rendering, with formulas once what draws them has
+   * loaded. Until then, formulas show as their TeX.
+   */
   #proseExtension(): Extension {
     if (this.mode !== "prose") return [];
+    const math = this.#drawsMath ? this.#proseMath : undefined;
     return [
       createProseMarkdownPlugin(),
-      this.#drawsMath ? proseMath(this._editorView?.hasFocus ?? false) : [],
+      math?.proseMath(this._editorView?.hasFocus ?? false) ?? [],
     ];
+  }
+
+  /**
+   * Starts loading what drawing formulas needs, unless a load has started,
+   * and draws them once it arrives. A load that fails is reported as
+   * `cf-error`, and the formulas stay as their TeX.
+   */
+  #loadProseMath(): void {
+    if (this.#proseMathLoad !== undefined) return;
+    this.#proseMathLoad = loadProseMath().then((module) => {
+      this.#proseMath = module;
+      this.#adoptMathStyles(module.mathStyles);
+      if (this._editorView !== undefined && this.#drawsMath) {
+        this._editorView.dispatch({
+          effects: this._proseMarkdownComp.reconfigure(this.#proseExtension()),
+        });
+      }
+    }, (cause: unknown) => {
+      const error = cause instanceof Error ? cause : new Error(String(cause));
+      this.emit("cf-error", { error, message: error.message });
+    });
+  }
+
+  /**
+   * Adds KaTeX's layout rules to this editor's shadow root, after the sheets
+   * already there. Lit's `adoptStyles()` would replace those, CodeMirror's
+   * own among them.
+   */
+  #adoptMathStyles(mathStyles: CSSResult): void {
+    const root = this.shadowRoot;
+    if (root === null) return;
+    const sheet = mathStyles.styleSheet;
+    if (sheet === undefined) {
+      const style = document.createElement("style");
+      style.textContent = mathStyles.cssText;
+      root.append(style);
+    } else if (!root.adoptedStyleSheets.includes(sheet)) {
+      root.adoptedStyleSheets = [...root.adoptedStyleSheets, sheet];
+    }
+  }
+
+  /**
+   * Like Lit's, except that once this editor has started loading what draws
+   * formulas, it also waits for that load and the drawing it brings.
+   */
+  protected override async getUpdateComplete(): Promise<boolean> {
+    const complete = await super.getUpdateComplete();
+    await this.#proseMathLoad;
+    return complete;
   }
 
   private _getModeExtension(): Extension {

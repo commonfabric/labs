@@ -39,7 +39,15 @@ const SHELL_PORT = parseInt(
 
 const config: Config = {
   entries: [
-    { in: "src/index.ts", out: "scripts/index" },
+    {
+      in: "src/index.ts",
+      out: "scripts/index",
+      // KaTeX is reached only through the dynamic import in cf-code-editor,
+      // the first time an editor draws math. Splitting emits it as a chunk of
+      // its own, so the page loads it only then.
+      // integration/page-boot-graph.test.ts holds it there.
+      splitting: true,
+    },
     { in: "src/library.ts", out: "scripts/shell-library", splitting: true },
     {
       in: "src/library-components.ts",
@@ -58,7 +66,7 @@ const config: Config = {
       // The TypeScript compiler stack is reached only through the single
       // dynamic import in deferred-compiler-stack.ts. Splitting emits it as a
       // separate chunk loaded on first compile, so it stays out of the worker
-      // boot bundle. `index` above is a plain, unsplit bundle.
+      // boot bundle.
       splitting: true,
     },
   ],
