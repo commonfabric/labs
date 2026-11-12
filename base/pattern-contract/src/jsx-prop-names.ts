@@ -12,7 +12,8 @@
  *
  * The compiler and the renderer both decide by these functions, so a name
  * the compiler lets through is one the renderer applies as the compiler
- * assumed.
+ * assumed. A misnamed prop that reaches the renderer some other way, in a
+ * spread object or a direct call to `h()`, is warned of there.
  *
  * Elements are created in the HTML namespace. SVG elements written as JSX
  * would need their hyphenated names (`stroke-width`) set as attributes, and

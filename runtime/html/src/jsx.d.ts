@@ -4604,6 +4604,10 @@ interface CFResizablePanelGroupAttributes<T> extends CFHTMLAttributes<T> {
   /** Below this width (px) of a horizontal group itself, its panels lie
    * vertically (the group is stacked). A vertical group never stacks. */
   "stackBelow"?: number | CellLike<number>;
+  /** A person resized the panels: each panel's size, a percentage of the
+   * group, in document order. Fired on this group only, never for a group
+   * nested in one of its panels. */
+  "oncf-resize"?: EventHandler<{ sizes: number[] }>;
 }
 
 interface CFResizableHandleAttributes<T> extends CFHTMLAttributes<T> {

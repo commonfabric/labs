@@ -11,7 +11,11 @@ import { CellHandle, cellRefToKey } from "@commonfabric/runtime-client";
 import { getLogger } from "@commonfabric/logger";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 
-import { isAttributePropName } from "@commonfabric/pattern-contract/jsx-prop-names";
+import {
+  camelCasePropName,
+  isAttributePropName,
+  isMisnamedPropName,
+} from "@commonfabric/pattern-contract/jsx-prop-names";
 import { setPropDefault, type SetPropHandler } from "../render-utils.ts";
 import { CONTAINER_NODE_ID, type VDomBatch, type VDomOp } from "../vdom-ops.ts";
 import { serializeEvent } from "./events.ts";
@@ -23,6 +27,27 @@ import {
 } from "./space-context.ts";
 
 const logger = getLogger("vdom-applicator", { enabled: false, level: "debug" });
+
+/** The element and prop names already warned of, so each is said once. */
+const warnedMisnamedProps = new Set<string>();
+
+/**
+ * Warns, once for each element name and prop, of a prop whose name names no
+ * property. The compiler refuses one written as a JSX prop; this catches one
+ * that reaches the renderer by another way, a spread object or a direct call
+ * to `h()`, which would otherwise set a property nothing reads.
+ */
+function warnMisnamedProp(element: string, key: string): void {
+  if (!isMisnamedPropName(key)) return;
+  const id = `${element} ${key}`;
+  if (warnedMisnamedProps.has(id)) return;
+  warnedMisnamedProps.add(id);
+  console.warn(
+    `<${element}> was given \`${key}\`, which names no property and sets ` +
+      `nothing. Write the property's name, \`${camelCasePropName(key)}\`; ` +
+      "only data-*, aria-* and on… event props keep a hyphen.",
+  );
+}
 
 const ELEMENT_NODE = 1;
 const TEXT_NODE = 3;
@@ -351,6 +376,7 @@ export class DomApplicator {
   #setProp(nodeId: number, key: string, value: unknown): void {
     const node = this.#nodes.get(nodeId);
     if (!isElementNode(node)) return;
+    warnMisnamedProp(node.localName, key);
 
     // Use the configured property setter (defaults to setPropDefault)
     this.#setPropHandler(node, key, value);
