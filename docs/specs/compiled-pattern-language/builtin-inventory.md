@@ -8,13 +8,19 @@ project owner's rulings on the classification are listed under
 [Decisions](#decisions), and what remains undecided under
 [Open questions](#open-questions).
 
-Two sibling documents specify the neighboring parts. This document refers to
+The sibling documents specify the neighboring parts. This document refers to
 them by file name and does not define their content:
 
 - `language-subset.md`: the grammar, type rules, and diagnostics;
 - `plan-and-label-templates.md`: the plan format, slots, observation classes,
   and the formal label rule of each operation. Each "Label rule" paragraph
-  below states the facts that document needs, informally.
+  below states the facts that document needs, informally;
+- `footprint-analysis.md`: what a function body's record holds for the
+  reads, the writes, and the runtime calls the body makes;
+- `execution-and-storage.md`: the transaction of a cause, causal
+  identifiers, and the durable state of operations;
+- `scheduler-and-serving-loop.md`: when an effect is requested and
+  completed, commits across spaces, and client speculation.
 
 ## Scope and method
 
@@ -86,6 +92,10 @@ they split, and the summary table lists both halves.
 - **Label rule:** for class A, which inputs flow to which outputs with which
   observation class. For class B, the declared rule at the boundary and the
   state that must be stored.
+- **Request operands:** for class B, which operands of a request are
+  references and how deep the others are serialized, as the implementation
+  reads them. [Effectful built-ins](#effectful-built-ins) says what the
+  compiled design does with those facts.
 
 ## What every built-in shares
 
@@ -434,17 +444,25 @@ computation returned, which are stored inline.
   function of the element, its captures, and the index only when it uses
   the index.
 - *State and handlers over plain values need the index.* A state cell
-  declared in the body has the cause instance, element key, and name, and a
-  handler binding is identified by its handler and captures, so rows that
-  show the same plain value would share both: two rows showing `"glazed"`
-  would open together, and an event from either could not be told apart.
+  declared in the body has the cause instance, element key, and name. The
+  stream of a handler bound in the body is named the same way, because a
+  binding made in the reactive tier copies nothing and is named by where it
+  is declared ([A handler binding](#a-handler-binding-made-in-a-body)). Rows
+  that show the same plain value would therefore share both: two rows
+  showing `"glazed"` would open together, and an event from either could
+  not be told apart.
   That sharing is not allowed. A body over plain-value elements that
   declares a state cell or binds a handler without using the index is a
   compile error. The author either uses the index, which puts it in the
   key, or makes the elements cells, which a list of records written by a
   handler already is. Sharing a cone for pure computation is unaffected.
   Whether an element is a plain value is a fact of storage that a type such
-  as `Donut[]` does not state; see open question 5.
+  as `Donut[]` does not state; see open question 5. *Assumed:* the error
+  covers a body that declares a state cell or binds a handler, as ruled,
+  and not a body that instantiates a child. The child's result cell is
+  named by the element key, so two equal plain elements share one child
+  and its state. The question is with the project owner (the continuation
+  plan, question 31).
 - *The same cell twice shares one cone.* The occurrence count is dropped,
   for the same reason: two positions that hold the same cell are the same
   element.
@@ -466,6 +484,13 @@ computation returned, which are stored inline.
   is a disclosure. A value is therefore combined with a secret of the space
   before it enters an identifier, as `sqliteQuery` does for row documents
   (`SQLITE_ROW_SALT`, `resultRowKeys`).
+- *A client cannot read the salt.* A client therefore cannot derive an
+  identifier that holds a value-derived key. It cannot name per-element
+  state over plain values, which exists only where the index is also in the
+  key, or a handler binding with a copied path, before the server stores a
+  link to it. Until that link arrives, what reads such state on a client is
+  pending. `scheduler-and-serving-loop.md` owns what a client shows
+  meanwhile.
 - *Keying by value is a `value` observation by the runtime, not by the
   body.* Deciding which cone an element belongs to compares element values.
   The comparison does not flow into any element's output, since each output
@@ -487,7 +512,13 @@ computation returned, which are stored inline.
   `group` bucket lists an element once per occurrence, in input order,
   which the key alone does not give. In `key` mode the winner among
   elements with equal index keys is the one with the smallest element key
-  (`firstMember` uses the occurrence identity today).
+  (`firstMember` uses the occurrence identity today). That tie rule, and
+  the same one for `minBy` and `maxBy`, is an assumption: for an element
+  that is a plain value the element key is a hash of the whole value, so
+  the choice then depends on element values that the label of the choice
+  does not hold. The question is with the project owner (the continuation
+  plan, question 6), and the correction proposed there is the first
+  position in source order.
 - `reduce` has no per-element cone, because the callback's result depends
   on the accumulator. Its entry says what it stores instead.
 - `findIndex`, `some`, `every`, and `find` use the same rule for their
@@ -496,8 +527,12 @@ computation returned, which are stored inline.
 `plan-and-label-templates.md` §1.3 states the same rule. The plan does not
 record the element part of the key, which the runtime computes from each
 element. It records in `Collection.bodyUses.index` whether a body uses the
-index, which is what puts the position in the key, and it joins the key to
-causes through `perElementOf`.
+index, which is what puts the position in the key. The key joins a cause
+through the `within` steps of the declaration (`WithinStep` in its §1.1): a
+state cell, an operation, a child, a body, or a binding declared in an
+element body has an `element` step that names the collection, and each
+such step, outermost first, adds the name of its collection and the key of
+the element to the cause.
 
 ### `aggregate` and `aggregateNode`
 
@@ -505,8 +540,9 @@ causes through `perElementOf`.
   `builtins/aggregate-sum.ts`, `builtins/aggregate-extremum.ts`. Reached
   through the cell methods `count()`, `sum()`, `min()`, `max()`,
   `countWithPattern`, `minByWithPattern`, and `maxByWithPattern`
-  (`createAggregate` in `runtime/runner/src/cell.ts`). The predicate and
-  selector forms first run `mapWithPattern` and aggregate its output.
+  (`createAggregate` in `runtime/runner/src/cell.ts`). The forms that take
+  a predicate or a key function first run `mapWithPattern` and aggregate
+  its output.
   `aggregateNode` has no authored entry point; `aggregate` instantiates it
   through a one-node pattern (`getNodePattern`).
 - **Does:** `aggregate` builds a balanced tree of `aggregateNode` runs over
@@ -556,10 +592,10 @@ causes through `perElementOf`.
     predicate for every element.
   - `sum()`, `min()`, `max()`: the membership of the input and the value of
     every member.
-  - `minBy(selector)`, `maxBy(selector)`: the membership of the input and
-    the selector's value for every element decide *which* element is
-    referenced. The output is that element (identity), so its content slots
-    are the winning element's own.
+  - `minBy(keyFunction)`, `maxBy(keyFunction)`: the membership of the
+    input and the key function's value for every element decide *which*
+    element is referenced. The output is that element (identity), so its
+    content slots are the winning element's own.
   - State to store: the fold. `plan-and-label-templates.md` §3.8 keeps the
     shape of that state private to the runtime and fixes the exact-sum
     semantics. The plan must fix the tie rules (`chooseAggregateCandidate`),
@@ -625,8 +661,11 @@ causes through `perElementOf`.
     depends on the same two things.
   - `keys()` and `keyEntries()` depend on the enumeration of the occupied
     keys, which depends on the key of every element.
-  - In `key` mode the winner among equal keys is decided by element identity,
-    so no element value beyond the key flows into the choice.
+  - In `key` mode the winner among equal keys is decided by the element
+    key. For elements keyed by the identity of their cells, no element
+    value beyond the index key flows into the choice. For plain-value
+    elements that does not hold, and the tie rule is an assumption
+    ([Element keys](#element-keys), "The other operations").
   - State to store: the index and the membership bookkeeping.
 
 ### `reduce`
@@ -822,12 +861,72 @@ causes through `perElementOf`.
   - A target that is not kept has no stored label: the plan document says
     an interim value is never labeled. The operation therefore takes a
     target with an address: a state cell, an argument, a kept output, or
-    whatever a link leads to. For an interim value of the same instance the
-    result is `notAvailable`, which is what the implementation returns
-    today for missing metadata, and the compiler reports the case when it
-    can see it statically. Inspecting a value does not make it kept.
+    whatever a link leads to. *Assumed:* for an interim value of the same
+    instance the result is `notAvailable`, which is what the implementation
+    returns today for missing metadata, and the compiler reports the case
+    when it can see it statically. Inspecting a value does not make it
+    kept. `plan-and-label-templates.md` §3.16 has the other reading: for a
+    value the instance computes, kept or interim, the operation reads the
+    label the value's template instantiates to in the current transaction.
+    The choice is with the project owner (open question 1).
 
 ## Effectful built-ins
+
+Each entry of this section has a **Request operands** paragraph. It says
+how the implementation reads each operand of a request. An operand is read
+*by value*, and the entry says how deep, or it is a *reference*: its content
+is not read, and what is stored or leaves is a link. The compiled design
+uses these facts in two places.
+
+- **The request is a set of write edges.** A request is written into the
+  effect's state, one `WriteEdge` with the target `request` per path
+  (`plan-and-label-templates.md` §1.1 and §3.14). A path that holds a
+  container or a cell the requester passes on unchanged holds a reference,
+  by the rule for a value passed on unchanged (`footprint-analysis.md`
+  §3.8). The template of such a path has the label of the pointer and not
+  the label of the content.
+- **The egress ceiling covers the content followed.** The transaction that
+  checks the ceiling follows the references the request holds as far as the
+  built-in serializes them, and checks the ceiling on the request's
+  templates joined with what those reads consume
+  (`plan-and-label-templates.md` §3.14). An operand that an entry declares
+  a reference is not followed: it leaves as a link, and its content is not
+  serialized. An operand that an entry says is serialized or read in full
+  is followed through every link below it. A depth in between is stated in
+  the entry. Where the declared rule of a boundary takes the label of the
+  request, it takes this joined label.
+- **What is hashed is followed too.** Some operands enter the request hash
+  and are not sent, such as `reactOn` of `sqliteQuery`. The stored hash is
+  a function of their content. *Assumed:* the transaction that checks the
+  ceiling follows such an operand as it follows one that is sent, so that
+  the label of the stored hash covers what the hash was computed from.
+  `plan-and-label-templates.md` §3.14 states the rule for what the effect
+  serializes and does not mention the hash.
+
+These paragraphs have two limits. They state what is read when the request
+is made. A language-model built-in also sends content during a tool loop
+that no request held, which its entry names and which the boundary's own
+transactions have to label. And the `streamData` and `llm` entries have no
+such paragraph, because both are removed.
+
+The staged changes are effect requests too, and their operands are under
+[Staged changes](#staged-changes).
+
+**When an effect is demanded, and its time gates.** An effect operation is
+demanded when something demands a path of its result. Two kinds of request
+are made in order to act and have no result that a pattern reads. A staged
+change is a step of the commit of the event's transaction and waits for no
+demand. A `navigateTo` requested by a handler is staged in the event's
+transaction, and one written in the reactive tier is demanded whenever its
+instance is (`scheduler-and-serving-loop.md` §6.2). The time gates are the
+ones the entries state, and they stay as they are: the claim of the fetch
+family goes stale after five seconds or `options.mutexTimeoutMs`
+(`MUTEX_STALE_AFTER` in `builtins/fetch-utils.ts`), and the turn claim of
+`llmDialog` after five minutes (`REQUEST_TIMEOUT` in
+`builtins/llm-dialog.ts`). No other entry declares one. *Assumed:* the
+50 ms debounce of `wish` (`WISH_DEBOUNCE_MS` in `builtins/index.ts`) has no
+counterpart. `wish` is structural, its parts are evaluated on demand like
+any cone, and no action remains for a debounce to apply to.
 
 ### `fetchBinary`, `fetchText`, `fetchJson`, `fetchJsonUnchecked`
 
@@ -859,15 +958,38 @@ causes through `perElementOf`.
 - **Execution:** effectful: server only, never speculated; a speculating
   client reads through to the last committed result. Computation; not
   replayable.
+- **Request operands:** no operand is a reference. The action reads the
+  inputs under the input schema of the built-in and builds the request from
+  them (`snapshotInputsFor` in `builtins/fetch.ts`).
+  - `url` is a string.
+  - Of `options` the schema names `method`, `cache`, and `redirect`, which
+    are strings, `headers`, a record of strings, `body`, and
+    `mutexTimeoutMs` (`fetchOptionsSchemaProperties`). A member the schema
+    does not name is dropped, and `mutexTimeoutMs` is removed before the
+    request is built.
+  - `body` has the open schema `{}` and is serialized in full: a body that
+    is not a string is passed to `JSON.stringify`, which reads every path
+    below it, through every link.
+  - For `fetchJson`, `schema` is an open object or a boolean and is read
+    in full. It is part of the request and of its hash. It is applied to
+    the response and is not sent.
+
+  The request that leaves is the one the action built (`startFetch`),
+  with two additions the runtime makes: a relative `url` is resolved
+  against the host of the space the inputs live in, and a request to a
+  protected first-party route gets signed headers. So the egress check
+  follows `body` and `schema` in full and each value of `headers`, and
+  nothing else.
 - **New design:** class B.
 - **Label rule:** the request slots are the values of `url`, `options`, and
-  the schema. The egress check applies the join of exactly those slots to
-  the sink's ceiling, which is tighter than the transaction-wide check. The
-  result's confidentiality is the join of the request slots; a declared
-  schema may add constants. Integrity is whatever the boundary declares for
-  the network origin, which today is nothing. `pending` and `error` carry
-  the request label too, since both reveal that the request was made. State
-  to store: the request hash, the claim, and the settled result or error.
+  the schema. The egress check applies the join of exactly those slots,
+  and of what following the references in `body` consumes, to the sink's
+  ceiling, which is tighter than the transaction-wide check. The result's
+  confidentiality is that join; a declared schema may add constants.
+  Integrity is whatever the boundary declares for the network origin,
+  which today is nothing. `pending` and `error` carry the request label
+  too, since both reveal that the request was made. State to store: the
+  request hash, the claim, and the settled result or error.
 
 ### `fetchProgram`
 
@@ -885,6 +1007,11 @@ causes through `perElementOf`.
   the action transaction that projects the cache entry, which read the
   inputs and the cache. No integrity.
 - **Execution:** effectful: server only. Computation; not replayable.
+- **Request operands:** `url` is the only operand, a string
+  (`fetchProgramInputSchema` and `snapshotFetchProgramInputs` in
+  `builtins/fetch-program.ts`). Nothing is a reference and nothing is
+  followed. The addresses of the dependencies come from the responses and
+  not from the request.
 - **New design:** class B, the same boundary as the fetch family with a
   multi-entry memo.
 - **Label rule:** as the fetch family, with `url` as the only request slot.
@@ -943,6 +1070,41 @@ causes through `perElementOf`.
   prompt-influence caveat is minted on results.
 - **Execution:** effectful: server only, never speculated. Computation; not
   replayable.
+- **Request operands,** for `generateText`: the action reads the
+  parameters under `GenerateTextParamsSchema` in `builtins/llm-schemas.ts`.
+  - `system`, `model`, `maxTokens`, and the other scalar parameters are
+    read by value. `prompt` and `messages` are read by value to the depth
+    that `LLMContentSchema` and `LLMMessageSchema` name: the role, the
+    content, and the named fields of each content part.
+  - An entry of `context` is held as a cell (`LLMContextEntrySchema` marks
+    it `asCell`), and it is not a reference in the sense of this section:
+    its content is serialized into the system prompt
+    (`buildAvailableCellsDocumentationWithObservation` in
+    `builtins/llm-dialog.ts`). The serializer, `serializeForLLMObservation`,
+    walks the entry's value to any depth, up to a bound of 100 levels. A
+    position that holds a cell handle, and a link at a position the
+    entry's schema leaves open, are rendered as links and are not
+    followed. A link at any other position is followed, and what it leads
+    to is content. The rendered text of one entry is cut at 2,000
+    characters, which bounds what is sent and not what is read. With an
+    observation ceiling declared, a node whose label exceeds the ceiling
+    is rendered as a link or redacted.
+  - Of each tool the catalog holds the `description` and the
+    `inputSchema`, read in full (`buildToolCatalog`, under
+    `LLMToolSchema`). For a pattern tool the stored pattern is read for
+    its argument schema. The `handler`, `pattern`, and `piece` of a tool
+    are references. `extraParams` are not part of the request: they are
+    read when the model calls the tool (`handleInvoke`).
+
+  The recorded request is the scalar parameters, the system prompt with
+  the rendered context, the messages, and the tool catalog, which holds
+  the six built-in tools unless they are switched off. What leaves after
+  the first model call is in no recorded request: the result of each tool
+  call, and whatever a `read` or an `invoke` call serializes of a cell the
+  model names by link (`handleRead`, `handleInvoke`). So the egress check
+  follows each entry of `context` as the serializer does, through links to
+  any depth and stopping at cell handles, and follows the description and
+  the input schema of each tool in full. It follows nothing else.
 - **New design:** class B. `llm` is class D, replaced by `generateText` and
   `generateObject`, which its deprecation already says.
 - **Label rule:** the request slots are every parameter read by value, the
@@ -970,6 +1132,11 @@ causes through `perElementOf`.
   result is validated and written with `InjectionSafe` annotations
   (`schemaWithInjectionSafeAnnotations`).
 - **Execution:** as `generateText`.
+- **Request operands:** as `generateText`, under
+  `GenerateObjectParamsSchema`. `schema` is read in full and is sent.
+  Because the system prompt is rendered again from the live `context`
+  after commit, the content of a context entry that leaves can differ from
+  the content the recorded request holds.
 - **New design:** class B.
 - **Label rule:** as `generateText`. The result has per-path labels declared
   by the result schema, so the boundary's declared rule is per output path.
@@ -1012,6 +1179,22 @@ causes through `perElementOf`.
 - **Execution:** effectful: server only. A computation that is a
   materializer; not replayable. It reads the clock and generates random
   identifiers.
+- **Request operands:** the parameters are read under `LLMParamsSchema`.
+  - `messages` is read by value: the whole transcript, with the document
+    of each message followed, to the depth `LLMMessageSchema` names.
+  - The entries of `context` and the pinned cells are serialized as the
+    context of `generateText` is.
+  - Tools are read as for `generateText`.
+  - The streams `addMessage`, `cancelGeneration`, `pinCell`, and
+    `unpinAllCells` are references.
+
+  The request is recorded in the transaction of the `addMessage` handler
+  (`materializeDialogRequestSnapshot`), for the first model call of a turn
+  only, and it has no request hash: the effect is named by a random
+  identifier. Every model call of the turn sends the live transcript and a
+  system prompt rendered from the live context and pins (`startRequest`),
+  so a cell pinned during the turn is serialized by a later call that no
+  request recorded.
 - **New design:** class B. It is the clearest case of a built-in pattern:
   it has handlers, state cells, and effects, and its write surface is the
   caller's `messages` cell plus whatever its tools write. It splits three
@@ -1048,6 +1231,14 @@ causes through `perElementOf`.
   strictest preset. Before staging, the consumed label is compared with the
   request's own `maxConfidentiality`. The built-in mints no integrity.
 - **Execution:** effectful: server only. Computation; not replayable.
+- **Request operands:** each entry of `inputs` is a reference.
+  `AgentParamsSchema` in `builtins/agent-schemas.ts` reads it as a cell,
+  the request holds the address of its link (`inputLinkSnapshot` in
+  `builtins/agent.ts`), and the run record stores the link
+  (`AgentRunRecordSchema`). `task` is a string, `tools` is an array of
+  tool names, and `progress` is a boolean. `resultSchema` and
+  `maxConfidentiality` are read in full. No entry of `inputs` is
+  followed.
 - **New design:** class B.
 - **Label rule:** the request slots are the task text, the tool names, the
   result schema, and the *identity* of each input. The record carries links,
@@ -1081,6 +1272,29 @@ causes through `perElementOf`.
   space is refused before staging. Declared ceilings filter or fail rows.
 - **Execution:** effectful: server only; a speculating run deduplicates
   instead of issuing. Computation; not replayable.
+- **Request operands:** the action reads the inputs without a schema
+  (`sqliteQuery` in `builtins/sqlite-builtins.ts`).
+  - The database handle is read by value: its `id`, `scope`, and `owner`,
+    and its `tables` in full, linked label rules included (`readDbRef`).
+    Its `rev` is not read. The space the database is in is taken from the
+    identity of the handle.
+  - The statement is a string.
+  - `params` are serialized in full: `encodeSqliteParams` in
+    `runtime/runner/src/cell.ts` walks arrays and plain objects to any
+    depth. A cell among them is a reference. At the top level a cell is
+    accepted only for a `_cf_link` column and is encoded as a link, and a
+    cell nested in a parameter becomes a link too.
+  - `reactOn`, `maxConfidentiality`, `onExceed`, `readClearance`, and
+    `requestKey` are read in full and enter the request hash. None of them
+    is sent. The row schema is read for the ceiling it declares, which
+    does not enter the hash.
+
+  The recorded request holds the space and the identifier of the
+  database, the statement, the parameters, and, for a database in another
+  space, the reader. The provider also receives the table declarations of
+  the handle. So the egress check follows `params` in full, stopping at
+  cells, the table declarations, and the operands that are hashed and
+  not sent.
 - **New design:** class B. It is the model for a declared label rule at a
   boundary, because it already has one.
 - **Label rule:** the request slots are the statement, the parameters, the
@@ -1107,7 +1321,18 @@ causes through `perElementOf`.
   client enacts it; a speculating client may navigate optimistically. It is
   the only built-in registered as a scheduler effect. A served `navigateTo`
   that is not a consequence of a client-fired event is a runtime error.
-- **New design:** class B, as a client-enacted effect.
+- **Request operands:** the target is the only operand, and it is a
+  reference. The action reads it through `targetCellSchema` in
+  `builtins/navigate-to.ts`, which marks it `asCell`, and resolves its
+  link. The intent a serving runtime appends holds the address of the
+  target and nothing of its content. Nothing is followed.
+- **New design:** class B, as a client-enacted effect. It is the one
+  effect a client enacts. A client enacts it from its speculative run of
+  the handler that requests it, and the navigation is reconciled with the
+  server's result as it is today: `deferSealedEffects` in
+  `runtime/runner/src/speculation/overlay-destination.ts` enacts a
+  speculative run's effects of kind `navigateTo` and of no other kind. A
+  client requests no other effect.
 - **Label rule:** the only request slot is the identity of the target. The
   boundary's declared rule is the constraint that the request is reachable
   only from an event's consequences. The fact that navigation happened is an
@@ -1135,6 +1360,12 @@ causes through `perElementOf`.
   `attributeInitialization: false`.
 - **Execution:** compile and instantiate: server only, not speculated.
   Computation; not replayable.
+- **Request operands:** the program is read by value under `programSchema`
+  in `builtins/compile-and-run.ts`: `files`, each a name and its contents,
+  `main`, and `dataFiles`, all strings. A key the schema does not name is
+  dropped. `input` is a reference: the action takes it as a cell, it is in
+  neither the request nor its hash, and it is passed to the instance as
+  its argument. Nothing is followed.
 - **New design:** it splits.
   - Compilation is class B: an effect whose request is the program and
     whose result is the identity of a compiled artifact, or errors.
@@ -1168,6 +1399,15 @@ causes through `perElementOf`.
 - **Execution:** not placed by either server-execution document.
   Computation; listed as non-replayable because name resolution reads an
   ambient cache.
+- **Request operands:** `url`, `hosts`, and `spaceHost` are read by value,
+  without a schema: a string, an array, and a string
+  (`targetOf` and the action in `builtins/cell-from-url.ts`). The cell the
+  URL names is a reference: the built-in stores a link to it and never
+  reads its content. The request of the effectful half is a space name or
+  a host, which are strings, and nothing is followed. Today that half
+  stages no request. The runtime resolves a host of another origin
+  itself, and may read that origin's deployment metadata over the network
+  to do so (`Runtime.resolveSpaceHost`).
 - **New design:** it splits.
   - Parsing a URL into an address is class A: a reactive expression whose
     result is a reference with identity derived from the URL's value.
@@ -1369,8 +1609,10 @@ export it and the pattern corpus does not call it.
   cell in a function body is one of the calls that remain legal, and the two
   regimes stay:
   - A handler invocation is a new frame for each event, so every cell it
-    creates is new. An identifier from the event and a per-invocation
-    counter is sufficient, and a handler needs no explicit cause.
+    creates is new. An identifier from the handling of the event, which
+    its receipt identifies, and a per-invocation counter is sufficient,
+    and a handler needs no explicit cause
+    ([What the plan records](#what-the-plan-records-for-calls-in-bodies)).
   - A pattern body and a lift are re-evaluated, so their cells need
     identifiers that are the same on every evaluation: the variable name in
     a pattern body, and an explicit cause in a lift.
@@ -1391,6 +1633,26 @@ export it and the pattern corpus does not call it.
 | `db.query(sql)` | Creates a `sqliteQuery` node. | B: sugar for `sqliteQuery`. |
 | `key(...)`, `asSchema(...)`, `get()`, `set(...)`, `push(...)`, `send(...)`, and the other transactional methods | No node. | Cell operations. `language-subset.md` owns the method surface. |
 
+The class A rows hold in the reactive tier. In a function body a collection
+method called on a cell handle, such as `aCell.map(...)`, is a compile
+error (`cell:collection-method-in-function`, `language-subset.md` §4.7).
+The compiler refuses the call and does not rewrite it to a reactive form,
+the way the transformer rewrites an authored `.map(fn)` on a reactive
+receiver to `mapWithPattern` today. The diagnostic names two corrections.
+
+- Wrap the expression in an inline `pattern(...)` and instantiate it. The
+  collection method is then in a pattern body, where it is the reactive
+  construct, and the result stays reactive. This is legal in every
+  function body, a `lift` and a `computed` included
+  ([Which body may make which call](#which-body-may-make-which-call)).
+- Read first, `aCell.get().map(...)`. The method is then the ordinary
+  array method over the values the read returned, and it processes them
+  synchronously.
+
+A `WithPattern` method written by an author is refused in every tier
+(`removed-form:builtin`), and its correction is the method without the
+suffix, with a callback written at the call.
+
 ### Context reads
 
 These functions read the frame they are called in and create no node. Each
@@ -1404,16 +1666,21 @@ throws outside the frames named.
 | `linksOf` | lift, handler | The links a value holds (`builder/links-of.ts`). |
 | `spaceOf`, `spaceAccess`, `spaceAccessOf`, `spaceMembers`, `spaceDeleted` | lift, handler | A space's identity and access list (`builder/space-access.ts`). |
 | `equals(a, b)`, `Cell.equals(a, b)` | anywhere | Whether two cells or values name the same cell. In a frame with a transaction the links both hold are resolved through it before they are compared (`equals` on the constructor that `cellConstructorFactory` in `runtime/runner/src/cell.ts` returns, with `areLinksSame` in `runtime/runner/src/link-equality.ts`). |
+| `a.equalLinks(b)`, `Cell.equalLinks(a, b)` | anywhere | Whether two cells or values hold the same link as it is stored. No link is resolved and no transaction is used (`equalLinks` on `CellImpl` and on the constructor in `runtime/runner/src/cell.ts`, with `areLinksSame`). |
 | `getPatternEnvironment()` | anywhere | A frozen `{ apiUrl }` (`builder/env.ts`). |
 
 - **New design:** context reads are one of the five kinds of call that are
   legal inside a function body. Each has an
   entry in the body's footprint so that its label is accounted for.
-  `principalOf`, `principalsOf`, and `profileOwnerOf` observe label
-  metadata, the same observation class as `inspectConfLabel`. `spaceOf`,
-  `linksOf`, and `equals` observe identity. `resultOwnerOf` and the
-  access-list reads `spaceAccess`, `spaceAccessOf`, and `spaceMembers` are
-  journaled reads of a document. `eventKey` and `currentPrincipal` are
+  `principalOf`, `principalsOf`, and `profileOwnerOf` observe a resolved
+  reference and its label metadata, the same observation class as
+  `inspectConfLabel`. `spaceOf` and `equals` observe resolved references,
+  and `linksOf` the enumeration of a list and the identity of each
+  element. `equalLinks` observes two references as they are stored.
+  `resultOwnerOf` follows links from its operand, and its read of the
+  back-link joins no label. The access-list reads `spaceAccess`,
+  `spaceAccessOf`, and `spaceMembers`, and `spaceDeleted`, are journaled
+  reads of a space's access list. `eventKey` and `currentPrincipal` are
   properties of the cause. The "Context reads" table under
   [What the plan records](#what-the-plan-records-for-calls-in-bodies) has
   the record of each, and
@@ -1455,6 +1722,15 @@ same event commits no access change.
   step of the wave's commit, and the batches an `inSpace` instantiation
   writes to other spaces are steps of the same commit. Whether the two
   become one defined sequence of commits across spaces is open question 3.
+- **Request operands:** `target` is a reference in all three calls. Only
+  the space it lives in is taken, from the identity of the cell
+  (`spaceOfTarget` in `builder/space-access.ts`), and a target that is not
+  a cell is refused. `principal` and `level`, and `blobId` and `name`, are
+  strings. Nothing is followed. `nameBlob` also reads the stored record of
+  the blob, which is a document of the blob and not an operand, and stages
+  a content-addressed document that holds the record's type and body
+  under the given name, in the handler's transaction (`nameBlob` in
+  `builder/blob-name.ts`).
 
 ### Tool and factory helpers
 
@@ -1509,7 +1785,7 @@ sense that authors never wrote it and the compiler emits a plan instead.
 | `.for(cause, true)` | A named `const`, or a pattern result (rooted at `"__patternResult"`) | The causal identity of a state cell in the plan, with the same derivation |
 | `toSchema<T>()`, replaced by a schema literal `satisfies __cfHelpers.JSONSchema` | Every schema slot of a builder call | Schemas in the plan |
 | `__cfHelpers.__cf_data(literal)` | Module-scope plain data | The freezing wrappers the compiler emits |
-| `__cfHelpers.tagCollectionKey(value)` | The selector result of `groupBy` and `keyBy` | Part of the index operation |
+| `__cfHelpers.tagCollectionKey(value)` | The result of the key function of `groupBy` and `keyBy` | Part of the index operation |
 | `__cfHelpers.nameInstance(value, name)` | `const child = Child(...)`, with the `instanceNames` option | An instance name in the plan |
 | `__cfHelpers.assertCapture`, `.assertRenderParts` | Operands inside `assert` bodies | Compiler-generated test diagnostics |
 | `__cfLift_N`, `__cfHandler_N`, `__cfPattern_N`, and the trailing `__cfReg({...})` | Hoisted builder calls (`BuilderCallHoistingTransformer`) | Content-addressed entries of the compiled artifact |
@@ -1538,13 +1814,14 @@ number of times, and it must produce the same writes each time
 most rows. The pattern body is the reactive tier and not a function body.
 Its column is here because `language-subset.md` §4.4 refers to this
 document for the context reads that are legal there, and the other four
-rows state what the documents already say of it.
+rows state what the documents already say of it. `language-subset.md` §5.2
+has the same table for the two kinds of function body.
 
 | Call | `handler`, `action` | `lift`, `computed` | Pattern body | Status |
 | --- | --- | --- | --- | --- |
-| Instantiate a pattern | Yes | No | Yes | Decided |
+| Instantiate a pattern | Yes | Yes. The instance belongs to the computation | Yes | Decided. How an instance a computation makes is identified is assumed (the continuation plan, question 38) |
 | Create a cell | Yes, with no explicit cause | Only with an explicit cause, `X.for(cause)` | Yes, as a state cell of the plan | Recommended for function bodies; decided for the pattern body |
-| Request an effect | Yes | No | Yes, except the staged changes, which only a handler requests | Decided |
+| Request an effect | Yes | Not directly. A pattern the computation instantiates may request effects in its own body | Yes, except the staged changes, which only a handler requests | Decided for a handler, an action, and the pattern body. For a `lift` or a `computed` the refusal of a direct request is assumed (the continuation plan, question 38) |
 | Read context | Yes, all of them | All except `eventKey` and `currentPrincipal` | All except `eventKey` and `currentPrincipal`; see the table below | Recommended; the implementation's rule for function bodies. For the pattern body, partly assumed (open question 10) |
 | Bind a handler | Yes | Yes | Yes | Decided |
 
@@ -1553,19 +1830,25 @@ Context reads in the pattern body, read by read:
 | Read | Pattern body | From |
 | --- | --- | --- |
 | `eventKey()`, `currentPrincipal()` | No | `language-subset.md` §10.3 refuses both in the pattern body, as in a `lift` or a `computed` (`function-body:event-context-in-computation`). There is no event |
-| `equals(a, b)` | Yes | `language-subset.md` §4.7 lists `X.equals(a, b)` for the reactive tier, and its §5.2 says the function form means the same. `plan-and-label-templates.md` §3.16 records the `identity` slots of both operands |
+| `equals(a, b)` | Yes | `language-subset.md` §4.7 lists `X.equals(a, b)` for the reactive tier, and its §5.2 says the function form means the same. `plan-and-label-templates.md` §3.16 records the resolved `identity` slots of both operands |
+| `a.equalLinks(b)`, `X.equalLinks(a, b)` | Yes | `language-subset.md` §4.7 lists both for the reactive tier. `plan-and-label-templates.md` §3.16 records the plain `identity` slots of both operands |
 | `getPatternEnvironment()` | Yes | It is legal in every frame today ([Context reads](#context-reads)), and `plan-and-label-templates.md` §3.16 records it as a `const` |
-| `principalOf`, `principalsOf`, `profileOwnerOf`, `spaceOf`, `linksOf`, `spaceDeleted` | Yes. *Assumed* | No document states it. `plan-and-label-templates.md` §3.16 records each as slots or as a `const`, and a template of the reactive tier holds those as it holds any slot |
-| `resultOwnerOf`, `spaceAccess`, `spaceAccessOf`, `spaceMembers` | Yes. *Assumed* | No document states it. `plan-and-label-templates.md` §3.16 records each as a `dynamic` read, which the reactive tier has for a followed link (its §3.10). `spaceAccess` and `spaceMembers` return a result for the acting principal, so the cone that holds the read is scoped to the user, as a computation that calls them is |
+| `principalOf`, `principalsOf`, `profileOwnerOf`, `spaceOf`, `linksOf` | Yes. *Assumed* | The legality is with the project owner (open question 10). `plan-and-label-templates.md` §3.16 gives the record of each call in the reactive tier: slots, which a template of the reactive tier holds as it holds any slot |
+| `resultOwnerOf`, `spaceAccess`, `spaceAccessOf`, `spaceMembers`, `spaceDeleted` | Yes. *Assumed* | The legality is with the project owner (open question 10). `plan-and-label-templates.md` §3.16 records each with a `dynamic` node, which the reactive tier has for a followed link (its §3.10). `spaceAccess` and `spaceMembers` return a result for the acting principal, so an output that depends on them has the scope `user`, which the plan records in `Output.scope` (its §1.4) |
 
 The reasons, from the implementation:
 
-- **Instantiation.** A handler's instance is identified by its event and
-  written into state. A computation that instantiates is re-run, and the
-  runner compares a hash of the synthesized result pattern to decide
-  whether to replace the instance (`#writeJavaScriptActionResult`).
-  Selection among patterns in the reactive tier says the same thing
-  without that mechanism.
+- **Instantiation.** A handler's instance is identified by the handling
+  of its event and is written into state. A computation is evaluated
+  again, so an instance it makes has to be named the same on every
+  evaluation. The instance belongs to the computation: an evaluation that
+  instantiates the same pattern at the same place names the same instance
+  and updates its argument, and an instance that an evaluation no longer
+  makes is torn down.
+  [An instantiation request from a `lift` or a `computed`](#an-instantiation-request-from-a-lift-or-a-computed)
+  has the record, the identity, and what the runtime does today, which
+  also keeps such an instance from one evaluation to the next
+  (`#writeJavaScriptActionResult`).
 - **Cell creation.** A handler frame numbers the cells it creates
   (`#ensureLink` uses the frame's counter when `inHandler` is set). In a
   lift the same code throws unless the cell has a cause, because a
@@ -1574,18 +1857,25 @@ The reasons, from the implementation:
   side-write whose target depends on data, so the computation is a
   materializer. `footprint-analysis.md` §8.2 makes the write a static
   target only for a constant cause.
-- **Effect requests.** Three facts point the same way. A computation may
-  run any number of times, and the scheduler's specification places
-  irreversible effects in event handlers and post-commit outboxes. A served
-  `navigateTo` outside the consequences of an event is a runtime error
+- **Effect requests.** Three facts are the reasons to refuse a direct
+  request from a computation. A computation may run any number of times,
+  and the scheduler's specification places irreversible effects in event
+  handlers and post-commit outboxes. A served `navigateTo` outside the
+  consequences of an event is a runtime error
   ([built-in contracts](../server-side-execution/builtins.md), §4). And the
   staged changes check for a handler frame and throw elsewhere. No
-  computation in the corpus requests an effect. Since a computation does
-  not instantiate a pattern either, it has no indirect route to an effect.
-  Nothing is lost: an effect that depends on computed data is requested in
-  the reactive tier with the computed value as its input, where it is a
-  durable operation of the plan with a memo. A pattern that a handler
-  instantiates may request effects in its own body.
+  computation in the corpus requests an effect. *Assumed:* a `lift` or a
+  `computed` does not request an effect directly
+  (`function-body:effect-in-computation`). It has an indirect route: a
+  pattern it instantiates may request effects in its own body, as a
+  pattern that a handler instantiates may. Such an effect is a durable
+  operation of the child's plan with a memo, and it is requested again
+  when its request changes, as any effect is whose input changed. What the
+  computation read reaches the request through the argument the
+  computation writes, and the label of the argument reaches it too
+  (`plan-and-label-templates.md` §3.14 and §3.15). An effect that depends
+  on computed data can also be requested in the reactive tier, with the
+  computed value as its input.
 - **Context reads.** `eventKey` and `currentPrincipal` throw outside a
   handler: a computation has no event, and a value computed from the viewer
   would have to be scoped to that viewer
@@ -1595,10 +1885,12 @@ The reasons, from the implementation:
   on who asks.
 - **Handler binding.** A binding creates a stream and the state the handler
   is bound to. In a computation it has to be the same stream on every
-  evaluation, which the content-derived identity under
-  [What the plan records](#what-the-plan-records-for-calls-in-bodies)
-  gives. A binding made in a handler is identified the same way
-  (`plan-and-label-templates.md` §1.3).
+  evaluation, which the identity under
+  [A handler binding made in a body](#a-handler-binding-made-in-a-body)
+  gives: it derives from what the binding holds and not from an ordinal. A
+  binding made in a handler is identified the same way
+  (`plan-and-label-templates.md` §1.3). A binding made in the pattern body
+  copies nothing and is named by where it is declared.
 - **The pattern body.** Instantiating a pattern, declaring a cell, and
   binding a handler are constructs of the reactive tier
   (`language-subset.md` §4.4 and §4.7): the call of a pattern is a
@@ -1617,7 +1909,8 @@ The reasons, from the implementation:
   name no space yet". That reason belongs to a body that builds a graph. An
   expression of the compiled reactive tier is evaluated with its slots
   bound, so the assumption of the table above is that these reads are legal
-  there.
+  there. `plan-and-label-templates.md` §3.16 gives the record of each call
+  in the reactive tier, so the assumption needs no record the plan lacks.
 
 ### Method
 
@@ -1637,14 +1930,14 @@ below are for source files unless a row says otherwise.
 
 | Call | Sites | Enclosing bodies | Legal under the rule | Rewrite |
 | --- | --- | --- | --- | --- |
-| Pattern instantiation `P({...})` | 121 | 64 in one computed, 28 in handlers, 28 in actions, 1 in an inline JSX handler | Yes | None in syntax; see below for timing |
+| Pattern instantiation `P({...})` | 121 | 64 in one computed, 28 in handlers, 28 in actions, 1 in an inline JSX handler | Yes | None in syntax; see below for timing and for the computed |
 | `P.inSpace(space, options)({...})` | 3 (plus 21 in fixtures and 8 in tests) | handlers | Yes | None in syntax; a cross-space request |
-| `P.asScope("user")({...})` | 2 | computeds | Not in a computed | Move to the reactive tier |
+| `P.asScope("user")({...})` | 2 | computeds | Yes | None. The instance belongs to the computed; see below |
 | `navigateTo(target)` | 48 | 33 in handlers, 13 in actions, 2 in inline JSX handlers | Yes, an effect request | None |
 | Handler binding `h({ state })` | 16 | computeds | Yes | None |
 | `new Writable(value)` | 3, plus 4 through helpers | handlers | Yes | None |
 | `Cell.for(cause)`, `Writable.for(cause)` | 9, plus 1 through a helper | lifts | Yes | None |
-| `.map(fn)` on a cell | 2 found | handlers | No | Read the value first, then map the array |
+| `.map(fn)` on a cell | 2 found | handlers | No (`cell:collection-method-in-function`) | Either wrap the expression in an inline `pattern(...)` and instantiate it, which keeps it reactive, or read first, `cell.get().map(...)`, which maps the values synchronously |
 | `grantSpaceAccess`, `revokeSpaceAccess` | 4 | handlers | Yes, effect requests | None |
 | `nameBlob` | 2 | handlers | Yes, an effect request | None |
 | Context reads | `equals` 108, `spaceOf` 28, `profileOwnerOf` 11, `eventKey` 9, `resultOwnerOf` 9, `spaceAccess` 6, `linksOf` 6, `currentPrincipal` 5, `principalOf` 3, `spaceDeleted` 3, `spaceMembers` 1 | handlers, lifts, computeds | Yes, context reads | None |
@@ -1660,8 +1953,9 @@ never uses `unless`, `llm`, `streamData`, `byRef`, `uiVariant`, or `cell`.
 Two conclusions follow.
 
 - The rule fits the corpus. Removing the reactive constructs from function
-  bodies requires rewriting the 2 cell maps and the three computeds that
-  instantiate patterns.
+  bodies requires rewriting the 2 cell maps, each by one of the two
+  corrections of `cell:collection-method-in-function`. The three computeds
+  that instantiate patterns are legal as written.
 - The third kind, requesting an effectful built-in from a body, has no
   precedent in the corpus except `navigateTo` and the staged changes. Its
   semantics can therefore be designed without a compatibility constraint, but
@@ -1702,9 +1996,17 @@ The rewrites, by case:
   requires a result cell, so passing a link to it also assigns the instance
   one.
 - **The causal identifier.** Each handler invocation is a new frame, so the
-  event and the order of requests within the invocation identify an
-  instance, as they do today. The four `.for(tag)` sites show the explicit
-  form, for an author who wants the same instance from different events.
+  handling of the event and the order of requests within the invocation
+  identify an instance. The handling is identified by its receipt, which
+  is also what an instance derives from today
+  ([An instantiation request from a handler](#an-instantiation-request-from-a-handler)).
+  The four `.for(tag)` sites show the explicit form. *Assumed:* the tag
+  names the same instance from different events, as
+  `plan-and-label-templates.md` §1.3 has it. Today it does not: the
+  instance of a `.for(tag)` site is minted under the receipt cell of the
+  event like any other, so it derives from the event. Which of the two the
+  form means is with the project owner (the continuation plan, question
+  19).
 - **Modifiers.** `P.asScope(scope)` and `P.inSpace(space, options)` are
   legal callees. `inSpace` makes the request a cross-space one: the new
   instance, and often its space, are created by a commit to another space.
@@ -1712,10 +2014,17 @@ The rewrites, by case:
   `patterns/system/fabrichat/manager.tsx` instantiates a room in a new space
   and reads `spaceOf(room)` from the returned link in the same handler run.
   Today the first run finds the space pending, is discarded, and runs again.
-  In the compiled design the identifier of an `inSpace` target is known
-  before the cross-space commit, derived from the request's causal
-  identifier, so the handler reads it in the same invocation with no
-  re-run.
+  In the compiled design the identifiers of an `inSpace` request are known
+  before the cross-space commit. The identifier of the instance derives
+  from the request's causal identifier. The identifier of a space the
+  request creates is obtained and not derived
+  ([An instantiation request from a handler](#an-instantiation-request-from-a-handler)).
+  *Assumed,* as `execution-and-storage.md` §5.6 has it: the runtime that
+  runs the handler authoritatively obtains the identifier when the request
+  is made, so the handler reads the space in the same invocation with no
+  re-run. A client's speculative run of a handler that names a space with
+  no allocation record does not speculate
+  (`scheduler-and-serving-loop.md` §9.4).
 - **Nested instances.** `patterns/dev/gideon-tests/notebook-nest-bug/main.tsx`
   builds twelve instances in one action and passes inner ones as inputs of
   outer ones. Each request needs its own identifier, and a link to an
@@ -1723,14 +2032,20 @@ The rewrites, by case:
 - **Instantiation in a computed (66 sites, 3 computeds).** One computed in
   `patterns/dev/catalog/ui/story-renderer.tsx` selects one of 64 patterns in
   a `switch` and returns the instance. Two computeds in
-  `patterns/apps/recommend-a-book/` return an `asScope("user")` instance. A
-  `computed` or `lift` body does not instantiate. These sites move to the
-  reactive tier: a conditional expression, or an index into a record of
-  sub-patterns. In all three the instance is part of the enclosing
-  pattern's result, so it is reachable from the result cell and is kept;
-  whether it is then an instantiated pattern with a result cell of its own
-  or an inline sub-pattern whose kept outputs are stored makes no
-  difference to the author.
+  `patterns/apps/recommend-a-book/` return an `asScope("user")` instance.
+  All three are legal as written: a `lift` or a `computed` may instantiate
+  a pattern, and the instance belongs to the computation
+  ([An instantiation request from a `lift` or a `computed`](#an-instantiation-request-from-a-lift-or-a-computed)).
+  No rewrite is required. Each site makes at most one instance per
+  evaluation, so the ordinal among the instantiations of the site
+  identifies it, and none needs an explicit cause. In the computed that
+  selects among 64 patterns each `case` is a site of its own: an
+  evaluation that takes another `case` tears down the instance of the
+  `case` it took before and makes one at the new site. An author may still
+  move such a selection to the reactive tier, as a conditional expression
+  or an index into a record of sub-patterns, where a statically resolved
+  callee is compiled into the surrounding instance and has no result cell
+  of its own.
 - **No lift returns a pattern.** The 72 lift bodies in the sources contain
   no instantiation.
 
@@ -1747,7 +2062,10 @@ module scope: `removeAddress({ person, index: i })` inside an array `map`,
 for example. `language-subset.md` §5.2 specifies both spellings of a
 binding: the inline arrow and `action(...)` forms, and a named handler
 applied to its state, which is the one the corpus uses in bodies. The
-object argument is the state, and the same state rules hold for both.
+object argument is the state, and the same state rules hold for both. In
+the example, `person` is a cell handle and stays a link, and `index` is a
+scalar and is copied
+([A handler binding made in a body](#a-handler-binding-made-in-a-body)).
 
 Today such a binding creates a stream and a node in the computation's frame.
 The runner sweeps both into a synthesized pattern, runs it into a cell whose
@@ -1755,8 +2073,8 @@ cause is the lift's `{ inputs, outputs, fn }` record, and makes the lift's
 output a link to that cell. When the computation re-runs, the synthesized
 pattern is hashed, and the child is replaced only if the hash changed
 (`#writeJavaScriptActionResult`). In the compiled design a binding is a
-record of the plan and a stream with a derived identity, with no
-synthesized pattern.
+record of the plan and a stream whose identity derives from what the
+binding holds, with no synthesized pattern.
 
 ### Cell creation in bodies
 
@@ -1829,6 +2147,28 @@ records hold, from what the implementation does today. Each has a *static*
 part, known to the compiler per call site, and a *run-time* part, known per
 invocation.
 
+**The handling.** Where this section says an identifier derives from the
+handling, it derives from the receipt of the handling: the durable
+identifier of the event and the stream the event was sent to, and not the
+acting principal (`handlingReceiptId` in
+`runtime/runner/src/scheduler/event-identity.ts`;
+`plan-and-label-templates.md` §1.3). One event on one stream is one
+handling whoever sends it. The string that `eventKey()` returns is a
+different thing. It binds the actor as well (`deriveEventKey` in the same
+file), and it is a context read and not the seed of an identifier. An
+event that a handler sends on a stream is identified by the handling and
+the event's order among the events that invocation sends.
+
+**References.** A value a body passes on unchanged is a reference: a cell
+handle, and a container the body read from an input or a cell and hands on
+whole, are stored as a link to where they were read, and the body does not
+read their content (`footprint-analysis.md` §3.8). The rule applies to the
+argument of an instantiation, to a request, and to the state of a binding
+made in a function body. *Assumed:* the rule stands as it is today, where
+such a value carries the address it was read from
+(`annotateWithBackToCellSymbols` in `runtime/runner/src/schema.ts`). The
+question is with the project owner (the continuation plan, question 10).
+
 ### An instantiation request from a handler
 
 Today the instance's result cell is minted under the event's receipt cell
@@ -1839,14 +2179,15 @@ name the author or the transformer attached with `.for(...)`, an instance
 name, or a generated ordinal (`factoryFromPattern`).
 
 - **Static:**
-  - the call site, as an ordinal within the body;
-  - the callee: a compiled pattern by content address, or the slot that
+  - the call site, an entry of `Body.calls` of the kind `instantiate`;
+  - the callee: a compiled pattern by content address, the slot that
     holds a pattern factory value (see
-    [Factory values](#factory-values));
-  - the argument binding: for each path of the callee's argument, the
-    template of the expression bound to it, so that labels flow into the
-    instance's argument slots, and whether the value is copied or is a cell
-    handle;
+    [Factory values](#factory-values)), or an inline `pattern(...)` written
+    at the call, with what it captures;
+  - the argument binding: for each path of the callee's argument, a
+    `WriteEdge` with the target `argument` that holds the template of the
+    expression bound to the path, so that labels flow into the instance's
+    argument slots;
   - the scope, when the callee carries `asScope(scope)`, which is a
     constant;
   - the space request, when the callee carries `inSpace(space, options)`:
@@ -1857,7 +2198,16 @@ name, or a generated ordinal (`factoryFromPattern`).
   - whether the site has an explicit cause, `.for(tag)`, and the template
     of the tag, since an identifier derived from data carries that data's
     label.
-- **Run time:** the event, and the order of the request within the
+- **What an argument path holds.** The site does not choose between a copy
+  and a link. The reference rule above decides it per path. A path bound to
+  a cell handle, or to a container the body read and passes on unchanged,
+  is written as a reference: the write edge records which `identity` slot
+  the reference is (`WriteEdge.reference`), the path carries the label of
+  the reference, and the content keeps its own label where it is stored. A
+  path bound to a scalar, or to a value the body computed, is written as a
+  value with the body's template. A reference inside a computed container
+  stays a reference.
+- **Run time:** the handling, and the order of the request within the
   invocation or the value of the explicit cause; the resolved target space.
 - **Links to instances not yet created.** A request returns a link whose
   identifier is derived from the facts above before anything is created. An
@@ -1876,6 +2226,144 @@ name, or a generated ordinal (`factoryFromPattern`).
   anonymous space is named from the frame's cause and a per-frame counter
   (`anonymousSpaceName`). The record therefore also needs the request's
   position among the body's `inSpace` requests.
+- **The identifiers of an `inSpace` request.** Both are known to the body
+  when it makes the request, before the commit that spans the spaces, and
+  they come about in two ways.
+  - The identifier of the instance is derived: from the request's causal
+    identifier, in the target space, or it is the root the target space
+    reserves when the request has `root`.
+  - The identifier of a space the request creates is obtained and is not
+    derived from the request. Creating a space returns a new identifier
+    ([random space identities](../random-space-identities.md)). The
+    runtime records the allocation in the calling space: the obtained
+    identifier under the name the request gives, or, for an anonymous
+    space, under the request's own identifier. That record is written in a
+    step that commits before the step in the foreign space, so that a
+    retry finds the record and names the same space
+    (`plan-and-label-templates.md` §3.14). A space identifier derived from
+    the request would make a retry converge without the record, and it is
+    not what creating a space gives.
+
+  Which sequence of commits carries those steps is open question 3.
+
+### An instantiation request from a `lift` or a `computed`
+
+A `lift` or a `computed` may instantiate a pattern: a named pattern, an
+inline `pattern(...)` written at the call, or a pattern factory value. The
+pattern may request effects in its own body. The instance belongs to the
+computation.
+
+Today a computation whose result holds an instance already keeps the
+instance from one evaluation to the next.
+
+- **The cell.** The runner turns the frame of the run into a synthesized
+  pattern (`patternFromFrame` in `builder/pattern.ts`) and runs it into a
+  cell whose cause is the computation's `{ inputs, outputs, fn }` record:
+  its input and output bindings and the source of its function
+  (`#writeJavaScriptActionResult` in `runtime/runner/src/runner.ts`). The
+  record is the same on every evaluation, so every evaluation names the
+  same cell, one for each scope the output is evaluated for. The
+  computation's output is a link to that cell.
+- **Identity.** The instance takes its result cell from its place in the
+  synthesized pattern. The cause is `{ resultFor: outputSpot }`
+  (`#mintChildResultCell`), and the output spot is an internal cell of the
+  synthesized pattern's cell, named by a `.for(...)` name, an instance
+  name, or an ordinal that `factoryFromPattern` generates. An evaluation
+  that builds the same graph names the same instance.
+- **Argument.** The values the body computed for the argument are inputs
+  of the instance's node in the synthesized pattern. On each evaluation
+  the runner hashes the synthesized pattern. With the hash of the
+  evaluation before, nothing is set up again. With another hash, which a
+  changed argument value gives, the runner runs the new synthesized
+  pattern on the same cell (`run`): the piece running there cancels its
+  nodes and instantiates the new ones (the swap in `#startCore`), and the
+  node of the instance sets its child up again at the same result cell,
+  with the new argument (`#instantiatePatternNode`). An argument that is a
+  cell is a link in the node's inputs, so a change of the cell's content
+  changes no hash, and the instance reads the content through the link.
+- **Teardown.** The node of an instance releases its child when the node
+  is canceled (`releaseChild`). An instance the new synthesized pattern
+  does not have is therefore released when the nodes of the old one are
+  canceled, and everything the computation started is released when the
+  computation's own node is canceled.
+
+In the compiled design the request is a record of the plan, with no
+synthesized pattern.
+
+- **Static:** as for a handler's request: the call site, an entry of
+  `Body.calls` of the kind `instantiate`; the callee; one `WriteEdge` with
+  the target `argument` per argument path, each holding a reference or a
+  value by the reference rule; the scope; and whether the site has an
+  explicit cause, `.for(cause)`, with the template of the cause.
+- **Run time:** the occurrences the evaluation made at each site, in
+  order, or the value of each explicit cause, and the argument of each.
+- **Identity.** *Assumed:* the instance is identified by the enclosing
+  instance, the body's name and `within` steps, the site, and the ordinal
+  of the instantiation among those the evaluation makes at that site.
+  Where the author writes `.for(cause)`, the cause takes the place of the
+  ordinal. The ruling leaves this to assume, and the question is with the
+  project owner (the continuation plan, question 38;
+  `plan-and-label-templates.md` §1.3 and §3.14). Three things follow.
+  - A site that an evaluation runs once needs no cause. An evaluation that
+    reaches the site again names the same instance.
+  - A site in a loop names its instances by the order in which the loop
+    makes them. When the first item of a list is removed, each instance
+    takes the argument of the next item, and the last instance is torn
+    down. An author who wants each instance to stay with its item writes
+    `.for(cause)` with a cause taken from the item.
+  - The ordinal is per site, where today's generated ordinal counts every
+    anonymous cell of the frame. A branch that makes an instance on some
+    evaluations only therefore does not rename the instances of the other
+    sites.
+- **The argument.** Each evaluation writes the argument of every instance
+  it makes, through the write edges. An evaluation that names an instance
+  that exists updates its argument and creates nothing, and the instance
+  keeps its state. The edges belong to the cone that runs the body. They
+  are derived writes: a failed constraint on one drops that write alone,
+  and they do not make the body a materializer
+  (`plan-and-label-templates.md` §3.14).
+- **Label.** The link the call returns carries the body's template: that
+  the instance exists, and which one it is, depends on what the body read.
+  Each argument path carries the body's template, or the label of a
+  reference the body passes on. Where the identifier holds an explicit
+  cause, the template of the cause is the label of the instance's
+  existence, as for a cell created under a cause. The runtime keeps, with
+  the cone, which instances the last evaluation made at each site, and
+  that record has the confidentiality of the body's template
+  (`plan-and-label-templates.md` §2.6).
+- **Teardown.** An instance that an evaluation no longer makes is torn
+  down: a branch that is not taken, or a loop that runs fewer times, ends
+  the instances the last evaluation made there. The cones of a torn-down
+  instance are not evaluated again and its effects are not requested
+  again. An evaluation that fails makes no instance and tears none down,
+  and the arguments of the instances the last evaluation made take the
+  error state (`plan-and-label-templates.md` §3.14 and §5.2).
+  When the callee is a factory value that differs from the one of the last
+  evaluation, the instance at that place is torn down and a new one is
+  started under the same name, as for a child of the reactive tier
+  ([A pattern factory value in the reactive tier](#a-pattern-factory-value-in-the-reactive-tier)).
+- **Effects.** *Assumed:* the computation requests no effect itself
+  ([Which body may make which call](#which-body-may-make-which-call)). A
+  pattern it instantiates may. Such an effect is an operation of the
+  child's plan. A cone of the child computes its request from the child's
+  argument, so what the computation read reaches the request through the
+  argument the computation writes, and so does its label. The effect is
+  requested again when its request changes, as any effect is whose input
+  changed, and its egress ceiling is checked in the operation's own
+  request transaction
+  ([An effect request made from a body](#an-effect-request-made-from-a-body)).
+- **`inSpace`.** *Assumed:* the modifier is legal on such a callee, as it
+  is today, where a reactive action that names an unresolved space runs
+  again a bounded number of times (`Runtime.resolveInSpaceNameSync` in
+  `runtime/runner/src/runtime.ts`). The ruling does not mention it, and
+  the corpus has `inSpace` in handlers only. The identifiers are those of
+  a handler's `inSpace` request, with the computation's identity of the
+  instance in place of the handling.
+- **Against today.** An instance is named by its place today as well, and
+  its argument carries the join of the computation's transaction, which
+  is the body's template. What differs is that today a synthesized
+  pattern that changed replaces the one running, where the compiled
+  design updates the argument of an instance that stays.
 
 ### A cell created in a handler
 
@@ -1888,7 +2376,7 @@ initial value is stored as the schema's default.
   constructors; the template of the initial value. The initial value is a
   `WriteEdge` whose target has the kind `created` and names the
   `createCell` site (`plan-and-label-templates.md` §1.1 and §3.14).
-- **Run time:** the event and the cell's order within the invocation.
+- **Run time:** the handling and the cell's order within the invocation.
 - **Label:** the initial value is a write by the handler body and carries
   the body's template, as any path the handler writes does.
 
@@ -1913,39 +2401,163 @@ sites write the cell in the same statement.
 
 Today applying a handler factory creates a stream cell with the event schema
 and a node whose inputs are `{ $ctx, $event }` (`handlerInternal` in
-`builder/module.ts`), and returns the stream.
+`builder/module.ts`), and returns the stream. A value the body read from an
+input carries the address it was read from, and the builder puts the cell
+at that address into the node's inputs in place of the value
+(`connectInputAndOutputs` in `builder/node-utils.ts`). So a container the
+body passes on unchanged is bound by reference today, and the handler
+reads it through the link when an event arrives.
 
-- **Static:** the binding site; the handler, as an index of the plan's
-  bodies or, for an imported handler, its content address; for each
-  capture, whether it is a data value or a cell handle, and its template.
-- **Run time:** the captured values and links.
-- **Identity.** The stream's identifier should derive from the enclosing
-  instance, the handler, and the captures: the values of the copied
-  captures and the identities of the captured cells. Then a computation
-  that re-runs binds the same streams, a binding made in a loop is told
-  apart by what it captures, and two bindings with equal captures are one
-  stream, which is harmless because they behave alike. A binding made in a
-  handler can use the same rule; nothing there needs the event in the
-  identity. Captured values are salted before they enter the identifier,
-  as element keys are.
-- **Label:** the copied captures are stored with the binding and carry
-  their templates. An event later handled by the binding reads them as
-  state.
+What a binding holds depends on where it is made.
+
+**A binding made in the reactive tier copies nothing.** The reactive tier
+is the pattern body and everything compiled in it, the body of a
+per-element callback of `map`, `filter`, and the other collection
+constructs included. Every path of the handler's state resolves to a slot
+or an output of the instance. In
+`list.map((el) => ... action(() => otherList.push(el)))`, written in a
+pattern body, `el` is bound by reference: the handler's state path is the
+element's slot, and the push stores a link to the original element.
+
+**A binding made while a function body runs** is a `bind` site in a
+`lift`, a `computed`, a `handler`, an `action`, an inline event handler, or
+an authored function one of them calls. Each path of the handler's state
+is bound by what the body has there (`language-subset.md` §5.2).
+
+| What the body binds at the path | The binding holds | `capture` |
+| --- | --- | --- |
+| A cell handle | A link to the cell | `link` |
+| A scalar: a primitive, a literal, `null`, `undefined` | A copy, in the binding's state document | `copy` |
+| A container (an object, an array, or a tuple) that the body read from an input or a cell and passes on unchanged; a reference at a position typed `unknown`, likewise | A link to the address the container is stored at. The body records `identity` at the path and does not read the container's content | `link` |
+| A container the body computed: an object or array literal, a spread, the result of a call or of an operator | A copy, in the binding's state document. A cell handle inside it stays a link, and so does a container inside it that the body read and passes on unchanged | `copy` |
+
+The handler reads a container bound by reference when an event arrives, in
+the event's transaction, at the paths and in the classes of its own
+footprint. A record it passes on, for example by pushing it onto a list,
+is a link to the original and not a second record. A scalar and a computed
+container are as they were when the binding was made. How much of a
+computed container the copy holds is decided by what the bound handler
+reads of it: the paths the handler's footprint names, and, for a handler
+received as a factory value, the paths its declared state type covers
+(`footprint-analysis.md` §8.5).
+
+A path can hold a reference on some runs only, for example where the body
+binds a conditional between a container it read and one it computed. The
+plan records such a path as copied, with no reference named, and the
+runtime decides per run from the value it is handed: a value that carries
+a stored address is stored as a link, and any other value is copied. The
+identity of the stream takes the address on the first kind of run and the
+salted value on the second (`plan-and-label-templates.md` §3.14).
+
+- **Static:** the binding site, an entry of `Body.calls` of the kind
+  `bind` that names a `Binding`; the handler, as an index of the plan's
+  bodies or, for a handler received as a value, the slot that holds the
+  factory; and for each path of the handler's state the template of what
+  is bound to it and its `capture` (`Binding.state` in
+  `plan-and-label-templates.md` §1.1). `capture` is `link` for a cell
+  handle and for a container bound by reference, and `copy` for a scalar
+  and for a computed container. For a path bound by reference the record
+  names the `identity` slot whose reference the binding holds, and the
+  runtime verifies it by identity, as it verifies a reference a body
+  writes. A binding of the reactive tier has no path with `copy`, and it
+  has a name and `within` steps.
+- **Run time:** for a binding made in a function body, the copied values,
+  the linked cells, and the addresses of the containers bound by
+  reference.
+- **Identity.** For a binding made in a function body, the stream's
+  identifier derives from the enclosing instance, the handler, and what
+  the binding holds: the copied values, the identities of the linked
+  cells, and the addresses of the containers bound by reference. A copied
+  value is salted before it enters the identifier, as an element key is.
+  The identifier holds no ordinal and nothing of the handling. Then:
+  - a computation that is evaluated again with the same state binds the
+    same streams;
+  - a binding made in a loop is told from its neighbors by what it holds
+    and not by its position;
+  - two bindings of one handler to equal copied values and to the same
+    cells and addresses are one stream, which is harmless because they
+    behave alike;
+  - two bindings of one handler to equal records stored in two places are
+    two streams, because the addresses differ;
+  - a binding made in a handler is identified the same way, so the same
+    binding made for two events is one stream.
+
+  A binding made in the reactive tier is not identified by what it holds.
+  Its stream is named by where it is declared: the instance, the `within`
+  steps with the keys of the enclosing elements, and the binding's name
+  (`plan-and-label-templates.md` §1.3).
+- **Clients.** A client cannot read the salt. It cannot name the stream
+  of a binding with a copied path before the server stores a link to it.
+  A binding with no copied path has an identifier a client derives, unless
+  an element key among its `within` steps holds a value.
+- **Label:** a copied path is stored in the binding's state document and
+  carries the body's template. A path bound by reference holds a
+  reference and carries the label of that reference: the body observes
+  the cell or the container for identity, and the content keeps its own
+  label where it is stored. The identity label of the stream is the join
+  of the templates of the state paths, which is the body's template
+  unless every path is a reference the body passes on. For a handler
+  received as a factory value, the label of the slot that holds the
+  factory joins it (`plan-and-label-templates.md` §3.14 and §3.21). An
+  event later handled by the binding reads its state as slots with the
+  root `binding`: a copied path resolves to the binding's state document,
+  and a path bound by reference crosses the link the binding holds, so
+  its label joins the pointer's label with what the handler observes at
+  the target.
+- **Against today.** Equal or tighter. A container passed on unchanged
+  stays a link today, and a scalar and a computed container are copied
+  today. For an inline event handler the transformer rewrites a captured
+  container into the paths the handler reads, which the body that makes
+  the binding then reads; a binding by reference reads none of them in
+  that body, which is tighter. `footprint-analysis.md` §8.5 has the
+  comparison case by case. The rule is not an exception to "equal to or
+  tighter".
 
 ### An effect request made from a body
 
 Today a built-in called in a handler body becomes a node of the synthesized
 result pattern and runs as it would in a pattern body.
 
-- **Static:** the request site; the built-in, named statically; the request
-  template, which is the body's template (`plan-and-label-templates.md`
-  §3.14): a sandboxed body has one template for every value it computes,
-  so the request's arguments carry it. It is the `input` of the effect
-  operation and is what the boundary's egress check applies to.
-- **Run time:** the event and the request's order within the invocation,
-  which identify the boundary's state; the request's value.
+- **Static:** the request site, an entry of `Body.calls` of the kind
+  `effect`; the built-in, named statically; and the request, as write
+  edges. Each path of the request is a `WriteEdge` with the target
+  `request` that names the site (`plan-and-label-templates.md` §1.1 and
+  §3.14). A path that holds a scalar or a value the body computed carries
+  the body's template: a sandboxed body has one template for every value
+  it computes. A path that holds a reference the body passes on is
+  written as a reference and carries the label of the reference, by the
+  reference rule above.
+- **The egress ceiling covers the content followed.** The templates of
+  the request hold the label of a pointer where the request holds a
+  reference, and the effect serializes the content. The ceiling is
+  therefore checked on the join of the request's templates, instantiated,
+  with what following the references of the request consumes. The
+  transaction that checks the ceiling follows each reference as far as
+  the built-in serializes it, which the **Request operands** paragraph of
+  the built-in's entry states, and does not follow an operand that entry
+  declares a reference
+  ([Effectful built-ins](#effectful-built-ins)). Those reads belong to
+  the check and not to the body: the label of the content reaches the
+  ceiling and the effect's result, and does not reach what else the
+  handler writes.
+- **Which transaction checks.** For a request a handler makes, the event's
+  transaction on the server. It is a check on what the handler itself
+  stages, so a failure rejects the event's whole transaction. A client
+  cannot make this check, because the ceiling of a sink is configuration
+  of the serving runtime. For a request of the reactive tier, or of a
+  pattern that a computation instantiates, the effect is an operation of
+  the plan and a cone computes its request. The check is then made in the
+  operation's own request transaction, when it reads the stored request. A
+  failure rejects that transaction and no other: the request is not made,
+  and the operation's result takes the refusal as an error state.
+- **Run time:** the handling and the request's order within the
+  invocation, which identify the boundary's state; the request's value.
 - **Result:** a link to the boundary's result, pending in the requesting
   transaction.
+- **Clients.** A client's speculative run of the handler stages the
+  request and requests no effect. `navigateTo` is the one exception: a
+  client enacts it from its speculative run
+  ([`navigateTo`](#navigateto)).
 
 ### Context reads
 
@@ -1955,35 +2567,77 @@ result pattern and runs as it would in a pattern body.
 | `currentPrincipal()` | The authenticated actor of the event | No | `Runtime.actingPrincipalFor`. `builder/current-principal.ts` notes that the value has no label saying who may see it |
 | `principalOf`, `principalsOf` | The principals that claims of one kind in the target's stored label attest, and for a `represents-principal` claim whether the target's `name` holds a written name | Pointer labels only | The link chain to the target is followed by ordinary reads, so the pointers' labels join. The label metadata read adds nothing, because a claim's kind and subject are classified public; the function throws if that classification changes. The read of `name` is a verifier read (`builder/principal-of.ts`) |
 | `profileOwnerOf` | Whose own profile the target is, by the rule of `profileOwnerAt` | As `principalOf` | The same reads, of the profile's label and name |
-| `resultOwnerOf` | The address of the pattern result a document belongs to, from the `result` back-link on the document | Yes | Ordinary journaled reads of the document's back-link (`builder/result-owner-of.ts`) |
+| `resultOwnerOf` | The address of the pattern result that the document a write to the target lands in belongs to, from the `result` back-link on that document. With a field, also whether that field of the owning result is the same document | Pointer labels only | The target is resolved to the document a write to it lands in, and with a field that field of the owning result is resolved, both by ordinary reads of links (`resolveLink` with `writeRedirect`), so the pointers' labels join. The read of the back-link is a verifier read (`internalVerifierRead` in `builder/result-owner-of.ts`), which takes no part in flow derivation. Setup writes the back-link and no pattern can write it |
 | `linksOf` | The elements of a list as the cells its links name: the list's enumeration and each slot's identity, and no target | Yes | An ordinary read of the list's own document through a schema that reads each element as a cell (`builder/links-of.ts`) |
 | `spaceOf` | The space the target's value lives in, after following links | Pointer labels only | Link resolution. Returns `undefined` while an `inSpace` name of the same run is unresolved |
 | `spaceAccess`, `spaceMembers` | The acting principal's level in the space's access list; the list itself | Yes | A read of the space's access-list document through the call's transaction. The answer depends on who asks, so a computation's read scope narrows to the user (`ownCall` in `builder/space-access.ts`) |
 | `spaceAccessOf` | A named principal's level in the access list | Yes | The same read; the answer does not depend on who asks |
-| `spaceDeleted` | Whether the memory server refused this runtime the space as deleted | No | Runtime state from the server's answer (`runtime.spaceAccessWatch`), not a document |
+| `spaceDeleted` | Whether the memory server refused this runtime the space as deleted | Yes, by the read that opens the space | The result is runtime state, from what the server answered (`runtime.spaceAccessWatch`), not a document. Every call also reads the space's access list through the call's transaction, which is what opens a space the runtime has not opened, and that journaled read carries a label (`spaceDeleted` and `aclOf` in `builder/space-access.ts`). The result is the same for every principal, so a computation's read scope stays as it is |
 | `equals` | Whether two cells or values name the same cell, after the links both hold are resolved | Pointer labels only | Link resolution through the frame's transaction (`areLinksSame` in `runtime/runner/src/link-equality.ts`). No target is read |
+| `equalLinks` | Whether two cells or values hold the same link as it is stored | Pointer labels only | No read at the call. The label is that of the reads that handed the body the two references (`equalLinks` in `runtime/runner/src/cell.ts`) |
 | `getPatternEnvironment()` | A frozen `{ apiUrl }` | No | A constant of the runtime |
 
-Four kinds of record follow from the table, as
-`plan-and-label-templates.md` §3.16 lists them.
+The records follow from the table, as `plan-and-label-templates.md` §3.16
+lists them.
 
-- A read of a *document* by an address computed from the target
-  (`resultOwnerOf` and the access-list reads `spaceAccess`,
-  `spaceAccessOf`, and `spaceMembers`): a `dynamic` read, journaled like a
-  read through a handle. These are the only context reads recorded as
-  dynamic.
-- An observation of *identity* (`spaceOf`, `linksOf`, `equals`): static
-  slots. `spaceOf(x)` is the `identity` slot of `x`. `linksOf(list)` is the
-  `enumeration` slot of the list and the `identity` slot of each element.
-  `equals(a, b)` is the `identity` slots of both operands.
+- An observation of a *resolved reference* (`spaceOf`, `equals`, and the
+  operand of `principalOf`, `principalsOf`, `profileOwnerOf`, and the
+  access-list reads): the `identity` slot of the operand with `resolved`
+  set (its §2.5). The slot observes the reference where resolution ends,
+  and its label joins the pointer label of every link followed on the way.
+  `spaceOf(x)` is that slot of `x`, and `equals(a, b)` is that slot of
+  each operand. No target is read.
+- An observation of *enumeration and identity* (`linksOf`): the
+  `enumeration` slot of the list and the plain `identity` slot of each
+  element.
+- An observation of a *stored reference* (`equalLinks`): the plain
+  `identity` slot of each operand, not resolved. The call compares the two
+  references as they are stored and follows no link, so nothing is
+  journaled, in a function body as in the reactive tier.
 - A read of *label metadata* (`principalOf`, `principalsOf`,
-  `profileOwnerOf`): a `labelMetadata` slot, as for `inspectConfLabel`.
+  `profileOwnerOf`): a `labelMetadata` slot on the resolved operand, as
+  for `inspectConfLabel`.
+- A read of a *space's access list* (`spaceAccess`, `spaceAccessOf`,
+  `spaceMembers`, `spaceDeleted`): a `dynamic` node of kind `space` through
+  the resolved `identity` slot of a cell operand, or, for `spaceDeleted`,
+  through the `value` slot of an operand that names a space. Which space
+  is read is data, so the read is journaled. `spaceAccess` and
+  `spaceMembers` return a result for the acting principal, so an output
+  that depends on them has the scope `user` (`Output.scope`, its §1.4).
+  `spaceDeleted` returns the same for every principal. Its result is
+  runtime state, and what its node stands for is the journaled read of the
+  access list that the call makes. When the server's answer for a space
+  changes, the runtime reports a change at the address of that space's
+  access list, which makes a cone that asked stale.
+- `resultOwnerOf`: the plain `identity` slot of the operand, and a
+  `dynamic` node of kind `link` through it for the links the call follows.
+  The slot is not `resolved`, because those links lead to the document a
+  write to the operand lands in, and not to the cell that holds the
+  operand's value. The read of the back-link contributes no label. The
+  runtime journals it with the node's reads, so that a change of the
+  back-link makes the cone stale, and leaves it out of the node's label.
+  Whether a result that a pattern sees may come from a read that joins no
+  label is with the project owner (the continuation plan, question 35).
+  *Assumed:* it may, as today.
 - A read of the *cause or the runtime* (`eventKey`, `currentPrincipal`,
-  `spaceDeleted`, `getPatternEnvironment`): unlabeled today. `eventKey` and
+  `getPatternEnvironment`): unlabeled today. `eventKey` and
   `currentPrincipal` are slots with the root `cause`, which carry no
-  confidentiality, and the other two are `const`.
-  The open question on nondeterministic inputs in
-  `plan-and-label-templates.md` makes the same assumption for the clock.
+  confidentiality, and `getPatternEnvironment` is `const`. The open
+  question on nondeterministic inputs in `plan-and-label-templates.md`
+  makes the same assumption for the clock.
+
+**Static and journaled.** The records above are those of a call in the
+reactive tier, and of a call in a function body whose operand is one
+handle the body was given at a static place and which every run that
+returns normally makes (`footprint-analysis.md` §7.2 and §8.4). Any other
+call in a body is journaled, as the runtime records it today. The
+operand's `identity` slot is then not `resolved`, the links the call
+follows below the operand's reference are a `dynamic` node of kind `link`
+through that slot, and an observation of label metadata joins the body's
+`dynamic` node of kind `labelMetadata`: the label of that node is the join
+of the labels of the observations the runtime recorded while the body ran.
+A change of the label stored at an observed path makes the cone stale.
+`equalLinks` has no journaled form, because it follows no link.
 
 ## Factory values
 
@@ -2023,7 +2677,8 @@ carried out by pull request #4687 in this repository, which is not merged.
 
 A function body may use two kinds of factory value: a pattern factory, which
 it instantiates, and a handler factory, which it binds to state to obtain a
-stream. Module factories are not callable as values: an imported function is
+stream. Every kind of function body may do both, a `lift` and a `computed`
+included. Module factories are not callable as values: an imported function is
 called as a function, and inside a function body a lifted function is an
 ordinary call with no reactivity, so a module factory value would add
 nothing a function value does not. Built-ins are not factory values at all;
@@ -2044,20 +2699,27 @@ A handler factory value is a handler passed by reference: the receiver
 chooses the state and binds it.
 
 - **What the binding site knows statically.** The factory's declared type:
-  the event type and the state type. The compiler checks the captured
-  values against the state type, records which captures are copied values
-  and which are cell handles, and knows the type of the stream the binding
-  yields. It does not know which handler will arrive.
+  the event type and the state type. The compiler checks the bound values
+  against the state type, records for each path of the state whether it is
+  copied or bound by reference
+  ([A handler binding made in a body](#a-handler-binding-made-in-a-body)),
+  and knows the type of the stream the binding yields. It does not know
+  which handler will arrive, so for a container the body computed it
+  copies the paths the declared state type covers.
 - **What is resolved at run time.** The factory value names a handler by
   content address. The handler's own compiled record supplies the rest: its
   footprint over state and event, its write edges, and its body identity,
   which is the identity a write policy names when it lists a permitted
   writer by `typeof` a handler.
-- **Identity of the binding.** The stream's identifier derives from the
-  enclosing instance, the handler's content address, and the captures, with
-  captured values salted. A site that receives a different handler
-  therefore binds a different stream, and two sites that bind the same
-  handler to the same captures are one stream.
+- **Identity of the binding.** For a binding made in a function body, the
+  stream's identifier derives from the enclosing instance, the handler's
+  content address, and what the binding holds: the copied values, salted,
+  the identities of the linked cells, and the addresses of the containers
+  bound by reference. A site that receives a different handler therefore
+  binds a different stream, and two sites that bind the same handler to
+  the same state are one stream. Which stream exists reveals which handler
+  arrived, so the label of the slot that holds the factory joins the
+  identity label of the stream (`plan-and-label-templates.md` §3.21).
 
 Three things are hard about it, and they are the cost.
 
@@ -2073,8 +2735,9 @@ Three things are hard about it, and they are the cost.
   value reveals which code a party chose, so the value has a label:
   `plan-and-label-templates.md` §3.21 observes the slot that holds a
   handler factory for identity and joins its label into everything the
-  bound handler writes, as §3.15 does for what is read from a child
-  instance of a pattern factory value.
+  bound handler writes and into the identity label of the stream, as
+  §3.15 does for what is read from a child instance of a pattern factory
+  value.
 - **Checks move from compile time to run time at that site.** For a
   named handler the compiler checks, against the plan, that every path the
   handler writes is one its bound state permits and that it satisfies each
@@ -2193,7 +2856,7 @@ all.
 | The eight `WithPattern` methods | D |
 | `db.query` | B |
 | `SqliteDb.exec` | a cell write |
-| `eventKey`, `currentPrincipal`, `principalOf`, `principalsOf`, `profileOwnerOf`, `resultOwnerOf`, `linksOf`, `spaceOf`, `spaceAccess`, `spaceAccessOf`, `spaceMembers`, `spaceDeleted`, `equals`, `getPatternEnvironment` | context reads |
+| `eventKey`, `currentPrincipal`, `principalOf`, `principalsOf`, `profileOwnerOf`, `resultOwnerOf`, `linksOf`, `spaceOf`, `spaceAccess`, `spaceAccessOf`, `spaceMembers`, `spaceDeleted`, `equals`, `equalLinks`, `getPatternEnvironment` | context reads |
 | `grantSpaceAccess`, `revokeSpaceAccess`, `nameBlob` | B |
 | `patternTool`, `byRef`, `nameInstance`, `cell` | D |
 | Every transformer-emitted form | D |
@@ -2214,18 +2877,41 @@ reflect them.
   pattern, creating a cell, requesting an effectful built-in, reading
   context, and binding a handler. Staged access changes and `nameBlob` are
   effect requests.
-- **Which body may request an effect.** A `handler` or an `action`, and the
-  reactive tier. A `lift` or a `computed` may not, directly or through a
-  pattern.
+- **Which body may instantiate a pattern and request an effect.** A
+  `handler` or an `action` may do both, and so may the pattern body. A
+  `lift` or a `computed` may instantiate a pattern, and that pattern may
+  request effects. An evaluation that instantiates the same pattern at
+  the same place names the same instance and updates its argument, an
+  instance that an evaluation no longer makes is torn down, and an effect
+  in the instance is requested again when its request changes. How such
+  an instance is identified, and that a `lift` or a `computed` does not
+  request an effect directly, are assumptions and not rulings (open
+  question 11).
 - **Factory values.** A function body may instantiate a pattern factory
   value and bind a handler factory value. Module factories are not callable
   as values.
 - **The label of a factory value.** The slot that holds a factory value is
   observed for identity, because which code runs is a function of it. For
   a handler factory its label joins everything the bound handler writes
-  (`plan-and-label-templates.md` §3.21). For a pattern factory it joins
-  every template that reads the child instance (§3.15). This entry is
-  stated by that document and is not a ruling of the project owner.
+  and the identity label of the stream (`plan-and-label-templates.md`
+  §3.21). For a pattern factory it joins every template that reads the
+  child instance (§3.15). This entry is stated by that document and is
+  not a ruling of the project owner.
+- **What a handler binding holds.** A binding made in the reactive tier
+  copies nothing, the body of a per-element callback included: every path
+  of the handler's state is a slot or an output of the instance. A binding
+  made while a function body runs copies a scalar and a container the
+  body computed. It binds a cell handle, and a container that has a
+  stored address, by reference: the handler reads the container when an
+  event arrives, and a record the handler passes on links to the
+  original. The identity of such a binding takes the address of a
+  container bound by reference, so two bindings to equal records stored
+  in two places are two streams.
+- **A collection method on a cell handle in a function body is a compile
+  error.** The compiler does not rewrite the call to a reactive form. The
+  diagnostic names two corrections: an inline `pattern(...)`, which keeps
+  the expression reactive and is legal in every function body, or
+  `get()` first, which processes the values synchronously.
 - **The callable conditionals and the `str` tag are removed.** The compiler
   may accept them for an interim period with a warning, only if that costs
   it nothing beyond mapping each to the operation of `?:`, `&&`, `||`, or a
@@ -2240,24 +2926,42 @@ reflect them.
   Equal plain values share a cone for pure computation only: a body over
   plain values that declares a state cell or binds a handler without using
   the index is an error.
-- **Value-derived identifiers are salted** with a secret of the space.
-- **`inSpace` identifiers are known before the cross-space commit.**
+- **Value-derived identifiers are salted** with a secret of the space. A
+  client cannot read the salt. It cannot name per-element state whose key
+  holds a value, or a binding with a copied path, before the server stores
+  a link.
+- **`inSpace` identifiers are known before the cross-space commit.** The
+  identifier of the instance is derived. The identifier of a space the
+  request creates is obtained and not derived from the request, and the
+  allocation is recorded in a step that commits before the step in the
+  foreign space, so that a retry names the same space.
 - **`wish` is structural.** What it creates, it creates idempotently, and
   the result reads as if the data had already existed.
 - **`streamData` and `llm` are removed.**
-- **A `computed` or `lift` body does not instantiate a pattern.** Selection
-  among patterns happens in the reactive tier.
 - **`navigateTo` requires a result cell,** so an instance that is only
   navigated to is an instantiated pattern.
+- **`navigateTo` is the one effect a client enacts.** A client enacts it
+  from its speculative run, reconciled with the server's result as it is
+  today. A client requests no other effect.
 - **Identifiers.** Cells and instances created in a handler need no stable
   identifier beyond the invocation, since each invocation is a new frame.
-  Patterns and lifts need identifiers that are the same on every evaluation.
+  They derive from the handling, which is identified by its receipt, and
+  the receipt leaves the acting principal out. Patterns and lifts need
+  identifiers that are the same on every evaluation.
+- **A failed constraint.** One on what a handler itself writes, the egress
+  ceiling of a request the handler makes included, rejects the event's
+  whole transaction. One on a derived write, such as the argument a
+  computation writes for an instance it makes, drops that write alone:
+  the target keeps what is stored, and the rest of the transaction
+  commits.
 - **`asScope` and `inSpace`** are part of the instantiation syntax.
 - **Migration is out of scope** for this document.
 
 ## Open questions
 
-Each question states the assumption this document made.
+Each question states the assumption this document made. A question that is
+with the project owner names its entry in the
+[continuation plan](../../plans/compiled-pattern-language.md).
 
 1. **`inspectConfLabel` on a value that is not kept.** The three reads
    this inventory found outside the four observation classes are placed by
@@ -2266,6 +2970,9 @@ Each question states the assumption this document made.
    An interim value has no stored label. *Assumed:* inspecting one reads as
    `notAvailable`, the compiler reports it where it can see it, and
    inspecting a value does not make it kept.
+   `plan-and-label-templates.md` §3.16 has the other reading, in which the
+   operation reads the label the value's template instantiates to. The
+   choice is with the project owner (question 30 of the plan).
 2. **How `wish` is spelled.** `wish` stays one structural operation.
    Whether the compiler requires a constant query, so that it can tell a
    path from a search from a clock at compile time and give each its label
@@ -2280,12 +2987,16 @@ Each question states the assumption this document made.
    ([Staged changes](#staged-changes)). `scheduler-and-serving-loop.md`
    §9.4 proposes one ordered sequence for both, which is not atomic: the
    access changes, then the batches for other spaces, then the home
-   writes. The question is with the project owner. *Assumed:* the access
-   change keeps committing first until the two are unified in one
-   cross-space commit.
-4. **The label of a factory value.** `plan-and-label-templates.md` §3.21
-   and §3.15 state it, and it is listed under [Decisions](#decisions).
-   Open question 11 holds the one part they do not state.
+   writes. The record of a space that an `inSpace` request creates has
+   its place in that sequence by ruling: it commits before the step in
+   the foreign space. The sequence itself is with the project owner
+   (question 15 of the plan). *Assumed:* the access change keeps
+   committing first until the two are unified in one cross-space commit.
+4. **The label of a factory value.** Not open.
+   `plan-and-label-templates.md` §3.21 and §3.15 state it, the identity
+   label of a stream bound from a received handler included, and it is
+   listed under [Decisions](#decisions). The entry keeps its number
+   because other documents cite the entries after it by number.
 5. **Knowing statically that elements are plain values.** The error for
    state or handlers over plain values needs the compiler to know whether a
    collection's elements are stored inline or as links. A primitive element
@@ -2303,9 +3014,13 @@ Each question states the assumption this document made.
 6. **Tool calls as instantiation.** A model tool call instantiates a
    pattern with a result cell whose cause is an identifier the model
    supplies, and the dialog's built-in tools let a model read, invoke, and
-   write whatever it can name by link. *Assumed:* out of scope for the
-   language, and specified with the model boundary's declared rule. The
-   identifier should derive from the turn and the call's position.
+   write whatever it can name by link. What such a call serializes was in
+   no recorded request ([Effectful built-ins](#effectful-built-ins)).
+   *Assumed:* out of scope for the language, and specified with the model
+   boundary's declared rule. The identifier should derive from the turn
+   and the call's position. No rule gives the label of the argument a
+   model supplies to a pattern closure it was given as a tool, or of the
+   result (question 8 of the plan).
 7. **Value checkpoints for `reduce`.** *Assumed:* none in the baseline; the
    fold is recomputed, and only its label is maintained incrementally.
 8. **`sqliteDatabase` identity.** Its handle is keyed on the whole cause,
@@ -2323,25 +3038,47 @@ Each question states the assumption this document made.
      collection-index family, `anchorsOf`, `cellFromUrl`, or
      `sqliteDatabase`;
    - `cancelGeneration` is declared on the state types of the one-shot
-     model built-ins in `base/api/index.ts` and is not implemented by them.
+     model built-ins in `base/api/index.ts` and is not implemented by them;
+   - a comment in `sqliteQuery` says the recorded request holds what goes
+     to the provider and not the handle's table declarations, and the
+     provider is sent those declarations as well.
 10. **Context reads in the pattern body.** `language-subset.md` §4.4 leaves
     to this document which context reads the pattern body may make. Three
     entries are stated elsewhere: `language-subset.md` §10.3 refuses
     `eventKey` and `currentPrincipal` there, its §4.7 lists `equals` for
     the reactive tier, and `getPatternEnvironment` is legal in every frame
-    today. No document decides the rest. *Assumed:* every other context
-    read is legal in the pattern body, as it is in a `lift` or a
-    `computed`, with the record `plan-and-label-templates.md` §3.16 gives
-    it. Today each of them throws in a pattern body
+    today. *Assumed:* every other context read is legal in the pattern
+    body, as it is in a `lift` or a `computed`. Today each of them throws
+    in a pattern body
     ([Which body may make which call](#which-body-may-make-which-call)).
-    One consequence is a request to `plan-and-label-templates.md`: a cone
-    of the reactive tier that holds `spaceAccess` or `spaceMembers` is
-    scoped to the user, as a computation that calls them is, and the plan
-    has to record that scope.
-11. **The identity label of a stream bound from a received handler.** The
-    stream's identifier derives from the handler factory's content address
-    (`plan-and-label-templates.md` §3.21), so which stream exists reveals
-    which handler arrived. §3.14 gives the stream's identity label as the
-    join of the captures' labels, and §3.21 does not add the factory slot.
-    *Assumed:* the label of the slot that holds the factory value joins
-    the identity label of the stream.
+    The records the assumption needs exist: `plan-and-label-templates.md`
+    §3.16 gives the record of each call in the reactive tier, and its §1.4
+    records in `Output.scope` that an output which depends on
+    `spaceAccess` or `spaceMembers` is scoped to the user. What is left is
+    the legality itself, which is with the project owner (question 32 of
+    the plan).
+11. **An instance made in a `lift` or a `computed`.** The ruling allows
+    the instantiation and leaves three things to assume
+    ([An instantiation request from a `lift` or a `computed`](#an-instantiation-request-from-a-lift-or-a-computed)).
+    *Assumed:* the instance is identified by the enclosing instance, the
+    body, the site, and the ordinal of the instantiation among those the
+    evaluation makes at that site, or by an explicit cause where the
+    author writes `.for(cause)`. *Assumed:* a `lift` or a `computed` does
+    not request an effect directly, so an effect that depends on computed
+    data is written in a pattern the computation instantiates, or in the
+    reactive tier. Both are question 38 of the plan. *Assumed,* and not in
+    that question: `inSpace` is legal on the callee of such an
+    instantiation, as it is today.
+12. **`.for(tag)` on an instantiation in a handler.** *Assumed:* the tag
+    names the same instance from different events, as
+    `plan-and-label-templates.md` §1.3 has it. Today the instance of such
+    a site is minted under the receipt cell of its event, so it derives
+    from the event
+    ([Pattern instantiation in bodies](#pattern-instantiation-in-bodies)).
+    The question is with the project owner (question 19 of the plan).
+13. **Ties among equal keys.** *Assumed:* `minBy`, `maxBy`, and an index in
+    `key` mode break a tie by the smallest element key. For a plain-value
+    element that key is a hash of the whole value, so the choice depends
+    on element values its label does not hold
+    ([Element keys](#element-keys)). The question is with the project
+    owner (question 6 of the plan).
