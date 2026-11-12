@@ -132,15 +132,28 @@ export const measureRequest = async (
     content: string;
   }[];
   const system = recorded[0].content;
-  // The result contract follows the caller's instructions; a run recorded
-  // before that order put it ahead of them, and its instructions run to the end.
+  // The result contract follows the caller's instructions and its schema line
+  // ends the prompt, so the real schema is the one the prompt ends on and the
+  // instructions end at the contract before it. A run recorded before that
+  // order put its schema ahead of the instructions, which run to the end:
+  // there the first schema heading is the real one. Either way a heading the
+  // instructions quote is not taken for the real one.
   const additionalAt = system.indexOf(ADDITIONAL);
-  const contractAt = system.lastIndexOf(CONTRACT);
+  const firstSchemaAt = system.indexOf(SCHEMA);
+  const lastSchemaAt = system.lastIndexOf(SCHEMA);
+  const schemaFirst = additionalAt === -1 ||
+    (firstSchemaAt !== -1 && firstSchemaAt < additionalAt);
+  const schemaAt = schemaFirst ? firstSchemaAt : lastSchemaAt !== -1 &&
+      !system.slice(lastSchemaAt + SCHEMA.length).includes("\n")
+    ? lastSchemaAt
+    : -1;
+  const contractAt = schemaFirst || schemaAt === -1
+    ? -1
+    : system.lastIndexOf(CONTRACT, schemaAt);
   const additional = additionalAt === -1 ? undefined : system.slice(
     additionalAt + ADDITIONAL.length,
     contractAt > additionalAt ? contractAt : undefined,
   );
-  const schemaAt = system.lastIndexOf(SCHEMA);
   const schema = schemaAt === -1
     ? undefined
     : JSON.parse(system.slice(schemaAt + SCHEMA.length).split("\n")[0]);
