@@ -364,7 +364,7 @@ const HUB: CanvasPoint = {
 // Tests
 //
 
-describe("guest", () => {
+describe("iframe-ring-loops/guest", () => {
   let page: GuestPage | undefined;
 
   afterEach(async () => {

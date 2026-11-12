@@ -148,7 +148,7 @@ class Link {
 // Tests
 //
 
-describe("guest", () => {
+describe("iframe-impossible-machine/guest", () => {
   let page: GuestPage | undefined;
 
   afterEach(async () => {

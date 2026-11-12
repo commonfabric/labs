@@ -189,7 +189,7 @@ function keepTextTrackCues(): void {
 // Tests
 //
 
-describe("guest", () => {
+describe("iframe-shared-tape-lab/guest", () => {
   let page: GuestPage | undefined;
 
   afterEach(async () => {

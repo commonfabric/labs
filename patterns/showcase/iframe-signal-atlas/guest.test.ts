@@ -55,7 +55,7 @@ function personalAtlas(): MemorySqlite {
   return atlas;
 }
 
-describe("guest", () => {
+describe("iframe-signal-atlas/guest", () => {
   let page: GuestPage | undefined;
 
   afterEach(async () => {

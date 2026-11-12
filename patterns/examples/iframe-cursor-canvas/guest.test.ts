@@ -19,7 +19,7 @@ function storedShape(id: string, box: ShapeBox): CanvasShape {
 
 const BOX: ShapeBox = { position: { x: 100, y: 100 }, width: 200, height: 100 };
 
-describe("guest", () => {
+describe("iframe-cursor-canvas/guest", () => {
   let page: GuestPage | undefined;
 
   afterEach(async () => {

@@ -232,7 +232,7 @@ function stateWithout(id: string): IframeStateData {
 // Tests
 //
 
-describe("guest", () => {
+describe("iframe-orbital-salvage-yard/guest", () => {
   let page: GuestPage | undefined;
 
   afterEach(async () => {

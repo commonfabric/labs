@@ -205,7 +205,7 @@ class Drawing {
 // Tests
 //
 
-describe("guest", () => {
+describe("iframe-firebreak-commons/guest", () => {
   let page: GuestPage | undefined;
 
   afterEach(async () => {
