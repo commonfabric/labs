@@ -11,11 +11,7 @@ import { CellHandle, cellRefToKey } from "@commonfabric/runtime-client";
 import { getLogger } from "@commonfabric/logger";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 
-import {
-  isAttributeKey,
-  setPropDefault,
-  type SetPropHandler,
-} from "../render-utils.ts";
+import { setPropDefault, type SetPropHandler } from "../render-utils.ts";
 import { CONTAINER_NODE_ID, type VDomBatch, type VDomOp } from "../vdom-ops.ts";
 import { serializeEvent } from "./events.ts";
 import type { DomEventMessage } from "./events.ts";
@@ -367,7 +363,7 @@ export class DomApplicator {
       this.#removeEvent(nodeId, key.slice(2).toLowerCase());
     } else if (key.startsWith("$") && key.length > 1) {
       (node as any)[key.slice(1)] = undefined;
-    } else if (isAttributeKey(key)) {
+    } else if (key.startsWith("data-") || key.startsWith("aria-")) {
       node.removeAttribute(key);
     } else if (key === "style") {
       node.removeAttribute("style");
