@@ -2395,11 +2395,13 @@ export class RuntimeProcessor {
    * the event with `native` provenance for them, replacing any `provenance`
    * the payload carries, and marks it renderer-trusted, and waits for the
    * event's handling. Reached only through a client of this worker, which a
-   * pattern the worker runs is not.
+   * pattern the worker runs is not. Returns `{ handling: "withheld" }` for a
+   * handling whose outcome is withheld, which reports the same thing whether
+   * it committed or not, and nothing otherwise.
    *
    * @throws If the payload is not a record, or the surface or action is
    *   blank, and when the event, or the run of the stream's handler, is
-   *   refused.
+   *   refused, except for a run whose outcome is withheld.
    */
   async handleCellSendReviewed(
     request: CellSendReviewedRequest,
@@ -2427,7 +2429,9 @@ export class RuntimeProcessor {
    * through the function it is given. With `wait` undefined the outcome is
    * logged; `commit` waits for the transaction's commit, and `handling` for
    * the commit of the handler's run as well, and either rejects with the
-   * refusal.
+   * refusal. `handling` resolves with `{ handling: "withheld" }` for a run
+   * whose outcome is withheld, which may have committed or not and never
+   * rejects.
    *
    * The event goes to the address `ref`'s stored links lead to, so each
    * document they pass through is loaded first, and events reach their

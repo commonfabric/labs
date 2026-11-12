@@ -209,10 +209,11 @@ export type InvocationResultLink = string;
 export interface InvocationOutcome {
   id: string;
 
-  /** `"settled"` once receipt readback completed. Otherwise the furthest
-   * phase the caller chose to observe: `--no-wait` returns at `"committed"`
-   * (commit acknowledged, readback skipped), and a caller-bounded wait
-   * reports the phase its bound expired in. */
+  /** `"settled"` once receipt readback completed, or once a handling whose
+   * outcome is `withheld` landed, which reads no receipt. Otherwise the
+   * furthest phase the caller chose to observe: `--no-wait` returns at
+   * `"committed"` (commit acknowledged, readback skipped), and a
+   * caller-bounded wait reports the phase its bound expired in. */
   status: "settled" | InvocationPhase;
 
   /** Durable address of this handling's receipt — the cell the outcome is

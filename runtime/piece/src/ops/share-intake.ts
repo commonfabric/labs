@@ -747,11 +747,9 @@ export class ShareIntake {
       const sent = await sending;
       const handled = sent.status === "committed" ? await sent.handled() : sent;
       if (handled.status === "failed") failed = { error: handled.error };
-      // A withheld registration may never have written its receipt, so
-      // there is nothing to read after it.
-      else if (handled.status === "handled" && sent.status === "committed") {
-        link = sent.receipt;
-      }
+      // A withheld registration may have committed, and its receipt is read
+      // as any other's; one that didn't left none, which reads as no outcome.
+      else if (sent.status === "committed") link = sent.receipt;
     } catch (error) {
       failed = { error };
     }

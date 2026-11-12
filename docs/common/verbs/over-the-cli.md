@@ -588,8 +588,12 @@ update. Read the pattern's own documentation for what a verb returns, and check
 
 ## Exercising all of it
 
-Everything above is asserted by a walkthrough that lives with the integration
-tests, not with this document:
+Everything above, apart from the withheld outcome, is asserted by a walkthrough
+that lives with the integration tests, not with this document. The withheld
+outcome needs a served handling that reads another space's labeled data, which
+the walkthrough's single space has none of; the runner's
+`runtime/runner/test/executor-events-down.test.ts` and the runtime-client's
+`runtime/runtime-client/test/send-reviewed.test.ts` assert it.
 
 - **`runtime/cli/integration/verbs-over-the-cli.sh`** — the runnable
   walkthrough. Each step names the property it asserts, so a failure says which
