@@ -79,8 +79,9 @@ next.
 
 ## Decided
 
-Each ruling is written into the documents, except the ones marked *pending*,
-which the reconciliation pass writes in. This list exists so that none is
+Each ruling is written into the documents. One marked *pending* is in
+`plan-and-label-templates.md` and in the specification and not yet in the
+other documents; their passes write it in. This list exists so that none is
 relitigated.
 
 **Architecture**
@@ -292,16 +293,34 @@ answer goes to the specification with the document.
     client: the egress ceiling of an effect a handler requests depends on
     sink ceilings that are server configuration. The overview now says a
     client evaluates the gates it can from the plan and the data it holds.
+34. **The label metadata of a label that depends on a value**
+    (`plan-and-label-templates.md`, open question 16). The stored label of
+    a conditional, a chosen child, or a prefix fold differs with the
+    condition's value, so a reader of the label in another instance learns
+    something about the condition.
+35. **What `resultOwnerOf` returns** (`plan-and-label-templates.md`, open
+    question 17). It returns the result of a verifier read, which
+    contributes no label today. The specification calls an exposed
+    verification result a labeled observation.
+36. **An effect request that holds a reference** (F1). *Written into
+    `plan-and-label-templates.md` §3.14 and the specification:* the
+    transaction that checks the egress ceiling follows the references the
+    request holds as far as the built-in serializes, and checks the ceiling
+    on the join. The other correction, a request that reads the content of
+    its members, would put that content's label on every other write of
+    the handler.
+37. **Side-writes of a failed cone.** *Written into
+    `plan-and-label-templates.md` §5.2:* a failed cone's writes to a state
+    cell, a cell through a handle, a created cell, or an anchors document
+    are withdrawn, which leaves it visible that the write did not happen,
+    as it is today; a child's argument and an effect's request take the
+    error state.
 
 ## Open, and not needing the owner
 
 The cross-read record lists each of these with the side that governs and the
 correction. The ones more depends on:
 
-- **An effect request that holds a container by reference** (F1). The
-  footprint records only the reference, the egress ceiling is checked on
-  the request's label, and nothing follows the link. The correction is in
-  `footprint-analysis.md`: a request reads the content of its members.
 - **Between `execution-and-storage.md` and `scheduler-and-serving-loop.md`**
   (section 3 of the record): one transaction or two for an effect's
   completion; when a kept output's value is staged and in what order labels
@@ -309,20 +328,6 @@ correction. The ones more depends on:
   what is current after a restart; what a rejection leaves in the memo;
   labels per position against a memo per key; how an event reaches its
   binding.
-- **Records the three new documents need in `plan-and-label-templates.md`:**
-  computed captures on `Body`, which handles a body is handed, a write
-  target and a cone edge for a write through a handle, a read envelope per
-  handle, a flag for sampled reads, a materializer's envelope and the home
-  of its return value, a scope on `Output`, a promotion directive on
-  `Cone`, the options of `inSpace` on `Child`, and names that are not
-  positional.
-- **Label rules that do not exist yet,** each for
-  `plan-and-label-templates.md` and the specification together: operation
-  bookkeeping state, a cached output, provenance records, what the prepared
-  digest binds, the frozen `shape` entry at migration, cache promotion as a
-  channel, which transaction a failed egress ceiling rejects, what a failed
-  cone's side-write targets take, and a journaled label-metadata
-  observation.
 - **Where a result is split into documents.** The ruling leaves the rule
   about size to `execution-and-storage.md`: which subtrees get a document
   of their own, how such a document is identified so that a reorder moves
@@ -336,29 +341,125 @@ correction. The ones more depends on:
 
 The open questions each document ends with stay where they are.
 
+### What each document changes to agree with `plan-and-label-templates.md`
+
+The plan document has the records and label rules the three newer
+documents asked for, and five rulings written in. The other six documents
+do not agree with it yet. Each list is the brief for that document's pass,
+beside the findings of the cross-read record that name the document.
+
+**`footprint-analysis.md`**
+
+- §1.1 and the requests of §13: the body record has `computed` and
+  `envelopes`, and an entry of `handles` carries the read envelope.
+- §1.4, §3.7, §7.2: "never wider than today" holds over runs that return
+  normally; a run that fails carries the static entries (ruled).
+- Notation and §12.3: a hop through a link is not a path segment in the
+  plan. A slot path crosses a link (§2.5 of the plan document).
+- §7.1, §8.4: `resolveAsCell()`, `spaceOf`, `equals`, `principalOf`, and
+  the operand of an access-list read record a resolved `identity` when the
+  conditions of §7.2 hold. The document has to state that condition.
+- §7.3, §7.5: the envelope is a schema on the `handles` entry; `sample()`
+  sets the slot's sampled flag.
+- §5.1, §5.3: a widening lists several slots and can name a handle.
+- §6.2 to §6.5: the write target through a handle, the two forms of write
+  envelope, a reference inside a written value, and a materializer's
+  result read through an `operation` slot.
+- §3.8, §8.3: an effect request keeps the reference rule and cites §3.14
+  of the plan document for the egress check.
+- §8.1, §8.4: a computed `inSpace` value has a form; `spaceDeleted` is a
+  dynamic read; `resultOwnerOf` has a row; a journaled label-metadata
+  observation is its own kind of dynamic read.
+- §9.2: body narrowing holds for computed inputs.
+- Findings F10, F11, F13, and F16 to F21, which are internal to the
+  document or wait on nothing.
+
+**`execution-and-storage.md`**
+
+- §1.1, §1.2, §1.5, §10.1: an event's transaction has no derivation step
+  behind the body; derivations run in one transaction behind the batch.
+- §1.2, §1.7, §3.3: a failed constraint on a derived write drops that
+  write alone; what the memo holds for it.
+- §1.2 step 5, §1.6: the three conditions of §4.1 of the plan document;
+  effect requests and cached outputs are instantiated; values are staged
+  at evaluation; labels resolve against what the transaction staged
+  (§4.5).
+- §1.3, §2.3: a cone edge through a handle beside one through a state
+  cell.
+- §1.4, §2.4: which handles a body is handed, `get()` under the envelope,
+  `sample()`.
+- §1.8, §1.9: the output's scope; what the digest binds (§4.6).
+- §2.1, §2.2: interim outputs; the runtime narrows a computed input;
+  slots resolve through links.
+- §2.5, §3.1, §3.2: label identifiers of element slots are per position.
+- §2.7: withdrawn side-writes, and the error state of an argument or a
+  request.
+- §4.1 to §4.4, §4.9: several documents. The document owns which subtrees
+  get a document, how a part is identified, and what a reader of a part
+  demands. A link to another instance's output is a slot across the link.
+- §4.1, §6: a materializer's state document and an effect's stored
+  request.
+- §5.2, §5.5: names as §1.3 of the plan document has them.
+- §6.5, §7.4, §8.4 to §8.7, §9: the labels of §2.6 of the plan document.
+  The assumption that provenance is protected as label metadata was
+  unsound and is replaced there.
+- Section 3 of the record: findings 1, 2, 3, 5, 6, 7, 10, 11, 12, 13, 18,
+  21, and 26.
+
+**`scheduler-and-serving-loop.md`**
+
+- §1.4, §5.2, §5.4, §10.2: the batch ruling.
+- §5.5, §5.6: only a handler's own writes reject its event; a failing
+  constraint in another instance drops that write.
+- §2.2: element bindings by slot and position.
+- §2.4, §5.2, §7.2: a materializer's envelope is its body's `writes` and
+  `envelopes`; what a creation-site envelope means for promotion.
+- §2.6, §8.2: the writer map and the cycle report include targets through
+  a handle and stored requests.
+- §3.1 to §3.5: resolved slots, storage links left out of chains, sampled
+  reads, journaled label-metadata reads, the deletion answer reported at
+  the access-list address, labels staged within a transaction and a batch.
+- §4.2: demand per path over several documents.
+- §5.3: a static read through a handle is a slot.
+- §6.2, §6.3: a request is a write edge and not a kept output; the request
+  transaction follows references and runs again when their content
+  changes.
+- §2.5, §6.7: `navigateTo` on a client (ruled).
+- §7: a materializer's result through an `operation` slot.
+- Section 3 of the record: findings 1, 3, 8, 9, 14, 19, 20, 23, and 24.
+
+**`builtin-inventory.md`**
+
+- "Element keys": `within` steps in place of `perElementOf`.
+- Each effectful built-in: which operands of a request are references,
+  and how deep the rest is serialized.
+- "An effect request made from a body": the request is a write edge, and
+  the ceiling covers the content followed.
+- "Context reads": `resultOwnerOf`, the resolved reads, `spaceDeleted`,
+  and journaled label-metadata reads.
+- Open questions 10 and 11, which the plan document answers.
+
+**`language-subset.md`**
+
+- §4.7: `resolveAsCell()` observes a resolved reference; `get()`,
+  `key(k)`, and `elementById` in the reactive tier.
+- §5.4, §10.3: a widening covers the entries it replaced.
+- §4.4.1, §4.6: the naming rule of §1.3 of the plan document.
+- Open questions 9 and 10.
+
+**The overview**
+
+- "One transaction per cause": the batch, and the two outcomes of a failed
+  constraint.
+- Staging and "Label templates": two exceptions to equal or tighter.
+- "Pull and dependency cones": the widening sentence.
+- "What is stored" and the example: several documents.
+- Clients: the `navigateTo` exception.
+
 ### Found while correcting the first four documents
 
 These are not in the cross-read record. Each is left as it was found.
 
-- **The FabriChat example of `plan-and-label-templates.md` §6.2.** `facts`
-  and `replies` meet the promotion criterion and are still shown as
-  `computed` bodies, because showing them promoted needs a body input that
-  is another cone's value and a rule for `.key(k).get()` on a handle in the
-  reactive tier. The reactions list is a `state` write edge in §6.2 and a
-  created cell in §6.3. §6.3 counts five places where `sendInto` throws,
-  and the source has four `throw` statements there and twelve in its
-  helpers. `authorProfile` is said to pass a reference on, where the stored
-  link is the result of `resolveAsCell()`.
-- **An `inSpace` option or target computed inside a body** has no form in
-  the plan record. A fixture of the corpus computes `root` and `grants`.
-- **`resultOwnerOf`.** Source reads the back-link as a verifier read. If a
-  verifier read is left out of flow derivation, the label rule in
-  `plan-and-label-templates.md` §3.16 and its comparison with today need
-  checking, and so does the inventory's "ordinary journaled reads".
-- **`spaceDeleted` as a constant** gives nothing that makes a reading cone
-  stale when the server's answer changes. **`spaceOf`** records one
-  `identity` slot, and the inventory says today's read follows links and
-  joins their pointer labels.
 - **`setSchema`** is removed by `language-subset.md` §4.7 and has no
   catalog entry. That document also does not say whether a cell handle
   type is a data type or a code type, which its rule for imported
@@ -393,11 +494,13 @@ These are not in the cross-read record. Each is left as it was found.
   serving-loop and events specifications by search, and knows the
   render-boundary document from a summary.
 - **Specs pull request #91 is behind `plan-and-label-templates.md`.**
-  Section 2 of the record lists where: among others the changed-factory
-  rule and the `inSpace` rule of the Decided list, most context reads, and
-  the group-mode rules of the collection index. It has not been reviewed.
-  Its Lean development states the two target theorems; the operations
-  added after the first draft, the closure included, are prose and
+  It has the pattern closure, the rulings on batches and on a failed
+  constraint, slot paths through references, and the labels of state the
+  runtime stores. Section 2 of the record lists what it still lacks: among
+  others the changed-factory rule and the `inSpace` rule of the Decided
+  list, most context reads, and the group-mode rules of the collection
+  index. It has not been reviewed. Its Lean development states the two
+  target theorems; everything added after the first draft is prose and
   pseudocode only.
 - **Corpus numbers are syntactic.** They come from throwaway scripts over
   the parse tree with no type information, and three runs disagree on the
@@ -421,16 +524,14 @@ These are not in the cross-read record. Each is left as it was found.
 
 1. **The owner rules** on the questions above. A ruling is added to
    [Decided](#decided) and the question removed.
-2. **The remaining reconciliation passes,** each document by one author.
-   The pending rulings of the Decided list are written in first, with any
-   ruling made by then. The order follows what governs:
-   `plan-and-label-templates.md` first, for the records and label rules
-   the newer documents ask of it, with specs pull request #91 changed in
-   the same pass; then `footprint-analysis.md` (section 4 of the record);
-   then `execution-and-storage.md` and `scheduler-and-serving-loop.md`
-   (section 3), by authors who each read the other in full; then
-   `builtin-inventory.md` and `language-subset.md` for what those passes
-   changed; the overview last.
+2. **The remaining reconciliation passes,** each document by one author,
+   from the lists under
+   [What each document changes](#what-each-document-changes-to-agree-with-plan-and-label-templatesmd)
+   and the findings of the record: `footprint-analysis.md` first; then
+   `execution-and-storage.md` and `scheduler-and-serving-loop.md`, by
+   authors who each read the other in full; then `builtin-inventory.md`
+   and `language-subset.md`; the overview last. A pass keeps the stated
+   assumption wherever a question above is still open.
 3. **Bring specs pull request #91 up to `plan-and-label-templates.md`**
    (section 2 of the record), and add the label rules listed above.
 4. **One corpus measurement** with one stated method, so that the three
