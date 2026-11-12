@@ -111,6 +111,31 @@ export const styleObjectToCssString = (
   return declarations.join("; ");
 };
 
+/**
+ * Whether a prop key names an attribute rather than a property. A property
+ * name is camel case and never holds a hyphen, so a hyphenated key such as
+ * `default-size`, `aria-label` or `data-id` is an attribute: assigned as a
+ * property it would only add an expando nothing reads, while as an attribute
+ * a custom element converts it to the property it declares for it. Event
+ * props are not props here; they arrive as events.
+ */
+export const isAttributeKey = (key: string): boolean =>
+  key.includes("-") && /^[a-zA-Z]/.test(key);
+
+/**
+ * The text an attribute is given for a prop value, or null to remove it.
+ * ARIA and data-* attributes take "true" and "false" as text. Any other
+ * hyphenated attribute is boolean by its presence, as a custom element's
+ * Boolean converter reads it, so `true` gives it and `false` takes it away.
+ */
+const attributeText = (key: string, value: unknown): string | null => {
+  if (value == null) return null;
+  const textBoolean = key.startsWith("data-") || key.startsWith("aria-");
+  if (!textBoolean && value === true) return "";
+  if (!textBoolean && value === false) return null;
+  return String(value);
+};
+
 export const setPropDefault = <T>(target: T, key: string, value: unknown) => {
   // Handle style object specially - set as attribute.
   if (
@@ -124,24 +149,16 @@ export const setPropDefault = <T>(target: T, key: string, value: unknown) => {
     return;
   }
 
-  // ARIA names and data-* keys are attributes; assigning a hyphenated
-  // property does not expose them to accessibility APIs or dataset.
   if (
-    (key.startsWith("data-") || key.startsWith("aria-")) &&
+    isAttributeKey(key) &&
     (target as Element | null | undefined)?.nodeType === 1
   ) {
     const element = target as Element;
-    // If value is null or undefined, remove the attribute
-    if (value == null) {
-      if (element.hasAttribute(key)) {
-        element.removeAttribute(key);
-      }
-    } else {
-      const currentValue = element.getAttribute(key);
-      const newValue = String(value);
-      if (currentValue !== newValue) {
-        element.setAttribute(key, newValue);
-      }
+    const text = attributeText(key, value);
+    if (text === null) {
+      if (element.hasAttribute(key)) element.removeAttribute(key);
+    } else if (element.getAttribute(key) !== text) {
+      element.setAttribute(key, text);
     }
   } else if (!Object.is(target[key as keyof T], value)) {
     // `Object.is`, not `!==`: a `NaN` prop must not be re-assigned on every

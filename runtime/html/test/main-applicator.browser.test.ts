@@ -195,3 +195,95 @@ Deno.test("removing a property a custom element defines sets it to undefined", (
     '<x-labeled-box title="Hint"></x-labeled-box>',
   );
 });
+
+/**
+ * A custom element that declares hyphenated attributes for camel-case
+ * properties, as a Lit component does with `attribute: "default-size"`.
+ */
+class SizedPanel extends HTMLElement {
+  static observedAttributes = ["default-size", "hide-when-stacked"];
+  defaultSize = 50;
+  hideWhenStacked = false;
+
+  attributeChangedCallback(
+    name: string,
+    _old: string | null,
+    value: string | null,
+  ): void {
+    if (name === "default-size") {
+      this.defaultSize = value === null ? 50 : Number(value);
+    } else this.hideWhenStacked = value !== null;
+  }
+}
+customElements.define("x-sized-panel", SizedPanel);
+
+/** A new `x-sized-panel` made through `applicator`, as node 1. */
+function sizedPanel(applicator: DomApplicator): SizedPanel {
+  applicator.applyBatch({
+    batchId: 1,
+    ops: [{ op: "create-element", nodeId: 1, tagName: "x-sized-panel" }],
+  });
+  return applicator.getNode(1) as SizedPanel;
+}
+
+/** A `DomApplicator` that throws whatever it reports. */
+function throwingApplicator(): DomApplicator {
+  return new DomApplicator({
+    onEvent: () => {},
+    onError: (error) => {
+      throw error;
+    },
+  });
+}
+
+Deno.test("a hyphenated prop is set as the attribute, which the custom element reads into its property", () => {
+  const applicator = throwingApplicator();
+  const panel = sizedPanel(applicator);
+  applicator.applyBatch({
+    batchId: 2,
+    ops: [{ op: "set-prop", nodeId: 1, key: "default-size", value: 28 }],
+  });
+  assertStrictEquals(panel.getAttribute("default-size"), "28");
+  assertStrictEquals(panel.defaultSize, 28);
+  assertStrictEquals(Object.hasOwn(panel, "default-size"), false);
+
+  applicator.applyBatch({
+    batchId: 3,
+    ops: [{ op: "remove-prop", nodeId: 1, key: "default-size" }],
+  });
+  assertStrictEquals(panel.hasAttribute("default-size"), false);
+  assertStrictEquals(panel.defaultSize, 50);
+});
+
+Deno.test("a hyphenated boolean prop is present while true and absent while false", () => {
+  const applicator = throwingApplicator();
+  const panel = sizedPanel(applicator);
+  applicator.applyBatch({
+    batchId: 2,
+    ops: [{ op: "set-prop", nodeId: 1, key: "hide-when-stacked", value: true }],
+  });
+  assertStrictEquals(panel.getAttribute("hide-when-stacked"), "");
+  assertStrictEquals(panel.hideWhenStacked, true);
+
+  applicator.applyBatch({
+    batchId: 3,
+    ops: [{
+      op: "set-prop",
+      nodeId: 1,
+      key: "hide-when-stacked",
+      value: false,
+    }],
+  });
+  assertStrictEquals(panel.hasAttribute("hide-when-stacked"), false);
+  assertStrictEquals(panel.hideWhenStacked, false);
+});
+
+Deno.test("an ARIA prop set to false keeps the text false", () => {
+  const applicator = throwingApplicator();
+  const panel = sizedPanel(applicator);
+  applicator.applyBatch({
+    batchId: 2,
+    ops: [{ op: "set-prop", nodeId: 1, key: "aria-hidden", value: false }],
+  });
+  assertStrictEquals(panel.getAttribute("aria-hidden"), "false");
+});
