@@ -310,10 +310,7 @@ control. The function that returns sends the control's payload with `native`
 provenance for that surface and action, carrying the renderer-trust mark. A
 host whose runtime runs in a worker sends the same act with
 `CellHandle.sendReviewed(event, { surface, action })`, which waits for the
-handler's run, and rejects with the reason when its write is refused, except
-that a served run whose outcome is withheld resolves it with
-`{ handling: "withheld" }`, for the client to show as sent with a private
-outcome. Either
+handler's run, and rejects with the reason when its write is refused. Either
 way, the runtime checks the surface and action against the write's policy as
 it checks a rendered gesture's provenance, and the mark reaches a served
 handler the way a rendered gesture's does. The generic `cell:send` marks

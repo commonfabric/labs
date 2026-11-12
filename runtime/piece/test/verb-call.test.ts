@@ -7,7 +7,6 @@ import {
   Runtime,
   type sendEvent,
 } from "@commonfabric/runner";
-import { withheldStatusTxViewForTestingOnly } from "@commonfabric/runner/for-testing-only";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { PiecesController } from "../src/ops/pieces-controller.ts";
 import { callVerb, sendVerbEvent } from "../src/verb-call.ts";
@@ -160,7 +159,7 @@ describe("verb-call", () => {
      * when `served` is `"echo"`.
      */
     const servedAfterFailedEcho =
-      (served: "handled" | "failed" | "echo" | "withheld"): typeof sendEvent =>
+      (served: "handled" | "failed" | "echo"): typeof sendEvent =>
       (_stream, _event, onCommit, options) => {
         const echo = runtime.edit();
         echo.abort(new Error("the local echo found no handler"));
@@ -170,11 +169,7 @@ describe("verb-call", () => {
         }
         void outcome.commit().settled.then(() => {
           options?.onAppended?.({ delivered: true }, echo);
-          onCommit?.(
-            served === "withheld"
-              ? withheldStatusTxViewForTestingOnly(outcome)
-              : outcome,
-          );
+          onCommit?.(outcome);
         });
       };
 
@@ -197,26 +192,6 @@ describe("verb-call", () => {
       expect(sent.status).toBe("committed");
       if (sent.status !== "committed") return;
       expect((await sent.handled()).status).toBe("failed");
-    });
-
-    it("reports a served handling whose outcome is withheld as `withheld`", async () => {
-      const sent = await sendVerbEvent(cell.key("add" as never), {
-        amount: 1,
-      }, { sendEvent: servedAfterFailedEcho("withheld") });
-
-      expect(sent.status).toBe("committed");
-      if (sent.status !== "committed") return;
-      expect(await sent.handled()).toEqual({ status: "withheld" });
-    });
-
-    it("returns `withheld` from `callVerb()` for such a handling, and reads no receipt", async () => {
-      const call = await callVerb(runtime, piece, "add", { amount: 1 }, {
-        sendEvent: servedAfterFailedEcho("withheld"),
-      });
-
-      expect(call.status).toBe("withheld");
-      expect(call).not.toHaveProperty("result");
-      expect(call).not.toHaveProperty("receipt");
     });
 
     it("reports a failed echo as the handling's outcome when the commit callback settles with it", async () => {

@@ -25,11 +25,6 @@ import {
   StorageManager,
 } from "@commonfabric/runner/storage/cache.deno";
 import { withStuckNet } from "@commonfabric/test-support/stuck-net";
-import {
-  SEED_ENVELOPE_SCHEMA_HASH,
-  seedStoredEnvelope,
-  writeSeedEnvelopeDoc,
-} from "../../runner/test/cfc-seed-envelope.ts";
 
 import type { RuntimeProcessor } from "@/backends/mod.ts";
 import { RuntimeClients } from "@/backends/client-registry.ts";
@@ -453,110 +448,6 @@ async function coldRelay(options: { serverExecution?: boolean } = {}) {
  * whose lease timer keeps the process from going quiet on a send that never
  * settles.
  */
-/**
- * A pattern whose `peek` handler reads the `secret` of the document its
- * event links to, and writes nothing.
- */
-const peekPatternSource = `
-  import { type Cell, handler, pattern } from "commonfabric";
-
-  const peek = handler<{ source: Cell<{ secret: string }> }, Record<string, never>>(
-    (event) => {
-      event.source.get();
-    },
-  );
-
-  export default pattern(() => ({ peek: peek({}) }));
-`;
-
-/** The label on the document of `bob`'s that a `peek` handler reads. */
-const PEEKED_ATOM = "https://commonfabric.org/cfc/atom/Public/peeked-secret";
-
-/**
- * A serving runtime running the peek pattern in `signer`'s space, a document
- * of `bob`'s own space whose `secret` carries a label `signer`'s space doesn't
- * admit, and a client attached to the runtime, holding handles on the
- * pattern's `peek` stream and on that document.
- */
-async function peekRoom() {
-  const serving = await startServingMemoryServer({
-    apiUrl: new URL(import.meta.url),
-    policy: { flushDeadlineMs: 5_000, idleParkMs: 600_000 },
-  });
-  const bobStorage = EmulatedStorageManager.connectTo(serving.server, {
-    as: bob,
-  });
-  const bobRuntime = new Runtime({
-    apiUrl: new URL(apiUrl),
-    storageManager: bobStorage,
-  });
-  const secret = bobRuntime.getCell(bob.did(), "peeked-secret");
-  const secretId = secret.getAsNormalizedFullLink().id;
-  const seed = bobRuntime.edit();
-  writeSeedEnvelopeDoc(seed, bob.did());
-  seedStoredEnvelope(seed, {
-    space: bob.did(),
-    scope: "space",
-    id: secretId,
-    path: [],
-  }, {
-    value: { secret: "s3cr3t" },
-    cfc: {
-      version: 1,
-      schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
-      labelMap: {
-        version: 1,
-        entries: [{
-          path: ["secret"],
-          label: { confidentiality: [PEEKED_ATOM] },
-        }],
-      },
-    },
-  });
-  expect((await seed.commit().settled).error).toBeUndefined();
-
-  const storage = EmulatedStorageManager.connectTo(serving.server, {
-    as: signer,
-  });
-  const runtime = new Runtime({
-    apiUrl: new URL(apiUrl),
-    storageManager: storage,
-    experimental: { serverExecution: true },
-  });
-  const compiled = await runtime.patternManager.compilePattern({
-    main: "/main.tsx",
-    files: [{ name: "/main.tsx", contents: peekPatternSource }],
-  }, { space });
-  const output = runtime.getCell<{ peek: unknown }>(
-    space,
-    `send-reviewed-peek-${crypto.randomUUID()}`,
-  );
-  const result: Cell<{ peek: unknown }> = await runtime.runSynced(
-    output,
-    compiled,
-    {},
-  );
-  const client = await attachClient(runtime);
-  const peek: CellHandle<Record<string, unknown>> = client.getCellFromRef(
-    createCellRef(result.key("peek")),
-  );
-  const source = client.getCellFromRef(
-    createCellRef(runtime.getCellFromLink(secret.getAsNormalizedFullLink())),
-  );
-  return {
-    peek,
-    source,
-    [Symbol.asyncDispose]: async () => {
-      await client.dispose();
-      await runtime.dispose();
-      await storage.close();
-      await bobRuntime.dispose();
-      await bobStorage.close();
-      await serving.close();
-    },
-  };
-}
-
 const settled = <T>(
   serverExecution: boolean,
   promise: Promise<T>,
@@ -849,15 +740,14 @@ describe("send-reviewed", () => {
     describe(
       serverExecution ? "under server execution" : "run in the worker",
       () => {
-        it("commits a write gated on the bound surface and action, and resolves with nothing", async () => {
+        it("commits a write gated on the bound surface and action", async () => {
           await using room = await chatRoom(serverExecution);
-          const outcome = await settled(
+          await settled(
             serverExecution,
             room.save.sendReviewed({ body: "  exact text  " }, chatSend),
             "the reviewed send's handling",
           );
 
-          expect(outcome).toBeUndefined();
           expect(await room.stored()).toEqual(["  exact text  "]);
         });
 
@@ -1017,44 +907,4 @@ describe("send-reviewed", () => {
       },
     );
   }
-
-  describe("a handling whose outcome is withheld", () => {
-    // Under server execution, a served handling that read data its stream's
-    // space doesn't admit reports the same thing whether it committed or not
-    // (events.md §5). The sends that wait for the handling resolve with
-    // `{ handling: "withheld" }`, and never reject.
-
-    it('resolves `sendReviewed()` with `{ handling: "withheld" }`', async () => {
-      await using room = await peekRoom();
-      const outcome = await settled(
-        true,
-        room.peek.sendReviewed({ source: room.source }, chatSend),
-        "the peeking reviewed send's handling",
-      );
-
-      expect(outcome).toEqual({ handling: "withheld" });
-    });
-
-    it('resolves `sendStrict()` with `awaitHandling` with `{ handling: "withheld" }`', async () => {
-      await using room = await peekRoom();
-      const outcome = await settled(
-        true,
-        room.peek.sendStrict({ source: room.source }, { awaitHandling: true }),
-        "the peeking strict send's handling",
-      );
-
-      expect(outcome).toEqual({ handling: "withheld" });
-    });
-
-    it("resolves `sendStrict()` without `awaitHandling` with nothing", async () => {
-      await using room = await peekRoom();
-      const outcome = await settled(
-        true,
-        room.peek.sendStrict({ source: room.source }),
-        "the peeking strict send's commit",
-      );
-
-      expect(outcome).toBeUndefined();
-    });
-  });
 });
