@@ -11,7 +11,7 @@ import { createTrustedBuilder } from "../support/trusted-builder.ts";
 const userIdentity = await Identity.fromPassphrase("wish home targets user");
 const patternSpace = await Identity.fromPassphrase("wish home targets space");
 
-type WishState = { result?: unknown; error?: string };
+type WishState = { result?: unknown; error?: string; errorCode?: string };
 
 describe("wish-home-targets", () => {
   let storageManager: ReturnType<typeof StorageManager.emulate>;
@@ -97,7 +97,7 @@ describe("wish-home-targets", () => {
       });
     }
 
-    it("searches no favorites for a hashtag in the user's Home", async () => {
+    it("reports the missing identity for a hashtag search of the user's Home", async () => {
       const favorite = runtime.getCell(
         userIdentity.did(),
         "wish home targets favorite",
@@ -112,7 +112,10 @@ describe("wish-home-targets", () => {
 
       const resolved = await wishFor("hashtag", "#tagged", ["~"]);
 
-      expect(resolved?.error).toBe('No favorites found matching "#tagged"');
+      expect(resolved?.error).toBe(
+        'User identity DID not available to search favorites for "#tagged"',
+      );
+      expect(resolved?.errorCode).toBe("failed");
       expect(resolved?.result).toBeUndefined();
     });
   });
