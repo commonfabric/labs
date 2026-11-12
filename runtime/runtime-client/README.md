@@ -69,16 +69,38 @@ type-check until it says how it stands.
 
 A cell's reads and writes through one runtime client run in the order they were
 asked for, through whichever handle on the cell and path: `sync()`, `pull()`,
-`set()`, `setStrict()`, `push()`, `initialize()`, `send()`, `sendStrict()`,
-`sendReviewed()` and `update()` share one queue, and each request goes to the
-worker once the one before it has been answered. `set()` shows its value at once
-and sends it in its turn. `update(updater)` computes a write in its turn, from
-the value the operations queued before it left, or else what its handle holds,
-reading the cell first where the handle holds nothing. A write asked for after
-it lands after it. A write another handle made that has already settled counts
-only once its update reaches this handle, so an update can compute from a value
-that write has since replaced. Its write is a blind overwrite, as `set()`'s is,
-not an atomic read-modify-write; `push()` appends as the worker merges.
+`set()`, `setForUI()`, `setStrict()`, `push()`, `initialize()`, `send()`,
+`sendStrict()`, `sendReviewed()` and `update()` share one queue, and each
+request goes to the worker once the one before it has been answered. `set()`
+shows its value at once and sends it in its turn. `update(updater)` computes a
+write in its turn, from the value the operations queued before it left, or else
+what its handle holds, reading the cell first where the handle holds nothing. A
+write asked for after it lands after it. A write another handle made that has
+already settled counts only once its update reaches this handle, so an update
+can compute from a value that write has since replaced. Its write is a blind
+overwrite, as `set()`'s is, not an atomic read-modify-write; `push()` appends as
+the worker merges.
+
+## Cell write contracts
+
+A handle overwrites its cell three ways, which differ in what they show, when
+they settle, and how long they hold the cell's queue:
+
+| Method        | Shows the value                                                      | Settles                                                        | Holds the queue               |
+| ------------- | -------------------------------------------------------------------- | -------------------------------------------------------------- | ----------------------------- |
+| `set()`       | At once                                                              | Once the worker has taken the write; a failure is logged       | Until the worker has taken it |
+| `setForUI()`  | At once                                                              | Once the runtime has committed the write; a refusal rejects it | Until the write is sent       |
+| `setStrict()` | After the commit, unless a newer write or delivery has superseded it | Once the runtime has committed the write; a refusal rejects it | Until the write has committed |
+
+`setForUI()` is for a control that shows a person's edit itself and observes the
+stored value through a subscription. A delivery equal to the edit before the
+commit may be the write's echo or an older value that happens to match, so the
+control keeps its edit until the commit and reads the cell then: a write a
+handler made after the edit can be delivered before the commit's acknowledgment,
+with nothing to follow it. Input asked for while the commit is pending is sent
+without waiting on it. `update(updater, { awaitCommit: true })` writes a
+computed value on the same terms. `CellController` in `@commonfabric/ui` is such
+a control.
 
 `resolveAsCell()` and `getCfcLabel()` take their turn in the same queue. A call
 to either, made through an equal ref while an earlier call to it waits for its

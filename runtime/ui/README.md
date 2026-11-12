@@ -30,6 +30,27 @@ src/
 TODO(ui-path-cleanup): Rename the `src/v2` path now that it is the only UI
 component implementation.
 
+## Cell-bound edits
+
+`CellController` shows a person's edit at once and writes it through
+`CellHandle.setForUI()`, or through `CellHandle.update()` with `awaitCommit` for
+a value computed from the current one, so that it observes the write's commit.
+Input stays responsive while the commit is pending: the cell's queue moves on as
+the write is sent. Until the commit, no subscription delivery releases the edit,
+one equal to it included, since that may be the write's echo or an older value
+that happens to match. Once the write has committed, the controller reads the
+cell and shows what the handle then holds: the committed value, a write a
+handler made after it, or a delivery that overtook the read. That read is what
+picks up a handler's clear delivered before the commit's acknowledgment, which
+no later delivery repeats. Each committed edit that is still the one shown costs
+one read of the worker.
+
+A refused write releases the edit and shows the bound value, telling `onChange`
+and the host; a write whose runtime was disposed does so quietly. The commit of
+an older write never releases a newer edit, one still waiting on its timing
+included. A custom `setValue` supplies no commit, so an edit made through one is
+released as soon as the setter has run.
+
 ## 🎯 Quick Start
 
 ### Installation with Deno

@@ -1051,7 +1051,10 @@ const DRIFTED_LABEL_VIEW: CellRef["cfcLabelView"] = {
   entries: [{ path: [], label: { confidentiality: ["did:key:z-someone"] } }],
 };
 
-/** Let in-flight CellHandle.set() round-trips settle (mock resolves async). */
+/**
+ * Let in-flight writes commit and the reads that reconcile them answer (the
+ * mock resolves both async).
+ */
 const settleWrites = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 describe("CellController — pending local edits vs stale bound state", () => {
@@ -1084,7 +1087,7 @@ describe("CellController — pending local edits vs stale bound state", () => {
     expect(ctrl.getValue()).toBe("");
   });
 
-  it("suppresses a stale pre-write value delivered by a same-cell rebind until the echo confirms", async () => {
+  it("suppresses a stale rebound cache until the read after the commit confirms the edit", async () => {
     const changes: Array<string | undefined> = [];
     const ctrl = new StringCellController(createMockHost(), {
       timing: { strategy: "immediate" },
@@ -1100,7 +1103,7 @@ describe("CellController — pending local edits vs stale bound state", () => {
     // pre-write snapshot.
     const rebound = createMockCellHandle<string>("", {
       cfcLabelView: DRIFTED_LABEL_VIEW,
-    });
+    }, initial);
     ctrl.bind(rebound);
     expect(ctrl.getValue()).toBe("Alice");
     // The stale "" must not be announced as a change either — the UI never
@@ -1109,7 +1112,7 @@ describe("CellController — pending local edits vs stale bound state", () => {
     await settleWrites();
     expect(ctrl.getValue()).toBe("Alice");
 
-    // Echo confirms; later remote edits apply normally.
+    // The read confirmed the edit; later remote edits apply normally.
     pushUpdate(rebound, "Alice");
     expect(ctrl.getValue()).toBe("Alice");
     pushUpdate(rebound, "Bob");
@@ -1228,7 +1231,7 @@ describe("CellController — pending local edits vs stale bound state", () => {
     expect(ctrl.getValue()).toBe("");
   });
 
-  it("releases a settled-but-unconverged edit when an authoritative clear arrives", async () => {
+  it("accepts an authoritative clear after reconciling a rebound handle", async () => {
     const ctrl = new StringCellController(createMockHost(), {
       timing: { strategy: "immediate" },
     });
@@ -1236,17 +1239,16 @@ describe("CellController — pending local edits vs stale bound state", () => {
     ctrl.bind(initial);
 
     ctrl.setValue("Alice");
-    // Rebind swaps in a pre-write snapshot, so the write settles unconverged.
+    // The rebound cache predates the edit; the read after the commit
+    // refreshes it.
     const rebound = createMockCellHandle<string>("", {
       cfcLabelView: DRIFTED_LABEL_VIEW,
-    });
+    }, initial);
     ctrl.bind(rebound);
     await settleWrites();
     expect(ctrl.getValue()).toBe("Alice");
 
-    // The write was lost and the cell cleared: the post-settle delivery is
-    // authoritative even when it is undefined — the edit must not be shown
-    // forever.
+    // A later clear is authoritative even when its value is undefined.
     pushUpdate(rebound, undefined as unknown as string);
     expect(ctrl.getValue()).toBe("");
   });
@@ -1266,7 +1268,7 @@ describe("CellController — pending local edits vs stale bound state", () => {
     expect(ctrl.getValue()).toBe("other");
   });
 
-  it("lets a genuinely newer remote value supersede a settled-but-unconverged edit", async () => {
+  it("accepts a remote edit after reconciling a rebound handle", async () => {
     const ctrl = new StringCellController(createMockHost(), {
       timing: { strategy: "immediate" },
     });
@@ -1276,12 +1278,11 @@ describe("CellController — pending local edits vs stale bound state", () => {
     ctrl.setValue("Alice");
     const rebound = createMockCellHandle<string>("", {
       cfcLabelView: DRIFTED_LABEL_VIEW,
-    });
+    }, initial);
     ctrl.bind(rebound);
     await settleWrites();
 
-    // Deliveries after settle reflect post-write state: a third value means a
-    // newer remote edit won and must repaint without waiting for our echo.
+    // A remote edit after reconciliation repaints without another local echo.
     pushUpdate(rebound, "Zed");
     expect(ctrl.getValue()).toBe("Zed");
   });
@@ -1327,7 +1328,7 @@ describe("CellController — pending local edits vs stale bound state", () => {
     }
   });
 
-  it("confirms an array edit structurally when the echo arrives on a rebound handle", () => {
+  it("confirms an array edit structurally when the echo arrives on a rebound handle", async () => {
     const ctrl = new ArrayCellController<string | { k: string }>(
       createMockHost(),
     );
@@ -1338,12 +1339,14 @@ describe("CellController — pending local edits vs stale bound state", () => {
     const rebound = createMockCellHandle<(string | { k: string })[]>(
       undefined,
       { cfcLabelView: DRIFTED_LABEL_VIEW },
+      initial,
     );
     ctrl.bind(rebound);
     expect(ctrl.getValue()).toEqual(["x", { k: "v" }]);
+    await settleWrites();
 
     // The echo is a fresh deserialized instance — equal by structure, not
-    // identity — and must still confirm (and release) the edit.
+    // identity — and shows as the edit does; a later remote value repaints.
     pushUpdate(rebound, ["x", { k: "v" }]);
     expect(ctrl.getValue()).toEqual(["x", { k: "v" }]);
     pushUpdate(rebound, ["x"]);

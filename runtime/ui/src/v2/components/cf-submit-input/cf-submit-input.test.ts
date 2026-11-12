@@ -167,7 +167,7 @@ describe("CFSubmitInput", () => {
       time.tick(0);
     });
 
-    it("keeps a newer equal-text edit over an earlier send's clear and follows shared updates after acknowledgment", () => {
+    it("keeps a newer equal-text edit over an earlier send's clear and follows shared updates after acknowledgment", async () => {
       const el = new CFSubmitInput();
       const draft = createMockCellHandle<SubmitInputDraft>({
         value: "hello",
@@ -192,6 +192,10 @@ describe("CFSubmitInput", () => {
         expect(el.getAttribute("data-draft-revision")).toBe(revision);
 
         pushUpdate(draft, { value: "hello", revision });
+        // The echo does not release the edit; the commit, and the read that
+        // follows it, do.
+        release();
+        await tick();
         pushUpdate(draft, { value: "shared edit", revision: "elsewhere" });
         internals(el).willUpdate(new Map());
         expect(el.value).toBe("shared edit");
