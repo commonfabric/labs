@@ -162,10 +162,9 @@ export function fabricFromJsonValue(
 /**
  * Creates a registry pairing the realm-crossing format with the fabric classes
  * this package defines. The counterpart to {@link createDefaultJsonRegistry},
- * drawing on the same two curated lists: which classes participate is a
- * question about the classes rather than about the format, so both formats
- * read the same roster and each class supplies whichever codec it has for the
- * format asking.
+ * drawing on the same two curated lists, less any class that supplies no codec
+ * for this format (see {@link codecClassesFor}): both formats read the same
+ * roster, and each class supplies whichever codec it has for the format asking.
  */
 export function createDefaultRealmRegistry(): CodecRegistry<RealmCodecValue> {
   return createBaseRealmRegistry().extend(codecClassesFor(REALM_FORMAT));
