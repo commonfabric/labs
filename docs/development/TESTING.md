@@ -740,8 +740,10 @@ non-converging graph leaves `runtime.idle()` waiting on the OFF arm. A run
 against a caller-supplied `storageHost` is refused on the ON arm,
 since the store is the caller's and there is no memory server to host a loop
 beside. A caller whose check does not depend on the posture, or holds only on
-the OFF arm, sets `storageHost.serverExecution: false`, which runs that file
-on the OFF arm without changing the process's environment. A run with
+the OFF arm, sets `storageHost.serverExecution: false`, which runs that
+single-user file on the OFF arm without changing the process's environment. A
+multi-user file refuses every `storageHost`, this one included, since its
+participants write against a storage server of the runner's own. A run with
 `--cfc-enforcement-mode disabled` is refused on the ON arm too: a runtime with
 CFC disabled writes no program closure for the serving loop to load, and
 served handlers run under the serving runtime's CFC posture, not the test's.

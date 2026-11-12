@@ -1152,6 +1152,20 @@ function printActionStatsTable(runtime: Runtime): void {
 }
 
 /**
+ * Wraps `observe` so it is not told of the default pattern the runner gives
+ * the test's space: that one is the harness's, not the test's, and its
+ * program is no file a caller could map it to.
+ */
+function harnessPatternsLeftOut(
+  observe: PatternInstantiationObserver,
+): PatternInstantiationObserver {
+  return (instantiation) => {
+    if (instantiation.main === TEST_DEFAULT_PATTERN_PROGRAM.main) return;
+    observe(instantiation);
+  };
+}
+
+/**
  * Run a single test pattern file.
  */
 export async function runTestPattern(
@@ -1347,7 +1361,11 @@ export async function runTestPattern(
           ? { cfcFlowLabels: options.cfcFlowLabels }
           : {}),
         ...(options.storageHost?.onPatternInstantiated !== undefined
-          ? { onPatternInstantiated: options.storageHost.onPatternInstantiated }
+          ? {
+            onPatternInstantiated: harnessPatternsLeftOut(
+              options.storageHost.onPatternInstantiated,
+            ),
+          }
           : {}),
         errorHandlers: [(error: ErrorWithContext) => runtimeErrors.push(error)],
         navigateCallback: (target) => {
