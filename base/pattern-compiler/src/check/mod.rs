@@ -136,6 +136,8 @@ struct Frame {
 struct ElementState {
     plain: bool,
     state: Option<Span>,
+    /// Whether the body instantiates a child.
+    child: bool,
 }
 
 /// What a name denotes.
@@ -181,6 +183,9 @@ pub struct Checker<'p, 'a> {
     /// The start of the builder call that is the whole initializer of the
     /// module-scope `const` being visited.
     direct_builder: Option<u32>,
+    /// How many loops and nested functions of the current function body
+    /// enclose the code being visited.
+    loop_depth: u32,
     /// The starts of the `Object.prototype` reads that are an operand of
     /// `===` or `!==`.
     prototype_operands: HashSet<u32>,
@@ -212,6 +217,7 @@ pub fn check_module<'a>(
         name_hint: None,
         helper_callees: HashSet::new(),
         direct_builder: None,
+        loop_depth: 0,
         prototype_operands: HashSet::new(),
     };
     if model.tier == ModuleTier::Imported {
@@ -447,9 +453,11 @@ impl<'p, 'a> Checker<'p, 'a> {
             }
             _ => false,
         };
+        let enclosing = std::mem::take(&mut self.loop_depth);
         self.with_ctx(Ctx::Function { body, root }, |checker| {
             checker.function_in_place(function);
         });
+        self.loop_depth = enclosing;
         if frame {
             self.frames.pop();
         }
@@ -1231,9 +1239,6 @@ impl<'p, 'a> Checker<'p, 'a> {
             }
             Builder::Action => {
                 self.verb_result(call, function, 1, "action");
-                if self.in_reactive() {
-                    self.mark_state(call.span);
-                }
                 self.record_call(CallKind::BindHandler, "action", call.span);
                 let body = self.enter_body(
                     BodyKind::Action,
@@ -1578,6 +1583,39 @@ impl<'p, 'a> Checker<'p, 'a> {
         });
     }
 
+    /// Records an instantiation of a pattern by a call. In a computation, an
+    /// instantiation inside a loop or a nested function is named by its
+    /// ordinal unless the author gives it a cause.
+    fn instantiated(&mut self, name: &str, span: Span) {
+        self.record_call(CallKind::Instantiate, name, span);
+        let computation = matches!(
+            self.cur(),
+            Ctx::Function {
+                root: Root::Computation,
+                ..
+            }
+        );
+        if computation && self.loop_depth > 0 && !self.cause_given.contains(&span.start) {
+            self.report(
+                "function-body:instantiation-without-cause",
+                span,
+                "A pattern instantiated in a loop or a callback of a computation without `.for(cause)`",
+            );
+        }
+        if self.in_reactive() {
+            let mut body = self.current_body();
+            while let Some(index) = body {
+                if self.out.bodies[index].tier != Tier::Reactive {
+                    break;
+                }
+                if let Some(state) = self.element.get_mut(&index) {
+                    state.child = true;
+                }
+                body = self.out.bodies[index].parent;
+            }
+        }
+    }
+
     // ----- Per-element state (§4.4.1) -----
 
     /// Records that the reactive code being visited declares a state cell or
@@ -1760,13 +1798,13 @@ impl<'p, 'a> Checker<'p, 'a> {
                     self.api_of(&inner.callee).map(|api| api.value())
                 {
                     self.statement_call = None;
-                    self.record_call(CallKind::Instantiate, "pattern", call.span);
+                    self.instantiated("pattern", call.span);
                     self.builder_call(inner, Builder::Pattern, true);
                     self.arguments(call, false);
                 } else {
                     self.statement_call = None;
                     if self.is_modifier_call(inner) {
-                        self.record_call(CallKind::Instantiate, "", call.span);
+                        self.instantiated("", call.span);
                     }
                     self.visit_expression(&call.callee);
                     self.arguments(call, false);
@@ -1826,11 +1864,8 @@ impl<'p, 'a> Checker<'p, 'a> {
             Thing::Def(def, kind, _) => {
                 self.statement_call = None;
                 match kind {
-                    DefKind::Pattern => self.record_call(CallKind::Instantiate, name, call.span),
+                    DefKind::Pattern => self.instantiated(name, call.span),
                     DefKind::Handler => {
-                        if self.in_reactive() {
-                            self.mark_state(call.span);
-                        }
                         self.record_call(CallKind::BindHandler, name, call.span);
                     }
                     DefKind::Lift => self.record_call(CallKind::Lift, name, call.span),
@@ -2153,6 +2188,7 @@ impl<'p, 'a> Checker<'p, 'a> {
                     self.record_call(CallKind::CreateCell, "for", call.span);
                     if self.in_reactive() {
                         self.mark_state(call.span);
+                        self.mark_state(call.span);
                         self.cause_literal(call);
                     }
                 }
@@ -2167,7 +2203,7 @@ impl<'p, 'a> Checker<'p, 'a> {
         }
 
         if name == "for" {
-            if self.is_cell_creation(object) {
+            if self.is_cell_creation(object) || self.is_instantiation(object) {
                 self.cause_given.insert(object.span().start);
             }
             if self.in_reactive() {
@@ -2326,9 +2362,6 @@ impl<'p, 'a> Checker<'p, 'a> {
                 );
             } else if let Some(kind) = self.factory_callee(call) {
                 // A value of a factory type held in a property (§4.4.2).
-                if kind == CallKind::BindHandler {
-                    self.mark_state(call.span);
-                }
                 self.record_call(kind, name, call.span);
             } else if class != MethodName::Reactive
                 && (self.declared_shape(&member.object).is_some()
@@ -2482,6 +2515,7 @@ impl<'p, 'a> Checker<'p, 'a> {
             ElementState {
                 plain: !reduce && self.is_plain_collection(&member.object, 0),
                 state: None,
+                child: false,
             },
         );
         self.reactive_body(function, body);
@@ -2494,11 +2528,14 @@ impl<'p, 'a> Checker<'p, 'a> {
                 format!("The callback of `{name}` uses its index, so its elements are keyed by position"),
             );
         }
+        if state.plain && state.child && !uses_index {
+            self.count("child instantiated per element of plain values");
+        }
         if let (true, false, Some(span)) = (state.plain, uses_index, state.state) {
             self.report(
                 "collection:shared-element-state",
                 span,
-                "State declared per element of a collection of plain values, without the index",
+                "A state cell declared per element of a collection of plain values, without the index",
             );
         }
     }
@@ -2900,7 +2937,11 @@ impl<'a> Visit<'a> for Checker<'_, 'a> {
                     self.refused(|checker| checker.function_in_place(function));
                 }
                 Ctx::Module => self.function_body(function, None, Root::ModuleInit),
-                Ctx::Function { .. } | Ctx::Refused => self.function_in_place(function),
+                Ctx::Function { .. } | Ctx::Refused => {
+                    self.loop_depth += 1;
+                    self.function_in_place(function);
+                    self.loop_depth -= 1;
+                }
             }
             return;
         }
@@ -3352,14 +3393,36 @@ impl<'a> Visit<'a> for Checker<'_, 'a> {
 
     fn visit_for_in_statement(&mut self, it: &ForInStatement<'a>) {
         self.report("function-body:for-in", it.span, "`for...in`");
+        self.loop_depth += 1;
         walk::walk_for_in_statement(self, it);
+        self.loop_depth -= 1;
     }
 
     fn visit_for_of_statement(&mut self, it: &ForOfStatement<'a>) {
         if it.r#await {
             self.report("function-body:async", it.span, "`for await`");
         }
+        self.loop_depth += 1;
         walk::walk_for_of_statement(self, it);
+        self.loop_depth -= 1;
+    }
+
+    fn visit_for_statement(&mut self, it: &ForStatement<'a>) {
+        self.loop_depth += 1;
+        walk::walk_for_statement(self, it);
+        self.loop_depth -= 1;
+    }
+
+    fn visit_while_statement(&mut self, it: &WhileStatement<'a>) {
+        self.loop_depth += 1;
+        walk::walk_while_statement(self, it);
+        self.loop_depth -= 1;
+    }
+
+    fn visit_do_while_statement(&mut self, it: &DoWhileStatement<'a>) {
+        self.loop_depth += 1;
+        walk::walk_do_while_statement(self, it);
+        self.loop_depth -= 1;
     }
 
     fn visit_with_statement(&mut self, it: &WithStatement<'a>) {
@@ -3397,9 +3460,6 @@ impl<'a> Visit<'a> for Checker<'_, 'a> {
             walk::walk_jsx_attribute(self, it);
             return;
         };
-        if self.in_reactive() {
-            self.mark_state(it.span);
-        }
         self.record_call(CallKind::BindHandler, name, it.span);
         let body = self.enter_body(
             BodyKind::InlineHandler,

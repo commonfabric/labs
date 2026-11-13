@@ -237,7 +237,12 @@ impl<'a> Resolver<'_, 'a> {
                 let property = self
                     .property(value, key.value.as_str())
                     .unwrap_or_else(|| self.add_unresolved());
-                Ok(self.intern(Shape::Handle(kind, property)))
+                // `key` flattens a handle it passes through: the property
+                // of a handle that is itself a handle is that handle.
+                Ok(match self.shape(property) {
+                    Shape::Handle(..) => property,
+                    _ => self.intern(Shape::Handle(kind, property)),
+                })
             }
             _ => Err(Origin::CallResult),
         }
@@ -560,6 +565,9 @@ pub struct OverloadNote {
     /// the function is deleted. `None` when the function has another form or
     /// the intersection is not evaluated.
     pub declared_instead: Option<String>,
+    /// Whether the declared type of what the implementation returns is the
+    /// result type of the signature, so that the function types without it.
+    pub typed_without_overload: bool,
 }
 
 impl<'a> Resolver<'_, 'a> {
@@ -631,6 +639,8 @@ impl<'a> Resolver<'_, 'a> {
                         }
                     },
                 );
+            let typed_without_overload =
+                returns.ends_with(&format!(", declared {}", self.display(result)));
             let identity = returns.starts_with("the parameter");
             let declared_instead = match (
                 parameters.first().map(|ty| self.shape(*ty)),
@@ -654,6 +664,7 @@ impl<'a> Resolver<'_, 'a> {
                 result: self.display(result),
                 returns,
                 declared_instead,
+                typed_without_overload,
             });
         }
         notes

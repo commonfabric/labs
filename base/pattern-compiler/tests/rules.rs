@@ -819,11 +819,56 @@ fn call_of_a_property_in_the_reactive_tier_is_decided_by_its_declared_type() {
 }
 
 #[test]
-fn stored_list_of_primitives_is_a_collection_of_plain_values() {
-    let primitive = "const pick = handler<unknown, { name: string }>(() => {});\nconst Box = pattern<{ names: string[] }>(({ names }) => ({ rows: names.map((name) => <button onClick={pick({ name })}>{name}</button>) }));\n";
-    assert_eq!(ids(&check(primitive)), ["collection:shared-element-state"]);
-    let records = "const pick = handler<unknown, { donut: { name: string } }>(() => {});\nconst Box = pattern<{ donuts: { name: string }[] }>(({ donuts }) => ({ rows: donuts.map((donut) => <button onClick={pick({ donut })}>{donut.name}</button>) }));\n";
+fn state_cell_per_element_of_a_stored_list_of_primitives_is_refused() {
+    let cell = "const Box = pattern<{ names: string[] }>(({ names }) => ({ rows: names.map((name) => { const open = new Writable(false); return { name, open }; }) }));\n";
+    assert_eq!(ids(&check(cell)), ["collection:shared-element-state"]);
+    let records = "const Box = pattern<{ donuts: { name: string }[] }>(({ donuts }) => ({ rows: donuts.map((donut) => { const open = new Writable(false); return { donut, open }; }) }));\n";
     assert_eq!(ids(&check(records)), Vec::<&str>::new());
+}
+
+#[test]
+fn handler_bound_per_element_of_plain_values_with_no_state_cell_is_accepted() {
+    let applied = "const GLAZES = [\"plain\", \"sugar\"];\nconst pick = handler<unknown, { glaze: string }>(() => {});\nconst Box = pattern(() => ({ rows: GLAZES.map((glaze) => <button onClick={pick({ glaze })}>{glaze}</button>) }));\n";
+    assert_eq!(ids(&check(applied)), Vec::<&str>::new());
+    let inline = "const GLAZES = [\"plain\", \"sugar\"];\nconst Box = pattern<{ chosen: Writable<string> }>(({ chosen }) => ({ rows: GLAZES.map((glaze) => <button onClick={() => chosen.set(glaze)}>{glaze}</button>) }));\n";
+    assert_eq!(ids(&check(inline)), Vec::<&str>::new());
+}
+
+#[test]
+fn key_flattens_a_handle_held_in_a_handle() {
+    let module = "interface About { title: string }\ninterface Link { about: { record: Cell<About> } }\n\
+        function aboutOf(room: Cell<Link>): Cell<About>;\n\
+        function aboutOf(room: Cell<Link>): unknown { return room.key(\"about\").key(\"record\"); }\n";
+    let analysis = analyze(&[SourceFile {
+        path: "case.ts".to_string(),
+        text: format!("{PRELUDE}{module}"),
+    }]);
+    let overload = &analysis.modules[0].overloads[0];
+    assert_eq!(
+        overload.returns,
+        "`room.key(\"about\").key(\"record\")`, declared Cell<{ title: string }>"
+    );
+    assert!(overload.typed_without_overload);
+}
+
+#[test]
+fn instantiation_in_a_loop_of_a_computation_without_a_cause_draws_a_warning() {
+    let looped = "const Quote = pattern<{ id: string }>(({ id }) => ({ id }));\nconst Box = pattern<{ ids: string[] }>(({ ids }) => ({ quotes: computed(() => ids.map((id) => Quote({ id }))) }));\n";
+    assert!(all(looped).contains(&"function-body:instantiation-without-cause"));
+    assert_eq!(ids(&check(looped)), Vec::<&str>::new());
+    let named = "const Quote = pattern<{ id: string }>(({ id }) => ({ id }));\nconst Box = pattern<{ ids: string[] }>(({ ids }) => ({ quotes: computed(() => ids.map((id) => Quote({ id }).for(id))) }));\n";
+    assert!(!all(named).contains(&"function-body:instantiation-without-cause"));
+    let once = "const Quote = pattern<{ id: string }>(({ id }) => ({ id }));\nconst Box = pattern<{ id: string }>(({ id }) => ({ quote: computed(() => Quote({ id })) }));\n";
+    assert!(!all(once).contains(&"function-body:instantiation-without-cause"));
+}
+
+#[test]
+fn function_type_in_a_probed_data_type_is_refused() {
+    let module = "type Piece = { mentionable?: Piece[] | { get?: () => Piece[] } };\nconst Box = pattern<{ piece: Piece }>(({ piece }) => ({ piece }));\n";
+    assert_eq!(ids(&check(module)), ["subset-type:function-in-data"]);
+    let helper =
+        "function read(source: { get?: () => string[] }) { return source.get?.() ?? []; }\n";
+    assert_eq!(ids(&check(helper)), Vec::<&str>::new());
 }
 
 #[test]

@@ -170,6 +170,10 @@ pub fn rewrite(id: &str) -> &'static str {
             "Define the builder at module scope and call its result. A function body that \
              needs a reactive value instantiates a pattern."
         }
+        "function-body:instantiation-without-cause" => {
+            "Write `.for(cause)` on the instantiation, with a cause taken from the record, so \
+             that each instance stays with its record when the list changes."
+        }
         "function-body:handler-capture" => {
             "Assign the value to a `const` before the handler and capture that."
         }

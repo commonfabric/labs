@@ -134,6 +134,10 @@ fn types(paths: &[&str], flags: &[&str]) -> std::io::Result<bool> {
             println!("  parameters: {}", overload.parameters.join(", "));
             println!("  result:     {}", overload.result);
             println!("  returns:    {}", overload.returns);
+            println!(
+                "  types without the overload: {}",
+                overload.typed_without_overload
+            );
             match &overload.declared_instead {
                 Some(ty) => println!("  declared instead: {ty}"),
                 None => println!("  declared instead: none"),

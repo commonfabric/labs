@@ -87,3 +87,19 @@ fn table_marks_exactly_the_entries_without_severity_as_retired() {
         );
     }
 }
+
+#[test]
+fn provisional_identifiers_are_not_yet_in_the_specification() {
+    let text = std::fs::read_to_string(SPECIFICATION).expect("the specification is readable");
+    let known: Vec<String> = entries_of_document(&text)
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    for entry in pattern_compiler::catalog::PROVISIONAL {
+        assert!(
+            !known.iter().any(|id| id == entry.id),
+            "{} is in the specification now; move it into the catalog table",
+            entry.id
+        );
+    }
+}

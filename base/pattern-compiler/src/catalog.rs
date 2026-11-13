@@ -428,9 +428,26 @@ pub const CATALOG: &[Entry] = &[
     done("scope:union-member", Error),
 ];
 
+/// Entries the front end reports under an identifier the specification has
+/// not named yet. `tests/catalog.rs` fails once the specification has one of
+/// these, so that it moves into [`CATALOG`].
+pub const PROVISIONAL: &[Entry] = &[Entry {
+    id: "function-body:instantiation-without-cause",
+    severity: Some(Warning),
+    status: Status::Implemented {
+        rest: Some(
+            "reported in a `lift`, a `computed`, and an `assert`; whether an authored \
+             function they call is covered is not ruled",
+        ),
+    },
+}];
+
 /// The entry for `id`, if the catalog has one.
 pub fn entry(id: &str) -> Option<&'static Entry> {
-    CATALOG.iter().find(|entry| entry.id == id)
+    CATALOG
+        .iter()
+        .chain(PROVISIONAL)
+        .find(|entry| entry.id == id)
 }
 
 /// The severity of `id` when the front end implements it, and `None` for any
@@ -496,5 +513,12 @@ pub fn render() -> String {
         out.push_str(&format!("{count:4}  {label}\n"));
     }
     out.push_str(&format!("{:4}  entries\n", CATALOG.len()));
+    for entry in PROVISIONAL {
+        out.push_str(&format!(
+            "\nprovisional: {} ({})\n",
+            entry.id,
+            entry.status.label()
+        ));
+    }
     out
 }
