@@ -654,8 +654,12 @@ impl<'a> Resolver<'_, 'a> {
             }
             Expression::LogicalExpression(logical) => match (logical.operator, sense) {
                 (LogicalOperator::And, true) | (LogicalOperator::Or, false) => {
+                    // Both operands hold. The left one is applied again
+                    // after the right one, which may have given `unknown`
+                    // the members the left one removes.
                     let ty = self.assume(module, &logical.left, sense, reference, ty);
-                    self.assume(module, &logical.right, sense, reference, ty)
+                    let ty = self.assume(module, &logical.right, sense, reference, ty);
+                    self.assume(module, &logical.left, sense, reference, ty)
                 }
                 // One of the two operands decided the result, so the type
                 // is what either of them leaves.
@@ -921,7 +925,16 @@ impl<'a> Resolver<'_, 'a> {
                 "undefined" => Some(Shape::Undefined),
                 _ => None,
             }
-            .map(|shape| self.intern(shape));
+            .map(|shape| self.intern(shape))
+            // An object, or `null`: a type with no property (§7.8).
+            .or_else(|| {
+                (kind == "object").then(|| {
+                    self.union_of(vec![
+                        self.intern(Shape::NonPrimitive),
+                        self.intern(Shape::Null),
+                    ])
+                })
+            });
             return self.assume_kind(sense, reference, ty, whole, |shape| {
                 let found = match shape {
                     Shape::String => "string",

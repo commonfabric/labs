@@ -495,3 +495,17 @@ fn let_of_an_enclosing_function_is_narrowed_where_one_function_assigns_it() {
         ["Set"]
     );
 }
+
+#[test]
+fn typeof_object_narrows_an_ordinary_unknown_to_a_type_with_no_property() {
+    assert_eq!(
+        types(
+            "function show(value: unknown) {\n\
+               if (typeof value === \"object\") { /*?*/value; if (value !== null) { /*?*/value; } }\n\
+               if (!value || typeof value !== \"object\") return 0;\n\
+               return /*?*/value;\n\
+             }\n"
+        ),
+        ["object | null", "object", "object"]
+    );
+}
