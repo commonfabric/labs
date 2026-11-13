@@ -4,10 +4,11 @@ export function random(length: number): Uint8Array {
   return buffer;
 }
 
-export function bufferSourceToArrayBuffer(
-  source: BufferSource,
-): ArrayBuffer | SharedArrayBuffer {
-  return ArrayBuffer.isView(source) ? source.buffer : source;
+/** Returns the bytes `source` holds, as a view of them rather than a copy. */
+export function bytesOfBufferSource(source: BufferSource): Uint8Array {
+  return ArrayBuffer.isView(source)
+    ? new Uint8Array(source.buffer, source.byteOffset, source.byteLength)
+    : new Uint8Array(source);
 }
 
 // Bind a handler to an `EventTarget`'s event once.

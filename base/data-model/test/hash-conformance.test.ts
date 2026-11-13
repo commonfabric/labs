@@ -413,6 +413,38 @@ describe("hash-conformance", () => {
       });
     });
 
+    it("throws given spec bytes that are not hexadecimal, two digits to a byte", () => {
+      for (const spec of ["2g", "22 0"]) {
+        expect(() =>
+          hashConformanceFixtureTextForTestingOnly([
+            { name: "true", section: "s", make: () => true, spec },
+          ])
+        ).toThrow(
+          `Not lowercase hexadecimal bytes: ${spec.replaceAll(" ", "")}`,
+        );
+      }
+    });
+
+    it("throws what decoding the value's text and mods throws, other than a refusal", () => {
+      // A link holding itself directly in its payload is a value no patch can
+      // make, a link holding its payload frozen. Building one takes a getter
+      // in the payload, which reads the link once it exists.
+
+      let link: FabricValue = null;
+      link = new FabricLink(Object.freeze({
+        get a() {
+          return link;
+        },
+      }));
+      expect(() =>
+        hashConformanceFixtureTextForTestingOnly([
+          { name: "link", section: "s", make: () => link },
+        ])
+      ).toThrow(
+        'The patch at ["payload","a"] does not hold once all are made.',
+      );
+    });
+
     it("throws given `equals` naming no earlier case", () => {
       expect(() =>
         hashConformanceFixtureTextForTestingOnly([

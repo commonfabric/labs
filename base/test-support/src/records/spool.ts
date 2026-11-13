@@ -82,17 +82,7 @@ export async function createRunSpool(
     await Deno.remove(staging, { recursive: true }).catch(() => {});
     throw error;
   }
-  const held = lock;
-  return {
-    dir,
-    close: () => {
-      try {
-        held.close();
-      } catch {
-        // The lock dies with the file handle either way.
-      }
-    },
-  };
+  return heldSpool(dir, lock);
 }
 
 /**
@@ -104,23 +94,19 @@ export async function createRunSpool(
 export async function tryAdoptSpool(
   dir: string,
 ): Promise<HeldSpool | undefined> {
-  let lock: Deno.FsFile;
+  let lock: Deno.FsFile | undefined;
   try {
     lock = await Deno.open(join(dir, LOCK_FILE), { create: true, write: true });
+    if (await lock.tryLock(true)) return heldSpool(dir, lock);
   } catch {
-    return undefined;
+    // A lock file that cannot be opened or locked leaves nothing to adopt.
   }
-  let locked = false;
-  try {
-    locked = await lock.tryLock(true);
-  } catch {
-    lock.close();
-    return undefined;
-  }
-  if (!locked) {
-    lock.close();
-    return undefined;
-  }
+  lock?.close();
+  return undefined;
+}
+
+/** The spool `dir`, held by `lock` until it is closed. */
+function heldSpool(dir: string, lock: Deno.FsFile): HeldSpool {
   return {
     dir,
     close: () => {
@@ -150,20 +136,15 @@ export function listStagingSpools(root: string): Promise<string[]> {
 
 async function listPrefixed(root: string, prefix: string): Promise<string[]> {
   const dirs: string[] = [];
-  let entries: AsyncIterable<Deno.DirEntry>;
   try {
-    entries = Deno.readDir(root);
-  } catch {
-    return dirs;
-  }
-  try {
-    for await (const entry of entries) {
+    for await (const entry of Deno.readDir(root)) {
       if (entry.isDirectory && entry.name.startsWith(prefix)) {
         dirs.push(join(root, entry.name));
       }
     }
   } catch {
-    // A root vanishing mid-listing yields the entries read so far.
+    // A root that is missing, or vanishes mid-listing, yields the entries
+    // read so far.
   }
   return dirs.sort();
 }

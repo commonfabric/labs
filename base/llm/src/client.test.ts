@@ -1,24 +1,35 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { stub } from "@std/testing/mock";
+import { fromFileUrl } from "@std/path";
 import {
   addMockObjectResponse,
   addMockResponse,
   clearMockResponses,
   type ConversationFixture,
+  type ConversationFixtureAssertions,
   disableMockMode,
   enableMockMode,
   failureHint,
+  initialLLMUrl,
   LLMClient,
   LLMStreamError,
   loadConversationFixture,
+  loadConversationFixtureFile,
   normalizeLLMResponse,
   parseLLMReply,
   readLLMResponse,
   readLLMStream,
   resetMockMode,
+  setLLMUrl,
   setMockResponseGate,
 } from "./client.ts";
-import { GOOGLE_SEARCH_NATIVE_MODEL_TOOL } from "./types.ts";
+import {
+  GOOGLE_SEARCH_NATIVE_MODEL_TOOL,
+  type LLMGenerateObjectRequest,
+  type LLMRequest,
+  type LLMResponse,
+} from "./types.ts";
 
 const GUARD_MESSAGE =
   "LLMClient: live LLM calls are blocked in test environments.";
@@ -62,6 +73,18 @@ describe("LLMClient test-environment guard", () => {
       client.generateObject({
         messages: [{ role: "user", content: "hello" }],
         schema: { type: "object", properties: { name: { type: "string" } } },
+      }),
+    ).rejects.toThrow(GUARD_MESSAGE);
+  });
+
+  it("sendRequest throws guard error for a client handed the global fetch", async () => {
+    disableMockMode();
+
+    await expect(
+      new LLMClient(globalThis.fetch).sendRequest({
+        messages: [{ role: "user", content: "hello" }],
+        model: "test-model",
+        stream: false,
       }),
     ).rejects.toThrow(GUARD_MESSAGE);
   });
@@ -805,6 +828,326 @@ describe("failureHint", () => {
       expect(hint).not.toContain(PARAMETERS);
       expect(hint).not.toContain("again later");
       expect(hint).not.toContain("was not the problem");
+    }
+  });
+});
+
+describe("conversation fixture assertions", () => {
+  const client = new LLMClient();
+
+  /** Loads a fixture whose one entry expects `expectRequest` of a request. */
+  function expectOne(
+    expectRequest: ConversationFixtureAssertions,
+    type: "sendRequest" | "generateObject" = "sendRequest",
+  ): void {
+    resetMockMode();
+    loadConversationFixture({
+      responses: [
+        type === "sendRequest"
+          ? {
+            type,
+            expectRequest,
+            response: { role: "assistant", content: "ok", id: "fixture-1" },
+          }
+          : { type, expectRequest, response: { object: { name: "Alice" } } },
+      ],
+    });
+  }
+
+  const request = (
+    content: LLMRequest["messages"][number]["content"],
+  ): LLMRequest => ({
+    messages: [{ role: "user", content }],
+    model: "test",
+    system: "You are terse.",
+    stream: false,
+  });
+
+  it("throws naming the expected and actual message counts", async () => {
+    expectOne({ messageCount: 2 });
+
+    await expect(client.sendRequest(request("hi"))).rejects.toThrow(
+      "Fixture entry 0: expected 2 messages, got 1",
+    );
+    resetMockMode();
+  });
+
+  it("matches `messagesContain` against the text parts of array content", async () => {
+    const parts = [
+      { type: "text" as const, text: "first" },
+      { type: "image" as const, image: "https://example.com/a.png" },
+      { type: "text" as const, text: "second" },
+    ];
+    expectOne({ messagesContain: ["first second"] });
+    expect((await client.sendRequest(request(parts))).content).toBe("ok");
+
+    expectOne({ messagesContain: ["a.png"] });
+    await expect(client.sendRequest(request(parts))).rejects.toThrow(
+      'expected some message to contain "a.png"',
+    );
+    resetMockMode();
+  });
+
+  it("throws naming the last message's text when it lacks `lastMessageContains`", async () => {
+    expectOne({ lastMessageContains: "bye" });
+
+    await expect(client.sendRequest(request("hello"))).rejects.toThrow(
+      'expected last message to contain "bye", got "hello"',
+    );
+    resetMockMode();
+  });
+
+  it("throws naming the tools a request carries when one is missing", async () => {
+    expectOne({ hasTools: ["search"] });
+
+    await expect(
+      client.sendRequest({
+        ...request("hi"),
+        tools: {
+          calculate: { description: "Calculate", inputSchema: {} },
+        },
+      }),
+    ).rejects.toThrow('expected tool "search" in request, got [calculate]');
+    resetMockMode();
+  });
+
+  it("throws when the system prompt lacks `systemContains`", async () => {
+    expectOne({ systemContains: "verbose" });
+
+    await expect(client.sendRequest(request("hi"))).rejects.toThrow(
+      'expected system prompt to contain "verbose"',
+    );
+    resetMockMode();
+  });
+
+  it("checks a `generateObject` entry's assertions against its request", async () => {
+    const schema = { type: "object" as const };
+    expectOne({ lastMessageContains: "name" }, "generateObject");
+    expect(
+      (await client.generateObject({
+        messages: [{ role: "user", content: "a name" }],
+        schema,
+      })).object,
+    ).toEqual({ name: "Alice" });
+
+    expectOne({ lastMessageContains: "name" }, "generateObject");
+    await expect(
+      client.generateObject({
+        messages: [{ role: "user", content: "a number" }],
+        schema,
+      }),
+    ).rejects.toThrow('expected last message to contain "name"');
+    resetMockMode();
+  });
+});
+
+describe("loadConversationFixtureFile()", () => {
+  const fixtures = new URL("../test/fixtures/", import.meta.url);
+
+  it("queues the responses the file describes, with their assertions", async () => {
+    resetMockMode();
+    await loadConversationFixtureFile(
+      fromFileUrl(new URL("conversation.json", fixtures)),
+    );
+    const client = new LLMClient();
+    const request = (content: string): LLMRequest => ({
+      messages: [{ role: "user", content }],
+      model: "test",
+      stream: false,
+    });
+
+    await expect(client.sendRequest(request("bye"))).rejects.toThrow(
+      'Fixture "fixture file" entry 0: expected last message to contain "hello"',
+    );
+    expect((await client.sendRequest(request("hello"))).content).toBe(
+      "from file",
+    );
+    resetMockMode();
+  });
+
+  it("throws naming the file when it holds no `responses` array", async () => {
+    resetMockMode();
+    const path = fromFileUrl(
+      new URL("conversation-without-responses.json", fixtures),
+    );
+
+    await expect(loadConversationFixtureFile(path)).rejects.toThrow(
+      `Invalid fixture at ${path}: "responses" must be an array`,
+    );
+  });
+});
+
+describe("mock streaming", () => {
+  const client = new LLMClient();
+
+  it("reports a mock's text, string or text part, to the callback once", async () => {
+    for (
+      const content of [
+        "whole text",
+        [
+          { type: "tool-call", toolCallId: "c", toolName: "t", input: {} },
+          { type: "text", text: "whole text" },
+        ],
+      ] satisfies LLMResponse["content"][]
+    ) {
+      resetMockMode();
+      enableMockMode();
+      addMockResponse(() => true, { role: "assistant", content, id: "m" });
+      const seen: string[] = [];
+
+      await client.sendRequest(
+        {
+          messages: [{ role: "user", content: "hi" }],
+          model: "t",
+          stream: true,
+        },
+        (text) => seen.push(text),
+      );
+
+      expect(seen).toEqual(["whole text"]);
+    }
+    resetMockMode();
+  });
+
+  it("does not call the callback for a mock without text", async () => {
+    resetMockMode();
+    enableMockMode();
+    addMockResponse(() => true, {
+      role: "assistant",
+      content: [{
+        type: "tool-call",
+        toolCallId: "c",
+        toolName: "t",
+        input: {},
+      }],
+      id: "m",
+    });
+    const seen: string[] = [];
+
+    await client.sendRequest(
+      { messages: [{ role: "user", content: "hi" }], model: "t", stream: true },
+      (text) => seen.push(text),
+    );
+
+    expect(seen).toEqual([]);
+    resetMockMode();
+  });
+});
+
+describe("LLMClient over HTTP", () => {
+  // A client given a `fetch` other than the global one sends through it,
+  // which the test-environment guard lets through.
+
+  /** A client whose requests `respond` answers, and the requests it sent. */
+  function clientAnswering(respond: () => Response) {
+    const sent: { url: string; init: RequestInit | undefined }[] = [];
+    const client = new LLMClient((input, init) => {
+      sent.push({ url: String(input), init });
+      return Promise.resolve(respond());
+    });
+    return { client, sent };
+  }
+
+  const textRequest: LLMRequest = {
+    messages: [{ role: "user", content: "hello" }],
+    model: "test-model",
+    stream: false,
+  };
+  const objectRequest: LLMGenerateObjectRequest = {
+    messages: [{ role: "user", content: "hello" }],
+    schema: { type: "object" },
+  };
+
+  it("POSTs a text request as JSON to the endpoint `setLLMUrl()` names", async () => {
+    disableMockMode();
+    setLLMUrl("http://127.0.0.1:9/some/path");
+    const { client, sent } = clientAnswering(() =>
+      Response.json({ role: "assistant", content: "hi" })
+    );
+
+    const reply = await client.sendRequest(textRequest);
+
+    expect(reply.content).toBe("hi");
+    expect(sent.map(({ url }) => url)).toEqual([
+      "http://127.0.0.1:9/api/ai/llm",
+    ]);
+    expect(sent[0].init?.method).toBe("POST");
+    expect(JSON.parse(String(sent[0].init?.body))).toEqual(textRequest);
+  });
+
+  it("sends a `generateObject` request to the endpoint's `/generateObject`", async () => {
+    disableMockMode();
+    setLLMUrl("http://127.0.0.1:9");
+    const { client, sent } = clientAnswering(() =>
+      Response.json({ object: { name: "Alice" } })
+    );
+
+    expect((await client.generateObject(objectRequest)).object).toEqual({
+      name: "Alice",
+    });
+    expect(sent.map(({ url }) => url)).toEqual([
+      "http://127.0.0.1:9/api/ai/llm/generateObject",
+    ]);
+  });
+
+  it("sends to the endpoint a call names in place of the default", async () => {
+    disableMockMode();
+    setLLMUrl("http://127.0.0.1:9");
+    const { client, sent } = clientAnswering(() =>
+      Response.json({ object: {}, role: "assistant", content: "" })
+    );
+    const endpoint = new URL("http://127.0.0.1:10/api/ai/llm");
+
+    await client.sendRequest(textRequest, undefined, undefined, { endpoint });
+    await client.generateObject(objectRequest, undefined, { endpoint });
+
+    expect(sent.map(({ url }) => url)).toEqual([
+      "http://127.0.0.1:10/api/ai/llm",
+      "http://127.0.0.1:10/api/ai/llm/generateObject",
+    ]);
+  });
+
+  it("throws the status and body of a failed response, and logs a hint naming the call", async () => {
+    disableMockMode();
+    const { client } = clientAnswering(() =>
+      new Response("too many", { status: 429 })
+    );
+    using logged = stub(console, "error");
+
+    await expect(client.sendRequest(textRequest)).rejects.toThrow(
+      "HTTP error! status: 429, body: too many",
+    );
+    await expect(client.generateObject(objectRequest)).rejects.toThrow(
+      "HTTP error! status: 429, body: too many",
+    );
+    const lines = logged.calls.map((call) => String(call.args[0]));
+    expect(lines[0]).toContain("[generateText Error]");
+    expect(lines[1]).toContain("[generateObject Error]");
+    for (const line of lines) {
+      expect(line).toContain(failureHint(429, ""));
+    }
+  });
+});
+
+describe("initialLLMUrl()", () => {
+  it("returns the endpoint on the host that served the page", () => {
+    expect(
+      initialLLMUrl(
+        { protocol: "https:", host: "app.example:8443" },
+        "http://api.example",
+      ),
+    ).toBe("https://app.example:8443/api/ai/llm");
+  });
+
+  it("returns the endpoint on the API URL when there is no page", () => {
+    expect(initialLLMUrl(undefined, "http://api.example/base/")).toBe(
+      "http://api.example/api/ai/llm",
+    );
+  });
+
+  it("returns a host-relative endpoint without a page or a usable API URL", () => {
+    for (const apiUrl of [undefined, "", "not a url"]) {
+      expect(initialLLMUrl(undefined, apiUrl)).toBe("//api/ai/llm");
     }
   });
 });

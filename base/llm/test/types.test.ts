@@ -8,12 +8,14 @@ import type {
 import {
   DEFAULT_GENERATE_OBJECT_MODEL,
   DEFAULT_MODEL_NAME,
+  extractTextFromLLMResponse,
   GOOGLE_SEARCH_NATIVE_MODEL_TOOL,
   isLLMTool,
   llmGenerateObjectRequestProblem,
   llmRequestProblem,
   type LLMTool,
 } from "../src/types.ts";
+import { normalizeLLMResponse } from "../src/client.ts";
 
 // This carries its declared type so that renaming a field stops this file
 // compiling. A guard reads fields by name, which no type check reaches, so an
@@ -109,6 +111,7 @@ describe("types", () => {
       named({ maxTokens: "4096 " }, "'maxTokens'");
       named({ system: {} }, "'system'");
       named({ stop: {} }, "'stop'");
+      named({ stream: "yes" }, "'stream'");
       named({ mode: "html" }, "'mode'");
       named({ metadata: "via piece" }, "'metadata'");
       named({ tools: [] }, "'tools'");
@@ -186,6 +189,36 @@ describe("types", () => {
       }));
       expect(problem).toContain("Message 1");
       expect(problem).toContain(`not "wizard"`);
+    });
+
+    it("returns text naming the request or the message for input that is not an object", () => {
+      expect(llmRequestProblem(null)).toBe("The request must be an object.");
+      expect(llmRequestProblem([])).toBe("The request must be an object.");
+      expect(llmRequestProblem(request({ messages: ["Hi"] }))).toBe(
+        "Message 0 must be an object.",
+      );
+    });
+  });
+
+  describe("extractTextFromLLMResponse()", () => {
+    it("returns string content as it is", () => {
+      expect(extractTextFromLLMResponse({ content: "Hello" })).toBe("Hello");
+    });
+
+    it("returns the text parts of array content joined by spaces, leaving out the rest", () => {
+      expect(extractTextFromLLMResponse({
+        content: [
+          { type: "text", text: "Looking" },
+          { type: "tool-call", toolCallId: "c", toolName: "find", input: {} },
+          { type: "text", text: "it up" },
+        ],
+      })).toBe("Looking it up");
+    });
+
+    it("returns the empty string for a reply that arrived without content", () => {
+      expect(extractTextFromLLMResponse(normalizeLLMResponse({}, "r"))).toBe(
+        "",
+      );
     });
   });
 

@@ -271,6 +271,20 @@ Deno.test("loadAgentsHostConfig reports a missing file", async () => {
   );
 });
 
+Deno.test("loadAgentsHostConfig reports a file it cannot read", async () => {
+  const directory = await Deno.makeTempDir();
+  try {
+    const error = await assertRejects(
+      () => loadAgentsHostConfig(directory),
+      Error,
+      `could not read configuration file ${directory}`,
+    );
+    assertEquals(error.cause instanceof Deno.errors.NotFound, false);
+  } finally {
+    await Deno.remove(directory, { recursive: true });
+  }
+});
+
 Deno.test("loadAgentsHostConfig distinguishes invalid JSONC", async () => {
   const directory = await Deno.makeTempDir();
   const path = join(directory, "agents.jsonc");

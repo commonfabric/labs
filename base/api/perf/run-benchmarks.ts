@@ -2,7 +2,7 @@
 
 import { tscCommand } from "./run-tsc.ts";
 
-const CONFIGS = [
+export const CONFIGS = [
   "tsconfig.baseline.json",
   "tsconfig.key.json",
   "tsconfig.anycell.json",
@@ -12,60 +12,44 @@ const CONFIGS = [
   "tsconfig.ikeyable-realistic.json",
 ] as const;
 
-const cwd = fromFileUrl(new URL(".", import.meta.url));
-
-function fromFileUrl(url: URL): string {
-  if (url.protocol !== "file:") throw new TypeError("URL must be a file URL");
-  const path = decodeURIComponent(url.pathname);
-  if (Deno.build.os === "windows") {
-    return path.slice(1).replaceAll("/", "\\");
-  }
-  return path;
-}
+const HARNESS_DIR = new URL(".", import.meta.url);
+const SEPARATOR = "----------------------------------------";
 
 const decoder = new TextDecoder();
-const encoder = new TextEncoder();
 
-async function runScenario(config: string) {
-  console.log(`# ${config}`);
-
-  const command = tscCommand(
-    ["--project", config, "--extendedDiagnostics", "--pretty", "false"],
-    {
-      cwd,
-    },
-  );
-
-  const { code, stdout, stderr } = await command.output();
-  const output = decoder.decode(stdout);
-  if (code !== 0) {
-    console.error(output);
-    console.error(decoder.decode(stderr));
-    throw new Error(`Benchmark failed for ${config}`);
-  }
-
-  console.log(output);
-
-  const summary: string[] = [];
-  for (const line of output.split("\n")) {
-    if (line.startsWith("Instantiations:")) {
-      summary.push(line.trim());
-    } else if (line.startsWith("Check time:")) {
-      summary.push(line.trim());
-    }
-  }
-
-  if (summary.length > 0) {
-    await Deno.stdout.write(
-      encoder.encode(
-        `${summary.join(" | ")}\n----------------------------------------\n\n`,
-      ),
-    );
-  } else {
-    console.log("----------------------------------------\n");
-  }
+/**
+ * The lines of `tsc --extendedDiagnostics` output that are compared across
+ * scenarios: the instantiation count and the check time.
+ */
+export function summarizeDiagnostics(output: string): string[] {
+  return output.split("\n")
+    .filter((line) =>
+      line.startsWith("Instantiations:") || line.startsWith("Check time:")
+    )
+    .map((line) => line.trim());
 }
 
-for (const config of CONFIGS) {
-  await runScenario(config);
+/**
+ * Compiles one scenario project, named relative to this directory, and returns
+ * the report to print for it: the compiler's diagnostics followed by their
+ * summary. Throws when the compile fails.
+ */
+export async function runScenario(config: string): Promise<string> {
+  const { code, stdout, stderr } = await tscCommand(
+    ["--project", config, "--extendedDiagnostics", "--pretty", "false"],
+    { cwd: HARNESS_DIR },
+  ).output();
+  const output = decoder.decode(stdout);
+  if (code !== 0) {
+    throw new Error(
+      `Benchmark failed for ${config}\n${output}${decoder.decode(stderr)}`,
+    );
+  }
+  const summary = summarizeDiagnostics(output);
+  const summaryLine = summary.length > 0 ? `${summary.join(" | ")}\n` : "";
+  return `# ${config}\n${output}\n${summaryLine}${SEPARATOR}\n`;
+}
+
+if (import.meta.main) {
+  for (const config of CONFIGS) console.log(await runScenario(config));
 }

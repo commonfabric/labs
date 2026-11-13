@@ -1,5 +1,6 @@
 import {
   assertEquals,
+  assertExists,
   assertFalse,
   assertNotEquals,
   assertRejects,
@@ -355,24 +356,40 @@ Deno.test("Fabric target publishes sessions and command receipts", async () => {
         errors: [{
           nativeSessionId: snapshot.summary.nativeSessionId,
           message: "session read failed",
+        }, {
+          message: "inventory page failed",
         }],
         complete: false,
       }]),
       1,
     );
-    const partialIndex = await readStableCellGraphValue(
-      connection,
-      target.cells.allIndex,
-    ) as Record<string, unknown>;
-    assertEquals(
-      (partialIndex.sessions as Array<Record<string, unknown>>).map((
-        entry,
-      ) => ({
-        nativeSessionId: entry.nativeSessionId,
-        syncStatus: entry.syncStatus,
-      })),
-      [{ nativeSessionId: "session-1", syncStatus: "partial" }],
-    );
+    const syncStatuses = async () =>
+      ((await readStableCellGraphValue(
+        connection,
+        target.cells.allIndex,
+      ) as Record<string, unknown>).sessions as Array<Record<string, unknown>>)
+        .map((entry) => ({
+          nativeSessionId: entry.nativeSessionId,
+          syncStatus: entry.syncStatus,
+        }));
+    assertEquals(await syncStatuses(), [
+      { nativeSessionId: "session-1", syncStatus: "partial" },
+    ]);
+
+    // A session read only in part stays partial when a later publication
+    // finds it unchanged.
+    const partialCollected = [{
+      source,
+      sessions: [{ ...snapshot, complete: false }],
+      errors: [],
+      complete: false,
+    }];
+    for (let publication = 0; publication < 2; publication++) {
+      assertEquals(await target.publish(partialCollected), 1);
+      assertEquals(await syncStatuses(), [
+        { nativeSessionId: "session-1", syncStatus: "partial" },
+      ]);
+    }
 
     await target.publishReceipt({
       schema: AGENT_CONNECTOR_SCHEMAS.commandReceipt,
@@ -386,6 +403,28 @@ Deno.test("Fabric target publishes sessions and command receipts", async () => {
     });
     assertEquals((await target.readReceipt("command-1"))?.status, "succeeded");
     assertEquals(await target.readReceipt("missing-command"), undefined);
+    const editBeforeRefusal = runtime.edit;
+    runtime.edit = function () {
+      runtime.edit = editBeforeRefusal;
+      const tx = editBeforeRefusal.call(this);
+      const commit = tx.commit.bind(tx);
+      tx.commit = () => {
+        tx.abort(new Error("claim refused"));
+        return commit();
+      };
+      return tx;
+    };
+    try {
+      const refusal = await assertRejects(
+        () => target.readReceipt("command-1"),
+        Error,
+        "could not verify command receipt ownership",
+      );
+      assertExists(refusal.cause);
+    } finally {
+      runtime.edit = editBeforeRefusal;
+    }
+    assertEquals((await target.readReceipt("command-1"))?.status, "succeeded");
     const receipts = await readStableCellGraphValue(
       connection,
       target.cells.receipts,
@@ -455,6 +494,30 @@ Deno.test("Fabric target publishes sessions and command receipts", async () => {
       "command receipt belongs to another owner",
     );
 
+    for (const value of [null, ["not", "an", "object"]]) {
+      const shapelessReceipt = runtime.getCell(
+        space,
+        commandReceiptCause(space, space, "shapeless-command"),
+        agentOwnerSchema(space),
+      );
+      const shapelessReceiptTx = runtime.edit();
+      setCfcImplementationIdentity(shapelessReceiptTx, {
+        kind: "builtin",
+        builtinId: AGENT_CONNECTOR_WRITER_ID,
+      });
+      shapelessReceipt.withTx(shapelessReceiptTx).setRawUntyped(value);
+      shapelessReceipt.withTx(shapelessReceiptTx)
+        .applyCfcSchemaToExistingValue();
+      shapelessReceiptTx.prepareCfc();
+      const shapelessReceiptCommit = await shapelessReceiptTx.commit().settled;
+      if (shapelessReceiptCommit.error) throw shapelessReceiptCommit.error;
+      await assertRejects(
+        () => target.readReceipt("shapeless-command"),
+        Error,
+        "command receipt is not an object: shapeless-command",
+      );
+    }
+
     const unprotectedReceipt = runtime.getCell(
       space,
       commandReceiptCause(space, space, "unprotected-command"),
@@ -511,11 +574,23 @@ Deno.test("Fabric target publishes sessions and command receipts", async () => {
       message: string;
     }> = [
       {
+        value: { ...validRow, commandId: 7 },
+        message: "command receipt index row has an invalid shape: 0",
+      },
+      {
         value: { ...validRow, status: "not-a-status" },
         message: "command receipt index row 0 status is invalid",
       },
       {
+        value: { ...validRow, updatedAt: "not-a-timestamp" },
+        message: "command receipt index row updatedAt is invalid: 0",
+      },
+      {
         value: { ...validRow, receipt: {} },
+        message: "command receipt index row receipt link is invalid",
+      },
+      {
+        value: { ...validRow, receipt: "not-a-link" },
         message: "command receipt index row receipt link is invalid",
       },
       {
@@ -557,6 +632,27 @@ Deno.test("Fabric target publishes sessions and command receipts", async () => {
         malformedRowIndex,
       );
     }
+
+    const duplicateIndex = {
+      schema: AGENT_CONNECTOR_SCHEMAS.commandReceipts,
+      ownerDid: space,
+      receipts: [validRow, structuredClone(validRow)],
+      updatedAt: "2026-07-20T00:00:00.000Z",
+    };
+    await writeReceiptIndex(duplicateIndex);
+    await assertRejects(
+      () =>
+        target.publishReceipt({
+          schema: AGENT_CONNECTOR_SCHEMAS.commandReceipt,
+          ownerDid: space,
+          commandId: "command-2",
+          sourceId: source.id,
+          nativeSessionId: snapshot.summary.nativeSessionId,
+          status: "succeeded",
+        }),
+      Error,
+      `command receipt index contains a duplicate command: ${validRow.commandId}`,
+    );
 
     const malformedTimestampIndex = {
       schema: AGENT_CONNECTOR_SCHEMAS.commandReceipts,
@@ -771,6 +867,24 @@ Deno.test("Fabric target publishes sessions and command receipts", async () => {
       Error,
       "agent session index source 0 has an invalid shape",
     );
+    const validSource = (index.sources as Array<Record<string, unknown>>)[0];
+    for (
+      const capabilities of [
+        "none",
+        { ...source.capabilities, prompt: "yes" },
+        { ...source.capabilities, modes: [1] },
+      ]
+    ) {
+      await writeInvalidIndex(publishedSession, [{
+        ...validSource,
+        capabilities,
+      }]);
+      await assertRejects(
+        () => target.publish(collected),
+        Error,
+        "agent session index source 0 has an invalid shape",
+      );
+    }
     await writeInvalidIndex({
       ...publishedSession,
       sourceId: "Codex:Test",
@@ -830,6 +944,38 @@ Deno.test("Fabric target publishes sessions and command receipts", async () => {
       () => target.publish(collected),
       Error,
       "agent session index checkout 0 has an invalid shape",
+    );
+    await writeInvalidIndex(
+      publishedSession,
+      index.sources,
+      [{ ...validCheckout, observedAt: Date.parse(validCheckout.observedAt) }],
+    );
+    await assertRejects(
+      () => target.publish(collected),
+      Error,
+      "agent session index checkout 0 has an invalid shape",
+    );
+    const clearedIndexTx = runtime.edit();
+    setCfcImplementationIdentity(clearedIndexTx, {
+      kind: "builtin",
+      builtinId: AGENT_CONNECTOR_WRITER_ID,
+    });
+    for (const cell of [target.cells.index, target.cells.allIndex]) {
+      cell.withTx(clearedIndexTx).setRawUntyped(null);
+      cell.withTx(clearedIndexTx).applyCfcSchemaToExistingValue();
+    }
+    clearedIndexTx.prepareCfc();
+    const clearedIndexCommit = await clearedIndexTx.commit().settled;
+    if (clearedIndexCommit.error) throw clearedIndexCommit.error;
+    await assertRejects(
+      () => target.publishedSessions(),
+      Error,
+      "agent session index is not an object",
+    );
+    await assertRejects(
+      () => target.publish(collected),
+      Error,
+      "agent session index is not an object",
     );
     await writeInvalidIndex(
       publishedSession,
@@ -2614,6 +2760,29 @@ Deno.test("newer session refresh wins over an older retained inventory", async (
     assertEquals(
       (manifest.summary as Record<string, unknown>).title,
       "New snapshot",
+    );
+
+    // A read failure the older collection reports does not mark the newer
+    // refresh partial.
+    await target.publish([{
+      source,
+      sessions: [],
+      errors: [{
+        nativeSessionId: "session-1",
+        message: "session read failed",
+      }],
+      complete: false,
+    }], { observationSequence: olderObservation });
+    const afterError = await readStableCellGraphValue(
+      connection,
+      target.cells.allIndex,
+    ) as Record<string, unknown>;
+    assertEquals(
+      (afterError.sessions as Array<Record<string, unknown>>).map((entry) => [
+        entry.title,
+        entry.syncStatus,
+      ]),
+      [["New snapshot", "complete"]],
     );
   } finally {
     await runtime.dispose();

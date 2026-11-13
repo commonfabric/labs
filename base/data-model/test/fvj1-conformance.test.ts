@@ -497,6 +497,32 @@ describe("fvj1-conformance", () => {
       expect(Object.keys(divergence)).toEqual(["note", "decode", "encode"]);
     });
 
+    it("throws given a value that encodes unlike what its text decodes to", () => {
+      // The getter returns 1 to the first two reads, which take the text and
+      // the probes, and 2 to the third, which encodes the value itself. The
+      // text then decodes to a value with the probes taken, which encodes
+      // unlike the value.
+
+      let reads = 0;
+      expect(() =>
+        fvj1ConformanceFixtureTextForTestingOnly([
+          {
+            name: "drifting",
+            section: "s",
+            make: () => ({
+              get a() {
+                reads++;
+                return (reads <= 2) ? 1 : 2;
+              },
+            }),
+          },
+        ])
+      ).toThrow(
+        'drifting: encodes to {"text":"fvj1:{\\"a\\":2}"}, but what its text ' +
+          'decodes to encodes to {"text":"fvj1:{\\"a\\":1}"}.',
+      );
+    });
+
     it("throws given a refused text whose lenient decode yields more than one problematic value", () => {
       expect(() =>
         fvj1ConformanceFixtureTextForTestingOnly([

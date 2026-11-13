@@ -64,7 +64,8 @@ export interface StartAgentsHostDependencies {
   ) => AgentsHost;
 }
 
-const defaultDependencies: StartAgentsHostDependencies = {
+/** The dependencies `startAgentsHost()` uses when its caller supplies none. */
+export const defaultStartAgentsHostDependencies: StartAgentsHostDependencies = {
   openFabric: openAgentFabricRuntime,
   targetLockPath: defaultTargetProcessLockPath,
   acquireProcessLock: AgentsHostProcessLock.acquire,
@@ -138,7 +139,8 @@ export class RunningAgentsHost {
 
 export async function startAgentsHost(
   options: StartAgentsHostOptions,
-  dependencies: StartAgentsHostDependencies = defaultDependencies,
+  dependencies: StartAgentsHostDependencies =
+    defaultStartAgentsHostDependencies,
 ): Promise<RunningAgentsHost> {
   const processLocks: HostProcessLock[] = [];
   const startupTasks = new Set<Promise<unknown>>();

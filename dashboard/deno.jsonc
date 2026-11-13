@@ -1,7 +1,8 @@
 {
   "imports": {
     // Dependency guide: ../docs/development/DEPENDENCIES.md
-    "@resvg/resvg-js": "npm:@resvg/resvg-js@2.6.2"
+    "@resvg/resvg-js": "npm:@resvg/resvg-js@2.6.2",
+    "happy-dom": "npm:happy-dom@^20.14.6"
   },
   "tasks": {
     "watch": "deno run --watch --allow-net --allow-run=deno --allow-read --allow-write --allow-env server.ts",

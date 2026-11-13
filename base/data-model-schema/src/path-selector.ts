@@ -91,8 +91,8 @@ const selectorPathKey = (path: readonly string[]): string => {
 /**
  * Sweep threshold for a per-schema path map: schemas that never die -- interned
  * canonical schemas, primitive schemas, or `undefined` (no schama) -- would
- * otherwise accumulate `pathKey -> dead WeakRef` entries forever, since the
- * lazy cleanup below only fires when the exact same path is looked up again.
+ * otherwise accumulate `pathKey -> dead WeakRef` entries forever, since an
+ * entry is otherwise replaced only when the exact same path is interned again.
  * Sweeping on insert once the map is large bounds growth to live selectors
  * (plus the threshold).
  */
@@ -136,23 +136,19 @@ export function internPathSelector(
   }
 
   const pathK = selectorPathKey(path);
-  const existingRef = byPath.get(pathK);
-  if (existingRef !== undefined) {
-    const existing = existingRef.deref();
-    if (existing !== undefined) {
-      // Preserve the pre-cache contract for callers that keep using their
-      // input object: a mutable input is still canonicalized and frozen in
-      // place even when a structurally-equal canonical instance exists.
-      if (existing !== selector && !Object.isFrozen(selector)) {
-        if (interned !== schema) {
-          selector.schema = interned;
-        }
-        Object.freeze(path);
-        Object.freeze(selector);
+  const existing = byPath.get(pathK)?.deref();
+  if (existing !== undefined) {
+    // Preserve the pre-cache contract for callers that keep using their
+    // input object: a mutable input is still canonicalized and frozen in
+    // place even when a structurally-equal canonical instance exists.
+    if (existing !== selector && !Object.isFrozen(selector)) {
+      if (interned !== schema) {
+        selector.schema = interned;
       }
-      return existing;
+      Object.freeze(path);
+      Object.freeze(selector);
     }
-    byPath.delete(pathK);
+    return existing;
   }
 
   if (byPath.size >= SELECTOR_CACHE_SWEEP_THRESHOLD) {

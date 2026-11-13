@@ -676,12 +676,8 @@ export function asDefinition(
  */
 export function writableSpool(spool: string | undefined): boolean {
   if (spool === undefined) return false;
-  try {
-    return Deno.permissions.querySync({ name: "write", path: spool }).state ===
-      "granted";
-  } catch {
-    return false;
-  }
+  return Deno.permissions.querySync({ name: "write", path: spool }).state ===
+    "granted";
 }
 
 function loadSkipList(env: Environment): SkipList | undefined {

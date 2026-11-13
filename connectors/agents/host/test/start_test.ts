@@ -1,7 +1,8 @@
 import type { AgentFabricRuntime } from "../src/fabric-runtime.ts";
-import type { AgentsHost } from "../src/host.ts";
+import type { AgentsHost, AgentsHostTarget } from "../src/host.ts";
 import type { AgentsHostProcessLock } from "../src/process-lock.ts";
 import {
+  defaultStartAgentsHostDependencies,
   RunningAgentsHost,
   startAgentsHost,
   type StartAgentsHostDependencies,
@@ -469,4 +470,77 @@ Deno.test("startAgentsHost accepts no commands when nothing bound a queue", asyn
     false,
   );
   await running.stop();
+});
+
+for (
+  const [description, failure, expected] of [
+    [
+      "reports owned startup work that fails after cancellation",
+      new Error("owned startup task failed"),
+      "cancel owned startup; owned startup task failed",
+    ],
+    [
+      "does not report owned startup work that ends with the cancellation",
+      undefined,
+      "cancel owned startup",
+    ],
+  ] as const
+) {
+  Deno.test(`startAgentsHost ${description}`, async () => {
+    const controller = new AbortController();
+    const ownership = Promise.withResolvers<void>();
+    const startFinished = Promise.withResolvers<number>();
+    const reason = new Error("cancel owned startup");
+    const harness = startHarness({
+      hostStart: (options) => {
+        options?.onHealthOwnership?.();
+        ownership.resolve();
+        return startFinished.promise;
+      },
+      hostStop: () => {
+        startFinished.reject(failure ?? reason);
+        return Promise.resolve();
+      },
+    });
+    const starting = startAgentsHost(
+      startOptions(controller.signal),
+      harness.dependencies,
+    );
+    await ownership.promise;
+    controller.abort(reason);
+
+    const error = await starting.then(() => undefined, (error) => error);
+    if (failure === undefined) {
+      expect(error).toBe(reason);
+      return;
+    }
+    if (!(error instanceof AggregateError)) throw error;
+    expect(error.message).toContain(expected);
+    expect(error.errors).toEqual([reason, failure]);
+  });
+}
+
+Deno.test("the default host factory builds a host for the target it describes", async () => {
+  const host = defaultStartAgentsHostDependencies.createHost({
+    sources: [],
+    target: {} as unknown as AgentsHostTarget,
+    targetDescription: {
+      spaceDid: "did:key:space",
+      ownerDid: "did:key:owner",
+      cells: {
+        recentIndex: "recent",
+        allIndex: "all",
+        health: "health",
+        commands: "commands",
+        receipts: "receipts",
+      },
+    },
+    ledger: { pendingPublicationCount: () => 0 } as unknown as CommandLedger,
+    createDriver: () => {
+      throw new Error("no source is configured");
+    },
+  });
+  expect(host.health().target.spaceDid).toBe("did:key:space");
+  expect(host.health().status).toBe("created");
+  await host.stop("unused", { publishHealth: false });
 });

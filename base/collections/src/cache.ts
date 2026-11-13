@@ -317,9 +317,9 @@ export class LRUCache<K, V> {
     }
     last.next = null;
     this.#head = kept;
-    if (kept === null) {
-      this.#tail = null;
-    } else {
+    // At least one entry survives, since the capacity is at least one and the
+    // weight budget never drops the last entry, so the tail stays where it is.
+    if (kept !== null) {
       kept.prev = null;
     }
     return first;

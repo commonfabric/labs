@@ -1,6 +1,6 @@
 {
   "extends": "./tsconfig.base.json",
   "files": [
-    "./ikeyable_cell_trace.ts"
+    "./fixtures/ikeyable_cell_trace.ts"
   ]
 }

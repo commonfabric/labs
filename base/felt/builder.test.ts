@@ -1,7 +1,12 @@
 import { assert, assertEquals } from "@std/assert";
+import { expect } from "@std/expect";
 import { join } from "@std/path/join";
-import { Builder } from "./builder.ts";
+import { toFileUrl } from "@std/path/to-file-url";
+import { describe, it } from "@std/testing/bdd";
+
+import { Builder, resolveOtelBrowserPlatform } from "./builder.ts";
 import { Config, ResolvedConfig } from "./interface.ts";
+import { build } from "./mod.ts";
 
 // Unique markers so we can tell, from a bundle's bytes alone, whether a
 // dynamically-imported module was inlined into its entry or peeled into a
@@ -227,4 +232,335 @@ Deno.test("Builder: repeated builds retain one prior split generation and prune 
   } finally {
     await Deno.remove(root, { recursive: true });
   }
+});
+
+/** Runs `body` with a fresh temporary directory, removed afterwards. */
+async function withTempDir(body: (root: string) => Promise<void>) {
+  const root = await Deno.makeTempDir({ prefix: "felt-builder-test-" });
+  try {
+    await body(root);
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+}
+
+/** A builder of the single entry `entry.ts` in `root`, into `dist/main.js`. */
+function entryBuilder(root: string): Builder {
+  return new Builder(
+    new ResolvedConfig({
+      entries: [{ in: "entry.ts", out: "main" }],
+      outDir: "dist",
+      esbuild: { tsconfigRaw: {} },
+    }, root),
+  );
+}
+
+/** Counts the `build` events `builder` dispatches. */
+function countBuilds(builder: Builder): { readonly count: number } {
+  const builds = { count: 0 };
+  builder.addEventListener("build", () => builds.count++);
+  return builds;
+}
+
+describe("builder", () => {
+  describe("Builder.watch()", () => {
+    it("builds once for each change reported while no build is running", async () => {
+      await withTempDir(async (root) => {
+        await Deno.writeTextFile(join(root, "entry.ts"), `console.log(1);\n`);
+        const builder = entryBuilder(root);
+        const builds = countBuilds(builder);
+        const built = Promise.withResolvers<void>();
+        builder.addEventListener("build", () => built.resolve(), {
+          once: true,
+        });
+
+        await builder.watch((async function* () {
+          yield "change";
+          await built.promise;
+          yield "change";
+        })());
+
+        expect(builds.count).toBe(2);
+      });
+    });
+
+    it("builds once more for any number of changes reported during a build", async () => {
+      await withTempDir(async (root) => {
+        await Deno.writeTextFile(join(root, "entry.ts"), `console.log(1);\n`);
+        const builder = entryBuilder(root);
+        const builds = countBuilds(builder);
+
+        // The first change starts a build, which cannot finish before the
+        // generator, which never waits, has reported the other two.
+        await builder.watch((async function* () {
+          yield "change";
+          yield "change";
+          yield "change";
+        })());
+
+        expect(builds.count).toBe(2);
+      });
+    });
+
+    it("reports a failed build and builds again on the next change", async () => {
+      await withTempDir(async (root) => {
+        const entry = join(root, "entry.ts");
+        await Deno.writeTextFile(entry, `console.log(;\n`);
+        const builder = entryBuilder(root);
+        const builds = countBuilds(builder);
+        const errors: string[] = [];
+        const reported = Promise.withResolvers<void>();
+        const consoleError = console.error;
+        console.error = (...data: unknown[]) => {
+          errors.push(data.join(" "));
+          if (errors.some((line) => line.includes("Error:"))) {
+            reported.resolve();
+          }
+        };
+        try {
+          await builder.watch((async function* () {
+            yield "change";
+            await reported.promise;
+            await Deno.writeTextFile(entry, `console.log(2);\n`);
+            yield "change";
+          })());
+        } finally {
+          console.error = consoleError;
+        }
+
+        expect(errors.join("\n")).toContain("Expression expected");
+        expect(builds.count).toBe(1);
+        expect(await Deno.readTextFile(join(root, "dist", "main.js")))
+          .toContain("console.log(2)");
+      });
+    });
+
+    it("builds nothing when no change is reported", async () => {
+      await withTempDir(async (root) => {
+        await Deno.writeTextFile(join(root, "entry.ts"), `console.log(1);\n`);
+        const builder = entryBuilder(root);
+        const builds = countBuilds(builder);
+
+        await builder.watch((async function* () {})());
+
+        expect(builds.count).toBe(0);
+      });
+    });
+  });
+
+  describe("Builder.build()", () => {
+    it("rejects, dispatching no build event, when an entry fails to compile", async () => {
+      await withTempDir(async (root) => {
+        await Deno.writeTextFile(join(root, "entry.ts"), `console.log(;\n`);
+        const builder = entryBuilder(root);
+        const builds = countBuilds(builder);
+
+        await expect(builder.build()).rejects.toThrow("Build failed");
+
+        expect(builds.count).toBe(0);
+      });
+    });
+
+    it("replaces a defined name with its string value, or undefined", async () => {
+      await withTempDir(async (root) => {
+        await Deno.writeTextFile(
+          join(root, "entry.ts"),
+          `console.log(DEFINED, UNSET);\n`,
+        );
+        await new Builder(
+          new ResolvedConfig({
+            entries: [{ in: "entry.ts", out: "main" }],
+            outDir: "dist",
+            esbuild: {
+              define: { DEFINED: "value", UNSET: undefined },
+              tsconfigRaw: {},
+            },
+          }, root),
+        ).build();
+
+        expect(await Deno.readTextFile(join(root, "dist", "main.js")))
+          .toContain(`console.log("value", void 0)`);
+      });
+    });
+
+    it("leaves out of the build manifest an entry that emits no JavaScript", async () => {
+      await withTempDir(async (root) => {
+        await Deno.writeTextFile(join(root, "entry.ts"), `console.log(1);\n`);
+        await Deno.writeTextFile(join(root, "style.css"), `a { color: red }\n`);
+        await new Builder(
+          new ResolvedConfig({
+            entries: [
+              { in: "entry.ts", out: "main" },
+              { in: "style.css", out: "style" },
+            ],
+            outDir: "dist",
+            esbuild: { tsconfigRaw: {} },
+          }, root),
+        ).build();
+
+        const manifest = JSON.parse(
+          await Deno.readTextFile(join(root, "dist", "build-manifest.json")),
+        );
+        expect(Object.keys(manifest)).toEqual(["main.js"]);
+        expect(await Deno.readTextFile(join(root, "dist", "style.css")))
+          .toContain("color: red");
+      });
+    });
+
+    it("keeps a split chunk that a retained generation still emits", async () => {
+      await withTempDir(async (root) => {
+        await writeFixture(root);
+        const builder = new Builder(new ResolvedConfig(fixtureConfig(), root));
+        const scriptsDir = join(root, "dist", "scripts");
+        await builder.build();
+        const chunks = await listChunks(scriptsDir);
+
+        await builder.build();
+        await builder.build();
+
+        expect(chunks).toHaveLength(1);
+        expect(await listChunks(scriptsDir)).toEqual(chunks);
+      });
+    });
+
+    it("prunes past a stale split chunk that is already gone", async () => {
+      await withTempDir(async (root) => {
+        await writeFixture(root);
+        const builder = new Builder(new ResolvedConfig(fixtureConfig(), root));
+        const scriptsDir = join(root, "dist", "scripts");
+        const lazy = join(root, "split-lazy.ts");
+        await builder.build();
+        const [first] = await listChunks(scriptsDir);
+        await Deno.writeTextFile(lazy, `export const marker = "second";\n`);
+        await builder.build();
+        await Deno.remove(join(scriptsDir, first!));
+        await Deno.writeTextFile(lazy, `export const marker = "third";\n`);
+
+        await builder.build();
+
+        expect(await listChunks(scriptsDir)).toHaveLength(2);
+      });
+    });
+
+    it("rejects when a stale split chunk cannot be removed", async () => {
+      await withTempDir(async (root) => {
+        await writeFixture(root);
+        const builder = new Builder(new ResolvedConfig(fixtureConfig(), root));
+        const scriptsDir = join(root, "dist", "scripts");
+        const lazy = join(root, "split-lazy.ts");
+        await builder.build();
+        const [first] = await listChunks(scriptsDir);
+        await Deno.writeTextFile(lazy, `export const marker = "second";\n`);
+        await builder.build();
+        // A non-empty directory where the oldest chunk was.
+        await Deno.remove(join(scriptsDir, first!));
+        await Deno.mkdir(join(scriptsDir, first!, "contents"), {
+          recursive: true,
+        });
+        await Deno.writeTextFile(lazy, `export const marker = "third";\n`);
+
+        await expect(builder.build()).rejects.toThrow(/not empty/i);
+      });
+    });
+
+    it("refuses to remove a stale split chunk outside the output directory", async () => {
+      await withTempDir(async (root) => {
+        await writeFixture(root);
+        const config = fixtureConfig();
+        config.esbuild!.chunkNames = "../escaped/chunk-[hash]";
+        const builder = new Builder(new ResolvedConfig(config, root));
+        const escaped = join(root, "escaped");
+        const lazy = join(root, "split-lazy.ts");
+        await builder.build();
+        const [first] = await listChunks(escaped);
+        await Deno.writeTextFile(lazy, `export const marker = "second";\n`);
+        await builder.build();
+        await Deno.writeTextFile(lazy, `export const marker = "third";\n`);
+
+        await expect(builder.build()).rejects.toThrow(
+          "Refusing to remove output outside outDir",
+        );
+
+        expect(await listChunks(escaped)).toContain(first);
+      });
+    });
+  });
+
+  describe("build()", () => {
+    it("bundles a text import as a string, an empty file included", async () => {
+      await withTempDir(async (root) => {
+        await Deno.writeTextFile(join(root, "full.md"), "text-contents");
+        await Deno.writeTextFile(join(root, "empty.md"), "");
+        await Deno.writeTextFile(
+          join(root, "entry.ts"),
+          `import full from "./full.md" with { type: "text" };\n` +
+            `import empty from "./empty.md" with { type: "text" };\n` +
+            `export default [full, empty];\n`,
+        );
+        const outfile = join(root, "out.js");
+
+        await build({ entryPoints: [join(root, "entry.ts")], outfile });
+
+        const bundle = await import(toFileUrl(outfile).href);
+        expect(bundle.default).toEqual(["text-contents", ""]);
+      });
+    });
+  });
+
+  describe("resolveOtelBrowserPlatform()", () => {
+    /** The resolve arguments for `./platform` imported from `importerDir`. */
+    const platformImport = (importerDir: string) => ({
+      importer: join(importerDir, "index.js"),
+      resolveDir: importerDir,
+      path: "./platform",
+    });
+
+    it("returns the browser index of an @opentelemetry package that has one", async () => {
+      await withTempDir(async (root) => {
+        const pkg = join(root, "@opentelemetry", "core");
+        await Deno.mkdir(join(pkg, "platform", "browser"), { recursive: true });
+        await Deno.writeTextFile(
+          join(pkg, "platform", "browser", "index.js"),
+          "",
+        );
+
+        expect(resolveOtelBrowserPlatform(platformImport(pkg))).toEqual({
+          path: join(pkg, "platform", "browser", "index.js"),
+        });
+      });
+    });
+
+    it("returns undefined for an @opentelemetry package with no browser platform", async () => {
+      await withTempDir(async (root) => {
+        const pkg = join(root, "@opentelemetry", "core");
+        await Deno.mkdir(join(pkg, "platform", "node"), { recursive: true });
+
+        expect(resolveOtelBrowserPlatform(platformImport(pkg))).toBeUndefined();
+      });
+    });
+
+    it("returns undefined for an importer outside @opentelemetry", async () => {
+      await withTempDir(async (root) => {
+        const pkg = join(root, "other", "core");
+        await Deno.mkdir(join(pkg, "platform", "browser"), { recursive: true });
+        await Deno.writeTextFile(
+          join(pkg, "platform", "browser", "index.js"),
+          "",
+        );
+
+        expect(resolveOtelBrowserPlatform(platformImport(pkg))).toBeUndefined();
+      });
+    });
+
+    it("throws when the browser index cannot be looked up", async () => {
+      await withTempDir(async (root) => {
+        const pkg = join(root, "@opentelemetry", "core");
+        await Deno.mkdir(pkg, { recursive: true });
+        await Deno.writeTextFile(join(pkg, "platform"), "");
+
+        expect(() => resolveOtelBrowserPlatform(platformImport(pkg)))
+          .toThrow(Deno.errors.NotADirectory);
+      });
+    });
+  });
 });

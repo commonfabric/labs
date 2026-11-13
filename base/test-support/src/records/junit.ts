@@ -72,7 +72,7 @@ function decodeEntities(text: string): string {
           const code = entity.startsWith("#x")
             ? parseInt(entity.slice(2), 16)
             : parseInt(entity.slice(1), 10);
-          if (!Number.isFinite(code)) return whole;
+          if (code > 0x10ffff) return whole;
           return String.fromCodePoint(code);
         }
       }

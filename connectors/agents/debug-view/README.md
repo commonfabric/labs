@@ -287,6 +287,5 @@ views without copying connector state.
 
 ```sh
 deno task cf check connectors/agents/debug-view/main.tsx --no-run
-deno task cf test connectors/agents/debug-view/main.test.tsx \
-  --root . --verbose
+deno task cf test connectors/agents/debug-view/ --root . --verbose
 ```

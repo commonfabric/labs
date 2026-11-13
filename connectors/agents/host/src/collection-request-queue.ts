@@ -35,7 +35,6 @@ export class CollectionRequestQueue {
     const task = Promise.resolve().then(() => this.#run(reason));
     this.#active = task;
     const settled = () => {
-      if (this.#active !== task) return;
       this.#active = undefined;
       if (this.#closed) {
         this.#pendingReason = undefined;

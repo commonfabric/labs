@@ -28,6 +28,13 @@ Use enableMockMode() and addMockResponse() to set up mocks.
 When mock mode is enabled via `enableMockMode()`, the mock interception runs
 first and the guard is never reached.
 
+A client constructed with a `fetch` of its own, as in
+`new LLMClient(fakeFetch)`, sends its requests through that function. The
+guard refuses only the global `fetch`, so it lets such a client through; a
+test that hands a client the global `fetch` is refused like any other.
+`base/llm/src/client.test.ts` tests the client's request and response
+handling that way.
+
 ## Writing tests that use LLM
 
 ```ts

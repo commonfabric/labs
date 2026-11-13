@@ -31,6 +31,9 @@ const EXCLUDED_RELATIVE_PREFIXES = [
 ];
 
 const EXCLUDED_FILE_SUFFIXES = [
+  // The configuration the browser test runner reads for a package's
+  // `*.browser.test.ts` files: test setup rather than source.
+  "/deno-web-test.config.ts",
   ".bench.ts",
   ".bench.tsx",
   ".d.ts",

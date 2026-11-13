@@ -3,6 +3,7 @@ import { join } from "@std/path";
 import {
   readDenoConfig,
   runDenoCheckWithTemporaryConfig,
+  runDenoCommandWithTemporaryLock,
   runFrozenDriftCheck,
 } from "./isolated-deno.ts";
 
@@ -84,6 +85,22 @@ Deno.test("nested checks use the checked-in dependency graph", async () => {
     `nested check failed:\n${decode(output.stdout)}\n${decode(output.stderr)}`,
   );
   assertEquals(await Deno.readTextFile(lockPath), lockBefore);
+});
+
+Deno.test("a command with a temporary lock runs in the environment it is given", async () => {
+  const output = await runDenoCommandWithTemporaryLock({
+    root: ROOT,
+    args: (lockPath) => [
+      "eval",
+      "--lock",
+      lockPath,
+      "console.log(Deno.env.get('CF_ISOLATED_DENO_PROBE'), Deno.cwd())",
+    ],
+    env: { CF_ISOLATED_DENO_PROBE: "given" },
+  });
+
+  assert(output.success, decode(output.stderr));
+  assertEquals(decode(output.stdout).trim(), `given ${ROOT}`);
 });
 
 Deno.test("nested frozen checks reject dependency graph drift", async () => {

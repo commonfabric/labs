@@ -110,6 +110,17 @@ for (const fromBase64 of [fromBase64url, fromBase64Polyfill]) {
       }
     });
 
+    describe("characters outside the base64url alphabet", () => {
+      // Standard base64's `+` and `/`, ASCII punctuation, and characters past
+      // ASCII, which no table indexed by an ASCII code holds.
+
+      for (const encoded of ["AQ+/", "AQ.I", "AQ\u00e9I", "AQ\u{1f369}"]) {
+        it(`throws on \`${encoded}\``, () => {
+          expect(() => fromBase64(encoded)).toThrow();
+        });
+      }
+    });
+
     describe("a final group of one character", () => {
       // Six bits, which hold no whole byte.
 

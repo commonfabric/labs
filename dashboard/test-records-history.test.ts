@@ -1,7 +1,7 @@
 import { assertEquals } from "@std/assert";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
+import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { AliasResolver } from "@commonfabric/test-support/records";
 
 import {
@@ -11,15 +11,22 @@ import {
   TestRecordsHistoryStore,
 } from "./test-records-history.ts";
 
-// A listing response naming one object, then that object's NDJSON body.
-function storeFetch(records: string[]): typeof fetch {
+// A listing response naming one object for the day listed, then that
+// object's NDJSON body: `records`, or the records `records` holds for the
+// day. Each day listed is pushed onto `listed`.
+function storeFetch(
+  records: string[] | Record<string, string[]>,
+  listed: string[] = [],
+): typeof fetch {
   return ((input: URL | RequestInfo) => {
-    const url = String(input);
+    const url = decodeURIComponent(String(input));
+    const day = url.match(/\/v1\/(\d{4}\/\d{2}\/\d{2})\//)![1];
     if (url.includes("/storage/v1/")) {
+      listed.push(day);
       return Promise.resolve(
         new Response(
           JSON.stringify({
-            items: [{ name: "labs/test-records/submissions/ci/v1/2026/08/16/run-1.ndjson" }],
+            items: [{ name: `labs/test-records/submissions/ci/v1/${day}/run-1.ndjson` }],
           }),
           { status: 200 },
         ),
@@ -39,8 +46,9 @@ function storeFetch(records: string[]): typeof fetch {
       denoVersion: "2.9.4",
       startedAt: "2026-08-16T01:00:00Z",
     });
+    const lines = Array.isArray(records) ? records : records[day] ?? [];
     return Promise.resolve(
-      new Response([context, ...records].join("\n") + "\n", { status: 200 }),
+      new Response([context, ...lines].join("\n") + "\n", { status: 200 }),
     );
   }) as typeof fetch;
 }
@@ -456,10 +464,135 @@ Deno.test("series keeps a pass rate for a day with no passing run", async () => 
   }
 });
 
+const SKIP = JSON.stringify({
+  line: "record",
+  test: { k: "unit", s: "bakery", n: "glaze" },
+  outcome: "skip",
+  durationMs: 0,
+});
+const OTHER_PASS = JSON.stringify({
+  line: "record",
+  test: { k: "unit", s: "bakery", n: "proof" },
+  outcome: "pass",
+  durationMs: 40,
+});
+const GLAZE = '["unit","bakery","glaze"]';
+
 describe("test-records-history", () => {
+  let directory: string;
+
+  beforeEach(async () => {
+    directory = await Deno.makeTempDir({ prefix: "test-records-history-" });
+  });
+
+  afterEach(async () => {
+    await Deno.remove(directory, { recursive: true });
+  });
+
+  describe("isDayAggregate()", () => {
+    it("returns `false` for a value that is not an object", () => {
+      expect(isDayAggregate(null)).toBe(false);
+      expect(isDayAggregate("2026/08/16")).toBe(false);
+    });
+  });
+
+  describe("collectDay()", () => {
+    it("counts a skipped record as a run and a skip, with no duration", async () => {
+      expect(
+        await collectDay("2026/08/16", {
+          fetchImpl: storeFetch([PASS, SKIP]),
+          aliases: new AliasResolver([]),
+        }),
+      ).toEqual([{
+        key: GLAZE,
+        day: "2026/08/16",
+        runs: 2,
+        failures: 0,
+        skips: 1,
+        totalDurationMs: 100,
+        maxDurationMs: 100,
+      }]);
+    });
+  });
+
   describe("TestRecordsHistoryStore", () => {
     describe("instance members", () => {
+      describe("load()", () => {
+        for (
+          const [what, text] of [
+            ["a missing file", undefined],
+            ["a file that is not JSON", "{"],
+            ["a cache that is not an object", "null"],
+            ["a cache whose days are not an object", '{"version":2,"days":5}'],
+          ] as const
+        ) {
+          it(`holds no days after reading ${what}`, async () => {
+            const file = join(directory, "history.json");
+            if (text !== undefined) await Deno.writeTextFile(file, text);
+            const store = new TestRecordsHistoryStore(file);
+
+            await store.load();
+
+            expect(store.days()).toEqual([]);
+          });
+        }
+      });
+
+      describe("series()", () => {
+        it("leaves out a day that did not run the test and a day that only skipped it", async () => {
+          const store = new TestRecordsHistoryStore(
+            join(directory, "history.json"),
+          );
+          await store.refresh(Date.parse("2026-08-17T12:00:00Z"), {
+            fetchImpl: storeFetch({
+              "2026/08/15": [PASS],
+              "2026/08/16": [OTHER_PASS],
+              "2026/08/17": [SKIP],
+            }),
+            windowDays: 3,
+            aliases: new AliasResolver([]),
+          });
+
+          const series = store.series(GLAZE);
+
+          expect(series).toEqual({
+            key: GLAZE,
+            passRateTimes: [Date.parse("2026-08-15")],
+            passRates: [1],
+            durationTimes: [Date.parse("2026-08-15")],
+            meanDurationsMs: [100],
+          });
+        });
+      });
+
       describe("refresh()", () => {
+        it("fetches only the trailing days again once it holds the closed days", async () => {
+          const listed: string[] = [];
+          const store = new TestRecordsHistoryStore(
+            join(directory, "history.json"),
+          );
+          const options = {
+            fetchImpl: storeFetch([PASS], listed),
+            windowDays: 5,
+            aliases: new AliasResolver([]),
+          };
+          const now = Date.parse("2026-08-17T12:00:00Z");
+
+          await store.refresh(now, options);
+          expect(listed).toEqual([
+            "2026/08/13",
+            "2026/08/14",
+            "2026/08/15",
+            "2026/08/16",
+            "2026/08/17",
+          ]);
+
+          listed.length = 0;
+          await store.refresh(now, options);
+          expect(listed).toEqual(["2026/08/15", "2026/08/16", "2026/08/17"]);
+          expect(store.days().length).toBe(5);
+        });
+
         it("removes the temporary files that interrupted saves left beside the file", async () => {
           const directory = await Deno.makeTempDir({
             prefix: "test-records-history-",

@@ -292,7 +292,7 @@ export class JsonDecodeAct extends BaseDecodeAct<JsonCodecValue, string> {
       return null;
     }
 
-    // `#isEncodedInstance()` guaranteed a single-property object, so this
+    // `isEncodedInstance()` guaranteed a single-property object, so this
     // destructures that one entry.
     const [key, value] = Object.entries(data)[0]!;
     return { tag: key.slice(1), state: value };

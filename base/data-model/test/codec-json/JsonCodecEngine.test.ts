@@ -1432,6 +1432,39 @@ describe("JsonCodecEngine", () => {
       expect("b" in result).toBe(true);
     });
 
+    describe("an enumerable key inherited from `Object.prototype`", () => {
+      // `JSON.parse()` makes each member an own property, so an inherited key
+      // reaches the decode's walk only through a polluted `Object.prototype`.
+      // The pollution lasts for the decode alone.
+
+      /** Returns what decoding `text` returns while the prototype is polluted. */
+      function decodePolluted(text: string): FabricValue {
+        const { jsonCodecEngine, runtime } = makeTestCodec();
+        Object.defineProperty(Object.prototype, "polluted", {
+          value: 1,
+          enumerable: true,
+          configurable: true,
+        });
+        try {
+          return jsonCodecEngine.decode(text, runtime);
+        } finally {
+          Reflect.deleteProperty(Object.prototype, "polluted");
+        }
+      }
+
+      it("returns a plain object holding its own keys alone", () => {
+        const result = decodePolluted(`${ENCODING_PREFIX}{"a":1}`);
+        expect(Object.keys(result as object)).toEqual(["a"]);
+        expect(Object.hasOwn(result as object, "polluted")).toBe(false);
+      });
+
+      it("returns an `/object`-unwrapped object holding its own keys alone", () => {
+        const result = decodePolluted(`${ENCODING_PREFIX}{"/object":{"/a":1}}`);
+        expect(Object.keys(result as object)).toEqual(["/a"]);
+        expect(Object.hasOwn(result as object, "polluted")).toBe(false);
+      });
+    });
+
     describe("key ordering (Section 10)", () => {
       it("emits keys in UTF-8 byte order for a bare plain object", () => {
         const obj = { c: 3, a: 1, b: 2 };

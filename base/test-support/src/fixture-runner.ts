@@ -185,35 +185,17 @@ export function createUnifiedDiff(
   return diff.trimEnd();
 }
 
+/**
+ * Registers a `describe()` named `suiteName` holding one test per fixture
+ * under `config.rootDir`, nested in a `describe()` per group when `groupBy`
+ * names one.
+ */
 export function defineFixtureSuite<Actual, Expected, Warmup = void>(
   config: FixtureSuiteConfig<Actual, Expected, Warmup>,
 ): void {
-  const {
-    suiteName,
-    rootDir,
-    expectedPath,
-    inputPattern = /\.input\.(ts|tsx)$/i,
-    skip,
-    groupBy,
-    sortFixtures,
-    formatTestName,
-    warmup,
-    beforeEach,
-    execute,
-    loadExpected,
-    compare,
-    determinismCheck,
-    updateGolden,
-  } = config;
-
-  const absoluteRoot = resolve(rootDir);
-  const fixtures = collectFixtures(absoluteRoot, inputPattern, expectedPath)
-    .filter((fixture) => !skip || !skip(fixture));
-
-  const sorter = sortFixtures ?? defaultSort;
-  fixtures.sort(sorter);
-
-  const shouldUpdate = shouldUpdateGoldens();
+  const { suiteName, formatTestName, warmup } = config;
+  const plan = planFixtureSuite(config);
+  const shouldUpdateGolden = shouldUpdateGoldens();
 
   describe(suiteName, () => {
     let warmupValue: Warmup;
@@ -223,72 +205,123 @@ export function defineFixtureSuite<Actual, Expected, Warmup = void>(
     });
 
     const registerTest = (fixture: Fixture) => {
-      const testName = formatTestName ? formatTestName(fixture) : fixture.id;
-      it(testName, async () => {
-        const ctx: FixtureContext<Warmup> = {
-          warmup: warmupValue,
-          shouldUpdateGolden: shouldUpdate,
-          rootDir: absoluteRoot,
-        };
-
-        if (beforeEach) {
-          await beforeEach(fixture, ctx);
-        }
-
-        const actual = await execute(fixture, ctx);
-
-        if (determinismCheck) {
-          await determinismCheck(actual, fixture, ctx);
-        }
-
-        if (ctx.shouldUpdateGolden) {
-          if (!updateGolden) {
-            throw new Error(
-              `UPDATE_GOLDENS=1, but no updateGolden handler provided for fixture suite "${suiteName}".`,
-            );
-          }
-          await updateGolden(actual, fixture, ctx);
-          return;
-        }
-
-        const expected = await loadExpected(fixture, ctx);
-        await compare(actual, expected, fixture, ctx);
-      });
+      it(
+        formatTestName ? formatTestName(fixture) : fixture.id,
+        () =>
+          runFixture(config, fixture, {
+            warmup: warmupValue,
+            shouldUpdateGolden,
+            rootDir: plan.rootDir,
+          }),
+      );
     };
 
-    if (groupBy) {
-      const groups = new Map<string, Fixture[]>();
-      const ungrouped: Fixture[] = [];
-
-      for (const fixture of fixtures) {
-        const groupName = groupBy(fixture);
-        if (groupName) {
-          const bucket = groups.get(groupName) ?? [];
-          bucket.push(fixture);
-          groups.set(groupName, bucket);
-        } else {
-          ungrouped.push(fixture);
-        }
-      }
-
-      for (const [name, groupFixtures] of groups) {
-        describe(name, () => {
-          groupFixtures.sort(sorter);
-          for (const fixture of groupFixtures) {
-            registerTest(fixture);
-          }
-        });
-      }
-
-      for (const fixture of ungrouped) {
-        registerTest(fixture);
-      }
-    } else {
-      for (const fixture of fixtures) {
-        registerTest(fixture);
-      }
+    for (const group of plan.groups) {
+      describe(group.name, () => group.fixtures.forEach(registerTest));
     }
+    plan.ungrouped.forEach(registerTest);
   });
+}
+
+/**
+ * The fixtures a suite runs, in the order and grouping `defineFixtureSuite()`
+ * registers them: each named group in the order its first fixture sorts, then
+ * every fixture `groupBy` left ungrouped.
+ */
+export interface FixtureSuitePlan {
+  readonly rootDir: string;
+  readonly groups: FixtureGroup[];
+  readonly ungrouped: Fixture[];
+}
+
+/**
+ * Finds the fixtures under `config.rootDir`, drops the skipped ones, sorts
+ * them, and groups them. A root that does not exist holds no fixtures.
+ */
+export function planFixtureSuite(
+  config: Pick<
+    FixtureSuiteConfig<unknown, unknown, unknown>,
+    | "rootDir"
+    | "inputPattern"
+    | "expectedPath"
+    | "skip"
+    | "groupBy"
+    | "sortFixtures"
+  >,
+): FixtureSuitePlan {
+  const {
+    rootDir,
+    expectedPath,
+    inputPattern = /\.input\.(ts|tsx)$/i,
+    skip,
+    groupBy,
+    sortFixtures = defaultSort,
+  } = config;
+  const absoluteRoot = resolve(rootDir);
+  const fixtures = collectFixtures(absoluteRoot, inputPattern, expectedPath)
+    .filter((fixture) => !skip || !skip(fixture))
+    .sort(sortFixtures);
+
+  const groups = new Map<string, Fixture[]>();
+  const ungrouped: Fixture[] = [];
+  for (const fixture of fixtures) {
+    const groupName = groupBy?.(fixture);
+    if (groupName) {
+      const bucket = groups.get(groupName) ?? [];
+      bucket.push(fixture);
+      groups.set(groupName, bucket);
+    } else {
+      ungrouped.push(fixture);
+    }
+  }
+  return {
+    rootDir: absoluteRoot,
+    groups: [...groups].map(([name, fixtures]) => ({ name, fixtures })),
+    ungrouped,
+  };
+}
+
+/**
+ * Runs one fixture's test: the `beforeEach` hook, the execution and the
+ * determinism check, then either the golden update or the comparison with
+ * the expected output.
+ */
+export async function runFixture<Actual, Expected, Warmup>(
+  config: FixtureSuiteConfig<Actual, Expected, Warmup>,
+  fixture: Fixture,
+  ctx: FixtureContext<Warmup>,
+): Promise<void> {
+  const {
+    suiteName,
+    beforeEach,
+    execute,
+    determinismCheck,
+    updateGolden,
+    loadExpected,
+    compare,
+  } = config;
+  if (beforeEach) {
+    await beforeEach(fixture, ctx);
+  }
+
+  const actual = await execute(fixture, ctx);
+
+  if (determinismCheck) {
+    await determinismCheck(actual, fixture, ctx);
+  }
+
+  if (ctx.shouldUpdateGolden) {
+    if (!updateGolden) {
+      throw new Error(
+        `UPDATE_GOLDENS=1, but no updateGolden handler provided for fixture suite "${suiteName}".`,
+      );
+    }
+    await updateGolden(actual, fixture, ctx);
+    return;
+  }
+
+  const expected = await loadExpected(fixture, ctx);
+  await compare(actual, expected, fixture, ctx);
 }
 
 function defaultSort(a: Fixture, b: Fixture): number {

@@ -828,7 +828,7 @@ measurement to look at rather than a setting to fix.
 | `RERUN_BUDGET_SECONDS` | 300 | seconds | chosen | What one lane of the full run may spend rerunning its failures. Up when failures go without reruns for want of it; down when a broken `main` holds every lane this much longer than it needs. |
 | `COVERAGE_COMMENT_LINES` | 25 | lines | chosen | Up when coverage comments are too noisy; down when debt is climbing unnoticed. |
 | `LOCAL_COVERAGE_MAX_SECONDS` | 30 | seconds | chosen | Up when too many sets are reported as expensive for the report to be worth reading; down when one is quietly eating a lane. Nothing is excluded either way; it only decides what the summary mentions. |
-| `EXCLUDED_FROM_COVERAGE_GATE` | 9 | workspace members | chosen | Not a quantity. A line comes off when a package fits the run's budget or gains a Deno-only half, which gives it a measured set. A line goes on when a package's own tests stop being what covers it. |
+| `EXCLUDED_FROM_COVERAGE_GATE` | 8 | workspace members | chosen | Not a quantity. A line comes off when a package fits the run's budget or gains a Deno-only half, which gives it a measured set. A line goes on when a package's own tests stop being what covers it. |
 | `LOCAL_COVERAGE_BASELINE_DAYS` | 7 | days | chosen | Up when branches based further back are being reported for want of a baseline they contain; down when the manifest carries more history than anybody reads. |
 | `NEW_REAL_TEST_FAILURE_BREADTH_WINDOW_DAYS` | 2 | days | chosen | Up when a broken runner's failures are being counted as new real test failures; down when genuine breadth is being written off as environmental. |
 | `SAME_COMMIT_REACH_DAYS` | 2 | days | chosen | How far back the fold remembers a commit's outcomes, so that a rerun landing in a later batch than the run it repeats is still read as the test disagreeing with itself. Up when reruns land far enough behind that their disagreement is being counted as a new real test failure; down when the fold's memory is the thing that will not fit. It costs the number of identities that have failed times the number of commits, so it is the dial to check first when a run runs out of memory. |
@@ -2145,11 +2145,9 @@ test by its own name.
 
 A change to such a member's source could bring its unit into a run only
 through a coverage gate the plan chose, and none of these units belongs to a
-measured set: `base/identity` because
-[the coverage gate excludes it](#the-coverage-gate), and the five
-browser halves because a measured set holds only a member's Deno-only
-half. No diff names a directory, so these units reach a lane only on the
-score of their tests.
+measured set. No member runs whole today, and a browser half is in none
+because a measured set holds only a member's Deno-only half. No diff names
+a directory, so these units reach a lane only on the score of their tests.
 
 A workspace member stops running whole when the task holding its tests
 becomes one the topology can point at files. That task is its

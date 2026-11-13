@@ -9,6 +9,10 @@ import {
   forEachFabricContainerValue,
 } from "@commonfabric/data-model";
 import { UnknownValue } from "@commonfabric/data-model/codec-common";
+import {
+  FabricBytes,
+  FabricEpochDay,
+} from "@commonfabric/data-model/fabric-primitives";
 
 describe("forEachFabricContainerValue", () => {
   it("weighs payloads and instance state without copying frozen graphs", () => {
@@ -25,6 +29,47 @@ describe("forEachFabricContainerValue", () => {
     const before = estimateFabricValueSize(mutable);
     mutable.payload = payload;
     expect(estimateFabricValueSize(mutable)).toBeGreaterThan(before);
+  });
+
+  describe("estimateFabricValueSize()", () => {
+    it("returns the same fixed weight for every number, boolean, `null` and `undefined`", () => {
+      const weight = estimateFabricValueSize(0);
+      expect([1e300, true, null, undefined].map(estimateFabricValueSize))
+        .toEqual([weight, weight, weight, weight]);
+      expect(estimateFabricValueSize("")).not.toBe(weight);
+    });
+
+    it("returns a weight for a bigint growing with its digits", () => {
+      expect(estimateFabricValueSize(0xffffn) - estimateFabricValueSize(0xfn))
+        .toBe(3);
+    });
+
+    it("returns a weight for bytes growing with their length", () => {
+      const bytes = (length: number) =>
+        estimateFabricValueSize(new FabricBytes(new Uint8Array(length)));
+      expect(bytes(1000) - bytes(0)).toBe(1000);
+      expect(bytes(1000)).toBeLessThan(Number.MAX_SAFE_INTEGER);
+    });
+
+    it("returns the largest safe integer for an opaque primitive", () => {
+      expect(estimateFabricValueSize(new FabricEpochDay(1n))).toBe(
+        Number.MAX_SAFE_INTEGER,
+      );
+    });
+
+    it("returns a weight for a symbol growing with its registry key", () => {
+      expect(
+        estimateFabricValueSize(Symbol.for("abcd")) -
+          estimateFabricValueSize(Symbol.for("")),
+      ).toBe(8);
+    });
+
+    it("returns a weight for a cycle counting the reference back as nothing", () => {
+      const cyclic: Record<string, FabricValue> = {};
+      cyclic.self = cyclic;
+      expect(estimateFabricValueSize(cyclic) + estimateFabricValueSize(null))
+        .toBe(estimateFabricValueSize({ self: null }));
+    });
   });
 
   it("visits shared containers once, including instance codec state", () => {

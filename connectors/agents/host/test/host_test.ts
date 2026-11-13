@@ -26,6 +26,7 @@ import {
   type AgentsHostTargetDescription,
 } from "../src/host.ts";
 import { join } from "@std/path";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 
 const TARGET_DESCRIPTION: AgentsHostTargetDescription = {
   spaceDid: "did:key:test-space",
@@ -197,6 +198,8 @@ class FakeTarget implements AgentsHostTarget {
   failSubscriptionCancel = false;
   failRefresh = false;
   failNextHealth = false;
+  /** Health publications after this many succeed are rejected. */
+  failHealthAfter = Infinity;
   refreshCount = 0;
   terminalReceiptFailures = 0;
   terminalReceipt = Promise.withResolvers<AgentSessionCommandReceipt>();
@@ -295,7 +298,9 @@ class FakeTarget implements AgentsHostTarget {
     this.healthGate = undefined;
     gate?.entered.resolve();
     await gate?.release.promise;
-    if (this.failNextHealth) {
+    if (
+      this.failNextHealth || this.healthValues.length > this.failHealthAfter
+    ) {
       this.failNextHealth = false;
       throw new Error("health publication rejected");
     }
@@ -1602,4 +1607,404 @@ describe("AgentsHost", () => {
       });
     });
   });
+
+  describe("instance members, when health publication fails", () => {
+    function renameCommand(id: string): Record<string, unknown> {
+      return {
+        schema: AGENT_CONNECTOR_SCHEMAS.command,
+        ownerDid: "did:key:test-owner",
+        id,
+        createdAt: "2026-07-20T00:05:00.000Z",
+        sourceId: "codex",
+        nativeSessionId: "codex-session",
+        type: "rename",
+        payload: { title: "Updated title" },
+      };
+    }
+
+    async function startedHost(
+      directory: string,
+      configure: (target: FakeTarget, driver: FakeDriver) => void = () => {},
+    ) {
+      const driver = new FakeDriver("codex");
+      const target = new FakeTarget();
+      configure(target, driver);
+      const errors: string[] = [];
+      const waiting: Array<[string, () => void]> = [];
+      const host = new AgentsHost({
+        sources: [sourceConfig("codex")],
+        target,
+        targetDescription: TARGET_DESCRIPTION,
+        ledger: await openLedger(directory),
+        createDriver: () => driver,
+        clock: clock(),
+        logger: {
+          error: (...values) => {
+            const line = values.join(" ");
+            errors.push(line);
+            for (const [expected, resolve] of waiting) {
+              if (expected === line) resolve();
+            }
+          },
+          info: () => {},
+        },
+      });
+      await host.start();
+      /** Resolves once the host has logged `line`. */
+      const logged = (line: string): Promise<void> =>
+        errors.includes(line)
+          ? Promise.resolve()
+          : new Promise((resolve) => waiting.push([line, resolve]));
+      return { driver, target, host, errors, logged };
+    }
+
+    it("logs each failed publication and still reports what caused it", async () => {
+      const directory = await Deno.makeTempDir();
+      try {
+        const { target, host, errors } = await startedHost(directory);
+        target.failHealthAfter = 0;
+        target.sendCommands([renameCommand("command-1")]);
+        await target.terminalReceipt.promise;
+
+        await expect(host.synchronize("manual")).rejects.toThrow(
+          "health publication rejected",
+        );
+        expect(host.health().status).toBe("failed");
+        const stopFailure = await host.stop("test-complete").then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+
+        expect(stopFailure).toBeInstanceOf(AggregateError);
+        if (!(stopFailure instanceof AggregateError)) throw stopFailure;
+        expect(stopFailure.errors.map(describeFailure)).toEqual([
+          "health publication rejected",
+          "health publication rejected",
+        ]);
+        for (
+          const occasion of [
+            "refresh",
+            "receipt",
+            "sync failure",
+            "stopping",
+            "stopped",
+          ]
+        ) {
+          expect(errors).toContain(
+            `${occasion} health publication failed: health publication rejected`,
+          );
+        }
+      } finally {
+        await Deno.remove(directory, { recursive: true });
+      }
+    });
+
+    it("degrades a ready host when a session refresh fails", async () => {
+      const directory = await Deno.makeTempDir();
+      try {
+        const { target, host, logged } = await startedHost(directory);
+        expect(host.health().status).toBe("ready");
+        target.failRefresh = true;
+        target.failHealthAfter = 0;
+        target.sendCommands([renameCommand("command-1")]);
+        await logged(
+          "refresh health publication failed: health publication rejected",
+        );
+
+        expect(host.health().status).toBe("degraded");
+        expect(host.health().sources[0].status).toBe("degraded");
+        await host.stop("test-complete", { publishHealth: false });
+      } finally {
+        await Deno.remove(directory, { recursive: true });
+      }
+    });
+
+    it("logs a failed publication after a receipt or command failure", async () => {
+      const directory = await Deno.makeTempDir();
+      try {
+        const { target, host, errors } = await startedHost(
+          directory,
+          (target) => {
+            target.terminalReceiptFailures = 1;
+            target.receipts.push({
+              schema: AGENT_CONNECTOR_SCHEMAS.commandReceipt,
+              ownerDid: "did:key:test-owner",
+              commandId: "reused",
+              sourceId: "codex",
+              nativeSessionId: "another-session",
+              status: "succeeded",
+              completedAt: "2026-07-20T00:04:00.000Z",
+            });
+          },
+        );
+        target.failHealthAfter = 0;
+        target.sendCommands([renameCommand("reused")]);
+        target.sendCommands([renameCommand("unpublished")]);
+        await target.failedTerminalAttempt.promise;
+        await target.commandFailureHealth.promise;
+        await expect(
+          host.stop("test-complete", { publishHealth: false }),
+        ).rejects.toThrow("command worker operations failed");
+
+        expect(errors).toContain(
+          "receipt failure health publication failed: health publication rejected",
+        );
+        expect(errors).toContain(
+          "command failure health publication failed: health publication rejected",
+        );
+      } finally {
+        await Deno.remove(directory, { recursive: true });
+      }
+    });
+
+    it("logs a failed publication after a cancelled collection", async () => {
+      const directory = await Deno.makeTempDir();
+      try {
+        const { driver, target, host, errors } = await startedHost(directory);
+        const entered = Promise.withResolvers<void>();
+        const release = Promise.withResolvers<void>();
+        driver.listGate = { entered, release };
+        target.failHealthAfter = target.healthValues.length + 1;
+        const controller = new AbortController();
+        const sync = host.synchronize("manual", controller.signal);
+        await entered.promise;
+        controller.abort(new Error("collection cancelled"));
+        await expect(sync).rejects.toThrow("collection cancelled");
+        release.resolve();
+        await expect(host.stop("test-complete")).rejects.toThrow(
+          "health publication rejected",
+        );
+
+        expect(errors).toContain(
+          "cancellation health publication failed: health publication rejected",
+        );
+      } finally {
+        await Deno.remove(directory, { recursive: true });
+      }
+    });
+
+    it("reports a source whose startup, cleanup, and health all failed", async () => {
+      const directory = await Deno.makeTempDir();
+      try {
+        const driver = new FakeDriver("codex");
+        driver.failStart = true;
+        driver.stopFailures = 1;
+        const target = new FakeTarget();
+        target.failHealthAfter = 1;
+        const host = new AgentsHost({
+          sources: [sourceConfig("codex")],
+          target,
+          targetDescription: TARGET_DESCRIPTION,
+          ledger: await openLedger(directory),
+          createDriver: () => driver,
+          clock: clock(),
+        });
+
+        const failure = await host.start({ acceptCommands: false }).then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+        expect(failure).toBeInstanceOf(AggregateError);
+        if (!(failure instanceof AggregateError)) throw failure;
+        expect(failure.message).toBe(
+          "one or more sources did not complete startup safely",
+        );
+        const [source, health] = failure.errors;
+        expect(failure.errors.length).toBe(2);
+        expect(source).toBeInstanceOf(AggregateError);
+        expect(source.message).toBe("source startup and cleanup failed: codex");
+        expect(source.errors.map(describeFailure)).toEqual([
+          "startup rejected",
+          "stop rejected synchronously",
+          "health publication rejected",
+        ]);
+        expect(describeFailure(health)).toBe("health publication rejected");
+        await host.stop("test-complete", { publishHealth: false });
+      } finally {
+        await Deno.remove(directory, { recursive: true });
+      }
+    });
+  });
+
+  describe("instance members, when stopping", () => {
+    it("stops a driver interrupted while starting once", async () => {
+      const directory = await Deno.makeTempDir();
+      try {
+        const driver = new FakeDriver("codex");
+        const entered = Promise.withResolvers<void>();
+        const release = Promise.withResolvers<void>();
+        driver.startGate = { entered, release };
+        driver.failStart = true;
+        let stops = 0;
+        const stop = driver.stop.bind(driver);
+        driver.stop = () => {
+          stops++;
+          return stop();
+        };
+        const host = new AgentsHost({
+          sources: [sourceConfig("codex")],
+          target: new FakeTarget(),
+          targetDescription: TARGET_DESCRIPTION,
+          ledger: await openLedger(directory),
+          createDriver: () => driver,
+          clock: clock(),
+        });
+        const starting = host.start({ acceptCommands: false });
+        await entered.promise;
+        const stopping = host.stop("interrupted", {
+          interruptInFlight: true,
+          publishHealth: false,
+        });
+        release.resolve();
+
+        await expect(starting).rejects.toThrow(
+          "no configured agent source started successfully",
+        );
+        await stopping;
+        expect(stops).toBe(1);
+        expect(host.health().sources[0].status).toBe("stopped");
+      } finally {
+        await Deno.remove(directory, { recursive: true });
+      }
+    });
+
+    it("cancels a subscription that resolves after stopping began", async () => {
+      const directory = await Deno.makeTempDir();
+      try {
+        const subscriptionEntered = Promise.withResolvers<void>();
+        const subscriptionRelease = Promise.withResolvers<void>();
+        const target = new FakeTarget();
+        target.subscriptionGate = {
+          entered: subscriptionEntered,
+          release: subscriptionRelease,
+        };
+        const controller = new AbortController();
+        const host = new AgentsHost({
+          sources: [sourceConfig("codex")],
+          target,
+          targetDescription: TARGET_DESCRIPTION,
+          ledger: await openLedger(directory),
+          createDriver: () => new FakeDriver("codex"),
+          clock: clock(),
+        });
+        const starting = host.start({ signal: controller.signal });
+        await subscriptionEntered.promise;
+        controller.abort(new Error("cancel pending subscription"));
+        await expect(starting).rejects.toThrow("cancel pending subscription");
+
+        const stopping = host.stop("startup-cancelled", {
+          publishHealth: false,
+        });
+        subscriptionRelease.resolve();
+        await stopping;
+        expect(target.subscriptionCancelled).toBe(true);
+        expect(target.commandCallback).toBe(undefined);
+      } finally {
+        await Deno.remove(directory, { recursive: true });
+      }
+    });
+
+    it("reports receipts it could recover neither at startup nor at shutdown", async () => {
+      const directory = await Deno.makeTempDir();
+      try {
+        const ledger = await openLedger(directory);
+        await ledger.put({
+          schema: AGENT_CONNECTOR_SCHEMAS.commandReceipt,
+          ownerDid: "did:key:test-owner",
+          commandId: "left-over",
+          sourceId: "codex",
+          nativeSessionId: "codex-session",
+          status: "succeeded",
+          completedAt: "2026-07-20T00:04:00.000Z",
+        });
+        const target = new FakeTarget();
+        target.terminalReceiptFailures = 2;
+        const host = new AgentsHost({
+          sources: [sourceConfig("codex")],
+          target,
+          targetDescription: TARGET_DESCRIPTION,
+          ledger,
+          createDriver: () => new FakeDriver("codex"),
+          clock: clock(),
+        });
+
+        await expect(host.start({ acceptCommands: false })).rejects.toThrow(
+          "could not publish recovered command receipts",
+        );
+        const stopFailure = await host.stop("test-complete").then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+
+        expect(stopFailure).toBeInstanceOf(AggregateError);
+        if (!(stopFailure instanceof AggregateError)) throw stopFailure;
+        expect(stopFailure.errors.map(describeFailure)).toEqual([
+          "could not publish recovered command receipts",
+          "could not publish recovered command receipts",
+        ]);
+        expect(
+          host.health().activity.map((event) => event.type),
+        ).toContain("receipt-flush-failed");
+        expect(
+          host.health().activity.map((event) => event.type),
+        ).not.toContain("receipt-flush-completed");
+        expect(target.receipts).toEqual([]);
+        expect(await ledger.recoverUnpublishedReceipts()).toHaveLength(1);
+      } finally {
+        await Deno.remove(directory, { recursive: true });
+      }
+    });
+
+    it("logs a command batch it could not admit", async () => {
+      const directory = await Deno.makeTempDir();
+      try {
+        const ledger = await openLedger(directory);
+        const errors: string[] = [];
+        const logged = Promise.withResolvers<void>();
+        const target = new FakeTarget();
+        const host = new AgentsHost({
+          sources: [sourceConfig("codex")],
+          target,
+          targetDescription: TARGET_DESCRIPTION,
+          ledger,
+          createDriver: () => new FakeDriver("codex"),
+          clock: clock(),
+          logger: {
+            error: (...values) => {
+              errors.push(values.join(" "));
+              logged.resolve();
+            },
+            info: () => {},
+          },
+        });
+        await host.start();
+        ledger.get = () => {
+          throw new Error("ledger unavailable");
+        };
+        target.sendCommands([renameCommandForAdmission()]);
+        await logged.promise;
+
+        expect(errors).toEqual([
+          "command admission failed: ledger unavailable",
+        ]);
+        expect(target.receipts).toEqual([]);
+        await host.stop("test-complete");
+      } finally {
+        await Deno.remove(directory, { recursive: true });
+      }
+    });
+  });
 });
+
+function renameCommandForAdmission(): Record<string, unknown> {
+  return {
+    schema: AGENT_CONNECTOR_SCHEMAS.command,
+    ownerDid: "did:key:test-owner",
+    id: "admission",
+    createdAt: "2026-07-20T00:05:00.000Z",
+    sourceId: "codex",
+    nativeSessionId: "codex-session",
+    type: "rename",
+    payload: { title: "Updated title" },
+  };
+}

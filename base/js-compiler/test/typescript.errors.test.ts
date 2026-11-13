@@ -66,6 +66,21 @@ describe("CompilationError message flattening", () => {
     expect(plain.message).toBe("Cannot find module './missing.ts'.");
   });
 
+  it("rebuilds an error from the fields an earlier one held", () => {
+    const details = {
+      diagnostic: chainDiagnostic("Cannot find module './missing.ts'."),
+    };
+    const fields = { ...new CompilationError(details) };
+
+    const rebuilt = new CompilationError(fields);
+
+    expect({ ...rebuilt }).toEqual(fields);
+    expect(rebuilt.type).toBe("MODULE_NOT_FOUND");
+    expect(new CompilerError([fields]).message).toBe(
+      new CompilerError([details]).message,
+    );
+  });
+
   it("applies a message transformer over the flattened text", () => {
     const transformer: DiagnosticMessageTransformer = (message) =>
       message.includes("assignable") ? `friendly: ${message}` : null;

@@ -1,5 +1,5 @@
 import { assertEquals, assertNotEquals, assertThrows } from "@std/assert";
-import { join } from "@std/path";
+import { join, resolve } from "@std/path";
 import {
   defaultAgentsHostStateDirectory,
   defaultTargetLedgerPath,
@@ -50,34 +50,45 @@ Deno.test("XDG_STATE_HOME selects the durable agent host state directory", () =>
 });
 
 Deno.test("HOME selects the platform agent host state directory", () => {
-  const directory = defaultAgentsHostStateDirectory((key) =>
-    key === "HOME" ? "/users/operator" : undefined
+  const home = (key: string) => key === "HOME" ? "/users/operator" : undefined;
+  assertEquals(
+    defaultAgentsHostStateDirectory(home, "darwin"),
+    join(
+      "/users/operator",
+      "Library",
+      "Application Support",
+      "CommonFabric",
+      "agents-host",
+    ),
   );
   assertEquals(
-    directory,
-    Deno.build.os === "darwin"
-      ? join(
-        "/users/operator",
-        "Library",
-        "Application Support",
-        "CommonFabric",
-        "agents-host",
-      )
-      : join(
-        "/users/operator",
-        ".local",
-        "state",
-        "commonfabric",
-        "agents-host",
-      ),
+    defaultAgentsHostStateDirectory(home, "linux"),
+    join("/users/operator", ".local", "state", "commonfabric", "agents-host"),
   );
-  if (Deno.build.os !== "windows") {
-    assertThrows(
-      () => defaultAgentsHostStateDirectory(() => undefined),
-      Error,
-      "HOME is required",
-    );
-  }
+  assertThrows(
+    () => defaultAgentsHostStateDirectory(() => undefined, "linux"),
+    Error,
+    "HOME is required",
+  );
+});
+
+Deno.test("LOCALAPPDATA selects the Windows agent host state directory", () => {
+  assertEquals(
+    defaultAgentsHostStateDirectory(
+      (key) => key === "LOCALAPPDATA" ? " C:\\Users\\operator " : undefined,
+      "windows",
+    ),
+    join(resolve("C:\\Users\\operator"), "CommonFabric", "agents-host"),
+  );
+  assertThrows(
+    () =>
+      defaultAgentsHostStateDirectory(
+        (key) => key === "HOME" ? "/users/operator" : undefined,
+        "windows",
+      ),
+    Error,
+    "LOCALAPPDATA is required",
+  );
 });
 
 Deno.test("API URL parsing removes the input from failures", () => {

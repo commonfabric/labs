@@ -1,6 +1,6 @@
 {
   "extends": "./tsconfig.base.json",
   "files": [
-    "./ikeyable_realistic.ts"
+    "./fixtures/ikeyable_realistic.ts"
   ]
 }

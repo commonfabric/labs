@@ -5,11 +5,7 @@ import { describe, it } from "@std/testing/bdd";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import type { FabricClient, ResourceSnapshot } from "../src/guest.ts";
-import {
-  createFabricReact,
-  type QuerySnapshot,
-  type ReactHooks,
-} from "../src/react.ts";
+import { createFabricReact, type ReactHooks } from "../src/react.ts";
 
 function containsValue(value: unknown, expected: unknown): boolean {
   if (value === expected) return true;
@@ -50,6 +46,72 @@ function withUpdater<
       return writing;
     },
   });
+}
+
+/**
+ * Renders `useSqliteQuery()` against `databases` with hooks that keep their
+ * state between renders, by call order, as React's do. `render()` renders
+ * again, and `effects` holds what the latest render asked to run.
+ */
+function queryHarness(databases: Record<string, unknown>) {
+  const client = {
+    sqlite: (name: string) => databases[name],
+  } as unknown as FabricClient;
+  const refs: Array<{ current: unknown }> = [];
+  const states: unknown[] = [];
+  const updated = new Set<() => void>();
+  let refIndex = 0;
+  let stateIndex = 0;
+  let effects: Array<() => void | (() => void)> = [];
+  const hooks: ReactHooks = {
+    useCallback: (callback) => callback,
+    useEffect: (effect) => effects.push(effect),
+    useMemo: (factory) => factory(),
+    useRef: (initial) => {
+      const index = refIndex++;
+      refs[index] ??= { current: initial };
+      return refs[index] as { current: typeof initial };
+    },
+    useState: (initial) => {
+      const index = stateIndex++;
+      states[index] ??= typeof initial === "function"
+        ? (initial as () => unknown)()
+        : initial;
+      return [
+        states[index],
+        (next: unknown) => {
+          states[index] = typeof next === "function"
+            ? (next as (current: unknown) => unknown)(states[index])
+            : next;
+          for (const listener of [...updated]) listener();
+        },
+      ] as never;
+    },
+    useSyncExternalStore: (_subscribe, getSnapshot) => getSnapshot(),
+  };
+  const { useSqliteQuery } = createFabricReact(hooks, client);
+  return {
+    states,
+    get effects() {
+      return effects;
+    },
+    render(name: string) {
+      refIndex = 0;
+      stateIndex = 0;
+      effects = [];
+      return useSqliteQuery(name, "SELECT owner FROM notes");
+    },
+    /** Resolves once the query's state next changes. */
+    nextUpdate(): Promise<void> {
+      return new Promise((resolve) => {
+        const listener = () => {
+          updated.delete(listener);
+          resolve();
+        };
+        updated.add(listener);
+      });
+    },
+  };
 }
 
 describe("React bridge adapter", () => {
@@ -364,8 +426,7 @@ describe("React bridge adapter", () => {
   });
 
   it("returns loading when the SQLite query identity changes", async () => {
-    const aliceReady = Promise.withResolvers<void>();
-    const databases = {
+    const harness = queryHarness({
       alice: {
         query: () => Promise.resolve({ rows: [{ owner: "alice" }] }),
         sink: () => () => {},
@@ -374,72 +435,25 @@ describe("React bridge adapter", () => {
         query: () => Promise.resolve({ rows: [{ owner: "bob" }] }),
         sink: () => () => {},
       },
-    };
-    const client = {
-      sqlite: (name: keyof typeof databases) => databases[name],
-    } as unknown as FabricClient;
-    const refs: Array<{ current: unknown }> = [];
-    const states: unknown[] = [];
-    let refIndex = 0;
-    let stateIndex = 0;
-    let effects: Array<() => void | (() => void)> = [];
-    const hooks: ReactHooks = {
-      useCallback: (callback) => callback,
-      useEffect: (effect) => effects.push(effect),
-      useMemo: (factory) => factory(),
-      useRef: (initial) => {
-        const index = refIndex++;
-        refs[index] ??= { current: initial };
-        return refs[index] as { current: typeof initial };
-      },
-      useState: (initial) => {
-        const index = stateIndex++;
-        states[index] ??= typeof initial === "function"
-          ? (initial as () => unknown)()
-          : initial;
-        return [
-          states[index],
-          (next: unknown) => {
-            states[index] = typeof next === "function"
-              ? (next as (current: unknown) => unknown)(states[index])
-              : next;
-            if (
-              (states[index] as {
-                snapshot?: QuerySnapshot<unknown>;
-              }).snapshot?.status === "ready"
-            ) {
-              aliceReady.resolve();
-            }
-          },
-        ] as never;
-      },
-      useSyncExternalStore: (_subscribe, getSnapshot) => getSnapshot(),
-    };
-    const { useSqliteQuery } = createFabricReact(hooks, client);
-    const render = (name: string) => {
-      refIndex = 0;
-      stateIndex = 0;
-      effects = [];
-      return useSqliteQuery(name, "SELECT owner FROM notes");
-    };
+    });
 
-    expect(render("alice").status).toBe("loading");
-    effects[0]?.();
-    await aliceReady.promise;
-    expect(render("alice")).toMatchObject({
+    expect(harness.render("alice").status).toBe("loading");
+    harness.effects[0]?.();
+    await harness.nextUpdate();
+    expect(harness.render("alice")).toMatchObject({
       status: "ready",
       rows: [{ owner: "alice" }],
     });
 
-    const bob = render("bob");
+    const bob = harness.render("bob");
     expect(bob).toMatchObject({
       status: "loading",
       rows: undefined,
       error: undefined,
     });
     expect(typeof bob.refresh).toBe("function");
-    const cleanupBob = effects[0]?.();
-    expect(containsValue(states[0], "alice")).toBe(false);
+    const cleanupBob = harness.effects[0]?.();
+    expect(containsValue(harness.states[0], "alice")).toBe(false);
     if (typeof cleanupBob === "function") cleanupBob();
   });
 
@@ -447,22 +461,16 @@ describe("React bridge adapter", () => {
     const aliceInitial = Promise.withResolvers<{
       rows: Array<{ owner: string }>;
     }>();
-    const aliceRetained = Promise.withResolvers<{
-      rows: Array<{ owner: string }>;
-    }>();
     const bobResult = Promise.withResolvers<{
       rows: Array<{ owner: string }>;
     }>();
     const queries: string[] = [];
-    let aliceQueries = 0;
     let retainedAliceRefresh: (() => void) | undefined;
-    const databases = {
+    const harness = queryHarness({
       alice: {
         query: () => {
           queries.push("alice");
-          return aliceQueries++ === 0
-            ? aliceInitial.promise
-            : aliceRetained.promise;
+          return aliceInitial.promise;
         },
         sink: (listener: () => void) => {
           retainedAliceRefresh = listener;
@@ -476,66 +484,87 @@ describe("React bridge adapter", () => {
         },
         sink: () => () => {},
       },
-    };
-    const client = {
-      sqlite: (name: keyof typeof databases) => databases[name],
-    } as unknown as FabricClient;
-    const refs: Array<{ current: unknown }> = [];
-    const states: unknown[] = [];
-    let refIndex = 0;
-    let stateIndex = 0;
-    let effects: Array<() => void | (() => void)> = [];
-    const hooks: ReactHooks = {
-      useCallback: (callback) => callback,
-      useEffect: (effect) => effects.push(effect),
-      useMemo: (factory) => factory(),
-      useRef: (initial) => {
-        const index = refIndex++;
-        refs[index] ??= { current: initial };
-        return refs[index] as { current: typeof initial };
-      },
-      useState: (initial) => {
-        const index = stateIndex++;
-        states[index] ??= typeof initial === "function"
-          ? (initial as () => unknown)()
-          : initial;
-        return [
-          states[index],
-          (next: unknown) => {
-            states[index] = typeof next === "function"
-              ? (next as (current: unknown) => unknown)(states[index])
-              : next;
-          },
-        ] as never;
-      },
-      useSyncExternalStore: (_subscribe, getSnapshot) => getSnapshot(),
-    };
-    const { useSqliteQuery } = createFabricReact(hooks, client);
-    const render = (name: string) => {
-      refIndex = 0;
-      stateIndex = 0;
-      effects = [];
-      return useSqliteQuery(name, "SELECT owner FROM notes");
-    };
+    });
 
-    render("alice");
-    const cleanupAlice = effects[0]?.() as () => void;
+    harness.render("alice");
+    const cleanupAlice = harness.effects[0]?.() as () => void;
     cleanupAlice();
-    render("bob");
-    const cleanupBob = effects[0]?.() as () => void;
+    harness.render("bob");
+    const cleanupBob = harness.effects[0]?.() as () => void;
     retainedAliceRefresh?.();
     expect(queries).toEqual(["alice", "bob"]);
 
+    const ready = harness.nextUpdate();
     bobResult.resolve({ rows: [{ owner: "bob" }] });
-    aliceRetained.resolve({ rows: [{ owner: "stale-alice" }] });
+    await ready;
     aliceInitial.resolve({ rows: [{ owner: "oldest-alice" }] });
-    await Promise.resolve();
-    await Promise.resolve();
+    // The hook took up Alice's query before this did, so its handler of the
+    // result has run by the time this one does.
+    await aliceInitial.promise;
 
-    expect(render("bob")).toMatchObject({
+    expect(harness.render("bob")).toMatchObject({
       status: "ready",
       rows: [{ owner: "bob" }],
     });
     cleanupBob();
+  });
+
+  describe("a SQLite query that fails", () => {
+    for (
+      const [what, cause] of [
+        ["an `Error`", new Error("no such table")],
+        ["anything else, as an `Error`", "no such table"],
+      ] as const
+    ) {
+      it(`returns the error state carrying ${what}`, async () => {
+        const query = Promise.withResolvers<{ rows: unknown[] }>();
+        const harness = queryHarness({
+          notes: { query: () => query.promise, sink: () => () => {} },
+        });
+
+        expect(harness.render("notes").status).toBe("loading");
+        const cleanup = harness.effects[0]?.();
+        const failed = harness.nextUpdate();
+        query.reject(cause);
+        await failed;
+
+        expect(harness.render("notes")).toEqual({
+          status: "error",
+          rows: undefined,
+          error: new Error("no such table"),
+          refresh: expect.any(Function),
+        });
+        if (typeof cleanup === "function") cleanup();
+      });
+    }
+
+    it("keeps the current query when an old query's failure arrives", async () => {
+      const aliceQuery = Promise.withResolvers<{ rows: unknown[] }>();
+      const bobQuery = Promise.withResolvers<{ rows: unknown[] }>();
+      const harness = queryHarness({
+        alice: { query: () => aliceQuery.promise, sink: () => () => {} },
+        bob: { query: () => bobQuery.promise, sink: () => () => {} },
+      });
+
+      harness.render("alice");
+      const cleanupAlice = harness.effects[0]?.();
+      if (typeof cleanupAlice === "function") cleanupAlice();
+      harness.render("bob");
+      const cleanupBob = harness.effects[0]?.();
+      const ready = harness.nextUpdate();
+      bobQuery.resolve({ rows: [{ owner: "bob" }] });
+      await ready;
+
+      aliceQuery.reject(new Error("stale"));
+      // The hook took up Alice's query before this did, so its handler of
+      // the failure has run by the time this one does.
+      await aliceQuery.promise.catch(() => {});
+
+      expect(harness.render("bob")).toMatchObject({
+        status: "ready",
+        rows: [{ owner: "bob" }],
+      });
+      if (typeof cleanupBob === "function") cleanupBob();
+    });
   });
 });

@@ -624,6 +624,7 @@ Deno.test("the workspace's capable members are read from their manifests", async
       "./runtime/cli",
       "./runtime/runner",
       "./base/api",
+      "./base/identity",
       "./runtime/memory",
       "./dashboard",
       "./patterns",
@@ -631,12 +632,6 @@ Deno.test("the workspace's capable members are read from their manifests", async
   ) {
     assertEquals(capable.has(member), true, `${member} should take the flag`);
   }
-  // A browser harness, which does not.
-  assertEquals(
-    capable.has("./base/identity"),
-    false,
-    "./base/identity should not",
-  );
 });
 
 Deno.test("the flag reaches the `deno-test` of a member running the wrapper", async () => {
@@ -792,8 +787,6 @@ Deno.test("a recording leaf is given the preload and the permissions it needs", 
   // which here grant a write anywhere.
   assertEquals(recording.get("./runtime/cli"), [preload]);
   assertEquals(recording.get("./dashboard"), [preload]);
-  // A member whose task cannot take the preload takes nothing at all.
-  assertEquals(recording.get("./base/identity"), []);
 });
 
 Deno.test("a leaf that cannot read is granted the skip list the run names", async () => {

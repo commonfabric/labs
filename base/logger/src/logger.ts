@@ -356,28 +356,11 @@ class TimingDataStore {
     this.#deltaCount = 0;
   }
 
-  /** Returns computed statistics over the recorded data. */
+  /**
+   * Returns computed statistics over the recorded data. A store is made to
+   * record its first measurement, so there is always at least one.
+   */
   getStats(): TimingStats {
-    if (this.#count === 0) {
-      return {
-        count: 0,
-        min: 0,
-        max: 0,
-        totalTime: 0,
-        average: 0,
-        countSinceBaseline: 0,
-        totalTimeSinceBaseline: 0,
-        averageSinceBaseline: 0,
-        p50: 0,
-        p95: 0,
-        lastTime: 0,
-        lastTimestamp: 0,
-        slowest: [],
-        cdf: [],
-        cdfSinceBaseline: null,
-      };
-    }
-
     // Sort samples for percentile calculation
     const sorted = [...this.#samples].sort((a, b) => a - b);
     const p50Index = Math.floor(sorted.length * 0.5);
@@ -389,7 +372,7 @@ class TimingDataStore {
 
     // Calculate CDF of samples since baseline (if baseline exists and has data)
     let cdfSinceBaseline: CDFPoint[] | null = null;
-    if (this.#deltaCount > 0 && this.#deltaSamples.length > 0) {
+    if (this.#deltaSamples.length > 0) {
       const deltaSorted = [...this.#deltaSamples].sort((a, b) => a - b);
       cdfSinceBaseline = this.#calculateCDF(deltaSorted);
     }
@@ -457,8 +440,6 @@ class TimingDataStore {
    * most `x` milliseconds.
    */
   #calculateCDF(sorted: number[]): CDFPoint[] {
-    if (sorted.length === 0) return [];
-
     return sorted.map((x, i) => ({
       x,
       y: (i + 1) / sorted.length,
@@ -474,6 +455,14 @@ const LOG_LEVELS: Record<LogLevel, number> = {
   error: 3,
   silent: 4,
 };
+
+/** The console method each level writes with. */
+const CONSOLE_METHODS = {
+  debug: "debug",
+  info: "log",
+  warn: "warn",
+  error: "error",
+} as const satisfies Record<ActiveLogLevel, keyof Console>;
 
 /** Colors for each log level. */
 export const LOG_COLORS = {
@@ -541,13 +530,26 @@ export function setLoggerCountObserver(
  * Always `undefined` outside Deno.
  */
 function getEnvFloor(): LogLevel | undefined {
-  if (isDeno()) {
-    try {
-      const envLevel = Deno.env.get("CF_LOG_LEVEL");
-      if (envLevel && envLevel in LOG_LEVELS) return envLevel as LogLevel;
-    } catch { /* ignore permission errors */ }
+  const envLevel = readEnv("CF_LOG_LEVEL");
+  return envLevel !== undefined && isLogLevel(envLevel) ? envLevel : undefined;
+}
+
+/**
+ * Returns the environment variable `name`, or `undefined` when it is unset,
+ * when this is not Deno, or when the permission to read it is missing.
+ */
+function readEnv(name: string): string | undefined {
+  try {
+    return isDeno() ? Deno.env.get(name) : undefined;
+  } catch {
+    // A missing permission reads as unset.
+    return undefined;
   }
-  return undefined;
+}
+
+/** Indicates whether `value` names a log level. */
+function isLogLevel(value: string): value is LogLevel {
+  return Object.hasOwn(LOG_LEVELS, value);
 }
 
 // Auto-initialize floor from CF_LOG_LEVEL so workers inherit it.
@@ -661,13 +663,8 @@ export function detailOfMeasure(name: string): string | undefined {
 }
 
 function getEnvMeasuresEnabled(): boolean {
-  if (isDeno()) {
-    try {
-      const raw = Deno.env.get("CF_TIMING_MEASURES");
-      return raw !== undefined && raw !== "" && raw !== "0";
-    } catch { /* ignore permission errors */ }
-  }
-  return false;
+  const raw = readEnv("CF_TIMING_MEASURES");
+  return raw !== undefined && raw !== "" && raw !== "0";
 }
 
 /**
@@ -696,12 +693,7 @@ export function parseTimingMeasureCap(
  * its setup. Raising it has to be reachable from wherever emission is.
  */
 function getEnvMeasureCap(): number | undefined {
-  if (isDeno()) {
-    try {
-      return parseTimingMeasureCap(Deno.env.get("CF_TIMING_MEASURES_CAP"));
-    } catch { /* ignore permission errors */ }
-  }
-  return undefined;
+  return parseTimingMeasureCap(readEnv("CF_TIMING_MEASURES_CAP"));
 }
 
 _emitTimingMeasures = getEnvMeasuresEnabled();
@@ -1178,22 +1170,7 @@ export class Logger {
 
   /** Logs a debug message. */
   debug(key: string, ...messages: LogMessage[]): void {
-    this.#counts.debug++;
-    this.#incrementKeyCount(key, "debug");
-    if (this.#disabled) return;
-    this.#maybeLogCountSummary();
-    if (shouldLog("debug", this.#level)) {
-      const { prefix, color } = this.#getLogFormat("debug");
-      if (shouldLogToStderr()) {
-        logToStderr(
-          prefix.replace("%c", ""),
-          key,
-          ...resolveMessages(messages),
-        );
-      } else {
-        console.debug(prefix, color, key, ...resolveMessages(messages));
-      }
-    }
+    this.#emit("debug", key, messages);
   }
 
   /** Logs a message at info level, this being the default method. */
@@ -1203,63 +1180,17 @@ export class Logger {
 
   /** Logs an info message. */
   info(key: string, ...messages: LogMessage[]): void {
-    this.#counts.info++;
-    this.#incrementKeyCount(key, "info");
-    if (this.#disabled) return;
-    this.#maybeLogCountSummary();
-    if (shouldLog("info", this.#level)) {
-      const { prefix, color } = this.#getLogFormat("info");
-      if (shouldLogToStderr()) {
-        logToStderr(
-          prefix.replace("%c", ""),
-          key,
-          ...resolveMessages(messages),
-        );
-      } else {
-        console.log(prefix, color, key, ...resolveMessages(messages));
-      }
-    }
+    this.#emit("info", key, messages);
   }
 
   /** Logs a warning message. */
   warn(key: string, ...messages: LogMessage[]): void {
-    this.#counts.warn++;
-    this.#incrementKeyCount(key, "warn");
-    if (this.#disabled) return;
-    this.#maybeLogCountSummary();
-    if (shouldLog("warn", this.#level)) {
-      const { prefix, color } = this.#getLogFormat("warn");
-      if (shouldLogToStderr()) {
-        logToStderr(
-          prefix.replace("%c", ""),
-          key,
-          ...resolveMessages(messages),
-        );
-      } else {
-        console.warn(prefix, color, key, ...resolveMessages(messages));
-      }
-    }
+    this.#emit("warn", key, messages);
   }
 
   /** Logs an error message. */
   error(key: string, ...messages: LogMessage[]): void {
-    this.#counts.error++;
-    this.#incrementKeyCount(key, "error");
-    this.#keepErrorMessage(key, messages);
-    if (this.#disabled) return;
-    this.#maybeLogCountSummary();
-    if (shouldLog("error", this.#level)) {
-      const { prefix, color } = this.#getLogFormat("error");
-      if (shouldLogToStderr()) {
-        logToStderr(
-          prefix.replace("%c", ""),
-          key,
-          ...resolveMessages(messages),
-        );
-      } else {
-        console.error(prefix, color, key, ...resolveMessages(messages));
-      }
-    }
+    this.#emit("error", key, messages);
   }
 
   //
@@ -1469,6 +1400,32 @@ export class Logger {
   // Private helpers
   //
 
+  /**
+   * Counts a call at `level` under `key`, keeps the message when `level` is
+   * `error`, and writes `messages` out when this logger is enabled and
+   * `level` passes its filter: to stderr where `LOG_TO_STDERR` asks for it,
+   * and otherwise to the console method for `level`.
+   */
+  #emit(level: ActiveLogLevel, key: string, messages: LogMessage[]): void {
+    this.#counts[level]++;
+    this.#incrementKeyCount(key, level);
+    if (level === "error") this.#keepErrorMessage(key, messages);
+    if (this.#disabled) return;
+    this.#maybeLogCountSummary();
+    if (!shouldLog(level, this.#level)) return;
+    const { prefix, color } = this.#getLogFormat(level);
+    if (shouldLogToStderr()) {
+      logToStderr(prefix.replace("%c", ""), key, ...resolveMessages(messages));
+    } else {
+      console[CONSOLE_METHODS[level]](
+        prefix,
+        color,
+        key,
+        ...resolveMessages(messages),
+      );
+    }
+  }
+
   /** Increments the count for a specific message key and log level. */
   #incrementKeyCount(key: string, level: ActiveLogLevel): void {
     // Skip reserved key name "total" to prevent corruption of breakdown totals
@@ -1674,18 +1631,12 @@ export const log = new Logger();
  * `undefined` when it is unset, is `silent`, is not a valid level, or cannot
  * be read. Always `undefined` outside Deno.
  */
-function getEnvLevel() {
-  if (isDeno()) {
-    try {
-      const envLevel = Deno.env.get("LOG_LEVEL");
-      if (envLevel && envLevel !== "silent" && envLevel in LOG_LEVELS) {
-        return envLevel as LogLevel;
-      }
-    } catch {
-      // Ignore permission errors - use default log level
-    }
-  }
-  return undefined;
+function getEnvLevel(): LogLevel | undefined {
+  const envLevel = readEnv("LOG_LEVEL");
+  return envLevel !== undefined && envLevel !== "silent" &&
+      isLogLevel(envLevel)
+    ? envLevel
+    : undefined;
 }
 
 /**
@@ -1694,14 +1645,7 @@ function getEnvLevel() {
  * tool whose real output a caller is parsing.
  */
 function shouldLogToStderr(): boolean {
-  if (isDeno()) {
-    try {
-      return Deno.env.get("LOG_TO_STDERR") === "1";
-    } catch {
-      return false;
-    }
-  }
-  return false;
+  return readEnv("LOG_TO_STDERR") === "1";
 }
 
 /**
@@ -1757,15 +1701,21 @@ export function getLogger(
   return logger;
 }
 
-/** Resets call counts for every registered logger. */
-export function resetAllLoggerCounts(): void {
+/**
+ * Returns the registered loggers by name. The registry lives on `globalThis`
+ * so that every copy of this module loaded into a realm shares it.
+ */
+function registeredLoggers(): Record<string, Logger> {
   const global = globalThis as unknown as {
     commonfabric?: { logger?: Record<string, Logger> };
   };
-  if (global.commonfabric?.logger) {
-    Object.values(global.commonfabric.logger).forEach((logger) =>
-      logger.resetCounts()
-    );
+  return global.commonfabric?.logger ?? {};
+}
+
+/** Resets call counts for every registered logger. */
+export function resetAllLoggerCounts(): void {
+  for (const logger of Object.values(registeredLoggers())) {
+    logger.resetCounts();
   }
 }
 
@@ -1774,13 +1724,7 @@ export function resetAllLoggerCounts(): void {
  * registered logger.
  */
 export function getTotalLoggerCounts(): number {
-  const global = globalThis as unknown as {
-    commonfabric?: { logger?: Record<string, Logger> };
-  };
-  if (!global.commonfabric?.logger) {
-    return 0;
-  }
-  return Object.values(global.commonfabric.logger)
+  return Object.values(registeredLoggers())
     .reduce((sum, logger) => sum + logger.counts.total, 0);
 }
 
@@ -1803,13 +1747,8 @@ export function getLoggerCountsByKey(): Record<
   string,
   Record<string, LogCounts>
 > {
-  const global = globalThis as unknown as {
-    commonfabric?: { logger?: Record<string, Logger> };
-  };
   const byLogger: Record<string, Record<string, LogCounts>> = {};
-  for (
-    const [name, logger] of Object.entries(global.commonfabric?.logger ?? {})
-  ) {
+  for (const [name, logger] of Object.entries(registeredLoggers())) {
     byLogger[name] = logger.countsByKey;
   }
   return byLogger;
@@ -1848,13 +1787,8 @@ export function getLoggerErrorMessagesBreakdown(): Record<
   string,
   Record<string, string[]>
 > {
-  const global = globalThis as unknown as {
-    commonfabric?: { logger?: Record<string, Logger> };
-  };
   const breakdown: Record<string, Record<string, string[]>> = {};
-  for (
-    const [name, logger] of Object.entries(global.commonfabric?.logger ?? {})
-  ) {
+  for (const [name, logger] of Object.entries(registeredLoggers())) {
     const messages = logger.errorMessagesByKey;
     if (Object.keys(messages).length > 0) breakdown[name] = messages;
   }
@@ -1887,21 +1821,13 @@ export type TimingStatsBreakdown = {
  * // }
  */
 export function getTimingStatsBreakdown(): TimingStatsBreakdown {
-  const global = globalThis as unknown as {
-    commonfabric?: { logger?: Record<string, Logger> };
-  };
-
   const breakdown: TimingStatsBreakdown = {};
-
-  if (global.commonfabric?.logger) {
-    for (const [name, logger] of Object.entries(global.commonfabric.logger)) {
-      const stats = logger.timeStats;
-      if (Object.keys(stats).length > 0) {
-        breakdown[name] = stats;
-      }
+  for (const [name, logger] of Object.entries(registeredLoggers())) {
+    const stats = logger.timeStats;
+    if (Object.keys(stats).length > 0) {
+      breakdown[name] = stats;
     }
   }
-
   return breakdown;
 }
 
@@ -1919,33 +1845,20 @@ export type LoggerFlagsBreakdown = Record<
  * `{ runner: { "action invalid input": { "action:myModule": {...} } } }`.
  */
 export function getLoggerFlagsBreakdown(): LoggerFlagsBreakdown {
-  const global = globalThis as unknown as {
-    commonfabric?: { logger?: Record<string, Logger> };
-  };
-
   const breakdown: LoggerFlagsBreakdown = {};
-
-  if (global.commonfabric?.logger) {
-    for (const [name, logger] of Object.entries(global.commonfabric.logger)) {
-      const flags = logger.flags;
-      if (Object.keys(flags).length > 0) {
-        breakdown[name] = flags;
-      }
+  for (const [name, logger] of Object.entries(registeredLoggers())) {
+    const flags = logger.flags;
+    if (Object.keys(flags).length > 0) {
+      breakdown[name] = flags;
     }
   }
-
   return breakdown;
 }
 
 /** Resets timing statistics for every registered logger. */
 export function resetAllTimingStats(): void {
-  const global = globalThis as unknown as {
-    commonfabric?: { logger?: Record<string, Logger> };
-  };
-  if (global.commonfabric?.logger) {
-    Object.values(global.commonfabric.logger).forEach((logger) =>
-      logger.resetTimeStats()
-    );
+  for (const logger of Object.values(registeredLoggers())) {
+    logger.resetTimeStats();
   }
 }
 
@@ -1954,13 +1867,8 @@ export function resetAllTimingStats(): void {
  * logger's `getCountDeltas()` reports relative to its current counts.
  */
 export function resetAllCountBaselines(): void {
-  const global = globalThis as unknown as {
-    commonfabric?: { logger?: Record<string, Logger> };
-  };
-  if (global.commonfabric?.logger) {
-    Object.values(global.commonfabric.logger).forEach((logger) =>
-      logger.resetCountBaseline()
-    );
+  for (const logger of Object.values(registeredLoggers())) {
+    logger.resetCountBaseline();
   }
 }
 
@@ -1970,13 +1878,8 @@ export function resetAllCountBaselines(): void {
  * its current timings.
  */
 export function resetAllTimingBaselines(): void {
-  const global = globalThis as unknown as {
-    commonfabric?: { logger?: Record<string, Logger> };
-  };
-  if (global.commonfabric?.logger) {
-    Object.values(global.commonfabric.logger).forEach((logger) =>
-      logger.resetTimingBaseline()
-    );
+  for (const logger of Object.values(registeredLoggers())) {
+    logger.resetTimingBaseline();
   }
 }
 

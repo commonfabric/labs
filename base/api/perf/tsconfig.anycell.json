@@ -1,6 +1,6 @@
 {
   "extends": "./tsconfig.base.json",
   "files": [
-    "./any_cell_wrapping.ts"
+    "./fixtures/any_cell_wrapping.ts"
   ]
 }
