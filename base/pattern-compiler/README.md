@@ -31,10 +31,12 @@ job builds or tests it. It is not a Deno workspace member.
 
 ## What it does not cover
 
-It has no type checker, no footprint analysis, and no code or plan emission. A
-rule that needs the type of an expression is not reported. `SPEC-NOTES.md` lists
-the places where the specification was ambiguous or could not be implemented as
-written, with the reading this crate chose.
+It has no footprint analysis and no code or plan emission. Its type checker is a
+first slice: it resolves written types and the declared types of bindings, and
+infers nothing from an expression apart from a literal. A rule that needs an
+inferred type is not reported. `SPEC-NOTES.md` lists the places where the
+specification was ambiguous or could not be implemented as written, with the
+reading this crate chose.
 
 The `catalog` command prints, for each entry of the diagnostics catalog, whether
 the crate implements it, implements the part syntax decides, leaves it to the
@@ -61,12 +63,14 @@ release that builds with the Rust 1.93 toolchain.
 | `api`                    | The `commonfabric` exports, the methods of a cell handle, and the standard-library surface of `language-subset.md` §9 |
 | `tiers`                  | The records of bodies, captures, and call sites that the later stages read                                            |
 | `check`                  | The walk that classifies code into tiers and applies the rules                                                        |
+| `types`                  | The representation of types, the resolution of written types, and the rules it decides (`language-subset.md` §7, §8)  |
+| `declared`               | The declared type of a binding and of an expression that names one, with no inference                                 |
 | `program`                | A set of modules, the resolution of imports between them, and the rules that follow a call into another function      |
 | `catalog`, `diagnostics` | The diagnostics catalog and the diagnostic record                                                                     |
 | `corpus`, `report`       | Which files are the corpus, and the report over them                                                                  |
 
-A type checker is a further module that reads the module model and the syntax
-tree. Footprint analysis reads the body records of `tiers`.
+Expression inference is the next part of `types`. Footprint analysis reads the
+body records of `tiers`.
 
 ## Build, test, and run
 
@@ -81,6 +85,7 @@ cargo run --release -- catalog
 cargo run --release -- check path/to/module.tsx path/to/other.ts
 cargo run --release -- check --hints path/to/module.tsx
 cargo run --release -- bodies path/to/module.tsx
+cargo run --release -- types path/to/module.tsx
 cargo run --release -- corpus ../../patterns
 cargo run --release -- corpus ../../patterns --json
 cargo run --release -- corpus ../../patterns --files
