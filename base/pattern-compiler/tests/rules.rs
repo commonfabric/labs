@@ -1101,3 +1101,64 @@ fn module_scope_call_of_a_factory_value_is_refused_by_the_callee_s_type() {
     assert_eq!(ids(&diagnostics), ["module-scope:runtime-call"]);
     assert_eq!(diagnostics[0].line, 4);
 }
+
+#[test]
+fn default_named_by_typeof_takes_a_static_initializer() {
+    assert!(check(
+        "const STEP = -1;\n\
+         const BASE = { size: 1, tags: [\"plain\"] };\n\
+         const COPY = (BASE);\n\
+         const NAMES = [\"ring\"] as const;\n\
+         type A = Default<number, typeof STEP>;\n\
+         type B = Default<{ size: number; tags: string[] }, typeof COPY>;\n\
+         type C = Default<readonly string[], typeof NAMES>;\n"
+    )
+    .is_empty());
+    for refused in [
+        "const TOTAL = 1 + 2;\ntype A = Default<number, typeof TOTAL>;\n",
+        "const BASE = [1];\nconst ALL = [...BASE];\ntype A = Default<number[], typeof ALL>;\n",
+        "const NAME = \"ring\";\nconst LABEL = `${NAME} donut`;\ntype A = Default<string, typeof LABEL>;\n",
+        "const SIZES = { small: 1 };\ntype A = Default<number, typeof SIZES.small>;\n",
+        "type A = Default<number, \"one\">;\n",
+        "const NAME = \"ring\";\ntype A = Default<number, typeof NAME>;\n",
+    ] {
+        assert_eq!(ids(&check(refused)), ["default:not-static"], "{refused}");
+    }
+}
+
+#[test]
+fn type_operator_on_an_operand_outside_its_table_is_refused() {
+    assert!(check(
+        "interface Donut { name: string; glaze: string }\n\
+         function priceOf(donut: Donut): number { return donut.name.length; }\n\
+         const save = handler<{ name: string }, { count: number }>((_event, _state) => {});\n\
+         const Box = pattern<{ name: string }, { name: string }>(({ name }) => ({ name }));\n\
+         type A = Pick<Donut, \"name\"> | Omit<Donut, \"name\" | \"glaze\"> | Partial<Donut>;\n\
+         type B = ReturnType<typeof priceOf> | Parameters<typeof priceOf>[0];\n\
+         type C = ReturnType<typeof save> | Parameters<typeof Box>[0];\n"
+    )
+    .is_empty());
+    for refused in [
+        "interface Donut { name: string }\ntype A = Pick<Donut, \"glaze\">;\n",
+        "interface Donut { name: string }\ntype A = Omit<Donut, string>;\n",
+        "type A = Partial<string | number>;\n",
+        "type A = ReturnType<string>;\n",
+        "type A = Parameters<{ name: string }>;\n",
+    ] {
+        assert_eq!(
+            ids(&check(refused)),
+            ["subset-type:operator-operand"],
+            "{refused}"
+        );
+    }
+}
+
+#[test]
+fn symbol_is_refused_as_an_operand_of_exclude() {
+    assert_eq!(
+        ids(&check(
+            "type Key = Exclude<string | number, symbol>;\ntype Mark = { readonly mark: unique symbol };\n"
+        )),
+        ["schema-type:symbol", "schema-type:symbol"]
+    );
+}

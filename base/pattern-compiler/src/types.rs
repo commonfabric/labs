@@ -895,19 +895,28 @@ impl<'a> Resolver<'_, 'a> {
                 // `Default<T, V>`, and `Default<V>` for `T | Default<V>`.
                 let value = arguments.last().copied();
                 let last = arguments.len().saturating_sub(1);
+                // `typeof NAME` names the binding, and the default is the
+                // value of its initializer (§8.8). `typeof NAME.path` names
+                // a part of a constant and is refused.
                 let constant = match written(last) {
                     Some(TSType::TSTypeQuery(query)) => match &query.expr_name {
                         TSTypeQueryExprName::IdentifierReference(name) => {
-                            Some(self.constant_is_literal(module, name))
+                            Some(self.static_constant(module, name, 0))
                         }
-                        _ => None,
+                        _ => Some((Some(false), None)),
                     },
                     _ => None,
                 };
                 if let Some(value) = value {
-                    let literal_like = match constant {
-                        Some(decided) => decided,
-                        None => self.is_literal_like(value, 0),
+                    let (literal_like, value) = match constant {
+                        Some((decided, initializer)) => (decided, initializer),
+                        None => (self.is_literal_like(value, 0), Some(value)),
+                    };
+                    // The value has to be assignable to the type it is the
+                    // default of.
+                    let fits = match (value, arguments.len()) {
+                        (Some(value), 2) => self.relate(value, first(), 0),
+                        _ => crate::assign::Verdict::Unsure,
                     };
                     if literal_like == Some(false) {
                         self.report(
@@ -915,6 +924,13 @@ impl<'a> Resolver<'_, 'a> {
                             "default:not-static",
                             reference.span,
                             "A `Default` value that is not literal-like",
+                        );
+                    } else if matches!(fits, crate::assign::Verdict::No(..)) {
+                        self.report(
+                            module,
+                            "default:not-static",
+                            reference.span,
+                            "A `Default` value that is not assignable to its type",
                         );
                     }
                 }
@@ -1001,35 +1017,111 @@ impl<'a> Resolver<'_, 'a> {
         }
     }
 
-    /// Whether the constant `name` is initialized by a literal expression,
-    /// whatever its annotation: `Default<T, typeof NAME>` takes the default
-    /// value from the initializer. `None` when the initializer refers to
-    /// other values, which this slice does not follow.
-    fn constant_is_literal(&self, module: usize, name: &IdentifierReference<'a>) -> Option<bool> {
-        let parsed = self.parsed(module)?;
-        let symbol = symbol_of(parsed.semantic.scoping(), name)?;
-        let (module, symbol) = match self.model(module)?.binding(symbol) {
-            Some(Binding::Import(import, binding)) => {
-                let import = &self.model(module)?.imports[import];
-                let def =
-                    self.resolve_import(module, import, &import.bindings[binding].imported)?;
-                (def.module, self.model(def.module)?.defs[def.def].symbol?)
+    /// Whether the constant `name` has a static initializer (§8.8), and the
+    /// type of the value the initializer denotes where this slice
+    /// evaluates it. `None` where the program does not hold the constant.
+    fn static_constant(
+        &self,
+        module: usize,
+        name: &IdentifierReference<'a>,
+        depth: u32,
+    ) -> (Option<bool>, Option<TypeId>) {
+        let found = (|| {
+            let parsed = self.parsed(module)?;
+            let symbol = symbol_of(parsed.semantic.scoping(), name)?;
+            let (module, symbol) = match self.model(module)?.binding(symbol) {
+                Some(Binding::Import(import, binding)) => {
+                    let import = &self.model(module)?.imports[import];
+                    let def =
+                        self.resolve_import(module, import, &import.bindings[binding].imported)?;
+                    (def.module, self.model(def.module)?.defs[def.def].symbol?)
+                }
+                _ => (module, symbol),
+            };
+            let parsed = self.parsed(module)?;
+            let scoping = parsed.semantic.scoping();
+            let declaration = scoping.symbol_declaration(symbol);
+            let AstKind::VariableDeclarator(declarator) = parsed.semantic.nodes().kind(declaration)
+            else {
+                return None;
+            };
+            // A module-scope `const` only: a local or a `let` is no
+            // constant.
+            let at_module_scope = scoping.symbol_scope_id(symbol) == scoping.root_scope_id();
+            if declarator.kind != VariableDeclarationKind::Const || !at_module_scope {
+                return Some((module, None));
             }
-            _ => (module, symbol),
-        };
-        let parsed = self.parsed(module)?;
-        let declaration = parsed.semantic.scoping().symbol_declaration(symbol);
-        let AstKind::VariableDeclarator(declarator) = parsed.semantic.nodes().kind(declaration)
-        else {
-            return None;
-        };
-        let init = unwrap(declarator.init.as_ref()?);
-        if self.literal_type_as(init, true, module).is_some() {
-            return Some(true);
+            Some((module, declarator.init.as_ref()))
+        })();
+        match found {
+            None => (None, None),
+            Some((_, None)) => (Some(false), None),
+            Some((module, Some(init))) => {
+                let is_static = self.is_static_initializer(module, init, depth);
+                let value = if is_static {
+                    self.literal_type_as(init, true, module)
+                } else {
+                    None
+                };
+                (Some(is_static), value)
+            }
         }
+    }
+
+    /// A static initializer (§8.8): a literal, a numeric literal with a
+    /// sign, an array or object literal of static initializers with static
+    /// keys, a reference to a module-scope constant whose initializer is
+    /// static, and any of these in parentheses or under `as const`, `as T`,
+    /// or `satisfies T`.
+    fn is_static_initializer(&self, module: usize, init: &Expression<'a>, depth: u32) -> bool {
+        if depth > 8 {
+            return false;
+        }
+        let next = depth + 1;
         match init {
-            Expression::CallExpression(_) | Expression::NewExpression(_) => Some(false),
-            _ => None,
+            Expression::ParenthesizedExpression(inner) => {
+                self.is_static_initializer(module, &inner.expression, next)
+            }
+            Expression::TSAsExpression(inner) => {
+                self.is_static_initializer(module, &inner.expression, next)
+            }
+            Expression::TSSatisfiesExpression(inner) => {
+                self.is_static_initializer(module, &inner.expression, next)
+            }
+            Expression::StringLiteral(_)
+            | Expression::NumericLiteral(_)
+            | Expression::BooleanLiteral(_)
+            | Expression::NullLiteral(_)
+            | Expression::BigIntLiteral(_) => true,
+            Expression::TemplateLiteral(template) => template.expressions.is_empty(),
+            Expression::UnaryExpression(unary) => {
+                matches!(
+                    unary.operator,
+                    oxc_syntax::operator::UnaryOperator::UnaryNegation
+                        | oxc_syntax::operator::UnaryOperator::UnaryPlus
+                ) && matches!(
+                    unary.argument,
+                    Expression::NumericLiteral(_) | Expression::BigIntLiteral(_)
+                )
+            }
+            Expression::ArrayExpression(array) => array.elements.iter().all(|element| {
+                element
+                    .as_expression()
+                    .is_some_and(|element| self.is_static_initializer(module, element, next))
+            }),
+            Expression::ObjectExpression(object) => object.properties.iter().all(|property| {
+                let ObjectPropertyKind::ObjectProperty(property) = property else {
+                    return false;
+                };
+                !property.computed
+                    && !property.method
+                    && static_key_name(&property.key).is_some()
+                    && self.is_static_initializer(module, &property.value, next)
+            }),
+            Expression::Identifier(name) => {
+                self.static_constant(module, name, next).0 == Some(true)
+            }
+            _ => false,
         }
     }
 
@@ -1396,9 +1488,10 @@ impl<'a> Resolver<'_, 'a> {
             let shape = checker.shape(operand);
             match shape {
                 Shape::Object(..) => Some((operand, shape)),
-                Shape::Unresolved(_) | Shape::Parameter(_) | Shape::Opaque(_) | Shape::Union(_) => {
-                    None
-                }
+                Shape::Unresolved(_) | Shape::Parameter(_) | Shape::Opaque(_) => None,
+                // A union with a member that is not evaluated is not
+                // decided.
+                Shape::Union(_) if checker.first_unresolved(operand, 0).is_some() => None,
                 _ => {
                     checker.report(
                         module,
@@ -1449,16 +1542,48 @@ impl<'a> Resolver<'_, 'a> {
                 }
                 _ => self.unresolved(Why::NotEvaluated),
             },
-            "Pick" | "Omit" => match (operand(self), keys(self)) {
-                (Some((_, Shape::Object(properties, index))), Some(keys)) => {
-                    let kept = properties
-                        .into_iter()
-                        .filter(|property| keys.contains(&property.name) == (name == "Pick"))
-                        .collect();
-                    self.add(Shape::Object(kept, index))
+            "Pick" | "Omit" => {
+                match (operand(self), keys(self)) {
+                    (Some((_, Shape::Object(properties, index))), Some(keys)) => {
+                        if let Some(missing) = keys.iter().find(|key| {
+                            name == "Pick"
+                                && index.is_none()
+                                && !properties.iter().any(|property| property.name == **key)
+                        }) {
+                            self.report(
+                            module,
+                            "subset-type:operator-operand",
+                            reference.span,
+                            format!("`Pick` with the key `{missing}`, which the type does not declare"),
+                        );
+                        }
+                        let kept = properties
+                            .into_iter()
+                            .filter(|property| keys.contains(&property.name) == (name == "Pick"))
+                            .collect();
+                        self.add(Shape::Object(kept, index))
+                    }
+                    (Some(_), None) => {
+                        // The keys are evaluated and are not string literals.
+                        let evaluated = arguments
+                            .get(1)
+                            .is_some_and(|keys| self.first_unresolved(*keys, 0).is_none())
+                            && !arguments.get(1).is_some_and(|keys| {
+                                matches!(self.shape(*keys), Shape::Parameter(_))
+                            });
+                        if evaluated {
+                            self.report(
+                                module,
+                                "subset-type:operator-operand",
+                                reference.span,
+                                format!("`{name}` with keys that are not string literal types"),
+                            );
+                        }
+                        self.unresolved(Why::NotEvaluated)
+                    }
+                    _ => self.unresolved(Why::NotEvaluated),
                 }
-                _ => self.unresolved(Why::NotEvaluated),
-            },
+            }
             "Record" => match (first.map(|key| self.shape(key)), arguments.get(1)) {
                 (Some(Shape::String), Some(value)) => {
                     self.add(Shape::Object(Vec::new(), Some(*value)))
@@ -1503,7 +1628,11 @@ impl<'a> Resolver<'_, 'a> {
                 Some((function, Shape::Function)) => self
                     .function_result(function)
                     .unwrap_or_else(|| self.unresolved(Why::NotEvaluated)),
-                _ => self.unresolved(Why::NotEvaluated),
+                Some((operand, shape)) => {
+                    self.outside_the_table(module, reference, name, operand, &shape);
+                    self.unresolved(Why::NotEvaluated)
+                }
+                None => self.unresolved(Why::NotEvaluated),
             },
             "Parameters" => match first.map(|operand| (operand, self.shape(operand))) {
                 Some((_, Shape::PatternFactory(input, _))) => self.add(Shape::Tuple(vec![input])),
@@ -1515,7 +1644,11 @@ impl<'a> Resolver<'_, 'a> {
                         )),
                     _ => self.unresolved(Why::NotEvaluated),
                 },
-                _ => self.unresolved(Why::NotEvaluated),
+                Some((operand, shape)) => {
+                    self.outside_the_table(module, reference, name, operand, &shape);
+                    self.unresolved(Why::NotEvaluated)
+                }
+                None => self.unresolved(Why::NotEvaluated),
             },
             "Exclude" | "Extract" => match (first, arguments.get(1)) {
                 (Some(subject), Some(test))
@@ -1591,6 +1724,28 @@ impl<'a> Resolver<'_, 'a> {
                 self.unresolved(Why::External)
             }
         }
+    }
+
+    /// `subset-type:operator-operand` for `ReturnType` or `Parameters`
+    /// applied to a type that is evaluated and is neither a function type
+    /// nor a factory type (§7.10).
+    fn outside_the_table(
+        &self,
+        module: usize,
+        reference: &TSTypeReference<'a>,
+        name: &str,
+        operand: TypeId,
+        shape: &Shape,
+    ) {
+        if matches!(shape, Shape::Parameter(_)) || self.first_unresolved(operand, 0).is_some() {
+            return;
+        }
+        self.report(
+            module,
+            "subset-type:operator-operand",
+            reference.span,
+            format!("`{name}` applied to a type that is not a function type or a factory type"),
+        );
     }
 
     /// `typeof name`: the declared type of a value binding (§7.1). A
@@ -1805,6 +1960,12 @@ impl<'a> Resolver<'_, 'a> {
                 primitive(Shape::String)
             }
             Expression::NumericLiteral(_) => primitive(Shape::Number),
+            Expression::UnaryExpression(unary)
+                if unary.operator == oxc_syntax::operator::UnaryOperator::UnaryNegation
+                    && matches!(unary.argument, Expression::NumericLiteral(_)) =>
+            {
+                primitive(Shape::Number)
+            }
             Expression::BooleanLiteral(_) => primitive(Shape::Boolean),
             Expression::NullLiteral(_) => self.add(Shape::Null),
             Expression::BigIntLiteral(_) => primitive(Shape::BigInt),
