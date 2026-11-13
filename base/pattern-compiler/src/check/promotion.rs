@@ -1,8 +1,13 @@
-//! The promotion criterion of `language-subset.md` §6.1, applied by syntax.
+//! The promotion criterion of `language-subset.md` §6.1, applied twice:
+//! by syntax, and with types.
 //!
-//! The criterion is decided here from the form of the body and from names:
-//! a method is taken to be the standard-library method of its name. The type
-//! checker's version of the criterion checks the receiver's type as well.
+//! By syntax the criterion is decided from the form of the body and from
+//! names: a method is taken to be the standard-library method of its name.
+//! With types it also reads the type of the receiver of a method call, of
+//! the accumulator of a `reduce`, of a computed key, and of an argument,
+//! and tests a `const` destructuring for a default or a rest element. Where
+//! a type it needs is not evaluated, the typed criterion records what was
+//! missing and decides nothing.
 
 use oxc_ast::ast::*;
 
@@ -17,6 +22,10 @@ use crate::tiers::Promotion;
 struct Shape {
     calls_function: bool,
     guard: bool,
+    /// Whether the criterion reads types.
+    typed: bool,
+    /// What the typed criterion could not decide, for want of a type.
+    undecided: Vec<String>,
 }
 
 /// Why a body is not promoted.
@@ -42,23 +51,78 @@ fn expression(reason: impl Into<String>) -> Outcome {
 }
 
 impl<'a> Checker<'_, 'a> {
-    /// The outcome of the criterion for a `computed` used as a value.
-    pub(super) fn promotion(&self, function: FunctionLike<'_, 'a>) -> Promotion {
-        let mut shape = Shape::default();
-        let outcome = if function.param_count() > 0 {
-            expression("the function has parameters")
-        } else {
-            self.pure_function(function, &mut shape, true)
+    /// The outcome of the criterion for a `computed` used as a value: the
+    /// outcome that decides the body's tier, whether the syntactic
+    /// criterion promotes the body, and the outcome of the typed criterion
+    /// as text.
+    pub(super) fn promotion(&self, function: FunctionLike<'_, 'a>) -> (Promotion, bool, String) {
+        let criterion = |typed: bool| {
+            let mut shape = Shape {
+                typed,
+                ..Shape::default()
+            };
+            let outcome = if function.param_count() > 0 {
+                expression("the function has parameters")
+            } else {
+                self.pure_function(function, &mut shape, true)
+            };
+            let promotion = match outcome {
+                Ok(()) => Promotion::Promoted {
+                    calls_function: shape.calls_function,
+                    guard: shape.guard,
+                },
+                Err(refusal) => Promotion::NotPromoted {
+                    statement_body: refusal.statement_body,
+                    reason: refusal.reason,
+                },
+            };
+            (promotion, shape.undecided)
         };
-        match outcome {
-            Ok(()) => Promotion::Promoted {
-                calls_function: shape.calls_function,
-                guard: shape.guard,
-            },
-            Err(refusal) => Promotion::NotPromoted {
-                statement_body: refusal.statement_body,
-                reason: refusal.reason,
-            },
+        let (by_syntax, _) = criterion(false);
+        let (by_type, undecided) = criterion(true);
+        let promoted_by_syntax = matches!(by_syntax, Promotion::Promoted { .. });
+        match (&by_type, undecided.first()) {
+            (Promotion::NotPromoted { reason, .. }, _) => {
+                let text = format!("not promoted: {reason}");
+                (by_type, promoted_by_syntax, text)
+            }
+            // A type the criterion needs is not evaluated, so the outcome
+            // of the syntactic criterion stands.
+            (_, Some(missing)) => (
+                by_syntax,
+                promoted_by_syntax,
+                format!("not decided: {missing}"),
+            ),
+            _ => (by_type, promoted_by_syntax, "promoted".to_string()),
+        }
+    }
+
+    /// The shape of the declared type of `expression`, for the typed
+    /// criterion. `None` where it has no type or the type is not evaluated,
+    /// which is recorded as `missing`.
+    fn typed_shape(
+        &self,
+        expression: &Expression<'a>,
+        shape: &mut Shape,
+        missing: impl FnOnce() -> String,
+    ) -> Option<(crate::types::TypeId, crate::types::Shape)> {
+        use crate::types::Shape as Type;
+        if !shape.typed {
+            return None;
+        }
+        let ty = match self.declared(expression) {
+            Ok(ty) => self.resolver.present(ty),
+            Err(_) => {
+                shape.undecided.push(missing());
+                return None;
+            }
+        };
+        match self.resolver.shape(ty) {
+            Type::Unresolved(_) | Type::Parameter(_) | Type::Unknown => {
+                shape.undecided.push(missing());
+                None
+            }
+            found => Some((ty, found)),
         }
     }
 
@@ -139,6 +203,16 @@ impl<'a> Checker<'_, 'a> {
         }
         for declarator in &declaration.declarations {
             if let Some(init) = &declarator.init {
+                // A default value or a rest element in a destructuring of a
+                // value that is not a constant expression (§4.2).
+                if shape.typed
+                    && super::has_default_or_rest(&declarator.id)
+                    && !self.is_constant_expression(init, 0)
+                {
+                    return expression(
+                        "a default value or a rest element in a `const` destructuring",
+                    );
+                }
                 self.pure(init, shape)?;
             }
         }
@@ -256,6 +330,23 @@ impl<'a> Checker<'_, 'a> {
                             if property.computed {
                                 if let Some(key) = property.key.as_expression() {
                                     self.pure(key, shape)?;
+                                    // A key is static when it is a
+                                    // well-known key or has a literal type.
+                                    let well_known = self.api_of(key).is_some();
+                                    let found = if well_known {
+                                        None
+                                    } else {
+                                        self.typed_shape(key, shape, || {
+                                            "a computed key with no type".to_string()
+                                        })
+                                    };
+                                    if let Some((_, found)) = found {
+                                        if !matches!(found, crate::types::Shape::Literal(_)) {
+                                            return self::expression(
+                                                "an object literal with a key that is not static",
+                                            );
+                                        }
+                                    }
                                 }
                             }
                             self.pure(&property.value, shape)?;
@@ -318,6 +409,15 @@ impl<'a> Checker<'_, 'a> {
                 other => {
                     let argument = other.to_expression();
                     if FunctionLike::of(argument).is_some() {
+                        return self::expression("a function passed as an argument");
+                    }
+                    // A function passed by name is a function argument too.
+                    if shape.typed
+                        && matches!(unwrap(argument), Expression::Identifier(_))
+                        && self.declared(argument).is_ok_and(|ty| {
+                            self.resolver.shape(ty) == crate::types::Shape::Function
+                        })
+                    {
                         return self::expression("a function passed as an argument");
                     }
                     self.pure(argument, shape)?;
@@ -384,6 +484,49 @@ impl<'a> Checker<'_, 'a> {
                     }
                 }
                 self.pure(&member.object, shape)?;
+                let receiver = self.typed_shape(&member.object, shape, || {
+                    format!("`.{name}(...)` on a receiver with no type")
+                });
+                if let Some((receiver, found)) = receiver {
+                    use crate::types::Shape as Type;
+                    match found {
+                        // On a cell the criterion lists six methods, and a
+                        // collection method on a cell is refused in a
+                        // function body (§4.7).
+                        Type::Handle(..) => {
+                            return match name {
+                                "get" | "key" | "elementById" | "resolveAsCell" | "equals"
+                                | "equalLinks" => self.pure_arguments(call, shape),
+                                _ => self::expression(format!("`.{name}(...)` on a cell")),
+                            };
+                        }
+                        Type::Object(..) => {
+                            let property = self
+                                .resolver
+                                .property(receiver, name)
+                                .map(|property| self.resolver.shape(property));
+                            match property {
+                                Some(Type::Function) => {
+                                    return self::expression(format!(
+                                        "a call of the function value `.{name}`"
+                                    ));
+                                }
+                                Some(Type::PatternFactory(..)) => {
+                                    return self::expression(format!(
+                                        "an instantiation of the pattern `.{name}`"
+                                    ));
+                                }
+                                Some(Type::HandlerFactory(..)) => {
+                                    return self::expression(format!(
+                                        "a binding of the handler `.{name}`"
+                                    ));
+                                }
+                                _ => {}
+                            }
+                        }
+                        _ => {}
+                    }
+                }
                 if api::is_selector_method(name) {
                     return self::expression(format!(
                         "`.{name}(...)`, an aggregate or a collection-index method"
@@ -434,6 +577,21 @@ impl<'a> Checker<'_, 'a> {
             return self::expression(
                 "a `reduce` callback that is not an expression with an initial value",
             );
+        }
+        if reduce {
+            let initial = call.arguments.get(1).and_then(Argument::as_expression);
+            let found = initial.and_then(|initial| {
+                self.typed_shape(initial, shape, || {
+                    "the initial value of a `reduce` has no type".to_string()
+                })
+            });
+            if let Some((accumulator, found)) = found {
+                if matches!(found, crate::types::Shape::Code(_))
+                    || self.resolver.contains_function(accumulator, 0)
+                {
+                    return self::expression("a `reduce` whose accumulator has a code type");
+                }
+            }
         }
         if !function.is_arrow() {
             return self::expression(format!("the callback of `{name}` is not an arrow function"));

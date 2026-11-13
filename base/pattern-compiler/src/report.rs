@@ -50,6 +50,12 @@ pub struct Report {
     pub bodies_by_site: BTreeMap<String, usize>,
     /// The outcomes of the promotion criterion over the `computed` calls.
     pub promotion: BTreeMap<String, usize>,
+    /// The outcomes of the promotion criterion applied by syntax and
+    /// applied with types, over the `computed` calls used as values.
+    pub promotion_criteria: BTreeMap<String, usize>,
+    /// The `computed` calls the two criteria decide differently: the place,
+    /// the two outcomes, and the start of the expression.
+    pub promotion_differences: Vec<String>,
     /// The number of calls of each removed or interim form.
     pub forms: BTreeMap<String, usize>,
     /// Other constructs counted for the comparison with §11.
@@ -80,6 +86,8 @@ impl Report {
         let mut bodies = BTreeMap::new();
         let mut bodies_by_site = BTreeMap::new();
         let mut promotion = BTreeMap::new();
+        let mut promotion_criteria = BTreeMap::new();
+        let mut promotion_differences = Vec::new();
         let mut constructs: BTreeMap<String, usize> = BTreeMap::new();
         let (mut errors, mut warnings, mut hints) = (0, 0, 0);
         for kind in BodyKind::ALL {
@@ -153,6 +161,39 @@ impl Report {
                         .entry("handler applied to its state in a computed".into())
                         .or_insert(0) += binds;
                 }
+                if let (Some(by_syntax), Some(by_type)) =
+                    (body.promoted_by_syntax, &body.promotion_by_type)
+                {
+                    let syntax = if by_syntax {
+                        "by syntax: promoted"
+                    } else {
+                        "by syntax: not promoted"
+                    };
+                    let typed = by_type.split(':').next().unwrap_or(by_type);
+                    *promotion_criteria.entry(syntax.to_string()).or_insert(0) += 1;
+                    *promotion_criteria
+                        .entry(format!("by type: {typed}"))
+                        .or_insert(0) += 1;
+                    let differs = match typed {
+                        "promoted" => !by_syntax,
+                        "not promoted" => by_syntax,
+                        _ => false,
+                    };
+                    if differs {
+                        promotion_differences.push(format!(
+                            "{}:{}: by syntax {}; by type {}; `{}`",
+                            module.path,
+                            body.line,
+                            if by_syntax {
+                                "promoted"
+                            } else {
+                                "not promoted"
+                            },
+                            by_type,
+                            body.excerpt.as_deref().unwrap_or_default()
+                        ));
+                    }
+                }
                 let key = match &body.promotion {
                     None => continue,
                     Some(Promotion::Statement) => "in statement position",
@@ -217,6 +258,8 @@ impl Report {
             bodies,
             bodies_by_site,
             promotion,
+            promotion_criteria,
+            promotion_differences,
             forms,
             constructs,
             comparisons: Vec::new(),
@@ -488,6 +531,10 @@ impl Report {
             ("bodies by kind", &self.bodies),
             ("bodies by kind and site", &self.bodies_by_site),
             ("promotion of `computed`", &self.promotion),
+            (
+                "promotion of `computed` by the two criteria",
+                &self.promotion_criteria,
+            ),
             ("removed and interim forms", &self.forms),
             ("other constructs", &self.constructs),
         ] {
@@ -496,6 +543,14 @@ impl Report {
             for (key, count) in table {
                 line(format!("  {count:6}  {key}"));
             }
+        }
+        line(String::new());
+        line(format!(
+            "`computed` calls the two criteria decide differently: {} (the first 20)",
+            self.promotion_differences.len()
+        ));
+        for difference in self.promotion_differences.iter().take(20) {
+            line(format!("  {difference}"));
         }
         line(String::new());
         line(

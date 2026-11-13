@@ -172,8 +172,19 @@ pub struct Body {
     pub block: bool,
     /// For a per-element callback: whether the body uses its index parameter.
     pub uses_index: bool,
-    /// For a `computed`: the outcome of the promotion criterion.
+    /// For a `computed`: the outcome of the promotion criterion. It is the
+    /// outcome of the typed criterion where that criterion decides, and of
+    /// the syntactic one where a type it needs is not evaluated.
     pub promotion: Option<Promotion>,
+    /// For a `computed` used as a value: whether the criterion applied by
+    /// syntax and by method names promotes it.
+    pub promoted_by_syntax: Option<bool>,
+    /// For a `computed` used as a value: the outcome of the criterion
+    /// applied with types, as `promoted`, `not promoted: <reason>`, or
+    /// `not decided: <what has no type>`.
+    pub promotion_by_type: Option<String>,
+    /// For a `computed` used as a value: the start of its source text.
+    pub excerpt: Option<String>,
     pub captures: Vec<Capture>,
     pub calls: Vec<CallSite>,
 }

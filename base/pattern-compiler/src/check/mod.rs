@@ -390,6 +390,9 @@ impl<'p, 'a> Checker<'p, 'a> {
             block,
             uses_index: false,
             promotion: None,
+            promoted_by_syntax: None,
+            promotion_by_type: None,
+            excerpt: None,
             captures: Vec::new(),
             calls: Vec::new(),
         });
@@ -1269,10 +1272,11 @@ impl<'p, 'a> Checker<'p, 'a> {
                 self.function_body(function, Some(body), Root::Computation);
             }
             Builder::Computed => {
-                let promotion = if statement {
-                    Promotion::Statement
+                let (promotion, by_syntax, by_type) = if statement {
+                    (Promotion::Statement, None, None)
                 } else {
-                    self.promotion(function)
+                    let (promotion, by_syntax, by_type) = self.promotion(function);
+                    (promotion, Some(by_syntax), Some(by_type))
                 };
                 match &promotion {
                     Promotion::Statement => {}
@@ -1293,6 +1297,20 @@ impl<'p, 'a> Checker<'p, 'a> {
                 };
                 let body = self.enter_body(BodyKind::Computed, tier, name, None, call.span, block);
                 self.out.bodies[body].promotion = Some(promotion);
+                self.out.bodies[body].promoted_by_syntax = by_syntax;
+                self.out.bodies[body].promotion_by_type = by_type;
+                if by_syntax.is_some() {
+                    let text: String = call
+                        .span
+                        .source_text(self.parsed.source)
+                        .split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                        .chars()
+                        .take(90)
+                        .collect();
+                    self.out.bodies[body].excerpt = Some(text);
+                }
                 self.function_body(function, Some(body), Root::Computation);
             }
         }
@@ -1648,7 +1666,7 @@ impl<'p, 'a> Checker<'p, 'a> {
     /// Whether an expression is a constant expression in the sense of §4.2:
     /// a literal, a module-scope constant, an object or array literal of
     /// constant expressions, or a `const` initialized by one.
-    fn is_constant_expression(&self, expression: &Expression<'a>, depth: u32) -> bool {
+    pub(super) fn is_constant_expression(&self, expression: &Expression<'a>, depth: u32) -> bool {
         if depth > 4 {
             return false;
         }
@@ -2844,7 +2862,7 @@ fn is_value_shape(shape: &Shape) -> bool {
 
 /// Whether a binding pattern has a default value or a rest element at any
 /// depth.
-fn has_default_or_rest(pattern: &BindingPattern<'_>) -> bool {
+pub(super) fn has_default_or_rest(pattern: &BindingPattern<'_>) -> bool {
     match pattern {
         BindingPattern::BindingIdentifier(_) => false,
         BindingPattern::AssignmentPattern(_) => true,
