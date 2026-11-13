@@ -589,3 +589,65 @@ fn assignment_of_a_container_without_type_arguments_narrows_to_the_declared_cont
         ["Map"]
     );
 }
+
+// ----- §7.6: `"k" in x` on `object` and on an object type without `k` -----
+
+#[test]
+fn in_adds_the_property_to_object_and_a_kind_test_narrows_it() {
+    assert_eq!(
+        types(
+            "function idOf(parsed: unknown): string | undefined {\n\
+               if (typeof parsed !== \"object\" || parsed === null) return undefined;\n\
+               const before = /*?*/parsed;\n\
+               if (!(\"id\" in parsed)) return undefined;\n\
+               const after = /*?*/parsed;\n\
+               const read = /*?*/(parsed.id);\n\
+               return typeof parsed.id === \"string\" ? /*?*/(parsed.id) : undefined;\n\
+             }\n"
+        ),
+        ["object", "{ id: unknown }", "unknown", "string"]
+    );
+}
+
+#[test]
+fn several_in_tests_add_several_properties() {
+    assert_eq!(
+        types(
+            "function f(x: object, y: { a: string }) {\n\
+               if (\"id\" in x && \"name\" in x) { /*?*/x; }\n\
+               if (\"b\" in y) { /*?*/y; } else { /*?*/y; }\n\
+             }\n"
+        ),
+        [
+            "{ id: unknown; name: unknown }",
+            "{ a: string; b: unknown }",
+            "{ a: string }"
+        ]
+    );
+}
+
+#[test]
+fn typeof_object_narrows_an_ordinary_unknown_to_object_or_null() {
+    assert_eq!(
+        types(
+            "function f(x: unknown) {\n\
+               if (typeof x === \"object\") { /*?*/x; }\n\
+             }\n"
+        ),
+        ["object | null"]
+    );
+}
+
+#[test]
+fn in_narrows_nothing_on_a_data_position() {
+    assert_eq!(
+        types(
+            "const h = handler<unknown, { detail: unknown; box: object }>((event, state) => {\n\
+               if (\"id\" in state.box) { /*?*/(state.box); }\n\
+               const detail = state.detail;\n\
+               if (typeof detail === \"object\" && detail !== null && \"id\" in detail) { /*?*/detail; }\n\
+             });\n"
+        ),
+        ["object", "unknown"]
+    );
+}

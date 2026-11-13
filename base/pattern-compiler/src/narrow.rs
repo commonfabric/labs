@@ -304,6 +304,9 @@ impl<'a> Resolver<'_, 'a> {
                 | Shape::String
                 | Shape::Number
                 | Shape::BigInt
+                // `"k" in x` adds a property to these two (§7.6).
+                | Shape::NonPrimitive
+                | Shape::Object(..)
         ) {
             return ty;
         }
@@ -712,6 +715,61 @@ impl<'a> Resolver<'_, 'a> {
                         return ty;
                     }
                     let key = key.value.as_str();
+                    // Where the type is `object`, or one object type that
+                    // does not declare the key, the true branch adds the
+                    // property, typed `unknown` (§7.6). On a data position
+                    // `in` sees the reference, and adds nothing (§7.8).
+                    let added = |properties: Vec<crate::types::Property>, index| {
+                        let mut properties = properties;
+                        properties.push(crate::types::Property {
+                            name: key.to_string(),
+                            ty: self.intern(Shape::Unknown),
+                            optional: false,
+                            readonly: false,
+                        });
+                        self.intern(Shape::Object(properties, index))
+                    };
+                    let add = |member: TypeId| match self.shape(member) {
+                        Shape::NonPrimitive => Some(added(Vec::new(), None)),
+                        Shape::Object(properties, None)
+                            if !properties.iter().any(|property| property.name == key) =>
+                        {
+                            Some(added(properties, None))
+                        }
+                        _ => None,
+                    };
+                    match self.shape(ty) {
+                        Shape::NonPrimitive | Shape::Object(..) => {
+                            return match add(ty) {
+                                Some(with) if sense && !reference.data => with,
+                                _ => ty,
+                            };
+                        }
+                        // `object | null`: the true branch has no `null`.
+                        Shape::Union(members)
+                            if sense
+                                && !reference.data
+                                && members
+                                    .iter()
+                                    .any(|member| self.shape(*member) == Shape::NonPrimitive) =>
+                        {
+                            let kept = members
+                                .into_iter()
+                                .filter_map(|member| match self.shape(member) {
+                                    Shape::NonPrimitive => add(member),
+                                    Shape::Object(properties, index) => (index.is_some()
+                                        || properties.iter().any(|property| property.name == key))
+                                    .then_some(member),
+                                    Shape::Unknown | Shape::Unresolved(_) | Shape::Parameter(_) => {
+                                        Some(member)
+                                    }
+                                    _ => None,
+                                })
+                                .collect();
+                            return self.union_of(kept);
+                        }
+                        _ => {}
+                    }
                     self.filter(ty, |_, shape| match shape {
                         Shape::Object(properties, index) => {
                             let declared = properties.iter().find(|property| property.name == key);
