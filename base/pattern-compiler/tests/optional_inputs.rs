@@ -146,3 +146,18 @@ fn property_with_a_default_and_no_question_mark_is_required_of_the_caller() {
     assert_eq!(found.len(), 1, "{found:?}");
     assert!(found[0].contains("glaze"), "{found:?}");
 }
+
+#[test]
+fn key_flattens_a_handle_held_by_an_optional_property() {
+    // §4.7: a `?` on the property does not change what `key` yields where
+    // the property is declared as a handle.
+    assert_eq!(
+        types(
+            "function f(box: Cell<{ inner?: Cell<string>; plain?: string }>) {\n\
+               const a = /*?*/(box.key(\"inner\"));\n\
+               const b = /*?*/(box.key(\"plain\"));\n\
+             }\n"
+        ),
+        ["Cell<string>", "Cell<string | undefined>"]
+    );
+}

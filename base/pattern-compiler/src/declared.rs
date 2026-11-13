@@ -374,8 +374,18 @@ impl<'a> Resolver<'_, 'a> {
                             .property(value, key.value.as_str())
                             .unwrap_or_else(|| self.add_unresolved()),
                     };
-                    current = match self.shape(property) {
-                        Shape::Handle(..) => property,
+                    // A `?` on a property declared as a handle does not
+                    // change the result (§4.7): the property's declared
+                    // type is the handle `key` yields.
+                    let declared = match self.shape(value) {
+                        Shape::Unknown => property,
+                        _ => self.with_optional_reads_declared(|| {
+                            self.property(value, key.value.as_str()).unwrap_or(property)
+                        }),
+                    };
+                    current = match (self.shape(declared), self.shape(property)) {
+                        (Shape::Handle(..), _) => declared,
+                        (_, Shape::Handle(..)) => property,
                         _ => self.intern(Shape::Handle(kind, property)),
                     };
                 }
