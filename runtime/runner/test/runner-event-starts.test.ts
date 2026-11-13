@@ -200,6 +200,20 @@ describe("runner-event-starts", () => {
       expect(namedSince(mark)).toEqual([]);
     });
 
+    it("names no piece another start joined while the event's start was in flight", async () => {
+      await createPiece("joined");
+      const mark = runtime.runner.eventStartMark;
+      // The event's start has its piece's document still to load, so the
+      // second start joins it rather than finding the piece running.
+      const forEvent = runtime.start(pieceNamed("joined"), { forEvent: true });
+      const opened = runtime.start(pieceNamed("joined"));
+
+      expect(await Promise.all([forEvent, opened])).toEqual([true, true]);
+
+      expect(namedSince(mark)).toEqual([]);
+      expect(runtime.runner.isRunning(pieceNamed("joined"))).toBe(true);
+    });
+
     it("names no piece an enclosing pattern has taken as a child since", async () => {
       await createPiece("child");
       const mark = runtime.runner.eventStartMark;

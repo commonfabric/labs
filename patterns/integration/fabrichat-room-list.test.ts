@@ -864,6 +864,18 @@ describe("fabrichat-room-list", () => {
       expect(roomNodesOn(client)).toBe(0);
     });
 
+    it("leaves no intent outstanding and no speculative entry in a room's space", async () => {
+      // Only a client under server execution echoes the joins.
+      if (!serving) return;
+      const overlay = client.controller.runtime.speculationOverlay;
+      expect(overlay).toBeDefined();
+      await overlay!.waitForIntentQuiescence();
+      expect(overlay!.pendingIntentCount).toBe(0);
+      expect(rooms.map((space) => overlay!.entryCount(space))).toEqual(
+        rooms.map(() => 0),
+      );
+    });
+
     it("leaves the pieces that ran before it running, and no other", () => {
       expect(runningOn(client)).toEqual(runningBefore);
     });
