@@ -30,7 +30,9 @@ A replica keeps a document while any of these holds:
   takes the document's hold token (`IStorageManager.holdDocument()`) when it
   loads, or, for a cell made from a loaded one, when it is first read; the
   storage manager keeps the token only weakly, so the hold ends when every cell
-  holding it has been garbage collected. Code that keeps a cell and reads or
+  holding it has been garbage collected, and that collection completes a
+  release a pass was asked for earlier (see "When documents are released").
+  Code that keeps a cell and reads or
   writes its document through it later therefore finds the document still
   loaded. The hold covers that document alone: a document the cell's value
   links to is kept only on its own account, and a read through the link that
@@ -69,10 +71,11 @@ at that moment (`#releaseServedHandlerResult` in
 `runtime/runner/src/runner.ts`; "A piece a handler starts" in
 [`../specs/server-side-execution/serving-loop.md`](../specs/server-side-execution/serving-loop.md)),
 when a host's client cancels a cell subscription
-(`RuntimeProcessor.handleCellUnsubscribe()` in `runtime/runtime-client`), and
-when a host's client departs (`RuntimeProcessor.disposeClient()`). A host may
-also call `Runtime.releaseUnreadDocuments()` itself. The pass waits until the
-scheduler is idle. Passes run one after another, never two at once. Requests
+(`RuntimeProcessor.handleCellUnsubscribe()` in `runtime/runtime-client`),
+and when a host's client departs (`RuntimeProcessor.disposeClient()`). A host
+may also call `Runtime.releaseUnreadDocuments()` itself. A pass any of these
+asks for is followed by another once the cells holding what it kept have been
+garbage collected, as below. The pass waits until the scheduler is idle. Passes run one after another, never two at once. Requests
 made before a pass begins share it, and a request made while a pass is under
 way is answered by the next one, which waits for that one to finish. So at most
 one pass waits at a time, and the requests that arrive while one is under way,
@@ -80,11 +83,33 @@ as a closing pane's cancellations of each of its subscriptions do, cost one
 more pass between them.
 
 A cell holds its document until it is collected, and a pass keeps every watch
-rooted at a document it keeps. So the document a cancelled subscription's own
-cell loaded stays, with what its watch reaches, until a pass that runs after
-that cell is collected, and nothing asks for that pass on the cell's account.
-What the subscription read only through its links, in documents watched on
-their own, is what the pass its cancellation asks for can release.
+rooted at a document it keeps. The pass a cancellation or a stop asks for runs
+once the scheduler is next idle, which is seldom long enough for a collection
+to have taken the cells the subscription or the piece held. So the documents
+those cells loaded usually stay, with what their watches reach, through that
+pass and the second one the window below can add. What the subscription or the
+piece read only through its links, in documents watched on their own, is what
+those passes can release.
+
+The rest goes once the cells holding it have been collected. The storage
+manager registers each hold token it hands out with a `FinalizationRegistry`,
+and the first pass of a request something other than a collection made marks
+each token live as it begins (`ReleaseOptions.followUpOnCollection`); the
+second pass the window below can add marks nothing, and closing the storage
+manager unmarks every token. When a marked token
+that is still its document's current one is collected while its space is
+open, the storage manager tells the runtime
+(`IStorageManager.subscribeHoldsCollected()`), which asks for a pass. That
+pass marks nothing, so a collection completes a release something already
+asked for and never begins one: a runtime that stops nothing and loses no
+client sees no pass on any collection's account, and the passes collections
+ask for end once the tokens marked have been collected. The pass decides as
+any other does, so a document held again under a new token since, read by a
+scheduler action, or held some other way, stays; a marked token whose
+document an action reads costs a pass that releases nothing. A collection
+that takes many marked tokens reports each one, and the requests share one
+pass, as requests made before a pass begins always do; a pass shared by such
+a request and any other marks as the other would.
 
 A pass keeps the watches rooted at a document loaded or read since the
 previous pass began, and removes only those rooted at one neither loaded nor
