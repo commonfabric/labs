@@ -153,6 +153,10 @@ is relitigated.
 - Nothing in this design bounds an effect whose completion changes its
   own request, or a cycle across two spaces. They fall under rate limits
   in general, which this design does not specify. To be revisited.
+- The scheduler is switched per space. A space runs the builder path
+  with Scheduler v2 or the compiled path with this design's scheduler,
+  never both. The two exist side by side only for validation, and the
+  builder path is retired soon after.
 - A client cannot read the element-key salt. It cannot name value-keyed
   per-element state, or a binding with copied captures, before the server
   stores a link.
@@ -331,15 +335,12 @@ answer goes to the specification with the document.
 
 **Migration.**
 
-24. **Compiled and builder-path instances in one space** (finding 20,
-    SS §10.8). ES migrates instances one at a time. *Assumed:* one serving
-    runtime hosts Scheduler v2 and this scheduler side by side until the
-    builder form is retired.
 25. **Settled effect results** (ES question 2). *Assumed:* copied forward,
     so that a migrated instance does not request again.
 26. **Retired documents and refused sources** (ES questions 3 and 4).
-    *Assumed:* deletion after thirty days without a read, and an instance
-    whose source the compiler refuses stays on the builder path.
+    *Assumed:* deletion after thirty days without a read, and a space
+    that holds an instance whose source the compiler refuses is not
+    switched.
 27. **State inside a compiled-in sub-pattern** (ES §5.7, §9.3). Matching it
     to a call site needs the builder form, so an instance migrated after
     stage 6 loses that state.
