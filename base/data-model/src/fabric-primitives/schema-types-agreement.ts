@@ -2,8 +2,7 @@
  * Compile-time agreement between the set of concrete primitive classes in
  * `impl.ts` and what `api.ts` declares of them. Against
  * `FabricPrimitiveSchemaType`: a class for every name in the vocabulary, a
- * name in the vocabulary for every class not reporting `object`, and no name
- * reported by two classes.
+ * name in the vocabulary for every class, and no name reported by two classes.
  * Against the declarations by name: each class keyed by the name `api.ts`
  * declares it under, and the runtime vocabulary and its predicate typed as
  * declared. No module imports this one: it exists to be type-checked, which
@@ -17,6 +16,9 @@
  * function of the name. It tells two classes apart by assignability, so two
  * that are mutually assignable read as one. A class holding a `#private`
  * member is assignable to no other, which covers every class with state.
+ *
+ * TODO(danfuzz): Once `FabricRegExp` is deleted, drop this caveat: it reports
+ * `object`, which `SchemaTypesAgree` leaves out of "every class".
  */
 
 import type { IsUnion, MustBeTrue, Same } from "@commonfabric/js-values/types";
