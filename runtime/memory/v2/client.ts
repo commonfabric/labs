@@ -1765,10 +1765,21 @@ export class Client {
             return STALE;
           }
           const epoch = this.#connectionEpoch;
-          const signed = await sign?.(space, session, {
-            ...this.sessionOpenAuthContext(),
-            ...(proofs === undefined ? {} : { proofs }),
-          });
+          // A mount its caller has cancelled gives up its turn here. One
+          // cancelled while it waited asks for no signature and sends
+          // nothing. One cancelled while its signer holds the turn stops
+          // waiting for the signer, which if it never returned would keep
+          // every later signed open waiting; whatever it returns after that
+          // is used for nothing.
+          const signed = await runWithAbortSignal(
+            options.signal,
+            "memory session mount cancelled",
+            () =>
+              sign?.(space, session, {
+                ...this.sessionOpenAuthContext(),
+                ...(proofs === undefined ? {} : { proofs }),
+              }),
+          );
           if (this.#staleSince(epoch)) {
             if (whileConnected) throw connectionLostWhileRestoring();
             return STALE;
