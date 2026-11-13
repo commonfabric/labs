@@ -849,12 +849,14 @@ function fetchBuiltin(kind: FetchKind) {
                 trackWork(
                   settleAbandonedRequest(
                     runtime,
-                    kind.name,
-                    effectKey,
+                    {
+                      builtinId: kind.name,
+                      effectKey,
+                      identity,
+                      scope: outputScope,
+                      attributeToBuiltin: true,
+                    },
                     (settleTx) => {
-                      if (identity !== undefined) {
-                        settleTx.tx.scopeKeyIdentity = identity;
-                      }
                       const ownsBinding = identity === undefined ||
                         (instances.get(instanceKey) === instance &&
                           stagings.get(bindingKey) === staging);
