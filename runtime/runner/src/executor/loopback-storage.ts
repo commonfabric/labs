@@ -205,11 +205,15 @@ class LoopbackSessionFactory implements SessionFactory {
     space: MemorySpace,
     signer: Signer,
     mountOptions: MemoryClient.MountOptions = {},
+    signal?: AbortSignal,
   ) {
     // A routed session dials the owner over the network, with the handshake
-    // attempts the routed plane gives its own sessions.
+    // attempts the routed plane gives its own sessions. `signal` aborts once
+    // the provider has no more use for the session, which ends the dial, and
+    // ends a mount that is waiting for an owner that cannot be reached.
     const client = await MemoryClient.connect({
       transport: this.#transport(space, signer),
+      signal,
       client: this.#clientInfo,
       instanceNames: this.#instanceNames,
       syncCidReferences: this.#syncCidReferences,
@@ -232,6 +236,7 @@ class LoopbackSessionFactory implements SessionFactory {
             descriptor,
             context,
           ),
+        signal,
       );
       return { client, session };
     } catch (error) {
