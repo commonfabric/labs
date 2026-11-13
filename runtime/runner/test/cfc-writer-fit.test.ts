@@ -29,6 +29,7 @@ import type { JSONSchema, Pattern } from "../src/builder/types.ts";
 import { trustExecutable } from "./support/trusted-builder.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
 import { stampWaveRunContext } from "../src/executor/wave.ts";
+import { crossHolderClausesOf } from "../src/cfc/prepare.ts";
 import {
   setCfcImplementationIdentity,
   setCfcTrustSnapshot,
@@ -1853,6 +1854,27 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         });
       });
 
+      it("refuses a copy of a clause read both from another space and from a store of the target's own space into a store that declares it", async () => {
+        // The clause is cross-holder because one of its reads is, whatever the
+        // other read says.
+
+        await withRuntime(true, async (runtime) => {
+          const { reasons, targetId } = await preparedCopy(runtime, {
+            sources: [
+              ownersOffers("wf-served-x-both-foreign"),
+              {
+                name: "wf-served-x-both-own",
+                confidentiality: [userPrincipal(OWNER)],
+              },
+            ],
+            targetName: "wf-served-x-both",
+            targetSchema: declaring(userPrincipal(OWNER)),
+            served: true,
+          });
+          expectCrossHolderMisfit(reasons, targetId);
+        });
+      });
+
       it("refuses a served derivation's value copy of a member's personal data from their user document into a computed document of the same space", async () => {
         // The shape of a room's lifts over its members' per-user state, done
         // by value rather than by reference.
@@ -1933,6 +1955,32 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
           expect(reasons[0]).toContain(`for ${targetId} at /`);
           expect(reasons[0]).toContain('"secret"');
         });
+      });
+    });
+
+    describe("crossHolderClausesOf()", () => {
+      const target = { space: signer.did(), scope: "space" as const };
+      const read = (space: `did:${string}:${string}`) => ({
+        space,
+        id: "of:wf-classified",
+        scope: "space" as const,
+        path: [],
+      });
+
+      it("returns a clause no source names", () => {
+        expect(crossHolderClausesOf(["secret"], [], [], false)(target))
+          .toEqual(["secret"]);
+      });
+
+      it("returns no clause only a store of the target's own space carried", () => {
+        expect(
+          crossHolderClausesOf(
+            ["secret"],
+            [{ atom: "secret", read: read(signer.did()), labelPath: [] }],
+            [],
+            false,
+          )(target),
+        ).toEqual([]);
       });
     });
 

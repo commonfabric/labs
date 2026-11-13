@@ -3980,7 +3980,7 @@ const sharesHolders = (
  * names counts as cross-holder. The sources are indexed once, for every
  * target of the transaction.
  */
-const crossHolderClausesOf = (
+export const crossHolderClausesOf = (
   confidentiality: readonly CfcConfClause[],
   sources: readonly ConsumedAtomSource[],
   withoutStore: readonly CfcConfClause[],
