@@ -1266,6 +1266,29 @@ export default pattern(() => {
       });
     });
 
+    it("confirms only the pattern, revision and origin the piece holds", async () => {
+      const created = await instantiate({ program: BASE_PROGRAM });
+      const receipt = await setSource(
+        created.pieceId,
+        { program: programOf(RELEASED_SOURCE) },
+        { origin: "system:followed.tsx" },
+      );
+      const { runtime } = await clientPieces();
+      await confirmServedSetSource(runtime, space, receipt);
+
+      for (
+        const altered of [
+          { ...receipt, pattern: { ...receipt.pattern, symbol: "other" } },
+          { ...receipt, pattern: created.pattern },
+          { ...receipt, revisionId: "no-such-revision" },
+          { ...receipt, origin: "system:numeric.tsx" },
+        ]
+      ) {
+        await expect(confirmServedSetSource(runtime, space, altered))
+          .rejects.toThrow("the source update did not commit");
+      }
+    });
+
     it("refuses an origin no piece can follow, and leaves the piece as it was", async () => {
       const created = await instantiate({ program: BASE_PROGRAM });
       const refusal = await refusalOf(
@@ -1527,6 +1550,25 @@ export default pattern(() => {
         pattern: receipt.pattern,
         origin: "system:numeric.tsx",
       });
+    });
+
+    it("confirms only the follow the piece holds", async () => {
+      const created = await instantiate({ program: BASE_PROGRAM });
+      const receipt = await follow(created.pieceId, "system:followed.tsx");
+      const { runtime } = await clientPieces();
+      await confirmServedFollow(runtime, space, receipt);
+
+      for (
+        const altered of [
+          { ...receipt, pattern: created.pattern },
+          { ...receipt, pattern: { ...receipt.pattern, symbol: "other" } },
+          { ...receipt, origin: "system:numeric.tsx" },
+          { ...receipt, revisionId: "no-such-revision" },
+        ]
+      ) {
+        await expect(confirmServedFollow(runtime, space, altered))
+          .rejects.toThrow("the follow did not commit");
+      }
     });
 
     it("refuses a follow pinned to a pattern or a revision the piece is off", async () => {

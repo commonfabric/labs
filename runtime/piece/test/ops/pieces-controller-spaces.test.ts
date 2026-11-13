@@ -299,6 +299,17 @@ describe("pieces-controller", () => {
           ]);
         });
 
+        it("throws for a Home with no space list, creating no space", async () => {
+          restoreFetch();
+          restoreFetch = installFetchStub(HOME_WITHOUT_INBOX_SOURCE);
+          const home = await open(signer.did());
+
+          await expect(home.createSpace("Garden")).rejects.toThrow(
+            "This Home pattern has no space list to record a space in",
+          );
+          expect(await siteTable()).toEqual([]);
+        });
+
         it("throws on a controller over a space other than the identity's Home", async () => {
           const pieces = await open(await runtime.createSpace());
 
@@ -314,12 +325,14 @@ describe("pieces-controller", () => {
         // its name, as a typed name is added, and a row keyed by its DID, as a
         // created space is added.
 
-        async function seedSpaces(home: PiecesController): Promise<void> {
-          const root = (await home.ensureDefaultPattern()).getCell();
-          const rows: [string, SpaceEntry][] = [
+        async function seedSpaces(
+          home: PiecesController,
+          rows: [string, SpaceEntry][] = [
             ["Work", { name: "Work" }],
             [current, { name: "Current", did: current }],
-          ];
+          ],
+        ): Promise<void> {
+          const root = (await home.ensureDefaultPattern()).getCell();
           await runtime.editWithRetry((tx) => {
             const spaces = root.withTx(tx).key("spaces");
             for (const [key, row] of rows) {
@@ -360,6 +373,52 @@ describe("pieces-controller", () => {
               source: "adopted",
             },
           ]);
+        });
+
+        it("leaves a legacy row with an empty name as it is", async () => {
+          const home = await open(signer.did());
+          await seedSpaces(home, [
+            ["Work", { name: "Work" }],
+            ["Unnamed", { name: "" }],
+          ]);
+
+          await home.adoptLegacySpaces();
+
+          const spaces = await homeSpaces(home);
+          expect(spaces).toHaveLength(2);
+          expect(spaces).toContainEqual({ name: "" });
+          expect(await siteTable()).toEqual([{
+            did: await legacySpaceDid("Work"),
+            host: apiUrl.origin,
+            source: "adopted",
+          }]);
+        });
+
+        it("adds no second site table row for a space the table already records", async () => {
+          const home = await open(signer.did());
+          await seedSpaces(home, [["Work", { name: "Work" }]]);
+          await home.adoptLegacySpaces();
+          await seedSpaces(home, [["Work", { name: "Work" }]]);
+
+          await home.adoptLegacySpaces();
+
+          expect(await homeSpaces(home)).toEqual([{
+            name: "Work",
+            did: await legacySpaceDid("Work"),
+          }]);
+          expect(await siteTable()).toHaveLength(1);
+        });
+
+        it("leaves the rows of a Home that cannot adopt as they are", async () => {
+          restoreFetch();
+          restoreFetch = installFetchStub(HOME_WITHOUT_INBOX_SOURCE);
+          const home = await open(signer.did());
+          await seedSpaces(home, [["Work", { name: "Work" }]]);
+
+          await home.adoptLegacySpaces();
+
+          expect(await homeSpaces(home)).toEqual([{ name: "Work" }]);
+          expect(await siteTable()).toEqual([]);
         });
 
         it("creates no space for an adopted name", async () => {

@@ -1,5 +1,10 @@
+// `assertThrows` returns the error it caught, typed as the class it checked,
+// for the lines that read its members.
+import { assertThrows } from "@std/assert";
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
+import { captureLogsForTestingOnly } from "@commonfabric/logger/for-testing-only";
 
 import {
   fabricFromRealmValue,
@@ -71,6 +76,188 @@ describe("cell-handle", () => {
       },
     );
   }
+
+  describe("CellHandle schema warning", () => {
+    const runtime = {
+      [$conn]: () => ({ peersOf: () => [] }),
+    } as unknown as RuntimeClient;
+    const ref: CellRef = {
+      id: "of:schemaless" as CellRef["id"],
+      space: "did:key:test" as CellRef["space"],
+      scope: "space",
+      path: ["a", "b"],
+    };
+
+    it("warns once per handle, naming the method and the cell, when a handle without a schema is read", () => {
+      using logs = captureLogsForTestingOnly("cell-handle");
+      const cell = new CellHandle(runtime, ref);
+
+      cell.get();
+      cell.get();
+
+      const warnings = logs.textsOf("no-schema-get");
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain("of:schemaless:a.b");
+    });
+
+    it("does not warn for a handle with a schema", () => {
+      using logs = captureLogsForTestingOnly("cell-handle");
+
+      new CellHandle(runtime, { ...ref, schema: { type: "number" } }).get();
+
+      expect(logs.logs).toEqual([]);
+    });
+  });
+
+  describe("CellHandle resolveAsCellWithWriteTarget()", () => {
+    const ref: CellRef = {
+      id: "of:with-write-target" as CellRef["id"],
+      space: "did:key:test" as CellRef["space"],
+      scope: "space",
+      path: ["field"],
+    };
+    const linked: CellRef = { ...ref, id: "of:linked" as CellRef["id"] };
+    const written: CellRef = { ...ref, id: "of:written" as CellRef["id"] };
+
+    /** A runtime whose worker responds to every request with `answer`. */
+    function answering(answer: unknown) {
+      const requests: unknown[] = [];
+      const runtime = {
+        [$conn]: () => ({
+          request: (request: unknown) => {
+            requests.push(request);
+            return Promise.resolve(answer);
+          },
+          peersOf: () => [],
+        }),
+      } as unknown as RuntimeClient;
+      return { runtime, requests };
+    }
+
+    it("returns handles on the cell the links lead to and on where a write lands", async () => {
+      const { runtime, requests } = answering({
+        cell: linked,
+        writeTarget: written,
+      });
+      const resolved = await new CellHandle(runtime, ref)
+        .resolveAsCellWithWriteTarget();
+      expect(resolved.cell.ref()).toEqual(linked);
+      expect(resolved.writeTarget.ref()).toEqual(written);
+      expect(requests).toEqual([{
+        type: RequestType.CellResolveAsCell,
+        cell: ref,
+        withWriteTarget: true,
+      }]);
+    });
+
+    it("rejects an answer that leaves the write target out", async () => {
+      const { runtime } = answering({ cell: linked });
+      await expect(
+        new CellHandle(runtime, ref).resolveAsCellWithWriteTarget(),
+      ).rejects.toThrow("The worker answered without the cell's write target.");
+    });
+  });
+
+  describe("CellHandle subscribers that throw", () => {
+    const ref: CellRef = {
+      id: "of:throwing-subscriber" as CellRef["id"],
+      space: "did:key:test" as CellRef["space"],
+      scope: "space",
+      path: [],
+      schema: { type: "string" },
+    };
+    const runtime = {
+      [$conn]: () => ({
+        subscribe: () => Promise.resolve(),
+        peersOf: () => [],
+      }),
+    } as unknown as RuntimeClient;
+    const refusal = { refusedBy: "display-ceiling" } as const;
+
+    it("logs a value callback that throws, and still delivers to the others", () => {
+      const cell = new CellHandle<string>(runtime, ref);
+      const heard: (string | undefined)[] = [];
+      using errors = stub(console, "error");
+      cell.subscribe(() => {
+        throw new Error("callback broke");
+      }, { onRefused: () => {} });
+      cell.subscribe((value) => {
+        heard.push(value);
+      }, { onRefused: () => {} });
+      cell[$onCellUpdate]("next");
+      expect(heard).toEqual([undefined, "next"]);
+      expect(errors.calls.map((call) => call.args)).toEqual([
+        ["[CellHandle] Callback error:", new Error("callback broke")],
+        ["[CellHandle] Callback error:", new Error("callback broke")],
+      ]);
+    });
+
+    it("logs a cleanup that throws, and runs the callback again", () => {
+      const cell = new CellHandle<string>(runtime, ref);
+      const heard: (string | undefined)[] = [];
+      using errors = stub(console, "error");
+      cell.subscribe((value) => {
+        heard.push(value);
+        return () => {
+          throw new Error("cleanup broke");
+        };
+      }, { onRefused: () => {} });
+      cell[$onCellUpdate]("next");
+      expect(heard).toEqual([undefined, "next"]);
+      expect(errors.calls.map((call) => call.args)).toEqual([
+        ["[CellHandle] Cleanup error:", new Error("cleanup broke")],
+      ]);
+    });
+
+    it("logs a refusal callback that throws, and still tells the others", () => {
+      const cell = new CellHandle<string>(runtime, ref);
+      const refused: unknown[] = [];
+      using errors = stub(console, "error");
+      cell.subscribe(() => {}, {
+        onRefused: () => {
+          throw new Error("refusal callback broke");
+        },
+      });
+      cell.subscribe(() => {}, { onRefused: (r) => refused.push(r) });
+      cell[$onCellRefused](refusal);
+      expect(refused).toEqual([refusal]);
+      expect(errors.calls.map((call) => call.args)).toEqual([
+        ["[CellHandle] Callback error:", new Error("refusal callback broke")],
+      ]);
+    });
+
+    it("hands the refusal to a read, on the error it throws", () => {
+      const cell = new CellHandle<string>(runtime, ref);
+      cell[$onCellRefused](refusal);
+      const thrown = assertThrows(() => cell.get(), CellReadRefusedError);
+      expect(thrown.refusal).toEqual(refusal);
+    });
+  });
+
+  describe("CellHandle equals()", () => {
+    const runtime = {
+      [$conn]: () => ({ peersOf: () => [] }),
+    } as unknown as RuntimeClient;
+    const ref: CellRef = {
+      id: "of:equals" as CellRef["id"],
+      space: "did:key:test" as CellRef["space"],
+      scope: "space",
+      path: ["a"],
+    };
+
+    it("returns true for a handle on the same cell", () => {
+      expect(new CellHandle(runtime, ref).equals(new CellHandle(runtime, ref)))
+        .toBe(true);
+    });
+
+    it("returns false for anything that is not a handle, or a handle on another cell", () => {
+      const cell = new CellHandle(runtime, ref);
+      expect(cell.equals(ref)).toBe(false);
+      expect(cell.equals(undefined)).toBe(false);
+      expect(cell.equals(new CellHandle(runtime, { ...ref, path: ["b"] })))
+        .toBe(false);
+    });
+  });
 
   describe("CellHandle key() schema", () => {
     const runtime = {

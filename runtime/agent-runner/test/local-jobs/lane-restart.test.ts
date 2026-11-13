@@ -188,4 +188,49 @@ describe("local-jobs/lane restart", () => {
       content: "A later follow-up",
     });
   });
+
+  describe("a recorded run root that cannot be read", () => {
+    /** Helper for tests, which leaves one job running with `runRoot`. */
+    const runningWithRoot = (runRoot: string) => {
+      const enqueued = store.enqueue("test", "chat", "first", { task: "t" });
+      if ("conflict" in enqueued) throw new Error(enqueued.conflict);
+      store.claimNext();
+      store.recordRunRoot(enqueued.job.id, runRoot);
+      return enqueued.job.id;
+    };
+
+    /** Helper for tests, which builds a lane that has nothing to run. */
+    const idleLane = () =>
+      new LocalJobLane({
+        store,
+        profiles: new Map(),
+        workRoot: join(dir, "runs"),
+        maxConcurrent: 1,
+      });
+
+    it("ends a job whose run root is gone `interrupted`, with no checkpoint to continue", async () => {
+      const id = runningWithRoot(join(dir, "gone"));
+      lane = idleLane();
+      await lane.start();
+
+      expect(store.get(id)?.state).toBe("interrupted");
+      expect(
+        store.acceptMessage(id, {
+          caller: "test",
+          idempotencyKey: "later",
+          message: "Try again",
+        }),
+      ).toMatchObject({ code: "not_continuable" });
+    });
+
+    it("throws from `start`, leaving the job running, for a run root it fails to read", async () => {
+      const file = join(dir, "not-a-directory");
+      await Deno.writeTextFile(file, "");
+      const id = runningWithRoot(file);
+      lane = idleLane();
+
+      await expect(lane.start()).rejects.toThrow(Deno.errors.NotADirectory);
+      expect(store.get(id)?.state).toBe("running");
+    });
+  });
 });

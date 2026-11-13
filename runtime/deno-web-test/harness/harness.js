@@ -1,11 +1,15 @@
-const $ = document.querySelector.bind(document);
+// The page side of deno-web-test. `index.html` calls `start()`, which loads
+// the test file the page's URL names and answers the driver's questions about
+// it through `globalThis.__denoWebTest`. Nothing here runs on import, so a
+// Deno test can import this module and drive it with stand-ins for the page.
+
 const formatError = (e) => ({
   name: e.name,
   message: e.message,
   stack: e.stack,
 });
 
-class Test {
+export class Test {
   constructor(name, fn, el, timeoutMs) {
     this.name = name;
     this.fn = fn;
@@ -40,12 +44,10 @@ class Test {
     const start = performance.now();
     try {
       // Nothing can cancel the test's own promise, so a stuck test goes on
-      // running in the page after this returns. Keep a handler on it either
-      // way, so that settling late does not surface as an unhandled rejection
+      // running in the page after this returns. The race keeps a handler on
+      // it, so settling late does not surface as an unhandled rejection
       // against whichever test is running by then.
-      const running = (async () => await this.fn())();
-      running.catch(() => {});
-      await Promise.race([running, this.#stuck()]);
+      await Promise.race([(async () => await this.fn())(), this.#stuck()]);
       this.success = true;
       this.el.setAttribute("state", "success");
     } catch (e) {
@@ -65,22 +67,27 @@ class Test {
   }
 }
 
-class TestController {
-  constructor(harness) {
+// What the driver calls in the page. `scope` is the page's global object,
+// whose uncaught errors fail the load.
+export class TestController {
+  constructor(harness, scope) {
     this.harness = harness;
     this.globalError = null;
-    globalThis.addEventListener("error", (e) => this.onGlobalError(e));
+    scope.addEventListener("error", (e) => this.onGlobalError(e));
+    this.loading = harness.load();
   }
 
-  isReady() {
+  // Resolves once the test file has loaded, with `{ ok: true }`, or with the
+  // message of what went wrong as `{ error }`.
+  async whenReady() {
+    const loadError = await this.loading;
     if (this.globalError) {
       return { error: this.globalError };
     }
-    const loadError = this.harness.getLoadError();
     if (loadError) {
       return { error: loadError.message };
     }
-    return { ok: this.harness.ready() };
+    return { ok: true };
   }
 
   getTestCount() {
@@ -92,40 +99,35 @@ class TestController {
   }
 
   onGlobalError(e) {
-    this.globalError = formatError(e);
+    this.globalError = e.message;
   }
 }
 
-class TestHarness {
-  constructor() {
-    const params = new URL(globalThis.location.href).searchParams;
+// The test file the page at `href` names and the tests it registers, each
+// listed in `document`. `importModule` imports a module by its URL.
+export class TestHarness {
+  constructor(document, href, importModule) {
+    const params = new URL(href).searchParams;
+    this.document = document;
+    this.importModule = importModule;
     this.testFile = params.get("test");
     // `BrowserController` always sends this; the fallback only covers the page
     // being opened by hand. Keep it in step with `DEFAULT_TEST_TIMEOUT_MS`,
     // which this file cannot import.
     this.testTimeout = Number(params.get("testTimeout")) || 40_000;
     this.tests = [];
-    this.loadError = null;
-    this._ready = false;
   }
 
-  ready() {
-    return this._ready;
-  }
-
-  getLoadError() {
-    return this.loadError;
-  }
-
+  // Imports the test file, resolving with what its import threw, or with
+  // `null` once it has loaded.
   async load() {
-    $("#title").innerText = this.testFile;
+    this.document.querySelector("#title").innerText = this.testFile;
     try {
-      await import(`/dist${this.testFile}`);
+      await this.importModule(`/dist${this.testFile}`);
     } catch (e) {
-      this.loadError = e;
-      return;
+      return e;
     }
-    this._ready = true;
+    return null;
   }
 
   addTest(name, fn) {
@@ -136,8 +138,8 @@ class TestHarness {
       name = object.name;
       fn = object.fn;
     }
-    const el = document.createElement("li");
-    $("#tests").appendChild(el);
+    const el = this.document.createElement("li");
+    this.document.querySelector("#tests").appendChild(el);
     this.tests.push(new Test(name, fn, el, this.testTimeout));
   }
 
@@ -152,10 +154,16 @@ class TestHarness {
   }
 }
 
-const harness = new TestHarness();
-const controller = new TestController(harness);
-globalThis.__denoWebTest = controller;
-
-globalThis.Deno = Object.create(null);
-globalThis.Deno.test = harness.addTest.bind(harness);
-harness.load();
+// Makes the page `scope` a deno-web-test harness: gives it a `Deno.test` that
+// registers with the harness, the controller the driver calls, and starts
+// loading the test file its URL names.
+export function start(scope) {
+  const harness = new TestHarness(
+    scope.document,
+    scope.location.href,
+    (url) => import(url),
+  );
+  scope.Deno = Object.create(null);
+  scope.Deno.test = harness.addTest.bind(harness);
+  scope.__denoWebTest = new TestController(harness, scope);
+}

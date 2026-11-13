@@ -31,7 +31,6 @@ import {
   getPatternIdentityRef,
   getPieceSourceRevisions,
   getPieceSourceSnapshot,
-  isLink,
   isStream,
   type MemorySpace,
   type NormalizedFullLink,
@@ -60,6 +59,7 @@ import {
   type PreparedPieceSourceChange,
 } from "./piece-controller.ts";
 import type { PiecesController } from "./pieces-controller.ts";
+import { addPieceHandlerOf } from "./utils.ts";
 import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
 import { setCfcTrustSnapshot } from "@commonfabric/runner/cfc/trust-authority";
 
@@ -638,20 +638,7 @@ export async function prepareServedRegistration(
         "The space has no default pattern; install its root and retry this request key",
       );
     }
-    const handlerCell = root.key("addPiece");
-    await handlerCell.sync();
-    // Inspect the declaration without reading a possibly foreign event target.
-    // The transport authorizes that target before it observes or appends events.
-    if (!isLink(handlerCell.getRaw())) {
-      throw new Error("The default pattern has no addPiece handler");
-    }
-    const handler = await root.asSchema({
-      type: "object",
-      properties: { addPiece: { asCell: ["stream"] } },
-    }).key("addPiece").pull();
-    if (!isStream(handler)) {
-      throw new Error("The default pattern has no addPiece handler");
-    }
+    const handler = await addPieceHandlerOf(root);
     const piece = runtime.getCellFromEntityId(
       pieces.getSpace(),
       entityIdFrom(receipt.pieceId),

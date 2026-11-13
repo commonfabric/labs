@@ -14,6 +14,7 @@ import { expect } from "@std/expect";
 
 import { $conn, type CellRef } from "@commonfabric/runtime-client";
 import { getLogger } from "@commonfabric/logger";
+import { captureLogsForTestingOnly } from "@commonfabric/logger/for-testing-only";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import { DomApplicator } from "../src/main/applicator.ts";
@@ -147,7 +148,14 @@ class MockMutationObserver {
 // With `upgrade` false, the document behaves like one that
 // `createHTMLDocument()` returns. An element with a custom element's name stays
 // a plain element there, without the custom element class's properties.
-function createMockDocument({ upgrade = true } = {}) {
+// Each element the document creates is also pushed onto `created`, if given,
+// for a test that drives an element as the mock it is.
+function createMockDocument(
+  { upgrade = true, created }: {
+    upgrade?: boolean;
+    created?: Record<string, any>[];
+  } = {},
+) {
   let idCounter = 0;
 
   const createElement = (tagName: string) => {
@@ -274,6 +282,7 @@ function createMockDocument({ upgrade = true } = {}) {
         : mockElementPrototype,
     );
 
+    created?.push(element);
     return element;
   };
 
@@ -1717,6 +1726,203 @@ describe("DomApplicator", () => {
         });
       });
 
+      describe("errors from an operation", () => {
+        const throwing = (thrown: unknown) => {
+          const errors: Error[] = [];
+          const applicator = new DomApplicator({
+            document: createMockDocument(),
+            onEvent: () => {},
+            onError: (error) => errors.push(error),
+            setProp: () => {
+              throw thrown;
+            },
+          });
+          applicator.applyBatch({
+            batchId: 1,
+            ops: [
+              { op: "create-element", nodeId: 1, tagName: "div" },
+              { op: "set-prop", nodeId: 1, key: "title", value: "x" },
+              { op: "create-element", nodeId: 2, tagName: "span" },
+            ],
+          });
+          return { applicator, errors };
+        };
+
+        it("reports a thrown error through `onError` and applies the rest", () => {
+          const thrown = new Error("setter failed");
+
+          const { applicator, errors } = throwing(thrown);
+
+          expect(errors).toEqual([thrown]);
+          assertExists(applicator.getNode(2));
+        });
+
+        it("wraps a thrown value that is not an `Error`", () => {
+          const { errors } = throwing("setter refused");
+
+          expect(errors.map((error) => error.message)).toEqual([
+            "setter refused",
+          ]);
+        });
+      });
+
+      describe("operations on a node that cannot take them", () => {
+        it("ignores props and events aimed at a text node or a missing node", () => {
+          // Each op would reach the node if let through: `set-prop` through
+          // `setProp`, `set-event` as a listener, and removing a `data-` prop
+          // through `removeAttribute()`, which a text node lacks, so the call
+          // would throw through `onError`.
+
+          const set: string[] = [];
+          const applicator = new DomApplicator({
+            document: createMockDocument(),
+            onEvent: () => {},
+            onError: (error) => {
+              throw error;
+            },
+            setProp: (_target, key) => set.push(key),
+          });
+
+          applicator.applyBatch({
+            batchId: 1,
+            ops: [
+              { op: "create-text", nodeId: 1, text: "plain" },
+              { op: "set-prop", nodeId: 1, key: "title", value: "x" },
+              { op: "remove-prop", nodeId: 1, key: "data-title" },
+              { op: "set-event", nodeId: 9, eventType: "click", handlerId: 1 },
+              { op: "remove-event", nodeId: 9, eventType: "click" },
+            ],
+          });
+
+          expect(set).toEqual([]);
+          expect(applicator.getDebugInfo().listenerCount).toBe(0);
+        });
+
+        it("provides no piece boundary without a runtime client", () => {
+          const applicator = new DomApplicator({
+            document: createMockDocument(),
+            onEvent: () => {},
+          });
+
+          applicator.applyBatch({
+            batchId: 1,
+            ops: [
+              { op: "create-element", nodeId: 1, tagName: "div" },
+              {
+                op: "set-piece-boundary",
+                nodeId: 1,
+                cellRef: {
+                  space: "did:key:test",
+                  scope: "space",
+                  id: "of:piece",
+                  path: [],
+                },
+              },
+            ],
+          });
+
+          expect(getPieceBoundary(applicator.getNode(1))).toBeUndefined();
+        });
+      });
+
+      describe("removing what a prop set", () => {
+        const applied = () => {
+          const events: DomEventMessage[] = [];
+          const created: Record<string, any>[] = [];
+          const applicator = new DomApplicator({
+            document: createMockDocument({ created }),
+            onEvent: (message) => events.push(message),
+            onError: (error) => {
+              throw error;
+            },
+          });
+          applicator.applyBatch({
+            batchId: 1,
+            ops: [
+              { op: "create-element", nodeId: 1, tagName: "button" },
+              { op: "set-event", nodeId: 1, eventType: "click", handlerId: 4 },
+              { op: "set-event", nodeId: 1, eventType: "focus", handlerId: 5 },
+            ],
+          });
+          const [node] = created;
+          assertExists(node);
+          expect(applicator.getNode(1)).toBe(node);
+          return { applicator, events, node };
+        };
+
+        it("removes the listener an `on` prop named, and keeps the others", () => {
+          const { applicator, events, node } = applied();
+
+          applicator.applyBatch({
+            batchId: 2,
+            ops: [
+              { op: "remove-prop", nodeId: 1, key: "onClick" },
+              { op: "remove-event", nodeId: 1, eventType: "keydown" },
+            ],
+          });
+          node.dispatchEvent({ type: "click", target: node });
+          node.dispatchEvent({ type: "focus", target: node });
+
+          expect(events.map((event) => event.handlerId)).toEqual([5]);
+        });
+
+        it("clears the property a removed `$` prop names", () => {
+          const { applicator, node } = applied();
+          node.value = "typed";
+
+          applicator.applyBatch({
+            batchId: 2,
+            ops: [{ op: "remove-prop", nodeId: 1, key: "$value" }],
+          });
+
+          expect(node.value).toBeUndefined();
+        });
+
+        it("removes the `style` attribute", () => {
+          const { applicator, node } = applied();
+          node.setAttribute("style", "color: red");
+
+          applicator.applyBatch({
+            batchId: 2,
+            ops: [{ op: "remove-prop", nodeId: 1, key: "style" }],
+          });
+
+          expect(node.hasAttribute("style")).toBe(false);
+        });
+      });
+
+      describe("debug logging", () => {
+        it("describes batches, removals and disposal while turned on", () => {
+          using logs = captureLogsForTestingOnly("vdom-applicator");
+          const applicator = new DomApplicator({
+            document: createMockDocument(),
+            onEvent: () => {},
+          });
+
+          applicator.applyBatch({
+            batchId: 1,
+            ops: [
+              { op: "create-element", nodeId: 1, tagName: "ul" },
+              { op: "create-element", nodeId: 2, tagName: "li" },
+              { op: "insert-child", parentId: 1, childId: 2, beforeId: null },
+            ],
+          });
+          expect(applicator.getNode(2)).toBeDefined();
+          applicator.applyBatch({
+            batchId: 2,
+            ops: [{ op: "remove-node", nodeId: 1 }],
+          });
+          // Removing the list took its item with it.
+          expect(applicator.getNode(2)).toBeUndefined();
+          applicator.dispose();
+
+          const keys = new Set(["remove-node", "apply-batch", "dispose"]);
+          expect(
+            logs.logs.map(({ key }) => key).filter((key) => keys.has(key)),
+          ).toEqual(["apply-batch", "remove-node", "apply-batch", "dispose"]);
+        });
+      });
+
       describe("bindings", () => {
         it(
           "requests a custom element update after assigning a CellHandle",
@@ -1790,6 +1996,89 @@ describe("DomApplicator", () => {
             }
           },
         );
+      });
+    });
+
+    describe("custom element upgrade", () => {
+      it("requests an update once a bound custom element is defined", async () => {
+        // Two custom elements are bound while neither is defined, and each is
+        // given its recorder at once, as an upgrade would, so that an update
+        // requested at any later point is seen. Defining the first and waiting
+        // for its update is the barrier: had the applicator not waited for the
+        // second's definition, its update would have arrived by then too.
+
+        const customElementsDescriptor = Object.getOwnPropertyDescriptor(
+          globalThis,
+          "customElements",
+        );
+        const tagNames = ["cf-early", "cf-later"];
+        const definitions = new Map(
+          tagNames.map((tagName) => [tagName, Promise.withResolvers<void>()]),
+        );
+        const updates = new Map(
+          tagNames.map((tagName) => [tagName, Promise.withResolvers<void>()]),
+        );
+        Object.defineProperty(globalThis, "customElements", {
+          configurable: true,
+          value: {
+            whenDefined: (tagName: string) => definitions.get(tagName)!.promise,
+          },
+        });
+        try {
+          const applicator = new DomApplicator({
+            document: createMockDocument(),
+            runtimeClient: createMockRuntimeClient(),
+            onEvent: () => {},
+          });
+          applicator.applyBatch({
+            batchId: 1,
+            ops: tagNames.flatMap((tagName, index) => [
+              { op: "create-element", nodeId: index + 1, tagName } as const,
+              {
+                op: "set-binding",
+                nodeId: index + 1,
+                propName: "value",
+                cellRef: {
+                  space: "did:key:test",
+                  scope: "space",
+                  id: `of:${tagName}`,
+                  path: [],
+                },
+              } as const,
+            ]),
+          });
+          const requested: [string, PropertyKey][] = [];
+          tagNames.forEach((tagName, index) => {
+            const node = applicator.getNode(index + 1) as any;
+            node.requestUpdate = (name: PropertyKey) => {
+              requested.push([tagName, name]);
+              updates.get(tagName)!.resolve();
+            };
+          });
+
+          definitions.get("cf-early")!.resolve();
+          await updates.get("cf-early")!.promise;
+
+          expect(requested).toEqual([["cf-early", "value"]]);
+
+          definitions.get("cf-later")!.resolve();
+          await updates.get("cf-later")!.promise;
+
+          expect(requested).toEqual([
+            ["cf-early", "value"],
+            ["cf-later", "value"],
+          ]);
+        } finally {
+          if (customElementsDescriptor) {
+            Object.defineProperty(
+              globalThis,
+              "customElements",
+              customElementsDescriptor,
+            );
+          } else {
+            Reflect.deleteProperty(globalThis, "customElements");
+          }
+        }
       });
     });
 
