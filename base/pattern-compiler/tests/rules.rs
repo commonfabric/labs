@@ -1162,3 +1162,20 @@ fn symbol_is_refused_as_an_operand_of_exclude() {
         ["schema-type:symbol", "schema-type:symbol"]
     );
 }
+
+#[test]
+fn type_name_of_the_dom_library_is_an_unsupported_member() {
+    for name in ["Event", "CustomEvent<{ value: string }>", "KeyboardEvent", "HTMLInputElement"] {
+        let diagnostics = check(&format!(
+            "const save = handler<{name}, {{ name: Writable<string> }}>((_, state) => state.name.set(\"\"));\n"
+        ));
+        assert_eq!(ids(&diagnostics), ["stdlib:unsupported-member"], "{name}");
+        assert!(
+            diagnostics[0].message.contains("declare the shape of the event"),
+            "{}",
+            diagnostics[0].message
+        );
+    }
+    let diagnostics = check("function show(donut: Doughnut) { return donut; }\n");
+    assert_eq!(ids(&diagnostics), ["subset-type:mismatch"]);
+}

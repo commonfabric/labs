@@ -1934,6 +1934,20 @@ impl<'a> Resolver<'_, 'a> {
             | "ReadonlyMap" | "ReadonlySet" | "URL" | "Uint8Array" | "Iterable" => {
                 self.code_type(name, arguments)
             }
+            // A type name of the browser (§7.10). No DOM object reaches a
+            // pattern.
+            _ if api::is_dom_type_name(name) => {
+                self.count(module, format!("types:dom type name:{name}"));
+                self.report(
+                    module,
+                    "stdlib:unsupported-member",
+                    reference.span,
+                    format!(
+                        "`{name}` is a type name of the DOM library, which is not part of the subset. An event arrives as data: declare the shape of the event the handler reads, such as `{{ detail: {{ value: string }} }}`"
+                    ),
+                );
+                self.unresolved(Why::RefusedForm)
+            }
             _ => {
                 // A name that resolves to no declaration of the program, no
                 // API type, and no standard-library type (§7.10).

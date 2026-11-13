@@ -554,3 +554,40 @@ pub fn is_function_tier_constructor(name: &str) -> bool {
             | "RegExp"
     )
 }
+
+/// Whether a global type name is a name of the DOM library
+/// (`language-subset.md` §7.10): an event, an element, or another object
+/// of the browser.
+pub fn is_dom_type_name(name: &str) -> bool {
+    name == "Event"
+        || (name.ends_with("Event") && name.chars().next().is_some_and(char::is_uppercase))
+        || name.starts_with("HTML")
+        || name.starts_with("SVG")
+        || name.starts_with("DOM")
+        || matches!(
+            name,
+            "EventTarget"
+                | "EventListener"
+                | "Element"
+                | "Node"
+                | "NodeList"
+                | "Document"
+                | "DocumentFragment"
+                | "Window"
+                | "File"
+                | "FileList"
+                | "Blob"
+                | "FormData"
+                | "DataTransfer"
+                | "Touch"
+                | "TouchList"
+                | "Selection"
+                | "Range"
+                | "ShadowRoot"
+                | "CSSStyleDeclaration"
+                | "Storage"
+                | "Location"
+                | "History"
+                | "Navigator"
+        )
+}
