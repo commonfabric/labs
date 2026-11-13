@@ -1468,9 +1468,10 @@ named service, read from the same SigNoz the prod errors tile uses. `enduser.id`
 the person the memory server decided the session stands for: the first person's
 identity on the session's delegation chain, or else the signature-checked session
 principal, and nothing at all for a serving loop's own sessions, for service and
-delegating principals, and for a new space's own key.
-`docs/features/active-user-counting.md` records the rules and what the number
-means. Three things bound it, and they are worth knowing before quoting it:
+delegating principals, and for a space's own key unless the space is a Home space or
+has history and no access list. `docs/features/active-user-counting.md` records the
+rules and what the number means. Three things bound it, and they are worth knowing
+before quoting it:
 
 - **Unlinked keys are separate people.** One person with a browser mnemonic and an
   unrelated `cf id derive` passphrase is two, unless one delegates to the other; one
@@ -1484,8 +1485,10 @@ Head sampling below 1.0 would not scale this number down, it would drop people o
 it, and no arithmetic afterwards would put them back.
 
 The tile is gray whenever the named service sent no spans in the retained window, which
-is the resting state for a deployment whose tracing is switched off. It needs no second
-change to light up once that deployment starts exporting.
+is the resting state for a deployment whose tracing is switched off, and while it has
+sent spans only today, since today is not yet a complete day. It is also gray when the
+service sent nothing yesterday, naming the last day it sent any. It needs no second
+change to light up once that deployment has exported for a complete UTC day.
 
 Notes:
 
