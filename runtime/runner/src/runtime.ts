@@ -3406,12 +3406,16 @@ export class Runtime {
   /**
    * Lets the storage manager release the documents nothing reads (see
    * `releaseUnreadDocuments()`): it asks the scheduler whether an action
-   * reads a document, and forgets a load kicked for a document it drops, so
-   * that a later read of it kicks the load again.
+   * reads a document, forgets a load kicked for a document it drops, so
+   * that a later read of it kicks the load again, and asks for a pass when a
+   * document's hold token has been collected.
    */
   #installDocumentRelease(): void {
     const manager = this.storageManager;
     const cancels = [
+      manager.subscribeHoldsCollected?.(() => {
+        void this.releaseUnreadDocuments();
+      }),
       manager.addDocumentReader?.((address) =>
         this.scheduler.readsEntity(
           entityKey(
@@ -3441,7 +3445,10 @@ export class Runtime {
    * (`IStorageManager.releaseUnreadDocuments()`), and resolves when that
    * pass has run. Stopping a piece asks for one. A host asks for one when
    * something that read documents through this runtime has gone, such as a
-   * client whose subscriptions it cancelled. Calls made before a pass begins
+   * client whose subscriptions it cancelled. The storage manager asks for one
+   * when the hold token of a document it has loaded has been collected
+   * (`IStorageManager.subscribeHoldsCollected()`), which is when the cells
+   * holding that document have gone. Calls made before a pass begins
    * share it. A call made while a pass is under way is answered by the next
    * one, which waits for that one to finish and then for the scheduler. So at
    * most one pass waits at a time, however many calls are made.

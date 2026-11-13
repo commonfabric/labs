@@ -1236,7 +1236,37 @@ export interface Options {
    *  through `installForeignScopedReadGrant`. Absent, every foreign scoped
    *  read is refused. */
   foreignScopedReadGrant?: ForeignScopedReadGrant;
+
+  /**
+   * Makes the registry that tells the manager when a document's hold token
+   * (`holdDocument()`) has been collected. Absent, it is a
+   * `FinalizationRegistry`. Tests inject their own to report a collection
+   * when they choose.
+   */
+  createHoldRegistry?: <T>(
+    cleanup: (held: T) => void,
+  ) => HoldRegistry<T>;
 }
+
+/**
+ * Where a storage manager registers each document hold token it hands out:
+ * once `token` has been collected, the registry calls the `cleanup` it was
+ * made with on `held`. A `FinalizationRegistry` is one.
+ */
+export interface HoldRegistry<T> {
+  register(token: object, held: T): void;
+}
+
+/** What a manager's hold registry holds for each token it registers. */
+type RegisteredHold = {
+  space: MemorySpace;
+
+  /** The document's key in the manager's map of hold tokens. */
+  key: string;
+
+  /** The entry for the token in that map. */
+  ref: WeakRef<object>;
+};
 
 /**
  * Max concurrent watch-refresh round trips per space when
@@ -1815,9 +1845,17 @@ export class StorageManager implements IStorageManager {
    * The token `holdDocument()` handed out for each document, by the
    * document's pull-kick key, held weakly: a document whose token has been
    * collected is held by nothing. Each release pass forgets the collected
-   * ones.
+   * ones, and the collection of a document's current token asks for a pass
+   * (`#holdCollected()`).
    */
   readonly #documentHolds = new Map<string, WeakRef<object>>();
+
+  /** Where each token `holdDocument()` hands out is registered, so that its
+   * collection asks for a release pass (`subscribeHoldsCollected()`). */
+  readonly #holdRegistry: HoldRegistry<RegisteredHold>;
+
+  /** See `subscribeHoldsCollected()`. */
+  readonly #holdsCollectedObservers = new Set<() => void>();
 
   /** See `addDocumentReader()`. */
   readonly #documentReaders = new Set<
@@ -2061,6 +2099,10 @@ export class StorageManager implements IStorageManager {
     this.#eventAppendPacing = options.eventAppendPacing;
     this.#servingHomeSpace = options.servingHomeSpace;
     this.#foreignScopedReadGrant = options.foreignScopedReadGrant;
+    this.#holdRegistry = (options.createHoldRegistry ??
+      ((cleanup) => new FinalizationRegistry(cleanup)))(
+        (held: RegisteredHold) => this.#holdCollected(held),
+      );
     // Snapshot + freeze: the resolver snapshotted its own copy at
     // open(), so refusal logic must see the same fixed facts — a
     // caller mutating their map object must not desynchronize them.
@@ -3520,9 +3562,17 @@ export class StorageManager implements IStorageManager {
     let hold = this.#documentHolds.get(key)?.deref();
     if (hold === undefined) {
       hold = {};
-      this.#documentHolds.set(key, new WeakRef(hold));
+      const ref = new WeakRef(hold);
+      this.#documentHolds.set(key, ref);
+      this.#holdRegistry.register(hold, { space: address.space, key, ref });
     }
     return hold;
+  }
+
+  /** @inheritDoc */
+  subscribeHoldsCollected(observer: () => void): Cancel {
+    this.#holdsCollectedObservers.add(observer);
+    return () => this.#holdsCollectedObservers.delete(observer);
   }
 
   /** @inheritDoc */
@@ -3548,6 +3598,27 @@ export class StorageManager implements IStorageManager {
     });
     this.#releasePass = pass;
     return pass;
+  }
+
+  /**
+   * Helper for the hold registry, which tells the observers of
+   * `subscribeHoldsCollected()` that a hold token has been collected, unless
+   * a pass has forgotten the token since, a new token for its document has
+   * replaced it, or its space's provider is gone. It leaves the token's entry
+   * for a pass to forget, so what a pass consults is only ever the
+   * document's current token.
+   */
+  #holdCollected({ space, key, ref }: RegisteredHold): void {
+    if (this.#documentHolds.get(key) !== ref || !this.#providers.has(space)) {
+      return;
+    }
+    for (const observer of [...this.#holdsCollectedObservers]) {
+      try {
+        observer();
+      } catch (error) {
+        console.error("holds-collected subscriber threw:", error);
+      }
+    }
   }
 
   /** @inheritDoc */

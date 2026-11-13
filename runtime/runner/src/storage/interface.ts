@@ -871,6 +871,15 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
   ): object;
 
   /**
+   * Calls `observer` when a document's hold token (`holdDocument()`) has been
+   * collected while it was still that document's token and its space was
+   * open, so that the next `releaseUnreadDocuments()` can release a document
+   * nothing holds any more. One collection can call it once for each of many
+   * tokens. Returns a cancel that removes it.
+   */
+  subscribeHoldsCollected?(observer: () => void): Cancel;
+
+  /**
    * Adds a way for the manager to learn whether something reads a document;
    * a document any of them reads keeps its watches through
    * `releaseUnreadDocuments()` and stays loaded when its watches go. Returns
