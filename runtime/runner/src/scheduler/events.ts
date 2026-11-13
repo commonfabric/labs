@@ -918,8 +918,21 @@ function chainOnCommit(
  * words in the piece's reconciliation record, to which it points. Those words
  * are whatever error the refusal raised, and a served drop's reason is
  * written into the dropped-event notice on the stream (events.md §5).
+ *
+ * The note only explains the drop, so a probe that throws adds nothing and is
+ * logged, and the drop goes ahead as it would without one.
  */
-function refusedUpdateNote(refused: RefusedUpdate | undefined): string {
+function refusedUpdateNote(verdict: EnsurePieceVerdict): string {
+  let refused: RefusedUpdate | undefined;
+  try {
+    refused = verdict.refusedUpdate?.();
+  } catch (error) {
+    logger.warn(
+      "scheduler",
+      "Reading a piece's refused update failed: " + describeFailure(error),
+    );
+    return "";
+  }
   if (refused === undefined) return "";
   const reason = refused.reason === undefined ? "" : ` (\`${refused.reason}\`)`;
   return `, which still runs its previous program because its update to ` +
@@ -1174,7 +1187,7 @@ export function queueSchedulerEvent(state: SchedulerEventQueueState, args: {
             // one, and its absence says nothing about the piece.
             const reason = `Event dropped: no handler registered for ` +
               `${args.eventLink.id} after starting its piece` +
-              refusedUpdateNote(verdict.refusedUpdate?.());
+              refusedUpdateNote(verdict);
             if (queuedEvent.served !== undefined) {
               dropQueuedEvent(state, queuedEvent, reason);
             } else {

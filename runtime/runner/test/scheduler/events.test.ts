@@ -896,6 +896,60 @@ describe("events", () => {
       expect(errors).toEqual([]);
     });
 
+    describe("a piece whose refused update cannot be read", () => {
+      // The verdict's `refusedUpdate` probe only adds to the drop's reason,
+      // so a probe that throws leaves the drop as it would be without one.
+
+      function setUnreadableRefusal(): void {
+        setLoadPieceForEvent(() =>
+          Promise.resolve({
+            started: true,
+            graphIsInstalled: () => true,
+            refusedUpdate: () => {
+              throw new Error("the record cannot be read");
+            },
+            observedDocIds: [],
+            observedDocs: [],
+          })
+        );
+      }
+
+      it("drops a served send with the plain no-handler reason", async () => {
+        const ref = streamLink("events-served-unreadable-refusal");
+        setUnreadableRefusal();
+        const outcomes: ServedEventFailureOutcome[] = [];
+
+        sendTracked(ref, 1, {
+          served: { onFailure: (outcome) => outcomes.push(outcome) },
+        });
+        await env.runtime.idle();
+
+        expect(outcomes).toEqual([{
+          kind: "dropped",
+          message: `Event dropped: no handler registered for ${ref.id} ` +
+            "after starting its piece",
+        }]);
+      });
+
+      it("reports a client's own drop with the plain no-handler reason", async () => {
+        const ref = streamLink("events-client-unreadable-refusal");
+        setUnreadableRefusal();
+        const errors = collectErrors();
+
+        sendTracked(ref, 1);
+        await env.runtime.idle();
+
+        expect(errors).toHaveLength(1);
+        expect(errors[0]).toBeInstanceOf(EventDroppedError);
+        expect(errors[0]).toMatchObject({
+          reason: `Event dropped: no handler registered for ${ref.id} ` +
+            "after starting its piece",
+          attempts: 1,
+          pieceStartReason: undefined,
+        });
+      });
+    });
+
     describe("waiting for the piece", () => {
       // An attempt that finds the piece not yet startable waits for a commit
       // to a document it read, after asking once more with the wait in place.
