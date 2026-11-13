@@ -2469,14 +2469,24 @@ describe("piece source reconciliation", () => {
         }]);
       });
 
-      it("says nothing of a reconciliation that followed its origin", async () => {
-        const v1Identity = await identityFor(source("v1"));
-        const piece = await preparePiece(
-          servingFetch(() => v1Identity, () => source("v1")),
-        );
-        await stampSource(piece, PARENT_SOURCE);
-        expect(await reconcile(piece)).toBe("current");
-        expect(getPieceReconciliation(piece)?.outcome).toBe("followed");
+      it("says nothing of an offer whose adoption did not land, short of a refusal", async () => {
+        // The next open proposes the offered program again, so the piece has
+        // not refused it.
+
+        const v2Identity = await identityFor(sourceWithStream("v2"));
+        const piece = await pieceRefusing(policyChanged);
+        const { reason: _reason, ...recorded } = getPieceReconciliation(piece)!;
+        const rewritten = await runtime.editWithRetry((tx) => {
+          setPieceReconciliation(piece, tx, {
+            ...recorded,
+            outcome: "unapplied",
+          });
+        });
+        expect(rewritten.error).toBeUndefined();
+        expect(getPieceReconciliation(piece)).toMatchObject({
+          outcome: "unapplied",
+          offered: { identity: v2Identity, symbol: SYMBOL },
+        });
 
         expect(await sendServed(piece)).toEqual([{
           kind: "dropped",
