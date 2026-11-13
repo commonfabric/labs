@@ -5974,9 +5974,10 @@ async function pieceSourceCompatibilityReview(
     issues.retainedLinks = describeFailure(error);
   }
 
-  const cfc = pieceSourceCfcEnvelopeIssue(
+  const cfc = await pieceSourceCfcEnvelopeIssue(
     piece,
     argumentCell,
+    previous.ref.identity,
     candidate,
     pieces,
   );
@@ -6024,24 +6025,40 @@ async function pieceSourceCompatibilityReview(
  * Each merge is driven for real, in dry run, through
  * `storedCfcEnvelopeMergeIssue` — the fast paths the commit takes before it
  * merges and then the merge itself — so the two cannot disagree about what
- * merges.
+ * merges. The commit's transaction is pinned to the delegations the update
+ * proposes, from the piece's current program (`previousIdentity`) to the
+ * candidate's, which decide whether a release may extend a stored write
+ * policy; the review reads through a transaction pinned to the same ones.
  */
-function pieceSourceCfcEnvelopeIssue(
+async function pieceSourceCfcEnvelopeIssue(
   piece: Cell<unknown>,
   argumentCell: Cell<unknown>,
+  previousIdentity: string,
   candidate: Pattern,
   pieces: PiecesController,
-): string | undefined {
-  // `readTx()` cannot write, so the two dry runs stay dry runs; a piece read
-  // as one principal's instance is reviewed through the transaction that
-  // names it.
-  const tx = pieces.runtime.readTx(instanceTx(piece));
+): Promise<string | undefined> {
   // The modules the release would install, as setup names them.
   const patternManager = pieces.runtime.patternManager;
   const entry = patternManager.getArtifactEntryRef(candidate);
   const programModules = entry === undefined
     ? []
     : patternManager.programModuleIdentities(entry.identity) ?? [];
+  const proposal = entry === undefined
+    ? undefined
+    : await patternManager.proposedSourceUpdateDelegations(
+      piece.space,
+      previousIdentity,
+      entry.identity,
+    );
+  // Neither transaction can write, so the two dry runs stay dry runs; a piece
+  // read as one principal's instance is reviewed as that principal's.
+  const instance = instanceTx(piece);
+  const tx = proposal === undefined
+    ? pieces.runtime.readTx(instance)
+    : pieces.runtime.readTxProposingDelegations(piece.space, proposal);
+  if (proposal !== undefined && instance !== undefined) {
+    tx.tx.scopeKeyIdentity = instance.tx.scopeKeyIdentity;
+  }
   const issues = [
     pieceDocumentCfcEnvelopeIssue(
       "argument",
