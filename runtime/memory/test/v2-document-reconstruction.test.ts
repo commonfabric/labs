@@ -166,7 +166,7 @@ describe("v2 document reconstruction", () => {
       installThenPatch(engine);
       evictDocumentCacheEntries(engine, Number.MAX_SAFE_INTEGER);
       const floors: unknown[] = [];
-      const statement = engine.statements.selectLatestBase;
+      const statement = engine.statement("selectLatestBase");
       const get = statement.get;
       statement.get = (params) => {
         floors.push(params?.floor);

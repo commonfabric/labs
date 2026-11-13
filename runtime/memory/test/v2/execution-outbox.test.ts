@@ -2,6 +2,8 @@ import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
+import { Database } from "@db/sqlite";
+
 import { close, type Engine, open } from "../../v2/engine.ts";
 import {
   insertExecutionOutboxRows,
@@ -83,6 +85,26 @@ describe("execution-outbox", () => {
         branch: "",
       });
       expect(pending.payload).toEqual({ inbox: "of:inbox", count: 2 });
+    });
+
+    it("adds the `source_event` column to an outbox from before it", async () => {
+      close(engine);
+      const database = new Database(path);
+      database.exec("ALTER TABLE execution_outbox DROP COLUMN source_event");
+      database.close();
+
+      engine = await open({ url: toFileUrl(path) });
+      const sourceEvent = { sidecarId: "of:sidecar", eventId: "event:source" };
+      insertExecutionOutboxRows(engine, {
+        branch: "",
+        createdSeq: 1,
+        rows: [{ ...row(null), sourceEvent }],
+      });
+
+      const [pending] = selectPendingExecutionOutboxRows(engine, {
+        branch: "",
+      });
+      expect(pending.sourceEvent).toEqual(sourceEvent);
     });
   });
 });

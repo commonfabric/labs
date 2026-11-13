@@ -72,7 +72,7 @@ export function isGenesisRoot(value: unknown): value is GenesisRoot {
 function readGenesisReceipt(
   engine: Engine,
 ): FabricPlainObject | null | undefined {
-  const row = engine.database.prepare(
+  const row = engine.prepare(
     'SELECT original FROM "commit" WHERE seq = 1',
   ).get() as { original: string } | undefined;
   if (row === undefined) return undefined;

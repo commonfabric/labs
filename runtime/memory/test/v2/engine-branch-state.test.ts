@@ -208,8 +208,8 @@ describe("engine", () => {
       setValue("warm");
       expect(valueAt()).toBe("warm");
 
-      using branchRows = spy(engine.statements.selectBranch, "get");
-      using documentRows = spy(engine.statements.selectCurrentLocal, "get");
+      using branchRows = spy(engine.statement("selectBranch"), "get");
+      using documentRows = spy(engine.statement("selectCurrentLocal"), "get");
       expect(valueAt()).toBe("warm");
 
       expect(branchRows.calls).toHaveLength(0);
@@ -221,7 +221,7 @@ describe("engine", () => {
       expect(valueAt()).toBe("first");
       setValue("second");
 
-      using branchRows = spy(engine.statements.selectBranch, "get");
+      using branchRows = spy(engine.statement("selectBranch"), "get");
       expect(valueAt()).toBe("second");
 
       expect(branchRows.calls).toHaveLength(0);
@@ -232,7 +232,7 @@ describe("engine", () => {
       expect(valueAt()).toBe("first");
       const second = setValue("second");
 
-      using branchRows = spy(engine.statements.selectBranch, "get");
+      using branchRows = spy(engine.statement("selectBranch"), "get");
       expect(valueAt({ seq: second })).toBe("second");
       expect(valueAt({ seq: second })).toBe("second");
 
@@ -247,7 +247,7 @@ describe("engine", () => {
       const second = setValue("second");
       expect(valueAt()).toBe("second");
 
-      using headRows = spy(engine.statements.selectCurrentLocal, "get");
+      using headRows = spy(engine.statement("selectCurrentLocal"), "get");
       expect(valueAt({ seq: second })).toBe("second");
 
       expect(headRows.calls).toHaveLength(0);
@@ -258,7 +258,7 @@ describe("engine", () => {
       createBranch(engine, "fork");
       expect(valueAt({ branch: "fork" })).toBe("parent");
 
-      using branchRows = spy(engine.statements.selectBranch, "get");
+      using branchRows = spy(engine.statement("selectBranch"), "get");
       expect(valueAt({ branch: "fork" })).toBe("parent");
 
       expect(branchRows.calls).toHaveLength(0);
