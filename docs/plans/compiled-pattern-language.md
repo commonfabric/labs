@@ -614,6 +614,17 @@ as an assumption.
     assignable to `ReadonlyCell<unknown>`. Raised by the owner, not
     ruled. The prototype is counting the corpus sites that write through
     such a handle.
+94. **The integrity of a default read through a link** (PL question 41).
+    *Assumed:* the read keeps the integrity of the observation at the
+    bound address. The alternative is empty integrity, because the value
+    comes from a link's schema.
+95. **A write through a handle bound to a value the instance computes**
+    (PL question 42; LS question 28): a `computed` result, an operator
+    result, or a literal given where a handler, a `lift`, or a
+    compiled-in pattern declares a writable handle. The corpus has 20
+    such arguments. *Assumed:* the runtime refuses the write. The
+    alternative lets it land and be replaced at the next evaluation,
+    which is understood to be what happens today.
 
 ## Open, and not needing the owner
 

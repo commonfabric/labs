@@ -849,6 +849,17 @@ Six rules hold for an invocation.
   `identity` slot stops at its last segment, and
   with `resolved` it yields the reference where resolution ends. Emitted
   code does not follow a link.
+- **Where nothing is stored, a slot reads as the default of the place.**
+  The runtime validates what it read against the slot's schema, with one
+  member taken from the chain: the default of the link nearest the bound
+  address whose schema declares one, and the slot's own default where no
+  link declares one (section 4.4;
+  `plan-and-label-templates.md` §2.5, "A default belongs to the place").
+  A path that resolves to a slot of the instance without a stored link,
+  as a path of a binding of the reactive tier does, takes the default of
+  that slot's schema in the same way. Where there is no default, the slot
+  reads as `undefined` if its schema admits that, and the cone fails
+  otherwise (`plan-and-label-templates.md` §5.2).
 - **Other cones' outputs are pulled.** A cone asks for an upstream output
   when its code reaches the use, so an output used only in the unselected
   branch of a conditional is not evaluated. This is how demand stops at a
@@ -937,6 +948,16 @@ that the body is handed that observation and no more.
 | `identity` with `resolved` | The same, for the reference where resolution ends |
 | `labelMetadata` | Nothing on its account. The observation is made by the call that reads the label |
 | No entry | The path is absent from the argument |
+
+A `value` entry at a path where nothing is stored holds the default of
+the place, by the rule of section 2.2. An `identity` entry at a position
+of handle type holds a handle whether or not anything is stored at the
+position: where the position holds no link, the handle names the position
+itself, which for an optional property of a pattern's input that the
+caller left out is that path of the instance's argument document
+(`plan-and-label-templates.md` §2.5, "A handle to a position that holds
+nothing"). A read through the handle gives the default of the place where
+it has one, and a write through it stores a value at that path.
 
 Where two entries name one path, the argument holds the form that carries
 more: `value` before `enumeration`, `enumeration` before `shape`, and a
@@ -1977,6 +1998,26 @@ carry their labels in their own envelopes, as documents do today.
 A link to an output of another instance is a link to that instance's result
 cell at the output's path: space, document identifier, path, and a declared
 scope where the output has one. This is the link a consumer holds today.
+
+**A stored link holds a schema.** Every link an instance writes for a
+path bound by reference holds, beside the address, the schema of the
+place it names, as the plan of the writing instance declares it, the
+default of that declaration included. That is the case for a link in a
+child's argument document, in a parameters document, in a binding state
+document, and for a link a body stores for a value it passes on
+unchanged. The schema is part of the stored link, as it is today
+(`CellLinkRefPayload` in `runtime/runner/src/sigil-types.ts`), and it is
+no part of the link's identity: two links to one address with different
+schemas name one cell. By ruling, a default belongs to the stored place
+and reaches a reader through this schema. A read that crosses the link
+is validated against the reader's schema, and where nothing is stored at
+the target it gives the default of the link nearest the target whose
+schema declares one, or the reader's own default where no link declares
+one (section 2.2). Nothing is written at the target by such a read: the
+place stays empty until a write stores a value there, and every reader
+then reads that value. Today the reader's schema governs a read that
+crosses a link, and the default is taken from the last link crossed that
+declares one (`combineSchemaForLink` in `runtime/runner/src/traverse.ts`).
 What changes is what it reaches. Today the path holds a link to the node
 document that holds the value, so a read is two hops and consumes the
 pointer labels of both links. In the compiled layout the path holds the
@@ -2038,7 +2079,15 @@ body instantiates (`plan-and-label-templates.md` §3.15).
   that writes it. A child that is loaded while that instance is not
   therefore reads a computed argument path as stored, without a check of
   the writer's basis rows, like a cell written through a handle
-  (`scheduler-and-serving-loop.md` §4.4 and §5.3).
+  (`scheduler-and-serving-loop.md` §4.4 and §5.3). An argument path that
+  is bound by reference holds a link with the schema of the place it
+  names (section 4.4), so the child reads the default of that place
+  where nothing is stored there. Where the child declares a handle at a
+  path that holds a value, the handle names that path of the argument
+  document. A write through it is stored there, and the next evaluation
+  of the parent's cone that writes the path replaces it
+  (`plan-and-label-templates.md` §3.15, "A handle to a path of the
+  argument").
 - **A child in the reactive tier** has a result cell named from the
   enclosing instance and the call site (section 5.2). When the factory at
   the slot changes, the runtime tears the old child down and sets up the
@@ -2124,8 +2173,11 @@ the binding was made.
   body of a per-element callback: in
   `list.map((el) => … action(() => otherList.push(el)))`, written in a
   pattern body, `el` is bound by reference, and the push stores a link to
-  the original element. In an element body the binding is made once per
-  element key. Positions that hold equal plain values share a key where
+  the original element. A path so bound reads the default that the
+  declaration of the slot has where nothing is stored there, whatever the
+  handler's state type declares (section 2.2). In an element body the
+  binding is made once per element key. Positions that hold equal plain
+  values share a key where
   the body neither uses the index nor instantiates a child, and they
   then share one stream, by ruling (section 2.5): the two rows hold links
   to one identifier, and an event from either is an event on that
@@ -2178,7 +2230,14 @@ path what section 2.4 puts into an argument for an entry of that class.
 
 The table holds for a scalar as for a container: a scalar that the handler
 observes for `shape` alone is stored as the stand-in of its kind, and a
-path the handler does not observe is not stored. Every copied path carries
+path the handler does not observe is not stored. A copied scalar is what
+the making body read. A scalar the body read from a place where nothing
+is stored, and whose declaration has a default, is copied as that
+default: the document holds the default as a value, and a later write to
+the place does not change the copy. A link the document holds carries
+the schema of its place (section 4.4), so a path bound by reference reads
+the default when an event arrives, if the place is still empty then.
+Every copied path carries
 the making body's template, whatever the class. `footprint-analysis.md`
 §8.5 has what the body that makes the binding records for each row, and
 `language-subset.md` §5.2 has the source forms.
@@ -4220,7 +4279,9 @@ key where a body over plain values instantiates a child (2.5, 5.3); an
 explicit cause in a handler names the same thing on every event, with the
 existence label fixed at first creation (5.4); the scheduler is switched
 per space, so a space is migrated as a whole and holds no instances of
-both kinds (9). The ruling on the keep set
+both kinds (9); a default belongs to the stored place, and a reader
+bound by reference reads it through the schema the link holds (2.2, 4.4,
+4.7). The ruling on the keep set
 answers what was question 1 of this list, the size of a result document.
 
 ### 11.1 For the project owner

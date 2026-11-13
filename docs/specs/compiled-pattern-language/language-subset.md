@@ -2063,7 +2063,7 @@ each position one of four cases applies.
 | A handle of `T` that can be read: `Cell`, `Writable`, or `ReadonlyCell` | A value type `U` | `T` is assignable to `U` | The value the cell holds, as `h.get()` written at the position would give it. The callee depends on the value and is evaluated again when it changes |
 | A handle | A handle | [§7.5.1](#751-handles) | The handle |
 
-Six points complete the table.
+Seven points complete the table.
 
 - **A literal where a cell is declared** is checked part by part against
   the value type of the declared cell, as a literal is wherever a type is
@@ -2098,8 +2098,17 @@ Six points complete the table.
   an argument read from an optional property of the caller's own input
   included, unless that read has no `undefined` in its type
   ([§7.6.1](#761-optional-properties-of-an-input)). What a read through
-  a handle returns while nothing is stored is the matter of question 12
-  of [§13](#13-open-questions).
+  a handle returns while nothing is stored, at a place whose declaration
+  has no default, is the matter of question 12 of
+  [§13](#13-open-questions).
+- **A default.** The default belongs to the stored place, by ruling. The
+  callee gets a link and not a copy, and the link carries the schema of
+  the place it names, the default included. So where nothing is stored
+  at the place, the callee reads the default the place's declaration
+  has, whether the callee declares the value or a handle, and whether or
+  not its own type declares a default
+  ([§7.6.1](#761-optional-properties-of-an-input);
+  `plan-and-label-templates.md`, §2.5, "A default belongs to the place").
 - **Writability.** The second row does not ask whether the place the
   argument denotes can be written, whatever the kind of the declared
   handle. The type of a reactive value does not say whether it is an
@@ -2110,10 +2119,14 @@ Six points complete the table.
   is bound to. A caller that holds a `ReadonlyCell<T>` cannot do the
   same, by the kind rule. Where the place is a value the instance
   computes, such as the result of an operator, of a collection operation,
-  or of a `computed`, a write through the handle is not defined in this
-  document. *Assumed* ([§13](#13-open-questions), question 28): the
-  checker accepts the argument, and `plan-and-label-templates.md`
-  defines the write.
+  or of a `computed`, the checker accepts the argument, and
+  `plan-and-label-templates.md` defines the write (its §3.11, "A write
+  through a handle to a value the instance computes"). Where the callee
+  is a child with a plan of its own, the value is stored in the child's
+  argument document, the write lands there, and the next evaluation of
+  the operation replaces it. For a handler, a `lift` result, and a
+  pattern compiled into the instance, that document assumes that the
+  runtime refuses the write ([§13](#13-open-questions), question 28).
 
 The plan records each path so bound as a link: every entry of
 `Binding.state` of a binding made in tier R has `capture: "link"`
@@ -2197,7 +2210,10 @@ of the caller (§7.5.2).
 - **Copy or link** follows the ruling on what a binding made in a
   function body holds ([§5.2](#52-runtime-calls), "What a binding
   holds"): a scalar and a computed container are copied, and a handle
-  and a container that has a stored address stay links.
+  and a container that has a stored address stay links. A scalar the
+  body read from a place where nothing is stored, and whose declaration
+  has a default, is copied as that default, which is what the body read
+  ([§7.6.1](#761-optional-properties-of-an-input)).
 - **A container passed on unchanged where a cell is declared.** The
   argument document holds a link to the container's address, and the
   callee's handle names the path that holds the link. A write through
@@ -2330,15 +2346,25 @@ Four rules complete the table.
   declares the property optional. So a pattern that declares
   `events?: Writable<Entry[] | Default<[]>>` may give `events` to a
   handler whose state declares `events: Writable<Entry[]>`.
-- **The default belongs to the place.** In that example the handler
-  declares no default, and it reads the place the pattern's input is
-  bound to. *Assumed* ([§13](#13-open-questions), question 33): a place
-  whose declaration has a default reads as the default, where nothing is
-  stored, for every reader bound to it by reference, a reader whose own
-  type declares no default included. Without this the handler's
-  `events.get()` would find nothing where its type requires a list, and
-  its cone would fail (`plan-and-label-templates.md`, §5.2). The
-  published typings accept the argument and do not state the guarantee.
+- **The default belongs to the stored place.** In that example the
+  handler declares no default, and it reads the place the pattern's
+  input is bound to. By ruling, the callee gets a link and not a copy,
+  and the link carries the schema of the place it names, the default
+  included. A place whose declaration has a default therefore reads as
+  that default, where nothing is stored, for every reader bound to it by
+  reference, a reader whose own type declares no default included: the
+  handler's `events.get()` returns `[]`. A write through the handle
+  stores a value at the place, and every reader then reads that value.
+  Where a chain of links leads to the place, the default is that of the
+  link nearest the place whose schema declares one, and the reader's own
+  default applies where no link declares one
+  (`plan-and-label-templates.md`, §2.5, "A default belongs to the
+  place", which also gives the label of such a read). A handle to a
+  place where nothing is stored is handed to the body all the same
+  (that document's §2.5, "A handle to a position that holds nothing").
+  The rule does not reach a copy: a scalar that a binding made in a
+  function body copies is copied as what the body read, which is the
+  default ([§5.2](#52-runtime-calls), "What a binding holds").
 - **A parameter default is still refused**
   (`pattern-context:parameter-form`, §4.1). The default is declared in
   the type ([§12.7](#127-declare-defaults-in-types-not-in-the-parameter)).
@@ -2355,7 +2381,14 @@ an absent value takes its schema's default before it is validated
 (`materializeSchemaView` in `runtime/runner/src/schema-view.ts`, through
 `defaultForAbsentValue`), and a property declared as a cell is handed
 to the body as a handle whether or not anything is stored
-(`processDefaultValue` in `runtime/runner/src/schema.ts`). The corpus
+(`processDefaultValue` in `runtime/runner/src/schema.ts`). A read that
+crosses a link continues under the reader's schema with one keyword
+taken from the link: the default of the last link crossed whose schema
+declares one (`combineSchemaForLink` in
+`runtime/runner/src/traverse.ts`). A binding a pattern makes is written
+as a link that holds the schema of the path it names
+(`unwrapOneLevelAndBindToDoc` in `runtime/runner/src/pattern-binding.ts`,
+with `includeSchema`). So the ruling is what the runtime does. The corpus
 declares 506 optional properties that hold a handle, 255 of them with a
 default (prototype). It uses a property of the first two rows without a
 test at 503 receivers, of which 434 hold a handle and 69 a value, and
@@ -3921,7 +3954,11 @@ Decided by the project owner:
   `computed` does not request an effect directly (§5.2);
 - an explicit cause in a handler names the same thing on every event, and
   without one an identifier minted in a handler derives from the event
-  (§5.2).
+  (§5.2);
+- a default belongs to the stored place: a callee bound by reference gets
+  a link, the link carries the schema with the default, and the callee
+  reads the default where nothing is stored, whatever its own type
+  declares (§7.5.2, §7.6.1).
 
 Decided by `plan-and-label-templates.md`: a dynamic key is a chosen child
 that does not observe the container's enumeration (its §3.18); `reduce` and
@@ -3939,8 +3976,8 @@ project owner. The
 first three as its questions 49 with 60, 28, and 59. It lists 21, 25,
 26, and 29 as its questions 72, 82, 78, and 93. The
 others do not need the owner. Each names
-the document it is addressed to. The numbers 9, 14, 19, and 30 are not in use,
-so that the other numbers stay as other documents cite them.
+the document it is addressed to. The numbers 9, 14, 19, 30, and 33 are not in
+use, so that the other numbers stay as other documents cite them.
 
 1. **Whether declared types can replace every re-typing overload** (to the
    prototype). §12.4 removes the idiom without a new construct, on the
@@ -4150,16 +4187,23 @@ so that the other numbers stay as other documents cite them.
     of a stored collection, and a projection of one, the write lands in
     the cell the place is in. For a value an operation of the instance
     computes, nothing in this document says where a write lands, and an
-    interim value is not stored at all. *Assumed:* the checker accepts
-    the argument, and `plan-and-label-templates.md` defines the write.
-    Two definitions are possible. The compiler refuses the argument
-    where it has the callee's body and the body has a write edge through
-    that path, and a write a received factory makes there fails its
-    transaction. Or the write lands in the stored output and the next
-    evaluation of the operation replaces it, which is how a write to a
-    derived cell is understood to behave today (not verified against
-    source). The prototype has to count the arguments that name a
-    computed value where a writable handle is declared.
+    interim value is not stored at all. The checker accepts the
+    argument, and `plan-and-label-templates.md` (§3.11 and §3.15)
+    defines the write. For a child with a plan of its own the value is
+    stored in the child's argument document: the write lands there, and
+    the next evaluation of the operation replaces it. For a handler, a
+    `lift` result, and a pattern compiled into the instance, the place
+    is an output of the instance. *Assumed,* with that document's
+    question 42: the runtime refuses the write, which rejects the
+    event's transaction in a handler. The alternative lets the write
+    land in the stored output, where the next evaluation of the
+    operation replaces it, which is how a write to a derived cell is
+    understood to behave today: no refusal of such a write was found in
+    the runtime. Whether the compiler also reports the argument, where
+    it has the callee's body and the body has a write edge through the
+    path, is not decided, and this document has no diagnostic for it.
+    The prototype has to count the arguments that name a computed value
+    where a writable handle is declared.
 29. **Whether a write through a handle of `unknown` is refused** (to
     the project owner; the continuation plan's question 93). By ruling,
     a handle of `T` is assignable to the same kind of handle of
@@ -4199,16 +4243,3 @@ so that the other numbers stay as other documents cite them.
     The alternative has `builtin-inventory.md` list, for each host
     element, the event types it delivers as object types of the API,
     such as one for the event of `cf-input`.
-33. **A default belongs to the place** (to `plan-and-label-templates.md`
-    and `execution-and-storage.md`). §7.6.1 lets a pattern give an
-    optional property of its input whose type declares a default to a
-    callee that requires the property and declares no default, bound by
-    reference, as the published typings do in 223 arguments of the
-    corpus (prototype). *Assumed:* where nothing is stored, the place
-    reads as the default its declaration has, for every reader bound to
-    it by reference, whatever that reader's own type declares. The
-    alternative refuses the argument unless the callee's type declares
-    the same default, which changes those 223 arguments. A second point
-    is assumed with it: a handle to a place where nothing is stored is
-    handed to the body all the same, for an optional property of a
-    pattern's input, as the runtime does today.
