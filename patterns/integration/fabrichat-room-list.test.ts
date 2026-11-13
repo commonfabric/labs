@@ -938,6 +938,51 @@ describe("fabrichat-room-list", () => {
     return (value?.items ?? []).map((profile) => profile.space);
   }
 
+  /**
+   * Has `person`'s Home register `room`, which `from` offered under `id`, as
+   * Home's share intake registers an offered room, with no acceptance after,
+   * as when the intake's acceptance did not land: the catalog then lists the
+   * room with no membership, and the room's roster doesn't list `person`.
+   * Returns the space of `person`'s profile.
+   */
+  async function registerOffered(
+    person: Identity,
+    room: DID,
+    from: Identity,
+    id: string,
+  ): Promise<DID> {
+    const member = await openMember(server.url, person, 0);
+    try {
+      const runtime = member.controller.runtime;
+      const registered = await sendVerbEvent(
+        member.home.key("registerSharedSpace"),
+        {
+          space: room,
+          host: normalizeSpaceHost(new URL(runtime.apiUrl).origin).origin,
+          kind: "fabrichat-room",
+          title: "Offered room",
+          offer: { from: from.did(), id },
+        },
+      );
+      if (registered.status !== "committed") {
+        throw new Error("Registering the room did not commit");
+      }
+      await settle(member.controller);
+      const profile = await member.home.key("profiles").key(0)
+        .asSchema<Cell<unknown>>({ asCell: ["cell"] }).pull();
+      return profile.space as DID;
+    } finally {
+      await closeMember(member);
+    }
+  }
+
+  /** A fresh identity named for `name`. */
+  const identityNamed = (name: string): Promise<Identity> =>
+    Identity.fromPassphrase(
+      `fabrichat-room-list ${name} ${crypto.randomUUID()}`,
+      { implementation: "noble" },
+    );
+
   describe("adopting a room whose roster lacks the person", () => {
     // Ivan makes the room with the person as a member, so its roster lists
     // Ivan alone until the person joins it, which adopting it does.
@@ -979,33 +1024,7 @@ describe("fabrichat-room-list", () => {
         await closeMember(ivan);
       }
 
-      // The person's Home registers the room as its share intake registers
-      // an offered one, and no acceptance follows, as when the intake's
-      // acceptance did not land: the catalog lists the room with no
-      // membership, and its roster doesn't list the person.
-      const member = await openMember(server.url, person, 0);
-      try {
-        const runtime = member.controller.runtime;
-        const registered = await sendVerbEvent(
-          member.home.key("registerSharedSpace"),
-          {
-            space: room,
-            host: normalizeSpaceHost(new URL(runtime.apiUrl).origin).origin,
-            kind: "fabrichat-room",
-            title: "Ivan's room",
-            offer: { from: ivanIdentity.did(), id: "ivans" },
-          },
-        );
-        if (registered.status !== "committed") {
-          throw new Error("Registering the room did not commit");
-        }
-        await settle(member.controller);
-        const profile = await member.home.key("profiles").key(0)
-          .asSchema<Cell<unknown>>({ asCell: ["cell"] }).pull();
-        profileSpace = profile.space as DID;
-      } finally {
-        await closeMember(member);
-      }
+      profileSpace = await registerOffered(person, room, ivanIdentity, "ivans");
 
       client = await bootClient({ adopt: false, person });
       stopped = await client.controller.adoptCatalogRooms();
@@ -1054,6 +1073,84 @@ describe("fabrichat-room-list", () => {
     it("adopts nothing at a later boot, and receives no document from the room's space", () => {
       expect(secondStopped).toBe(0);
       expect(arrivedWhileAdopting).toEqual([0]);
+    });
+  });
+
+  describe("two people adopting one room at once", () => {
+    // Ivan makes the room with both as members, and each one's Home lists it
+    // with no membership. Both clients adopt it at once, so with server
+    // execution off each client's join writes the room's roster, and one of
+    // the two commits meets the other's.
+
+    let rosterBefore: string[];
+    let profileSpaces: DID[];
+    let clients: Client[];
+    let outcomes: { status?: string }[];
+    let rosterAfter: string[];
+
+    beforeAll(async () => {
+      const people = [await identityNamed("kim"), await identityNamed("lee")];
+      for (const person of people) {
+        await closeMember(await openMember(server.url, person, 0));
+      }
+      const ivanIdentity = await identityNamed("ivan");
+      const ivan = await openMember(server.url, ivanIdentity, 0);
+      let room: DID;
+      let roomCell: Cell<unknown>;
+      try {
+        room = await createGroup(
+          ivan,
+          "both",
+          "Ivan's room for two",
+          people.map((person) => person.did()),
+        );
+        roomCell = await ivan.home.key("chatManager").key("requests")
+          .key("both").key("entry").key("room").asSchema<Cell<unknown>>(
+            HANDLE,
+          ).pull();
+        rosterBefore = await rosterOf(ivan.controller, roomCell);
+      } finally {
+        await closeMember(ivan);
+      }
+      profileSpaces = [];
+      for (const person of people) {
+        profileSpaces.push(
+          await registerOffered(person, room, ivanIdentity, "both"),
+        );
+      }
+
+      clients = await Promise.all(
+        people.map((person) => bootClient({ adopt: false, person })),
+      );
+      await Promise.all(
+        clients.map((client) => client.controller.adoptCatalogRooms()),
+      );
+      for (const client of clients) await settle(client.controller);
+      outcomes = (await Promise.all(
+        clients.map((client) => adoptedRooms(client, [room])),
+      )).map(([outcome]) => outcome);
+
+      const reader = await bootClient({ adopt: false, person: people[0] });
+      try {
+        rosterAfter = await rosterOf(reader.controller, roomCell);
+      } finally {
+        await reader.controller.dispose();
+      }
+    });
+
+    afterAll(async () => {
+      for (const client of clients ?? []) await client.controller.dispose();
+    });
+
+    it("records each one's adoption", () => {
+      expect(outcomes.map(({ status }) => status)).toEqual(["done", "done"]);
+    });
+
+    it("leaves both on the room's roster", () => {
+      expect(rosterBefore.length).toBe(1);
+      expect([...rosterAfter].sort()).toEqual(
+        [...rosterBefore, ...profileSpaces].sort(),
+      );
     });
   });
 
