@@ -491,8 +491,21 @@ impl<'a> Resolver<'_, 'a> {
                 self.function_return(module, callback, None, depth)
             }
             "action" => {
+                // The event type: the type argument, or what the callback
+                // declares for its parameter. A callback without a
+                // parameter takes no event.
+                let declared = || {
+                    let callback = Self::callback(call)?;
+                    match callback.params().items.first() {
+                        None => Some(self.intern(Shape::Void)),
+                        Some(parameter) => parameter.type_annotation.as_ref().map(|annotation| {
+                            self.resolve_type(module, &annotation.type_annotation)
+                        }),
+                    }
+                };
                 let event = self
                     .type_argument(module, call, 0)
+                    .or_else(declared)
                     .unwrap_or_else(|| self.intern(Shape::Unknown));
                 self.of(Shape::Handle(HandleKind::Stream, event))
             }

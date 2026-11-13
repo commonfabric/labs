@@ -9,7 +9,9 @@ use pattern_compiler::program::{types_at_markers, SourceFile};
 fn types(snippet: &str) -> Vec<String> {
     types_at_markers(&[SourceFile {
         path: "case.tsx".to_string(),
-        text: format!("import {{ Cell, handler, pattern }} from \"commonfabric\";\n{snippet}"),
+        text: format!(
+            "import {{ action, Cell, handler, pattern }} from \"commonfabric\";\n{snippet}"
+        ),
     }])
 }
 
@@ -395,5 +397,24 @@ fn key_on_a_handle_of_unknown_is_a_handle_of_unknown() {
              }\n"
         ),
         ["Cell<unknown>", "Cell<unknown>", "unknown"]
+    );
+}
+
+#[test]
+fn action_has_the_event_type_its_callback_declares() {
+    assert_eq!(
+        types(
+            "const Show = pattern<{ n: number }, { a: unknown }>(() => {\n\
+               const add = action((event: { url: string }) => { event.url; });\n\
+               const clear = action(() => {});\n\
+               const typed = action<{ index: number }>((event) => { event.index; });\n\
+               return { a: [/*?*/add, /*?*/clear, /*?*/typed] };\n\
+             });\n"
+        ),
+        [
+            "Stream<{ url: string }>",
+            "Stream<void>",
+            "Stream<{ index: number }>"
+        ]
     );
 }
