@@ -474,16 +474,18 @@ impl<'a> TypedRules<'_, '_, 'a> {
         let Shape::Handle(_, value) = resolver.shape(resolver.present(receiver)) else {
             return;
         };
-        if resolver.shape(value) != Shape::Unknown {
-            return;
-        }
+        let top = match resolver.shape(value) {
+            Shape::Unknown => "unknown",
+            Shape::Unresolved(Why::Any) => "any",
+            _ => return,
+        };
         resolver.count(
             self.module,
-            format!("types:write through a handle of `unknown`:{method}"),
+            format!("types:write through a handle of `{top}`:{method}"),
         );
         resolver.note(
             self.module,
-            "a write through a handle of `unknown`",
+            format!("a write through a handle of `{top}`"),
             call.span,
         );
     }

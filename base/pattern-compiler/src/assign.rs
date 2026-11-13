@@ -1039,8 +1039,8 @@ impl<'a> Resolver<'_, 'a> {
             return Verdict::Unsure;
         };
         let verdict = self.relate_in(from, to, 0, by_reference);
-        if verdict == Verdict::Yes {
-            self.note_bindings(module, expression, from, to, by_reference);
+        if !matches!(verdict, Verdict::No(..)) {
+            self.note_bindings(module, expression, from, to, by_reference, &verdict);
         }
         if let Verdict::No(class, text) = &verdict {
             // Whether the value is refused only because it is read from an
@@ -1099,6 +1099,7 @@ impl<'a> Resolver<'_, 'a> {
         from: TypeId,
         to: TypeId,
         by_reference: bool,
+        verdict: &Verdict,
     ) {
         let span = self
             .types
@@ -1111,7 +1112,7 @@ impl<'a> Resolver<'_, 'a> {
                 Shape::Handle(HandleKind::Cell | HandleKind::WriteonlyCell, _)
             ) && !matches!(have, Shape::Handle(..))
         };
-        if by_reference && self.pairs(from, to, 0, &writable) {
+        if by_reference && *verdict == Verdict::Yes && self.pairs(from, to, 0, &writable) {
             let origin = self.origin_of_place(module, expression, 0);
             self.count(
                 module,
@@ -1132,23 +1133,33 @@ impl<'a> Resolver<'_, 'a> {
             HandleKind::Stream,
             HandleKind::Any,
         ] {
-            let to_unknown = |have: &Shape, want: &Shape| match (have, want) {
-                (Shape::Handle(_, value), Shape::Handle(wanted_kind, wanted)) => {
-                    *wanted_kind == kind
-                        && self.shape(*wanted) == Shape::Unknown
-                        && self.shape(*value) != Shape::Unknown
+            // A handle of `any` is listed beside a handle of `unknown`,
+            // which is what the subset has the author write for it (§7.8).
+            for (top, name) in [
+                (Shape::Unknown, "unknown"),
+                (Shape::Unresolved(crate::types::Why::Any), "any"),
+            ] {
+                let to_top = |have: &Shape, want: &Shape| match (have, want) {
+                    (Shape::Handle(_, value), Shape::Handle(wanted_kind, wanted)) => {
+                        *wanted_kind == kind
+                            && self.shape(*wanted) == top
+                            && !matches!(
+                                self.shape(*value),
+                                Shape::Unknown | Shape::Unresolved(crate::types::Why::Any)
+                            )
+                    }
+                    _ => false,
+                };
+                if self.pairs(from, to, 0, &to_top) {
+                    self.note(
+                        module,
+                        format!(
+                            "a handle of a known type where `{}<{name}>` is declared",
+                            kind.name()
+                        ),
+                        span,
+                    );
                 }
-                _ => false,
-            };
-            if self.pairs(from, to, 0, &to_unknown) {
-                self.note(
-                    module,
-                    format!(
-                        "a handle of a known type where `{}<unknown>` is declared",
-                        kind.name()
-                    ),
-                    span,
-                );
             }
         }
     }
