@@ -269,11 +269,18 @@ to report. No test can cover a line of it, so the metric charges it nothing.
 The metric tells the two apart by compiling each file it finds no record for,
 and charges it only when something comes out. `tasks/executable-source.ts` runs
 the file through the TypeScript compiler and reads the emitted JavaScript: a
-file that emits no statement, an `export {}` module marker aside, is charged
+file that emits no statement other than export declarations is charged
 nothing, and every other file is charged its full tracked-line count. Which
 constructs reach the output is the compiler's rule. An enum, a namespace holding
 a value, and an import kept for its side effects all emit code. A type-only
-import, a namespace holding only types, and a comment do not. The compile
+import, a namespace holding only types, and a comment do not. An export
+declaration does reach the output — `export * from "./a.ts"`,
+`export { b } from "./b.ts"`, or the `export {}` the compiler adds to keep an
+otherwise empty file a module — but it only binds names, and a module's
+evaluation runs no step for it. So a file that only re-exports other modules is
+charged nothing as well. The pattern instrumentation agrees: it skips export
+declarations, so a pattern test that loads such a file leaves no record of it.
+The compile
 happens when the report is scored, once per file the report leaves out. A file
 with a record never pays for it, because its record already says which of its
 lines ran.
@@ -1193,6 +1200,13 @@ rendered its UI. Once it instruments, the test passes in 7 seconds.
 A new browser-driven suite that creates its pieces some other way should expect
 the same trap.
 
+An integration test with no browser at all, whose pattern code runs only in
+runtimes it constructs itself, collects the same way: it hands each runtime
+`patternCoverageCollector()` as its `patternCoverage` option. No page dump
+writes that collector out, so the test calls `writeProcessPatternCoverage()`
+once it has disposed its runtimes. `patterns/integration/fabrifile-store.test.ts`
+is the worked example.
+
 Getting the hits back out crosses two boundaries: the worker's and the browser's.
 `PatternCoverageCollector.toData()` and `ingest()` give the spans and hit counts a
 plain-JSON form. The worker exposes them over the RuntimeClient IPC
@@ -1278,12 +1292,6 @@ record matches nothing and drops its coverage without complaining, which looks
 exactly like a pattern nobody tested. Writing one warns.
 
 ## Known limitations and possible future work
-
-- Only the browser-driven suites contribute. A pattern exercised solely through
-  the headless multi-runtime harness (`multi-runtime-harness.ts`), whose sessions
-  are Deno workers rather than pages, has nowhere for the teardown dump to run and
-  contributes nothing. Those sessions could write their own LCOV directly — they
-  are Deno realms with a filesystem — which is the natural way to extend this.
 
 - Integration coverage is not a reason to skip a unit test. A unit test can cover
   a handler body too (see the handler bullet above) and can assert on what the

@@ -61,15 +61,6 @@ export interface PiecesListOutput {
   addParticipant: Stream<{ profile: ParticipantProfile }>;
 }
 
-const _visit = handler<
-  Record<string, never>,
-  { piece: Writable<MinimalPiece> }
->(
-  (_, state) => {
-    return navigateTo(state.piece);
-  },
-);
-
 const removePiece = handler<
   Record<string, never>,
   {

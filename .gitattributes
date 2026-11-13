@@ -18,3 +18,10 @@ patterns/*/iframe-*/**/guest.js linguist-generated=true
 # Test-support modules for the UI components, which sit beside the source
 # rather than in a test directory.
 runtime/ui/src/v2/test-utils/** test
+
+# Test-support modules for pattern tests, which pattern tests import from
+# beside the patterns rather than from a test directory.
+patterns/tools/test-support/** test
+patterns/showcase/battleship/shared/board-view.ts test
+patterns/showcase/battleship/multiplayer/room-view.ts test
+patterns/system/notes/note-test-fixtures.tsx test

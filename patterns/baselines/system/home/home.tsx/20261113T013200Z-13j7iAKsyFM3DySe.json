@@ -424,7 +424,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/system/profile-home/profile-home.tsx",
-                  "moduleIdentity": "rIRhJLfUzsC3Zaa-WaGJZThyVL7vw2-2IyXmfbqEAZs",
+                  "moduleIdentity": "nyElFEgS1kZad82Qcp0QoZdiVyq8k197dbaGEscG9rg",
                   "path": [
                     "setAvatar"
                   ]
@@ -450,7 +450,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/system/profile-home/profile-home.tsx",
-                  "moduleIdentity": "rIRhJLfUzsC3Zaa-WaGJZThyVL7vw2-2IyXmfbqEAZs",
+                  "moduleIdentity": "nyElFEgS1kZad82Qcp0QoZdiVyq8k197dbaGEscG9rg",
                   "path": [
                     "setBio"
                   ]
@@ -475,7 +475,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/system/profile-home/profile-home.tsx",
-                  "moduleIdentity": "rIRhJLfUzsC3Zaa-WaGJZThyVL7vw2-2IyXmfbqEAZs",
+                  "moduleIdentity": "nyElFEgS1kZad82Qcp0QoZdiVyq8k197dbaGEscG9rg",
                   "path": [
                     "mutateElements"
                   ]
@@ -504,7 +504,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/system/profile-home/profile-home.tsx",
-                  "moduleIdentity": "rIRhJLfUzsC3Zaa-WaGJZThyVL7vw2-2IyXmfbqEAZs",
+                  "moduleIdentity": "nyElFEgS1kZad82Qcp0QoZdiVyq8k197dbaGEscG9rg",
                   "path": [
                     "mutateExternalProfileLinks"
                   ]
@@ -533,7 +533,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/system/profile-home/profile-home.tsx",
-                  "moduleIdentity": "rIRhJLfUzsC3Zaa-WaGJZThyVL7vw2-2IyXmfbqEAZs",
+                  "moduleIdentity": "nyElFEgS1kZad82Qcp0QoZdiVyq8k197dbaGEscG9rg",
                   "path": [
                     "setInbox"
                   ]
@@ -564,7 +564,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/system/profile-home/profile-home.tsx",
-                  "moduleIdentity": "rIRhJLfUzsC3Zaa-WaGJZThyVL7vw2-2IyXmfbqEAZs",
+                  "moduleIdentity": "nyElFEgS1kZad82Qcp0QoZdiVyq8k197dbaGEscG9rg",
                   "path": [
                     "setName"
                   ]
@@ -589,7 +589,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/system/profile-home/profile-home.tsx",
-                  "moduleIdentity": "rIRhJLfUzsC3Zaa-WaGJZThyVL7vw2-2IyXmfbqEAZs",
+                  "moduleIdentity": "nyElFEgS1kZad82Qcp0QoZdiVyq8k197dbaGEscG9rg",
                   "path": [
                     "setPicture"
                   ]
@@ -675,7 +675,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/system/profile-home/profile-home.tsx",
-                  "moduleIdentity": "rIRhJLfUzsC3Zaa-WaGJZThyVL7vw2-2IyXmfbqEAZs",
+                  "moduleIdentity": "nyElFEgS1kZad82Qcp0QoZdiVyq8k197dbaGEscG9rg",
                   "path": [
                     "publishVerifiedIdentities"
                   ]
@@ -1019,7 +1019,7 @@
                     "type": "string"
                   },
                   "state": {
-                    "type": "string"
+                    "$ref": "#/$defs/SharedSpaceMembership"
                   }
                 },
                 "required": [
@@ -2004,7 +2004,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/system/private-inbox/private-inbox.tsx",
-              "moduleIdentity": "ht_0SZjiT6l0ds2QQFwqcxy3e4E5Bdwz6cjG4qJ_gNU",
+              "moduleIdentity": "F9Z53Q5Ag-EKCBpWEfzVKoVFUdJDeaCs9Ku7jJbnLe4",
               "path": [
                 "replaceRefusedPrivateInbox"
               ]
@@ -2910,7 +2910,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/system/profile-create/profile-create.tsx",
-                  "moduleIdentity": "xVD8a2Iaf8utRkAYMFTekxuykHnqi-_er7MP9iBziSU",
+                  "moduleIdentity": "OHUjnRKrWVpmzm3BPCInQUy7VGBJEbsxxOKyGTeLLOA",
                   "path": [
                     "setDefaultProfile"
                   ]
@@ -2938,7 +2938,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/system/profile-create/profile-create.tsx",
-              "moduleIdentity": "xVD8a2Iaf8utRkAYMFTekxuykHnqi-_er7MP9iBziSU",
+              "moduleIdentity": "OHUjnRKrWVpmzm3BPCInQUy7VGBJEbsxxOKyGTeLLOA",
               "path": [
                 "submitProfileCreation"
               ]
@@ -2954,7 +2954,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/system/profile-create/profile-create.tsx",
-              "moduleIdentity": "xVD8a2Iaf8utRkAYMFTekxuykHnqi-_er7MP9iBziSU",
+              "moduleIdentity": "OHUjnRKrWVpmzm3BPCInQUy7VGBJEbsxxOKyGTeLLOA",
               "path": [
                 "submitProfileCreation"
               ]
@@ -2974,7 +2974,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/system/profile-create/profile-create.tsx",
-              "moduleIdentity": "xVD8a2Iaf8utRkAYMFTekxuykHnqi-_er7MP9iBziSU",
+              "moduleIdentity": "OHUjnRKrWVpmzm3BPCInQUy7VGBJEbsxxOKyGTeLLOA",
               "path": [
                 "setMruProfile"
               ]
@@ -2998,7 +2998,7 @@
             "writeAuthorizedBy": {
               "__ctWriterIdentityOf": {
                 "file": "/patterns/system/profile-create/profile-create.tsx",
-                "moduleIdentity": "xVD8a2Iaf8utRkAYMFTekxuykHnqi-_er7MP9iBziSU",
+                "moduleIdentity": "OHUjnRKrWVpmzm3BPCInQUy7VGBJEbsxxOKyGTeLLOA",
                 "path": [
                   "setMruProfile"
                 ]
@@ -3016,7 +3016,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/system/profile-create/profile-create.tsx",
-              "moduleIdentity": "xVD8a2Iaf8utRkAYMFTekxuykHnqi-_er7MP9iBziSU",
+              "moduleIdentity": "OHUjnRKrWVpmzm3BPCInQUy7VGBJEbsxxOKyGTeLLOA",
               "path": [
                 "setProfileRetired"
               ]
@@ -3032,7 +3032,7 @@
             "writeAuthorizedBy": {
               "__ctWriterIdentityOf": {
                 "file": "/patterns/system/profile-create/profile-create.tsx",
-                "moduleIdentity": "xVD8a2Iaf8utRkAYMFTekxuykHnqi-_er7MP9iBziSU",
+                "moduleIdentity": "OHUjnRKrWVpmzm3BPCInQUy7VGBJEbsxxOKyGTeLLOA",
                 "path": [
                   "setProfileRetired"
                 ]
@@ -3049,7 +3049,7 @@
             "writeAuthorizedBy": {
               "__ctWriterIdentityOf": {
                 "file": "/patterns/system/shared-space/shared-space-catalog.ts",
-                "moduleIdentity": "E0StssjQ2bMaPg98jIN4M6Bdzz3sDNLmgaYZYhwHKA0",
+                "moduleIdentity": "TlaU1p0DN5StRLdEub8p0BI0p0mWn1watWx-4Uo7ZTE",
                 "path": [
                   "registerSharedSpace"
                 ]
@@ -3061,7 +3061,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/system/shared-space/shared-space-catalog.ts",
-              "moduleIdentity": "E0StssjQ2bMaPg98jIN4M6Bdzz3sDNLmgaYZYhwHKA0",
+              "moduleIdentity": "TlaU1p0DN5StRLdEub8p0BI0p0mWn1watWx-4Uo7ZTE",
               "path": [
                 "registerSharedSpace"
               ]
@@ -3187,12 +3187,6 @@
       "chatManager": {
         "$ref": "#/$defs/FabriChatManagerOutput"
       },
-      "createOwnPrivateInbox": {
-        "$ref": "#/$defs/EnsurePrivateInboxEvent",
-        "asCell": [
-          "stream"
-        ]
-      },
       "createProfile": {
         "$ref": "#/$defs/CreateProfileEvent",
         "asCell": [
@@ -3241,9 +3235,6 @@
       "mru": {
         "$ref": "#/$defs/TrustedProfileMru",
         "default": []
-      },
-      "ownPrivateInbox": {
-        "$ref": "#/$defs/PrivateInboxHolder"
       },
       "privateInbox": {
         "$ref": "#/$defs/PrivateInboxHolder"
@@ -3394,7 +3385,6 @@
       "agentQueue",
       "chatManager",
       "privateInbox",
-      "ownPrivateInbox",
       "retainedPrivateInboxes",
       "privateInboxRefusal",
       "privateInboxReplacement",
@@ -3413,7 +3403,6 @@
       "ensurePrivateInbox",
       "requestPrivateInbox",
       "replaceRefusedPrivateInbox",
-      "createOwnPrivateInbox",
       "addFavorite",
       "removeFavorite",
       "addJournalEntry",
