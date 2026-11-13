@@ -418,3 +418,26 @@ fn action_has_the_event_type_its_callback_declares() {
         ]
     );
 }
+
+#[test]
+fn optional_chain_that_holds_narrows_its_receiver() {
+    assert_eq!(
+        types(
+            "function show(pending: string | undefined, reply: { thread?: string } | undefined) {\n\
+               if (pending?.trim()) { /*?*/pending; }\n\
+               const a = reply?.thread === undefined ? /*?*/reply : /*?*/reply;\n\
+               const b = reply?.thread !== undefined && /*?*/reply;\n\
+               const c = reply?.thread === \"x\" ? /*?*/reply : /*?*/reply;\n\
+               return [a, b, c];\n\
+             }\n"
+        ),
+        [
+            "string",
+            "{ thread?: string } | undefined",
+            "{ thread?: string }",
+            "{ thread?: string }",
+            "{ thread?: string }",
+            "{ thread?: string } | undefined"
+        ]
+    );
+}

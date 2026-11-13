@@ -1050,9 +1050,7 @@ impl<'a> Resolver<'_, 'a> {
             if let Ok(declared) = declared {
                 // Where the rest of the comparison is not decided, the
                 // optional property is still the one reason found.
-                let absent = self.present(from) != from && self.present(declared) == declared;
-                if absent
-                    && *class != Class::OptionalProperty
+                if *class != Class::OptionalProperty
                     && !matches!(
                         self.relate_in(declared, to, 0, by_reference),
                         Verdict::No(..)

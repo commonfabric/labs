@@ -731,6 +731,15 @@ impl<'a> Resolver<'_, 'a> {
             Expression::CallExpression(call) => {
                 self.assume_call(module, call, sense, reference, ty)
             }
+            // A chain that is truthy did not stop, so each receiver it
+            // tests with `?.` is present.
+            Expression::ChainExpression(chain) if sense => {
+                if self.chain_tests(module, &chain.expression, reference) {
+                    self.present(ty)
+                } else {
+                    ty
+                }
+            }
             _ if self.reference_of(module, test).as_ref() == Some(reference) => {
                 self.assume_truthy(sense, ty)
             }
@@ -939,6 +948,19 @@ impl<'a> Resolver<'_, 'a> {
             let Some(value) = self.unit_of(module, value) else {
                 continue;
             };
+            // A chain that is not `undefined` did not stop, so each
+            // receiver it tests with `?.` is present.
+            if let Expression::ChainExpression(chain) = tested {
+                let defined = match &value {
+                    Unit::Undefined => !sense,
+                    Unit::Null => !sense && !strict,
+                    Unit::Literal(_) => sense,
+                };
+                if defined && self.chain_tests(module, &chain.expression, reference) {
+                    return self.present(ty);
+                }
+                continue;
+            }
             let Some(tested) = self.reference_of(module, tested) else {
                 continue;
             };
@@ -974,6 +996,35 @@ impl<'a> Resolver<'_, 'a> {
             }
         }
         ty
+    }
+
+    /// Whether the chain tests `reference` with `?.`: some link of it is
+    /// optional and has the reference as its receiver.
+    fn chain_tests(
+        &self,
+        module: usize,
+        element: &ChainElement<'a>,
+        reference: &Reference,
+    ) -> bool {
+        let (mut optional, mut object) = match element {
+            ChainElement::StaticMemberExpression(member) => (member.optional, &member.object),
+            ChainElement::ComputedMemberExpression(member) => (member.optional, &member.object),
+            ChainElement::CallExpression(call) => (call.optional, &call.callee),
+            _ => return false,
+        };
+        loop {
+            if optional && self.reference_of(module, object).as_ref() == Some(reference) {
+                return true;
+            }
+            (optional, object) = match object {
+                Expression::StaticMemberExpression(member) => (member.optional, &member.object),
+                Expression::ComputedMemberExpression(member) => (member.optional, &member.object),
+                Expression::CallExpression(call) => (call.optional, &call.callee),
+                Expression::TSNonNullExpression(inner) => (false, &inner.expression),
+                Expression::ParenthesizedExpression(inner) => (false, &inner.expression),
+                _ => return false,
+            };
+        }
     }
 
     /// The unit value an expression denotes: a literal, `null`, or
