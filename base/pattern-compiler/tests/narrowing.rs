@@ -669,3 +669,18 @@ fn result_of_an_operator_and_a_let_are_ordinary_values() {
         ["string", "number", "unknown"]
     );
 }
+
+#[test]
+fn conditional_with_an_unknown_branch_is_unknown_and_a_kind_test_narrows_it() {
+    assert_eq!(
+        types(
+            "function f(value: object) {\n\
+               const key = \"item_key\" in value ? value.item_key : undefined;\n\
+               const a = /*?*/key;\n\
+               if (typeof key !== \"string\" || /*?*/key.length !== 64) return undefined;\n\
+               return /*?*/key;\n\
+             }\n"
+        ),
+        ["unknown", "string", "string"]
+    );
+}

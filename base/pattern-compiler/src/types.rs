@@ -553,6 +553,14 @@ impl<'a> Resolver<'_, 'a> {
                 _ => flat.push(member),
             }
         }
+        // `unknown` beside any other member is `unknown`.
+        if let Some(unknown) = flat
+            .iter()
+            .copied()
+            .find(|member| self.shape(*member) == Shape::Unknown)
+        {
+            return unknown;
+        }
         let mut seen: Vec<String> = Vec::new();
         let mut kept = Vec::new();
         for member in flat {
