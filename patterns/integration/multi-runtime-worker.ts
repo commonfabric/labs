@@ -943,6 +943,12 @@ const handlers: Record<
    * asked for. The same read annotates each container it returns with the cell
    * it came from, and that annotation is machinery rather than content: the
    * container's own entries are what the reader asked for.
+   *
+   * The cell at `path` is pulled as well as the result. A path can run past a
+   * link the result's schema holds as a handle, into another space, and a
+   * client loads what such a path reaches only when a read reaches it: the
+   * result's pull stops at the handle, and a bare `get()` of the path would
+   * read the far documents before they arrive.
    */
   async read({ path, piece }) {
     const target = await resultAt(piece);
@@ -952,7 +958,7 @@ const handlers: Record<
       cell = cell.key(segment as never);
     }
     if (boundedReads) cell.get();
-    if (boundedReads) await cell.pull();
+    await cell.pull();
     return convertCellsToLinks(cell.get(), { doNotConvertCellResults: true });
   },
 
