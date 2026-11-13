@@ -890,6 +890,17 @@ export function lifecycleVerbNotDurable<W>(
   return undefined;
 }
 
+/**
+ * What a running lifecycle verb's transactions sealed so far: the
+ * space-scoped documents they write, each accepted seal's contribution by
+ * wave and index, and the store seqs of its direct commits.
+ */
+type RunningLifecycleVerb = {
+  writes: Map<string, { id: string; scopeKey: "space" }>;
+  contributions: { wave: WaveAccumulator; index: number }[];
+  directCommitSeqs: number[];
+};
+
 /** Where a durable stream entry sits, by the identity no compaction moves. */
 type StreamEntryAddress = {
   /** The stream's sidecar document. */
@@ -1452,17 +1463,17 @@ export class SpaceServer implements TransactionSealDestination {
    * `seal()` while `#runQueuedLifecycleVerbs` awaits the verb: the
    * space-scoped documents they write, and each accepted seal's
    * contribution, by wave and index. Seals are chained one at a time, so
-   * the count right after a seal resolves names that seal's contribution
-   * — another action's transaction sealing meanwhile gets its own entry
-   * nowhere here, and cannot settle the verb.
+   * the count right after a seal resolves names that seal's contribution.
+   *
+   * Only `bookkeeping` transactions are recorded
+   * ({@link #lifecycleVerbHolding}). A verb's own writes are stamped that
+   * way, and the served pieces of the space keep deriving and handling
+   * events while it runs, into the same wave. A derivation or a handler run
+   * that seals meanwhile is not the verb's, and the wave commit loses none
+   * of its writes: it drops a superseded derivation, which runs again, and
+   * requeues a handler run, which replays (`WaveRunKind`).
    */
-  #runningLifecycleVerb:
-    | {
-      writes: Map<string, { id: string; scopeKey: "space" }>;
-      contributions: { wave: WaveAccumulator; index: number }[];
-      directCommitSeqs: number[];
-    }
-    | undefined;
+  #runningLifecycleVerb: RunningLifecycleVerb | undefined;
 
   /**
    * Transactions stamped `directCommit` (runtime.ts `ServerRunInfo`),
@@ -2510,7 +2521,7 @@ export class SpaceServer implements TransactionSealDestination {
     }
     const wave = this.#openWave();
     this.#waveByTx.set(tx, wave);
-    const runningVerb = this.#runningLifecycleVerb;
+    const runningVerb = this.#lifecycleVerbHolding(tx);
     this.#recordLifecycleVerbWrites(tx);
     const sealed = this.#sealChain.then(async () => {
       const before = wave.contributionCount;
@@ -7187,7 +7198,7 @@ export class SpaceServer implements TransactionSealDestination {
       }
       const start = performance.now();
       const staged = new Map<string, { id: string; scopeKey: "space" }>();
-      const running = {
+      const running: RunningLifecycleVerb = {
         writes: staged,
         contributions: [],
         directCommitSeqs: [],
@@ -7254,11 +7265,25 @@ export class SpaceServer implements TransactionSealDestination {
   }
 
   /**
-   * Record a running verb's space-scoped writes off the transaction's
-   * journal at its seal; no-op outside a verb's run.
+   * The running verb a transaction sealed now is held to: the verb running,
+   * when the transaction is stamped `bookkeeping`, the kind a verb's own
+   * writes carry, and `undefined` for any other kind or outside a verb's
+   * run (see {@link #runningLifecycleVerb}).
+   */
+  #lifecycleVerbHolding(
+    tx: IExtendedStorageTransaction,
+  ): RunningLifecycleVerb | undefined {
+    return waveRunContextOf(tx)?.kind === "bookkeeping"
+      ? this.#runningLifecycleVerb
+      : undefined;
+  }
+
+  /**
+   * Record a running verb's space-scoped writes off the journal of a
+   * transaction it is held to, at its seal; no-op for any other.
    */
   #recordLifecycleVerbWrites(tx: IExtendedStorageTransaction): void {
-    const staged = this.#runningLifecycleVerb?.writes;
+    const staged = this.#lifecycleVerbHolding(tx)?.writes;
     if (staged === undefined) return;
     for (const detail of tx.tx.getWriteDetails?.(this.#options.space) ?? []) {
       const { id, scope } = detail.address;
