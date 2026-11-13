@@ -52,10 +52,12 @@ a piece's stored address (`pattern:<space>/<piece-id>`, or the
 model as the handle the run holds for that piece, once the bridge has checked it
 is a whole Pattern Instance in the session's own space. So an agent that
 inspects a Loom can describe and call the pieces in it. An address it cannot
-hold (another space, not a Pattern Instance, unreadable, or past 32 distinct
-pieces in one answer) is dropped, and a `<key>_unheld` member, or `{unheld}` in
-a list, says why. This is half of the rule that an address never reaches a
-model; the other half is the host's: it must not spell a piece's address to an
+hold is dropped, and a `<key>_unheld` member, or `{unheld}` in a list, says why:
+`foreign-space`, `limit` (past 32 distinct pieces in one answer), or
+`unavailable` for everything else. An absent piece, a cell that is no Pattern
+Instance and a failed read all answer `unavailable`, so a raw address cannot
+probe what a space holds. This is half of the rule that an address never reaches
+a model; the other half is the host's: it must not spell a piece's address to an
 agent run any other way, such as a pane url, which the bridge cannot recognize.
 Loom keeps its render blocks out of what an agent run reads for that reason.
 

@@ -201,13 +201,13 @@ const apiBase = (value: unknown): string | undefined => {
 };
 
 /**
- * Why {@link heldPatternInstance} gave no reference for a piece. Only
- * `unavailable` may change on a later read.
+ * Why {@link heldPatternInstance} gave no reference for a piece.
+ * `foreign-space` is read from the address alone. Every other failure is
+ * `unavailable`: an absent piece, a cell that is no whole Pattern Instance and
+ * a failed read answer alike, so a raw address from untrusted text cannot
+ * probe what the space holds (CFC §17.1, §8.13.5).
  */
-export type UnheldPatternInstance =
-  | "foreign-space"
-  | "not-a-pattern-instance"
-  | "unavailable";
+export type UnheldPatternInstance = "foreign-space" | "unavailable";
 
 /**
  * The model-facing reference for a whole Pattern Instance named by space and
@@ -242,7 +242,7 @@ export const heldPatternInstance = async (
     });
     await cell.sync();
     if (pieceId(cell) !== id || getPatternIdentityRef(cell) === undefined) {
-      return { unheld: "not-a-pattern-instance" };
+      return { unheld: "unavailable" };
     }
     const held = context.handleTable?.entries.filter((entry) => {
       const address = parseHandleRef(entry.ref);

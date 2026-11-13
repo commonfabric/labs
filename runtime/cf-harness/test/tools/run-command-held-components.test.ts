@@ -237,7 +237,7 @@ describe("run_command: components a host names", () => {
     expect(seen).not.toContain("A".repeat(43));
     expect(seen).not.toMatch(/cfh:a:/);
     expect(seen.match(/ref_unheld\\":\\"foreign-space/g)).toHaveLength(1);
-    expect(seen.match(/ref_unheld\\":\\"not-a-pattern-instance/g))
+    expect(seen.match(/ref_unheld\\":\\"unavailable/g))
       .toHaveLength(2);
     expect(seen).toContain('{\\"unheld\\":\\"foreign-space\\"}');
   });
@@ -260,7 +260,7 @@ describe("run_command: components a host names", () => {
     );
     const { seen } = await inspect(ids.map((id) => `pattern:${own}/${id}`));
     expect(seen.match(/ref_unheld\\":\\"limit/g)).toHaveLength(1);
-    expect(seen.match(/ref_unheld\\":\\"not-a-pattern-instance/g))
+    expect(seen.match(/ref_unheld\\":\\"unavailable/g))
       .toHaveLength(HELD_COMPONENT_LIMIT);
   });
 });
