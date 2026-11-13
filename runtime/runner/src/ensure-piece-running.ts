@@ -9,8 +9,13 @@ import {
 } from "./link-utils.ts";
 import { addressKey } from "./link-types.ts";
 import { asPatternIdentityRef } from "./meta-seam.ts";
+import {
+  getPieceReconciliation,
+  type PieceReconciliationReason,
+} from "./piece-reconciliation.ts";
 import type { Runtime } from "./runtime.ts";
 import type { IExtendedStorageTransaction } from "./storage/interface.ts";
+import { ignoreReadForScheduling } from "./storage/reactivity-log.ts";
 
 const logger = getLogger("ensure-piece-running", {
   enabled: false,
@@ -193,6 +198,43 @@ function rootKey(address: OwningRootAddress): string {
   return addressKey({ ...address, path: [] });
 }
 
+/** A pattern update a piece refused, as `refusedUpdateOf()` reports it. */
+export type RefusedUpdate = {
+  /** The pattern the piece's origin offered. */
+  offered: { identity: string; symbol: string };
+
+  /** Why the piece refused it, when its record says. */
+  reason?: PieceReconciliationReason;
+};
+
+/**
+ * The pattern update a piece's origin last offered and the piece refused, as
+ * its reconciliation record (`piece-reconciliation.ts`) names it, while the
+ * piece runs some other program; `undefined` when the record says no such
+ * thing. `piece` is the instance the start walk synced, so the reads load
+ * nothing, and each runs in a read transaction of its own, so neither joins
+ * a caller's transaction.
+ */
+function refusedUpdateOf(piece: Cell<any>): RefusedUpdate | undefined {
+  const record = getPieceReconciliation(piece);
+  if (record?.outcome !== "refused" || record.offered === undefined) {
+    return undefined;
+  }
+  const running = asPatternIdentityRef(
+    piece.getMetaRaw("patternIdentity", { meta: ignoreReadForScheduling }),
+  );
+  if (
+    running?.identity === record.offered.identity &&
+    running.symbol === record.offered.symbol
+  ) {
+    return undefined;
+  }
+  return {
+    offered: record.offered,
+    ...(record.reason !== undefined && { reason: record.reason }),
+  };
+}
+
 /**
  * The address of the result document a chain resolved to — the one whose
  * `patternIdentity` decides the verdict.
@@ -248,6 +290,13 @@ export type EnsurePieceVerdict = {
    * stands. A caller acting on `started` later asks this instead of
    * assuming. Present whenever a start ran. */
   graphIsInstalled?: () => boolean;
+
+  /** The pattern update the started piece last refused while it runs
+   * another program, read from its reconciliation record AT THE MOMENT THIS
+   * IS CALLED (`refusedUpdateOf()`), or `undefined` when it refused none.
+   * A caller explaining why the piece lacks what a newer program has asks
+   * this. Present whenever a start ran. */
+  refusedUpdate?: () => RefusedUpdate | undefined;
 
   /** The owning result doc (the chain terminus) where the chain
    * resolved — present for `started`, `no-pattern-meta`,
@@ -507,6 +556,7 @@ async function ensureVerdict(
             started: true,
             graphIsInstalled: () =>
               runtime.runner.pieceGraphIsInstalled(resultCell),
+            refusedUpdate: () => refusedUpdateOf(resultCell),
             root,
             observedDocIds,
             observedDocs,
@@ -526,6 +576,7 @@ async function ensureVerdict(
         started: true,
         graphIsInstalled: () =>
           runtime.runner.pieceGraphIsInstalled(resultCell),
+        refusedUpdate: () => refusedUpdateOf(resultCell),
         root,
         observedDocIds,
         observedDocs,
