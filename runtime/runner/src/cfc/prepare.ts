@@ -15189,6 +15189,54 @@ export const processedClaimJoinIsForeign = (
       ).length > 0;
 };
 
+/**
+ * Whether the reads `reads` of a served run on a stream in `space`, whose
+ * transaction has ended and so holds no observations to derive a join from,
+ * found anything the stream's entries document doesn't admit: a document of
+ * another space, or one whose stored labels carry, at any path, a clause
+ * outside that document's residency. `tx` is an open transaction the stored
+ * labels are read through. A document's labels count wherever in it they
+ * sit, not only at the paths the run read, so this finds more foreign than
+ * `processedClaimJoinIsForeign` would, never less. A label it cannot read
+ * counts as foreign.
+ */
+export const endedRunReadForeignLabel = (
+  tx: IExtendedStorageTransaction,
+  reads: Iterable<{
+    space: MemorySpace;
+    id: string;
+    scope?: CellScope;
+    type?: string;
+  }>,
+  space: MemorySpace,
+): boolean => {
+  const ceiling = residencyCeilingOf(tx, space, "space");
+  const seen = new Set<string>();
+  for (const read of reads) {
+    if (read.space !== space) return true;
+    if (read.id.startsWith("cid:")) continue;
+    const scope = normalizeCellScope(read.scope);
+    const type = (read.type ?? "application/json") as MediaType;
+    const key = stringTupleKey([read.id, scope, type]);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    let metadata: CfcMetadata | undefined;
+    try {
+      metadata = storedMetadataFor(tx, space, read.id as URI, scope, type);
+    } catch {
+      return true;
+    }
+    for (const entry of metadata?.labelMap.entries ?? []) {
+      const confidentiality = (entry.label.confidentiality ??
+        []) as readonly CfcConfClause[];
+      if (atomsOutsideCeiling(confidentiality, ceiling).length > 0) {
+        return true;
+      }
+    }
+  }
+  return false;
+};
+
 const cfcLogger = getLogger("cfc", { enabled: false });
 
 /**

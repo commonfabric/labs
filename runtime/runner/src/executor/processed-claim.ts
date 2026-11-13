@@ -14,7 +14,10 @@
  */
 
 import type { MemorySpace } from "@commonfabric/memory/interface";
-import { processedClaimJoinIsForeign } from "../cfc/prepare.ts";
+import {
+  endedRunReadForeignLabel,
+  processedClaimJoinIsForeign,
+} from "../cfc/prepare.ts";
 import {
   CFC_STRUCTURAL_PROVENANCE_PROCESSED_CLAIM,
   runtimeWritePolicyAuthorization,
@@ -101,11 +104,14 @@ export const writeWithheldOutcome = (
  * stream lives in `space`, is withheld: whether its join carries a clause the
  * stream's space doesn't admit (`processedClaimJoinIsForeign()`). A run whose
  * transaction has already ended, as one the handler aborted has, no longer
- * holds the label observations its join is derived from; it is taken as
- * foreign when it read any document of another space, which withholds more
- * rather than less.
+ * holds the label observations its join is derived from. For it, the reads it
+ * journaled are weighed instead, through a transaction of its own
+ * (`endedRunReadForeignLabel()`): a document of another space, or one of the
+ * stream's own space labeled outside it, makes it foreign, which withholds
+ * more rather than less. Where neither can be decided, it is withheld.
  */
 export const runOutcomeIsWithheld = (
+  runtime: Runtime,
   tx: IExtendedStorageTransaction,
   space: MemorySpace,
 ): boolean => {
@@ -116,13 +122,17 @@ export const runOutcomeIsWithheld = (
       // Fall through to what the run's reads say.
     }
   }
+  const reader = runtime.edit();
   try {
-    for (const read of getTransactionReadActivities(tx)) {
-      if (read.space !== space) return true;
-    }
-    return false;
+    return endedRunReadForeignLabel(
+      reader,
+      getTransactionReadActivities(tx),
+      space,
+    );
   } catch {
     return true;
+  } finally {
+    reader.abort();
   }
 };
 
@@ -142,7 +152,7 @@ export const withholdProcessedClaimOutcome = (
   space: MemorySpace,
   entry: ProcessedClaimEntry | undefined,
 ): boolean => {
-  if (!runOutcomeIsWithheld(tx, space)) return false;
+  if (!runOutcomeIsWithheld(runtime, tx, space)) return false;
   if (tx.status().status !== "ready") return true;
   if (entry === undefined) {
     withheldWaveClaims.add(tx);

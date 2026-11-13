@@ -2407,7 +2407,11 @@ export async function dispatchQueuedEvent(state: {
   let outcomeWithheld: boolean | undefined;
   const servedOutcomeWithheld = (): boolean => {
     if (served === undefined) return false;
-    outcomeWithheld ??= runOutcomeIsWithheld(tx, queuedEvent.eventLink.space);
+    outcomeWithheld ??= runOutcomeIsWithheld(
+      state.runtime,
+      tx,
+      queuedEvent.eventLink.space,
+    );
     return outcomeWithheld;
   };
   /** `outcome`, with `withheld` set when the served run's outcome is. */

@@ -20,6 +20,7 @@ import {
 import { stampWaveRunContext, WaveAccumulator } from "../src/executor/wave.ts";
 import { EngineWaveCommitSink } from "../src/executor/engine-wave-sink.ts";
 import {
+  runOutcomeIsWithheld,
   waveClaimIsWithheld,
   withholdProcessedClaimOutcome,
   writeProcessedClaim,
@@ -381,6 +382,56 @@ describe("cfc-processed-claim", () => {
         .toBe(true);
       expect(waveClaimIsWithheld(tx)).toBe(true);
       tx.abort();
+    });
+
+    it("finds an aborted run that read a document of the stream's own space labeled outside it foreign", async () => {
+      // A foreign join needs no other space: a document of the stream's own
+      // space whose label the entries document doesn't admit makes it foreign
+      // too. Once the run's transaction has ended, its observations are gone.
+
+      const privateId = runtime.getCell(space, "same-space-private", undefined)
+        .getAsNormalizedFullLink().id;
+      const seed = runtime.edit();
+      writeSeedEnvelopeDoc(seed, space);
+      seedStoredEnvelope(seed, {
+        space,
+        scope: "space",
+        id: privateId,
+        path: [],
+      }, {
+        value: { secret: "s3cr3t" },
+        cfc: {
+          version: 1,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: {
+            version: 1,
+            entries: [{
+              path: ["secret"],
+              label: { confidentiality: [FOREIGN_ATOM] },
+            }],
+          },
+        },
+      });
+      expect((await seed.commit().settled).error).toBeUndefined();
+
+      const tx = plainRun("same-space-aborted");
+      const read = runtime.getCellFromLink(
+        { space, scope: "space", id: privateId, path: [] },
+        undefined,
+        tx,
+      ).getRaw() as { secret?: string };
+      expect(read.secret).toBe("s3cr3t");
+      expect(processedClaimJoinIsForeign(tx, space)).toBe(true);
+      tx.abort();
+
+      expect(runOutcomeIsWithheld(runtime, tx, space)).toBe(true);
+    });
+
+    it("finds an aborted run that read nothing labeled not foreign", () => {
+      const tx = plainRun("plain-aborted");
+      tx.abort();
+
+      expect(runOutcomeIsWithheld(runtime, tx, space)).toBe(false);
     });
 
     it("withholds nothing for a run whose join the stream's space admits", () => {
