@@ -39,6 +39,7 @@ import {
   type CellGetRequest,
   type CellPullRequest,
   type CellReadRefusal,
+  type CellReadRefusalLabelSource,
   type CellRef,
   type CellResponse,
   type CellSendResponse,
@@ -208,6 +209,16 @@ export type CellSendOptions = {
   awaitHandling?: boolean;
 };
 
+/** How a refusal's message names the kind of label that refused it. */
+const LABEL_SOURCE_PHRASES: Readonly<
+  Record<CellReadRefusalLabelSource, string>
+> = {
+  stored: "a label stored at the cell or above it",
+  consumed: "a label the read consumed",
+  schema: "the label the cell's schema declares",
+  unreadable: "labels that could not be read",
+};
+
 /**
  * Thrown by a read of a handle whose read the worker refused, and the
  * rejection of `sync()`, `pull()` and `initialize()` when the worker refuses
@@ -217,8 +228,20 @@ export type CellSendOptions = {
 export class CellReadRefusedError extends Error {
   readonly #refusal: CellReadRefusal;
 
-  constructor(refusal: CellReadRefusal) {
-    super(`The worker refused this read of a cell (${refusal.refusedBy}).`);
+  /**
+   * @param refusal What refused the read, as the worker said.
+   * @param call The handle's method that threw, such as `fields()`, which
+   *   the message names; omitted, it names none.
+   */
+  constructor(refusal: CellReadRefusal, call?: string) {
+    const by = refusal.labelSource === undefined
+      ? refusal.refusedBy
+      : `${refusal.refusedBy}: ${LABEL_SOURCE_PHRASES[refusal.labelSource]}`;
+    super(
+      call === undefined
+        ? `The worker refused this read of a cell (${by}).`
+        : `The worker refused the read of a cell behind \`${call}\` (${by}).`,
+    );
     this.name = "CellReadRefusedError";
     this.#refusal = refusal;
   }
@@ -416,7 +439,7 @@ export class CellHandle<T = unknown> {
   get(): Readonly<T> | undefined {
     this.#requireSchema("get");
     if (this.#refusal !== undefined) {
-      throw new CellReadRefusedError(this.#refusal);
+      throw new CellReadRefusedError(this.#refusal, "get()");
     }
     return this.#value !== undefined ? this.#value as Readonly<T> : undefined;
   }
@@ -428,7 +451,7 @@ export class CellHandle<T = unknown> {
    */
   async set(value: T): Promise<void> {
     this.#requireSchema("set");
-    const refused = this.#writeRefusal();
+    const refused = this.#writeRefusal("set()");
     if (refused !== undefined) {
       console.error("[CellHandle] Write failed:", refused);
       return;
@@ -444,7 +467,7 @@ export class CellHandle<T = unknown> {
     this.#publishWrite(snapshot);
     await this.#enqueueOperation(async (queue) => {
       // A refusal that arrived while the write waited its turn stands.
-      const refusedSince = this.#writeRefusal();
+      const refusedSince = this.#writeRefusal("set()");
       if (refusedSince !== undefined) {
         console.error("[CellHandle] Write failed:", refusedSince);
         return;
@@ -494,7 +517,7 @@ export class CellHandle<T = unknown> {
    */
   update(updater: (current: Readonly<T> | undefined) => T): Promise<void> {
     this.#requireSchema("update");
-    const refused = this.#writeRefusal();
+    const refused = this.#writeRefusal("update()");
     if (refused !== undefined) return Promise.reject(refused);
     // Taken now, as a write's, so that neither an older read's answer nor this
     // update's own shows over a write asked for after this call.
@@ -516,6 +539,7 @@ export class CellHandle<T = unknown> {
           writeGeneration,
           updateGeneration,
           startedAt,
+          "update()",
         );
         // A refusal or an update that reached the cell while the read was
         // on its way is newer than what the read found.
@@ -566,7 +590,7 @@ export class CellHandle<T = unknown> {
     queue: CellOperationQueue,
     writeGeneration: number,
   ): { value: unknown } | undefined {
-    const refused = this.#writeRefusal();
+    const refused = this.#writeRefusal("update()");
     if (refused !== undefined) throw refused;
     const queued = this.#queuedValue(queue);
     if (queued !== undefined) return queued;
@@ -595,7 +619,7 @@ export class CellHandle<T = unknown> {
    */
   async setStrict(value: T): Promise<void> {
     this.#requireSchema("setStrict");
-    const refused = this.#writeRefusal();
+    const refused = this.#writeRefusal("setStrict()");
     if (refused !== undefined) throw refused;
     const serialized = this.#serializeWrite(value);
     const snapshot = applyValue(
@@ -606,7 +630,7 @@ export class CellHandle<T = unknown> {
     const writeGeneration = this.#writeGeneration;
     await this.#enqueueOperation(async (queue) => {
       // A refusal that arrived while the write waited its turn stands.
-      const refusedSince = this.#writeRefusal();
+      const refusedSince = this.#writeRefusal("setStrict()");
       if (refusedSince !== undefined) throw refusedSince;
       const updateGeneration = this.#updateGeneration;
       const authoritativeGeneration = queue.authoritativeGeneration;
@@ -676,7 +700,7 @@ export class CellHandle<T = unknown> {
       authoritative;
     if ("refused" in read) {
       if (latest) this.#refuse(read.refused);
-      throw new CellReadRefusedError(read.refused);
+      throw new CellReadRefusedError(read.refused, "initialize()");
     }
     // What an initialization stores, and what it finds stored, are both
     // defined.
@@ -692,12 +716,13 @@ export class CellHandle<T = unknown> {
    * see: a toggle of a value it read as absent, a list with one item removed
    * from a list it read as empty. Writing it would replace a value the host
    * was never shown. A handle reached through `key()` makes reads of its own,
-   * and is not held to its parent's refusal.
+   * and is not held to its parent's refusal. `call` names the method writing,
+   * as the error's message does.
    */
-  #writeRefusal(): CellReadRefusedError | undefined {
+  #writeRefusal(call: string): CellReadRefusedError | undefined {
     return this.#refusal === undefined
       ? undefined
-      : new CellReadRefusedError(this.#refusal);
+      : new CellReadRefusedError(this.#refusal, call);
   }
 
   /**
@@ -1038,7 +1063,7 @@ export class CellHandle<T = unknown> {
     this: CellHandle<U[]>,
     ...values: T extends (infer U)[] ? U[] : never
   ): void {
-    this.#pushValuesReportingFailure(values);
+    this.#pushValuesReportingFailure(values, "push()");
   }
 
   /**
@@ -1049,7 +1074,7 @@ export class CellHandle<T = unknown> {
     this: CellHandle<U[]>,
     values: T extends (infer U)[] ? readonly U[] : never,
   ): void {
-    this.#pushValuesReportingFailure(values);
+    this.#pushValuesReportingFailure(values, "pushAll()");
   }
 
   /** Append values and reject when the runtime refuses the mergeable write. */
@@ -1057,7 +1082,7 @@ export class CellHandle<T = unknown> {
     this: CellHandle<U[]>,
     ...values: T extends (infer U)[] ? U[] : never
   ): Promise<void> {
-    return this.#pushValues(values);
+    return this.#pushValues(values, "pushStrict()");
   }
 
   /**
@@ -1068,23 +1093,31 @@ export class CellHandle<T = unknown> {
     this: CellHandle<U[]>,
     values: T extends (infer U)[] ? readonly U[] : never,
   ): Promise<void> {
-    return this.#pushValues(values);
+    return this.#pushValues(values, "pushAllStrict()");
   }
 
   /**
    * Helper for `push()` and `pushAll()`, which appends `values` and logs a
    * refusal instead of returning it, unless the connection has been aborted.
+   * `call` names the method, as {@link #pushValues} takes it.
    */
-  #pushValuesReportingFailure(values: readonly unknown[]): void {
-    void this.#pushValues(values).catch((error) => {
+  #pushValuesReportingFailure(
+    values: readonly unknown[],
+    call: string,
+  ): void {
+    void this.#pushValues(values, call).catch((error) => {
       if (!this.#conn.signal.aborted) {
         console.error("[CellHandle] Push failed:", error);
       }
     });
   }
 
-  #pushValues(values: readonly unknown[]): Promise<void> {
-    const refused = this.#writeRefusal();
+  /**
+   * Helper for the `push` methods, which appends `values`. `call` names the
+   * method that asked, for the refusal it rejects with.
+   */
+  #pushValues(values: readonly unknown[], call: string): Promise<void> {
+    const refused = this.#writeRefusal(call);
     if (refused !== undefined) return Promise.reject(refused);
     const serializedValues = values.map((value) =>
       CellHandle.serialize(value as ClientCellValue)
@@ -1106,7 +1139,7 @@ export class CellHandle<T = unknown> {
     const append = (queue: CellOperationQueue): Promise<void> => {
       // A refusal that arrived while the append waited its turn stands, and
       // what it would append to, the value from before it, is refused.
-      const refusedSince = this.#writeRefusal();
+      const refusedSince = this.#writeRefusal(call);
       if (refusedSince !== undefined) return Promise.reject(refusedSince);
       const authoritativeGeneration = queue.authoritativeGeneration;
       const queued = this.#queuedValue(queue);
@@ -1319,7 +1352,10 @@ export class CellHandle<T = unknown> {
    *   `onRefused`.
    */
   async sync(): Promise<Readonly<T> | undefined> {
-    return await this.#read({ type: RequestType.CellGet, cell: this.ref() });
+    return await this.#read(
+      { type: RequestType.CellGet, cell: this.ref() },
+      "sync()",
+    );
   }
 
   /**
@@ -1346,7 +1382,7 @@ export class CellHandle<T = unknown> {
       type: RequestType.CellPull,
       cell: this.ref(),
       awaitDurability: options.awaitDurability ?? false,
-    });
+    }, "pull()");
   }
 
   /**
@@ -1357,10 +1393,11 @@ export class CellHandle<T = unknown> {
    * other handle subscribed to the same cell under the same schema, except
    * that a `sync()` finding nothing leaves a value the handle holds in place
    * and goes to no other handle. A refused read caches the refusal and
-   * rejects.
+   * rejects, naming `call`, the method that asked.
    */
   async #read(
     request: CellGetRequest | CellPullRequest,
+    call: string,
   ): Promise<Readonly<T> | undefined> {
     const writeGeneration = this.#writeGeneration;
     const updateGeneration = this.#updateGeneration;
@@ -1374,6 +1411,7 @@ export class CellHandle<T = unknown> {
       writeGeneration,
       updateGeneration,
       startedAt,
+      call,
     );
   }
 
@@ -1401,7 +1439,8 @@ export class CellHandle<T = unknown> {
   /**
    * Helper for {@link #read} and {@link update}, which takes `answer`, the
    * worker's answer to `request`, as {@link #read} describes: what it finds
-   * reaches subscribers where nothing newer has, and a refusal rejects.
+   * reaches subscribers where nothing newer has, and a refusal rejects,
+   * naming `call`, the method that asked.
    */
   #takeAnswer(
     request: CellGetRequest | CellPullRequest,
@@ -1409,6 +1448,7 @@ export class CellHandle<T = unknown> {
     writeGeneration: number,
     updateGeneration: number,
     startedAt: number,
+    call: string,
   ): Readonly<T> | undefined {
     const latest = writeGeneration === this.#writeGeneration &&
       updateGeneration === this.#updateGeneration &&
@@ -1416,7 +1456,7 @@ export class CellHandle<T = unknown> {
     if ("refused" in read) {
       // Subscribers hear it, as they hear a refused update.
       if (latest) this.#refuse(read.refused);
-      throw new CellReadRefusedError(read.refused);
+      throw new CellReadRefusedError(read.refused, call);
     }
     if (!latest) return read.value;
     // A pull that finds nothing has waited for the loads its read started, so
@@ -1582,7 +1622,7 @@ export class CellHandle<T = unknown> {
       })
     );
     if (response.refused !== undefined) {
-      throw new CellReadRefusedError(response.refused);
+      throw new CellReadRefusedError(response.refused, "fields()");
     }
     if (response.fields === undefined) return undefined;
     const fields: Record<string, CellHandle<unknown>> = {};

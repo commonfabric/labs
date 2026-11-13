@@ -80,7 +80,8 @@ export type DisplayFitSources = {
 /**
  * The label a display decision was made on, as a denial reports it: a cell's
  * stored label, its schema's, a read's consumed labels, or none it could
- * read.
+ * read, which is what a read that consumed the read-failure marker reports
+ * as well.
  */
 export type RenderLabelSummary = {
   labelSource: "stored" | "schema" | "consumed" | "unreadable";
@@ -121,7 +122,9 @@ export function admitsEverything(policy: RenderPolicy): boolean {
  * for that field, and one that reaches it is (spec §8.10.6: a display
  * boundary evaluates the consumed labels). A read that reports no consumed
  * labels counts as consuming the marker no policy admits, and reads that
- * consumed none are fitted by the cell's schema.
+ * consumed none are fitted by the cell's schema. A refusal names the schema
+ * as its source when the schema refused, and names the labels as unreadable
+ * when what refused includes the read-failure marker.
  */
 export function readRefusal(
   cell: Cell<unknown>,
@@ -139,11 +142,10 @@ export function readRefusal(
     [...(read?.modulePolicySpaces.values() ?? [])].flatMap((set) => [...set])
   );
   if (confidentiality.length === 0) {
-    return confidentialityLabelsFromCellSchema(cell).every((atom) =>
-        atomRenderableUnderPolicy(atom, policy)
-      )
+    const declared = confidentialityLabelsFromCellSchema(cell);
+    return declared.every((atom) => atomRenderableUnderPolicy(atom, policy))
       ? cellLabelRefusal(cell, nodeLabelSources(cell), policy, sources, watch)
-      : { labelSource: "consumed", confidentiality, integrity };
+      : schemaRefusal(declared, integrity);
   }
   // The reads behind one rendered value are one access. Its clauses are
   // watched as read, since the exchange at each location may consult a
@@ -169,7 +171,42 @@ export function readRefusal(
       "not-value-intrinsic",
     )
     ? cellLabelRefusal(cell, nodeLabelSources(cell), policy, sources, watch)
-    : { labelSource: "consumed", confidentiality, integrity: access.integrity };
+    : {
+      labelSource: confidentiality.some(namesReadFailure)
+        ? "unreadable"
+        : "consumed",
+      confidentiality,
+      integrity: access.integrity,
+    };
+}
+
+/**
+ * The refusal of a read by the information-flow atoms its cell's schema
+ * declares, `declared`, which names the labels as unreadable where the schema
+ * could not be read for them.
+ */
+function schemaRefusal(
+  declared: readonly unknown[],
+  integrity: readonly CfcAtom[],
+): RenderLabelSummary {
+  const confidentiality = declared as readonly CfcConfClause[];
+  return {
+    labelSource: confidentiality.some(namesReadFailure)
+      ? "unreadable"
+      : "schema",
+    confidentiality,
+    integrity,
+  };
+}
+
+/**
+ * Whether `clause` is, or offers as an alternative, the marker a label read
+ * that failed stands in for.
+ */
+function namesReadFailure(clause: CfcConfClause): boolean {
+  return clauseAlternatives(clause).some((alternative) =>
+    deepEqual(alternative, CFC_LABEL_READ_FAILED_ATOM)
+  );
 }
 
 /**
@@ -278,11 +315,7 @@ export function cellLabelRefusal(
         atomRenderableUnderPolicy(atom, policy)
       )
       ? undefined
-      : {
-        labelSource: "schema",
-        confidentiality: confidentiality as readonly CfcConfClause[],
-        integrity: [],
-      };
+      : schemaRefusal(confidentiality, []);
   }
   // A stored label is fitted on the integrity at its root. A label view
   // carries no origin, folds an ancestor's entry in beside a narrower cell's
@@ -477,13 +510,7 @@ function resolvedConfidentialityRenderable(
 ): boolean {
   const offending = atomsOutsideCeiling(resolved, policy.maxConfidentiality);
   for (const clause of offending) {
-    if (
-      clauseAlternatives(clause).some((alternative) =>
-        deepEqual(alternative, CFC_LABEL_READ_FAILED_ATOM)
-      )
-    ) {
-      return false;
-    }
+    if (namesReadFailure(clause)) return false;
     // Declassification names an atom; after resolution an offending clause
     // may be an OR of alternatives, and releasing one alternative releases
     // the clause.

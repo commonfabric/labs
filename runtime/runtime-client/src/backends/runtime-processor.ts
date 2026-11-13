@@ -134,6 +134,7 @@ import {
   readCustodyAnswer,
 } from "@commonfabric/runner/cfc/custody-seal";
 import { cfcSchemaGivesNoShape } from "@commonfabric/runner/cfc/schema-primitives";
+import { defaultDisplayCeiling } from "@commonfabric/runner/cfc/default-display-ceiling";
 import { hashStringForEntityAddress } from "@commonfabric/runner/entity-kind";
 import { offerProfileSuggestion } from "@commonfabric/runner/profile-suggestion";
 import { bindNativeUiControl } from "@commonfabric/runner/native-ui";
@@ -580,6 +581,32 @@ export function browserWorkerParamsFromInitializationData(
 }
 
 /**
+ * The principal a worker's display sinks show to: the acting principal of the
+ * trust snapshot the runtime runs against, or the session's own identity where
+ * the snapshot names none.
+ */
+function renderAudienceOf(runtime: Runtime, identity: Identity): string {
+  return runtime.trustSnapshotProvider()?.actingPrincipal ?? identity.did();
+}
+
+/**
+ * The display ceiling a worker renders with and decides a host's reads under,
+ * from the ceiling the host declared (spec §8.10.6). A host that declares none
+ * is given the default display ceiling for `audience`, which a display
+ * boundary no authored policy covers is fitted against. `null` is a host's
+ * declaration that it wants no ceiling, so that nothing is gated. Any other
+ * value is normalized, a malformed one to the empty ceiling.
+ */
+export function renderCeilingFor(
+  declared: unknown,
+  audience: string,
+): RenderConfidentialityCeiling | undefined {
+  return declared === undefined
+    ? defaultDisplayCeiling(audience)
+    : normalizeRenderConfidentialityCeiling(declared);
+}
+
+/**
  * Builds the display-boundary resolver for a worker's renders. When a ceiling
  * is in force, each render egress resolves principal-form atoms
  * (Space-via-HasRole) RUNNER-side; the reconciler only fits the result.
@@ -622,8 +649,7 @@ export function renderConfidentialityResolverFor(
   if (ceiling === undefined) {
     return undefined;
   }
-  const actingPrincipal = runtime.trustSnapshotProvider()?.actingPrincipal ??
-    identity.did();
+  const actingPrincipal = renderAudienceOf(runtime, identity);
   // `session.open` authorizes the key holder, so the workspace it gated on is
   // a member for that principal's own renders. A host that names somebody else
   // as acting has shown nothing about what that principal reads.
@@ -666,9 +692,10 @@ export function renderMembershipProviderFor(
   if (ceiling === undefined) {
     return undefined;
   }
-  const actingPrincipal = runtime.trustSnapshotProvider()?.actingPrincipal ??
-    identity.did();
-  return createRuntimeSpaceMembershipProvider(runtime, actingPrincipal);
+  return createRuntimeSpaceMembershipProvider(
+    runtime,
+    renderAudienceOf(runtime, identity),
+  );
 }
 
 /**
@@ -1089,13 +1116,14 @@ export class RuntimeProcessor {
 
   /**
    * Render-boundary declassification policy applied to every mount's
-   * reconciler, from the initialization data; `allow` when it names none.
+   * reconciler, from the initialization data; `deny` when it names none.
    */
-  #renderDeclassificationPolicy: RenderDeclassificationPolicy = "allow";
+  #renderDeclassificationPolicy: RenderDeclassificationPolicy = "deny";
 
   /**
-   * Host-supplied default render ceiling applied to every mount's reconciler;
-   * `undefined` when the host set none.
+   * The default render ceiling applied to every mount's reconciler and to a
+   * host's reads, as {@link renderCeilingFor} makes it from the
+   * initialization data; `undefined` while none is in force.
    */
   #renderConfidentialityCeiling?: RenderConfidentialityCeiling;
 
@@ -5096,11 +5124,18 @@ export class RuntimeProcessor {
     }
     // InitializationData crosses postMessage with no runtime validation, so a
     // typo'd host config or version-skewed peer must fail CLOSED, not open:
-    // any present-but-unknown value becomes "deny"; absent stays "allow".
+    // any present-but-unknown value becomes "deny". A host that declares
+    // neither field gets the shell's posture: the default display ceiling,
+    // and no author declassification (spec §8.10.6).
     processor.#renderDeclassificationPolicy =
-      normalizeRenderDeclassificationPolicy(data.renderDeclassificationPolicy);
+      normalizeRenderDeclassificationPolicy(
+        data.renderDeclassificationPolicy ?? "deny",
+      );
     processor.#configureRenderCeiling(
-      normalizeRenderConfidentialityCeiling(data.renderConfidentialityCeiling),
+      renderCeilingFor(
+        data.renderConfidentialityCeiling,
+        renderAudienceOf(runtime, identity),
+      ),
     );
     processor.#intentOutcomeCancel = subscribeEventAttentionNotifications(
       runtime,

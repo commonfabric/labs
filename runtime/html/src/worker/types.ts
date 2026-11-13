@@ -351,14 +351,16 @@ export interface RenderConfidentialityCeiling {
  * Like the declassification policy, the ceiling crosses postMessage seams
  * (e.g. `InitializationData`) with no runtime validation. Fail-closed here
  * means a present-but-malformed value becomes the EMPTY ceiling (public-only
- * rendering) — never a mount crash, and never fail-open to unbounded. Only
- * an absent value keeps the documented no-ceiling default; malformed fields
- * inside an otherwise well-formed ceiling drop to empty individually.
+ * rendering) — never a mount crash, and never fail-open to unbounded. An
+ * absent value and `null` are the two that mean no ceiling: `null` is how a
+ * host whose absent value would be given a default says it wants none.
+ * Malformed fields inside an otherwise well-formed ceiling drop to empty
+ * individually.
  */
 export function normalizeRenderConfidentialityCeiling(
   value: unknown,
 ): RenderConfidentialityCeiling | undefined {
-  if (value === undefined) return undefined;
+  if (value === undefined || value === null) return undefined;
   if (!isObjectOrArray(value)) return {};
   const { atoms, caveatKinds } = value as {
     atoms?: unknown;

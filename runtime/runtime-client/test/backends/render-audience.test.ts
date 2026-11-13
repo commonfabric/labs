@@ -29,6 +29,7 @@ import {
 
 import {
   browserWorkerParamsFromInitializationData,
+  renderCeilingFor,
   renderConfidentialityResolverFor,
   renderMembershipProviderFor,
   renderModulePolicySourceFor,
@@ -51,6 +52,17 @@ function createWorkerRuntime(
     options.memoryUrl ?? options.apiUrl,
   );
   return new Runtime(runtimePresets.browserWorker(params));
+}
+
+/**
+ * The ceiling a worker initialized from `options` puts in force, as
+ * `renderCeilingFor()` makes it for the principal the runtime acts as.
+ */
+function ceilingOf(options: ReturnType<typeof createRuntimeClientOptions>) {
+  return renderCeilingFor(
+    options.renderConfidentialityCeiling,
+    options.trustSnapshot?.actingPrincipal ?? options.identity.did(),
+  );
 }
 
 /**
@@ -157,7 +169,7 @@ describe("render-audience", () => {
       const membership = renderMembershipProviderFor(
         runtime,
         identity,
-        options.renderConfidentialityCeiling,
+        ceilingOf(options),
       );
       expect(membership?.readerRole(identity.did())).toBe("owner");
       expect(options.renderConfidentialityCeiling?.atoms).toContainEqual(
@@ -245,7 +257,7 @@ describe("render-audience", () => {
         }
 
         await setDelegateRead(false);
-        const ceiling = options.renderConfidentialityCeiling;
+        const ceiling = ceilingOf(options);
         const membership = renderMembershipProviderFor(
           runtime,
           identity,
@@ -377,7 +389,7 @@ describe("render-audience", () => {
       });
       expect((await seed.commit().settled).error).toBeUndefined();
 
-      const ceiling = options.renderConfidentialityCeiling;
+      const ceiling = ceilingOf(options);
       const membership = renderMembershipProviderFor(
         runtime,
         identity,
@@ -573,7 +585,7 @@ describe("render-audience", () => {
         expect((await tx.commit().settled).error).toBeUndefined();
       };
 
-      const ceiling = options.renderConfidentialityCeiling;
+      const ceiling = ceilingOf(options);
       const membership = renderMembershipProviderFor(
         runtime,
         identity,
@@ -735,7 +747,7 @@ describe("render-audience", () => {
       // holder's.
       expect(note.getAsNormalizedFullLink().space).toEqual(valueSpace);
 
-      const ceiling = options.renderConfidentialityCeiling;
+      const ceiling = ceilingOf(options);
       const membership = renderMembershipProviderFor(
         runtime,
         identity,

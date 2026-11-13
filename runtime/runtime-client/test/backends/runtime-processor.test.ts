@@ -64,6 +64,7 @@ import {
   linkCfcLabelView,
   withLinkCfcLabelView,
 } from "@commonfabric/runner/cfc";
+import { defaultDisplayCeiling } from "@commonfabric/runner/cfc/default-display-ceiling";
 import {
   EmulatedStorageManager,
   newLoopbackServer,
@@ -79,6 +80,7 @@ import {
   type CfcLabelView,
   ClientNotificationType,
   type GetPatternSourcesRequest,
+  type InitializationData,
   type IPCRemotePost,
   type LoggerErrorMessagesResponse,
   NotificationType,
@@ -121,6 +123,9 @@ const cfcSigner = await Identity.fromPassphrase(
   "runtime-processor-cfc-label-tests",
 );
 const testSessionOpenAudience = "did:key:z6Mk-runtime-processor-test-audience";
+// A principal other than `cfcSigner`, whose labels no display of
+// `cfcSigner`'s admits.
+const otherUser = "did:key:z6Mk-runtime-processor-test-other-user";
 
 class SharedV2SessionFactory implements V2Storage.SessionFactory {
   readonly #server: MemoryV2Server.Server;
@@ -10155,7 +10160,7 @@ describe("runtime-processor", () => {
           atoms: [],
         } as never;
         expect(await read()).toEqual({
-          refused: { refusedBy: "display-ceiling" },
+          refused: { refusedBy: "display-ceiling", labelSource: "schema" },
         });
       } finally {
         await runtime.dispose();
@@ -10197,18 +10202,25 @@ describe("runtime-processor", () => {
           atoms: [],
         } as never;
         expect(await read()).toEqual({
-          refused: { refusedBy: "display-ceiling" },
+          refused: { refusedBy: "display-ceiling", labelSource: "schema" },
         });
       } finally {
         await runtime.dispose();
       }
     });
 
-    it("decides a host's read under the ceiling `initialize()` configures, with the resolver a mount gets", async () => {
-      // The ceiling admits what the acting user may see. A value labeled with
-      // the session's own space is admitted through the exchange rules alone,
-      // which the resolver built for that space applies, and a value labeled
-      // with a resource the ceiling does not name is refused.
+    /**
+     * Initializes a processor from `data` over a memory server that admits
+     * `cfcSigner`, runs `use` with it and a reader of a document `cfcSigner`'s
+     * space holds labeled `atom`, read as a host reads it, and disposes it.
+     */
+    async function initialized(
+      data: Partial<InitializationData>,
+      use: (
+        processor: RuntimeProcessor,
+        labeled: (id: string, atom: unknown) => Promise<CellGetResponse>,
+      ) => Promise<void> | void,
+    ): Promise<void> {
       const space = cfcSigner.did();
       const server = new MemoryV2Server.Server({
         authorizeSessionOpen: () => cfcSigner.did(),
@@ -10224,7 +10236,7 @@ describe("runtime-processor", () => {
           apiUrl: "http://worker.test/",
           identity: cfcSigner.keyPair,
           spaceDid: space,
-          renderConfidentialityCeiling: { atoms: [cfcAtom.user(space)] },
+          ...data,
         });
         try {
           const runtime = processor.accessForTestingOnly.runtime;
@@ -10257,15 +10269,7 @@ describe("runtime-processor", () => {
               } as unknown as CellRef,
             });
           };
-
-          expect(await labeled("session-space-note", cfcAtom.space(space)))
-            .toEqual({ value: "value-of-session-space-note" });
-          expect(
-            await labeled(
-              "credential-note",
-              cfcAtom.resource("CredentialSecret"),
-            ),
-          ).toEqual({ refused: { refusedBy: "display-ceiling" } });
+          await use(processor, labeled);
         } finally {
           await processor.dispose();
         }
@@ -10274,7 +10278,78 @@ describe("runtime-processor", () => {
         await storageManager.close();
         await server.close();
       }
+    }
+
+    it("decides a host's read under the ceiling `initialize()` configures, with the resolver a mount gets", async () => {
+      // The ceiling admits what the acting user may see. A value labeled with
+      // the session's own space is admitted through the exchange rules alone,
+      // which the resolver built for that space applies, and a value labeled
+      // with a resource the ceiling does not name is refused.
+      const space = cfcSigner.did();
+      await initialized(
+        { renderConfidentialityCeiling: { atoms: [cfcAtom.user(space)] } },
+        async (_processor, labeled) => {
+          expect(await labeled("session-space-note", cfcAtom.space(space)))
+            .toEqual({ value: "value-of-session-space-note" });
+          expect(
+            await labeled(
+              "credential-note",
+              cfcAtom.resource("CredentialSecret"),
+            ),
+          ).toEqual({
+            refused: { refusedBy: "display-ceiling", labelSource: "consumed" },
+          });
+        },
+      );
     });
+
+    it("decides a host's read under the default display ceiling for the acting principal when the host declares none", async () => {
+      // A display boundary no authored policy covers is fitted against the
+      // default display ceiling (spec §8.10.6), so a host that declares no
+      // ceiling is held to the one the shell declares.
+      await initialized({}, async (processor, labeled) => {
+        expect(processor.accessForTestingOnly.renderConfidentialityCeiling)
+          .toEqual(defaultDisplayCeiling(cfcSigner.did()));
+        expect(await labeled("own-note", cfcAtom.user(cfcSigner.did())))
+          .toEqual({ value: "value-of-own-note" });
+        expect(await labeled("someone-elses-note", cfcAtom.user(otherUser)))
+          .toEqual({
+            refused: { refusedBy: "display-ceiling", labelSource: "consumed" },
+          });
+      });
+    });
+
+    it("returns every read as read for a host that declares no ceiling with `null`", async () => {
+      await initialized(
+        { renderConfidentialityCeiling: null },
+        async (processor, labeled) => {
+          expect(processor.accessForTestingOnly.renderConfidentialityCeiling)
+            .toBeUndefined();
+          expect(await labeled("someone-elses-note", cfcAtom.user(otherUser)))
+            .toEqual({ value: "value-of-someone-elses-note" });
+        },
+      );
+    });
+
+    for (
+      const [data, expected] of [
+        [{}, "deny"],
+        [{ renderConfidentialityCeiling: { atoms: [] } }, "deny"],
+        [{ renderDeclassificationPolicy: "allow" }, "allow"],
+      ] as const
+    ) {
+      it(
+        `denies author declassification unless the host allows it, given ${
+          JSON.stringify(data)
+        }`,
+        async () => {
+          await initialized(data, (processor) => {
+            expect(processor.accessForTestingOnly.renderDeclassificationPolicy)
+              .toBe(expected);
+          });
+        },
+      );
+    }
   });
 
   describe("`RuntimeProcessor` vdom mount render policy", () => {

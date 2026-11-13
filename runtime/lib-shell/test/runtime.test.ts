@@ -1284,11 +1284,12 @@ describe("RuntimeInternals", () => {
         iframeOuterFrameUrl: "/outer-frame",
       }).iframeOuterFrameUrl,
     ).toBe("/outer-frame");
-    // With the render ceiling off, neither ceiling field reaches the worker:
-    // rendering is unbounded and author declassification is honored. The case
-    // below reads the same two fields with the ceiling on.
+    // With the render ceiling off, the worker is told it has none, which is
+    // `null`: one told nothing gives itself the default ceiling. With no
+    // ceiling, no declassification policy is weighed, so none is sent. The
+    // case below reads the same two fields with the ceiling on.
     expect(options.renderDeclassificationPolicy).toBeUndefined();
-    expect(options.renderConfidentialityCeiling).toBeUndefined();
+    expect(options.renderConfidentialityCeiling).toBeNull();
   });
 
   it("defaults the CFC enforcement rung no lower than a runtime resolves on its own", async () => {
@@ -1381,7 +1382,7 @@ describe("RuntimeInternals", () => {
       cfcRenderCeiling: false,
     });
     expect(off.renderDeclassificationPolicy).toBeUndefined();
-    expect(off.renderConfidentialityCeiling).toBeUndefined();
+    expect(off.renderConfidentialityCeiling).toBeNull();
   });
 
   it("builds the render ceiling for a host-supplied acting principal", async () => {

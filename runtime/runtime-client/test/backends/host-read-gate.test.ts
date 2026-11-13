@@ -275,7 +275,9 @@ describe("HostReadGate", () => {
       );
 
       expect(holds(answer, SEALED_ENTRY)).toBe(false);
-      expect(answer).toEqual({ refused: { refusedBy: "display-ceiling" } });
+      expect(answer).toEqual({
+        refused: { refusedBy: "display-ceiling", labelSource: "consumed" },
+      });
     });
 
     for (const untyped of [{}, true] as const) {
@@ -332,7 +334,9 @@ describe("HostReadGate", () => {
       );
 
       expect(holds(answer, SEALED_ENTRY)).toBe(false);
-      expect(answer).toEqual({ refused: { refusedBy: "display-ceiling" } });
+      expect(answer).toEqual({
+        refused: { refusedBy: "display-ceiling", labelSource: "consumed" },
+      });
     });
 
     it("returns the owner the `[NAME]` of a piece read at its root, beside a credential stored inline that the read does not reach", async () => {
@@ -478,7 +482,7 @@ describe("HostReadGate", () => {
 
       await gate.settle(note);
       expect(gate.read(note)).toEqual({
-        refused: { refusedBy: "display-ceiling" },
+        refused: { refusedBy: "display-ceiling", labelSource: "consumed" },
       });
     });
 
@@ -644,7 +648,7 @@ describe("HostReadGate", () => {
       );
 
       expect(answer).toEqual({
-        refused: { refusedBy: "display-ceiling" },
+        refused: { refusedBy: "display-ceiling", labelSource: "consumed" },
         cell: expect.objectContaining({ id: expect.any(String), path: [] }),
       });
       if (answer.cell === undefined) throw new Error("no cell was named");
@@ -669,7 +673,7 @@ describe("HostReadGate", () => {
 
       for (const schema of [openPathRead, sidebarRead]) {
         expect(gate.read(docs.importer.asSchema(schema))).toEqual({
-          refused: { refusedBy: "display-ceiling" },
+          refused: { refusedBy: "display-ceiling", labelSource: "consumed" },
         });
       }
     });
@@ -694,7 +698,7 @@ describe("HostReadGate", () => {
       });
       // Each field's own read is decided on its own.
       expect(gate.read(docs.importer.key("auth").asSchema(true))).toEqual({
-        refused: { refusedBy: "display-ceiling" },
+        refused: { refusedBy: "display-ceiling", labelSource: "consumed" },
       });
       expect(gate.read(docs.importer.key(NAME).asSchema(true))).toEqual({
         value: "Importer",
@@ -731,7 +735,9 @@ describe("HostReadGate", () => {
         docs.sealedPiece,
       );
 
-      expect(answer).toEqual({ refused: { refusedBy: "display-ceiling" } });
+      expect(answer).toEqual({
+        refused: { refusedBy: "display-ceiling", labelSource: "consumed" },
+      });
       expect(holds(answer, SEALED_NAME)).toBe(false);
     });
 
@@ -752,7 +758,9 @@ describe("HostReadGate", () => {
 
       const refused = await visitorGate.fields(record);
 
-      expect(refused).toEqual({ refused: { refusedBy: "display-ceiling" } });
+      expect(refused).toEqual({
+        refused: { refusedBy: "display-ceiling", labelSource: "schema" },
+      });
       expect(holds(refused, "alice-secret-key")).toBe(false);
       expect(await gateFor(docs.runtime, owner).fields(record)).toEqual({
         fields: Object.fromEntries(
@@ -816,6 +824,77 @@ describe("HostReadGate", () => {
       );
 
       expect(answer).toEqual({ value: { note: SEALED_INTERNAL } });
+    });
+  });
+
+  describe("the kind of label a refusal names", () => {
+    it("names a stored label for a read of a sealed piece's metadata", async () => {
+      await using docs = await shelf();
+      const answer = gateFor(docs.runtime, visitor).readMetadata(
+        docs.sealedPiece,
+        "internal",
+      );
+
+      expect(answer).toEqual({
+        refused: { refusedBy: "display-ceiling", labelSource: "stored" },
+      });
+    });
+
+    it("names a consumed label for a read that follows a link to a sealed entry", async () => {
+      await using docs = await shelf();
+      const answer = gateFor(docs.runtime, visitor).read(
+        docs.piece.asSchema(true),
+      );
+
+      expect(answer).toEqual({
+        refused: { refusedBy: "display-ceiling", labelSource: "consumed" },
+      });
+    });
+
+    it("names the schema for a read of a record that only its schema labels", async () => {
+      await using docs = await shelf();
+      const record = (await docs.write("schema-labeled", { note: "a note" }))
+        .asSchema({
+          type: "object",
+          properties: { note: { type: "string" } },
+          ifc: { confidentiality: [ownerOnly] },
+        });
+
+      expect(gateFor(docs.runtime, visitor).read(record)).toEqual({
+        refused: { refusedBy: "display-ceiling", labelSource: "schema" },
+      });
+    });
+
+    it("names the labels unreadable for a document whose stored envelope this build cannot interpret", async () => {
+      // An envelope of a version this build does not know is read as no
+      // label at all by nothing: the read fails closed, and what refused it
+      // is the failure to read a label rather than a label.
+      await using docs = await shelf();
+      const unknown = await docs.write("unknown-envelope", "a value", [], {
+        cfc: { version: 99, labelMap: { version: 1, entries: [] } },
+      });
+      const gate = gateFor(docs.runtime, owner);
+      const refusal = {
+        refused: { refusedBy: "display-ceiling", labelSource: "unreadable" },
+      };
+
+      expect(gate.readMetadata(unknown, "internal")).toEqual(refusal);
+      expect(await gate.fields(unknown)).toEqual(refusal);
+    });
+
+    it("names the kind in a subscription's refusal", async () => {
+      await using docs = await shelf();
+      const { updates, cancel } = subscribe(
+        gateFor(docs.runtime, visitor),
+        docs.sealedPiece.asSchema(true),
+      );
+      cancel();
+
+      expect(updates).toEqual([
+        expect.objectContaining({
+          refused: { refusedBy: "display-ceiling", labelSource: "consumed" },
+        }),
+      ]);
     });
   });
 

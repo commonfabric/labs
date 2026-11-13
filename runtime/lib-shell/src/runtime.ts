@@ -126,8 +126,10 @@ export type RuntimeInternalsCreateOptions = RuntimeInternalsCallbacks & {
    * Populate the default render confidentiality ceiling. Defaults to on:
    * the worker's display sinks gate labeled values against the §8.10.6
    * profile for the acting identity, and author-supplied render-boundary
-   * declassification is denied. `false` opts a host out, which renders
-   * labeled content ungated.
+   * declassification is denied. `false` opts a host out: it declares that it
+   * wants no ceiling (`renderConfidentialityCeiling: null`), and labeled
+   * content renders ungated, where a host declaring nothing is given the
+   * default ceiling by the worker.
    */
   cfcRenderCeiling?: boolean;
 
@@ -383,7 +385,12 @@ export function createRuntimeClientOptions({
           actingPrincipal,
         ),
       }
-      : {}),
+      // None, declared as such: the worker gives a host that declares nothing
+      // the default ceiling. With no ceiling, no declassification is weighed.
+      : {
+        renderDeclassificationPolicy: undefined,
+        renderConfidentialityCeiling: null,
+      }),
     trustSnapshot: resolvedTrustSnapshot,
     forwardWorkerConsole,
     patternCoverage,

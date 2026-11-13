@@ -34,6 +34,7 @@ import {
   hostValueOf,
   isStream,
   type MetaField,
+  type ProjectedRead,
   readProjected,
   type SinkConsumedLabel,
   sinkProjected,
@@ -46,6 +47,7 @@ import {
   redactCaveatSourcesForDisplay,
   reportCfcDenial,
   type SpaceMembershipProvider,
+  StoredCfcMetadataError,
 } from "@commonfabric/runner/cfc";
 
 import {
@@ -71,10 +73,43 @@ const FIELDS_SCHEMA = {
   additionalProperties: { asCell: ["cell"] },
 } as const;
 
-/** What the display ceiling's refusal of a host's read says. */
-const DISPLAY_CEILING_REFUSAL: CellReadRefusal = Object.freeze({
-  refusedBy: "display-ceiling",
+/**
+ * What the display ceiling's refusal of a host's read says: that the ceiling
+ * refused it, and the kind of label `refusal` was decided on, which carries
+ * nothing of the label itself.
+ */
+function displayCeilingRefusal(refusal: RenderLabelSummary): CellReadRefusal {
+  return Object.freeze({
+    refusedBy: "display-ceiling",
+    labelSource: refusal.labelSource,
+  });
+}
+
+/** The decision on a read whose labels could not be read. */
+const UNREADABLE_LABELS: RenderLabelSummary = Object.freeze({
+  labelSource: "unreadable",
+  confidentiality: [],
+  integrity: [],
 });
+
+/**
+ * Reads `cell` once through `project`, as `readProjected()` does, or returns
+ * `undefined` where the read reached a document whose stored labels this
+ * build cannot interpret. Such a read fails closed with a
+ * `StoredCfcMetadataError` (`docs/specs/cfc-stored-envelope.md`), and is
+ * decided as one whose labels could not be read, which refuses it.
+ */
+function readProjectedOrUnreadable<R>(
+  cell: Cell<unknown>,
+  project: (value: unknown) => R,
+): ProjectedRead<R> | undefined {
+  try {
+    return readProjected(cell, project);
+  } catch (error) {
+    if (error instanceof StoredCfcMetadataError) return undefined;
+    throw error;
+  }
+}
 
 /**
  * Marks `answer` as one this gate made. This is the only place the mark is
@@ -167,13 +202,9 @@ export class HostReadGate {
    */
   async settle(cell: Cell<unknown>): Promise<void> {
     await this.#settle((policy, sources, watch) => {
-      readRefusal(
-        cell,
-        [readProjected(cell, hostValueOf).consumed],
-        policy,
-        sources,
-        watch,
-      );
+      const read = readProjectedOrUnreadable(cell, hostValueOf);
+      if (read === undefined) return;
+      readRefusal(cell, [read.consumed], policy, sources, watch);
     });
   }
 
@@ -257,15 +288,9 @@ export class HostReadGate {
     if (policy === undefined) {
       value = hostValueOf(cell.get());
     } else {
-      const read = readProjected(cell, hostValueOf);
-      const refusal = readRefusal(
-        cell,
-        [read.consumed],
-        policy,
-        this.#sources,
-      );
-      if (refusal !== undefined) {
-        const refused = this.#refuse(refusal, policy);
+      const read = this.#decide(cell, cell, hostValueOf, policy);
+      if ("refusal" in read) {
+        const refused = this.#refuse(read.refusal, policy);
         if (!options.includeRef) return refused;
         // The address alone, without the label view a ref carries: a
         // refused read gives no label.
@@ -400,7 +425,7 @@ export class HostReadGate {
       return decided({
         type: NotificationType.CellUpdate as const,
         cell: ref,
-        refused: DISPLAY_CEILING_REFUSAL,
+        refused: displayCeilingRefusal(refusal),
       });
     };
     if (holdsEvents(cell)) {
@@ -489,27 +514,17 @@ export class HostReadGate {
   async fields(cell: Cell<unknown>): Promise<CellFieldsResponse> {
     const listed = cell.asSchema(FIELDS_SCHEMA);
     await this.#settle((policy, sources, watch) => {
-      readRefusal(
-        cell,
-        [readProjected(listed, fieldNamesOf).consumed],
-        policy,
-        sources,
-        watch,
-      );
+      const read = readProjectedOrUnreadable(listed, fieldNamesOf);
+      if (read === undefined) return;
+      readRefusal(cell, [read.consumed], policy, sources, watch);
     });
     const policy = this.#policy;
     let names: string[] | undefined;
     if (policy === undefined) {
       names = fieldNamesOf(listed.get());
     } else {
-      const read = readProjected(listed, fieldNamesOf);
-      const refusal = readRefusal(
-        cell,
-        [read.consumed],
-        policy,
-        this.#sources,
-      );
-      if (refusal !== undefined) return this.#refuse(refusal, policy);
+      const read = this.#decide(cell, listed, fieldNamesOf, policy);
+      if ("refusal" in read) return this.#refuse(read.refusal, policy);
       names = read.value;
     }
     // Nothing to list, which is not a record that holds no fields.
@@ -524,13 +539,35 @@ export class HostReadGate {
     return decided({ fields });
   }
 
+  /**
+   * Reads `read` once through `project` and decides it under `policy` as a
+   * read of `cell`, on what it consumed: the projection, or the label that
+   * refuses it.
+   */
+  #decide<R>(
+    cell: Cell<unknown>,
+    read: Cell<unknown>,
+    project: (value: unknown) => R,
+    policy: RenderPolicy,
+  ): { value: R } | { refusal: RenderLabelSummary } {
+    const projected = readProjectedOrUnreadable(read, project);
+    if (projected === undefined) return { refusal: UNREADABLE_LABELS };
+    const refusal = readRefusal(
+      cell,
+      [projected.consumed],
+      policy,
+      this.#sources,
+    );
+    return refusal === undefined ? { value: projected.value } : { refusal };
+  }
+
   /** A refusal of a read, reported as a refused render is. */
   #refuse(
     refusal: RenderLabelSummary,
     policy: RenderPolicy,
   ): CellGetResponse & CellRefusedAnswer {
     this.#report(refusal, policy);
-    return decided({ refused: DISPLAY_CEILING_REFUSAL });
+    return decided({ refused: displayCeilingRefusal(refusal) });
   }
 
   #report(refusal: RenderLabelSummary, policy: RenderPolicy): void {
