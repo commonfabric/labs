@@ -1630,6 +1630,46 @@ describe("pattern update validates the stored argument", () => {
     });
   });
 
+  it("carries the label of content the update carries over onto what it writes", async () => {
+    // A slot holding content is read as content when the update stages it
+    // again, so its label joins what the update writes; only a slot holding
+    // a link is read as the link alone.
+
+    const { cell } = await setupVintage(
+      openArgument("v1"),
+      { note: "kept" },
+      "carried-labeled-content",
+    );
+    const argument = getMetaLink(cell, "argument")!;
+    const seed = rt.edit();
+    writeSeedEnvelopeDoc(seed, space);
+    seedStoredEnvelope(seed, {
+      space,
+      scope: "space",
+      id: argument.id,
+      path: ["cfc"],
+    }, {
+      version: 1,
+      schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+      labelMap: {
+        version: 1,
+        entries: [{
+          path: ["note"],
+          label: { confidentiality: [personalSpaceOf(space)] },
+        }],
+      },
+    } as never);
+    expect((await seed.commit().settled).error).toBeUndefined();
+
+    const { error } = await rollForward(cell, openArgument("v2"));
+
+    expect(error).toBeUndefined();
+    await cell.pull();
+    expect(cell.getRaw()).toEqual({ marker: "v2" });
+    expect(await confidentialityOf(cell.getAsNormalizedFullLink().id))
+      .toContainEqual(personalSpaceOf(space));
+  });
+
   it("leaves a same-version setup alone over an argument its OWN schema rejects", async () => {
     // The blast-radius guard, and the reason this check keys on the setup
     // marker rather than on strictness everywhere.
