@@ -247,9 +247,11 @@ describe("runner-event-starts", () => {
     it("leaves a piece whose start is in flight running, and returns `false`", async () => {
       await createPiece("in-flight");
       expect(await send("in-flight", "hello")).toBe("done");
-      // A start of the piece's own document, as an open does, which has not
-      // yet settled.
-      const starting = runtime.start(pieceNamed("in-flight"));
+      // A start for another event's delivery, which takes nothing off what
+      // may be stopped, and which has not yet settled.
+      const starting = runtime.start(pieceNamed("in-flight"), {
+        forEvent: true,
+      });
 
       expect(runtime.runner.releaseEventStart(pieceNamed("in-flight"))).toBe(
         false,
