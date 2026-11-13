@@ -154,6 +154,10 @@ pub struct TypeStore {
     /// The number of written types of each module by how far they were
     /// evaluated.
     pub written: HashMap<(usize, &'static str), usize>,
+    /// The result type of each function type whose signature gives one.
+    results: HashMap<TypeId, TypeId>,
+    /// The type arguments of each standard-library object type.
+    code_arguments: HashMap<TypeId, Vec<TypeId>>,
     /// The functions whose return type is being inferred.
     in_progress: std::collections::HashSet<(usize, u32)>,
 }
@@ -327,7 +331,11 @@ impl<'a> Resolver<'_, 'a> {
                 result
             }
             TSType::TSTypeLiteral(literal) => self.members(module, &literal.members, env, next),
-            TSType::TSFunctionType(_) | TSType::TSConstructorType(_) => self.add(Shape::Function),
+            TSType::TSFunctionType(function) => {
+                let result = self.resolve(module, &function.return_type.type_annotation, env, next);
+                self.function_type(Some(result))
+            }
+            TSType::TSConstructorType(_) => self.add(Shape::Function),
             TSType::TSTypeOperatorType(operator) => {
                 let operand = self.resolve(module, &operator.type_annotation, env, next);
                 match operator.operator {
@@ -425,9 +433,12 @@ impl<'a> Resolver<'_, 'a> {
                 }
                 TSSignature::TSMethodSignature(method) => {
                     if let Some(name) = self.key_name(module, &method.key, method.computed) {
+                        let result = method.return_type.as_ref().map(|annotation| {
+                            self.resolve(module, &annotation.type_annotation, env, depth)
+                        });
                         properties.push(Property {
                             name,
-                            ty: self.add(Shape::Function),
+                            ty: self.function_type(result),
                             optional: method.optional,
                         });
                     }
@@ -1136,7 +1147,7 @@ impl<'a> Resolver<'_, 'a> {
             }
             "Date" | "RegExp" | "Error" | "TypeError" | "RangeError" | "Map" | "Set"
             | "ReadonlyMap" | "ReadonlySet" | "URL" | "Uint8Array" | "Iterable" => {
-                self.add(Shape::Code(name.to_string()))
+                self.code_type(name, arguments)
             }
             _ => self.unresolved(Why::External),
         }
@@ -1373,6 +1384,43 @@ impl<'a> Resolver<'_, 'a> {
             .written
             .entry((module, label))
             .or_insert(0) += 1;
+    }
+
+    /// A function type with the result type `result`, where one is known.
+    pub(crate) fn function_type(&self, result: Option<TypeId>) -> TypeId {
+        let function = self.add(Shape::Function);
+        if let Some(result) = result {
+            self.types.borrow_mut().results.insert(function, result);
+        }
+        function
+    }
+
+    /// The result type of a function type, where its signature gives one.
+    pub(crate) fn function_result(&self, function: TypeId) -> Option<TypeId> {
+        self.types.borrow().results.get(&function).copied()
+    }
+
+    /// A standard-library object type with its type arguments, such as
+    /// `Map<K, V>`.
+    pub(crate) fn code_type(&self, name: &str, arguments: Vec<TypeId>) -> TypeId {
+        let code = self.add(Shape::Code(name.to_string()));
+        if !arguments.is_empty() {
+            self.types
+                .borrow_mut()
+                .code_arguments
+                .insert(code, arguments);
+        }
+        code
+    }
+
+    /// The type arguments of a standard-library object type.
+    pub(crate) fn code_arguments(&self, code: TypeId) -> Vec<TypeId> {
+        self.types
+            .borrow()
+            .code_arguments
+            .get(&code)
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// A union of `members`.

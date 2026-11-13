@@ -371,7 +371,7 @@ impl<'a> Resolver<'_, 'a> {
                     (Some(annotation), _) => {
                         Ok(self.resolve_type(module, &annotation.type_annotation))
                     }
-                    (None, _) if declarator.kind == VariableDeclarationKind::Let => {
+                    (None, None) if declarator.kind == VariableDeclarationKind::Let => {
                         Err(Origin::Reassigned)
                     }
                     (None, Some(init)) => self.declared_initializer(module, init, depth + 1),

@@ -46,12 +46,10 @@ one that accepts less. The crate implements the document as it stands at commit
     a constant whose initializer is a call is refused. Still open: an
     initializer that is not a literal and not a call, such as one that spreads
     another constant. Chosen: not decided, and not reported.
-14. **An intersection with a handle, a function, or an opaque API type** (§7.4).
-    "Any other combination is `never`" would refuse `Cell<A> & { ... }` and
-    `VNode & { ... }`. The document does not give the structure of the opaque
-    API types. Chosen: such an intersection is left unevaluated and is not
-    reported. This is the one place the crate does not take the reading that
-    accepts less.
+14. **An intersection the document does not compute** (§7.4). Written in: an
+    intersection with a handle, a factory, a function, or an opaque API type is
+    `subset-type:empty-intersection`. Still open in the crate: an intersection
+    with an operand it did not evaluate is not decided.
 15. **`Default<V>` as a member of a union** (§8.8). `T | Default<V>` gives the
     value type `T`. Chosen: the member is dropped from the union when the type
     is resolved, and the default annotation is not kept on the union, because no
@@ -101,26 +99,21 @@ one that accepts less. The crate implements the document as it stands at commit
 
 ## The rulings of 2026-11-13, and inference
 
-20. **Where the warning for an instantiation without a cause applies** (ruling
-    R10). The ruling says "inside a loop or a callback in a function body".
-    Chosen: a `lift`, a `computed`, and an `assert`, where an instance is named
-    by its ordinal. A `handler` and an `action` are not warned, and neither is
-    an authored function a computation calls. A nested function counts as a
-    callback whatever it is passed to. The identifier is provisional:
-    `function-body:instantiation-without-cause`.
-21. **A state cell in a per-element body that also instantiates a child**
-    (ruling R11). The ruling puts the position in the key where such a body
-    instantiates a child, and asks whether the body's own state cell is then
-    accepted. The documents do not say. Chosen: the state cell is still refused
-    when the callback does not use its index. The crate counts the bodies over
-    plain values that instantiate a child; the corpus has none. This is a
-    question for the owner.
+20. **The warning for an instantiation without a cause** (§5.2, question 26).
+    Written in. The crate reports it in a `lift`, a `computed`, an `assert`, and
+    an authored function one of them or tier R calls. A nested function counts
+    as a callback whatever it is passed to.
+21. **A state cell declared by a pattern called in a per-element body**
+    (§4.4.1). The document counts a state cell of a statically resolved pattern
+    called in the body as a state cell of the body. The crate does not look into
+    the called pattern, so it does not report that case.
 22. **A call of an overloaded function** (§7.9). Overloads are refused, and a
     call of one still has to have a type for the code around it. Chosen: the
     result type of the first signature.
-23. **A value of a function type** (§7.1). The representation keeps no signature
-    for a function type, so the result of calling a parameter or a property of
-    function type has no type. Six receivers in the corpus.
+23. **A function type** (§7.1). The crate keeps the result type of a written
+    function type and of a method signature, and not the parameter types, so a
+    callback passed to a function-typed parameter gets no parameter types from
+    it.
 24. **Generic functions** (§7.3). A type parameter is bound from a written type
     argument, or from the argument whose parameter is the type parameter, an
     array of it, or a handle of it. Any other parameter stays unbound, and the
@@ -137,3 +130,13 @@ one that accepts less. The crate implements the document as it stands at commit
     `string`. The declarations in `base/api/index.ts` have more fields, which
     read as untyped here. The other effectful built-ins have no signature in
     this slice.
+28. **The parts of the document at `d24ff348c7` the crate does not follow yet.**
+    `Exclude` and `Extract` (§7.10) are not computed. A type name that resolves
+    to nothing is not reported (`subset-type:mismatch`). Label arguments are not
+    decided after alias substitution, and `cfc-policy-of` is not implemented. A
+    callee at module scope that does not resolve by name is not classified by
+    its type. Assignability (§7.5), narrowing (§7.6), and the typed promotion
+    criterion (§6.1) are not implemented.
+29. **Iterators of `Map` and `Set`** (§9.9). `keys()`, `values()`, and
+    `entries()` are given array types, which is enough for spread, `for...of`,
+    and `Array.from`, and wrong for a method called on the iterator itself.

@@ -146,11 +146,11 @@ fn variable_of_a_for_of_loop_has_the_element_type() {
 #[test]
 fn receiver_inference_gives_up_on_is_counted_with_its_reason() {
     let (labels, errors) = untyped(
-        "function show(source: { format: (count: number) => string }) { return source.format(1).trim(); }\n",
+        "function show(run: () => void) { try { run(); return \"\"; } catch (error) { return error.toString(); } }\n",
     );
     assert_eq!(
         labels,
-        ["untyped: the result of a call of a function value"]
+        ["untyped: a `let` without an annotation, or a `catch` variable"]
     );
     assert!(errors.is_empty());
 }
@@ -211,5 +211,42 @@ fn alias_reached_first_through_a_cycle_keeps_its_type() {
          const read = handler<unknown, { first: Message; composer: ComposerCell }>((_, { composer }) => {\n\
            composer.get().text.trim();\n\
          });\n",
+    );
+}
+
+#[test]
+fn function_with_several_returns_has_the_union_of_what_it_returns() {
+    assert_typed(
+        "function label(count: number) { if (count === 1) { return \"one\"; } return `${count}`; }\n\
+         function show(count: number) { return label(count).trim(); }\n",
+    );
+}
+
+#[test]
+fn let_without_an_annotation_has_the_type_of_its_initializer() {
+    assert_typed(
+        "function show(names: string[]) { let joined = \"\"; for (const name of names) { joined = joined + name; } return joined.trim(); }\n",
+    );
+}
+
+#[test]
+fn call_of_a_function_typed_parameter_or_property_has_its_result_type() {
+    assert_typed(
+        "function show(format: (count: number) => string, source: { read(): string[]; pick: (name: string) => string }) {\n\
+           return format(1).trim() + source.read().join(\",\") + source.pick(\"a\").trim();\n\
+         }\n",
+    );
+}
+
+#[test]
+fn map_and_set_have_key_and_value_types() {
+    assert_typed(
+        "function show(prices: Map<string, number>, names: Set<string>) {\n\
+           const made = new Map<string, string[]>();\n\
+           const first = prices.get(\"plain\")?.toFixed(2);\n\
+           const rows = [...prices.entries()].map(([name, price]) => name.trim() + price.toFixed(1));\n\
+           for (const name of names) { made.get(name)?.push(name.trim()); }\n\
+           return rows.join(\",\") + first + [...names].map((name) => name.trim()).length + Array.from(prices.keys()).map((key) => key.trim()).length;\n\
+         }\n",
     );
 }

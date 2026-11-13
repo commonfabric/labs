@@ -70,6 +70,14 @@ impl<'a> Resolver<'_, 'a> {
             Shape::Array(element) => Some(element),
             Shape::Tuple(elements) => Some(self.union_distinct(elements)),
             Shape::String => Some(self.intern(Shape::String)),
+            Shape::Code(code) if code.ends_with("Set") => self
+                .code_arguments(self.present(collection))
+                .first()
+                .copied(),
+            Shape::Code(code) if code.ends_with("Map") => {
+                let arguments = self.code_arguments(self.present(collection));
+                (arguments.len() == 2).then(|| self.intern(Shape::Tuple(arguments)))
+            }
             Shape::Handle(_, value) => match self.shape(self.present(value)) {
                 Shape::Array(element) => Some(element),
                 Shape::Tuple(elements) => Some(self.union_distinct(elements)),
@@ -178,10 +186,11 @@ impl<'a> Resolver<'_, 'a> {
 
     /// The result of calling a value of type `callee`.
     fn call_of_value(&self, callee: TypeId) -> Declared {
-        match self.shape(self.present(callee)) {
+        let callee = self.present(callee);
+        match self.shape(callee) {
             Shape::PatternFactory(_, output) => Ok(output),
             Shape::HandlerFactory(event, _) => self.of(Shape::Handle(HandleKind::Stream, event)),
-            Shape::Function => Err(Origin::FunctionValue),
+            Shape::Function => self.function_result(callee).ok_or(Origin::FunctionValue),
             _ => Err(Origin::CallResult),
         }
     }
@@ -322,7 +331,16 @@ impl<'a> Resolver<'_, 'a> {
                     Some(argument) => self.typed_at(module, argument, depth + 1),
                     None => self.of(Shape::Void),
                 },
-                _ => Err(Origin::UninferredReturn),
+                several => {
+                    let mut members = Vec::new();
+                    for statement in several {
+                        members.push(match &statement.argument {
+                            Some(argument) => self.typed_at(module, argument, depth + 1)?,
+                            None => self.intern(Shape::Undefined),
+                        });
+                    }
+                    Ok(self.union_distinct(members))
+                }
             }
         };
         self.leave(key);
@@ -658,6 +676,30 @@ impl<'a> Resolver<'_, 'a> {
                 },
             },
             (Shape::PatternFactory(..), "asScope" | "inSpace") => Ok(receiver),
+            (Shape::Code(code), _) if code.ends_with("Map") || code.ends_with("Set") => {
+                let arguments = self.code_arguments(receiver);
+                let argument = |index: usize| {
+                    arguments
+                        .get(index)
+                        .copied()
+                        .unwrap_or_else(|| self.add_unresolved())
+                };
+                let (key, value) = if code.ends_with("Map") {
+                    (argument(0), argument(1))
+                } else {
+                    (argument(0), argument(0))
+                };
+                match name {
+                    "get" => Ok(self.union_of(vec![value, self.intern(Shape::Undefined)])),
+                    "has" | "delete" => boolean(),
+                    "set" | "add" => Ok(receiver),
+                    "clear" | "forEach" => self.of(Shape::Void),
+                    "keys" => self.of(Shape::Array(key)),
+                    "values" => self.of(Shape::Array(value)),
+                    "entries" => self.of(Shape::Array(self.intern(Shape::Tuple(vec![key, value])))),
+                    _ => Err(Origin::UnlistedMember),
+                }
+            }
             (Shape::Code(code), _) => match (code.as_str(), name) {
                 (
                     "Date",
@@ -763,6 +805,16 @@ impl<'a> Resolver<'_, 'a> {
             && matches!(method, "replace" | "replaceAll")
         {
             return self.of(Shape::String);
+        }
+        if let Shape::Code(code) = self.shape(self.present(receiver)) {
+            if code.ends_with("Map") && method == "forEach" {
+                let arguments = self.code_arguments(self.present(receiver));
+                return match (arguments.as_slice(), index) {
+                    ([_, value], 0) => Ok(*value),
+                    ([key, _], 1) => Ok(*key),
+                    _ => Err(Origin::CallbackParameter),
+                };
+            }
         }
         let element = self.element_of(receiver).ok_or(Origin::CallbackParameter)?;
         match (method, index) {
@@ -947,8 +999,34 @@ impl<'a> Resolver<'_, 'a> {
         }
         match callee.name.as_str() {
             "Array" => self.of(Shape::Array(self.add_unresolved())),
-            name @ ("Date" | "Map" | "Set" | "Error" | "TypeError" | "RangeError" | "URL"
-            | "RegExp" | "Uint8Array" | "TextEncoder") => self.of(Shape::Code(name.to_string())),
+            name @ ("Map" | "Set") => {
+                let mut arguments: Vec<TypeId> = new
+                    .type_arguments
+                    .iter()
+                    .flat_map(|arguments| &arguments.params)
+                    .map(|written| self.resolve_type(module, written))
+                    .collect();
+                if arguments.is_empty() {
+                    // The element type of the iterable the container is made
+                    // from: an element for a `Set`, a pair for a `Map`.
+                    let element = new
+                        .arguments
+                        .first()
+                        .and_then(Argument::as_expression)
+                        .and_then(|source| self.typed_at(module, source, 1).ok())
+                        .and_then(|source| self.element_of(source));
+                    match (name, element.map(|element| (element, self.shape(element)))) {
+                        ("Set", Some((element, _))) => arguments.push(element),
+                        ("Map", Some((_, Shape::Tuple(pair)))) if pair.len() == 2 => {
+                            arguments = pair
+                        }
+                        _ => {}
+                    }
+                }
+                Ok(self.code_type(name, arguments))
+            }
+            name @ ("Date" | "Error" | "TypeError" | "RangeError" | "URL" | "RegExp"
+            | "Uint8Array" | "TextEncoder") => self.of(Shape::Code(name.to_string())),
             _ => Err(Origin::External),
         }
     }
