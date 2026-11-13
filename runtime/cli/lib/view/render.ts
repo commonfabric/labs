@@ -1626,11 +1626,15 @@ function layoutButtons(
 
 /**
  * Returns the inner row of a dialog box of `innerH` rows that the buttons are
- * drawn on, or -1 when the box is too short to show them below the body.
+ * drawn on, or -1 when the box is too short to show them below the body, or
+ * below the body and fields of a dialog without fields to scroll.
  */
 function buttonRowOf(dialog: DialogState, innerH: number): number {
   const row = innerH - 2; // the buttons' shadow takes the last row
-  return row > contentRows(dialog) ? row : -1;
+  const above = dialog.fields?.length
+    ? dialog.body.length
+    : contentRows(dialog);
+  return row > above ? row : -1;
 }
 
 /** The text of the rows of a field that set how wide it is: a check box's
@@ -1694,7 +1698,8 @@ function inputLineStart(field: DialogInputLine, width: number): number {
 /**
  * Returns where in the box of `dialog` each field is drawn, as the box's
  * inner row it starts on, or null for a field the box is too short to show
- * whole above its buttons.
+ * whole between its body and its buttons. When the fields do not all fit,
+ * they scroll up as far as it takes to show the focused one.
  */
 function shownFieldRows(
   dialog: DialogState,
@@ -1703,8 +1708,17 @@ function shownFieldRows(
   const buttonRow = buttonRowOf(dialog, innerH);
   const bottom = buttonRow < 0 ? innerH : buttonRow;
   const fields = dialog.fields ?? [];
-  return fieldRows(dialog).map((row, i) =>
-    row + fieldHeight(fields[i]) <= bottom ? row : null
+  const rows = fieldRows(dialog);
+  const focus = dialog.fieldFocus ?? -1;
+  const focused = fields[focus];
+  const scroll = focused === undefined
+    ? 0
+    : Math.max(0, rows[focus] + fieldHeight(focused) - bottom);
+  return rows.map((row, i) =>
+    row - scroll > dialog.body.length &&
+      row - scroll + fieldHeight(fields[i]) <= bottom
+      ? row - scroll
+      : null
   );
 }
 

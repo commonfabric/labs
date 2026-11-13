@@ -612,21 +612,22 @@ button activates that button. Releasing it anywhere else, or pressing a key
 first, lets go of the button without activating it. Printable keys enter text
 while a filter is active.
 
-Some dialogs also hold check boxes and input lines, drawn as Turbo Vision draws
-them. Tab and Shift-Tab, like the navigation keys, move the focus through those
-first and then through the buttons. Space toggles the focused check box, and so
-does a click on it. Moving the focus to an input line selects its text, so that
-typing replaces it. While an input line is focused, every key but Tab,
-Shift-Tab, Enter, Escape, and Alt with a letter goes to it: typed text goes in,
-Backspace and Delete (or Ctrl-D) delete a character, Alt-Backspace deletes the
-word before the cursor, and Left, Right, Home, and End (or Ctrl-B, Ctrl-F,
-Ctrl-A, and Ctrl-E) move its cursor. A click on an input line puts its cursor
-where the click lands, and a click on its label selects its text. An arrow at
-either end of the line says that its text runs on past that end. A check box's
-highlighted letter toggles it, an input line's moves the focus to it, and a
-button's activates it; while an input line is focused, Alt with the letter does.
-Enter activates the default button wherever the focus is, unless it is on
-another button.
+Some dialogs also hold check boxes, radio buttons, and input lines, drawn as
+Turbo Vision draws them. On a screen too short for all of a dialog's fields, its
+buttons stay in view and its fields scroll to show the focused one. Tab and
+Shift-Tab, like the navigation keys, move the focus through those first and then
+through the buttons. Space toggles the focused check box, and so does a click on
+it. Moving the focus to an input line selects its text, so that typing replaces
+it. While an input line is focused, every key but Tab, Shift-Tab, Enter, Escape,
+and Alt with a letter goes to it: typed text goes in, Backspace and Delete (or
+Ctrl-D) delete a character, Alt-Backspace deletes the word before the cursor,
+and Left, Right, Home, and End (or Ctrl-B, Ctrl-F, Ctrl-A, and Ctrl-E) move its
+cursor. A click on an input line puts its cursor where the click lands, and a
+click on its label selects its text. An arrow at either end of the line says
+that its text runs on past that end. A check box's highlighted letter toggles
+it, an input line's moves the focus to it, and a button's activates it; while an
+input line is focused, Alt with the letter does. Enter activates the default
+button wherever the focus is, unless it is on another button.
 
 Press `i` in a diff to open its file and commit list. The list starts in browse
 mode. Press `/` to filter it by file name, commit hash, or commit subject. In
@@ -743,21 +744,22 @@ keeps, one a line as its repository, branch, and number separated by tabs. The
 list does not say whose fork a branch is in, so unless it names exactly one pull
 request for the branch, the viewer asks GitHub. With the first radio button, the
 dialog closes and the status line gives the pull request's address as a link.
-With the third, the viewer opens the pull request in the browser. With the
-second or the fourth, the viewer asks GitHub's GraphQL API how GitHub's page
-would merge the pull request: by the method the token's account last used, or
-else by the repository's default. GitHub's merge API itself merges with a merge
-commit unless told otherwise, which a repository that allows only squashing or
-rebasing refuses. With the second radio button, the dialog then asks whether to
-merge that way, with Merge and Cancel buttons. No button is its default: Enter
-does nothing until Tab or an arrow key has moved the focus to a button, while a
-button's letter acts at once. With the fourth, the touch of the security key
-approves the merge, so the viewer asks nothing first. The viewer merges the pull
-request with GitHub's API or touch-gate, in a dialog like the push's. The merge
-happens only while the pull request's head is the commit the viewer has checked
-out. Asking for the merge method needs a GitHub token, from the same places the
-API uses. When a creation or a merge is aborted after its request was sent, it
-may have happened anyway, and the summary says so.
+With the third, the viewer opens the pull request in the browser, or, when no
+browser can be opened, gives its address in the status line as the first does.
+With the second or the fourth, the viewer asks GitHub's GraphQL API how GitHub's
+page would merge the pull request: by the method the token's account last used,
+or else by the repository's default. GitHub's merge API itself merges with a
+merge commit unless told otherwise, which a repository that allows only
+squashing or rebasing refuses. With the second radio button, the dialog then
+asks whether to merge that way, with Merge and Cancel buttons. No button is its
+default: Enter does nothing until Tab or an arrow key has moved the focus to a
+button, while a button's letter acts at once. With the fourth, the touch of the
+security key approves the merge, so the viewer asks nothing first. The viewer
+merges the pull request with GitHub's API or touch-gate, in a dialog like the
+push's. The merge happens only while the pull request's head is the commit the
+viewer has checked out. Asking for the merge method needs a GitHub token, from
+the same places the API uses. When a creation or a merge is aborted after its
+request was sent, it may have happened anyway, and the summary says so.
 
 Press `O` to open the settings dialog. Below the radio buttons, an input line
 holds the name of the token the touch-gate server uses. Its check box, "Quit

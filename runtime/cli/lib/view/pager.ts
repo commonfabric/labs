@@ -28,6 +28,7 @@ import { realFileGateway } from "./filegateway.ts";
 import { ViewError } from "./errors.ts";
 import { join } from "@std/path";
 import {
+  abortable,
   type GitHubApi,
   githubApi,
   githubToken,
@@ -560,7 +561,7 @@ export async function runPager(
     target: PullRequestTarget,
     signal: AbortSignal,
   ) => {
-    const list = await deps.pullRequestList();
+    const list = await abortable(deps.pullRequestList(), signal);
     return (list === null ? null : listedPullRequest(list, target)) ??
       await deps.github.find(target, signal);
   };

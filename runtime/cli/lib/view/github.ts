@@ -222,6 +222,22 @@ export function listedPullRequest(
     : null;
 }
 
+/** Settles as `promise` does, or rejects with `signal`'s reason once it
+ * aborts first, whether or not `promise` itself can be stopped. */
+export function abortable<T>(
+  promise: Promise<T>,
+  signal: AbortSignal,
+): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const abort = () => reject(signal.reason);
+    if (signal.aborted) abort();
+    signal.addEventListener("abort", abort, { once: true });
+    promise.then(resolve, reject).finally(() =>
+      signal.removeEventListener("abort", abort)
+    );
+  });
+}
+
 /** GitHub's REST API, authenticated with a token when there is one. */
 export interface GitHubApi extends PullRequestService {
   /** Resolves with the open pull request from `target`'s branch, or null
@@ -261,7 +277,7 @@ export function githubApi(
     body?: string,
     required = true,
   ): Promise<unknown> => {
-    const key = await token();
+    const key = await abortable(Promise.resolve(token()), signal);
     if (key === null && required) {
       throw new Error(
         "there is no GitHub token: set GH_TOKEN, or sign in with `gh auth login`",

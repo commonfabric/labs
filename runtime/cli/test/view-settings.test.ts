@@ -633,20 +633,39 @@ describe("settings", () => {
       );
     });
 
-    it("does nothing on a click below a dialog too short to draw its fields and buttons", () => {
+    it("keeps its buttons on a screen too short for its fields, scrolling the fields to show the focused one", () => {
+      const s = session();
+      s.resize(80, 12);
+      s.openSettings({ ...OFF, webhookRelay: "old.test:1" });
+
+      const top = drawnRows(s).join("\n");
+      expect(top).toContain("Pull requests");
+      expect(top).toContain(" OK ");
+      expect(top).toContain(" Cancel ");
+      expect(top).not.toContain("Webhook relay");
+      s.handleKey(typed("w"));
+      const scrolled = drawnRows(s);
+      expect(scrolled.join("\n")).toContain("Webhook relay");
+      expect(scrolled.join("\n")).not.toContain("Pull requests");
+      expect(cursorScreenPos(s.displayDoc(), s.view())).not.toBeNull();
+      const ok = cellOf(scrolled, " OK ");
+      s.handleKey(mouseKey(true, ok));
+      s.handleKey(mouseKey(false, ok));
+
+      expect(s.settingsToSave?.settings).toEqual({
+        ...OFF,
+        webhookRelay: "old.test:1",
+      });
+    });
+
+    it("shows its buttons and none of its fields on a screen too short for any field", () => {
       const s = session();
       s.resize(80, 7);
       s.openSettings(OFF);
-      const rows = drawnRows(s);
 
-      for (let y = 0; y < rows.length; y++) {
-        s.handleKey(mouseKey(true, { x: 40, y }));
-        s.handleKey(mouseKey(false, { x: 40, y }));
-      }
-
-      expect(s.view().dialog!.fieldFocus).toBe(TOOL);
-      expect(s.view().dialog!.fields![TOOL]).toMatchObject({ selected: 2 });
-      expect(rows.join("\n")).not.toContain("Pull requests");
+      const rows = drawnRows(s).join("\n");
+      expect(rows).toContain(" OK ");
+      expect(rows).not.toContain("Pull requests");
       expect(cursorScreenPos(s.displayDoc(), s.view())).toBeNull();
     });
 

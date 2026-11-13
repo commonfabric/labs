@@ -2247,6 +2247,29 @@ describe("view-push", () => {
         expect(harness.writes.join("")).not.toContain("no open pull request");
       });
 
+      it("stops looking on Cancel while the user's list is still being read", async () => {
+        const asked: string[] = [];
+        const reading = Promise.withResolvers<void>();
+        const harness = pagerHarness(() => fakeIo().io, {
+          git: viewerGit({ "cf-view.pullRequestTool": "api" }, UPSTREAM),
+          pullRequestList: () => {
+            reading.resolve();
+            return new Promise<never>(() => {});
+          },
+          github: {
+            ...unusedGitHub,
+            find: () => {
+              asked.push("find");
+              return Promise.resolve(null);
+            },
+          },
+        });
+        await harness.run(["L", () => reading.promise, "\x1b"]);
+
+        expect(asked).toEqual([]);
+        expect(harness.writes.at(-2)).not.toContain("Looking for");
+      });
+
       it("starts only the first of two tasks whose keys arrive in one read, the second key reaching its dialog", async () => {
         const looked: string[] = [];
         const harness = pagerHarness(() => fakeIo().io, {

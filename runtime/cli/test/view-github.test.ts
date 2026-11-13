@@ -3,6 +3,7 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import {
+  abortable,
   githubApi,
   githubToken,
   listedPullRequest,
@@ -450,6 +451,43 @@ describe("github", () => {
           new AbortController().signal,
         ),
       ).rejects.toThrow("there is no GitHub token");
+      expect(requests).toEqual([]);
+    });
+  });
+
+  describe("abortable()", () => {
+    it("settles as the promise does while its signal has not aborted", async () => {
+      const signal = new AbortController().signal;
+
+      expect(await abortable(Promise.resolve(7), signal)).toBe(7);
+      await expect(abortable(Promise.reject(new Error("no")), signal)).rejects
+        .toThrow("no");
+    });
+
+    it("rejects with the signal's reason once it aborts, or when it already has", async () => {
+      const controller = new AbortController();
+      const pending = abortable(
+        new Promise<never>(() => {}),
+        controller.signal,
+      );
+      controller.abort(new Error("stopped"));
+
+      await expect(pending).rejects.toThrow("stopped");
+      await expect(
+        abortable(Promise.resolve(7), AbortSignal.abort(new Error("early"))),
+      ).rejects.toThrow("early");
+    });
+
+    it("lets GitHub's API stop waiting for the token, asking GitHub nothing", async () => {
+      const { send, requests } = fakeFetch(200, "[]");
+      const controller = new AbortController();
+      const finding = githubApi(() => new Promise<never>(() => {}), send).find(
+        TARGET,
+        controller.signal,
+      );
+      controller.abort(new Error("stopped"));
+
+      await expect(finding).rejects.toThrow("stopped");
       expect(requests).toEqual([]);
     });
   });
