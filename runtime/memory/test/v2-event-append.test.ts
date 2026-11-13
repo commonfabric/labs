@@ -170,7 +170,7 @@ const waveSetSidecar = (
   });
 
 const headSeqOf = (engine: Engine): number =>
-  (engine.statements.selectServerSeq.get() as { seq: number }).seq;
+  (engine.statement("selectServerSeq").get() as { seq: number }).seq;
 
 const commitActingColumns = (
   path: string,
