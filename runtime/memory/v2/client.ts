@@ -3178,8 +3178,12 @@ export class Client {
       return this.#connectionEpoch;
     }
     await this.#reconnect();
-    // #reconnect() resolves without connecting when it gives up on a permanent
-    // handshake failure; surface it here rather than returning as if connected.
+    // `#reconnect()` resolves without connecting when a close ends it, or when
+    // it gives up on a permanent handshake failure. Either is thrown here
+    // rather than returning as if connected.
+    if (this.#closed) {
+      throw new Error("memory client is closed");
+    }
     if (this.#fatalError) {
       throw this.#fatalError;
     }
