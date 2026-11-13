@@ -266,6 +266,7 @@ pub const CATALOG: &[Entry] = &[
          constant, an array literal, or the result of `Object.keys`, \
          `Object.entries`, or `split`; any other collection needs its element type",
     ),
+    done("function-body:instantiation-without-cause", Warning),
     done("verb-result:undeclared-return", Error),
     footprint(
         "mergeable-push:read-then-push",
@@ -307,6 +308,7 @@ pub const CATALOG: &[Entry] = &[
         Error,
         "reported for an index signature; `Record<K, T>` needs the evaluated key type",
     ),
+    done("subset-type:tuple-rest", Error),
     done("subset-syntax:enum", Error),
     done("subset-syntax:namespace", Error),
     done("subset-syntax:ambient-declaration", Error),
@@ -433,16 +435,7 @@ pub const CATALOG: &[Entry] = &[
 /// Entries the front end reports under an identifier the specification has
 /// not named yet. `tests/catalog.rs` fails once the specification has one of
 /// these, so that it moves into [`CATALOG`].
-pub const PROVISIONAL: &[Entry] = &[Entry {
-    id: "function-body:instantiation-without-cause",
-    severity: Some(Warning),
-    status: Status::Implemented {
-        rest: Some(
-            "reported in a `lift`, a `computed`, and an `assert`; whether an authored \
-             function they call is covered is not ruled",
-        ),
-    },
-}];
+pub const PROVISIONAL: &[Entry] = &[];
 
 /// The entry for `id`, if the catalog has one.
 pub fn entry(id: &str) -> Option<&'static Entry> {

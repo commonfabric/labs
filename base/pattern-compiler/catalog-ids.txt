@@ -69,6 +69,7 @@ function-body:cell-needs-cause error
 function-body:effect-in-computation error
 function-body:event-context-in-computation error
 collection:shared-element-state error
+function-body:instantiation-without-cause warning
 verb-result:undeclared-return error
 mergeable-push:read-then-push warning
 footprint:widened hint
@@ -88,6 +89,7 @@ subset-type:callable-object error
 subset-type:assertion-signature error
 subset-type:unsupported-modifier error
 subset-type:index-signature-key error
+subset-type:tuple-rest error
 subset-syntax:enum error
 subset-syntax:namespace error
 subset-syntax:ambient-declaration error

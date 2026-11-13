@@ -221,6 +221,7 @@ pub fn rewrite(id: &str) -> &'static str {
         "subset-type:assertion-signature" => "Use a type predicate and an `if` that throws.",
         "subset-type:unsupported-modifier" => "Omit the modifier.",
         "subset-type:index-signature-key" => "Use an array, or a `string` key.",
+        "subset-type:tuple-rest" => "Use an array type, or a tuple of fixed length.",
         "subset-syntax:enum" => "Use a union of string literals with an `as const` object.",
         "subset-syntax:namespace" => "Use a module.",
         "subset-syntax:ambient-declaration" => "Write one declaration per name.",

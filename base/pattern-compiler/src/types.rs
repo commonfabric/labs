@@ -569,8 +569,9 @@ impl<'a> Resolver<'_, 'a> {
                 }
             }
             _ if is_plain(&a) && is_plain(&b) => self.add(Shape::Never),
-            // An intersection with a handle, a function, an opaque API type,
-            // or a type this slice did not evaluate is left unevaluated.
+            // §7.4 does not compute an intersection with a handle, a factory,
+            // a function, or an opaque API type, so one is `never`.
+            _ if is_uncomputed(&a) || is_uncomputed(&b) => self.add(Shape::Never),
             _ => self.unresolved(Why::NotEvaluated),
         }
     }
@@ -1105,6 +1106,34 @@ impl<'a> Resolver<'_, 'a> {
             },
             "Exclude" | "Extract" => self.unresolved(Why::NotEvaluated),
             "PropertyKey" => self.add(Shape::String),
+            "Awaited"
+            | "InstanceType"
+            | "ConstructorParameters"
+            | "ThisParameterType"
+            | "OmitThisParameter"
+            | "ThisType"
+            | "NoInfer"
+            | "Uppercase"
+            | "Lowercase"
+            | "Capitalize"
+            | "Uncapitalize" => {
+                self.report(
+                    module,
+                    "stdlib:unsupported-member",
+                    reference.span,
+                    format!("The utility type `{name}` is not part of the subset"),
+                );
+                self.unresolved(Why::RefusedForm)
+            }
+            _ if matches!(api::global(name), api::Global::Refused(_)) => {
+                self.report(
+                    module,
+                    "function-body:unsupported-global",
+                    reference.span,
+                    format!("The type of the global `{name}` is not available"),
+                );
+                self.unresolved(Why::RefusedForm)
+            }
             "Date" | "RegExp" | "Error" | "TypeError" | "RangeError" | "Map" | "Set"
             | "ReadonlyMap" | "ReadonlySet" | "URL" | "Uint8Array" | "Iterable" => {
                 self.add(Shape::Code(name.to_string()))
@@ -1453,6 +1482,18 @@ fn keys_of(resolver: &Resolver<'_, '_>, keys: Option<TypeId>) -> Option<Vec<Stri
             _ => None,
         })
         .collect()
+}
+
+/// Whether a shape is one §7.4 computes no intersection for.
+fn is_uncomputed(shape: &Shape) -> bool {
+    matches!(
+        shape,
+        Shape::Handle(..)
+            | Shape::PatternFactory(..)
+            | Shape::HandlerFactory(..)
+            | Shape::Function
+            | Shape::Opaque(_)
+    )
 }
 
 /// Whether a shape is a primitive, a literal, or an object type: the shapes

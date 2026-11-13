@@ -334,6 +334,11 @@ const CASES: &[Case] = &[
         "const GLAZES = [\"plain\", \"glazed\"];\nconst Box = pattern(() => { const rows = GLAZES.map((glaze, index) => { const open = new Writable(false); return <li onClick={() => open.set(!open.get())}>{index + 1}. {glaze}</li>; }); return { rows }; });",
     ),
     case(
+        "function-body:instantiation-without-cause",
+        "const Quote = pattern<{ id: string }>(({ id }) => ({ id }));\nconst quotes = lift((ids: string[]) => ids.map((id) => /*!*/Quote({ id })));",
+        "const Quote = pattern<{ id: string }>(({ id }) => ({ id }));\nconst quotes = lift((ids: string[]) => ids.map((id) => Quote({ id }).for(id)));",
+    ),
+    case(
         "verb-result:undeclared-return",
         "const save = handler(() => { /*!*/return { saved: true }; });",
         "const save = handler<unknown, unknown, { saved: boolean }>(() => { return { saved: true }; });",
@@ -392,6 +397,11 @@ const CASES: &[Case] = &[
         "subset-type:index-signature-key",
         "interface Tray { /*!*/[slot: number]: string }",
         "interface Tray { [slot: string]: string }",
+    ),
+    case(
+        "subset-type:tuple-rest",
+        "type Row = [string, /*!*/...number[]];",
+        "type Row = [string, number];",
     ),
     case(
         "subset-syntax:enum",
@@ -934,4 +944,38 @@ fn overload_that_retypes_a_link_is_described_with_the_type_that_replaces_it() {
         overloads[0].declared_instead.as_deref(),
         Some("Cell<{ id: string; add: number }>")
     );
+}
+
+#[test]
+fn instantiation_in_a_loop_of_an_authored_function_a_computation_calls_draws_a_warning() {
+    let module = "const Quote = pattern<{ id: string }>(({ id }) => ({ id }));\nfunction quotesOf(ids: string[]) { return ids.map((id) => Quote({ id })); }\nconst quotes = lift((ids: string[]) => quotesOf(ids));\n";
+    assert!(all(module).contains(&"function-body:instantiation-without-cause"));
+    let handled = "const Quote = pattern<{ id: string }>(({ id }) => ({ id }));\nfunction quotesOf(ids: string[]) { return ids.map((id) => Quote({ id })); }\nconst add = handler<unknown, { ids: string[] }>((_, { ids }) => { quotesOf(ids); });\n";
+    assert!(!all(handled).contains(&"function-body:instantiation-without-cause"));
+}
+
+#[test]
+fn intersection_with_a_handle_is_refused() {
+    let module = "type Odd = Writable<number> & { extra: string };\n";
+    assert_eq!(ids(&check(module)), ["subset-type:empty-intersection"]);
+}
+
+#[test]
+fn utility_type_the_subset_does_not_list_is_refused() {
+    let module = "type Done = Awaited<string>;\n";
+    assert_eq!(ids(&check(module)), ["stdlib:unsupported-member"]);
+    let promise = "type Later = Promise<string>;\n";
+    assert_eq!(ids(&check(promise)), ["function-body:unsupported-global"]);
+}
+
+#[test]
+fn new_of_an_authored_function_in_a_frozen_data_initializer_is_refused() {
+    let module = "function Donut() { return { name: \"plain\" }; }\nconst FIRST = new Donut();\n";
+    assert_eq!(ids(&check(module)), ["function-body:constructor"]);
+}
+
+#[test]
+fn state_cell_in_a_per_element_body_that_instantiates_a_child_is_accepted() {
+    let module = "const GLAZES = [\"plain\", \"sugar\"];\nconst Row = pattern<{ glaze: string }>(({ glaze }) => ({ glaze }));\nconst Box = pattern(() => ({ rows: GLAZES.map((glaze) => { const open = new Writable(false); return { open, row: Row({ glaze }) }; }) }));\n";
+    assert_eq!(ids(&check(module)), Vec::<&str>::new());
 }

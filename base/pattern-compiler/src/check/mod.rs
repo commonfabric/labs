@@ -51,6 +51,9 @@ pub enum ActKind {
     /// Makes another runtime call of §5.2: instantiates a pattern, binds a
     /// handler, or reads context.
     Runtime,
+    /// Instantiates a pattern in a loop or a nested function without a
+    /// cause.
+    Uncaused,
 }
 
 impl ActKind {
@@ -61,6 +64,7 @@ impl ActKind {
             ActKind::EventContext => "reads the event's key or principal",
             ActKind::CellWithoutCause => "creates a cell without an explicit cause",
             ActKind::Runtime => "makes a runtime call",
+            ActKind::Uncaused => "instantiates a pattern in a loop or a callback without a cause",
         }
     }
 }
@@ -1516,7 +1520,19 @@ impl<'p, 'a> Checker<'p, 'a> {
             ActKind::EventContext => "function-body:event-context-in-computation",
             ActKind::CellWithoutCause => "function-body:cell-needs-cause",
             ActKind::Runtime => "module-scope:runtime-call",
+            ActKind::Uncaused => "function-body:instantiation-without-cause",
         };
+        if kind == ActKind::Uncaused
+            && !matches!(
+                self.cur(),
+                Ctx::Function {
+                    root: Root::Computation | Root::Authored(_),
+                    ..
+                }
+            )
+        {
+            return;
+        }
         let module_scope = |checker: &mut Self| {
             if kind == ActKind::Ambient {
                 checker.report(id, span, format!("{found} at module scope"));
@@ -1591,18 +1607,11 @@ impl<'p, 'a> Checker<'p, 'a> {
     /// ordinal unless the author gives it a cause.
     fn instantiated(&mut self, name: &str, span: Span) {
         self.record_call(CallKind::Instantiate, name, span);
-        let computation = matches!(
-            self.cur(),
-            Ctx::Function {
-                root: Root::Computation,
-                ..
-            }
-        );
-        if computation && self.loop_depth > 0 && !self.cause_given.contains(&span.start) {
-            self.report(
-                "function-body:instantiation-without-cause",
+        if self.loop_depth > 0 && !self.cause_given.contains(&span.start) {
+            self.act(
+                ActKind::Uncaused,
                 span,
-                "A pattern instantiated in a loop or a callback of a computation without `.for(cause)`",
+                "A pattern instantiated in a loop or a callback without `.for(cause)`",
             );
         }
         if self.in_reactive() {
@@ -2567,7 +2576,9 @@ impl<'p, 'a> Checker<'p, 'a> {
         if state.plain && state.child && !uses_index {
             self.count("child instantiated per element of plain values");
         }
-        if let (true, false, Some(span)) = (state.plain, uses_index, state.state) {
+        if let (true, false, false, Some(span)) =
+            (state.plain, uses_index, state.child, state.state)
+        {
             self.report(
                 "collection:shared-element-state",
                 span,
@@ -3071,7 +3082,7 @@ impl<'a> Visit<'a> for Checker<'_, 'a> {
                     "The `Function` constructor",
                 );
             }
-            if matches!(self.cur(), Ctx::Function { .. })
+            if matches!(self.cur(), Ctx::Function { .. } | Ctx::Module)
                 && self.is_authored_constructor(&it.callee)
             {
                 self.report(
@@ -3613,6 +3624,33 @@ impl<'a> Visit<'a> for Checker<'_, 'a> {
     fn visit_ts_index_signature(&mut self, it: &TSIndexSignature<'a>) {
         self.index_signature(it);
         walk::walk_ts_index_signature(self, it);
+    }
+
+    fn visit_ts_rest_type(&mut self, it: &TSRestType<'a>) {
+        let mut inner = &it.type_annotation;
+        while let TSType::TSParenthesizedType(parenthesized) = inner {
+            inner = &parenthesized.type_annotation;
+        }
+        let array = match inner {
+            TSType::TSArrayType(_) => true,
+            TSType::TSTypeOperatorType(operator) => {
+                matches!(operator.type_annotation, TSType::TSArrayType(_))
+            }
+            TSType::TSTypeReference(reference) => {
+                matches!(&reference.type_name, TSTypeName::IdentifierReference(name)
+                    if matches!(name.name.as_str(), "Array" | "ReadonlyArray")
+                        && symbol_of(self.scoping, name).is_none())
+            }
+            _ => false,
+        };
+        if array {
+            self.report(
+                "subset-type:tuple-rest",
+                it.span,
+                "A rest element of an array type in a tuple",
+            );
+        }
+        walk::walk_ts_rest_type(self, it);
     }
 
     fn visit_ts_type_operator(&mut self, it: &TSTypeOperator<'a>) {
