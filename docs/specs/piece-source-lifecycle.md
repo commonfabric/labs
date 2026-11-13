@@ -1491,7 +1491,7 @@ a read.
 A refused candidate is worth surfacing beyond the panel, because a piece
 nobody opens says nothing at all and the owner of the origin is usually not
 the owner of the piece. How that reaches a person is open design work. One
-place already says it. When the piece's program has no handler for the stream
+place says it. When the piece's program has no handler for the stream
 an event is sent to — a stream only the refused candidate defines, say — the
 drop's reason names the candidate's identity and the refusal's reason, and
 points at this record for the rest. It names no more than that: a served

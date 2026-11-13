@@ -291,11 +291,13 @@ export type EnsurePieceVerdict = {
    * assuming. Present whenever a start ran. */
   graphIsInstalled?: () => boolean;
 
-  /** The pattern update the started piece last refused while it runs
-   * another program, read from its reconciliation record AT THE MOMENT THIS
-   * IS CALLED (`refusedUpdateOf()`), or `undefined` when it refused none.
-   * A caller explaining why the piece lacks what a newer program has asks
-   * this. Present whenever a start ran. */
+  /**
+   * The pattern update the started piece last refused while it runs another
+   * program, read from its reconciliation record AT THE MOMENT THIS IS CALLED
+   * (`refusedUpdateOf()`), or `undefined` when it refused none. It says why
+   * the piece can lack what the offered program has. Present whenever a start
+   * ran.
+   */
   refusedUpdate?: () => RefusedUpdate | undefined;
 
   /** The owning result doc (the chain terminus) where the chain
