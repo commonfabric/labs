@@ -143,8 +143,8 @@ function and nothing else (`language-subset.md` §5.5). Its record has kind
   the `identity` entry that accompanies a `value` entry is there too
   ([§2.2](#22-observations));
 - `handles`, `writes`, `envelopes`, and `calls` are empty, because a
-  parameter of such a function is a data type, and a module of that tier
-  cannot call a builder or a built-in;
+  parameter of such a function is a data type that contains no handle
+  type, and a module of that tier cannot call a builder or a built-in;
 - `outputs` is empty, so every result path is computed from every argument.
 
 A body in the subset that passes one of its inputs to an imported function
