@@ -34,6 +34,7 @@ import {
   parseOwnerReleaseByIntentRecord,
   type VerifiedOwnerReleaseByIntent,
 } from "./cfc-owner-release-by-intent.ts";
+import { broaderCellScopes } from "./cfc-scoped-instance-labels.ts";
 import { isCfcLabelDocumentContent } from "./cfc-stored-envelope.ts";
 import {
   admitsDroppedDeclaredPaths,
@@ -5326,28 +5327,35 @@ const readAnchorsDocument = (
 
 /**
  * The scope instances of a document broader than the instance `scopeKey`
- * names, as scope keys: a user instance's space instance, and a session
- * instance's user and space ones. A reader of a narrower instance answers to
- * the broader ones' confidentiality as well.
+ * names (`broaderCellScopes()`), as scope keys, nearest first.
  */
 const broaderScopeKeys = (scopeKey: string): ScopeKey[] => {
-  const scope = scopeOfScopeKey(scopeKey);
-  if (scope === "space") return [];
-  if (scope === "user") return [DEFAULT_SCOPE_KEY];
   // A session key that names no principal has no user instance to resolve,
   // which `resolveScopeKey()` refuses.
-  return [
-    resolveScopeKey("user", identityOfScopeKey(scopeKey) ?? {}),
-    DEFAULT_SCOPE_KEY,
-  ];
+  const identity = identityOfScopeKey(scopeKey) ?? {};
+  return broaderCellScopes(scopeOfScopeKey(scopeKey)).map((scope) =>
+    resolveScopeKey(scope, identity)
+  );
 };
 
 /**
- * The confidentiality the anchors of `field` take on when an edit moves them
- * (§7.7.4): what the CFC envelope of the field's document holds over the
- * field's path, in the field's own scope instance and in each broader one.
+ * Helper for {@link fieldConfidentiality} and {@link fieldIntegrity}, which
+ * returns the stored CFC envelope of the instance of the document `id` that
+ * `scopeKey` names, or `undefined` where that instance stores none.
+ */
+const storedEnvelopeOf = (
+  engine: Engine,
+  options: { branch: BranchName; id: EntityId; scopeKey: string },
+): FabricValue | undefined =>
+  readStateForScopeKey(engine, options)?.document?.cfc;
+
+/**
+ * The confidentiality the anchors of `field` take on when an edit to the
+ * field integrates (§7.7.4): what a reader of the field answers to over the
+ * field's path, from the CFC envelope of the field's own scope instance of
+ * its document and of each broader one.
  *
- * @throws ProtocolError where a label cannot be read, naming the field.
+ * @throws AnchorsLabelError for an envelope the engine cannot read.
  */
 const fieldConfidentiality = (
   engine: Engine,
@@ -5358,12 +5366,11 @@ const fieldConfidentiality = (
   },
 ): FabricValue[] => {
   const { branch, field, scopeKey } = options;
-  const envelopes = [scopeKey, ...broaderScopeKeys(scopeKey)].map((key) =>
-    readStateForScopeKey(engine, { branch, id: field.id, scopeKey: key })
-      ?.document?.cfc
-  );
   return confidentialityOver(
-    envelopes,
+    storedEnvelopeOf(engine, { branch, id: field.id, scopeKey }),
+    broaderScopeKeys(scopeKey).map((key) =>
+      storedEnvelopeOf(engine, { branch, id: field.id, scopeKey: key })
+    ),
     field.path,
     `the document ${field.id}`,
     labelDocumentOf(engine, branch),
@@ -5371,9 +5378,9 @@ const fieldConfidentiality = (
 };
 
 /**
- * The integrity a read of the field `field` carries, from its document's
- * stored CFC envelopes in the same scope instances
- * {@link fieldConfidentiality} reads.
+ * The integrity a read of the field `field` carries, from the stored CFC
+ * envelope of the field's own scope instance of its document, and of no
+ * broader one.
  *
  * @throws AnchorsLabelError for an envelope the engine cannot read.
  */
@@ -5386,12 +5393,8 @@ const fieldIntegrity = (
   },
 ): FabricValue[] => {
   const { branch, field, scopeKey } = options;
-  const envelopes = [scopeKey, ...broaderScopeKeys(scopeKey)].map((key) =>
-    readStateForScopeKey(engine, { branch, id: field.id, scopeKey: key })
-      ?.document?.cfc
-  );
   return integrityOver(
-    envelopes,
+    storedEnvelopeOf(engine, { branch, id: field.id, scopeKey }),
     field.path,
     `the document ${field.id}`,
     labelDocumentOf(engine, branch),

@@ -26,6 +26,7 @@
     "./v2/cfc-observation-classes": "./v2/cfc-observation-classes.ts",
     "./v2/cfc-owner-release-by-intent": "./v2/cfc-owner-release-by-intent.ts",
     "./v2/cfc-release-authority": "./v2/cfc-release-authority.ts",
+    "./v2/cfc-scoped-instance-labels": "./v2/cfc-scoped-instance-labels.ts",
     "./v2/cfc-stored-envelope": "./v2/cfc-stored-envelope.ts",
     "./interface": "./interface.ts",
     "./v2": "./v2.ts",

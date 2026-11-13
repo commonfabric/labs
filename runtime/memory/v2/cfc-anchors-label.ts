@@ -4,8 +4,9 @@
  * offset is computed from the field's edits, so it is as confidential as the
  * field, whoever wrote the anchor, and which anchors an edit moves says where
  * it fell, so every anchor takes the label, moved or not. The engine reads
- * what labels the field's stored CFC envelope holds over the field's path,
- * keeps their confidentiality, and joins it onto the anchors document's
+ * the labels a reader of the field answers to over the field's path, from
+ * the stored CFC envelope of the field's scope instance and of each broader
+ * one, keeps their confidentiality, and joins it onto the anchors document's
  * envelope as a label of each anchor's offset.
  *
  * The functions here read and build envelopes as plain stored values. Which
@@ -21,6 +22,7 @@ import type { FabricValue } from "@commonfabric/api";
 import { taggedHashStringOf, valueEqual } from "@commonfabric/data-model";
 import { atomPropagationClass } from "./cfc-atom-classes.ts";
 import { readConsumesEntry } from "./cfc-observation-classes.ts";
+import { broaderEntriesForReader } from "./cfc-scoped-instance-labels.ts";
 import {
   isCfcLabelDocumentContent,
   isCfcLabelReference,
@@ -142,9 +144,7 @@ const readableEnvelopeOf = (
 /**
  * Whether a label entry at `entryPath` bears on the value at `fieldPath`: it
  * labels the field, something above it, or something inside it. A `*`
- * segment of an entry's path stands for every key at its depth. An entry of
- * any observation class counts, so the anchors take on at least what a read
- * of the field's value would.
+ * segment of an entry's path stands for every key at its depth.
  */
 const bearsOn = (
   entryPath: readonly string[],
@@ -160,12 +160,18 @@ const bearsOn = (
 };
 
 /**
- * The confidentiality the stored envelopes `envelopes` hold over the value
- * at `path`: every clause of every payload entry that bears on the path,
- * each once, in the order found. A label-metadata template entry is not a
- * payload entry and bears on no path here. `envelopes` are those of the
- * document the value is in, one per scope instance a reader of the value
- * answers to.
+ * The confidentiality a reader of the value at `path` answers to, from the
+ * stored envelopes of the document the value is in: `own`, that of the scope
+ * instance holding the value, and `broader`, those of each broader instance
+ * of the document. Every clause of every entry counted that bears on the
+ * path, each once, in the order found.
+ *
+ * Of `own`, every payload entry counts, of whatever observation class, so
+ * the anchors take on at least what a read of the field's value would. A
+ * label-metadata template entry is not a payload entry and bears on no path
+ * here. Of `broader`, the entries count that a reader of a narrower
+ * instance's content answers to (`broaderEntriesForReader()`), which leaves
+ * out a label of the pointer a broader slot holds.
  *
  * A version-2 envelope may hold a label as `{ $ref: "cid:<hash>" }`, which
  * `labelDocument` resolves to the value of the document stored under that
@@ -176,72 +182,78 @@ const bearsOn = (
  *   and for a label document that does not hold a label.
  */
 export const confidentialityOver = (
-  envelopes: readonly Stored[],
+  own: Stored,
+  broader: readonly Stored[],
   path: readonly string[],
   holder: string,
   labelDocument: (hash: string) => Stored,
 ): FabricValue[] => {
+  const entriesOf = (envelope: Stored): readonly ReadEntry[] | undefined =>
+    readableEnvelopeOf(envelope, holder)?.labelMap.entries;
+  const counted: readonly ReadEntry[] = [
+    // A label-metadata template is keyed against the stored document, not
+    // the value, so it labels no field. Compared as a payload path,
+    // `["cfc", "labels", ...]` would bear on a field that is the whole
+    // value, whose path is a prefix of every path, and on one named `cfc`.
+    ...(entriesOf(own) ?? []).filter((entry) =>
+      !isLabelMetadataTemplateEntry(entry)
+    ),
+    ...broaderEntriesForReader(broader.map(entriesOf)),
+  ];
   const clauses: FabricValue[] = [];
-  for (const envelope of envelopes) {
-    const entries: readonly ReadEntry[] =
-      readableEnvelopeOf(envelope, holder)?.labelMap.entries ?? [];
-    for (const entry of entries) {
-      // A label-metadata template is keyed against the stored document, not
-      // the value, so it labels no field. Compared as a payload path,
-      // `["cfc", "labels", ...]` would bear on a field that is the whole
-      // value, whose path is a prefix of every path, and on one named `cfc`.
-      if (isLabelMetadataTemplateEntry(entry)) continue;
-      if (!bearsOn(entry.path, path)) continue;
-      const label = resolvedLabel(entry.label, holder, labelDocument);
-      for (const clause of label.confidentiality ?? []) clauses.push(clause);
-    }
+  for (const entry of counted) {
+    if (!bearsOn(entry.path, path)) continue;
+    const label = resolvedLabel(entry.label, holder, labelDocument);
+    for (const clause of label.confidentiality ?? []) clauses.push(clause);
   }
   return distinctValues(clauses);
 };
 
 /**
- * The integrity a read of the value at `path` carries, from the stored
- * envelopes `envelopes`, the same ones {@link confidentialityOver} reads: in
- * each, for each component, the deepest payload entry a value read consumes
+ * The integrity a read of the value at `path` carries, from `own`, the
+ * stored envelope of the scope instance holding the value: for each
+ * component, the deepest payload entry a value read consumes
  * ({@link readConsumesEntry}) at the path or above it, and across those every
  * atom any of them holds, each once. A link entry with no class labels the
  * pointer rather than the value, so it is not counted, and neither is an
  * entry inside the value, whose claim holds for part of the value only.
  *
+ * The envelope of a broader instance of the document is not read. Integrity
+ * speaks for whoever wrote the value, and whoever wrote a broader instance
+ * did not write this one.
+ *
  * @throws AnchorsLabelError as {@link confidentialityOver} does.
  */
 export const integrityOver = (
-  envelopes: readonly Stored[],
+  own: Stored,
   path: readonly string[],
   holder: string,
   labelDocument: (hash: string) => Stored,
 ): FabricValue[] => {
-  const atoms: FabricValue[] = [];
-  for (const envelope of envelopes) {
-    const entries: readonly ReadEntry[] =
-      readableEnvelopeOf(envelope, holder)?.labelMap.entries ?? [];
-    const deepest = new Map<string, { depth: number; entries: ReadEntry[] }>();
-    for (const entry of entries) {
-      if (isLabelMetadataTemplateEntry(entry)) continue;
-      if (entry.path.length > path.length || !bearsOn(entry.path, path)) {
-        continue;
-      }
-      if (!readConsumesEntry("value", entry)) continue;
-      const component = typeof entry.origin === "string"
-        ? entry.origin
-        : "legacy";
-      const match = deepest.get(component);
-      if (match === undefined || match.depth < entry.path.length) {
-        deepest.set(component, { depth: entry.path.length, entries: [entry] });
-      } else if (match.depth === entry.path.length) {
-        match.entries.push(entry);
-      }
+  const entries: readonly ReadEntry[] =
+    readableEnvelopeOf(own, holder)?.labelMap.entries ?? [];
+  const deepest = new Map<string, { depth: number; entries: ReadEntry[] }>();
+  for (const entry of entries) {
+    if (isLabelMetadataTemplateEntry(entry)) continue;
+    if (entry.path.length > path.length || !bearsOn(entry.path, path)) {
+      continue;
     }
-    for (const match of deepest.values()) {
-      for (const entry of match.entries) {
-        const label = resolvedLabel(entry.label, holder, labelDocument);
-        for (const atom of label.integrity ?? []) atoms.push(atom);
-      }
+    if (!readConsumesEntry("value", entry)) continue;
+    const component = typeof entry.origin === "string"
+      ? entry.origin
+      : "legacy";
+    const match = deepest.get(component);
+    if (match === undefined || match.depth < entry.path.length) {
+      deepest.set(component, { depth: entry.path.length, entries: [entry] });
+    } else if (match.depth === entry.path.length) {
+      match.entries.push(entry);
+    }
+  }
+  const atoms: FabricValue[] = [];
+  for (const match of deepest.values()) {
+    for (const entry of match.entries) {
+      const label = resolvedLabel(entry.label, holder, labelDocument);
+      for (const atom of label.integrity ?? []) atoms.push(atom);
     }
   }
   return distinctValues(atoms);

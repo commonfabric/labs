@@ -232,13 +232,22 @@ it fell. So when an edit integrates, Memory labels every anchor of the
 field, moved or not, with the label the field's document holds over the
 field at that edit, in the same transaction. It reads the label entries
 of the field's stored envelope that lie at, above or inside the field's path,
-in the field's scope instance and in each broader instance of the same
-document. The label-metadata templates are left out: they are keyed against
-the stored document rather than its value, so none labels the field, not
-even a field that is the whole value, whose path is a prefix of every path,
-or one named `cfc`. The field's integrity is what a read of the whole field
-carries: from the entries at or above its path, not those inside it, whose
-claims hold for part of the text only. Memory joins the field's label into
+in the field's own scope instance. The label-metadata templates are left
+out: they are keyed against the stored document rather than its value, so
+none labels the field, not even a field that is the whole value, whose path
+is a prefix of every path, or one named `cfc`. For a field in a user or
+session instance, it also reads each broader instance of the same document,
+and takes from it what the runner's read ceiling holds a reader of the
+field to: the entries at those paths that a read of the value consumes. A
+broader instance can hold a label the field's own instance does not, such as
+the stamp of a whole value a writer set there. The label of the pointer the
+broader slot holds is not one of those entries: every user's redirect is
+that one stored link, so its label speaks for whichever user's write stored
+it. The field's integrity is what a read of the whole field carries: from
+the entries at or above its path, not those inside it, whose claims hold for
+part of the text only, and from the field's own instance alone, since
+whoever wrote a broader instance did not write this one. Memory joins the
+field's label into
 the label of each anchor's offset, the one derived entry of the value class
 at the anchor's path. The join keeps every clause either label held, since
 a moved offset is computed from the old one. Its integrity is the meet of

@@ -113,7 +113,7 @@ describe("cfc-anchors-label", () => {
       };
 
       expect(
-        confidentialityOver([stored], ["cfc"], "of:field", () => undefined),
+        confidentialityOver(stored, [], ["cfc"], "of:field", () => undefined),
       ).toEqual(["field"]);
     });
 
@@ -139,8 +139,112 @@ describe("cfc-anchors-label", () => {
       };
 
       expect(
-        confidentialityOver([stored], [], "of:field", () => undefined),
+        confidentialityOver(stored, [], [], "of:field", () => undefined),
       ).toEqual(["field"]);
+    });
+
+    it("returns the clauses of every class of entry of the value's own instance, a label of the pointer among them", () => {
+      const own = anchorsEnvelope([
+        { path: ["text"], label: { confidentiality: ["covering"] } },
+        {
+          path: ["text"],
+          observes: "shape",
+          label: { confidentiality: ["shape"] },
+        },
+        {
+          path: ["text"],
+          origin: "link",
+          label: { confidentiality: ["pointer"] },
+        },
+        {
+          path: ["text"],
+          observes: "followRef",
+          label: { confidentiality: ["followRef"] },
+        },
+      ]);
+
+      expect(
+        confidentialityOver(own, [], ["text"], "of:field", () => undefined),
+      ).toEqual(["covering", "shape", "pointer", "followRef"]);
+    });
+
+    it("returns the clauses of the entries of a broader instance that a value read consumes, and none of a label of the pointer its slot holds", () => {
+      // The broader slot's pointer label copies the labels of the instance
+      // its writer narrowed into, which is some user's and not this one's.
+
+      const own = anchorsEnvelope([
+        { path: ["text"], label: { confidentiality: ["own"] } },
+      ]);
+      const user = anchorsEnvelope([
+        { path: ["text"], label: { confidentiality: ["covering"] } },
+        {
+          path: [],
+          origin: "derived",
+          observes: "value",
+          label: { confidentiality: ["whole-value"] },
+        },
+        {
+          path: ["text"],
+          origin: "link",
+          label: { confidentiality: ["pointer"] },
+        },
+        {
+          path: ["text"],
+          origin: "derived",
+          observes: "followRef",
+          label: { confidentiality: ["followRef"] },
+        },
+        { path: ["title"], label: { confidentiality: ["beside"] } },
+      ]);
+      const space = anchorsEnvelope([
+        {
+          path: ["text"],
+          origin: "declared",
+          observes: "enumerate",
+          label: { confidentiality: ["enumerate"] },
+        },
+      ]);
+
+      expect(
+        confidentialityOver(
+          own,
+          [user, undefined, space],
+          ["text"],
+          "of:field",
+          () => undefined,
+        ),
+      ).toEqual(["own", "covering", "whole-value", "enumerate"]);
+    });
+
+    it("returns the clauses of a broader instance for a value whose own instance stores no envelope", () => {
+      const space = anchorsEnvelope([
+        { path: ["text"], label: { confidentiality: ["declared"] } },
+      ]);
+
+      expect(
+        confidentialityOver(
+          undefined,
+          [space],
+          ["text"],
+          "of:field",
+          () => undefined,
+        ),
+      ).toEqual(["declared"]);
+    });
+
+    it("throws `AnchorsLabelError` for a broader instance's envelope it cannot read", () => {
+      const own = anchorsEnvelope([]);
+      const unreadable = { ...(anchorsEnvelope([]) as object), version: 3 };
+
+      expect(() =>
+        confidentialityOver(
+          own,
+          [unreadable as FabricValue],
+          ["text"],
+          "of:field",
+          () => undefined,
+        )
+      ).toThrow(AnchorsLabelError);
     });
   });
 
@@ -166,7 +270,7 @@ describe("cfc-anchors-label", () => {
         { path: ["title"], label: { integrity: ["beside"] } },
       ]);
 
-      expect(integrityOver([stored], ["text"], "of:field", () => undefined))
+      expect(integrityOver(stored, ["text"], "of:field", () => undefined))
         .toEqual(["field", certified("p")]);
     });
 
@@ -208,7 +312,7 @@ describe("cfc-anchors-label", () => {
         },
       ]);
 
-      expect(integrityOver([stored], ["text"], "of:field", () => undefined))
+      expect(integrityOver(stored, ["text"], "of:field", () => undefined))
         .toEqual(["covering", "value", "shape", "enumerate"]);
     });
   });

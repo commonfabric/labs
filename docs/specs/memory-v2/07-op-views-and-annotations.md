@@ -403,16 +403,27 @@ Within the apply steps of §7.7.1:
    only the moved ones would tell a reader that. That the anchors take the
    field's confidentiality is a rule of Contextual Flow Control; what follows
    is how the engine arranges it. The engine reads the
-   stored CFC envelope of the field's document, in the field's scope instance
-   and in each broader instance, and takes the confidentiality of every label
+   stored CFC envelope of the field's document in the field's own scope
+   instance, and takes the confidentiality of every label
    entry whose path is the field's path, a prefix of it, or beneath it, a `*`
    segment standing for any key. A label-metadata template entry is keyed
    against the stored document rather than the value, so it is never one of
    these: not for a field that is the whole value, whose path is a prefix of
-   every path, and not for a field named `cfc`. A label an entry names by
+   every path, and not for a field named `cfc`. For a field in a user or
+   session instance, the engine also reads the envelope of each broader
+   instance of the document, and takes the confidentiality of the entries at
+   those paths that a reader of a narrower instance's content answers to, by
+   the rule the runner's read ceiling holds to (`broaderEntriesForReader()`
+   in `cfc-scoped-instance-labels.ts`): those a read of the value consumes. A
+   broader instance can hold a label the field's own does not, such as the
+   stamp of a whole value a writer set there. A label of the pointer the
+   broader slot holds is not one of these entries, since it speaks for
+   whichever user's write stored the redirect. A label an entry names by
    document is read from that document. It also takes the field's
-   integrity, what a read of the whole field carries: in each instance and
-   for each component, the deepest entry at the field's path or above it
+   integrity, what a read of the whole field carries: in the field's own
+   scope instance and no broader one, since whoever wrote a broader instance
+   did not write this one, and for each component, the deepest entry at the
+   field's path or above it
    that a read of the field's value consumes, by the runner's rule
    (`readConsumesEntry()` in `cfc-observation-classes.ts`), and every atom
    those hold. That excludes a link entry with no class, which labels the

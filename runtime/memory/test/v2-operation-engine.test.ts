@@ -2785,6 +2785,81 @@ describe("v2-operation-engine", () => {
           labelMap: { entries: FabricValue[] };
         } | undefined)?.labelMap.entries;
 
+      const alice = "did:key:z6MkAnchorsLabelAlice";
+
+      /** Commits `operations` as Alice, in her one session. */
+      const commitAsAlice = (engine: Engine, operations: Operation[]) =>
+        applyCommit(engine, {
+          sessionId: "session:alice",
+          principal: alice,
+          commit: {
+            localSeq: ++seq,
+            reads: { confirmed: [], pending: [] },
+            operations,
+          },
+        });
+
+      /**
+       * Sets the `scope` instance of `id` to the body `abc`, under an
+       * envelope holding `entries`.
+       */
+      const scopedField = (
+        id: string,
+        scope: "space" | "user" | "session",
+        entries: FabricValue[],
+      ): Operation => ({
+        op: "set",
+        id,
+        ...(scope === "space" ? {} : { scope }),
+        value: { value: { body: "abc" }, cfc: envelope(entries) },
+      });
+
+      /** The anchors document of the `scope` instance of the body of `id`. */
+      const scopedAnchorsDoc = (id: string, scope: "user" | "session") =>
+        operationAnchorsDocId({ id, scope, path: ["body"] });
+
+      /**
+       * Sets the anchors of the `scope` instance of the body of `id` to
+       * `end` at 3, under an envelope holding `entries` where any are given.
+       */
+      const scopedAnchors = (
+        id: string,
+        scope: "user" | "session",
+        entries?: FabricValue[],
+      ): Operation => ({
+        op: "set",
+        id: scopedAnchorsDoc(id, scope),
+        scope,
+        value: {
+          value: { end: 3 },
+          ...(entries === undefined ? {} : { cfc: envelope(entries) }),
+        },
+      });
+
+      /** Inserts at the start of Alice's `scope` instance of the body of `id`. */
+      const editAsAlice = (
+        engine: Engine,
+        id: string,
+        scope: "user" | "session",
+      ) =>
+        commitAsAlice(engine, [{
+          ...applyOp(id, `alice:${id}:${scope}`, "abc", [changes(3, 0, ">")]),
+          scope,
+        }]);
+
+      /** The label entries of the anchors {@link scopedAnchorsDoc} names. */
+      const scopedLabelEntries = (
+        engine: Engine,
+        id: string,
+        scope: "user" | "session",
+      ) =>
+        (read(engine, {
+          id: scopedAnchorsDoc(id, scope),
+          scope,
+          principal: alice,
+          sessionId: "session:alice",
+        })?.cfc as { labelMap: { entries: FabricValue[] } }).labelMap.entries;
+
       it("writes no envelope for a field whose document holds no label", async () => {
         const { engine, path } = await openTestEngine();
         try {
@@ -3188,71 +3263,135 @@ describe("v2-operation-engine", () => {
 
       it("joins the confidentiality of the broader instances of a scoped field's document", async () => {
         const { engine, path } = await openTestEngine();
-        const alice = "did:key:z6MkAnchorsLabelAlice";
-        const scoped = (scope: "user" | "session") =>
-          operationAnchorsDocId({ id: "of:scoped", scope, path: ["body"] });
-        const commitAs = (operations: Operation[]) =>
-          applyCommit(engine, {
-            sessionId: "session:alice",
-            principal: alice,
-            commit: {
-              localSeq: ++seq,
-              reads: { confirmed: [], pending: [] },
-              operations,
-            },
-          });
         const entity = (
           scope: "space" | "user" | "session",
           clause: string,
-        ): Operation => ({
-          op: "set",
-          id: "of:scoped",
-          ...(scope === "space" ? {} : { scope }),
-          value: {
-            value: { body: "abc" },
-            cfc: envelope([{
-              path: ["body"],
-              label: { confidentiality: [clause] },
-            }]),
-          },
-        });
+        ): Operation =>
+          scopedField("of:scoped", scope, [{
+            path: ["body"],
+            label: { confidentiality: [clause] },
+          }]);
         try {
-          commitAs([
+          commitAsAlice(engine, [
             { op: "set", id: schemaDoc, value: { value: {} } },
             entity("space", "of-space"),
             entity("user", "of-user"),
             entity("session", "of-session"),
-            ...(["user", "session"] as const).map((scope): Operation => ({
-              op: "set",
-              id: scoped(scope),
-              scope,
-              value: { value: { end: 3 } },
-            })),
+            ...(["user", "session"] as const).map((scope) =>
+              scopedAnchors("of:scoped", scope)
+            ),
           ]);
 
           for (const scope of ["user", "session"] as const) {
-            commitAs([{
-              ...applyOp("of:scoped", `alice:${scope}`, "abc", [
-                changes(3, 0, ">"),
-              ]),
-              scope,
-            }]);
+            editAsAlice(engine, "of:scoped", scope);
           }
 
-          const entriesIn = (scope: "user" | "session") =>
-            (read(engine, {
-              id: scoped(scope),
-              scope,
-              principal: alice,
-              sessionId: "session:alice",
-            })?.cfc as { labelMap: { entries: FabricValue[] } }).labelMap
-              .entries;
-          expect(entriesIn("user")).toEqual([
+          expect(scopedLabelEntries(engine, "of:scoped", "user")).toEqual([
             moved("end", ["of-user", "of-space"]),
           ]);
-          expect(entriesIn("session")).toEqual([
+          expect(scopedLabelEntries(engine, "of:scoped", "session")).toEqual([
             moved("end", ["of-session", "of-user", "of-space"]),
           ]);
+        } finally {
+          close(engine);
+          await Deno.remove(path);
+        }
+      });
+
+      it("joins the whole-value stamp a broader instance holds, and no label of the pointer its slot holds", async () => {
+        // The pointer label copies the labels of the instance the redirect's
+        // writer narrowed into, which is whichever user's write stored it.
+
+        const { engine, path } = await openTestEngine();
+        try {
+          commitAsAlice(engine, [
+            { op: "set", id: schemaDoc, value: { value: {} } },
+            scopedField("of:pointer", "space", [
+              {
+                path: [],
+                origin: "derived",
+                observes: "value",
+                label: { confidentiality: ["whole-value"] },
+              },
+              {
+                path: ["body"],
+                origin: "link",
+                label: { confidentiality: ["pointer"] },
+              },
+              {
+                path: ["body"],
+                origin: "derived",
+                observes: "followRef",
+                label: { confidentiality: ["followRef"] },
+              },
+            ]),
+            scopedField("of:pointer", "user", [{
+              path: ["body"],
+              label: { confidentiality: ["of-user"] },
+            }]),
+            scopedAnchors("of:pointer", "user"),
+          ]);
+
+          editAsAlice(engine, "of:pointer", "user");
+
+          expect(scopedLabelEntries(engine, "of:pointer", "user")).toEqual([
+            moved("end", ["of-user", "whole-value"]),
+          ]);
+        } finally {
+          close(engine);
+          await Deno.remove(path);
+        }
+      });
+
+      it("keeps the integrity an anchor's writer and the field's own instance both hold, and none a broader instance alone holds", async () => {
+        // Whoever wrote the broader instance did not write the field's, so
+        // a claim stored there does not vouch for the field.
+
+        const { engine, path } = await openTestEngine();
+        const vouched = (policy: string): FabricValue => ({
+          path: ["end"],
+          origin: "derived",
+          observes: "value",
+          label: { integrity: [certified(policy)] },
+        });
+        const field = (
+          id: string,
+          scope: "space" | "user",
+          policy: string | undefined,
+        ) =>
+          scopedField(id, scope, [{
+            path: ["body"],
+            label: {
+              confidentiality: [`of-${scope}`],
+              ...(policy === undefined
+                ? {}
+                : { integrity: [certified(policy)] }),
+            },
+          }]);
+        try {
+          commitAsAlice(engine, [
+            { op: "set", id: schemaDoc, value: { value: {} } },
+            field("of:broader-vouches", "space", "p"),
+            field("of:broader-vouches", "user", undefined),
+            scopedAnchors("of:broader-vouches", "user", [vouched("p")]),
+            field("of:own-vouches", "space", undefined),
+            field("of:own-vouches", "user", "p"),
+            scopedAnchors("of:own-vouches", "user", [vouched("p")]),
+          ]);
+
+          editAsAlice(engine, "of:broader-vouches", "user");
+          editAsAlice(engine, "of:own-vouches", "user");
+
+          expect(scopedLabelEntries(engine, "of:broader-vouches", "user"))
+            .toEqual([moved("end", ["of-user", "of-space"])]);
+          expect(scopedLabelEntries(engine, "of:own-vouches", "user"))
+            .toEqual([{
+              ...moved("end", ["of-user", "of-space"]),
+              label: {
+                confidentiality: ["of-user", "of-space"],
+                integrity: [certified("p")],
+              },
+            }]);
         } finally {
           close(engine);
           await Deno.remove(path);
