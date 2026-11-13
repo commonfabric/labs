@@ -1163,16 +1163,19 @@ describe("operation storage capability", () => {
     const replica = storage.open(signer.did()).replica;
     if (!hasOperationStorageCapability(replica)) return;
     const warnings: unknown[][] = [];
+    const warned = Promise.withResolvers<void>();
     const original = console.warn;
-    console.warn = (...values: unknown[]) => warnings.push(values);
+    console.warn = (...values: unknown[]) => {
+      warnings.push(values);
+      warned.resolve();
+    };
     try {
       const cancel = await replica.subscribeOperationField({
         id: "of:failed-removal",
         path: toValuePath([]),
       }, () => {});
       cancel();
-      await Promise.resolve();
-      await Promise.resolve();
+      await warned.promise;
       expect(warnings).toHaveLength(1);
     } finally {
       console.warn = original;

@@ -11,6 +11,7 @@ import {
   toValuePath,
 } from "@commonfabric/memory/v2";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
+import { ResendingSession } from "@commonfabric/memory/v2/resending-session";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
 
@@ -119,7 +120,12 @@ describe("SpaceReplica", () => {
       }),
       routeState: options.routeState ?? { generation: 0 },
       routeGeneration: 0,
-      createSession: options.createSession ?? mount,
+      // A replica asks through a session that resends, as the storage
+      // manager hands it one.
+      createSession: async () => {
+        const { client, session } = await (options.createSession ?? mount)();
+        return { client, session: new ResendingSession(session) };
+      },
       syncReplayDependencies: () => Promise.resolve(undefined),
       watchDocument: options.watchDocument ??
         (() => Promise.resolve({ ok: {} })),

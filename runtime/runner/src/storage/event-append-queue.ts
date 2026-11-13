@@ -563,9 +563,12 @@ export class EventAppendQueue {
           attempt = 0;
           continue;
         }
-        // Transient (transport death, session replacement, handshake
-        // in progress): keep the entry queued in place and retry with
-        // backoff. Its stream's delivery order holds — nothing of that
+        // Transient (session replacement, a session that could not be
+        // opened): keep the entry queued in place and retry with backoff. A
+        // lost connection does not come here: the session the replica
+        // appends through sends the same commit again once it can
+        // (`ResendingSession`). Its stream's delivery order holds — nothing
+        // of that
         // stream behind it sends first (it stays the earliest-fired
         // entry of its stream, and a token spent on a failed attempt
         // is one token per WIRE attempt).

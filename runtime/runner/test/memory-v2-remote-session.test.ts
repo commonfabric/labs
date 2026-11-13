@@ -19,6 +19,7 @@ import {
   RouterAssembler,
 } from "@commonfabric/memory/v2/router-protocol";
 import { routedFrameOf } from "../../memory/test/support/routed-slots.ts";
+import { ResendingSession } from "@commonfabric/memory/v2/resending-session";
 import type { Server as MemoryServer } from "@commonfabric/memory/v2/server";
 import {
   decodeCompressedMemoryMessage,
@@ -85,6 +86,25 @@ function urlWithThrowingHref(cause: Error): URL {
   });
   return host;
 }
+
+/** The `ResendingSession` these cases commit through for each session. */
+const resendingSessions = new WeakMap<
+  MemoryClient.SpaceSession,
+  ResendingSession
+>();
+
+/**
+ * Returns the `ResendingSession` around `session`, the same one each time, as
+ * a replica commits through one for its session.
+ */
+const resending = (session: MemoryClient.SpaceSession): ResendingSession => {
+  let wrapped = resendingSessions.get(session);
+  if (wrapped === undefined) {
+    wrapped = new ResendingSession(session);
+    resendingSessions.set(session, wrapped);
+  }
+  return wrapped;
+};
 
 describe("memory v2 remote session websocket address", () => {
   it("upgrades http and https urls to websocket protocols", () => {
@@ -3090,7 +3110,7 @@ describe("WebSocketTransport failure signaling", () => {
   it("resolves commits queued behind a pending write when the socket closes, once the client reconnects", async () => {
     // The first commit's write is still in progress when the peer drops the
     // connection, and the second commit waits behind it. Neither reaches the
-    // server on that connection, so the client replays both on the next one.
+    // server on that connection, so the runner sends both again on the next one.
 
     DrivableWebSocket.instances.length = 0;
     const server = newSharedServer();
@@ -3120,8 +3140,8 @@ describe("WebSocketTransport failure signaling", () => {
       const sentBefore = dropped.sent.length;
       holdNextTransact = true;
       const outcomes = Promise.allSettled([
-        session.transact(commitAt(1, "of:first")),
-        session.transact(commitAt(2, "of:second")),
+        resending(session).transact(commitAt(1, "of:first")),
+        resending(session).transact(commitAt(2, "of:second")),
       ]);
       await dropped.whenSent(sentBefore + 1);
       dropped.close();
@@ -3142,7 +3162,7 @@ describe("WebSocketTransport failure signaling", () => {
   it("resolves a commit whose write fails while the socket is closing, once the client reconnects", async () => {
     // The peer has started closing the connection, so the socket refuses the
     // write before it reports the close. The commit never reached the server
-    // and is replayed on the next connection.
+    // and is sent again on the next connection.
 
     DrivableWebSocket.instances.length = 0;
     const server = newSharedServer();
@@ -3172,7 +3192,7 @@ describe("WebSocketTransport failure signaling", () => {
       const sentBefore = closing.sent.length;
       holdNextTransact = true;
       const outcomes = Promise.allSettled([
-        session.transact(commitAt(1, "of:closing")),
+        resending(session).transact(commitAt(1, "of:closing")),
       ]);
       await closing.whenSent(sentBefore + 1);
       closing.readyState = DrivableWebSocket.CLOSING;
@@ -3193,7 +3213,7 @@ describe("WebSocketTransport failure signaling", () => {
   it("resolves a commit whose write fails on a socket that reports nothing, ahead of the commit after it", async () => {
     // The first commit's write fails, but the socket neither closes nor errors
     // and goes on carrying frames. The transport reported the write as a lost
-    // connection, so it must also start the reconnect that replays the commit,
+    // connection, so it must also start the reconnect the commit is sent again on,
     // and must not deliver the second commit on the old socket ahead of it.
 
     DrivableWebSocket.instances.length = 0;
@@ -3222,8 +3242,8 @@ describe("WebSocketTransport failure signaling", () => {
       const silent = DrivableWebSocket.instances.at(-1)!;
       failNextTransact = true;
       const settled = { first: false, second: false };
-      const first = session.transact(commitAt(1, "of:first"));
-      const second = session.transact(commitAt(2, "of:second"));
+      const first = resending(session).transact(commitAt(1, "of:first"));
+      const second = resending(session).transact(commitAt(2, "of:second"));
       first.then(() => settled.first = true, () => settled.first = true);
       second.then(() => settled.second = true, () => settled.second = true);
 
@@ -3243,8 +3263,8 @@ describe("WebSocketTransport failure signaling", () => {
 
   it("resolves a commit the server applied before its write reported failure, without applying it twice", async () => {
     // The frame reaches the server, which applies the commit, but the closing
-    // socket drops the response and reports the write as failed. The replay on
-    // the next connection is a duplicate the server answers from its record.
+    // socket drops the response and reports the write as failed. Sent again on
+    // the next connection, it is a duplicate the server answers from its record.
 
     DrivableWebSocket.instances.length = 0;
     const server = newSharedServer();
@@ -3300,7 +3320,7 @@ describe("WebSocketTransport failure signaling", () => {
       );
       const closing = DrivableWebSocket.instances.at(-1)!;
       duplicateNextTransact = true;
-      const first = session.transact(commitAt(1, "of:duplicate"));
+      const first = resending(session).transact(commitAt(1, "of:duplicate"));
       first.catch(() => {});
       await clock.settle();
       closing.close();
@@ -3308,7 +3328,10 @@ describe("WebSocketTransport failure signaling", () => {
 
       expect(await first).toMatchObject({ seq: 1, replayed: true });
       // Applied twice, the first commit would have taken seq 2 as well.
-      expect((await session.transact(commitAt(2, "of:after"))).seq).toBe(2);
+      expect(
+        (await resending(session).transact(commitAt(2, "of:after")))
+          .seq,
+      ).toBe(2);
       expect(localSeqsSeenByServer).toEqual([1, 1, 2]);
     } finally {
       await client.close();
@@ -3316,9 +3339,9 @@ describe("WebSocketTransport failure signaling", () => {
     }
   });
   it("rejects a commit whose own write fails on one connection after another, and lands the commit behind it", async () => {
-    // The first commit's write fails on every socket, so each replay takes the
+    // The first commit's write fails on every socket, so each sending takes the
     // new connection down with it. After a bounded number of connections the
-    // client rejects that commit with the write's error, and the commit behind
+    // runner fails that commit with the write's error, and the commit behind
     // it lands.
 
     DrivableWebSocket.instances.length = 0;
@@ -3350,8 +3373,8 @@ describe("WebSocketTransport failure signaling", () => {
         testSessionOpenAuthFactory,
       );
       const settled = { first: false, second: false };
-      const first = session.transact(commitAt(1, "of:refused"));
-      const second = session.transact(commitAt(2, "of:behind"));
+      const first = resending(session).transact(commitAt(1, "of:refused"));
+      const second = resending(session).transact(commitAt(2, "of:behind"));
       first.then(() => settled.first = true, () => settled.first = true);
       second.then(() => settled.second = true, () => settled.second = true);
 
@@ -3369,7 +3392,7 @@ describe("WebSocketTransport failure signaling", () => {
       await server.close();
     }
   });
-  it("keeps replaying a commit that closing sockets refuse, and lands it once a socket accepts it", async () => {
+  it("keeps sending a commit that closing sockets refuse again, and lands it once a socket accepts it", async () => {
     // Each socket has started closing when the commit's write reaches it, as
     // a peer restarting over and over would leave it. A refusal from a closing
     // socket says nothing about the commit, so none counts against it, however
@@ -3403,7 +3426,7 @@ describe("WebSocketTransport failure signaling", () => {
         testSessionOpenAuthFactory,
       );
       const outcome = Promise.allSettled([
-        session.transact(commitAt(1, "of:refused-while-closing")),
+        resending(session).transact(commitAt(1, "of:refused-while-closing")),
       ]);
 
       await clock.settle();

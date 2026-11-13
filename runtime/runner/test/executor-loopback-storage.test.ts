@@ -1,7 +1,15 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import { Identity } from "@commonfabric/identity";
+import type { Signer } from "@commonfabric/memory/interface";
 import type * as MemoryClient from "@commonfabric/memory/v2/client";
-import { delegatingTransport } from "../src/executor/loopback-storage.ts";
+import { Server } from "@commonfabric/memory/v2/server";
+import { hostTransport } from "../../memory/test/support/host-transport.ts";
+import {
+  delegatingTransport,
+  LoopbackStorageManager,
+} from "../src/executor/loopback-storage.ts";
+import { TEST_MEMORY_SERVER_AUTH } from "./memory-v2-test-utils.ts";
 
 /**
  * Every member of the transport type. A member the type gains and this list
@@ -154,5 +162,136 @@ describe("loopback-storage", () => {
         "setReceiver",
       ]);
     });
+  });
+
+  describe("LoopbackStorageManager", () => {
+    it("reads a routed space whose connection dropped while its session's open was being signed, once the connection is back", async () => {
+      // A space the serving runtime does not hold is reached over the
+      // network, as the routed plane reaches one. A mount whose connection
+      // drops before the open is sent is made again, so the read that opened
+      // the space is answered rather than failed.
+
+      const server = new Server(TEST_MEMORY_SERVER_AUTH);
+      const host = hostTransport(server);
+      const identity = await Identity.fromPassphrase("loopback-routed-mount");
+      const signing = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      let first = true;
+      const signer: Signer = {
+        did: () => identity.did(),
+        verifier: identity.verifier,
+        async sign(bytes) {
+          if (first) {
+            first = false;
+            signing.resolve();
+            await release.promise;
+          }
+          return await identity.sign(bytes);
+        },
+      };
+      const storage = LoopbackStorageManager.connect(server, {
+        as: signer,
+        servingHomeSpace: "did:key:z6Mk-loopback-routed-mount-home",
+        route: { createTransport: () => host.transport },
+      });
+      try {
+        const reading = storage.open("did:key:z6Mk-loopback-routed-mount")
+          .serverHeadSeq!();
+        await signing.promise;
+        host.drop();
+        release.resolve();
+
+        expect(await reading).toBe(0);
+        expect(host.sentOfType("session.open")).toBe(1);
+      } finally {
+        release.resolve();
+        await storage.closeNow();
+        await server.close();
+      }
+    });
+
+    for (const method of ["close", "closeNow"] as const) {
+      it(`closes the connection to a routed space whose mount is waiting for an owner that stays down, on \`${method}()\``, async () => {
+        // The connection drops while the mount's open is being signed, so
+        // the mount is never sent and waits for the owner. Destroying the
+        // storage ends that wait and closes the connection, rather than
+        // leaving it dialing an owner nobody is waiting for any more.
+
+        const server = new Server(TEST_MEMORY_SERVER_AUTH);
+        const host = hostTransport(server);
+        const identity = await Identity.fromPassphrase("loopback-routed-close");
+        const signing = Promise.withResolvers<void>();
+        const release = Promise.withResolvers<void>();
+        let redialed = Promise.withResolvers<void>();
+        let first = true;
+        let closes = 0;
+        const signer: Signer = {
+          did: () => identity.did(),
+          verifier: identity.verifier,
+          async sign(bytes) {
+            if (first) {
+              first = false;
+              signing.resolve();
+              await release.promise;
+            }
+            return await identity.sign(bytes);
+          },
+        };
+        const transport = {
+          ...host.transport,
+          async send(payload: string) {
+            try {
+              await host.transport.send(payload);
+            } catch (error) {
+              redialed.resolve();
+              throw error;
+            }
+          },
+          close() {
+            closes++;
+            return host.transport.close();
+          },
+        };
+        const storage = LoopbackStorageManager.connect(server, {
+          as: signer,
+          servingHomeSpace: "did:key:z6Mk-loopback-routed-close-home",
+          route: { createTransport: () => transport },
+        });
+        const reading = storage.open("did:key:z6Mk-loopback-routed-close")
+          .serverHeadSeq!().then(() => "read", () => "failed");
+        let closing: Promise<void> | undefined;
+        try {
+          await signing.promise;
+          host.hostDown();
+          release.resolve();
+          // The mount has failed as never sent, and the client has tried
+          // the owner again and found it down.
+          await redialed.promise;
+          if (method === "closeNow") {
+            await storage.closeNow();
+
+            expect(closes).toBeGreaterThan(0);
+          } else {
+            redialed = Promise.withResolvers<void>();
+            closing = storage.close();
+            const outcome = await Promise.race([
+              closing.then(() => "closed"),
+              redialed.promise.then(() => "dialed again"),
+            ]);
+
+            expect(outcome).toBe("closed");
+          }
+          expect(await reading).toBe("failed");
+        } finally {
+          // A close left waiting for the owner ends once the owner is back.
+          release.resolve();
+          host.hostUp();
+          await reading;
+          await closing;
+          await storage.closeNow();
+          await server.close();
+        }
+      });
+    }
   });
 });

@@ -145,6 +145,16 @@ class ReplacingPreWatchEffectTransport extends ScriptedSessionTransport {
   }
 
   protected override handle(message: ScriptedTransportMessage): void {
+    if (message.type === "session.watch.set") {
+      // The restore re-establishes the watch set the session holds, which
+      // the failed add is not part of.
+      this.respond({
+        type: "response",
+        requestId: message.requestId!,
+        ok: { serverSeq: 1, sync: sync(1, 1, []) },
+      });
+      return;
+    }
     if (message.type !== "session.watch.add") {
       throw new Error(`Unhandled scripted message: ${message.type}`);
     }
@@ -215,9 +225,7 @@ class FirstWatchSetTransport extends ScriptedSessionTransport {
  * that `loses` the connection drops it once they are sent, before the
  * request's send has settled: the response has arrived, so it answers the
  * request all the same. An answer that `holds` its send leaves it unsettled
- * until the connection is lost. A request left `unanswered` is sent nothing,
- * and its send stays unsettled until the connection is lost, so the client
- * sends it again.
+ * until the connection is lost.
  */
 type ScriptedAnswer = {
   ahead?: SessionSync;
@@ -225,7 +233,7 @@ type ScriptedAnswer = {
   effect?: SessionSync;
   loses?: boolean;
   holds?: boolean;
-} | { unanswered: true };
+};
 
 /**
  * Answers each watch request (`session.watch.add` or `session.watch.set`)
@@ -289,11 +297,6 @@ class EffectBehindWatchResponseTransport extends ScriptedSessionTransport {
     const answer = this.#answers.shift();
     if (answer === undefined) {
       throw new Error(`No scripted answer for ${message.type}`);
-    }
-    if ("unanswered" in answer) {
-      const held = Promise.withResolvers<void>();
-      this.#heldSends.push(held);
-      return held.promise;
     }
     this.#serverSeq = answer.effect?.toSeq ?? answer.response.toSeq;
     if (answer.ahead !== undefined) this.emitSync(answer.ahead);
@@ -580,7 +583,9 @@ describe("memory-v2-pre-watch-effect", () => {
 
   it("emits a response that arrived before its send was lost, then the effect behind it, ahead of what the resumed session catches up on", async () => {
     // The response answers its request though the send then fails with the
-    // connection, so the request is not sent again.
+    // connection, so nothing is sent again. The restore sets the session's
+    // watches once more, since the drop came before the response had been
+    // applied, and what that brings follows the catch-up.
 
     const signer = await Identity.fromPassphrase(
       "memory-v2-effect-behind-lost-watch-response",
@@ -594,6 +599,7 @@ describe("memory-v2-pre-watch-effect", () => {
         effect: sync(2, 3, [upsert(documentId, 3, { value: "effect" })]),
         loses: true,
       },
+      { response: sync(4, 5, [upsert(documentId, 5, { value: "set again" })]) },
     ]);
     transport.reopened = {
       resumed: true,
@@ -617,30 +623,28 @@ describe("memory-v2-pre-watch-effect", () => {
         (await frames.next()).value,
         (await frames.next()).value,
         (await frames.next()).value,
+        (await frames.next()).value,
       ];
 
       expect(transport.requests).toEqual([
         "session.watch.add",
         "session.watch.add",
+        "session.watch.set",
       ]);
       expect(framesOf(emitted)).toEqual([
         { toSeq: 2, values: ["answered"] },
         { toSeq: 3, values: ["effect"] },
         { toSeq: 4, values: ["caught up"] },
+        { toSeq: 5, values: ["set again"] },
       ]);
       expect(view.snapshot().entities.map((entity) => entity.document))
-        .toEqual([{ value: "caught up" }]);
+        .toEqual([{ value: "set again" }]);
     } finally {
       await client.close();
     }
   });
 
-  it("emits an effect that followed a response left unapplied behind an unanswered request ahead of what the resumed session catches up on", async () => {
-    // The first request gets no answer before the connection is lost, so
-    // the second's response, which did arrive, waits its turn to be applied.
-    // The restore sends both again, and the response that arrived is never
-    // applied: the effect behind it is emitted without it.
-
+  it("emits overlapping responses that arrived before the connection was lost, then the effect behind them, ahead of what the resumed session catches up on", async () => {
     const signer = await Identity.fromPassphrase(
       "memory-v2-effect-behind-lost-overlapping-responses",
     );
@@ -649,18 +653,20 @@ describe("memory-v2-pre-watch-effect", () => {
     const documentId = "of:lost-overlapping-document" as URI;
     const transport = new EffectBehindWatchResponseTransport(space, [
       { response: sync(0, 1, []) },
-      { unanswered: true },
       {
-        response: sync(1, 2, [upsert(documentId, 2, { value: "response" })]),
-        effect: sync(2, 3, [upsert(documentId, 3, { value: "effect" })]),
+        response: sync(1, 2, [upsert(firstId, 2, { value: "first" })]),
+        holds: true,
+      },
+      {
+        response: sync(2, 3, [upsert(documentId, 3, { value: "response" })]),
+        effect: sync(3, 4, [upsert(documentId, 4, { value: "effect" })]),
         loses: true,
       },
-      { response: sync(4, 5, []) },
       { response: sync(5, 6, []) },
     ]);
     transport.reopened = {
       resumed: true,
-      sync: sync(3, 4, [upsert(documentId, 4, { value: "caught up" })]),
+      sync: sync(4, 5, [upsert(documentId, 5, { value: "caught up" })]),
     };
     const client = await MemoryV2Client.Client.connect({
       instanceNames: namesInstancesByDefault(),
@@ -683,12 +689,22 @@ describe("memory-v2-pre-watch-effect", () => {
       const emitted = [
         (await frames.next()).value,
         (await frames.next()).value,
+        (await frames.next()).value,
+        (await frames.next()).value,
       ];
+      await session.whenRestored();
 
-      expect(transport.requests).toHaveLength(5);
+      expect(transport.requests).toEqual([
+        "session.watch.add",
+        "session.watch.add",
+        "session.watch.add",
+        "session.watch.set",
+      ]);
       expect(framesOf(emitted)).toEqual([
-        { toSeq: 3, values: ["effect"] },
-        { toSeq: 4, values: ["caught up"] },
+        { toSeq: 2, values: ["first"] },
+        { toSeq: 3, values: ["response"] },
+        { toSeq: 4, values: ["effect"] },
+        { toSeq: 5, values: ["caught up"] },
       ]);
       expect(
         view.snapshot().entities.find((entity) => entity.id === documentId)
@@ -770,8 +786,14 @@ describe("memory-v2-pre-watch-effect", () => {
     );
 
     try {
-      // The connection drops under the first request, which the restore
-      // sends again on the session that replaces the one the effect came on.
+      // The connection drops under the first request, which fails; made
+      // again once the session is back, it goes to the session that replaces
+      // the one the effect came on.
+      const failed = await session.watchAddSync([watch(watchedId)]).catch((
+        error,
+      ) => error);
+      expect(MemoryV2Client.connectionDeliveryOf(failed)).toBeDefined();
+      await failed.readyToRetry();
       const result = await session.watchAddSync([watch(watchedId)]);
 
       expect(transport.watchAddCount).toBe(2);

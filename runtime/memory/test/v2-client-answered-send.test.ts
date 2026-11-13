@@ -333,7 +333,8 @@ describe("client", () => {
     // The server admits the mount's open, refuses the restore's for good, and
     // admits every open after that. A refused open uses up its connection's
     // challenge, so the second mount is made on a new connection, which has
-    // nothing of the refused session to restore.
+    // nothing of the refused session to restore, once the client has
+    // connected again: a mount made while it is connecting fails at once.
 
     let opens = 0;
     const server = serverFor("denied", {
@@ -349,6 +350,7 @@ describe("client", () => {
       ).rejects.toMatchObject({ name: "AuthorizationError" });
 
       lose();
+      await client.restoreConnection();
       const session = await client.mount(
         spaceFor("denied"),
         {},

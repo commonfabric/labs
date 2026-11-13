@@ -86,6 +86,7 @@ import {
   type ViewPlan,
 } from "@commonfabric/memory/v2";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
+import { ResendingSession } from "@commonfabric/memory/v2/resending-session";
 import type { ClientBuild } from "@commonfabric/memory/v2/client-info";
 import { validatePresencePublication } from "@commonfabric/memory/v2/presence";
 import type { AppliedCommit } from "@commonfabric/memory/v2/engine";
@@ -2242,7 +2243,12 @@ export class StorageManager implements IStorageManager {
     return { accepted: true };
   }
 
-  /** Opens through admission unless this manager already requires an update. */
+  /**
+   * Opens through admission unless this manager already requires an update.
+   * This is the one place a session the storage layer uses is made, so it is
+   * where each is made a `ResendingSession`: every request made of one waits
+   * out a lost connection there, and no caller does.
+   */
   async #createSession(
     ...args: Parameters<SessionFactory["create"]>
   ): Promise<OpenedSpaceSession> {
@@ -2254,7 +2260,10 @@ export class StorageManager implements IStorageManager {
     try {
       const opened = await this.#sessionFactory.create(...args);
       opened.session.subscribeTermination(noteFailure);
-      return opened;
+      return {
+        client: opened.client,
+        session: new ResendingSession(opened.session),
+      };
     } catch (error) {
       if (error instanceof Error) noteFailure(error);
       throw error;
@@ -2387,7 +2396,10 @@ export class StorageManager implements IStorageManager {
             "owns itself could not be opened",
         );
       }
-      const commit = session.transact({
+      // Built once: a genesis sent again after a lost connection carries the
+      // same bytes under the same `localSeq`, so the server answers one that
+      // landed from its record, whatever the caller's grants are by then.
+      const genesis: ClientCommit = {
         ...declarations,
         localSeq: 1,
         reads: {
@@ -2399,7 +2411,8 @@ export class StorageManager implements IStorageManager {
           id: aclId,
           value: { value: { ...acl(space) } },
         }],
-      });
+      };
+      const commit = session.transact(genesis);
       this.trackPendingCommit(commit);
       await commit;
       if (afterGenesis !== undefined) delegation = await afterGenesis();
@@ -3054,7 +3067,8 @@ export class StorageManager implements IStorageManager {
         // first inspection; the resume below then opens what it wrote.
         if (isFresh(current)) {
           try {
-            const commit = bootstrap.session.transact({
+            // Built once, as `#createSpaceAs()` builds its genesis.
+            const genesis: ClientCommit = {
               localSeq: 1,
               reads: {
                 confirmed: [{ id: aclId, path: toDocumentPath([]), seq: 0 }],
@@ -3065,7 +3079,8 @@ export class StorageManager implements IStorageManager {
                 id: aclId,
                 value: { value: { [space]: "OWNER" } },
               }],
-            }, () => {
+            };
+            const commit = bootstrap.session.transact(genesis, () => {
               assertCurrentRoute();
               routeState.writeIssuedGeneration = routeGeneration;
             });
@@ -4697,7 +4712,7 @@ type ProviderRouteState = {
 
 type OpenedSpaceSession = {
   client: SessionConnection;
-  session: MemoryV2Client.SpaceSession;
+  session: ResendingSession;
 };
 
 type ProviderOptions = {
@@ -5715,11 +5730,11 @@ export class SpaceReplica
 
   readonly #createSession: () => Promise<{
     client: SessionConnection;
-    session: MemoryV2Client.SpaceSession;
+    session: ResendingSession;
   }>;
   #sessionHandle?: Promise<{
     client: SessionConnection;
-    session: MemoryV2Client.SpaceSession;
+    session: ResendingSession;
   }>;
 
   /** The client of the last RESOLVED session handle — for synchronous
@@ -5730,7 +5745,7 @@ export class SpaceReplica
    *  `authorizationError()` can observe a denial that terminated the session
    *  during reconnect, which closes its watch view without a fresh watch result
    *  to record. */
-  #sessionSession?: MemoryV2Client.SpaceSession;
+  #sessionSession?: ResendingSession;
 
   /**
    * The loads the memory server refused this replica for want of access, and
@@ -6186,7 +6201,7 @@ export class SpaceReplica
     | undefined;
 
   #viewPlans: readonly ViewPlan[] = [];
-  #viewCapabilitySession: MemoryV2Client.SpaceSession | undefined;
+  #viewCapabilitySession: ResendingSession | undefined;
   #cancelViewCapabilityLost: Cancel | undefined;
   #viewOwnerVersion = 0;
   #viewOwnerRetired: (() => void) | undefined;
@@ -7891,7 +7906,10 @@ export class SpaceReplica
           // one has issued, canReplaceProvisionalReplica() must answer
           // false — a late host hint may no longer swap the replica out
           // underneath the queue and strand its traffic on a closed
-          // route.
+          // route. An append a connection loses is sent again by the
+          // session, unchanged and under the same `localSeq`, once the
+          // session can take it, so the queue's own retry never polls a
+          // host that is down.
           return await session.transact(
             commit,
             () => this.#markRouteWriteIssued(),
@@ -7992,7 +8010,7 @@ export class SpaceReplica
       let resolved:
         | {
           client: SessionConnection;
-          session: MemoryV2Client.SpaceSession;
+          session: ResendingSession;
         }
         | undefined;
       try {
@@ -8478,7 +8496,7 @@ export class SpaceReplica
       else anyReleasable = true;
     }
     if (!anyReleasable) return { released: [], deferred };
-    let session: MemoryV2Client.SpaceSession;
+    let session: ResendingSession;
     try {
       const { client } = await this.#activeSessionHandle();
       if (client.serverFlags?.watchRemoveV1 !== true) {
@@ -9451,7 +9469,7 @@ export class SpaceReplica
    * Helper for `#refreshWatchSet()`, which consumes any session remount owed
    * and returns whether `session` has been replaced as this replica's session.
    */
-  #remountedSince(session: MemoryV2Client.SpaceSession): boolean {
+  #remountedSince(session: ResendingSession): boolean {
     this.#consumeOwedSessionRemount();
     return this.#sessionSession !== session;
   }
@@ -13224,7 +13242,7 @@ export class SpaceReplica
 
   #memoizedSessionHandle(): Promise<{
     client: SessionConnection;
-    session: MemoryV2Client.SpaceSession;
+    session: ResendingSession;
   }> {
     if (this.#closed) {
       return Promise.reject(new Error("memory replica closed"));

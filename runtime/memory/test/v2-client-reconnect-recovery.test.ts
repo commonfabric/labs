@@ -16,6 +16,8 @@ import {
 import {
   connect,
   connectionError,
+  isNotSentError,
+  isUnacknowledgedError,
   loopback,
   type Transport,
   writeFailedError,
@@ -226,6 +228,15 @@ function reconnectableTransport(
     get connections() {
       return connections;
     },
+    /** The connections a `transact` frame for the commit `localSeq` was
+     * sent on, one entry per frame. */
+    transactsOf(localSeq: number) {
+      return sent.filter(({ message }) =>
+        message.type === "transact" &&
+        (message.commit as { localSeq?: number } | undefined)?.localSeq ===
+          localSeq
+      ).map(({ connection }) => connection);
+    },
     get refusedWrites() {
       return refusedWrites;
     },
@@ -249,6 +260,19 @@ function reconnectableTransport(
       await Promise.allSettled([...inFlight]);
     },
   };
+}
+
+/**
+ * Waits until the session whose request failed with `error`, a connection
+ * error, can take that request again.
+ */
+function readyToRetry(error: unknown): Promise<void> {
+  const ready = (error as { readyToRetry?: () => Promise<void> } | null)
+    ?.readyToRetry;
+  if (ready === undefined) {
+    throw new Error("Expected a connection error ready to be retried");
+  }
+  return ready();
 }
 
 describe("v2-client-reconnect-recovery", () => {
@@ -435,7 +459,12 @@ describe("v2-client-reconnect-recovery", () => {
   }
 
   for (const name of [undefined, 7]) {
-    it(`resets after a remote reopen error with ${name === undefined ? "a missing" : "a numeric"} name and settles retained work on recovery`, async () => {
+    it(`resets after a remote reopen error with ${name === undefined ? "a missing" : "a numeric"} name, and returns the stored verdict for a dropped commit sent again once its session is back`, async () => {
+      // The commit is handed to the server, which stores it, and the drop
+      // loses its verdict. A watch asked for while the client reconnects
+      // fails at once; one asked for after the reconnect shows the commit's
+      // write.
+
       const server = new Server({
         ...testSessionOpenServerOptions,
         store: new URL(`memory://reconnect-malformed-error-${name}`),
@@ -454,27 +483,32 @@ describe("v2-client-reconnect-recovery", () => {
           {},
           testSessionOpenAuthFactory,
         );
-        const pending = session.transact({
+        const commit = {
           localSeq: 1,
           reads: { confirmed: [], pending: [] },
-          operations: [{ op: "set", id: "of:retained", value: { value: 7 } }],
-        });
-        pending.catch(() => {});
-        await wire.transactSent;
-        wire.drop();
-        const restored = client.restoreConnection();
-        restored.catch(() => {});
-        const watched = session.watchAddSync([{
+          operations: [{
+            op: "set" as const,
+            id: "of:retained",
+            value: { value: 7 },
+          }],
+        };
+        const retained = {
           id: "retained",
-          kind: "graph",
+          kind: "graph" as const,
           query: {
             roots: [{
               id: "of:retained",
               selector: { path: [], schema: false },
             }],
           },
-        }]);
-        watched.catch(() => {});
+        };
+        const pending = session.transact(commit).catch((e) => e);
+        await wire.transactSent;
+        wire.drop();
+        const restored = client.restoreConnection();
+        restored.catch(() => {});
+        const watched = await session.watchAddSync([retained]).catch((e) => e);
+        expect(isNotSentError(watched)).toBe(true);
         expect(
           await Promise.race([
             wire.resetCalled.then(() => "reset"),
@@ -482,13 +516,22 @@ describe("v2-client-reconnect-recovery", () => {
           ]),
         ).toBe("reset");
         await restored;
-        await expect(pending).resolves.toMatchObject({ seq: 1 });
-        expect((await watched).view.entities).toEqual([
-          expect.objectContaining({
-            id: "of:retained",
-            document: { value: 7 },
-          }),
-        ]);
+        const error = await pending;
+        expect(isUnacknowledgedError(error)).toBe(true);
+
+        await readyToRetry(error);
+        await expect(session.transact(commit)).resolves.toMatchObject({
+          seq: 1,
+          replayed: true,
+        });
+        expect(wire.transactsOf(1)).toEqual([1, 3]);
+        expect((await session.watchAddSync([retained])).view.entities)
+          .toEqual([
+            expect.objectContaining({
+              id: "of:retained",
+              document: { value: 7 },
+            }),
+          ]);
         expect(wire.connections).toBe(3);
         expect(client.connectionState).toBe("connected");
       } finally {
@@ -498,7 +541,7 @@ describe("v2-client-reconnect-recovery", () => {
     });
   }
 
-  it("rejects pending writes with the restoration error when the transport cannot reset", async () => {
+  it("rejects a commit made while reconnecting as never sent, and its `readyToRetry()` with the restoration error, when the transport cannot reset", async () => {
     const server = new Server({
       ...testSessionOpenServerOptions,
       store: new URL("memory://reconnect-without-reset"),
@@ -514,29 +557,30 @@ describe("v2-client-reconnect-recovery", () => {
     );
     const failure = new Error("session restoration failed");
     using _restore = stub(session, "restore", () => Promise.reject(failure));
-    let pending: ReturnType<typeof session.transact> | undefined;
     try {
       wire.drop();
-      pending = session.transact({
+      const error = await session.transact({
         localSeq: 1,
         reads: { confirmed: [], pending: [] },
         operations: [{ op: "set", id: "of:pending", value: { value: 1 } }],
-      });
-      pending.catch(() => {});
+      }).catch((e) => e);
+      expect(isNotSentError(error)).toBe(true);
+      const ready = readyToRetry(error);
+      ready.catch(() => {});
       expect(
         await Promise.race([
-          client.restoreConnection().then(() => "restored", (error) => error),
+          client.restoreConnection().then(() => "restored", (reason) => reason),
           wire.duplicateHello,
         ]),
       ).toBe(failure);
-      await expect(pending).rejects.toBe(failure);
+      await expect(ready).rejects.toBe(failure);
       await expect(session.whenRestored()).rejects.toBe(failure);
       expect(client.connectionState).toBe("failed");
       expect(wire.connections).toBe(2);
+      expect(wire.transactsOf(1)).toEqual([]);
       await expect(client.restoreConnection()).rejects.toBe(failure);
     } finally {
       await client.close();
-      await pending?.catch(() => {});
       await server.close();
     }
   });
@@ -585,7 +629,7 @@ describe("v2-client-reconnect-recovery", () => {
     }
   });
 
-  it("restores sessions and queued writes after restoration fails on a live connection", async () => {
+  it("restores sessions after restoration fails on a live connection, and lands a commit made while reconnecting once it is ready to retry", async () => {
     const server = new Server({
       ...testSessionOpenServerOptions,
       store: new URL("memory://reconnect-recovery"),
@@ -619,19 +663,19 @@ describe("v2-client-reconnect-recovery", () => {
       }
       return restore();
     });
-    let pending: ReturnType<typeof session.transact> | undefined;
+    const commit = {
+      localSeq: 1,
+      reads: { confirmed: [], pending: [] },
+      operations: [{
+        op: "set" as const,
+        id: "of:recovered",
+        value: { value: 7 },
+      }],
+    };
     try {
       wire.drop();
-      pending = session.transact({
-        localSeq: 1,
-        reads: { confirmed: [], pending: [] },
-        operations: [{
-          op: "set",
-          id: "of:recovered",
-          value: { value: 7 },
-        }],
-      });
-      pending.catch(() => {});
+      const error = await session.transact(commit).catch((e) => e);
+      expect(isNotSentError(error)).toBe(true);
       const restored = client.restoreConnection().then(() => "restored");
       restored.catch(() => {});
       expect(
@@ -648,21 +692,26 @@ describe("v2-client-reconnect-recovery", () => {
           wire.duplicateHello,
         ]),
       ).toBe("restored");
-      await pending;
       await session.whenRestored();
       await healthy.whenRestored();
       expect(attempts).toBe(2);
       expect(healthyAttempts).toBe(2);
+
+      await readyToRetry(error);
+      await expect(session.transact(commit)).resolves.toMatchObject({
+        seq: 1,
+      });
+      // Sent once, by the caller, on the connection the session restored on.
+      expect(wire.transactsOf(1)).toEqual([3]);
       expect(wire.connections).toBe(3);
       expect(client.connectionState).toBe("connected");
     } finally {
       await client.close();
-      await pending?.catch(() => {});
       await server.close();
     }
   });
 
-  it("retains a commit in flight on a restored session when its sibling fails", async () => {
+  it("fails a commit in flight on a restored session as unacknowledged when its sibling's restore fails, and returns its stored verdict when it is sent again on the next connection", async () => {
     const server = new Server({
       ...testSessionOpenServerOptions,
       store: new URL("memory://reconnect-inflight-commit"),
@@ -687,16 +736,20 @@ describe("v2-client-reconnect-recovery", () => {
     });
     const restoreFlaky = flaky.restore.bind(flaky);
     let attempts = 0;
-    let pending: ReturnType<typeof healthy.transact> | undefined;
+    const commit = {
+      localSeq: 1,
+      reads: { confirmed: [], pending: [] },
+      operations: [{
+        op: "set" as const,
+        id: "of:inflight",
+        value: { value: 1 },
+      }],
+    };
+    let pending: Promise<unknown> | undefined;
     using _flaky = stub(flaky, "restore", async () => {
       if (++attempts === 1) {
         await healthyRestored.promise;
-        pending = healthy.transact({
-          localSeq: 1,
-          reads: { confirmed: [], pending: [] },
-          operations: [{ op: "set", id: "of:inflight", value: { value: 1 } }],
-        });
-        pending.catch(() => {});
+        pending = healthy.transact(commit).catch((e) => e);
         await wire.transactSent;
         throw new Error("transient session restoration failure");
       }
@@ -706,16 +759,29 @@ describe("v2-client-reconnect-recovery", () => {
       wire.drop();
       await client.restoreConnection();
       expect(pending).toBeDefined();
-      await expect(pending).resolves.toMatchObject({ seq: 1 });
+      const error = await pending;
+      expect(isUnacknowledgedError(error)).toBe(true);
+
+      await readyToRetry(error);
+      await expect(healthy.transact(commit)).resolves.toMatchObject({
+        seq: 1,
+        replayed: true,
+      });
+      expect(wire.transactsOf(1)).toEqual([2, 3]);
       expect(wire.connections).toBe(3);
     } finally {
       await client.close();
-      await pending?.catch(() => {});
       await server.close();
     }
   });
 
-  it("retains replayed commits when the same session fails to restore its watches", async () => {
+  it("resolves a dropped commit's `readyToRetry()` only on the connection its session's restore completes on, after a watch restore that failed on the one before", async () => {
+    // The session reopens on the second connection and fails to
+    // re-establish its watches there, so the reconnect moves to a third. The
+    // commit's `readyToRetry()` resolves only once the session is restored,
+    // so it is sent again on the third connection, where the server answers
+    // it from its record.
+
     const server = new Server({
       ...testSessionOpenServerOptions,
       store: new URL("memory://reconnect-replay-watch-failure"),
@@ -734,8 +800,7 @@ describe("v2-client-reconnect-recovery", () => {
         roots: [{ id: "of:replayed", selector: { path: [], schema: false } }],
       },
     }]);
-    // A reopened session whose watches were forgotten re-establishes them
-    // after starting its retained commits' replay.
+    // A reopened session whose watches were forgotten re-establishes them.
     const open = client.openSession.bind(client);
     using _open = stub(client, "openSession", async (...args) => ({
       ...await open(...args),
@@ -745,34 +810,46 @@ describe("v2-client-reconnect-recovery", () => {
     let attempts = 0;
     using _watchSet = stub(session, "watchSetSync", async (...args) => {
       if (++attempts === 1) {
-        await wire.transactSent;
         throw new Error("transient watch restoration failure");
       }
-      return watchSet(...args);
+      return await watchSet(...args);
     });
-    let pending: ReturnType<typeof session.transact> | undefined;
+    const commit = {
+      localSeq: 1,
+      reads: { confirmed: [], pending: [] },
+      operations: [{
+        op: "set" as const,
+        id: "of:replayed",
+        value: { value: 1 },
+      }],
+    };
     try {
+      const pending = session.transact(commit).catch((e) => e);
+      await wire.transactSent;
       wire.drop();
-      pending = session.transact({
-        localSeq: 1,
-        reads: { confirmed: [], pending: [] },
-        operations: [{ op: "set", id: "of:replayed", value: { value: 1 } }],
-      });
-      pending.catch(() => {});
-      await client.restoreConnection();
-      await expect(pending).resolves.toMatchObject({ seq: 1 });
+      const error = await pending;
+      expect(isUnacknowledgedError(error)).toBe(true);
+
+      await readyToRetry(error);
       expect(attempts).toBe(2);
       expect(wire.connections).toBe(3);
+      await expect(session.transact(commit)).resolves.toMatchObject({
+        seq: 1,
+        replayed: true,
+      });
+      expect(wire.transactsOf(1)).toEqual([1, 3]);
     } finally {
       await client.close();
-      await pending?.catch(() => {});
       await server.close();
     }
   });
 
-  it("resumes a session, and lands a commit issued while disconnected, when the response to its reopen is lost", async () => {
+  it("resumes a session when the response to its reopen is lost, and lands a commit made while disconnected once it is ready to retry", async () => {
     // The server rotates the resume token as it handles the reopen, so the
     // client, which never saw the response, resumes with the token before.
+    // The commit made while the client reconnects fails at once, and its
+    // `readyToRetry()` waits through both connections.
+
     const server = new Server({
       ...testSessionOpenServerOptions,
       store: new URL("memory://lost-reopen-response"),
@@ -793,16 +870,21 @@ describe("v2-client-reconnect-recovery", () => {
 
       lossy.loseNextOpenResponse();
       lossy.drop();
-      const pending = session.transact({
+      const commit = {
         localSeq: 2,
         reads: { confirmed: [], pending: [] },
-        operations: [{ op: "set", id: "of:x", value: { value: "B" } }],
-      });
-      pending.catch(() => {});
+        operations: [{ op: "set" as const, id: "of:x", value: { value: "B" } }],
+      };
+      const error = await session.transact(commit).catch((e) => e);
+      expect(isNotSentError(error)).toBe(true);
 
-      await expect(pending).resolves.toMatchObject({ seq: 2 });
+      await readyToRetry(error);
+      await expect(session.transact(commit)).resolves.toMatchObject({
+        seq: 2,
+      });
       expect(session.closeError).toBeUndefined();
       expect(lossy.connections).toBe(3);
+      expect(lossy.transactsOf(2)).toEqual([3]);
     } finally {
       await client.close();
       await server.close();
@@ -868,7 +950,10 @@ describe("v2-client-reconnect-recovery", () => {
     });
   }
 
-  it("retains a commit whose send rejects with a `ConnectionError` as its connection drops", async () => {
+  it("fails a commit whose send rejects with a `ConnectionError` as its connection drops as unacknowledged, and applies it when it is sent again on the next connection", async () => {
+    // The frame never reaches the server, so the commit sent again is judged
+    // afresh rather than answered from a record.
+
     const server = new Server({
       ...testSessionOpenServerOptions,
       store: new URL("memory://reconnect-lost-send"),
@@ -880,27 +965,35 @@ describe("v2-client-reconnect-recovery", () => {
       {},
       testSessionOpenAuthFactory,
     );
-    let pending: ReturnType<typeof session.transact> | undefined;
+    const commit = {
+      localSeq: 1,
+      reads: { confirmed: [], pending: [] },
+      operations: [{
+        op: "set" as const,
+        id: "of:lost-send",
+        value: { value: 1 },
+      }],
+    };
     try {
-      pending = session.transact({
-        localSeq: 1,
-        reads: { confirmed: [], pending: [] },
-        operations: [{ op: "set", id: "of:lost-send", value: { value: 1 } }],
-      });
-      pending.catch(() => {});
-      await expect(pending).resolves.toMatchObject({ seq: 1 });
+      const error = await session.transact(commit).catch((e) => e);
+      expect(isUnacknowledgedError(error)).toBe(true);
+
+      await readyToRetry(error);
+      const applied = await session.transact(commit);
+      expect(applied).toMatchObject({ seq: 1 });
+      expect(applied.replayed).toBeUndefined();
+      expect(wire.transactsOf(1)).toEqual([1, 2]);
       expect(wire.connections).toBe(2);
     } finally {
       await client.close();
-      await pending?.catch(() => {});
       await server.close();
     }
   });
   it("returns the stored verdict for an exact replay without overwriting a later write, and refuses an altered one", async () => {
-    // A retained commit can reach the server twice: its write can fail after
-    // its bytes have left, or its response can be lost after the server
-    // applied it. Replaying it is safe only because the server answers a
-    // repeated commit from its record.
+    // A commit can reach the server twice: its write can fail after its bytes
+    // have left, or its response can be lost after the server applied it, and
+    // its caller then sends it again. That is safe only because the server
+    // answers a repeated commit from its record.
 
     const server = new Server({
       ...testSessionOpenServerOptions,
@@ -950,7 +1043,7 @@ describe("v2-client-reconnect-recovery", () => {
   it("rejects a commit with the server's verdict when the verdict's message mentions a disconnect", async () => {
     // A server verdict carries client-chosen text, here the name of the
     // document whose read went stale. It is a verdict however it is worded, so
-    // the commit is rejected with it rather than kept for a replay.
+    // the commit is rejected with it rather than as a lost connection.
 
     const server = new Server({
       ...testSessionOpenServerOptions,
@@ -989,7 +1082,12 @@ describe("v2-client-reconnect-recovery", () => {
       await server.close();
     }
   });
-  it("rejects a commit with its own write's error once that write has failed five times", async () => {
+  it("fails a commit whose own write fails as unacknowledged, marked as its own write's failure, each time it is sent", async () => {
+    // The socket refuses this commit's frame every time. The client sends it
+    // once per call, and its failure carries the mark a caller sending it
+    // again counts, so that a payload that fails every time is not sent
+    // forever.
+
     const server = new Server({
       ...testSessionOpenServerOptions,
       store: new URL("memory://reconnect-refused-write"),
@@ -1004,25 +1102,38 @@ describe("v2-client-reconnect-recovery", () => {
       {},
       testSessionOpenAuthFactory,
     );
-    let pending: ReturnType<typeof session.transact> | undefined;
+    const commit = {
+      localSeq: 1,
+      reads: { confirmed: [], pending: [] },
+      operations: [{
+        op: "set" as const,
+        id: "of:refused",
+        value: { value: 1 },
+      }],
+    };
     try {
-      pending = session.transact({
-        localSeq: 1,
-        reads: { confirmed: [], pending: [] },
-        operations: [{ op: "set", id: "of:refused", value: { value: 1 } }],
+      const error = await session.transact(commit).catch((e) => e);
+      expect(isUnacknowledgedError(error)).toBe(true);
+      expect(error).toMatchObject({
+        ownWriteFailed: true,
+        cause: expect.objectContaining({ cause: writeFailure }),
       });
-      await expect(pending).rejects.toBe(writeFailure);
-      expect(wire.refusedWrites).toBe(5);
       await client.restoreConnection();
       expect(client.isConnected()).toBe(true);
+      expect(wire.refusedWrites).toBe(1);
+
+      await readyToRetry(error);
+      const again = await session.transact(commit).catch((e) => e);
+      expect(isUnacknowledgedError(again)).toBe(true);
+      expect(again).toMatchObject({ ownWriteFailed: true });
+      expect(wire.refusedWrites).toBe(2);
     } finally {
       await client.close();
-      await pending?.catch(() => {});
       await server.close();
     }
   });
 
-  it("rejects a watch request with its own write's error once that write has failed five times", async () => {
+  it("fails a watch request whose own write fails as unacknowledged, marked as its own write's failure, and takes the next watch request after the reconnect", async () => {
     const server = new Server({
       ...testSessionOpenServerOptions,
       store: new URL("memory://reconnect-refused-watch-write"),
@@ -1044,13 +1155,18 @@ describe("v2-client-reconnect-recovery", () => {
         roots: [{ id: `of:${id}`, selector: { path: [], schema: false } }],
       },
     });
-    let pending: ReturnType<typeof session.watchAddSync> | undefined;
     try {
-      pending = session.watchAddSync([watch("refused")]);
-      await expect(pending).rejects.toBe(writeFailure);
-      expect(wire.refusedWrites).toBe(5);
+      const error = await session.watchAddSync([watch("refused")]).catch((
+        e,
+      ) => e);
+      expect(isUnacknowledgedError(error)).toBe(true);
+      expect(error).toMatchObject({
+        ownWriteFailed: true,
+        cause: expect.objectContaining({ cause: writeFailure }),
+      });
       await client.restoreConnection();
       await session.watchAddSync([watch("accepted")]);
+      expect(wire.refusedWrites).toBe(1);
       expect(
         server.demandedInstancesForSpace(
           "did:key:z6Mk-reconnect-refused-watch-write",
@@ -1058,12 +1174,11 @@ describe("v2-client-reconnect-recovery", () => {
       ).toEqual(["of:accepted"]);
     } finally {
       await client.close();
-      await pending?.catch(() => {});
       await server.close();
     }
   });
 
-  it("rejects a commit whose own write fails five times with a value other than an `Error`, carrying that value as the cause", async () => {
+  it("fails a commit whose own write fails with a value other than an `Error` as unacknowledged, carrying that value as the write failure's cause", async () => {
     const server = new Server({
       ...testSessionOpenServerOptions,
       store: new URL("memory://reconnect-refused-write-value"),
@@ -1077,25 +1192,26 @@ describe("v2-client-reconnect-recovery", () => {
       {},
       testSessionOpenAuthFactory,
     );
-    let pending: ReturnType<typeof session.transact> | undefined;
     try {
-      pending = session.transact({
+      const failure = await session.transact({
         localSeq: 1,
         reads: { confirmed: [], pending: [] },
         operations: [{ op: "set", id: "of:refused", value: { value: 1 } }],
-      });
-      const failure = await pending.then(
+      }).then(
         () => undefined,
         (error: unknown) => error,
       );
       expect(failure).toBeInstanceOf(Error);
-      expect((failure as Error).name).toBe("Error");
-      expect((failure as Error).message).toBe("Memory websocket write failed");
-      expect((failure as Error).cause).toBe("frame refused");
-      expect(wire.refusedWrites).toBe(5);
+      expect(isUnacknowledgedError(failure)).toBe(true);
+      expect(failure).toMatchObject({
+        name: "ConnectionError",
+        message: "Memory websocket write failed",
+        ownWriteFailed: true,
+      });
+      expect(((failure as Error).cause as Error).cause).toBe("frame refused");
+      expect(wire.refusedWrites).toBe(1);
     } finally {
       await client.close();
-      await pending?.catch(() => {});
       await server.close();
     }
   });

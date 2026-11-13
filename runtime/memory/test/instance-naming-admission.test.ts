@@ -619,6 +619,50 @@ describe("instance-naming-admission", () => {
       }
     });
 
+    it("rejects a positional client's commit with the server's `SessionRevokedError`, on a connection that stays up", async () => {
+      // The refusal is the commit's answer. No `session/revoked` frame and
+      // no drop follow it, so the commit has to settle with it: a client
+      // that kept the commit for a later connection would never tell its
+      // caller that the client needs an update.
+
+      const server = createServer(
+        "client-positional-commit",
+        "enforce",
+        () => true,
+      );
+      const space = "did:key:z6Mk-naming-client-positional-commit";
+      const wire = droppableTransport(server);
+      const client = await connectClient({ transport: wire.transport });
+      let drained: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await createSpace(server, space);
+        const session = await client.mount(space, {}, recordingAuth(BOB, []));
+        await markInStore(server, space);
+        const settled = session.transact({
+          localSeq: 1,
+          reads: { confirmed: [], pending: [] },
+          operations: [{ op: "set", id: "of:a", value: { value: 1 } }],
+        }).then(() => "applied", (error) => error);
+        // One macrotask, which the server's answer arrives well inside.
+        const outcome = await Promise.race([
+          settled,
+          new Promise((resolve) => {
+            drained = setTimeout(() => resolve("unsettled"), 0);
+          }),
+        ]);
+
+        expect(outcome).toMatchObject({
+          name: "SessionRevokedError",
+          clientUpdateRequired: true,
+        });
+        expect(client.isConnected()).toBe(true);
+      } finally {
+        clearTimeout(drained);
+        await client.close();
+        await server.close();
+      }
+    });
+
     it("admits a naming session's commit", async () => {
       const server = createServer("naming-commit", "enforce", () => true);
       const space = "did:key:z6Mk-naming-naming-commit";

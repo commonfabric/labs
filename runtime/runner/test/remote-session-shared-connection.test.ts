@@ -11,6 +11,7 @@ import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
 import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import {
   createNativeMemorySocket,
+  type MemorySocketConnection,
   type MemorySocketFactory,
 } from "../src/storage/memory-socket.ts";
 import {
@@ -33,6 +34,9 @@ type Harness = {
 
   /** Uncompressed client requests submitted through the transport. */
   sent: ClientMessage[];
+
+  /** Every socket the factory has dialed, in order. */
+  sockets: MemorySocketConnection["socket"][];
 };
 
 describe("RemoteSessionFactory connection sharing", () => {
@@ -73,9 +77,11 @@ describe("RemoteSessionFactory connection sharing", () => {
   ): Harness => {
     const dialed: URL[] = [];
     const sent: ClientMessage[] = [];
+    const sockets: Harness["sockets"] = [];
     const createSocket: MemorySocketFactory = (address) => {
       dialed.push(address);
       const connected = createNativeMemorySocket(address);
+      sockets.push(connected.socket);
       return {
         socket: connected.socket,
         send: (frame) => {
@@ -94,7 +100,7 @@ describe("RemoteSessionFactory connection sharing", () => {
     );
     factory.setSharedConnections(options.shared);
     factories.push(factory);
-    return { factory, dialed, sent };
+    return { factory, dialed, sent, sockets };
   };
 
   /** The principal of every session of `space` a connection holds. */
@@ -284,6 +290,29 @@ describe("RemoteSessionFactory connection sharing", () => {
 
       await factory.create(SPACES[2]);
       expect(dialed).toHaveLength(1);
+    });
+
+    it("opens a space first asked for while the shared connection is down, once the connection is back", async () => {
+      // The factory hands out the host's shared connection while it is
+      // connecting again. A mount made on it then is not sent, and is made
+      // once the connection is back rather than failing the space's open.
+
+      const server = startServer({ connectionAuth: true });
+      const { factory, dialed, sockets } = harnessFor(server, { shared: true });
+      await factory.create(SPACES[0]);
+      const closed = Promise.withResolvers<void>();
+      sockets[0].addEventListener("close", () => closed.resolve(), {
+        once: true,
+      });
+      sockets[0].close();
+      await closed.promise;
+      const opened = await factory.create(SPACES[1]);
+
+      expect((await opened.session.queryGraph({ roots: [] })).serverSeq).toBe(
+        0,
+      );
+      expect(dialed).toHaveLength(2);
+      expect(principalsIn(server, SPACES[1])).toEqual([user.did()]);
     });
 
     it("closes while a dial is still opening, and refuses a create whose signal aborts meanwhile", async () => {

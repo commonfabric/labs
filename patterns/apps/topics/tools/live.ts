@@ -6,13 +6,13 @@
  * whatever new comment, link, or Topic a changed document now links.
  */
 
-import type { SpaceSession } from "@commonfabric/memory/v2/client";
 import { ROUTED_HOLDINGS_LIMIT } from "@commonfabric/memory/v2/routed-limits";
 
 import { linkOf, type MirrorData } from "./mirror.ts";
 import {
   applyDocs,
   assembleBoard,
+  type BoardSession,
   chunked,
   declarable,
   type DocSource,
@@ -45,7 +45,7 @@ const MOST_ADDED = 256;
  * any other way is an error.
  */
 export async function followBoard(
-  session: SpaceSession,
+  session: BoardSession,
   space: string,
   data: MirrorData,
   board: string,
@@ -63,7 +63,7 @@ export async function followBoard(
 
 /** Helper for {@link followBoard}, which follows until the session ends. */
 async function follow(
-  session: SpaceSession,
+  session: BoardSession,
   space: string,
   data: MirrorData,
   board: string,
