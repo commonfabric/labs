@@ -584,7 +584,7 @@ describe("topics-browser-measurement", () => {
 
       const fresh = await openFreshSession();
       try {
-        await fresh.page.evaluate(async (served: boolean) => {
+        const setupRuns = await fresh.page.evaluate(async (served: boolean) => {
           const scope = globalThis as typeof globalThis & {
             commonfabric?: { rt?: RuntimeClient };
             __cfLeftOnRuns?: { count: number; stop: () => void };
@@ -602,11 +602,27 @@ describe("topics-browser-measurement", () => {
           await rt.setTelemetryEnabled(true);
           await rt.setReadStatsEnabled(true);
           if (served) await rt.setActionRunTraceEnabled(true);
+          // Exercise telemetry delivered before the timed interval.
+          rt.emit("telemetry", {
+            type: "scheduler.run.complete",
+            actionId: "setup",
+            durationMs: 1,
+            timeStamp: 0,
+          });
+          return counter.count;
         }, { args: [servedViews] });
+        expect(setupRuns).toBeGreaterThan(0);
         const sample = await timeTopicsOperation(fresh.page, {
           label: "open topic and return, timed",
           posture,
           operation: async () => {
+            // The sampler has disabled telemetry before the operation starts.
+            await fresh.page.evaluate(() => {
+              const scope = globalThis as typeof globalThis & {
+                __cfLeftOnRuns?: { count: number };
+              };
+              scope.__cfLeftOnRuns!.count = 0;
+            });
             await openNewestTopic(fresh);
             await returnToBoard(fresh);
           },
