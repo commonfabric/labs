@@ -1853,6 +1853,30 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         });
       });
 
+      it("refuses a served derivation's value copy of a member's personal data from their user document into a computed document of the same space", async () => {
+        // The shape of a room's lifts over its members' per-user state, done
+        // by value rather than by reference.
+
+        await withRuntime(true, async (runtime) => {
+          const { reasons, targetId } = await preparedCopy(runtime, {
+            sources: [{
+              name: "wf-served-x-member-source",
+              confidentiality: [personalSpacePrincipal(OTHER_PRINCIPAL)],
+              scope: "user",
+            }],
+            targetName: "wf-served-x-member",
+            computed: true,
+            served: true,
+            kind: "derivation",
+          });
+          expect(targetId.startsWith("computed:")).toBe(true);
+          expect(reasons).toHaveLength(1);
+          expect(reasons[0]).toContain("(cross-holder, §8.12.5.1)");
+          expect(reasons[0]).toContain(`for ${targetId} at /`);
+          expect(reasons[0]).toContain(OTHER_PRINCIPAL);
+        });
+      });
+
       it("refuses a write of a clause only label metadata carried, which reads no store, into a store of the same space that declares it", async () => {
         await withRuntime(true, async (runtime) => {
           const { reasons, targetId } = await preparedCopy(runtime, {
