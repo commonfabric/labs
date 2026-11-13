@@ -24,6 +24,15 @@ export const propValue = (node: unknown, prop: string): unknown => {
   return props ? readValue(props[prop]) : undefined;
 };
 
+/** The labels of the `items` a picker such as `cf-autocomplete` offers, in
+ * order; empty when there is no picker. */
+export const pickerLabels = (picker: unknown): unknown[] => {
+  const items = propValue(picker, "items");
+  return Array.isArray(items)
+    ? items.map((item) => isRecord(item) ? readValue(item.label) : undefined)
+    : [];
+};
+
 const childrenArray = (children: unknown): unknown[] => {
   const value = readValue(children);
   if (Array.isArray(value)) return value;
@@ -76,6 +85,18 @@ export const viewShows = (
     absent.every((part) => !text.includes(part));
 };
 
+/** Whether `parts` appear in `text` in that order, each one starting after
+ * the end of the one before it. */
+export const inOrder = (text: string, parts: string[]): boolean => {
+  let from = 0;
+  for (const part of parts) {
+    const at = text.indexOf(part, from);
+    if (at === -1) return false;
+    from = at + part.length;
+  }
+  return true;
+};
+
 export const findNode = (
   root: unknown,
   predicate: (node: unknown) => boolean,
@@ -85,6 +106,19 @@ export const findNode = (
   return childNodes(value)
     .map((child) => findNode(child, predicate))
     .find((child) => child !== undefined);
+};
+
+/** Every node in the subtree `predicate` accepts, in document order,
+ * `root` and the nodes nested in accepted ones included. */
+export const findNodes = (
+  root: unknown,
+  predicate: (node: unknown) => boolean,
+): unknown[] => {
+  const value = readValue(root);
+  return [
+    ...(predicate(value) ? [value] : []),
+    ...childNodes(value).flatMap((child) => findNodes(child, predicate)),
+  ];
 };
 
 /** How many elements named `name` sit under `root`, counting nested ones. */
@@ -153,6 +187,10 @@ export const findElement = (
   name: string,
 ): unknown | undefined => findNode(root, (node) => isElement(node, name));
 
+/** Every element named `name` in the subtree, in document order. */
+export const findElements = (root: unknown, name: string): unknown[] =>
+  findNodes(root, (node) => isElement(node, name));
+
 export const findElementByText = (
   root: unknown,
   name: string,
@@ -187,6 +225,22 @@ export const innermostNode = (
   return accept(node) ? node : undefined;
 };
 
+/** The row under `root` that shows `text` and holds a button labeled
+ * `label`: the innermost node holding both. */
+export const rowWith = (root: unknown, text: string, label: string): unknown =>
+  innermostNode(
+    root,
+    (node) =>
+      hasText(node, text) && findNode(node, isButton(label)) !== undefined,
+  );
+
+/** The button labeled `label` in the row `rowWith` finds for `text`. */
+export const buttonInRow = (
+  root: unknown,
+  text: string,
+  label: string,
+): unknown => findNode(rowWith(root, text, label), isButton(label));
+
 /** Fires the event handler a node binds under `prop` (`onClick`,
  * `oncf-submit`, …), sending it `event`. A handler bound only in JSX is
  * reached through the rendered tree. Throws when there is no node or it binds
@@ -220,17 +274,11 @@ export const clickInRow = (
   root: unknown,
   rowText: string,
   label: string,
-): void => {
-  const row = innermostNode(
-    root,
-    (node) =>
-      hasText(node, rowText) && findNode(node, isButton(label)) !== undefined,
-  );
+): void =>
   fireClick(
-    findNode(row, isButton(label)),
+    buttonInRow(root, rowText, label),
     `a button labelled "${label}" in the row "${rowText}"`,
   );
-};
 
 /** Sends `message` from the first `cf-message-input` under `root`, firing its
  * `oncf-send` with the message in the event's `detail` as the component does
@@ -245,4 +293,28 @@ export const sendMessage = (
     "oncf-send",
     { detail: { message } },
     what,
+  );
+
+/** Types `value` into the one input under `root` whose placeholder is
+ * `placeholder`, through its `$value` binding. */
+export const typeInto = (
+  root: unknown,
+  placeholder: string,
+  value: string,
+): void =>
+  setBound(
+    findNodeByProp(root, "placeholder", placeholder),
+    "$value",
+    value,
+    `an input with the placeholder "${placeholder}"`,
+  );
+
+/** Answers the owner check of the `cf-owner-view` under `root` the way the
+ * shell does, by writing `isOwner` through the cell its `$result` binds. */
+export const answerOwnerCheck = (root: unknown, isOwner: boolean): void =>
+  setBound(
+    findElement(root, "cf-owner-view"),
+    "$result",
+    isOwner,
+    "cf-owner-view",
   );

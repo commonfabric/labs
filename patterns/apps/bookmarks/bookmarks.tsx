@@ -11,6 +11,8 @@ import {
   action,
   computed,
   Default,
+  equals,
+  handler,
   NAME,
   pattern,
   UI,
@@ -36,22 +38,29 @@ export interface BookmarksOutput {
   count: number;
 }
 
+/** Whether a bookmark's URL, title, or description contains `query`. */
+function matchesQuery(bookmark: Bookmark, query: string): boolean {
+  const needle = query.toLowerCase();
+  return [bookmark.url, bookmark.title, bookmark.description].some((field) =>
+    (field ?? "").toLowerCase().includes(needle)
+  );
+}
+
+// Removes the bookmark itself rather than whatever sits at its position, so a
+// search hiding others, or another user's edit, cannot redirect the removal.
+const removeBookmark = handler<
+  unknown,
+  { bookmarks: Writable<Bookmark[]>; bookmark: Bookmark }
+>((_event, { bookmarks, bookmark }) => {
+  const current = bookmarks.get() ?? [];
+  const index = current.findIndex((el) => equals(bookmark, el));
+  if (index >= 0) bookmarks.set(current.toSpliced(index, 1));
+});
+
 // ===== The Pattern =====
 export const Bookmarks = pattern<BookmarksInput, BookmarksOutput>(
   ({ bookmarks }) => {
     const searchQuery = new Writable("");
-
-    const filteredBookmarks = computed(() => {
-      const query = searchQuery.get().toLowerCase();
-      if (!query) return bookmarks.get() ?? [];
-      return (bookmarks.get() ?? []).filter((b) => {
-        const url = (b.url ?? "").toLowerCase();
-        const title = (b.title ?? "").toLowerCase();
-        const description = (b.description ?? "").toLowerCase();
-        return url.includes(query) || title.includes(query) ||
-          description.includes(query);
-      });
-    });
 
     const count = computed(() => (bookmarks.get() ?? []).length);
 
@@ -59,12 +68,6 @@ export const Bookmarks = pattern<BookmarksInput, BookmarksOutput>(
       const trimmed = url.trim();
       if (!trimmed) return;
       bookmarks.push({ url: trimmed, title: "", description: "" });
-    });
-
-    const removeBookmark = action(({ index }: { index: number }) => {
-      const current = bookmarks.get() ?? [];
-      if (index < 0 || index >= current.length) return;
-      bookmarks.set(current.toSpliced(index, 1));
     });
 
     return {
@@ -90,41 +93,45 @@ export const Bookmarks = pattern<BookmarksInput, BookmarksOutput>(
 
           {/* Grid of link previews */}
           <cf-grid columns="3" gap="4">
-            {filteredBookmarks.map((bookmark: Bookmark, index: number) => (
-              <cf-vstack
-                gap="1"
-                style={{
-                  position: "relative",
-                  borderRadius: "8px",
-                  overflow: "hidden",
-                }}
-              >
-                <cf-link-preview url={bookmark.url} />
-                <button
-                  type="button"
-                  onClick={() => removeBookmark.send({ index })}
-                  style={{
-                    position: "absolute",
-                    top: "4px",
-                    right: "4px",
-                    background: "rgba(0,0,0,0.5)",
-                    color: "white",
-                    border: "none",
-                    borderRadius: "50%",
-                    width: "24px",
-                    height: "24px",
-                    cursor: "pointer",
-                    fontSize: "12px",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                  }}
-                  title="Remove bookmark"
-                >
-                  ✕
-                </button>
-              </cf-vstack>
-            ))}
+            {bookmarks.map((bookmark) =>
+              computed(() => matchesQuery(bookmark, searchQuery.get()))
+                ? (
+                  <cf-vstack
+                    gap="1"
+                    style={{
+                      position: "relative",
+                      borderRadius: "8px",
+                      overflow: "hidden",
+                    }}
+                  >
+                    <cf-link-preview url={bookmark.url} />
+                    <button
+                      type="button"
+                      onClick={removeBookmark({ bookmarks, bookmark })}
+                      style={{
+                        position: "absolute",
+                        top: "4px",
+                        right: "4px",
+                        background: "rgba(0,0,0,0.5)",
+                        color: "white",
+                        border: "none",
+                        borderRadius: "50%",
+                        width: "24px",
+                        height: "24px",
+                        cursor: "pointer",
+                        fontSize: "12px",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                      }}
+                      title="Remove bookmark"
+                    >
+                      ✕
+                    </button>
+                  </cf-vstack>
+                )
+                : null
+            )}
           </cf-grid>
         </cf-vstack>
       ),

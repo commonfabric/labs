@@ -21,41 +21,19 @@ import {
   Writable,
 } from "commonfabric";
 import {
+  clickButton,
   findElement,
-  findElementByText,
   findNode,
   fireClick,
+  fireEvent,
   hasText,
   isButton,
-  propsOf,
   textContent,
 } from "../../tools/test-support/vnode-helpers.ts";
 import type { ContactPiece, Person as PersonRecord } from "./contact-types.tsx";
 import Contacts from "./contacts.tsx";
 import FamilyMember from "./family-member.tsx";
 import Person from "./person.tsx";
-
-type ClickStream = { send: (event: Record<string, never>) => void };
-
-// The add buttons are bound in the list's own JSX rather than exported, so a
-// test reaches them by walking to the button carrying the label.
-function clickButton(root: unknown, label: string): void {
-  const button = findElementByText(root, "cf-button", label);
-  const onClick = propsOf(button)?.onClick;
-  if (typeof onClick === "object" && onClick !== null && "send" in onClick) {
-    (onClick as ClickStream).send({});
-  }
-}
-
-// A field bound with `oncf-change` is reached the same way a button is: walk
-// to the element and send its stream.
-function sendChange(root: unknown, element: string, detail: unknown): void {
-  const node = findElement(root, element);
-  const onChange = propsOf(node)?.["oncf-change"];
-  if (typeof onChange === "object" && onChange !== null && "send" in onChange) {
-    (onChange as { send: (event: unknown) => void }).send({ detail });
-  }
-}
 
 export default pattern(() => {
   const contactList = new Writable<ContactPiece[]>([]);
@@ -95,6 +73,7 @@ export default pattern(() => {
     giftIdeas: [],
   });
   const member = FamilyMember({ member: memberCell });
+  const memberPiece: ContactPiece = member;
 
   // Person reads through the `Person` interface, which has no `relationship`.
   // This cell stores one anyway, standing in for the every-day case of a
@@ -161,11 +140,13 @@ export default pattern(() => {
   // Editing tags writes one field. Everything the writer cannot see has to
   // still be there afterwards.
   const action_edit_wider_tags = action(() => {
-    sendChange(widerPerson[UI], "cf-tags", { tags: ["colleague"] });
+    fireEvent(findElement(widerPerson[UI], "cf-tags"), "oncf-change", {
+      detail: { tags: ["colleague"] },
+    });
   });
 
   const action_offer_candidate = action(() => {
-    linkCandidates.push(member as ContactPiece);
+    linkCandidates.push(memberPiece);
   });
 
   const action_clear_link = action(() => {

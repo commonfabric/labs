@@ -1,11 +1,10 @@
 /**
- * Test Pattern: the app patterns that had no test of their own
+ * Test Pattern: small app patterns built in an empty space
  *
  * Each of these lives in a directory of its own and is a whole small
  * application: an activity log, an agent console, a router, three chat
  * patterns built on scoped or shared profiles, a voice note, two policy demos,
- * and a regression repro kept to pin down runtime behavior. None of them had a
- * test, so nothing built any of them outside a browser.
+ * and a regression repro kept to pin down runtime behavior.
  *
  * scope-bug-computed-vnode-blank is left out. It is a harness whose enabled
  * section exists to produce a runtime error on purpose, so a passing test

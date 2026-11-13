@@ -191,6 +191,10 @@ Reading a single node:
 - `styleOf(node, key)` — one resolved entry of the node's `style` prop.
 - `viewShows(root, present, absent)` — whether the subtree's text contains
   every string in `present` and none in `absent`, read in one walk.
+- `pickerLabels(picker)` — the labels of the `items` a picker such as
+  `cf-autocomplete` offers, in order.
+- `inOrder(text, parts)` — whether `parts` appear in `text` in that order, each
+  one starting after the end of the one before it.
 
 Searching for a node:
 
@@ -207,6 +211,41 @@ Searching for a node:
 - `findElementByText(root, name, expected)` and
   `findElementByExactText(root, name, expected)` — the same search narrowed to
   a tag name.
+- `findNodes(root, predicate)` and `findElements(root, name)` — every node the
+  predicate accepts, or every element with that tag name, in document order.
+- `countElements(root, name)` — how many elements with that tag name the
+  subtree holds, nested ones included.
+- `innermostNode(root, accept)` — the first node `accept` admits that has no
+  admitted node inside it, such as the row itself rather than every container
+  that also carries its text.
+- `isButton(label)` — a predicate for a clickable node whose whole text is
+  `label`.
+- `rowWith(root, text, label)` — the row that shows `text` and holds a button
+  labeled `label`: the innermost node holding both.
+  `buttonInRow(root, text, label)` is that button.
+
+Pressing a control:
+
+- `fireEvent(node, prop, event)` and `fireClick(node)` — send an event to the
+  handler a node binds, as described under
+  [Firing a handler the pattern does not export](#firing-a-handler-the-pattern-does-not-export).
+- `clickButton(root, label)` — clicks the first button whose whole text is
+  `label`.
+- `sendMessage(root, message)` — sends `message` from the view's
+  `cf-message-input`, as a person pressing send does.
+- `clickInRow(root, text, label)` — clicks the button `buttonInRow` finds.
+
+Typing into a control:
+
+- `setBound(node, prop, value)` — writes `value` through the cell the node
+  binds under `prop`, such as `$value`, `$checked` or `$result`, as the control
+  does when the user types or picks in it. It works in an `action` and in a
+  handler that receives the view as a `Cell<VNode>`, and fails when the node is
+  missing or binds no cell under `prop`.
+- `typeInto(root, placeholder, value)` — the `$value` case, for the input with
+  that placeholder.
+- `answerOwnerCheck(root, isOwner)` — answers a `cf-owner-view` the way the
+  shell does, through its `$result`.
 
 ## Writing Actions
 

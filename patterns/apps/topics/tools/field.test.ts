@@ -209,6 +209,122 @@ describe("field", () => {
       expect(field.text).toBe("one two th_ree");
     });
 
+    it("moves by words with Alt, and by characters with Control-B and Control-F", () => {
+      const moves = [
+        ["\x1bb", "one _two"], // Alt-B
+        ["\x1b[1;3D", "one _two"], // Alt-Left
+        ["\x01\x1bf", "one_ two"], // Home, Alt-F
+        ["\x01\x1b[1;3C", "one_ two"], // Home, Alt-Right
+        ["\x02\x02", "one t_wo"], // Control-B twice
+        ["\x01\x06", "o_ne two"], // Home, Control-F
+      ];
+
+      expect(moves.map(([keys]) => {
+        const field = new Field("one two");
+        type(field, `${keys}_`);
+        return field.text;
+      })).toEqual(moves.map(([, text]) => text));
+    });
+
+    it("moves to the end of the line with End or Control-E, and of the text with Control-End", () => {
+      const field = new Field("ab\ncd", true);
+      type(field, "\x1b[1;5H\x1b[F1"); // Control-Home, End
+      type(field, "\x01\x052"); // Control-A, Control-E
+      type(field, "\x1b[1;5F3"); // Control-End
+
+      expect(field.text).toBe("ab12\ncd3");
+    });
+
+    it("moves by rows with Control-P and Control-N, and ten rows at a time with Page Up and Page Down", () => {
+      const lines = Array.from({ length: 25 }, (_, n) => `l${n}`);
+      const field = new Field(lines.join("\n"), true);
+      type(field, "\x1b[5~^"); // Page Up
+      type(field, "\x1b[6~v"); // Page Down
+      type(field, "\x10p"); // Control-P
+      type(field, "\x0en"); // Control-N
+
+      expect(field.text.split("\n").filter((_, n) => [14, 23, 24].includes(n)))
+        .toEqual(["l14^", "l23p", "l24vn"]);
+    });
+
+    it("leaves the keys that move by rows to the caller in a field of one line", () => {
+      const field = new Field("ab");
+      const keys = decodeKeys(
+        new TextEncoder().encode("\x1b[A\x1b[B\x10\x0e\x1b[5~\x1b[6~"),
+      ).keys;
+
+      expect(keys.map((key) => field.key(key))).toEqual(
+        keys.map(() => false),
+      );
+      type(field, "_");
+      expect(field.text).toBe("ab_");
+    });
+
+    it("moves right across a line break onto the next line", () => {
+      const field = new Field("ab\ncd", true);
+      type(field, "\x1b[1;5H\x1b[F\x1b[C_"); // Control-Home, End, Right
+
+      expect(field.text).toBe("ab\n_cd");
+    });
+
+    it("kills the word before the cursor with Alt-Backspace or Control-W, the word after with Alt-D, and the line before with Control-U", () => {
+      const kills = [
+        ["\x1b\x7f", "one "], // Alt-Backspace
+        ["\x17", "one "], // Control-W
+        ["\x01\x1bd", " two"], // Home, Alt-D
+        ["\x1b[D\x1b[D\x15", "wo"], // two lefts, Control-U
+      ];
+
+      expect(kills.map(([keys]) => {
+        const field = new Field("one two");
+        type(field, keys);
+        return field.text;
+      })).toEqual(kills.map(([, text]) => text));
+    });
+
+    it("leaves a key it has no use for to the caller", () => {
+      const field = new Field("ab");
+      const tab = decodeKeys(new TextEncoder().encode("\t")).keys[0];
+
+      expect(field.key(tab)).toBe(false);
+      expect(field.text).toBe("ab");
+    });
+
+    it("scrolls a field of many lines to keep the cursor in view, up as well as down", () => {
+      const field = new Field("a\nb\nc\nd\ne", true);
+
+      expect(shown(field, 4, 2)).toEqual(["d", "e|"]);
+
+      type(field, "\x1b[1;5H"); // Control-Home
+
+      expect(shown(field, 4, 2)).toEqual(["|a", "b"]);
+    });
+
+    it("keeps the latest 200 undo steps, and undoes nothing once they are spent", () => {
+      const field = new Field("");
+      for (let n = 1; n <= 201; n++) field.text = `${n}`;
+      type(field, "\x1a".repeat(200));
+
+      expect(field.text).toBe("1");
+
+      type(field, "\x1a");
+
+      expect(field.text).toBe("1");
+    });
+
+    it("places the cursor where a click falls in a field of one line scrolled sideways", () => {
+      const field = new Field("abcdefghij");
+      shown(field, 5);
+      field.place(1, 0);
+      type(field, "_");
+
+      expect(field.text).toBe("abcdefg_hij");
+    });
+
+    it("draws blank rows below the text of a field of many lines", () => {
+      expect(shown(new Field("ab", true), 4, 3)).toEqual(["ab|", "", ""]);
+    });
+
     it("draws a character a terminal would act on as a glyph", () => {
       const field = new Field("a\u0007b");
 
