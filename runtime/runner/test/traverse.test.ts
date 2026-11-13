@@ -8,6 +8,7 @@ import { dataUriFromValue } from "@commonfabric/data-model/codec-data-uri";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import {
   internPathSelector,
+  internSchema,
   isInternedSchema,
 } from "@commonfabric/data-model-schema";
 import type {
@@ -19,6 +20,10 @@ import type {
 import { maxOf } from "@commonfabric/collections/math";
 
 import type { JSONSchema } from "../src/builder/types.ts";
+import {
+  acquireSchemaRegistryLease,
+  registerSchemaDocument,
+} from "../src/schema-registry.ts";
 import { LINK_V1_TAG } from "../src/sigil-types.ts";
 import { ExtendedStorageTransaction } from "../src/storage/extended-storage-transaction.ts";
 import { StoreObjectManager } from "../src/storage/query.ts";
@@ -31,6 +36,7 @@ import {
   createTraversalContext,
   getAtPath,
   IMemorySpaceValueAttestation,
+  isOpaquePosition,
   ManagedStorageTransaction,
   MapSet,
   MapSetStringToPathSelectors,
@@ -4691,4 +4697,109 @@ describe("schemaAcceptsType()", () => {
       anyOf: [{ $ref: "#/$defs/Name", $defs: { Name: { type: "string" } } }],
     }, "string")).toBe(true);
   });
+
+  it("answers each value type of one interned schema for itself", () => {
+    const schema = internSchema({
+      anyOf: [{ type: "string" }, { type: "null" }],
+      title: "one verdict per value type",
+    });
+
+    expect(schemaAcceptsType(schema, "string")).toBe(true);
+    expect(schemaAcceptsType(schema, "number")).toBe(false);
+    expect(schemaAcceptsType(schema, "string")).toBe(true);
+    expect(schemaAcceptsType(schema, "number")).toBe(false);
+  });
+
+  it("returns `true` once the document a `$ref` names arrives after a first ask", () => {
+    const leaf = { type: "string", title: "a late type verdict" } as const;
+    const hash = internSchema(leaf, true).taggedHashString;
+    const schema = internSchema({ $ref: `cid:${hash}` });
+    const release = acquireSchemaRegistryLease();
+
+    // The first ask resolves nothing, so it must not be remembered.
+    expect(schemaAcceptsType(schema, "string")).toBe(false);
+    registerSchemaDocument(hash, leaf);
+    expect(schemaAcceptsType(schema, "string")).toBe(true);
+    release();
+  });
+
+  it("returns `false` once the registry clears the document a remembered answer read", () => {
+    const leaf = { type: "string", title: "a cleared type verdict" } as const;
+    const hash = internSchema(leaf, true).taggedHashString;
+    const schema = internSchema({ $ref: `cid:${hash}` });
+    const release = acquireSchemaRegistryLease();
+    registerSchemaDocument(hash, leaf);
+    expect(schemaAcceptsType(schema, "string")).toBe(true);
+
+    // The last lease out clears the registry, and with it the document.
+    release();
+
+    expect(schemaAcceptsType(schema, "string")).toBe(false);
+  });
+});
+
+describe("isOpaquePosition()", () => {
+  // A position is opaque when `unknown` decides it: nothing in the
+  // declaration asks for the value.
+
+  it("returns `true` for an `allOf` whose only branch is `unknown`", () => {
+    expect(isOpaquePosition({ allOf: [{ type: "unknown" }] }, "object")).toBe(
+      true,
+    );
+  });
+
+  it("returns `false` for an `allOf` where a concrete type sits beside `unknown`", () => {
+    expect(
+      isOpaquePosition(
+        { allOf: [{ type: "unknown" }, { type: "object" }] },
+        "object",
+      ),
+    ).toBe(false);
+  });
+
+  it("returns `true` for an `anyOf` whose only branch is `unknown`", () => {
+    expect(isOpaquePosition({ anyOf: [{ type: "unknown" }] }, "object")).toBe(
+      true,
+    );
+  });
+
+  it("returns `false` for an `anyOf` where a `true` branch sits beside `unknown`", () => {
+    expect(isOpaquePosition({ anyOf: [{ type: "unknown" }, true] }, "object"))
+      .toBe(false);
+  });
+
+  it("throws for a `type` that is neither a string nor a list", () => {
+    // A schema read out of stored data is not held to the type.
+    const schema = JSON.parse('{ "type": 5 }');
+    expect(() => isOpaquePosition(schema, "number")).toThrow(
+      "Invalid schema type",
+    );
+  });
+});
+
+describe("MapSet keys() and deleteValue()", () => {
+  for (
+    const [mode, newMapSet] of [
+      ["reference-equality", () => new MapSet<string, string>()],
+      ["hash-dedup", () => new MapSet<string, string>((value) => value)],
+    ] as const
+  ) {
+    describe(`in the ${mode} mode`, () => {
+      it("iterates each key once", () => {
+        const mapSet = newMapSet();
+        mapSet.add("a", "one");
+        mapSet.add("a", "two");
+        mapSet.add("b", "three");
+        expect([...mapSet.keys()]).toEqual(["a", "b"]);
+      });
+
+      it("returns `false` from `deleteValue()` for a key it does not hold", () => {
+        const mapSet = newMapSet();
+        mapSet.add("a", "one");
+        expect(mapSet.deleteValue("absent", "one")).toBe(false);
+        expect(mapSet.deleteValue("a", "one")).toBe(true);
+        expect([...mapSet.keys()]).toEqual([]);
+      });
+    });
+  }
 });

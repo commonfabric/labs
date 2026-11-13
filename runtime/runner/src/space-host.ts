@@ -149,12 +149,10 @@ export const readHttpOrigin = (
   subject: string,
 ): { origin: URL } | { refused: string } => {
   if (typeof value !== "string") return { refused: "expected a string" };
-  try {
-    return { origin: parseOrigin(value, originRuleMessages(subject)) };
-  } catch (error) {
-    if (!(error instanceof SpaceHostValidationError)) throw error;
-    return { refused: error.message };
-  }
+  const checked = checkOrigin(value, originRuleMessages(subject));
+  return typeof checked === "string"
+    ? { refused: checked }
+    : { origin: checked };
 };
 
 /** Parses `host` as an HTTP or HTTPS origin, refusing with `messages`. */
@@ -162,33 +160,41 @@ const parseOrigin = (
   host: string | URL,
   messages: OriginRuleMessages,
 ): URL => {
+  const checked = checkOrigin(host, messages);
+  if (typeof checked === "string") {
+    throw new SpaceHostValidationError(checked);
+  }
+  return checked;
+};
+
+/**
+ * Helper for {@link parseOrigin} and {@link readHttpOrigin}, which returns
+ * `host` as an HTTP or HTTPS origin, or the one of `messages` that says why it
+ * is not one.
+ */
+const checkOrigin = (
+  host: string | URL,
+  messages: OriginRuleMessages,
+): URL | string => {
   const source = typeof host === "string" ? host.trim() : host.href;
   let parsed: URL;
   try {
     parsed = new URL(source);
-  } catch (cause) {
-    if (!(cause instanceof TypeError)) throw cause;
-    throw new SpaceHostValidationError(messages.invalid);
+  } catch {
+    return messages.invalid;
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    throw new SpaceHostValidationError(messages.protocol);
+    return messages.protocol;
   }
   if (parsed.username !== "" || parsed.password !== "") {
-    throw new SpaceHostValidationError(messages.credentials);
+    return messages.credentials;
   }
-  if (parsed.pathname !== "/") {
-    throw new SpaceHostValidationError(messages.path);
-  }
-  if (parsed.search !== "") {
-    throw new SpaceHostValidationError(messages.query);
-  }
-  if (parsed.hash !== "") {
-    throw new SpaceHostValidationError(messages.fragment);
-  }
+  if (parsed.pathname !== "/") return messages.path;
+  if (parsed.search !== "") return messages.query;
+  if (parsed.hash !== "") return messages.fragment;
   if (!/^https?:\/\/[^/?#\\@\s]+\/?$/i.test(source)) {
-    throw new SpaceHostValidationError(messages.origin);
+    return messages.origin;
   }
-
   return parsed;
 };
 
@@ -244,8 +250,7 @@ const tryParseUrl = (value: string | URL): URL | undefined => {
   if (typeof value !== "string") return value;
   try {
     return new URL(value.trim());
-  } catch (cause) {
-    if (!(cause instanceof TypeError)) throw cause;
+  } catch {
     return undefined;
   }
 };

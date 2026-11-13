@@ -21,7 +21,6 @@ import {
 } from "../cfc/types.ts";
 import type { Runtime } from "../runtime.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
-import { getTransactionReadActivities } from "../storage/transaction-inspection.ts";
 
 /** Where an event's entry sits: its stream's entries document, and its index. */
 export interface ProcessedClaimEntry {
@@ -99,50 +98,45 @@ export const writeWithheldOutcome = (
 /**
  * Whether the outcome of the served event-handler run `tx`, whose event's
  * stream lives in `space`, is withheld: whether its join carries a clause the
- * stream's space doesn't admit (`processedClaimJoinIsForeign()`). A run whose
- * transaction has already ended, as one the handler aborted has, no longer
- * holds the label observations its join is derived from; it is taken as
- * foreign when it read any document of another space, which withholds more
- * rather than less.
+ * stream's space doesn't admit (`processedClaimJoinIsForeign()`). The join is
+ * derived from the label observations the transaction holds, so the decision
+ * is made while it holds them: before the commit, before the serving loop
+ * aborts a failed run, and, for a handler that aborts its own transaction,
+ * in the callback `runBeforeAbort()` runs first. A transaction that has ended
+ * undecided no longer holds them, and its outcome is withheld, as it is
+ * where the join cannot be derived.
  */
 export const runOutcomeIsWithheld = (
   tx: IExtendedStorageTransaction,
   space: MemorySpace,
 ): boolean => {
-  if (tx.status().status === "ready") {
-    try {
-      return processedClaimJoinIsForeign(tx, space);
-    } catch {
-      // Fall through to what the run's reads say.
-    }
-  }
+  if (tx.status().status !== "ready") return true;
   try {
-    for (const read of getTransactionReadActivities(tx)) {
-      if (read.space !== space) return true;
-    }
-    return false;
+    return processedClaimJoinIsForeign(tx, space);
   } catch {
     return true;
   }
 };
 
 /**
- * Decides, for the served event-handler run `tx` whose event's stream lives in
- * `space`, whether its processed claim withholds the outcome: whether the
- * run's join carries a clause the stream's space doesn't admit
- * (`runOutcomeIsWithheld()`). When it does, a run delivered from its
- * event's durable entry (`entry`) records `withheld` on that entry beside the
- * mark, in its own transaction, and a run the wave delivers beside its event's
- * append is noted for the wave to record it (`waveClaimIsWithheld()`). Returns
- * the decision, which a failure arm reports the same way.
+ * Records, for the served event-handler run `tx` whose event's stream lives in
+ * `space`, that its processed claim withholds the outcome, when `withheld`
+ * says it does: whether the run's join carries a clause the stream's space
+ * doesn't admit, decided while the transaction held its observations
+ * (`runOutcomeIsWithheld()`). A run delivered from its event's durable entry
+ * (`entry`) records `withheld` on that entry beside the mark, in its own
+ * transaction, and a run the wave delivers beside its event's append is noted
+ * for the wave to record it (`waveClaimIsWithheld()`). Returns `withheld`,
+ * which a failure arm reports the same way.
  */
 export const withholdProcessedClaimOutcome = (
   runtime: Runtime,
   tx: IExtendedStorageTransaction,
   space: MemorySpace,
   entry: ProcessedClaimEntry | undefined,
+  withheld: boolean,
 ): boolean => {
-  if (!runOutcomeIsWithheld(tx, space)) return false;
+  if (!withheld) return false;
   if (tx.status().status !== "ready") return true;
   if (entry === undefined) {
     withheldWaveClaims.add(tx);

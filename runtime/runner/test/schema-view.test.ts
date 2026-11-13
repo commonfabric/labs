@@ -12,6 +12,7 @@ import { Identity } from "@commonfabric/identity";
 import { internSchema } from "@commonfabric/data-model-schema";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { getLogger } from "@commonfabric/logger";
+import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { Runtime } from "../src/runtime.ts";
 import { isSchemaMismatchError } from "../src/schema-view.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
@@ -20,6 +21,8 @@ import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { toCell } from "../src/back-to-cell.ts";
 import { ensureSchemaDocument } from "../src/cfc/prepare.ts";
 import { hasInlineCellScheme } from "../src/immutable-cell.ts";
+import { isStream } from "../src/cell.ts";
+import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
 
 const signer = await Identity.fromPassphrase("schema-view");
 const space = signer.did();
@@ -694,6 +697,21 @@ describe("schema-view", () => {
       }
     });
 
+    it("lists the keys it was taken over when the reader writes a new one", async () => {
+      const { tx, cell } = await opened("keys-under-write", { title: "t" });
+      try {
+        const value = cell.get() as Record<string, unknown>;
+        cell.withTx(tx).key("xs").set([1] as never);
+        expect(Object.keys(value)).toEqual(["title"]);
+        expect(Object.keys(cell.get() as Record<string, unknown>)).toEqual([
+          "title",
+          "xs",
+        ]);
+      } finally {
+        await tx.commit().settled;
+      }
+    });
+
     it("reads only the paths the reader touched after a write", async () => {
       const { tx, cell } = await opened("lazy-after-write", {
         title: "before",
@@ -914,6 +932,28 @@ describe("schema-view", () => {
         const xs = (lazy.get() as { xs: Record<symbol, unknown> }).xs;
         const cell = (xs[toCell] as () => { get: () => unknown })();
         expect(typeof cell.get).toBe("function");
+      } finally {
+        await lazy.tx.commit().settled;
+      }
+    });
+
+    it("leaves a hole in the array where the stored array has one", async () => {
+      const read = await seeded(
+        "array-hole",
+        // deno-lint-ignore no-sparse-arrays
+        { xs: [1, , 3] },
+        {
+          type: "object",
+          properties: { xs: { type: "array", items: { type: "number" } } },
+        } as const,
+      );
+      const lazy = read(true);
+      try {
+        const xs = (lazy.get() as { xs: number[] }).xs;
+        const doubled = xs.map((n) => n * 2);
+        expect(doubled.length).toBe(3);
+        expect(1 in doubled).toBe(false);
+        expect([doubled[0], doubled[2]]).toEqual([2, 6]);
       } finally {
         await lazy.tx.commit().settled;
       }
@@ -1965,6 +2005,142 @@ describe("schema-view", () => {
         }).toThrow("it is a read");
       } finally {
         await lazy.tx.commit().settled;
+      }
+    });
+
+    it("refuses freezing an object or an array", async () => {
+      const read = await seeded(
+        "no-freeze",
+        { xs: [1] },
+        {
+          type: "object",
+          properties: { xs: { type: "array", items: { type: "number" } } },
+        } as const,
+      );
+      const lazy = read(true);
+      try {
+        const value = lazy.get() as { xs: number[] };
+        expect(() => Object.freeze(value)).toThrow("Cannot freeze or seal");
+        expect(() => Object.freeze(value.xs)).toThrow("Cannot freeze or seal");
+      } finally {
+        await lazy.tx.commit().settled;
+      }
+    });
+  });
+
+  describe("property descriptors", () => {
+    const LIST = {
+      type: "object",
+      properties: {
+        a: { type: "number" },
+        xs: { type: "array", items: { type: "number" } },
+      },
+    } as const;
+
+    it("describes an object view's own keys and no symbol", async () => {
+      const read = await seeded("object-descriptors", { a: 1, xs: [] }, LIST);
+      const lazy = read(true);
+      try {
+        const value = lazy.get() as object;
+        expect(Object.getOwnPropertyDescriptor(value, "a")?.value).toBe(1);
+        expect(Object.getOwnPropertyDescriptor(value, Symbol.iterator))
+          .toBe(undefined);
+      } finally {
+        await lazy.tx.commit().settled;
+      }
+    });
+
+    it("describes an array view's indices and length, and nothing else", async () => {
+      const read = await seeded("array-descriptors", { a: 1, xs: [7] }, LIST);
+      const lazy = read(true);
+      try {
+        const xs = (lazy.get() as { xs: number[] }).xs;
+        expect(Object.getOwnPropertyDescriptor(xs, "0")?.value).toBe(7);
+        expect(Object.getOwnPropertyDescriptor(xs, "length")?.value).toBe(1);
+        expect(Object.getOwnPropertyDescriptor(xs, "1")).toBe(undefined);
+        expect(Object.getOwnPropertyDescriptor(xs, "map")).toBe(undefined);
+        expect(Object.getOwnPropertyDescriptor(xs, Symbol.iterator))
+          .toBe(undefined);
+      } finally {
+        await lazy.tx.commit().settled;
+      }
+    });
+  });
+
+  describe("a stored opaque value", () => {
+    // A `FabricBytes` is a leaf, and it supplies the keys an object schema
+    // requires through its own accessors.
+
+    const blobUnder = async (cause: string, required: string[]) => {
+      const read = await seeded(cause, { blob: new Uint8Array([1, 2]) }, {
+        type: "object",
+        properties: { blob: { type: "object", required } },
+      });
+      const lazy = read(true);
+      try {
+        return (lazy.get() as { blob?: unknown }).blob;
+      } finally {
+        await lazy.tx.commit().settled;
+      }
+    };
+
+    it("reads as the leaf where it has every key the schema requires", async () => {
+      expect(await blobUnder("blob-has-length", ["length"])).toBeInstanceOf(
+        FabricBytes,
+      );
+    });
+
+    it("reads as absent where it lacks a key the schema requires", async () => {
+      expect(await blobUnder("blob-lacks-x", ["x"])).toBe(undefined);
+    });
+  });
+
+  describe("a verb its producer no longer publishes", () => {
+    // The holder links to an empty field of a document carrying `argument`
+    // metadata, which is how a piece's data document reads, so the verb there
+    // is one its producer stopped publishing.
+
+    const holderSchema = (required: boolean): JSONSchema => ({
+      type: "object",
+      properties: { tick: { type: "object", asCell: ["stream"] } },
+      ...(required && { required: ["tick"] }),
+    });
+
+    const readHolder = async (cause: string, required: boolean) => {
+      const write = runtime.edit();
+      const piece = runtime.getCell(space, `${cause}-piece`, undefined, write);
+      piece.set({});
+      piece.setMetaRaw("argument", { from: "test" }, rawMetaWriteAuthorization);
+      runtime.getCell(space, cause, undefined, write).set({
+        tick: piece.key("tick"),
+      });
+      await write.commit().settled;
+
+      const tx = runtime.edit();
+      tx.markLazyMaterialize(true);
+      const value = runtime.getCell(space, cause, holderSchema(required), tx)
+        .get() as Record<string, unknown>;
+      return { tx, value };
+    };
+
+    it("is absent where the schema leaves it optional", async () => {
+      const { tx, value } = await readHolder("withdrawn-optional", false);
+      try {
+        expect(value.tick).toBe(undefined);
+        expect("tick" in value).toBe(false);
+        expect(Object.keys(value)).toEqual([]);
+      } finally {
+        await tx.commit().settled;
+      }
+    });
+
+    it("is still a handle where the schema requires it", async () => {
+      const { tx, value } = await readHolder("withdrawn-required", true);
+      try {
+        expect(isStream(value.tick)).toBe(true);
+        expect("tick" in value).toBe(true);
+      } finally {
+        await tx.commit().settled;
       }
     });
   });

@@ -14,10 +14,7 @@ import {
   tagOfConvertibleJsValueElseNull,
   VALUE_TAGS,
 } from "@commonfabric/data-model";
-import {
-  FabricEpochNsec,
-  FabricRegExp,
-} from "@commonfabric/data-model/fabric-primitives";
+import { FabricEpochNsec } from "@commonfabric/data-model/fabric-primitives";
 
 import { createModuleCompartmentGlobals } from "../src/sandbox/compartment-globals.ts";
 import {
@@ -121,7 +118,7 @@ describe("lockdown-value-classification", () => {
   });
 
   describe("a pattern handler", () => {
-    it("stores the fabric forms of a `Date` and a `RegExp` it writes", async () => {
+    it("stores the fabric form of a `Date` it writes", async () => {
       const storageManager = StorageManager.emulate({ as: signer });
       const runtime = new Runtime({
         apiUrl: new URL(import.meta.url),
@@ -136,16 +133,14 @@ describe("lockdown-value-classification", () => {
             contents: [
               'import { type Cell, handler, pattern } from "commonfabric";',
               "const record = handler(",
-              "  (_: unknown, state: { when: Cell<Date>; match: Cell<RegExp> }) => {",
+              "  (_: unknown, state: { when: Cell<Date> }) => {",
               "    state.when.set(new Date(1000));",
-              "    state.match.set(/a/g);",
               "  },",
               ");",
-              "export default pattern<{ when: Date; match: RegExp }>(",
-              "  ({ when, match }) => ({",
+              "export default pattern<{ when: Date }>(",
+              "  ({ when }) => ({",
               "    when,",
-              "    match,",
-              "    record: record({ when, match }),",
+              "    record: record({ when }),",
               "  }),",
               ");",
             ].join("\n"),
@@ -162,7 +157,7 @@ describe("lockdown-value-classification", () => {
         await runtime.setup(
           undefined,
           main!.default,
-          { when: null, match: null },
+          { when: null },
           resultCell,
         );
         runtime.start(resultCell);
@@ -175,10 +170,6 @@ describe("lockdown-value-classification", () => {
         const when = resultCell.key("when").get();
         expect(when).toBeInstanceOf(FabricEpochNsec);
         expect((when as FabricEpochNsec).value).toBe(1_000_000_000n);
-        const match = resultCell.key("match").get();
-        expect(match).toBeInstanceOf(FabricRegExp);
-        expect((match as FabricRegExp).source).toBe("a");
-        expect((match as FabricRegExp).flags).toBe("g");
       } finally {
         await runtime.dispose();
         await storageManager.close();

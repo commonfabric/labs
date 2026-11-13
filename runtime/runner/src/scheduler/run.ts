@@ -170,12 +170,20 @@ export function invokeReactiveAction(state: {
   }
 }
 
-export function startReactiveActionCommit(state: {
+/**
+ * Prepares `state.tx` for commit, runs `beforeCommit` on the prepared
+ * transaction, and starts the commit. Returns what `beforeCommit` returned
+ * beside the commit's settlement.
+ */
+export function startReactiveActionCommit<T>(state: {
   readonly runtime: Runtime;
   readonly tx: IExtendedStorageTransaction;
-}, options: {
-  readonly beforeCommit?: () => void;
-} = {}): ReturnType<IExtendedStorageTransaction["commit"]>["settled"] {
+}, beforeCommit: () => T): {
+  readonly prepared: T;
+  readonly settled: ReturnType<
+    IExtendedStorageTransaction["commit"]
+  >["settled"];
+} {
   logger.timeStart("scheduler", "run", "commit");
   try {
     state.runtime.prepareTxForCommit(state.tx);
@@ -194,10 +202,10 @@ export function startReactiveActionCommit(state: {
       state.tx.abort(error);
     }
   }
-  options.beforeCommit?.();
-  const commitPromise = state.tx.commit().settled;
+  const prepared = beforeCommit();
+  const settled = state.tx.commit().settled;
   logger.timeEnd("scheduler", "run", "commit");
-  return commitPromise;
+  return { prepared, settled };
 }
 
 export function watchReactiveActionCommit(state: {
@@ -1232,7 +1240,6 @@ function finalizeReactiveActionCommit(
   // reactive functions based on it will be retriggered. But also, the
   // retry logic below will have re-scheduled this action, so
   // topological sorting should move it before the dependencies.
-  let log: ReactivityLog | undefined;
   // Captured at commit kickoff (after prepareTxForCommit populates the CFC
   // outbox, before the async flush clears it): does this commit have
   // asynchronous post-commit work that `settled()` must wait on?
@@ -1281,43 +1288,39 @@ function finalizeReactiveActionCommit(
       );
     }
   }
-  const commitPromise = startReactiveActionCommit({
+  const { prepared: log, settled: commitPromise } = startReactiveActionCommit({
     runtime: state.runtime,
     tx: args.tx,
-  }, {
-    beforeCommit: () => {
-      log = txToReactivityLog(args.tx);
-      if (validateLocalReadBasisForCommit(args.tx) !== undefined) return;
-      warnOnWriteSurfaceViolations(state, args, log);
-      echoRun = state.captureRemoteEcho(args.tx, log, args.invalidCauses);
-      hasPostCommitEffects = args.tx.hasPendingPostCommitEffects();
-      if (args.fanOutRun !== undefined) {
-        // The DISCOVERY half of stage B's ratchet (design §B3): the run's
-        // narrowest read scope — the transaction's ratchet, complete once
-        // the body and its result write ran (the write path's diff-base
-        // read at the narrower instance and identity consumption ratchet
-        // it too) — is what this node has LEARNED. Read here, at commit
-        // kickoff, before the asynchronous seal: a seal the wave refuses
-        // still leaves the lesson (the retry runs at the moved ratchet).
-        // The run's key at the (possibly moved) ratchet is marked clean
-        // — unless a cause dirtied its stamped key while it ran — and
-        // keeps this committed log for the union subscription (B7).
-        fanOutRunFinished(args.fanOutRun.state, args.fanOutRun.instance, {
-          discovered: normalizeCellScope(args.tx.getNarrowestReadScope()),
-          startGen: args.fanOutRun.startGen,
-          log,
-        });
-      }
-    },
+  }, () => {
+    const log = txToReactivityLog(args.tx);
+    if (validateLocalReadBasisForCommit(args.tx) !== undefined) return log;
+    warnOnWriteSurfaceViolations(state, args, log);
+    echoRun = state.captureRemoteEcho(args.tx, log, args.invalidCauses);
+    hasPostCommitEffects = args.tx.hasPendingPostCommitEffects();
+    if (args.fanOutRun !== undefined) {
+      // The DISCOVERY half of stage B's ratchet (design §B3): the run's
+      // narrowest read scope — the transaction's ratchet, complete once
+      // the body and its result write ran (the write path's diff-base
+      // read at the narrower instance and identity consumption ratchet
+      // it too) — is what this node has LEARNED. Read here, at commit
+      // kickoff, before the asynchronous seal: a seal the wave refuses
+      // still leaves the lesson (the retry runs at the moved ratchet).
+      // The run's key at the (possibly moved) ratchet is marked clean
+      // — unless a cause dirtied its stamped key while it ran — and
+      // keeps this committed log for the union subscription (B7).
+      fanOutRunFinished(args.fanOutRun.state, args.fanOutRun.instance, {
+        discovered: normalizeCellScope(args.tx.getNarrowestReadScope()),
+        startGen: args.fanOutRun.startGen,
+        log,
+      });
+    }
+    return log;
   });
   // The commit's own validations stood on the one just before it. A commit
   // that handed nothing over can still have changed what that one proved,
   // through its commit callbacks for one, so the check below makes its own.
   endLocalReadValidationStretch();
   if (parkUnavailableRun(state, args)) return;
-  if (!log) {
-    throw new Error("scheduler action commit did not build a reactivity log");
-  }
   // Track the effect layer as in-flight async builtin work so
   // `runtime.settled()` waits for the post-commit outbox flush (the sqlite
   // query RPC + writeback; also the barrier that guarantees a
@@ -1505,7 +1508,8 @@ function finalizeReactiveActionCommit(
                 fanOutRun.instance.key,
             ) === instanceRecord;
     };
-    const superseded = outcome.error?.supersededOutputs;
+    const superseded = outcome.error?.supersededOutputs ??
+      outcome.ok?.supersededOutputs;
     let owed: boolean | Promise<boolean> =
       outcome.error?.readDependencyWithdrawn === true &&
       outcome.error?.waveWithdrawalCause === "contribution-dropped";

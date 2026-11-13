@@ -101,21 +101,20 @@ type Located = { readonly schema: JSONSchema; readonly root: JSONSchema };
 
 // The node a schema position stands for, with every reference on the way
 // followed, or `undefined` when a reference does not resolve.
+// `resolveSchemaRefs()` follows a chain of references to its end, so what it
+// returns holds no `$ref` of its own.
 const resolveLocated = (at: Located): Located | undefined => {
-  let { schema, root } = at;
-  const seen = new Set<unknown>();
-  while (isObjectNotArray(schema) && typeof schema.$ref === "string") {
-    if (seen.has(schema)) return undefined;
-    seen.add(schema);
-    const resolved = ContextualFlowControl.resolveSchemaRefs(schema, root);
-    if (resolved === undefined) return undefined;
-    root = cfcSchemaResolvedRoot(
+  const { schema, root } = at;
+  if (!isObjectNotArray(schema) || typeof schema.$ref !== "string") return at;
+  const resolved = ContextualFlowControl.resolveSchemaRefs(schema, root);
+  if (resolved === undefined) return undefined;
+  return {
+    schema: resolved,
+    root: cfcSchemaResolvedRoot(
       resolved,
       resolveCfcSchemaRefRoot(schema, root),
-    );
-    schema = resolved;
-  }
-  return { schema, root };
+    ),
+  };
 };
 
 const EMPTY: Located = { schema: {}, root: {} };

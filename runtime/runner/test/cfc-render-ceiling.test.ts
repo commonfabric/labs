@@ -145,6 +145,7 @@ const providerGranting = (
   grantedSpaces: readonly string[],
 ): SpaceMembershipProvider => ({
   readerRole: (space) => grantedSpaces.includes(space) ? "reader" : null,
+  load: () => Promise.resolve(),
   subscribe: () => () => {},
 });
 
@@ -219,6 +220,7 @@ describe("CFC render resolver — per-label membership discovery (§4.9.3)", () 
         consulted.push(space);
         return null;
       },
+      load: () => Promise.resolve(),
       subscribe: () => () => {},
     };
     const resolve = createRenderConfidentialityResolver({
@@ -239,6 +241,7 @@ describe("CFC render resolver — per-label membership discovery (§4.9.3)", () 
         consulted.push(space);
         return space === SPACE_TEAM ? "reader" : null;
       },
+      load: () => Promise.resolve(),
       subscribe: () => () => {},
     };
     const resolve = createRenderConfidentialityResolver({
@@ -379,6 +382,7 @@ describe("CFC render resolver — module policies at the display boundary", () =
           consulted.push(space);
           return space === SPACE_TEAM ? "reader" : null;
         },
+        load: () => Promise.resolve(),
         subscribe: () => () => {},
       },
       modulePolicyResolver: () => releaseManifest,
@@ -482,6 +486,7 @@ describe("CFC render resolver — the direct-release PolicyOf rule", () => {
           consulted.push(space);
           return space === SPACE_TEAM ? "reader" : null;
         },
+        load: () => Promise.resolve(),
         subscribe: () => () => {},
       },
       modulePolicyResolver: () => directReleaseManifest,
@@ -608,6 +613,7 @@ describe("CFC render resolver — the direct-release PolicyOf rule", () => {
           consulted.push(space);
           return space === SPACE_TEAM ? "reader" : null;
         },
+        load: () => Promise.resolve(),
         subscribe: () => () => {},
       },
       modulePolicyResolver: () => directReleaseManifest,
@@ -663,6 +669,7 @@ describe("CFC render resolver — spaces a module rule adds", () => {
           consulted.push(space);
           return space === SPACE_TEAM ? "reader" : null;
         },
+        load: () => Promise.resolve(),
         subscribe: () => () => {},
       },
       modulePolicyResolver: () => addsTeam,

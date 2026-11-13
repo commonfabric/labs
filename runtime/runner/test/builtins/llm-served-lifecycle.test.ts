@@ -4,275 +4,17 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
-import { LLMClient, type LLMResponse } from "@commonfabric/llm";
-import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
 
-import { generateObject, generateText, llm } from "../../src/builtins/llm.ts";
-import type { Cell } from "../../src/cell.ts";
-import {
-  stampWaveRunContext,
-  WaveAccumulator,
-  waveSettlementOf,
-} from "../../src/executor/wave.ts";
-import { Runtime } from "../../src/runtime.ts";
-import { StorageManager } from "../../src/storage/cache.deno.ts";
 import type { IExtendedStorageTransaction } from "../../src/storage/interface.ts";
-
-/** Output fields shared by the three LLM builtins. */
-type Result = {
-  /** Whether the model response remains pending. */
-  pending: boolean;
-
-  /** Completed model output. */
-  result?: unknown;
-
-  /** Terminal model or dispatch failure. */
-  error?: string;
-
-  /** Selected or completed request. */
-  requestHash?: string;
-};
-
-const identity = await Identity.fromPassphrase("llm lifecycle unit");
-const builtins = { llm, generateText, generateObject };
-
-/** Builds a real transaction fixture with a model response held by the test. */
-async function fixture(
-  name: keyof typeof builtins,
-  served = true,
-  bindingScope: "space" | "user" = "space",
-  writeParent = true,
-) {
-  const storage = StorageManager.emulate({ as: identity });
-  const runtime = new Runtime({
-    apiUrl: new URL(import.meta.url),
-    storageManager: storage,
-    experimental: { serverExecution: served },
-    servingPosture: served,
-    cfcFlowLabels: "off",
-  });
-  const input = runtime.getCell<any>(
-    identity.did(),
-    "lifecycle-input",
-  );
-  const parent = runtime.getCell(
-    identity.did(),
-    "lifecycle-parent",
-    undefined,
-    undefined,
-    bindingScope,
-  );
-  const announcements: Array<ScopeKeyIdentity | undefined> = [];
-  let output: Cell<Result>;
-  const instanceMaps = new Set<Map<unknown, unknown>>();
-  const mapSet = Map.prototype.set;
-  const send = LLMClient.prototype.sendRequest;
-  const object = LLMClient.prototype.generateObject;
-  try {
-    await input.sync();
-    Map.prototype.set = function (key, value) {
-      if (
-        value && typeof value === "object" &&
-        Object.hasOwn(value, "currentRun") &&
-        Object.hasOwn(value, "lastRequestQueued")
-      ) {
-        instanceMaps.add(this);
-      }
-      return mapSet.call(this, key, value);
-    };
-    const { action } = builtins[name](
-      input,
-      (tx, result) => {
-        announcements.push(tx.tx.scopeKeyIdentity);
-        output = result;
-        if (writeParent) {
-          parent.withTx(tx).set({ announced: true, output: result });
-        }
-      },
-      () => {},
-      "lifecycle",
-      parent,
-      runtime,
-      parent.key("output").getAsNormalizedFullLink(),
-      undefined,
-      parent.key("output").getAsNormalizedFullLink(),
-    );
-    const requests: Array<
-      ReturnType<typeof Promise.withResolvers<LLMResponse>>
-    > = [];
-    const works: Promise<unknown>[] = [];
-    let changed = Promise.withResolvers<void>();
-    LLMClient.prototype.sendRequest = () => {
-      const response = Promise.withResolvers<LLMResponse>();
-      requests.push(response);
-      changed.resolve();
-      changed = Promise.withResolvers<void>();
-      return response.promise;
-    };
-    LLMClient.prototype.generateObject = async () => {
-      const response = Promise.withResolvers<LLMResponse>();
-      requests.push(response);
-      changed.resolve();
-      changed = Promise.withResolvers<void>();
-      const result = await response.promise;
-      return { object: { answer: result.content }, id: "response" };
-    };
-    runtime.asyncWorkObserver = (work) => works.push(work);
-
-    /** Stages the builtin's request in the selected transaction. */
-    const stage = (
-      tx: IExtendedStorageTransaction,
-      prompt: unknown,
-      messages = false,
-      queue?: string,
-    ) => {
-      input.withTx(tx).set(
-        {
-          ...(name === "llm"
-            ? {
-              messages: messages ? prompt : [{ role: "user", content: prompt }],
-            }
-            : name === "generateObject"
-            ? { prompt, schema: { type: "object" } }
-            : { prompt }),
-          ...(queue ? { queue } : {}),
-        },
-      );
-      action(tx);
-    };
-
-    /** Commits a request and waits for its post-commit dispatch boundary. */
-    const run = async (
-      prompt: unknown,
-      as?: ScopeKeyIdentity,
-      messages = false,
-    ) => {
-      const tx = runtime.edit();
-      if (as) tx.tx.scopeKeyIdentity = as;
-      stage(tx, prompt, messages);
-      expect((await tx.commit().settled).error).toBeUndefined();
-      await tx.postCommitEffectsSettled();
-      await runtime.idle();
-    };
-
-    const wave = new WaveAccumulator({
-      space: identity.did(),
-      basisSeq: 0,
-      scopeKeyIdentity: runtime.scopeKeyIdentity,
-      replicaFor: (space) => storage.open(space).replica,
-    });
-    const deferred: Array<() => void> = [];
-    const refusals: Array<() => void> = [];
-
-    return {
-      runtime,
-      requests,
-      announcements,
-      works,
-      run,
-      async clear() {
-        const tx = runtime.edit();
-        input.withTx(tx).set(
-          name === "llm"
-            ? { messages: [] }
-            : { prompt: "", schema: { type: "object" } },
-        );
-        action(tx);
-        expect((await tx.commit().settled).error).toBeUndefined();
-        await tx.postCommitEffectsSettled();
-        await runtime.idle();
-      },
-      stage,
-      parent,
-      wave,
-      deferred,
-      refusals,
-      async issued(count: number) {
-        while (requests.length < count) await changed.promise;
-      },
-      get instanceCount() {
-        return [...instanceMaps].reduce((sum, map) => sum + map.size, 0);
-      },
-      get bindingCount() {
-        return [...instanceMaps].flatMap((map) => [...map.values()]).reduce(
-          (sum: number, state) =>
-            sum + (state as { staging: Map<unknown, unknown> }).staging.size,
-          0,
-        );
-      },
-      get output() {
-        return output;
-      },
-      async seal(prompt: unknown) {
-        runtime.installSealDestination({
-          seal: (tx) => wave.seal(tx),
-          deferSealedEffects: (tx, effects) => {
-            for (const effect of effects) {
-              deferred.push(() => effect.flush(tx));
-              refusals.push(() =>
-                effect.abandon?.({
-                  name: "StorageTransactionAborted",
-                  message: "Withdrawn request refused",
-                  reason: "Withdrawn request refused",
-                })
-              );
-            }
-            return true;
-          },
-        });
-        const tx = runtime.edit();
-        stampWaveRunContext(tx, { actionId: "held-llm", kind: "derivation" });
-        stage(tx, prompt);
-        expect((await tx.commit().settled).error).toBeUndefined();
-        runtime.clearSealDestination();
-        expect(waveSettlementOf(tx)).toBeDefined();
-        return { settlement: waveSettlementOf(tx)! };
-      },
-      release(text = "A-result") {
-        requests.at(-1)!.resolve({
-          role: "assistant",
-          content: text,
-          id: "response",
-        });
-      },
-      async close() {
-        runtime.clearSealDestination();
-        wave.abandon("Fixture complete");
-        await wave.settled();
-        for (const request of requests) {
-          request.resolve({
-            role: "assistant",
-            content: "cleanup",
-            id: "cleanup",
-          });
-        }
-        try {
-          await runtime.settled();
-          await runtime.dispose().catch(async (error) => {
-            await storage.close();
-            throw error;
-          });
-        } finally {
-          Map.prototype.set = mapSet;
-          LLMClient.prototype.sendRequest = send;
-          LLMClient.prototype.generateObject = object;
-        }
-      },
-    };
-  } catch (error) {
-    Map.prototype.set = mapSet;
-    LLMClient.prototype.sendRequest = send;
-    LLMClient.prototype.generateObject = object;
-    await runtime.dispose().catch(async (error) => {
-      await storage.close();
-      throw error;
-    });
-    throw error;
-  }
-}
+import { createTransactionCommitReceipt } from "../../src/storage/commit-receipt.ts";
+import {
+  llmBuiltinFixture as fixture,
+  llmBuiltinNames,
+  llmFixtureIdentity as identity,
+} from "../support/llm-builtin-fixture.ts";
 
 describe("llm-served-lifecycle", () => {
-  for (const name of Object.keys(builtins) as Array<keyof typeof builtins>) {
+  for (const name of llmBuiltinNames) {
     for (const completed of [false, true]) {
       it(`announces ${name} for an actor sharing another actor's ${completed ? "completed" : "pending"} result`, async () => {
         // The publication callback records its identity without storing two
@@ -987,6 +729,68 @@ describe("llm-served-lifecycle", () => {
             : "A-result",
         });
       } finally {
+        await f.close();
+      }
+    });
+
+    it(`records no ${name} request hash when its refused request's ending is itself rejected`, async () => {
+      // A served request's ending is written in two transactions: the ending,
+      // then the request hash. When the ending's commit is rejected, the hash
+      // must not land on its own, since a node that holds the hash takes the
+      // request as answered and shows no error.
+
+      const f = await fixture(name);
+      const refusal = {
+        name: "StorageTransactionAborted",
+        message: "Staged request refused",
+        reason: "Staged request refused",
+      } as const;
+      const rejection = {
+        name: "AuthorizationError",
+        message: "the ending's write was refused",
+      };
+      const settle = f.runtime.editWithRetry.bind(f.runtime);
+      const edit = f.runtime.edit.bind(f.runtime);
+      let endings = 0;
+      let refuseNext = false;
+      f.runtime.editWithRetry = ((...args: Parameters<typeof settle>) => {
+        endings += 1;
+        refuseNext = endings === 1;
+        return settle(...args);
+      }) as typeof settle;
+      f.runtime.edit = ((...args: Parameters<typeof edit>) => {
+        const opened = edit(...args);
+        if (refuseNext) {
+          refuseNext = false;
+          opened.commit = (() => {
+            opened.abort(rejection);
+            return createTransactionCommitReceipt(
+              Promise.resolve({ error: rejection }),
+            );
+          }) as typeof opened.commit;
+        }
+        return opened;
+      }) as typeof edit;
+      const originalError = console.error;
+      const reported: string[] = [];
+      console.error = (...args: unknown[]) => {
+        reported.push(args.map(String).join(" "));
+      };
+      const tx = f.runtime.edit();
+      try {
+        f.stage(tx, "refused prompt");
+        tx.abort(refusal);
+        tx.abandonStagedWork(refusal);
+        await f.runtime.settled();
+
+        expect(endings).toBe(1);
+        expect(reported.some((line) => line.includes("was rejected")))
+          .toBe(true);
+        expect(f.output.key("requestHash").get()).toBeUndefined();
+      } finally {
+        console.error = originalError;
+        f.runtime.editWithRetry = settle;
+        f.runtime.edit = edit;
         await f.close();
       }
     });

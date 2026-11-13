@@ -17,10 +17,11 @@ import {
 } from "../../v2/engine.ts";
 
 describe("engine", () => {
-  // Each read resolves its branch's row before it reads the document, and the
-  // engine keeps those rows between reads. These cases pin what a read
-  // returns and throws as the `branch` table changes under it, and how many
-  // statements a read of a known branch costs.
+  // Each read resolves its branch before it reads the document, and the
+  // engine keeps what it learned of each branch between reads. These cases
+  // pin what a read returns and throws as the `branch` table changes under
+  // it, through this connection and another one, and how many statements a
+  // read of a known branch costs.
 
   let engine: Engine;
   let path: string;
@@ -207,24 +208,49 @@ describe("engine", () => {
       setValue("warm");
       expect(valueAt()).toBe("warm");
 
-      using branchRows = spy(engine.statements.selectBranch, "get");
-      using documentRows = spy(engine.statements.selectCurrentLocal, "get");
+      using branchRows = spy(engine.statement("selectBranch"), "get");
+      using documentRows = spy(engine.statement("selectCurrentLocal"), "get");
       expect(valueAt()).toBe("warm");
 
       expect(branchRows.calls).toHaveLength(0);
       expect(documentRows.calls).toHaveLength(1);
     });
 
-    it("reads the `branch` row once for the first read after a commit", () => {
+    it("reads no `branch` row for a read at the head after a commit", () => {
       setValue("first");
       expect(valueAt()).toBe("first");
       setValue("second");
 
-      using branchRows = spy(engine.statements.selectBranch, "get");
-      expect(valueAt()).toBe("second");
+      using branchRows = spy(engine.statement("selectBranch"), "get");
       expect(valueAt()).toBe("second");
 
+      expect(branchRows.calls).toHaveLength(0);
+    });
+
+    it("reads the `branch` row once for reads at a seq past the head it knew", () => {
+      setValue("first");
+      expect(valueAt()).toBe("first");
+      const second = setValue("second");
+
+      using branchRows = spy(engine.statement("selectBranch"), "get");
+      expect(valueAt({ seq: second })).toBe("second");
+      expect(valueAt({ seq: second })).toBe("second");
+
       expect(branchRows.calls).toHaveLength(1);
+    });
+
+    it("reads no `head` row for a read at a seq, even the head's", () => {
+      // Another connection's commit between two statements of one read
+      // moves the `head` table, so a read at a seq reads the revision rows
+      // as of that seq.
+      setValue("first");
+      const second = setValue("second");
+      expect(valueAt()).toBe("second");
+
+      using headRows = spy(engine.statement("selectCurrentLocal"), "get");
+      expect(valueAt({ seq: second })).toBe("second");
+
+      expect(headRows.calls).toHaveLength(0);
     });
 
     it("reads no `branch` row for a warm read a fork inherits", () => {
@@ -232,10 +258,56 @@ describe("engine", () => {
       createBranch(engine, "fork");
       expect(valueAt({ branch: "fork" })).toBe("parent");
 
-      using branchRows = spy(engine.statements.selectBranch, "get");
+      using branchRows = spy(engine.statement("selectBranch"), "get");
       expect(valueAt({ branch: "fork" })).toBe("parent");
 
       expect(branchRows.calls).toHaveLength(0);
+    });
+  });
+
+  describe("another connection", () => {
+    // The serving loop's worker and the memory server beside it are two
+    // connections to one store, each committing what the other then reads.
+
+    let other: Engine;
+
+    const otherValueAt = (
+      options: { branch?: BranchName; seq?: number } = {},
+    ) => read(other, { id, ...options })?.value;
+
+    beforeEach(async () => {
+      other = await open({ url: toFileUrl(path) });
+    });
+
+    afterEach(() => {
+      close(other);
+    });
+
+    it("returns the value as of a seq the other's commit passed, and the value at the new head", () => {
+      const first = setValue("first");
+      expect(otherValueAt()).toBe("first");
+      const second = setValue("second");
+
+      expect(otherValueAt({ seq: first })).toBe("first");
+      expect(otherValueAt({ seq: second })).toBe("second");
+      expect(otherValueAt()).toBe("second");
+      expect(() => otherValueAt({ seq: second + 1 })).toThrow(
+        `seq ${second + 1} is out of range for branch `,
+      );
+    });
+
+    it("throws for a branch until the other creates it, then returns its parent's value as of the fork point", () => {
+      setValue("before the other read");
+      expect(otherValueAt()).toBe("before the other read");
+      expect(() => otherValueAt({ branch: "fork" })).toThrow(
+        "unknown branch: fork",
+      );
+      setValue("at the fork point");
+      createBranch(engine, "fork");
+      setValue("after the fork");
+
+      expect(otherValueAt({ branch: "fork" })).toBe("at the fork point");
+      expect(otherValueAt()).toBe("after the fork");
     });
   });
 });

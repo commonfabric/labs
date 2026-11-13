@@ -21,7 +21,7 @@ export default pattern<MessageInputStoryInput, MessageInputStoryOutput>(() => {
           maxWidth: "400px",
         }}
       >
-        <cf-message-input placeholder="Type a message..." button-text="Send" />
+        <cf-message-input placeholder="Type a message..." buttonText="Send" />
       </div>
     ),
     controls: (

@@ -87,6 +87,18 @@ describe("parseDeviceLinkFragment", () => {
   it("is pure — a rejected hash is simply null, never a throw", () => {
     assertEquals(parseDeviceLinkFragment("#k=" + "!".repeat(43)), null);
   });
+
+  it("returns 32 bytes for a payload ending in any base64url character", () => {
+    // The last character carries two bits past the 32nd byte, so these 64
+    // payloads are every way a payload can leave bits over.
+
+    const alphabet =
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    const lengths = [...alphabet].map((last) =>
+      parseDeviceLinkFragment("#k=" + "A".repeat(42) + last)?.length
+    );
+    expect(lengths).toEqual(Array(64).fill(32));
+  });
 });
 
 describe("looksLikeDeviceLink", () => {

@@ -38,17 +38,23 @@ nothing live to hand over for it.
 **Native HTML inputs are one-way only.** Always use the Common Fabric form
 components for inputs.
 
-Use camelCase for component properties — kebab-case JSX attributes don't map
-correctly:
+A JSX prop sets the element's JavaScript property, so write the property's
+name: `allowCustom`, `defaultSize`, `className`, `htmlFor`. Three kinds of name
+are not properties and keep their hyphens: `data-*` and `aria-*`, which are set
+as attributes, and an event prop, which starts with `on` and is spelled with the
+event's own name (`onClick`, `oncf-change`). Any other hyphenated prop sets
+nothing, since no property has that name, and the compiler warns of it, naming
+the property to write. Because the property name is the only spelling, TypeScript checks every
+prop against the component's declared props.
 
 ```tsx
 // Shown for illustration only.
-// ❌ Kebab-case won't work
-<cf-autocomplete allow-custom={true} />  // Sets element["allow-custom"], not allowCustom
-
-// ✅ CamelCase works
-<cf-autocomplete allowCustom={true} />  // Sets element.allowCustom correctly
+<cf-autocomplete allow-custom={true} />  // warning: write `allowCustom`
+<cf-autocomplete allowCustom={true} />
 ```
+
+A component's HTML attribute names, such as `allow-custom` in a component's own
+documentation, are for markup written as HTML, not for pattern JSX.
 
 When a control is already bound to a cell via `$value`, treat that binding as
 the primary value path. Avoid `oncf-change` handlers that simply write the same
@@ -129,7 +135,7 @@ cell means none confirmed — check the component source before assuming.
 | `cf-checkbox` | Binary selection input with indeterminate support | `$checked` |
 | `cf-chevron-button` | Minimal chevron button rotating between up/down | |
 | `cf-chip` | Compact pill/label for status, tags, and filters | |
-| `cf-code-editor` | Code/prose editor with syntax highlighting and `[[`-mention completion. Its `highlights` attribute marks ranges of a collaborative field's text, each from one of the field's anchors to another (see [`anchorsOf`](../concepts/types-and-schemas/writable.md#anchoring-text-anchorsof)); `cf-highlight-click` names the highlight a click lands on, and `cf-selection-change` reports the selection with the editor's whole text, which a handler compares with the field before anchoring the selection | `$value`, `$mentionable`, `$mentioned` |
+| `cf-code-editor` | Code/prose editor with syntax highlighting and `[[`-mention completion. With `mode="prose"`, its `math` attribute draws `$…$` and `$$…$$` TeX in Markdown with KaTeX, showing a formula's TeX where the cursor or a selection touches it. Its `highlights` attribute marks ranges of a collaborative field's text, each from one of the field's anchors to another (see [`anchorsOf`](../concepts/types-and-schemas/writable.md#anchoring-text-anchorsof)); `cf-highlight-click` names the highlight a click lands on, and `cf-selection-change` reports the selection with the editor's whole text, which a handler compares with the field before anchoring the selection | `$value`, `$mentionable`, `$mentioned` |
 | `cf-collapsible` | Single collapsible section with trigger and content | |
 | `cf-copy-button` | Copy-to-clipboard button with visual feedback | |
 | `cf-custody-seal` | Native confirmation that seals the actor's draft into a custody room, showing the runtime-verified room, readers, seats, policy and sources beside what the terms say (see [custody seal](#cf-custody-seal)) | `$draft`, `$terms`, `$policy`, `$sources`, `$box` |
@@ -155,7 +161,7 @@ cell means none confirmed — check the component source before assuming.
 | `cf-hstack` | Horizontal stack layout (flexbox) (see [stacks](#cf-vstack--cf-hstack)) | |
 | `cf-iframe` | Sandboxed guest with explicit cell, stream, SQLite, service, or presence-room capabilities, bound as one record of cells (see [iframe-first patterns](../ai/iframe-pattern-guide.md)) | `$context` |
 | `cf-image` | Image from raw `bytes` and a `media-type`, or from a blob reference `{ space, id }` (see [files](../capabilities/files.md)) | |
-| `cf-image-input` | Image capture/upload with compression, EXIF, camera support | |
+| `cf-image-input` | Image capture/upload with compression and camera support | |
 | `cf-input` | Text input with validation and reactive binding | `$value` |
 | `cf-input-otp` | One-time-password input with individual digit fields | |
 | `cf-kbd` | Inline keyboard hint element | |
@@ -325,9 +331,10 @@ array indices, which drift when lists change.
 
 ### Events and best practices
 
-- `cf-submit` — emitted after validation passes and buffers are flushed.
-  Handlers should read from the bound cell directly (type-safe), not from
-  event detail.
+- `cf-submit` — emitted after validation passes and buffers are flushed. It
+  carries no detail: handlers read from the bound cell directly (type-safe).
+  It is cancelable; `preventDefault()` keeps a form with an `action` from
+  submitting natively.
 - `cf-form-invalid` — emitted when submit is attempted but validation fails;
   detail carries `{ errors: Array<{ element, message? }> }`.
 - Fields use HTML5 constraint validation by default.

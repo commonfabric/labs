@@ -5,8 +5,10 @@ import type { RuntimeProgram } from "../src/harness/types.ts";
 import { Runtime } from "../src/runtime.ts";
 import { createCallbackCompartmentGlobals } from "../src/sandbox/compartment-globals.ts";
 import { hardenVerifiedFunction } from "../src/sandbox/function-hardening.ts";
-import { evaluateCallbackSourceInSES } from "../src/sandbox/mod.ts";
-import { evaluateFunctionSourceInSES } from "../src/sandbox/ses-runtime.ts";
+import {
+  evaluateFunctionSourceInSES,
+  SESRuntime,
+} from "../src/sandbox/ses-runtime.ts";
 
 const signer = await Identity.fromPassphrase("bench ses boundary");
 
@@ -74,7 +76,7 @@ Deno.bench(
   },
 );
 
-const sharedCallback = evaluateCallbackSourceInSES(callbackSource) as (
+const sharedCallback = new SESRuntime().evaluateCallback(callbackSource) as (
   value: number,
 ) => number;
 

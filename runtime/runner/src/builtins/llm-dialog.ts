@@ -178,7 +178,6 @@ const MAX_SERIALIZE_DEPTH = 100;
 function stripInjectedResult(
   schema: JSONSchema,
 ): JSONSchema {
-  if (!schema || typeof schema !== "object") return schema;
   const obj = schema as Record<string, unknown>;
   if (obj.type !== "object") return schema;
 
@@ -1466,64 +1465,6 @@ function flattenTools(
   return flattened;
 }
 
-/**
- * Compare two flattened tool objects to detect changes.
- * Uses a heuristic approach that compares only serializable properties
- * (description, inputSchema, internal) and excludes handler which may have
- * circular references.
- */
-function _toolsHaveChanged(
-  newTools: Record<string, any>,
-  oldTools: Record<string, any> | undefined,
-): boolean {
-  if (!oldTools) return true;
-
-  const newKeys = Object.keys(newTools).sort();
-  const oldKeys = Object.keys(oldTools).sort();
-
-  // Check if the set of tools changed
-  if (newKeys.length !== oldKeys.length) return true;
-  if (newKeys.some((key, i) => key !== oldKeys[i])) return true;
-
-  // Check if any tool's serializable properties changed
-  for (const key of newKeys) {
-    const newTool = newTools[key];
-    const oldTool = oldTools[key];
-
-    // Compare description
-    if (newTool.description !== oldTool.description) return true;
-
-    // Compare inputSchema via interned-schema identity. `internSchema()`
-    // returns the canonical reference, so structurally-equal schemas
-    // collapse to `===`. Handles non-JSON-compatible `FabricValue`s in
-    // schema `default` fields correctly, unlike plain `JSON.stringify`
-    // (which silently mis-encodes them and could hide real changes).
-    try {
-      if (
-        internSchema(newTool.inputSchema) !== internSchema(oldTool.inputSchema)
-      ) {
-        return true;
-      }
-    } catch {
-      // Defensive: preserve the prior try/catch shape in case of
-      // unexpected input. Treat any failure as "changed."
-      return true;
-    }
-
-    // Compare internal metadata
-    try {
-      const newInternal = JSON.stringify(newTool.internal);
-      const oldInternal = JSON.stringify(oldTool.internal);
-      if (newInternal !== oldInternal) return true;
-    } catch {
-      // If internal has circular refs (unlikely), consider it changed
-      return true;
-    }
-  }
-
-  return false;
-}
-
 function buildToolCatalog(
   toolsCell:
     | Cell<Record<string, Schema<typeof LLMToolSchema>>>
@@ -1854,17 +1795,7 @@ function buildAvailableCellsDocumentationWithObservation(
       // Parse the path using the same parser as read/run tools
       const link = parseLLMFriendlyLink(pinnedCell.path, space);
 
-      // Get cell from link
-      const cell = runtime.getCellFromLink(link);
-      if (!cell) {
-        logger.warn(
-          "llm",
-          `Could not resolve pinned cell ${pinnedCell.path} to a cell`,
-        );
-        continue;
-      }
-
-      addCellEntry(pinnedCell.name, cell);
+      addCellEntry(pinnedCell.name, runtime.getCellFromLink(link));
     } catch (e) {
       logger.warn(
         "llm",
@@ -1937,14 +1868,12 @@ function mergeDialogMessageObservations(
     { index: number; observedConfidentiality: readonly CfcConfClause[] }
   >,
 ): DialogMessageObservationMap {
-  const merged: Record<string, unknown[]> = {
-    ...(current ?? {}),
-  };
+  const merged: Record<string, unknown[]> = { ...current };
   for (const update of updates) {
     const key = update.index.toString();
     merged[key] = uniqueCfcAtoms([
       ...(merged[key] ?? []),
-      ...(update.observedConfidentiality ?? []),
+      ...update.observedConfidentiality,
     ]) as unknown[];
   }
   return merged;
@@ -1957,9 +1886,6 @@ function recordDialogMessageObservations(
     { index: number; observedConfidentiality: readonly CfcConfClause[] }
   >,
 ): void {
-  if (updates.length === 0) {
-    return;
-  }
   const current = internal.withTx(tx).key("messageObservations").get() as
     | DialogMessageObservationMap
     | undefined;
@@ -3039,6 +2965,7 @@ function createToolResultMessages(
 
 export const llmDialogTestHelpers = {
   REQUEST_TIMEOUT,
+  editWithRetryUnlessAborted,
   getCellSchema,
   parseLLMFriendlyLink,
   traverseAndSerialize,
@@ -3134,24 +3061,15 @@ async function safelyPerformUpdate(
  * `editWithRetry` bound to the turn's abort signal (round-2 thread 14):
  * a stopped or replaced turn must not persist pin/unpin/argument state
  * from a tool call that was mid-flight when the cancel landed. Checked
- * before starting AND inside the callback (a retry attempt after the
- * cancel aborts too — the throw makes editWithRetry abort the tx and
- * return the error without committing).
+ * inside the callback, so every attempt checks it, a retry after the
+ * cancel included: the throw makes editWithRetry abort the tx and return
+ * the error without committing.
  */
 function editWithRetryUnlessAborted(
   runtime: Runtime,
   abortSignal: AbortSignal | undefined,
   fn: (tx: IExtendedStorageTransaction) => void,
 ): ReturnType<Runtime["editWithRetry"]> {
-  if (abortSignal?.aborted) {
-    return Promise.resolve({
-      error: {
-        name: "StorageTransactionAborted" as const,
-        message: "Tool call cancelled",
-        reason: new Error("turn-aborted"),
-      },
-    });
-  }
   return runtime.editWithRetry((tx) => {
     if (abortSignal?.aborted) {
       throw new Error("Tool call cancelled");
@@ -4116,8 +4034,8 @@ export function llmDialog(
           internal.withTx(tx).set({
             requestId: nextRequestId,
             lastActivity: Date.now(),
-            messageObservations:
-              internal.withTx(tx).key("messageObservations").get() ?? {},
+            messageObservations: internal.withTx(tx).key("messageObservations")
+              .get(),
           });
 
           const capturedRequest = materializeDialogRequestSnapshot(
@@ -4250,18 +4168,24 @@ export function llmDialog(
                 runtime.trackAsyncWork(
                   settleAbandonedRequest(
                     runtime,
-                    "llmDialog",
-                    `llmDialog:${nextRequestId}`,
+                    {
+                      builtinId: "llmDialog",
+                      effectKey: `llmDialog:${nextRequestId}`,
+                      identity: capturedRequest.scopeKeyIdentity,
+                      scope: outputScope,
+                      attributeToBuiltin: true,
+                    },
                     (settleTx) => {
-                      if (capturedRequest.scopeKeyIdentity) {
-                        settleTx.tx.scopeKeyIdentity =
-                          capturedRequest.scopeKeyIdentity;
-                      }
                       // An accepted publication owns the physical binding.
                       // Legacy callers without that coordinate can only check
-                      // whether their input scope still selects this target.
-                      settleTx.resetNarrowestReadScope();
-                      inputs.withTx(settleTx).get();
+                      // whether their input scope still selects this target,
+                      // which reads the inputs; with it, the ending reads none,
+                      // so their labels don't refuse what it writes, none of
+                      // which derives from them.
+                      if (publicationBinding === undefined) {
+                        settleTx.resetNarrowestReadScope();
+                        inputs.withTx(settleTx).get();
+                      }
                       if (
                         ownsPublication() &&
                         (publicationBinding !== undefined ||
@@ -4466,12 +4390,12 @@ async function startRequest(
   result: Cell<Schema<typeof resultSchema>>,
   requestId: string,
   abortSignal: AbortSignal,
-  capturedRequest?: DialogRequestSnapshot,
+  capturedRequest: DialogRequestSnapshot,
 ) {
   let messagesCell = inputs.key("messages");
   /** Reads each asynchronous phase from the current actor instance. */
   const refreshRead = () => {
-    if (!capturedRequest?.scopeKeyIdentity) return;
+    if (!capturedRequest.scopeKeyIdentity) return;
     const read = runtime.readTx();
     read.tx.scopeKeyIdentity = capturedRequest.scopeKeyIdentity;
     inputs = inputs.withTx(read);
@@ -4483,7 +4407,7 @@ async function startRequest(
   // Served inputs were demanded by the accepted handler. Ambient pull
   // actions would demand the service instance instead of the issuing actor.
   // Local execution still drives dependencies through pull scheduling.
-  if (!capturedRequest?.scopeKeyIdentity) {
+  if (!capturedRequest.scopeKeyIdentity) {
     await inputs.pull();
     await pinnedCells.pull();
   }
@@ -4497,31 +4421,28 @@ async function startRequest(
   for (const pinnedCell of pinnedCellsForPull) {
     try {
       const link = parseLLMFriendlyLink(pinnedCell.path, space);
-      const cell = runtime.getCellFromLink(link);
-      if (cell) {
-        await cell.resolveAsCell().pull();
-      }
+      await runtime.getCellFromLink(link).resolveAsCell().pull();
     } catch {
       // Ignore errors - cell might not exist
     }
   }
 
   refreshRead();
-  const { system, maxTokens, model } = inputs.get();
-  const queueName = capturedRequest?.queueName ??
+  const { system } = inputs.get();
+  const queueName = capturedRequest.queueName ??
     (inputs.key("queue").get() as unknown as string | undefined);
-  // The snapshot already carries the deployment-bounded ceiling. When there is
-  // no snapshot, fold the deployment llmDialog ceiling in here too so a
-  // direct/recovery path can't observe past it (#3993 review).
-  const observationMaxConfidentiality = capturedRequest
-    ?.observationMaxConfidentiality ??
-    effectiveObservationCeiling(
-      runtime,
-      "llmDialog",
-      inputs.key("observationMaxConfidentiality").get() as
-        | readonly CfcConfClause[]
-        | undefined,
-    );
+  // The snapshot already carries the deployment-bounded ceiling. Where it
+  // carries none, fold the deployment llmDialog ceiling in here too so the
+  // turn can't observe past it (#3993 review).
+  const observationMaxConfidentiality =
+    capturedRequest.observationMaxConfidentiality ??
+      effectiveObservationCeiling(
+        runtime,
+        "llmDialog",
+        inputs.key("observationMaxConfidentiality").get() as
+          | readonly CfcConfClause[]
+          | undefined,
+      );
   const builtinTools = inputs.key("builtinTools").get() !== false;
 
   // Epic D1 (docs/history/specs/cfc-trusted-agent-tool-integrity.md piece B): model-
@@ -4614,10 +4535,6 @@ async function startRequest(
     }
   };
 
-  const toolsCell = inputs.key("tools") as Cell<
-    Record<string, Schema<typeof LLMToolSchema>>
-  >;
-
   // Update merged pinnedCells in case context or internal pinnedCells changed
   const contextCells = inputs.key("context").get() ?? {};
   const toolPinnedCells = pinnedCells.get() ?? [];
@@ -4642,7 +4559,7 @@ async function startRequest(
 
   // Write to result cell using editWithRetry since we're outside handler tx
   await runtime.editWithRetry((tx) => {
-    if (capturedRequest?.scopeKeyIdentity) {
+    if (capturedRequest.scopeKeyIdentity) {
       tx.tx.scopeKeyIdentity = capturedRequest.scopeKeyIdentity;
     }
     markEffectCompletion(tx, `llmDialog:${requestId}`);
@@ -4650,27 +4567,14 @@ async function startRequest(
   });
 
   refreshRead();
-  const toolCatalog = capturedRequest?.toolCatalog ?? buildToolCatalog(
-    toolsCell,
-    builtinTools,
-  );
+  const toolCatalog = capturedRequest.toolCatalog;
 
   // If resultSchema is provided, inject presentResult built-in tool.
   // TODO(danfuzz): `resultSchema` is untrusted input, so this `as` is an
   // unchecked assertion. Replace with a runtime validating guard, e.g.
   // `asSchemaOrThrow(schema: unknown): schema is JSONSchema`.
-  const userResultSchema = capturedRequest?.userResultSchema ??
+  const userResultSchema = capturedRequest.userResultSchema ??
     (inputs.key("resultSchema").get() as JSONSchema | undefined);
-  if (userResultSchema && capturedRequest === undefined) {
-    // collectToolEntries refuses this name, so nothing else holds it.
-    toolCatalog.llmTools[PRESENT_RESULT_TOOL_NAME] = {
-      description:
-        "Call this tool to present a structured result. This stores the result for the caller.",
-      inputSchema: prepareSchemaForLLM(
-        toDeepFrozenSchema(userResultSchema),
-      ),
-    };
-  }
 
   // Build available cells documentation (both context and pinned cells).
   // This rebuild happens POST-COMMIT (no sink-request input gates these
@@ -4754,22 +4658,11 @@ Some operations (especially \`invoke()\` with patterns) create "Pages" - running
     visibleMessages.observedConfidentiality,
     cellsDocs.observedConfidentiality,
   ]);
-  const llmParams: LLMRequest = capturedRequest
-    ? {
-      ...capturedRequest.llmParams,
-      system: augmentedSystem,
-      messages: visibleMessages.messages,
-    }
-    : {
-      system: augmentedSystem,
-      messages: visibleMessages.messages,
-      maxTokens: maxTokens,
-      stream: true,
-      model: model ?? DEFAULT_MODEL_NAME,
-      metadata: { context: "piece" },
-      cache: true,
-      tools: toolCatalog.llmTools,
-    };
+  const llmParams: LLMRequest = {
+    ...capturedRequest.llmParams,
+    system: augmentedSystem,
+    messages: visibleMessages.messages,
+  };
 
   const mappedLlmHost = runtime.mappedHostFor(space);
   const doWork = () =>
@@ -4811,7 +4704,7 @@ Some operations (especially \`invoke()\` with patterns) create "Pages" - running
           pending,
           internal,
           requestId,
-          capturedRequest?.scopeKeyIdentity,
+          capturedRequest.scopeKeyIdentity,
           (tx) => {
             // As above: made explicitly for identity control, in the resolved
             // messages document's space and scope, schema-less.
@@ -4857,7 +4750,7 @@ Some operations (especially \`invoke()\` with patterns) create "Pages" - running
             pending,
             internal,
             requestId,
-            capturedRequest?.scopeKeyIdentity,
+            capturedRequest.scopeKeyIdentity,
             (tx) => {
               const nextIndex = (messagesCell.withTx(tx).get() as
                 | readonly BuiltInLLMMessage[]
@@ -4902,41 +4795,6 @@ Some operations (especially \`invoke()\` with patterns) create "Pages" - running
             }
           }
 
-          // Validate that we have a result for every tool call with matching IDs
-          const toolCallIds = new Set(toolCallParts.map((p) => p.toolCallId));
-          const resultIds = new Set(toolResults.map((r) => r.id));
-          const mismatch = toolResults.length !== toolCallParts.length ||
-            !toolCallParts.every((p) => resultIds.has(p.toolCallId));
-
-          if (mismatch) {
-            logger.error(
-              "llm-error",
-              `Tool execution mismatch: ${toolCallParts.length} calls [${
-                Array.from(toolCallIds)
-              }] but ${toolResults.length} results [${Array.from(resultIds)}]`,
-            );
-            // Add error message instead of invalid partial results
-            const errorMessage = {
-              role: "assistant",
-              content: "Some tool calls failed to execute. Please try again.",
-            } satisfies BuiltInLLMMessage;
-
-            await safelyPerformUpdate(
-              runtime,
-              pending,
-              internal,
-              requestId,
-              capturedRequest?.scopeKeyIdentity,
-              (tx) => {
-                messagesCell.withTx(tx).push(
-                  errorMessage as Schema<typeof LLMMessageSchema>,
-                );
-                pending.withTx(tx).set(false);
-              },
-            );
-            return;
-          }
-
           // Create and publish tool result messages
           const toolResultMessages = createToolResultMessages(toolResults);
 
@@ -4945,7 +4803,7 @@ Some operations (especially \`invoke()\` with patterns) create "Pages" - running
             pending,
             internal,
             requestId,
-            capturedRequest?.scopeKeyIdentity,
+            capturedRequest.scopeKeyIdentity,
             (tx) => {
               // Write presentResult atomically with tool result messages,
               // guarded by requestId to prevent stale writes from canceled requests.
@@ -5041,7 +4899,7 @@ Some operations (especially \`invoke()\` with patterns) create "Pages" - running
           pending,
           internal,
           requestId,
-          capturedRequest?.scopeKeyIdentity,
+          capturedRequest.scopeKeyIdentity,
           (tx) => {
             const nextIndex = (messagesCell.withTx(tx).get() as
               | readonly BuiltInLLMMessage[]
@@ -5074,7 +4932,7 @@ Some operations (especially \`invoke()\` with patterns) create "Pages" - running
         pending,
         internal,
         requestId,
-        capturedRequest?.scopeKeyIdentity,
+        capturedRequest.scopeKeyIdentity,
         (tx) => {
           messagesCell.withTx(tx).push(
             errorMessage as Schema<typeof LLMMessageSchema>,

@@ -115,33 +115,26 @@ export class CFLabel extends BaseElement {
   }
 
   private _handleClick = (_event: Event): void => {
-    // If label has a 'for' attribute, find and focus the associated element
-    if (this.for && !this.disabled) {
-      // Look for the element in the parent document
-      const root = this.getRootNode() as Document | ShadowRoot;
-      const targetElement = root.querySelector(
-        `#${CSS.escape(this.for)}`,
-      ) as HTMLElement;
+    if (this.disabled) return;
+    const targetElement = this.getControl();
+    if (targetElement) {
+      // Focus the element if it's focusable
+      if (
+        "focus" in targetElement && typeof targetElement.focus === "function"
+      ) {
+        targetElement.focus();
 
-      if (targetElement) {
-        // Focus the element if it's focusable
-        if (
-          "focus" in targetElement && typeof targetElement.focus === "function"
-        ) {
-          targetElement.focus();
-
-          // For custom elements, also try clicking them
-          if (targetElement.tagName.includes("-")) {
-            targetElement.click();
-          }
+        // For custom elements, also try clicking them
+        if (targetElement.tagName.includes("-")) {
+          targetElement.click();
         }
-
-        // Emit custom event
-        this.emit("cf-label-click", {
-          targetId: this.for,
-          targetElement: targetElement,
-        });
       }
+
+      // Emit custom event
+      this.emit("cf-label-click", {
+        targetId: this.for,
+        targetElement: targetElement,
+      });
     }
   };
 
@@ -153,15 +146,5 @@ export class CFLabel extends BaseElement {
 
     const root = this.getRootNode() as Document | ShadowRoot;
     return root.querySelector(`#${CSS.escape(this.for)}`) as HTMLElement;
-  }
-
-  /**
-   * Focus the associated control element
-   */
-  focusControl(): void {
-    const control = this.getControl();
-    if (control && "focus" in control && typeof control.focus === "function") {
-      control.focus();
-    }
   }
 }

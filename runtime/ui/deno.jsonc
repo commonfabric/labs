@@ -18,6 +18,7 @@
     "@codemirror/collab": "npm:@codemirror/collab@^6.1.1",
     "@codemirror/commands": "npm:@codemirror/commands@^6.10.4",
     "@lit/context": "npm:@lit/context@^1.1.6",
+    "happy-dom": "npm:happy-dom@^20.14.6",
     "marked": "npm:marked@^18.0.6",
     "@codemirror/state": "npm:@codemirror/state@^6.7.1",
     "@codemirror/view": "npm:@codemirror/view@^6.43.6",
@@ -32,6 +33,12 @@
     "@codemirror/search": "npm:@codemirror/search@^6.7.1",
     "@codemirror/lint": "npm:@codemirror/lint@^6.9.7",
     "@lezer/markdown": "npm:@lezer/markdown@^1.7.2",
+    // Exact: `tasks/generate-katex-assets.ts` writes KaTeX's stylesheet and
+    // fonts from this release. See DEPENDENCIES.md, "KaTeX".
+    "katex": "npm:katex@0.19.1",
+    // The module the editor loads KaTeX from, by a name the shell's page maps
+    // to a script of its own. See `features/katex-render.ts`.
+    "cf-katex-render": "./src/v2/components/cf-code-editor/features/katex-render.ts",
     "leaflet": "npm:leaflet@^1.9.4",
     "@types/leaflet": "npm:@types/leaflet@^1.9.21",
     "d3-scale": "npm:d3-scale@^4.0.2",

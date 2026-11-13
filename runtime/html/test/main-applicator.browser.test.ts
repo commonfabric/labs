@@ -195,3 +195,61 @@ Deno.test("removing a property a custom element defines sets it to undefined", (
     '<x-labeled-box title="Hint"></x-labeled-box>',
   );
 });
+
+Deno.test("a prop whose name names no property is warned of once, naming the property", () => {
+  const warnings: unknown[][] = [];
+  const warn = console.warn;
+  console.warn = (...args: unknown[]) => warnings.push(args);
+  try {
+    for (const batchId of [1, 2]) {
+      const applicator = new DomApplicator({
+        onEvent: () => {},
+        onError: (error) => {
+          throw error;
+        },
+      });
+      applicator.applyBatch({
+        batchId,
+        ops: [
+          { op: "create-element", nodeId: 1, tagName: "x-spread-target" },
+          { op: "set-prop", nodeId: 1, key: "default-size", value: 28 },
+          { op: "set-prop", nodeId: 1, key: "data-id", value: "a" },
+        ],
+      });
+    }
+  } finally {
+    console.warn = warn;
+  }
+  assertEquals(warnings.length, 1);
+  assertStrictEquals(String(warnings[0]![0]).includes("`defaultSize`"), true);
+});
+
+Deno.test("a bound prop whose name names no property is warned of too", () => {
+  const warnings: unknown[][] = [];
+  const warn = console.warn;
+  console.warn = (...args: unknown[]) => warnings.push(args);
+  try {
+    const applicator = new DomApplicator({
+      onEvent: () => {},
+      onError: (error) => {
+        throw error;
+      },
+    });
+    applicator.applyBatch({
+      batchId: 1,
+      ops: [
+        { op: "create-element", nodeId: 1, tagName: "x-bound-target" },
+        {
+          op: "set-binding",
+          nodeId: 1,
+          propName: "max-size",
+          cellRef: {} as never,
+        },
+      ],
+    });
+  } finally {
+    console.warn = warn;
+  }
+  assertEquals(warnings.length, 1);
+  assertStrictEquals(String(warnings[0]![0]).includes("`maxSize`"), true);
+});

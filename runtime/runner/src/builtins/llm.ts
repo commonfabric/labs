@@ -67,6 +67,10 @@ import {
 } from "./llm-schemas.ts";
 import { ownedCell, ownedStoreLinks } from "./runtime-owned-store.ts";
 import {
+  type AbandonedRequest,
+  settleAbandonedRequest,
+} from "./abandoned-request.ts";
+import {
   LLM_DERIVED_RESULT_STAMP_SCHEMA,
   withLlmDerivedStamp,
 } from "../cfc/llm-derived-stamp.ts";
@@ -345,9 +349,6 @@ async function executeWithToolsLoop(params: {
       ...llmParams,
       messages: currentMessages,
     };
-    if (toolCatalog && requestParams.tools === undefined) {
-      requestParams.tools = toolCatalog.llmTools;
-    }
 
     // Route the call to the executing space's host when the space is
     // host-mapped (one runtime spans hosts; an LLM call belongs to the
@@ -417,6 +418,14 @@ async function executeWithToolsLoop(params: {
   );
 }
 
+/** Which request an abandoned LLM request's ending belongs to. */
+type AbandonedLLMRequest =
+  & Pick<
+    AbandonedRequest,
+    "effectKey" | "identity" | "scope"
+  >
+  & { builtinId: "llm" | "generateText" | "generateObject" };
+
 /**
  * Common error handler for LLM requests.
  * Resets state and allows retry on next invocation.
@@ -444,6 +453,13 @@ async function handleLLMError<T, P>(
   requestGuard?: ServedLLMRequestGuard,
   /** Whether this refusal can replace the instance's request fields. */
   ownsRefusal?: () => boolean,
+  /**
+   * Present when the error is the ending of a request that will never be
+   * sent, which commits through `settleAbandonedRequest()`: as a completion of
+   * the request where that helper finds the request's carriage, and otherwise
+   * stamped into the serving loop's open wave.
+   */
+  abandoned?: AbandonedLLMRequest,
 ): Promise<void> {
   if (thisRun !== getCurrentRun() && announce === undefined) return;
 
@@ -455,38 +471,85 @@ async function handleLLMError<T, P>(
 
   await runtime.idle();
 
+  // The error had nowhere to land, so a reader of this result cell sees
+  // something other than this failure. Report it here, since nothing
+  // downstream can.
+  const reportRejection = (rejection: Error) =>
+    console.error(
+      "[LLM] Writing the request's error to its result cell was rejected.",
+      { requestHash, cause: message, rejection: rejection.message },
+    );
+  // A served request's ending, where a request guard binds writebacks to the
+  // request's live inputs, is written in two transactions. Of what it writes,
+  // only the request hash derives from those inputs, and binding to them puts
+  // their labels in the transaction's join, where a clause the target's store
+  // doesn't admit refuses every field the transaction writes. So the ending
+  // itself reads no input, and the hash follows in a transaction of its own
+  // that binds to them, carrying their labels to the one field that derives
+  // from them (`docs/specs/server-side-execution/builtins.md` §2).
+  const splitsHash = abandoned !== undefined && requestGuard !== undefined;
+  // Read at write time rather than from a decision taken before the wait
+  // above: a newer request can start while this one waits for the
+  // scheduler, and from then on the answer is that request's to give.
+  const ownsAnswer = () =>
+    (!ownsRefusal || ownsRefusal()) && thisRun === getCurrentRun();
   let wrote = false;
-  const { error: writeError } = await runtime.editWithRetry((tx) => {
-    if (effectKey !== undefined) markEffectCompletion(tx, effectKey);
+  const write = (tx: IExtendedStorageTransaction) => {
     if (requestGuard) {
       // Refusal rolls back the selected-request marker with its transaction.
-      // Its announcement and generation guard still belong to this identity.
-      if (announce) requestGuard.bind(tx);
-      else if (!requestGuard.accept(tx, requestHash)) return;
+      // Its announcement and generation guard still belong to this identity,
+      // which `settleAbandonedRequest()` sets where the ending reads no input.
+      if (announce) {
+        if (!splitsHash) requestGuard.bind(tx);
+      } else if (!requestGuard.accept(tx, requestHash)) return;
     }
+    // The announcement has its own binding guard: another actor can still
+    // need a link to a shared result that this request no longer owns.
     announce?.(tx);
-    if (ownsRefusal && !ownsRefusal()) return;
-    // Read at write time rather than from a decision taken before the wait
-    // above: a newer request can start while this one waits for the
-    // scheduler, and from then on the answer is that request's to give. The
-    // announcement has its own binding guard: another actor can still need a
-    // link to a shared result that this request no longer owns.
-    if (thisRun !== getCurrentRun()) return;
+    if (!ownsAnswer()) return;
     wrote = true;
     pendingCell.withTx(tx).set(false);
     errorCell.withTx(tx).set(message);
     resultCell.withTx(tx).set(undefined as T);
     partialCell.withTx(tx).set(undefined as P);
-    requestHashCell.withTx(tx).set(requestHash);
-  });
-  if (writeError) {
-    // The error had nowhere to land, so a reader of this result cell sees
-    // something other than this failure. Report it here, since nothing
-    // downstream can.
-    console.error(
-      "[LLM] Writing the request's error to its result cell was rejected.",
-      { requestHash, cause: message, rejection: writeError.message },
+    if (!splitsHash) requestHashCell.withTx(tx).set(requestHash);
+  };
+  if (abandoned !== undefined) {
+    const endingCommitted = await settleAbandonedRequest(
+      runtime,
+      { ...abandoned, attributeToBuiltin: false, reportRejection },
+      write,
     );
+    // Only behind an ending that committed: a node that holds the hash takes
+    // its request as answered, so a hash without its ending would leave the
+    // node showing no error.
+    if (splitsHash && wrote && endingCommitted) {
+      await settleAbandonedRequest(
+        runtime,
+        {
+          ...abandoned,
+          attributeToBuiltin: false,
+          reportRejection: (rejection) =>
+            console.error(
+              "[LLM] Writing the refused request's hash to its result cell " +
+                "was rejected; the request is staged again on the node's " +
+                "next run.",
+              { requestHash, rejection: rejection.message },
+            ),
+        },
+        (tx) => {
+          requestGuard.bind(tx);
+          if (!ownsAnswer()) return;
+          requestHashCell.withTx(tx).set(requestHash);
+        },
+      );
+    }
+  } else {
+    const { error: writeError } = await runtime.editWithRetry((tx) => {
+      if (effectKey !== undefined) markEffectCompletion(tx, effectKey);
+      write(tx);
+    });
+    if (writeError) reportRejection(writeError);
   }
 
   if (!wrote) return;
@@ -1182,6 +1245,12 @@ export function llm(
         announceResult,
         requestGuard,
         lifecycle?.owns,
+        {
+          builtinId: "llm",
+          effectKey,
+          identity,
+          scope: outputScope ?? "space",
+        },
       );
 
     // The ending for a request refused before it started.
@@ -1671,6 +1740,12 @@ export function generateText(
         announceResult,
         requestGuard,
         lifecycle?.owns,
+        {
+          builtinId: "generateText",
+          effectKey,
+          identity,
+          scope: outputScope ?? "space",
+        },
       );
 
     // The ending for a request refused before it started.
@@ -2216,6 +2291,12 @@ export function generateObject<T extends Record<string, unknown>>(
           announceResult,
           requestGuard,
           lifecycle?.owns,
+          {
+            builtinId: "generateObject",
+            effectKey,
+            identity,
+            scope: outputScope ?? "space",
+          },
         );
 
       // The ending for a request refused before it started.
@@ -2630,6 +2711,12 @@ export function generateObject<T extends Record<string, unknown>>(
           announceResult,
           requestGuard,
           lifecycle?.owns,
+          {
+            builtinId: "generateObject",
+            effectKey,
+            identity,
+            scope: outputScope ?? "space",
+          },
         );
 
       logGenerateObject("enqueue", directRequestSummary);

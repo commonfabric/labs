@@ -352,8 +352,8 @@ export class BuildConfig {
    * embedded when an embedded module imports it. The toolshed leaves out the
    * files in the pattern trees that it never serves to a runtime: the
    * integration tests with their helpers and fixtures, the recorded
-   * compatibility baselines, the Topics board's command-line client, Deno unit
-   * tests, and iframe guest sources.
+   * compatibility baselines, the Topics board's command-line client, the
+   * test support modules, Deno unit tests, and iframe guest sources.
    * Authored `.test.tsx` pattern tests are served because a program can attach
    * them as source roots. Excluding development-only files also keeps their npm
    * dependencies out of the binary.
@@ -363,6 +363,7 @@ export class BuildConfig {
     const directories = [
       this.#path("patterns", "integration"),
       this.#path("patterns", "apps", "topics", "tools"),
+      this.#path("patterns", "tools", "test-support"),
       this.#path(...BASELINES_DIR.split("/")),
     ];
     const files = this.patternPaths().flatMap((tree) =>
@@ -784,7 +785,7 @@ export async function runBuildBinaries(
       // V8's default limit of about 4 GB is less than a serving worker can need
       // on a busy board. The limit applies to each isolate, so a worker gets
       // its own.
-      "--v8-flags=--max-old-space-size=8192",
+      "--v8-flags=--max-old-space-size=16384",
     ],
     binaries: requestedBinaries(args),
     cachedOnly: Deno.env.get("CF_DENO_DEPENDENCIES_INSTALLED") === "1",

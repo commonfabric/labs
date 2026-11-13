@@ -136,7 +136,17 @@ A space stays placed on its worker for as long as the worker runs. Counted:
 A space is ACTIVE when it has ≥1 live client session or undelivered
 events; otherwise it MAY be parked (lease released, loop stopped, and
 the runtime disposed or kept for the space's next tenure — Parking
-below).
+below). A client session is any session except a serving loop's own,
+which is a session of the deployment's service identity that
+reached the memory server from the process holding it, declared the
+serving binding (`actingAs: "space-owner"`, a serving runtime of another
+process), or declared that it is not demand (`demand: false`, which the
+toolshed's own webhook runtime declares, since it keeps a session on
+every space it touched for as long as it runs and no one waits on it).
+The connection and the session's declaration decide, not the key: a local
+toolshed that runs under the identity its operator's client also signs
+with still counts that client's sessions as client sessions, for
+activation, parking and demand alike.
 Activation on: session open, event append, or explicit warm request.
 *(AMENDED 2026-09-09: a fourth trigger — a pattern-lifecycle verb
 request, which the host queues on the space's serving loop; the loop
@@ -1349,7 +1359,11 @@ seal resolves its scoped writes (the defaults setup seeds in the
 start's own transaction among them) against the same instances
 rather than the wave-level service identity. The stamp still
 carries no acting principal (protocol.md §1's "The SpaceServer's
-own writes"). A piece-start
+own writes"). A builtin's ending for a request that never
+went out (builtins.md §2) is stamped `bookkeeping` the same way,
+with the staging run's identity, when it has one, as its
+addressing, and seals into the open wave behind the writes that
+run's predecessors left pending there. A piece-start
 commit that FAILS after start() resolved (the path is
 fire-and-forget by design) must SURFACE — loudly logged in every
 arm and counted into §7's `structureLoadFailures` on a serving
@@ -1643,13 +1657,15 @@ consequence mark and its watermark advance ride the wave commit, and
 write still commits that entry's consequence, and an entry held behind
 it (events.md §5) re-drains at that wave as it would behind any other
 consequence. The patches it keeps on a doc go through this
-class's CAS without the dropped ones. The store ends where applying the
-dropped writes at the event's position and the session's writes on top
-would have left it, and nothing can have read a dropped value in
-between, since it would have committed after the write that overwrites
-it. Whatever in the wave read a doc the consequence lost writes on folds
-into the withdrawal closure, as a reader of a superseded derivation
-write does.
+class's CAS without the dropped ones. The serving replica settles the
+consequence's sealed commit to match: the writes the wave commit carried
+promote at its seq, and only the dropped ones roll back. The store ends
+where applying the dropped writes at the event's position and the
+session's writes on top would have left it, and nothing can have read
+a dropped value in between, since it would have committed after the
+write that overwrites it. Whatever in the wave read a doc the
+consequence lost writes on folds into the withdrawal closure, as a
+reader of a superseded derivation write does.
 
 Two cases keep commit order. Both are OPEN, awaiting @seefeldb's
 ruling:
@@ -1743,7 +1759,9 @@ value (`scheduler/superseded-output.ts`). A commit that wrote a value
 keeps the disposition above: the derived output waits for the next
 input change. A run writes all its outputs again, so one document
 holding a value keeps the whole run from re-arming, and its other
-outputs wait with it.
+outputs wait with it. Writes of the run that were not dropped commit and
+promote in the serving replica as any committed write does, so such a
+settlement succeeds and still names the documents the run lost.
 
 The wait does not hold the scheduler's `idle()` open, since a frame may
 never arrive and `idle()` must still resolve. So a replica that had not
@@ -1956,7 +1974,10 @@ installs) before it commits; a cycle awaiting the follow would wait on its
 own commit. A follow that completes counts from the next cycle's head, so
 every start a cycle asks about gets the same answer, and that cycle starts
 the piece on the adopted source: a first start is deferred by at least one
-cycle, and by the compile when the origin moved. A served event deferred for
+cycle, and by the compile when the origin moved. A terminal root a commit
+re-armed, whose retry is declined for the follow, holds W below that commit
+until then, and a settle does not wait to retry it meanwhile, since every such
+retry would be declined the same way. A served event deferred for
 the follow spends none of the drain's deferral budget and arms no backstop;
 the follow's completion owes the re-scan. A follow that fails, or an origin
 that cannot be reached, leaves the piece to start on its stored source, as a

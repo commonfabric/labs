@@ -76,12 +76,12 @@ export const replaceSchedulerBasisRows = (
   },
 ): void => {
   const { branch, action, actionScopeKey, rows } = options;
-  engine.database.prepare(DELETE_INSTANCE_ROWS).run({
+  engine.prepare(DELETE_INSTANCE_ROWS).run({
     branch,
     action,
     action_scope_key: actionScopeKey,
   });
-  const insert = engine.database.prepare(INSERT_ROW);
+  const insert = engine.prepare(INSERT_ROW);
   for (const row of rows) {
     insert.run({
       branch,
@@ -122,7 +122,7 @@ export const selectStaleBasisInstances = (
   stale: StaleBasisInstance[];
   foreignReadInstances: StaleBasisInstance[];
 } => {
-  const stale = engine.database.prepare(`
+  const stale = engine.prepare(`
 SELECT DISTINCT b.action AS action, b.action_scope_key AS action_scope_key
 FROM scheduler_basis b
 LEFT JOIN head h
@@ -137,7 +137,7 @@ ORDER BY b.action, b.action_scope_key
     action: string;
     action_scope_key: string;
   }>;
-  const foreign = engine.database.prepare(`
+  const foreign = engine.prepare(`
 SELECT DISTINCT b.action AS action, b.action_scope_key AS action_scope_key
 FROM scheduler_basis b
 WHERE b.branch = :branch
@@ -172,7 +172,7 @@ export const selectForeignBasisRows = (
   engine: Engine,
   options: { branch: string; space: string },
 ): ForeignBasisRow[] => {
-  const rows = engine.database.prepare(`
+  const rows = engine.prepare(`
 SELECT action, action_scope_key, entity_space, entity, entity_scope_key, seq
 FROM scheduler_basis
 WHERE branch = :branch
@@ -201,7 +201,7 @@ export const selectSchedulerBasisRows = (
   engine: Engine,
   options: { branch: string; action: string; actionScopeKey: string },
 ): Array<SchedulerBasisEntry> => {
-  const rows = engine.database.prepare(`
+  const rows = engine.prepare(`
 SELECT entity_space, entity, entity_scope_key, seq
 FROM scheduler_basis
 WHERE branch = :branch

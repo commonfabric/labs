@@ -59,7 +59,6 @@ import {
   FabricDurationNsec,
   FabricEpochDay,
   FabricEpochNsec,
-  FabricRegExp,
   FabricUnavailable,
   UNAVAILABLE_PENDING,
 } from "@/fabric-primitives";
@@ -1117,27 +1116,6 @@ describe("JsonCodecEngine", () => {
       const d = result.date as unknown as FabricEpochDay;
       expect(d).toBeInstanceOf(FabricEpochDay);
       expect(d.value).toBe(19723n);
-    });
-
-    it("round-trips `FabricRegExp` at top level and in nested structures", () => {
-      const top = roundTrip(
-        new FabricRegExp(/ab+c/gi),
-      ) as unknown as FabricRegExp;
-      expect(top).toBeInstanceOf(FabricRegExp);
-      expect(top.source).toBe("ab+c");
-      expect(top.flags).toBe("gi");
-      expect(top.flavor).toBe("es2025");
-
-      const obj = {
-        pattern: new FabricRegExp(/\d+/g),
-        label: "digits",
-      };
-      const result = roundTrip(obj) as Record<string, FabricValue>;
-      expect(result.label).toBe("digits");
-      const re = result.pattern as unknown as FabricRegExp;
-      expect(re).toBeInstanceOf(FabricRegExp);
-      expect(re.source).toBe("\\d+");
-      expect(re.flags).toBe("g");
     });
 
     it("round-trips `FabricUnavailable` at top level and in nested structures", () => {

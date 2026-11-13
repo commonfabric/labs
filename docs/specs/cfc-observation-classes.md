@@ -300,7 +300,10 @@ normative from C1 on:
   The document has no position there: such an entry labels a position of
   the target, as a copy of the target's labels that a stored envelope can
   carry although no link write persists one, and a dereference consumes the
-  target's own labels where it reads them (spec §4.6.3, §8.2.5). The link
+  target's own labels where it reads them (spec §4.6.3, §8.2.5). Whether the
+  slot holds a reference is decided for the state the stored envelope
+  describes, the one before the transaction, so a transaction that takes the
+  reference and then writes the slot consumes no such entry either. The link
   entry at the slot stays consumed (spec §18.7).
 - **An `enumerate` entry applies at its container only.** It labels a
   container's membership, order and count, so it is consumed by a read of

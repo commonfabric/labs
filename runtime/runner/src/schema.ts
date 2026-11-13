@@ -298,13 +298,7 @@ const matchesConcreteValue = (
   schema: JSONSchema,
   value: unknown,
 ): boolean => {
-  if (schema === false) {
-    return false;
-  }
-  const resolved = resolveSchema(schema);
-  if (resolved === undefined) {
-    return true;
-  }
+  const resolved = resolveSchema(schema) ?? true;
   if (typeof resolved === "boolean") {
     return resolved;
   }
@@ -490,14 +484,10 @@ export function resolveSchema(
 
 const selectMatchingCompoundBranch = (
   schema: JSONSchemaObj,
-  value: unknown,
   kind: "anyOf" | "oneOf",
+  branches: readonly JSONSchema[],
+  value: unknown,
 ): JSONSchema | undefined => {
-  const branches = schema[kind];
-  if (!Array.isArray(branches) || branches.length === 0) {
-    return undefined;
-  }
-
   const { [kind]: _compound, ...rest } = schema;
   const baseSchema = rest as JSONSchemaObj;
   const matches = branches.flatMap((branch) => {
@@ -565,11 +555,19 @@ export function resolveSchemaForValue(
 
   let narrowed: JSONSchema = resolved;
   if (Array.isArray(resolved.anyOf)) {
-    narrowed = selectMatchingCompoundBranch(resolved, value, "anyOf") ??
-      resolved;
+    narrowed = selectMatchingCompoundBranch(
+      resolved,
+      "anyOf",
+      resolved.anyOf,
+      value,
+    ) ?? resolved;
   } else if (Array.isArray(resolved.oneOf)) {
-    narrowed = selectMatchingCompoundBranch(resolved, value, "oneOf") ??
-      resolved;
+    narrowed = selectMatchingCompoundBranch(
+      resolved,
+      "oneOf",
+      resolved.oneOf,
+      value,
+    ) ?? resolved;
   }
 
   if (!isObjectOrArray(narrowed)) {
@@ -1836,6 +1834,16 @@ type RouteCrossing = {
   memoKey?: string;
 };
 
+/**
+ * The metadata of the read `TransformObjectCreator.cross()` journals at the
+ * slot a followed link leaves: a link-resolution probe, which CFC takes as the
+ * observation of which reference sits there, and which scheduling ignores.
+ */
+const followedSlotProbe = {
+  ...ignoreReadForScheduling,
+  ...linkResolutionProbe,
+};
+
 class TransformObjectCreator
   implements IObjectCreator<AnyCellWrapping<FabricValue>>, LinkCrossingRoute {
   #runtime: Runtime;
@@ -1891,12 +1899,13 @@ class TransformObjectCreator
     // Following a reference consumes its own restrictions as well as the
     // target observations (§8.2.4). Keep the pointer read and its trace in
     // the transaction even when the returned value cannot carry a label view.
-    // The traversal already records the slot's scheduling dependencies,
-    // including batched array reads; this observation is for CFC alone.
-    this.#tx.runWithAmbientReadMeta(
-      ignoreReadForScheduling,
-      () => readMaybeLink(this.#tx, source),
-    );
+    // The traversal already records the slot's scheduling dependencies and
+    // has the reference in hand; this observation is for CFC alone, so it
+    // loads nothing.
+    this.#tx.readOrThrow(toMemorySpaceAddress(source), {
+      meta: followedSlotProbe,
+      trackReadWithoutLoad: true,
+    });
     this.#tx.recordCfcDereferenceTrace({
       source: cfcAddressFromLink(source),
       target: cfcAddressFromLink(target),

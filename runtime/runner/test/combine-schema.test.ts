@@ -57,7 +57,7 @@ describe("combineSchema type handling", () => {
     },
     {
       name: "a `FabricPrimitive` type and array are disjoint",
-      a: { type: "FabricRegExp" },
+      a: { type: "FabricKeyPair" },
       b: { type: "array" },
     },
   ];

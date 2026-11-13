@@ -1212,7 +1212,6 @@ export class SpeculationOverlayDestination
         (scope === undefined || scope === "space") &&
         this.#trackedIntents.get(space)?.has(id) === true,
       onNotify: (space, id, paths) => {
-        if (this.#closed) return;
         if (id === undefined) {
           // A storage reset: everything tracked in the space is dirty.
           const bySidecar = this.#trackedIntents.get(space);
@@ -1265,9 +1264,8 @@ export class SpeculationOverlayDestination
     sidecarId: string,
     hints: readonly number[],
   ): void {
-    if (this.#closed) return;
     const ids = this.#trackedIntents.get(space)?.get(sidecarId);
-    if (ids === undefined || ids.size === 0) return;
+    if (ids === undefined) return;
     const state = this.#intentSidecarStates.get(`${space}\0${sidecarId}`);
     for (const hint of hints) state?.hints.add(hint);
     let entries: unknown;
@@ -1310,20 +1308,7 @@ export class SpeculationOverlayDestination
       pending.delete(entry.eventId);
       const live = this.#trackedIntents.get(space)?.get(sidecarId);
       if (live === undefined || !live.has(entry.eventId)) return;
-      try {
-        this.#applyIntentEntry(space, sidecarId, entry);
-      } catch (error) {
-        // Nothing in the arms throws today (subscribers are caught in
-        // `#notifyIntentOutcome`; the waiters are promise resolvers),
-        // and the old sink ran inside a scheduler effect whose catch
-        // logged `schedule-error`. Kept so a future regression in one
-        // entry's arm cannot strand the OTHER ids of this check in a
-        // microtask's uncaught throw (independent review of W2, N-2).
-        logger.warn("intent-apply-failed", () => [
-          `intent ${entry.eventId} on ${sidecarId}: applying its entry threw`,
-          error,
-        ]);
-      }
+      this.#applyIntentEntry(space, sidecarId, entry);
     };
     if (state !== undefined && state.hints.size > 0) {
       const hinted = [...state.hints];
@@ -2077,7 +2062,6 @@ export class SpeculationOverlayDestination
           | undefined;
       };
       observable.speculationArrivalObserver = (arrived) => {
-        if (this.#closed) return;
         const entries = this.#entries.get(space);
         if (entries === undefined || entries.size === 0) return;
         const arrivedKeys = new Set(
@@ -2141,7 +2125,6 @@ export class SpeculationOverlayDestination
         speculationAckObserver: (() => void) | undefined;
       };
       observable.speculationAckObserver = () => {
-        if (this.#closed) return;
         this.#sweep(space, this.#watermarks.get(space) ?? 0);
       };
       const installed = observable.speculationAckObserver;
@@ -2339,7 +2322,6 @@ export class SpeculationOverlayDestination
    * closing — rollback is best-effort) and release the watermark
    * sinks. */
   close(): void {
-    if (this.#closed) return;
     this.#closed = true;
     this.#closedForQuiescence.resolve();
     for (const entries of this.#entries.values()) {
@@ -2376,21 +2358,9 @@ export class SpeculationOverlayDestination
     // Nothing can retire an intent after close (`#trackedIntents` was
     // just cleared), so quiescence waiters settle now rather than hang.
     this.#flushIntentQuiescenceWaiters();
-    for (const release of this.#ackObserverReleases.values()) {
-      try {
-        release();
-      } catch {
-        // observer release is best-effort during teardown
-      }
-    }
+    for (const release of this.#ackObserverReleases.values()) release();
     this.#ackObserverReleases.clear();
-    for (const release of this.#arrivalObserverReleases.values()) {
-      try {
-        release();
-      } catch {
-        // observer release is best-effort during teardown
-      }
-    }
+    for (const release of this.#arrivalObserverReleases.values()) release();
     this.#arrivalObserverReleases.clear();
     this.#terminalIntents.clear();
     this.#cascadeParents.clear();

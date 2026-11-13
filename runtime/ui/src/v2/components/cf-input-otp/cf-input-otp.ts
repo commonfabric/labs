@@ -43,8 +43,6 @@ export class CFInputOTP extends BaseElement {
   declare autoComplete: boolean;
   declare autofocus: boolean;
 
-  private _inputs: NodeListOf<HTMLInputElement> | null = null;
-
   constructor() {
     super();
     this.length = 6;
@@ -56,13 +54,14 @@ export class CFInputOTP extends BaseElement {
     this.autofocus = false;
   }
 
-  get inputs(): NodeListOf<HTMLInputElement> | null {
-    if (!this._inputs) {
-      this._inputs = this.shadowRoot?.querySelectorAll("input[type='text']") as
-        | NodeListOf<HTMLInputElement>
-        | null;
-    }
-    return this._inputs;
+  /**
+   * The digit inputs as currently rendered, or `undefined` before the element
+   * has a shadow root.
+   */
+  get inputs(): NodeListOf<HTMLInputElement> | undefined {
+    return this.shadowRoot?.querySelectorAll<HTMLInputElement>(
+      "input[type='text']",
+    );
   }
 
   override connectedCallback() {
@@ -74,11 +73,6 @@ export class CFInputOTP extends BaseElement {
   }
 
   override firstUpdated() {
-    // Cache references
-    this._inputs = this.shadowRoot?.querySelectorAll("input[type='text']") as
-      | NodeListOf<HTMLInputElement>
-      | null;
-    // Initialize input values
     this._updateInputValues();
   }
 
@@ -135,12 +129,7 @@ export class CFInputOTP extends BaseElement {
     const input = event.target as HTMLInputElement;
     const value = input.value;
 
-    // Only allow single digit
-    if (value.length > 1) {
-      input.value = value.slice(-1);
-    }
-
-    // Only allow numbers
+    // Only allow a single digit
     if (value && !/^\d$/.test(value)) {
       input.value = "";
       return;
@@ -153,9 +142,7 @@ export class CFInputOTP extends BaseElement {
 
     // Move to next input if value entered
     if (value && index < this.length - 1) {
-      const nextInput = this.inputs?.[index + 1] as
-        | HTMLInputElement
-        | undefined;
+      const nextInput = this.inputs?.[index + 1];
       nextInput?.focus();
       nextInput?.select();
     }
@@ -177,9 +164,7 @@ export class CFInputOTP extends BaseElement {
         if (!input.value && index > 0) {
           // Move to previous input
           event.preventDefault();
-          const prevInput = this.inputs?.[index - 1] as
-            | HTMLInputElement
-            | undefined;
+          const prevInput = this.inputs?.[index - 1];
           prevInput?.focus();
           prevInput?.select();
         }
@@ -188,26 +173,25 @@ export class CFInputOTP extends BaseElement {
       case "ArrowLeft":
         if (index > 0) {
           event.preventDefault();
-          (this.inputs?.[index - 1] as HTMLInputElement | undefined)?.focus();
+          this.inputs?.[index - 1]?.focus();
         }
         break;
 
       case "ArrowRight":
         if (index < this.length - 1) {
           event.preventDefault();
-          (this.inputs?.[index + 1] as HTMLInputElement | undefined)?.focus();
+          this.inputs?.[index + 1]?.focus();
         }
         break;
 
       case "Home":
         event.preventDefault();
-        (this.inputs?.[0] as HTMLInputElement | undefined)?.focus();
+        this.inputs?.[0]?.focus();
         break;
 
       case "End":
         event.preventDefault();
-        (this.inputs?.[this.length - 1] as HTMLInputElement | undefined)
-          ?.focus();
+        this.inputs?.[this.length - 1]?.focus();
         break;
     }
   }
@@ -231,7 +215,7 @@ export class CFInputOTP extends BaseElement {
       const nextEmptyIndex = this.value.length < this.length
         ? this.value.length
         : this.length - 1;
-      (this.inputs?.[nextEmptyIndex] as HTMLInputElement | undefined)?.focus();
+      this.inputs?.[nextEmptyIndex]?.focus();
 
       // Emit events
       const complete = this.value.length === this.length;
@@ -249,10 +233,7 @@ export class CFInputOTP extends BaseElement {
   }
 
   private _updateInputValues(): void {
-    const inputs = this.inputs;
-    if (!inputs) return;
-
-    inputs.forEach((input: HTMLInputElement, index: number) => {
+    this.inputs?.forEach((input: HTMLInputElement, index: number) => {
       input.value = this.value[index] || "";
     });
   }
@@ -261,7 +242,7 @@ export class CFInputOTP extends BaseElement {
    * Focus the first input
    */
   override focus(): void {
-    (this.inputs?.[0] as HTMLInputElement | undefined)?.focus();
+    this.inputs?.[0]?.focus();
   }
 
   /**

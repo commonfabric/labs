@@ -21,7 +21,7 @@ export class CFAspectRatio extends BaseElement {
   static override styles = unsafeCSS(aspectRatioStyles);
 
   static override properties = {
-    ratio: { type: String },
+    ratio: { type: String, reflect: true },
   };
 
   declare ratio: string;

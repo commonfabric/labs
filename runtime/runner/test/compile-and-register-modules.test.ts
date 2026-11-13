@@ -13,6 +13,7 @@ import type { Pattern } from "../src/builder/types.ts";
 import { loadCompiledClosure } from "../src/compilation-cache/cell-cache.ts";
 import type { CompiledModuleArtifact } from "../src/harness/types.ts";
 import { PatternCoverageCollector } from "../src/pattern-coverage.ts";
+import { CompileTurns } from "../src/harness/compile-interleave.ts";
 import type { ModuleByteCache } from "../src/runtime.ts";
 
 /**
@@ -370,6 +371,74 @@ describe("PatternManager.compileAndRegisterModules", () => {
     } finally {
       await warmRuntime.dispose();
       await warmStorage.close();
+    }
+  });
+
+  it("reads the byte cache again once its compile turn comes, and takes the bodies put while it waited", async () => {
+    // The test holds the turn, so the waiting compile's first read misses.
+    // Another runtime, which takes no turns, compiles and puts the bodies
+    // before the turn is released.
+    const entries = new Map<
+      string,
+      { identity: string } & CompiledModuleArtifact
+    >();
+    const reads: boolean[] = [];
+    const firstRead = Promise.withResolvers<void>();
+    const byteCache: ModuleByteCache = {
+      getCompleteSet(runtimeVersion, identities) {
+        const set = new Map<string, CompiledModuleArtifact>();
+        for (const identity of identities) {
+          const entry = entries.get(`${runtimeVersion}\0${identity}`);
+          if (entry !== undefined) set.set(identity, entry);
+        }
+        const hit = set.size === identities.length;
+        reads.push(hit);
+        firstRead.resolve();
+        return hit ? set : undefined;
+      },
+      putAll(runtimeVersion, modules) {
+        for (const module of modules) {
+          entries.set(`${runtimeVersion}\0${module.identity}`, module);
+        }
+      },
+    };
+    const compileTurns = new CompileTurns();
+    const storages = [
+      StorageManager.emulate({ as: signer }),
+      StorageManager.emulate({ as: signer }),
+    ];
+    const waiting = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: storages[0],
+      moduleByteCache: byteCache,
+      compileTurns,
+    });
+    const putting = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: storages[1],
+      moduleByteCache: byteCache,
+    });
+    try {
+      const endHeldTurn = await compileTurns.take();
+      const compiled = waiting.patternManager.compileAndRegisterModules(
+        program,
+      );
+      await firstRead.promise;
+      await putting.patternManager.compileAndRegisterModules(program);
+      expect(reads).toEqual([false, false]);
+      endHeldTurn();
+
+      const result = await compiled;
+      expect(reads).toEqual([false, false, true]);
+      expect(
+        waiting.patternManager.getArtifactEntryRef(
+          result.main!["default"] as object,
+        ),
+      ).toBeDefined();
+    } finally {
+      await waiting.dispose();
+      await putting.dispose();
+      for (const storage of storages) await storage.close();
     }
   });
 });

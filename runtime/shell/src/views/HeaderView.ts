@@ -989,15 +989,6 @@ export class XHeaderView extends BaseView {
       : { spaceDid: view.spaceDid };
   }
 
-  /** Human-readable space name, falling back to a truncated DID. */
-  get #spaceDisplayName(): string {
-    const view = this.view;
-    if (!view) return "";
-    if ("builtin" in view) return "Home";
-    if ("spaceName" in view) return view.spaceName;
-    return view.spaceDid.slice(0, 20) + "...";
-  }
-
   /** True when viewing a specific piece (not the space's default pattern). */
   get #isViewingPiece(): boolean {
     return !!(this.pieceId && this.view && !this.isViewingDefaultPattern);
@@ -1005,10 +996,10 @@ export class XHeaderView extends BaseView {
 
   /** Label for the navigate-up button: "Back to <space>" or "Go Home". */
   get #navigateUpLabel(): string {
-    if (this.#isViewingPiece) {
-      return `Back to ${this.#spaceDisplayName}`;
-    }
-    return "Go Home";
+    const spaceView = this.#spaceView;
+    return spaceView && this.#isViewingPiece
+      ? `Back to ${spaceDisplayName(spaceView)}`
+      : "Go Home";
   }
 
   /** Copy the current page URL to the clipboard. */
@@ -1128,7 +1119,7 @@ export class XHeaderView extends BaseView {
                   class="header-space"
                   href="${appViewToUrlPath(spaceView)}"
                   @click="${this.#handleSpaceClick}"
-                >${this.#spaceDisplayName}</a>
+                >${spaceDisplayName(spaceView)}</a>
                 <span class="header-separator">/</span>
                 <span class="header-piece-wrapper">
                   <button
@@ -1184,8 +1175,9 @@ export class XHeaderView extends BaseView {
                 ? html`
                   <div class="breadcrumb">
                     <span class="breadcrumb-icon">${iconFolder()}</span>
-                    <span class="breadcrumb-text">${this
-                      .#spaceDisplayName}</span>
+                    <span class="breadcrumb-text">${spaceDisplayName(
+                      spaceView,
+                    )}</span>
                     <span class="breadcrumb-chevron">
                       ${iconChevronRight()}
                     </span>
@@ -1315,6 +1307,13 @@ export class XHeaderView extends BaseView {
 }
 
 globalThis.customElements.define("x-header-view", XHeaderView);
+
+/** Human-readable name of the space `view` is in, or a truncated DID. */
+function spaceDisplayName(view: AppView): string {
+  if ("builtin" in view) return "Home";
+  if ("spaceName" in view) return view.spaceName;
+  return view.spaceDid.slice(0, 20) + "...";
+}
 
 function getConnectionColor(connectionStatus: ConnectionStatus): string {
   const saturation = 65;

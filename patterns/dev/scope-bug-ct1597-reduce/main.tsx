@@ -518,7 +518,7 @@ export default pattern<CozyPollInput, CozyPollOutput>(
                       $value={joinName}
                       placeholder="Your name"
                       aria-label="Your name"
-                      timing-strategy="immediate"
+                      timingStrategy="immediate"
                       style="flex:1"
                     />
                     <cf-button onClick={boundJoin}>Join</cf-button>
@@ -574,7 +574,7 @@ export default pattern<CozyPollInput, CozyPollOutput>(
                       $value={optionDraft}
                       placeholder="Add an option (e.g. Sushi place)…"
                       aria-label="Option title"
-                      timing-strategy="immediate"
+                      timingStrategy="immediate"
                       style="flex:1"
                     />
                     <cf-button onClick={boundAddOption}>Add</cf-button>

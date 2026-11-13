@@ -14,3 +14,7 @@ docs/history/**/*.results.json linguist-generated=true
 # An iframe pattern's guest bundle is `deno bundle` output, read as a data file
 # by the pattern beside it; review its `guest.ts` or `guest.tsx` instead.
 patterns/*/iframe-*/**/guest.js linguist-generated=true
+
+# Test-support modules for the UI components, which sit beside the source
+# rather than in a test directory.
+runtime/ui/src/v2/test-utils/** test

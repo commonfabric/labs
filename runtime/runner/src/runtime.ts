@@ -5,6 +5,7 @@ import {
   fabricFromConvertibleJsValue,
   type FabricValue,
 } from "@commonfabric/data-model";
+import { SERVER_EXECUTION_DEFAULT_ENABLED } from "@commonfabric/memory/v2/server-execution-default";
 import {
   getModernCellRepConfig,
   resetModernCellRepConfig,
@@ -167,6 +168,7 @@ import {
   type PieceSourceTransition,
   Runner,
   type RunnerRunOptions,
+  type RunnerStartOptions,
   type RunSyncedCommitResult,
   type RunSyncedOptions,
   type RunSyncedWithCommitOptions,
@@ -196,7 +198,6 @@ import {
   normalizeSpaceHost,
   parseMemoryUrl,
   type SpaceHostRegistration,
-  SpaceHostValidationError,
 } from "./space-host.ts";
 import { EffectsChannel } from "./speculation/effects-channel.ts";
 import {
@@ -1627,6 +1628,12 @@ export class Runtime {
     | undefined;
 
   /**
+   * Whether the serving loop holds the identity carriage of an effect whose
+   * request has gone out (installed _with_ the destination).
+   */
+  #dispatchedEffectCarriage: ((effectKey: string) => boolean) | undefined;
+
+  /**
    * The client speculation overlay (`speculation.md`): the _default_ seal
    * destination of every runtime under the flag that has no wave destination
    * installed. Created lazily on the first `edit()`; derivation-kind runs
@@ -1874,15 +1881,10 @@ export class Runtime {
     inputs: readonly unknown[],
   ): void {
     for (const input of inputs) {
+      // Validation recomputes the digest from the manifest, so two artifacts
+      // under one digest are equal and replacing one with the other changes
+      // nothing.
       const artifact = validateCfcPolicyArtifactManifest(input);
-      const existing = this.#policyManifests.get(artifact.policyDigest);
-      // Reaching this branch requires a collision in the canonical SHA-256
-      // digest: validation recomputes the digest for both artifacts.
-      if (existing !== undefined && !deepEqual(existing, artifact)) {
-        throw new Error(
-          `cfcPolicyManifest: immutable digest collision for ${artifact.policyDigest}`,
-        );
-      }
       this.#policyManifests.set(artifact.policyDigest, artifact);
       let spaces = this.#policyManifestSpaces.get(artifact.policyDigest);
       if (spaces === undefined) {
@@ -2119,8 +2121,14 @@ export class Runtime {
     // Not console.error/warn either: the cf test console enforcement fails
     // tests on those. Direct process stderr in Deno; plain console in browser
     // realms (no stdout contract there).
+    // `serverExecution` at the first-party default is no override: a deployed
+    // entry point and every serving runtime state it explicitly, and only
+    // the other arm, selected per deployment, is worth announcing.
     const overrideFlags = Object.entries(this.experimental)
-      .filter(([_, v]) => v !== undefined)
+      .filter(([k, v]) =>
+        v !== undefined &&
+        !(k === "serverExecution" && v === SERVER_EXECUTION_DEFAULT_ENABLED)
+      )
       .map(([k, v]) => `${k}=${v}`);
     if (overrideFlags.length > 0) {
       const banner = `Experimental flag overrides: ${overrideFlags.join(", ")}`;
@@ -2210,7 +2218,6 @@ export class Runtime {
         try {
           route = normalizeSpaceHost(host);
         } catch (cause) {
-          if (!(cause instanceof SpaceHostValidationError)) throw cause;
           throw new Error(
             `Invalid spaceHostMap entry for ${space}`,
             { cause },
@@ -3234,6 +3241,12 @@ export class Runtime {
        * the run identity). Absent (or returning nothing) the run keeps
        * the wave-level fallback — the Phase-1 cardinality-1 posture. */
       runDemanderResolver?: ServerRunDemanderResolver;
+
+      /** Whether the serving loop's outbox holds the identity carriage of
+       * an effect whose request has gone out: captured when the run that
+       * staged the effect sealed, held until the effect retires
+       * (serving-loop.md §4). */
+      dispatchedEffectCarriage?: (effectKey: string) => boolean;
     } = {},
   ): void {
     if (this.experimental.serverExecution !== true) {
@@ -3252,6 +3265,7 @@ export class Runtime {
     this.#transactionSealDestination = destination;
     this.#serverRunStamper = options.runStamper;
     this.#serverRunDemanderResolver = options.runDemanderResolver;
+    this.#dispatchedEffectCarriage = options.dispatchedEffectCarriage;
   }
 
   /** The installed seal destination (the serving loop), if any —
@@ -3274,6 +3288,19 @@ export class Runtime {
     this.#transactionSealDestination = undefined;
     this.#serverRunStamper = undefined;
     this.#serverRunDemanderResolver = undefined;
+    this.#dispatchedEffectCarriage = undefined;
+  }
+
+  /**
+   * Whether `effectKey`'s request has gone out and the serving loop still
+   * holds the identity carriage the staging run's seal recorded: an effect
+   * completion committed now commits under that carriage (serving-loop.md
+   * §4). False for a request whose release check refused it, whose carriage
+   * retires without a request going out, and everywhere a serving loop
+   * installed no answer.
+   */
+  hasDispatchedEffectCarriage(effectKey: string): boolean {
+    return this.#dispatchedEffectCarriage?.(effectKey) ?? false;
   }
 
   /**
@@ -5414,8 +5441,11 @@ export class Runtime {
     );
   }
 
-  start<T = any>(resultCell: Cell<T>): Promise<boolean> {
-    return this.runner.start(resultCell);
+  start<T = any>(
+    resultCell: Cell<T>,
+    options?: RunnerStartOptions,
+  ): Promise<boolean> {
+    return this.runner.start(resultCell, options);
   }
 
   /**
@@ -5423,8 +5453,11 @@ export class Runtime {
    * it instantiates, rejecting when that commit failed; see
    * `Runner.startWithCommit()`.
    */
-  startWithCommit<T = any>(resultCell: Cell<T>): Promise<boolean> {
-    return this.runner.startWithCommit(resultCell);
+  startWithCommit<T = any>(
+    resultCell: Cell<T>,
+    options?: RunnerStartOptions,
+  ): Promise<boolean> {
+    return this.runner.startWithCommit(resultCell, options);
   }
 
   /**
@@ -5694,7 +5727,6 @@ export class Runtime {
     try {
       return normalizeSpaceHost(host);
     } catch (cause) {
-      if (!(cause instanceof SpaceHostValidationError)) throw cause;
       throw new Error(
         `Invalid host for space ${space}`,
         { cause },
@@ -5731,19 +5763,13 @@ export class Runtime {
     const generation = ++this.#healthCheckGeneration;
     this.#serverGitSha = null;
     const defaultHost = this.apiUrl.toString();
-    const hosts = new Set([defaultHost]);
-    for (
-      const host of [
-        ...Object.values(this.spaceHostMap ?? {}),
-        ...this.#dynamicHosts.values(),
-      ]
-    ) {
-      try {
-        hosts.add(new URL(host).toString());
-      } catch {
-        return false; // a malformed mapped host is unhealthy by definition
-      }
-    }
+    // Every mapped host is already a normalized origin, so equal hosts are
+    // equal strings.
+    const hosts = new Set([
+      defaultHost,
+      ...Object.values(this.spaceHostMap ?? {}),
+      ...this.#dynamicHosts.values(),
+    ]);
     const deadline = new AbortController();
     const timer = setTimeout(
       () => deadline.abort(new DOMException("timed out", "TimeoutError")),

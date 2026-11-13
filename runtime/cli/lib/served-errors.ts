@@ -1,15 +1,16 @@
 /**
- * Errors thrown by served handler runs, for `cf test` on the server-execution
- * arm. There the test's runtime runs a handler speculatively and a serving
- * runtime runs it for real, and the serving runtime has no error handler of
- * the test's. A served run that throws reaches the test's runtime only as an
- * `errored` outcome of the event that fired it, which this module turns into
- * a runtime error of the test. It covers the events the test's runtime fired:
- * an event a served handler fires on its own account is no event of the
- * test's runtime, and has no outcome there.
+ * Errors of served handler runs, for `cf test` on the server-execution arm.
+ * There the test's runtime runs a handler speculatively and a serving runtime
+ * runs it for real, and the serving runtime has no error handler of the
+ * test's. A served run that throws, or whose commit CFC enforcement refuses,
+ * reaches the test's runtime only as an `errored` outcome of the event that
+ * fired it, which this module turns into a runtime error of the test, or for
+ * a refusal into a console warning. It covers the events the test's runtime
+ * fired: an event a served handler fires on its own account is no event of
+ * the test's runtime, and has no outcome there.
  */
 
-import type { Runtime } from "@commonfabric/runner";
+import { isCfcEnforcementRejection, type Runtime } from "@commonfabric/runner";
 
 /** Prefix that marks a runtime error as a served run's. */
 export const SERVED_ERROR_PREFIX = "[served] ";
@@ -37,6 +38,31 @@ export function collectServedErrors(runtime: Runtime): EventError[] {
     }
   });
   return errors;
+}
+
+/**
+ * Returns the console warnings to report for the commits CFC enforcement
+ * refused among `served` errors, each marked with {@link SERVED_ERROR_PREFIX}.
+ * A refused commit is a denial rather than a throw, and the test's runtime
+ * reports a commit of its own that CFC refuses through the warnings its
+ * loggers count, so a served one is reported among the warnings too, where
+ * `allowConsoleWarnings` decides about both alike.
+ */
+export function servedCfcRefusalWarnings(
+  served: readonly EventError[],
+): string[] {
+  return served.filter(isCfcEnforcementRejection).map(({ message }) =>
+    `${SERVED_ERROR_PREFIX}${message}`
+  );
+}
+
+/**
+ * Returns the `served` errors other than the commits CFC enforcement refused,
+ * which are the throws of served runs, for {@link servedRuntimeErrors} to
+ * report; {@link servedCfcRefusalWarnings} reports the rest.
+ */
+export function servedThrows(served: readonly EventError[]): EventError[] {
+  return served.filter((error) => !isCfcEnforcementRejection(error));
 }
 
 /**

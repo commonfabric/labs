@@ -556,10 +556,7 @@ export class CFSlider extends BaseElement {
       if (binding === this.#binding) return move();
     };
     // A move that failed is reported, and the queue goes on without it.
-    this.#enqueue(this.#queue.then(onBinding, (error) => {
-      reportError(error);
-      return onBinding();
-    }));
+    this.#enqueue(this.#queue.catch(reportError).then(onBinding));
   }
 
   #enqueue(run: Promise<void> | void): void {
@@ -661,9 +658,8 @@ export class CFSlider extends BaseElement {
     return true;
   }
 
-  /** Begin a drag by `pointer`, or keep the one under way. */
+  /** Begin a drag by `pointer`, where none is under way. */
   #beginDrag(pointer: number): void {
-    if (this.#pointer !== undefined) return;
     this.#pointer = pointer;
     this.requestUpdate();
     // In order, so a step still waiting on the worker lands first.
@@ -713,21 +709,22 @@ export class CFSlider extends BaseElement {
     const onThumb = event.composedPath().some((target) =>
       target instanceof Element && target.classList.contains("thumb")
     );
-    if (!onThumb) this.#moveToPointer(event);
+    if (!onThumb) this.#moveToPointer(event, track);
   };
 
   #onPointerMove = (event: PointerEvent): void => {
-    if (event.pointerId !== this.#pointer || this.disabled) return;
-    this.#moveToPointer(event);
+    const track = this.#track.value;
+    if (
+      event.pointerId !== this.#pointer || this.disabled || track === undefined
+    ) return;
+    this.#moveToPointer(event, track);
   };
 
   #onPointerUp = (event: PointerEvent): void => {
     if (event.pointerId === this.#pointer) this.#endDrag(true);
   };
 
-  #moveToPointer(event: PointerEvent): void {
-    const track = this.#track.value;
-    if (track === undefined) return;
+  #moveToPointer(event: PointerEvent, track: HTMLDivElement): void {
     const rect = track.getBoundingClientRect();
     // Vertical sliders put the minimum at the bottom.
     const fraction = this.orientation === "horizontal"

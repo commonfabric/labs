@@ -91,20 +91,6 @@ export class CFCollapsible extends BaseElement {
   }
 
   override firstUpdated() {
-    // Cache references
-    this._contentWrapper = this.shadowRoot?.querySelector(".content-wrapper") as
-      | HTMLElement
-      | null;
-    this._content = this.shadowRoot?.querySelector(".content") as
-      | HTMLElement
-      | null;
-    this._triggerSlot = this.shadowRoot?.querySelector(
-      'slot[name="trigger"]',
-    ) as HTMLSlotElement | null;
-    this._triggerWrapperEl = this.shadowRoot?.querySelector(
-      ".trigger-wrapper",
-    ) as HTMLElement | null;
-
     this.setupTriggerHandlers();
     this.updateContentHeight();
   }
@@ -146,74 +132,47 @@ export class CFCollapsible extends BaseElement {
   };
 
   private setupTriggerHandlers(): void {
-    if (!this.triggerSlot) return;
-
-    const triggerElements = this.triggerSlot.assignedElements();
-    triggerElements.forEach((element: Element) => {
-      // Mark trigger elements with appropriate attributes
-      if (element instanceof HTMLElement) {
-        element.setAttribute("role", "button");
-        element.setAttribute("aria-expanded", String(this.open));
-        element.setAttribute("aria-controls", "collapsible-content");
-        if (this.disabled) {
-          element.setAttribute("aria-disabled", "true");
-        } else {
-          element.removeAttribute("aria-disabled");
-        }
-        element.style.cursor = this.disabled ? "not-allowed" : "pointer";
-      }
-    });
+    for (const element of this.#triggerElements()) {
+      element.setAttribute("role", "button");
+      element.setAttribute("aria-controls", "collapsible-content");
+    }
+    this.updateTriggerAttributes();
   }
 
   private updateTriggerAttributes(): void {
-    if (!this.triggerSlot) return;
-
-    const triggerElements = this.triggerSlot.assignedElements();
-    triggerElements.forEach((element: Element) => {
-      if (element instanceof HTMLElement) {
-        element.setAttribute("aria-expanded", String(this.open));
-        if (this.disabled) {
-          element.setAttribute("aria-disabled", "true");
-        } else {
-          element.removeAttribute("aria-disabled");
-        }
-        element.style.cursor = this.disabled ? "not-allowed" : "pointer";
+    for (const element of this.#triggerElements()) {
+      element.setAttribute("aria-expanded", String(this.open));
+      if (this.disabled) {
+        element.setAttribute("aria-disabled", "true");
+      } else {
+        element.removeAttribute("aria-disabled");
       }
-    });
+      element.style.cursor = this.disabled ? "not-allowed" : "pointer";
+    }
   }
 
   private handleClick = (event: Event): void => {
-    // Check if click came from trigger slot or wrapper/indicator
-    const path = event.composedPath();
-
     if (this.disabled) return;
-
-    let clickedTrigger = false;
-    if (this.triggerSlot) {
-      const triggerElements = this.triggerSlot.assignedElements();
-      clickedTrigger = path.some((el) =>
-        triggerElements.includes(el as Element)
-      );
-    }
-    if (!clickedTrigger && this.triggerWrapperEl) {
-      clickedTrigger = path.includes(this.triggerWrapperEl);
-    }
-
-    if (clickedTrigger) {
+    // A click on a slotted trigger, or on the wrapper around the trigger slot
+    // and the indicator.
+    const path = event.composedPath();
+    const wrapper = this.triggerWrapperEl;
+    const triggers = this.triggerSlot?.assignedElements() ?? [];
+    if (
+      triggers.some((trigger) => path.includes(trigger)) ||
+      (wrapper !== null && path.includes(wrapper))
+    ) {
       event.preventDefault();
       this.toggle();
     }
   };
 
   private updateContentHeight(): void {
-    if (!this.contentWrapper || !this.content) return;
-
-    if (this.open) {
-      // Get the actual height of the content
-      const height = this.content.scrollHeight;
-      (this.contentWrapper as HTMLElement).style.height = `${height}px`;
-    } else {
-      (this.contentWrapper as HTMLElement).style.height = "0px";
+    const { contentWrapper, content } = this;
+    if (contentWrapper && content) {
+      contentWrapper.style.height = this.open
+        ? `${content.scrollHeight}px`
+        : "0px";
     }
   }
 
@@ -253,5 +212,12 @@ export class CFCollapsible extends BaseElement {
         open: false,
       });
     }
+  }
+
+  /** The slotted triggers that are HTML elements, which carry a style. */
+  #triggerElements(): HTMLElement[] {
+    return (this.triggerSlot?.assignedElements() ?? []).filter(
+      (element): element is HTMLElement => element instanceof HTMLElement,
+    );
   }
 }

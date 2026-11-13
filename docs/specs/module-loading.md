@@ -945,12 +945,12 @@ cell's contents. The cache is designed around this:
 
 Source maps are per module. `SESInternals` loads them keyed by filename
 ([`SESRuntime.loadSourceMapLazy`][c10]), and the Engine registers each module's
-map twice: once composed under the per-load `<evalId>.js` name, and once under
-the module's own eval `sourceURL`, shifted by the CommonJS factory-wrapper line,
-because the browser surfaces the per-module eval frame in `new Error().stack`.
-When a warm cached record retained no authored map, an identity map keyed on the
-module's authored name is registered instead, so the frame names the module
-source rather than a raw bundle coordinate. Diagnostic names are
+map under the module's own eval `sourceURL`, shifted by the CommonJS
+factory-wrapper line, because each module is evaluated on its own and its
+frame in `new Error().stack` names that URL. When a warm cached record retained
+no authored map, an identity map keyed on the module's authored name is
+registered instead, so the frame names the module source rather than a raw
+compiled coordinate. Diagnostic names are
 `cf:module/<hash>/<path>` rather than a bundle-relative location, which is both
 stable and directly meaningful as an identity.
 

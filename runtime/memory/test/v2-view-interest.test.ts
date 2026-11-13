@@ -163,8 +163,12 @@ describe("view interests", () => {
     resetServerExecutionConfig();
   });
 
-  it("excludes the serving principal from visible client demand", async () => {
+  it("excludes the serving principal's serving session from visible client demand, and keeps its client session", async () => {
     await set([], [view()]);
+    expect(server.viewInterestsForSpace(space, { excludePrincipal: principal }))
+      .toHaveLength(1);
+
+    await resume({ actingAs: "space-owner" });
     expect(server.viewInterestsForSpace(space, { excludePrincipal: principal }))
       .toEqual([]);
     expect(server.viewInterestsForSpace(space, { excludePrincipal: "another" }))
@@ -573,7 +577,7 @@ describe("view interests", () => {
       expect(demanded()).not.toContain("of:unborn");
       expect(demanded()).toContain("of:arriving");
       expect(changed.calls.slice(notifications).map((call) => call.args))
-        .toEqual([[space, "push-growth", principal, sessionId]]);
+        .toEqual([[space, "push-growth", principal, sessionId, undefined]]);
       messages.length = 0;
       await server.writeDocument(space, "of:unborn", { label: "orphan" });
       await server.flushSessions();
@@ -1203,7 +1207,7 @@ describe("view interests", () => {
       server.demandedInstancesForSpace(space).map((row) => row.id),
     ).toContain("of:arriving");
     expect(changed.calls.slice(notifications).map((call) => call.args))
-      .toEqual([[space, "push-growth", principal, sessionId]]);
+      .toEqual([[space, "push-growth", principal, sessionId, undefined]]);
   });
 
   it("rebuilds only the support graphs for a plan that keeps a root under another selector", async () => {

@@ -166,12 +166,10 @@ describe("v2 document reconstruction", () => {
       installThenPatch(engine);
       evictDocumentCacheEntries(engine, Number.MAX_SAFE_INTEGER);
       const floors: unknown[] = [];
-      const statement = engine.statements.selectLatestBase as unknown as {
-        get: (params: { floor?: unknown }) => unknown;
-      };
-      const get = statement.get.bind(statement);
+      const statement = engine.statement("selectLatestBase");
+      const get = statement.get;
       statement.get = (params) => {
-        floors.push(params.floor);
+        floors.push(params?.floor);
         return get(params);
       };
       const newestSnapshot = SNAPSHOT_SEQS[SNAPSHOT_SEQS.length - 1];

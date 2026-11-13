@@ -2,7 +2,9 @@
  * Labeled SQLite mapped-render scaling fixture. Each render demands the full
  * mapped view at the named row count; seeding precedes the render intervals.
  * Run the same file with --cfc-enforcement-mode disabled --cfc-flow-labels off
- * and with --cfc-shell-posture, adding --verbose --stats-threshold 0 to both.
+ * (with EXPERIMENTAL_SERVER_EXECUTION=false, since the server-execution arm
+ * refuses CFC disabled) and with --cfc-shell-posture, adding --verbose
+ * --stats-threshold 0 to both.
  */
 import {
   action,
@@ -22,9 +24,11 @@ interface Row {
 }
 
 const MappedRows = pattern<{ db: SqliteDb; count: number }>(({ db, count }) => {
+  // `reactOn: db` re-runs the query after the seed's writes. Without it a
+  // query that ran before the seed keeps the empty result it read then.
   const query = db.query<Row>(
     "SELECT id, title FROM messages ORDER BY id LIMIT ?",
-    { params: [count] },
+    { params: [count], reactOn: db },
   );
   return {
     query,

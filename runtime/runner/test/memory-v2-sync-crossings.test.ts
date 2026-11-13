@@ -65,7 +65,12 @@ describe("memory-v2-sync-crossings", () => {
   beforeEach(() => {
     server = newSharedServer();
     managerA = EmulatedStorageManager.connectTo(server, { as: signer });
-    managerB = EmulatedStorageManager.connectTo(server, { as: signer });
+    // Only a serving manager follows crossings, so the reader here serves
+    // the space its reads start in.
+    managerB = EmulatedStorageManager.connectTo(server, {
+      as: signer,
+      servingHomeSpace: space,
+    });
     rt1 = new Runtime({
       apiUrl: new URL(import.meta.url),
       storageManager: managerA,
@@ -260,6 +265,78 @@ describe("memory-v2-sync-crossings", () => {
     );
     expect(recovered).not.toContain(`load-key:${leafKey}`);
     expect(localOnB(leaf, farSpace)).toBe(false);
+  });
+
+  describe("on a manager that isn't serving", () => {
+    let managerC: EmulatedStorageManager;
+    let rt3: Runtime;
+
+    beforeEach(() => {
+      managerC = EmulatedStorageManager.connectTo(server, { as: signer });
+      rt3 = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: managerC,
+      });
+    });
+
+    afterEach(async () => {
+      await rt3.dispose();
+      await managerC.close();
+    });
+
+    /** Whether replica C holds the document `cell` names, in `inSpace`. */
+    function localOnC(cell: Cell<unknown>, inSpace: MemorySpace): boolean {
+      const link = cell.getAsNormalizedFullLink();
+      const replica = managerC.open(inSpace) as unknown as {
+        get?: (uri: string, scope?: unknown) => unknown;
+      };
+      return replica.get?.(link.id, link.scope) !== undefined;
+    }
+
+    it("kicks no load from the crossing a sync's frame carries", async () => {
+      const { leaf, top } = await writeCrossing("client sync");
+      const top3 = rt3.getCellFromLink<{ next?: { name?: string } }>({
+        ...top.getAsNormalizedFullLink(),
+        schema: topSchema,
+      });
+      await top3.sync();
+      expect(managerC.followsCrossings?.(space)).toBe(false);
+      expect(managerC.pendingCrossingLoadAddresses?.()).toEqual([]);
+      expect(localOnC(top, space)).toBe(true);
+      expect(localOnC(leaf, farSpace)).toBe(false);
+    });
+
+    it("loads the far document once a read reaches the link", async () => {
+      const { leaf, top } = await writeCrossing("client read");
+      const top3 = rt3.getCellFromLink<{ next?: { name?: string } }>({
+        ...top.getAsNormalizedFullLink(),
+        schema: topSchema,
+      });
+      expect(await top3.pull()).toEqual({ next: { name: "Ada" } });
+      expect(localOnC(leaf, farSpace)).toBe(true);
+    });
+
+    it("loads the far document once a pull reaches it past a handle", async () => {
+      // The link is held as a handle, declaring nothing of what it links,
+      // so a read of the document holding it loads nothing in the far
+      // space; a pull of a path through the handle is a read that reaches
+      // the far document, and loads it.
+      const { leaf, top } = await writeCrossing("client handle read");
+      const top3 = rt3.getCellFromLink<{ next?: unknown }>({
+        ...top.getAsNormalizedFullLink(),
+        schema: {
+          type: "object",
+          properties: { next: { type: "unknown", asCell: ["cell"] } },
+        },
+      });
+      await top3.pull();
+      expect(localOnC(leaf, farSpace)).toBe(false);
+      const name = top3.key("next").key("name" as never).asSchema<string>({
+        type: "string",
+      });
+      expect(await name.pull()).toBe("Ada");
+      expect(localOnC(leaf, farSpace)).toBe(true);
+    });
   });
 
   it("leaves a link the schema does not follow unloaded", async () => {

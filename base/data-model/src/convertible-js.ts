@@ -57,6 +57,7 @@ import { FabricError } from "@/fabric-instances/FabricError.ts";
 import { FabricNativeWrapper } from "@/fabric-instances/FabricNativeWrapper.ts";
 import { cloneHelper } from "./value-clone.ts";
 import { isValidDeepFrozenFabricValueWithCaches } from "./deep-freeze.ts";
+import { recordFrozenFabricContainer } from "./value-acyclic.ts";
 
 /**
  * Helper for `shallowFabricFromConvertibleJsObjectElseUndefined()`, which
@@ -445,7 +446,10 @@ function fabricFromConvertibleJsValueInternal(
         );
       }
     }
-    if (freeze) Object.freeze(resultArray);
+    if (freeze) {
+      Object.freeze(resultArray);
+      recordFrozenFabricContainer(resultArray);
+    }
     result = resultArray;
   } else {
     // Recurse into object properties. Preserve `undefined`-valued properties.
@@ -461,7 +465,10 @@ function fabricFromConvertibleJsValueInternal(
         invalidValues,
       );
     }
-    if (freeze) Object.freeze(obj);
+    if (freeze) {
+      Object.freeze(obj);
+      recordFrozenFabricContainer(obj);
+    }
     result = obj;
   }
 

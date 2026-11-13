@@ -704,41 +704,30 @@ function prepareAnyOfBranch(
   };
   if (ContextualFlowControl.isFalseSchema(option)) return rejected;
   const merged = mergeSchemaOption(restSchema, option);
-  if (typeof merged === "boolean") {
+  const hasAsCell = SchemaObjectTraverser.hasAsCell(merged);
+  const resolved = typeof merged !== "boolean" && "$ref" in merged
+    ? resolveSchemaRefsCanonical(merged)
+    : merged;
+  if (typeof resolved === "boolean") {
     // canBranchMatch's first check: boolean schemas decide immediately.
     return {
       optionIsFalse: false,
       merged,
-      constant: merged,
-      hasAsCell: false,
+      constant: resolved,
+      hasAsCell,
       types: undefined,
       required: undefined,
     };
-  }
-  const hasAsCell = SchemaObjectTraverser.hasAsCell(merged);
-  let resolved: JSONSchema | undefined = merged;
-  if ("$ref" in merged) {
-    resolved = resolveSchemaRefsCanonical(merged);
-    if (typeof resolved === "boolean") {
-      return {
-        optionIsFalse: false,
-        merged,
-        constant: resolved,
-        hasAsCell,
-        types: undefined,
-        required: undefined,
-      };
-    } else if (resolved === undefined) {
-      // Unresolved $ref: pass the prefilter; traversal complains properly.
-      return {
-        optionIsFalse: false,
-        merged,
-        constant: true,
-        hasAsCell,
-        types: undefined,
-        required: undefined,
-      };
-    }
+  } else if (resolved === undefined) {
+    // Unresolved $ref: pass the prefilter; traversal complains properly.
+    return {
+      optionIsFalse: false,
+      merged,
+      constant: true,
+      hasAsCell,
+      types: undefined,
+      required: undefined,
+    };
   }
   const types = resolved.type !== undefined
     ? (Array.isArray(resolved.type) ? resolved.type : [resolved.type])
@@ -1503,33 +1492,6 @@ export const coveringSelector = (
   return undefined;
 };
 
-export class CycleTracker<K> {
-  #partial: Set<K>;
-  #expectCycles: boolean;
-  constructor(expectCycles = false) {
-    this.#expectCycles = expectCycles;
-    this.#partial = new Set<K>();
-  }
-  include(k: K, context?: unknown): Disposable | null {
-    if (this.#partial.has(k)) {
-      if (!this.#expectCycles) {
-        logger.warn("traverse", () => [
-          "Cycle Detected!",
-          k,
-          context,
-        ]);
-      }
-      return null;
-    }
-    this.#partial.add(k);
-    return {
-      [Symbol.dispose]: () => {
-        this.#partial.delete(k);
-      },
-    };
-  }
-}
-
 /**
  * Cycle tracker for more complex objects with multiple parts.
  *
@@ -2198,14 +2160,17 @@ function getNormalizedLink(
   if (address.path.length === 0 || address.path[0] !== "value") {
     throw new Error("Unable to create link to non-value address");
   }
-  const { space, id, path } = address;
-  return pinImmutableCell({
-    space,
+  const { space, id } = address;
+  const scope = address.scope ?? "space";
+  const path = address.path.slice(1);
+  // Every link crossing builds two of these links, so each arm is a whole
+  // literal: a spread in an object literal copies its source member by member.
+  return pinImmutableCell(
+    schema === undefined
+      ? { space, id, scope, path }
+      : { space, id, scope, path, schema },
     id,
-    scope: address.scope ?? "space",
-    path: path.slice(1),
-    ...(schema !== undefined && { schema }),
-  }, id);
+  );
 }
 
 // Value traversed must be a DAG, though it may have aliases or cell links
@@ -2376,112 +2341,103 @@ export abstract class BaseObjectTraverser {
       // that is read back through here), so unlike the schema-`default`
       // paths it cannot fail loudly yet: the instance leafs through whole.
       return doc.value;
-    } else if (isObjectOrArray(doc.value)) {
-      // First, see if we need special handling
-      if (isSigilLink(doc.value)) {
-        // Check coverage before getAtPath/followPointer adds this link target
-        // to schemaTracker.
-        const alreadyTracked = this.traverseCells &&
-          this.isLinkedDocumentCovered(doc, DEFAULT_SELECTOR);
-        const link = parseLink(doc.value, doc.address);
-        const [redirDoc, _redirSelector] = this.getDocAtPath(
-          doc,
-          [],
-          DEFAULT_SELECTOR,
-          "writeRedirect",
-        );
-        this.tx.read(redirDoc.address, READ_FOR_SCHEDULING);
-        if (redirDoc.value === undefined) {
-          logger.debug(
-            "traverse",
-            () => [
-              "getAtPath returned undefined value for",
-              doc,
-            ],
-          );
-          return null;
-        }
-        // If the target doc was already tracked before this traversal,
-        // skip re-traversing it (followPointer already loaded and tracked it)
-        // We can only do this in the querySchema version.
-        // For validateAndTransform, we need the returned value, so we can't
-        // optmize this out. We can tell based on traverseCells.
-        if (
-          this.traverseCells && alreadyTracked &&
-          doc.address.id !== redirDoc.address.id
-        ) {
-          return null;
-        }
-        // our item link should point to the target of the last redirect
-        itemLink = getNormalizedLink(redirDoc.address, true);
-        // We can follow all the links, since we don't need to track cells
-        const [valueDoc, _] = this.getDocAtPath(redirDoc, [], DEFAULT_SELECTOR);
-        this.tx.read(valueDoc.address, READ_FOR_SCHEDULING);
-        // Same entry gate as followPointer: an unresolvable ref names a
-        // corrupt or malformed declaration (the loader logs it), and such
-        // a declaration selects nothing.
-        const linkSchemaCollected = link?.schema === undefined ||
-          loadExternalSchemaDocs(
-            this.tx,
-            doc.address,
-            link.schema,
-            this.context,
-          );
-        return this.traverseLinkedDoc(
-          valueDoc,
-          linkSchemaCollected ? link?.schema : false,
-          defaultValue,
-          itemLink,
-        );
-      } else {
-        const newValue: Record<string, FabricValue> = {};
-        using t = this.tracker.include(doc.value, true, newValue, doc);
-        if (t === null) {
-          return this.tracker.getExisting(doc.value, true);
-        }
-        const entries = Object.entries(doc.value as JSONObject).map((
-          [k, v],
-        ) => {
-          const itemDoc = {
-            address: {
-              ...doc.address,
-              path: appendToPath(doc.address.path, k),
-            },
-            value: v,
-          };
-          const val = this.traverseDAG(
-            itemDoc,
-            isWalkableObjectNotArray(defaultValue)
-              ? (defaultValue as JSONObject)[k]
-              : undefined,
-          )!;
-          return [k, val];
-        });
-        // We copy the contents of our result into newValue so that if we have
-        // a cycle, we can return newValue before we actually populate it.
-        for (const [k, v] of entries) {
-          if (typeof k === "string") {
-            newValue[k] = v;
-          }
-        }
-        // Our link is based on the last link in the chain and not the first.
-        const newLink = itemLink ?? getNormalizedLink(doc.address, true);
-        const recordResult = this.objectCreator.createObject(newLink, newValue);
-        if (defaultValue === undefined) {
-          const memoKey = itemLink
-            ? addressKey(scopedAddressForKey(doc.address)) + "|" +
-              addressKey(itemLink)
-            : addressKey(scopedAddressForKey(doc.address));
-          this.dagMemo.set(memoKey, recordResult);
-        }
-        return recordResult;
-      }
-    } else {
-      logger.error(
-        "traverse-error",
-        () => ["Encountered unexpected object: ", doc.value],
+    } else if (isSigilLink(doc.value)) {
+      // Check coverage before getAtPath/followPointer adds this link target
+      // to schemaTracker.
+      const alreadyTracked = this.traverseCells &&
+        this.isLinkedDocumentCovered(doc, DEFAULT_SELECTOR);
+      const link = parseLink(doc.value, doc.address);
+      const [redirDoc, _redirSelector] = this.getDocAtPath(
+        doc,
+        [],
+        DEFAULT_SELECTOR,
+        "writeRedirect",
       );
-      return null;
+      this.tx.read(redirDoc.address, READ_FOR_SCHEDULING);
+      if (redirDoc.value === undefined) {
+        logger.debug(
+          "traverse",
+          () => [
+            "getAtPath returned undefined value for",
+            doc,
+          ],
+        );
+        return null;
+      }
+      // If the target doc was already tracked before this traversal,
+      // skip re-traversing it (followPointer already loaded and tracked it)
+      // We can only do this in the querySchema version.
+      // For validateAndTransform, we need the returned value, so we can't
+      // optmize this out. We can tell based on traverseCells.
+      if (
+        this.traverseCells && alreadyTracked &&
+        doc.address.id !== redirDoc.address.id
+      ) {
+        return null;
+      }
+      // our item link should point to the target of the last redirect
+      itemLink = getNormalizedLink(redirDoc.address, true);
+      // We can follow all the links, since we don't need to track cells
+      const [valueDoc, _] = this.getDocAtPath(redirDoc, [], DEFAULT_SELECTOR);
+      this.tx.read(valueDoc.address, READ_FOR_SCHEDULING);
+      // Same entry gate as followPointer: an unresolvable ref names a
+      // corrupt or malformed declaration (the loader logs it), and such
+      // a declaration selects nothing.
+      const linkSchemaCollected = link?.schema === undefined ||
+        loadExternalSchemaDocs(
+          this.tx,
+          doc.address,
+          link.schema,
+          this.context,
+        );
+      return this.traverseLinkedDoc(
+        valueDoc,
+        linkSchemaCollected ? link?.schema : false,
+        defaultValue,
+        itemLink,
+      );
+    } else {
+      const newValue: Record<string, FabricValue> = {};
+      using t = this.tracker.include(doc.value, true, newValue, doc);
+      if (t === null) {
+        return this.tracker.getExisting(doc.value, true);
+      }
+      const entries = Object.entries(doc.value as JSONObject).map((
+        [k, v],
+      ) => {
+        const itemDoc = {
+          address: {
+            ...doc.address,
+            path: appendToPath(doc.address.path, k),
+          },
+          value: v,
+        };
+        const val = this.traverseDAG(
+          itemDoc,
+          isWalkableObjectNotArray(defaultValue)
+            ? (defaultValue as JSONObject)[k]
+            : undefined,
+        )!;
+        return [k, val];
+      });
+      // We copy the contents of our result into newValue so that if we have
+      // a cycle, we can return newValue before we actually populate it.
+      for (const [k, v] of entries) {
+        if (typeof k === "string") {
+          newValue[k] = v;
+        }
+      }
+      // Our link is based on the last link in the chain and not the first.
+      const newLink = itemLink ?? getNormalizedLink(doc.address, true);
+      const recordResult = this.objectCreator.createObject(newLink, newValue);
+      if (defaultValue === undefined) {
+        const memoKey = itemLink
+          ? addressKey(scopedAddressForKey(doc.address)) + "|" +
+            addressKey(itemLink)
+          : addressKey(scopedAddressForKey(doc.address));
+        this.dagMemo.set(memoKey, recordResult);
+      }
+      return recordResult;
     }
   }
 
@@ -2613,18 +2569,15 @@ export abstract class BaseObjectTraverser {
   }
 
   /**
-   * Traverse a document reached by following a link. The base implementation
-   * always uses traverseDAG; subclasses may override to switch to a
-   * schema-aware traversal when the link carries a schema.
+   * Traverse a document reached by following a link, under the schema the
+   * link carries, if any.
    */
-  protected traverseLinkedDoc(
+  protected abstract traverseLinkedDoc(
     doc: IMemorySpaceValueAttestation,
-    _linkSchema: JSONSchema | undefined,
+    linkSchema: JSONSchema | undefined,
     defaultValue: FabricValue,
     itemLink: NormalizedFullLink | undefined,
-  ): FabricValue {
-    return this.traverseDAG(doc, defaultValue, itemLink);
-  }
+  ): FabricValue;
 }
 
 /**
@@ -4213,6 +4166,12 @@ function isMatch(result: TraverseResult<FabricValue> | undefined): boolean {
   return result !== undefined && result.error === undefined;
 }
 
+/**
+ * The document an ordinary array-item link names: one in the source's space
+ * and scope, read at its root.
+ */
+type ArrayItemLinkTarget = IMemorySpaceValueAddress & { scope: CellScope };
+
 export class SchemaObjectTraverser<V extends FabricValue>
   extends BaseObjectTraverser {
   #sharedSchemaMemo?: SchemaMemo;
@@ -5430,7 +5389,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
   #plainArrayItemLinkTarget(
     doc: IMemorySpaceValueAttestation,
     selector: SchemaPathSelector,
-  ): IMemorySpaceValueAddress | undefined {
+  ): ArrayItemLinkTarget | undefined {
     if (
       this.traverseCells || selector.schema === undefined ||
       preparePlainSchemaPlan(selector.schema) === undefined ||
@@ -5444,7 +5403,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
   #ordinaryArrayItemLinkTarget(
     value: FabricValue,
     source: IMemorySpaceValueAddress,
-  ): IMemorySpaceValueAddress | undefined {
+  ): ArrayItemLinkTarget | undefined {
     const link = parseLink(value, source);
     const sourceScope = source.scope ?? "space";
     if (
@@ -5494,13 +5453,11 @@ export class SchemaObjectTraverser<V extends FabricValue>
   #reportMissingPlainArrayItemLink(
     doc: IMemorySpaceValueAttestation,
     selector: SchemaPathSelector,
-    target: IMemorySpaceValueAddress,
+    target: ArrayItemLinkTarget,
   ): void {
-    const link = parseLink(doc.value, doc.address);
-    if (link === undefined) return;
     reportMissingLinkTarget(
       this.context,
-      link,
+      { space: target.space, id: target.id, scope: target.scope, path: [] },
       { path: target.path, schema: selector.schema },
       doc.address.space,
       { id: doc.address.id, scope: doc.address.scope },
@@ -5521,7 +5478,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
   ):
     | {
       sourceAddresses: readonly IMemorySpaceValueAddress[];
-      targets: readonly IMemorySpaceValueAddress[];
+      targets: readonly ArrayItemLinkTarget[];
     }
     | undefined {
     const itemPlan = itemSchema === undefined
@@ -5536,7 +5493,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
     }
 
     const sourceAddresses: IMemorySpaceValueAddress[] = [];
-    const targets: IMemorySpaceValueAddress[] = [];
+    const targets: ArrayItemLinkTarget[] = [];
     for (let index = 0; index < docArray.length; index++) {
       if (!(index in docArray)) continue;
       const item = docArray[index];
@@ -6743,45 +6700,95 @@ interface TypeReading {
   readonly valueType: JSONSchemaTypes;
 
   /**
-   * What the reading keeps about the branch lists it reads as an `allOf`,
-   * from the first it reads. One array of options can be both an `allOf` and
-   * an `anyOf`, and comes to something different as each, so each way keeps
-   * its own. A schema with no `allOf`, `anyOf` or `oneOf` is read without
-   * either.
+   * The branch lists the reading has read, by their options, from the first
+   * it reads. A schema with no `allOf`, `anyOf` or `oneOf` is read without
+   * any.
    */
-  allOf?: BranchListReading;
+  lists?: Map<readonly JSONSchema[], BranchListReading>;
 
-  /** Likewise, for the lists it reads as an `anyOf` or a `oneOf`. */
-  anyOf?: BranchListReading;
+  /** Whether the current round reached a list again while it was open. */
+  reachedAgain: boolean;
 }
 
-/** What a `TypeReading` keeps about the branch lists it reads. */
+/**
+ * What a `TypeReading` keeps about one array of options, read as one
+ * combinator against one set of definitions. One array can be read both as an
+ * `allOf` and as an `anyOf`, and against more than one set of definitions,
+ * where a union with no definitions to hand its options holds options that
+ * carry definitions of their own. It comes to something different each way,
+ * so each way keeps its own, chained through `next`.
+ */
 interface BranchListReading {
-  /** The branch lists being read further up. */
-  readonly open: ByReading<true>;
+  readonly combinator: BranchCombinator;
+  readonly definitions: JSONSchemaObj["$defs"];
 
-  /** What each branch list read in the current round came to. */
-  readonly validities: ByReading<TypeValidity>;
+  /** The same options read another way. */
+  next: BranchListReading | undefined;
+
+  /** Whether the list is being read further up. */
+  open: boolean;
+
+  /** What the list came to in the current round, once read. */
+  validity: TypeValidity | undefined;
 
   /**
-   * What stands in for a branch list reached again while it is being read
-   * further up: what it came to in the round before. A list with none matches
-   * nothing.
+   * What stands in for the list where it is reached again while open: what it
+   * came to in the round before. A list with none matches nothing.
    */
-  readonly standIns: ByReading<TypeValidity>;
+  standIn: TypeValidity | undefined;
 
-  /**
-   * The branch lists, each with the definitions it is read against, reached
-   * again in the current round while they were being read further up.
-   */
-  readonly reachedAgain: [readonly JSONSchema[], unknown][];
+  /** Whether the current round reached the list again while it was open. */
+  reachedAgain: boolean;
 }
+
+/**
+ * `schemaTypeValidity()` verdicts for memoizable schemas, by value type. A
+ * verdict reached through an external reference embeds registry content, so
+ * the registry clear swaps the cache.
+ */
+let _typeValidities = new WeakMap<
+  JSONSchemaObj,
+  Map<JSONSchemaTypes, TypeValidity>
+>();
+
+onSchemaRegistryClear(() => {
+  _typeValidities = new WeakMap();
+});
 
 /**
  * Canonical schema/type matching (extracted from SchemaObjectTraverser so the
  * write path can share it): whether a schema can match a value of the given
  * type name, with the same $ref resolution and allOf/anyOf/oneOf handling the
  * read-side validation uses.
+ *
+ * The verdict is kept per schema identity where the schema is memoizable. A
+ * verdict reached while an external resolution missed is not kept, since the
+ * document can still arrive.
+ */
+function schemaTypeValidity(
+  schema: JSONSchema,
+  valueType: JSONSchemaTypes,
+): TypeValidity {
+  if (typeof schema === "boolean" || !isMemoizableSchemaInput(schema)) {
+    return readTypeValidity(schema, valueType);
+  }
+  let byType = _typeValidities.get(schema);
+  const cached = byType?.get(valueType);
+  if (cached !== undefined) return cached;
+  const missesBefore = externalResolutionMissCount();
+  const validity = readTypeValidity(schema, valueType);
+  if (externalResolutionMissCount() === missesBefore) {
+    if (byType === undefined) {
+      byType = new Map();
+      _typeValidities.set(schema, byType);
+    }
+    byType.set(valueType, validity);
+  }
+  return validity;
+}
+
+/**
+ * Like {@link schemaTypeValidity}, without the memo.
  *
  * A schema that reaches itself again through a `$ref` — a union whose handle
  * branch names the union — presents one of its branch lists again, since
@@ -6802,44 +6809,49 @@ interface BranchListReading {
  * in for it is the least fixed point, and each list can move up only twice, so
  * the rounds number at most one more than twice the lists reached again.
  */
-function schemaTypeValidity(
+function readTypeValidity(
   schema: JSONSchema,
   valueType: JSONSchemaTypes,
 ): TypeValidity {
-  const reading: TypeReading = { valueType };
+  const reading: TypeReading = { valueType, reachedAgain: false };
   for (;;) {
     const validity = typeValidityWithin(schema, reading);
-    if (listsSettled(reading.allOf) && listsSettled(reading.anyOf)) {
-      return validity;
-    }
-    startNextRound(reading.allOf);
-    startNextRound(reading.anyOf);
+    if (!reading.reachedAgain || listsSettled(reading)) return validity;
+    startNextRound(reading);
   }
 }
 
-/**
- * Whether every branch list `lists` reached again came to what stood in for
- * it, as a reading that read no list this way trivially has.
- */
-function listsSettled(lists: BranchListReading | undefined): boolean {
-  return lists === undefined ||
-    lists.reachedAgain.every(([options, definitions]) =>
-      readingEntry(lists.validities, options, definitions) ===
-        (readingEntry(lists.standIns, options, definitions) ??
-          TypeValidity.False)
-    );
-}
-
-/** Lets what each list in `lists` came to stand in for it in the next round. */
-function startNextRound(lists: BranchListReading | undefined): void {
-  if (lists === undefined) return;
-  for (const [options, byDefinitions] of lists.validities) {
-    for (const [definitions, listValidity] of byDefinitions) {
-      setReadingEntry(lists.standIns, options, definitions, listValidity);
+/** Whether every list reached again came to what stood in for it. */
+function listsSettled(reading: TypeReading): boolean {
+  for (const first of reading.lists?.values() ?? []) {
+    for (
+      let list: BranchListReading | undefined = first;
+      list;
+      list = list.next
+    ) {
+      if (
+        list.reachedAgain &&
+        list.validity !== (list.standIn ?? TypeValidity.False)
+      ) return false;
     }
   }
-  lists.validities.clear();
-  lists.reachedAgain.length = 0;
+  return true;
+}
+
+/** Lets what each list came to stand in for it in the next round. */
+function startNextRound(reading: TypeReading): void {
+  for (const first of reading.lists?.values() ?? []) {
+    for (
+      let list: BranchListReading | undefined = first;
+      list;
+      list = list.next
+    ) {
+      if (list.validity !== undefined) list.standIn = list.validity;
+      list.validity = undefined;
+      list.reachedAgain = false;
+    }
+  }
+  reading.reachedAgain = false;
 }
 
 /** What `schema` comes to for the reading's value type, within `reading`. */
@@ -6945,33 +6957,37 @@ function branchListValidity(
   definitions: JSONSchemaObj["$defs"],
   reading: TypeReading,
 ): TypeValidity {
-  let lists = reading[combinator];
-  if (lists === undefined) {
-    lists = {
-      open: new Map(),
-      validities: new Map(),
-      standIns: new Map(),
-      reachedAgain: [],
+  reading.lists ??= new Map();
+  const first = reading.lists.get(options);
+  let list = first;
+  while (
+    list !== undefined &&
+    (list.combinator !== combinator || list.definitions !== definitions)
+  ) list = list.next;
+  if (list === undefined) {
+    list = {
+      combinator,
+      definitions,
+      next: first,
+      open: false,
+      validity: undefined,
+      standIn: undefined,
+      reachedAgain: false,
     };
-    reading[combinator] = lists;
+    reading.lists.set(options, list);
   }
-  const known = readingEntry(lists.validities, options, definitions);
-  if (known !== undefined) return known;
-  if (readingEntry(lists.open, options, definitions)) {
-    lists.reachedAgain.push([options, definitions]);
-    return readingEntry(lists.standIns, options, definitions) ??
-      TypeValidity.False;
+  if (list.validity !== undefined) return list.validity;
+  if (list.open) {
+    list.reachedAgain = true;
+    reading.reachedAgain = true;
+    return list.standIn ?? TypeValidity.False;
   }
-  setReadingEntry(lists.open, options, definitions, true);
-  try {
-    const listValidity = combinator === "allOf"
-      ? everyOptionValidity(options, definitions, reading)
-      : someOptionValidity(options, definitions, reading);
-    setReadingEntry(lists.validities, options, definitions, listValidity);
-    return listValidity;
-  } finally {
-    lists.open.get(options)?.delete(definitions);
-  }
+  list.open = true;
+  list.validity = combinator === "allOf"
+    ? everyOptionValidity(options, definitions, reading)
+    : someOptionValidity(options, definitions, reading);
+  list.open = false;
+  return list.validity;
 }
 
 /** What an `allOf` over `options` comes to: unknown & T => T. */

@@ -617,7 +617,10 @@ loop's duty).
   may have committed; the overlay signals `withheld`. Neither the sender
   nor a reader of the stream's space learns whether the handling
   committed. What the handling wrote stays
-  readable under its own labels. A delivery failure that ends in
+  readable under its own labels. A dispatch whose handler did not run is
+  withdrawn rather than marked, and under such a join its deferral, and the
+  drop notice its deferrals can harden into, carry fixed text in place of the
+  runner's reason, which can name a document the run reached. A delivery failure that ends in
   `needs-attention` made no claim: the event was not handled and stays
   retryable, and its record holds fixed text and the failure's class,
   `unknown` for a commit preparation, and nothing of what the run read.
@@ -637,7 +640,38 @@ loop's duty).
   unknowable, so the write is neither sent nor attempted (a value
   write would open a second space's writer, which the transaction
   refuses, and lose the event); the re-run reads the loaded document
-  and sends. A target the load confirms absent writes as before. Sealing the skip is the
+  and sends. A target the load confirms absent writes as before. A
+  body that did run is withdrawn too, a throw from it included, when
+  it read, in a space other than its home, a document whose load is in
+  flight and of which the replica holds nothing, not even a confirmed
+  absence. Such a document is one the body reached through a link it
+  resolved while it ran, which no dependency CT-1795's preflight park
+  walks names, and the read returned the schema's default, or
+  nothing, in place of the stored value. That entry is not left to
+  the drain: the serving scheduler requeues it with its carriage and
+  parks it on those loads as the preflight park parks a head, and the
+  copy's final callback waits for the run that follows, so it runs
+  again once they settle and a load it already waited for does not
+  withdraw it again. When every failed load failed by authorization,
+  with durable evidence of the refusal (the access list's revision), it
+  runs again on what the replica holds; any other failure, a revoked
+  session's not least, defers it as a failed preflight load does. A read in
+  the home space needs none of this, since the wave holds the run's
+  home-space reads to the store's head (serving-loop.md §3d) once the
+  run seals a write there, as a drain's copy always does with its
+  consequence mark; an LT1 in-process copy that writes only into other
+  spaces seals nothing at home, so its home-space reads count too, and
+  so do every run's that threw, which seals nothing at all. The
+  run that reads a document its load confirms absent proceeds with
+  that absence. So does a run reading a document in a space the
+  server refuses the serving identity, which commits the schema's
+  default: a load in a space whose access the runtime has lost
+  (`spaceAccessError()`) delivers nothing, so the check made after the
+  run does not wait on one, and a run that reads such a space reads the
+  lost state, whether or not a retry of the space's access is in flight.
+  The checks made as a run reads (`resolveAsCell()`, a send into another
+  space) take that load as they take any other.
+  Sealing the skip is the
   defect this rule prevents: the mark committed ALONE — a 1-op derived
   commit, the user's event permanently consumed with zero effects and
   no error (the b1-lifts a04 red, seqs 53/56). Consequence atomicity
@@ -683,8 +717,20 @@ loop's duty).
   the argument reaches is a cold read rather than a schema mismatch: a
   computation reading a document the replica does not hold publishes
   `undefined` until the load lands, by design, so a handler reading
-  through it finds its argument unresolved in exactly that window.
-  Sealing the skip would fire the commit callback on a transaction that
+  through it finds its argument unresolved in exactly that window. A
+  body that did run is withdrawn the same way, a throw from it
+  included, when it read a document still loading, as the served rule
+  above describes, in a space its commit does not write. Its re-run is
+  parked on that load, spending none of the retry window below, since
+  waiting on a load is settlement; a load that fails otherwise than by
+  authorization drops it, reporting the error the withdrawn run threw.
+  A read in a space the commit writes travels with that commit, which
+  the store refuses when the read is stale; a run that threw makes no
+  commit, so every one of its reads counts. A one-shot
+  (`retries: false`) is not withdrawn, since it is never run again: one
+  that read a document still loading commits what it read, the
+  schema's default, as one with nothing in flight does. Sealing the skip
+  would fire the commit callback on a transaction that
   wrote nothing, which a caller reads as a completed handling. The
   finalize withdraws the transaction and requeues the event within the
   retry window a stale-basis rejection gets, drawing on the same budget:

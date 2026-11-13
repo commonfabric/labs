@@ -574,7 +574,7 @@ const ChatNote = pattern<Input, Output>(
                   flexShrink: 0,
                 }}
               >
-                <cf-loader show-elapsed style={{ flexShrink: 0 }} />
+                <cf-loader showElapsed style={{ flexShrink: 0 }} />
                 <cf-button
                   variant="secondary"
                   size="sm"
@@ -594,7 +594,7 @@ const ChatNote = pattern<Input, Output>(
           <cf-keybind
             code="Enter"
             meta
-            ignore-editable={false}
+            ignoreEditable={false}
             oncf-keybind={handleGenerate({
               content,
               llmSystem,
@@ -608,7 +608,7 @@ const ChatNote = pattern<Input, Output>(
           <cf-keybind
             code="Enter"
             ctrl
-            ignore-editable={false}
+            ignoreEditable={false}
             oncf-keybind={handleGenerate({
               content,
               llmSystem,

@@ -5299,3 +5299,94 @@ Deno.test("Paren-Invariance Twins", async (t) => {
     await assertTwins(bare, paren, []);
   });
 });
+
+Deno.test("JSX Prop Name Validation", async (t) => {
+  const misnamed = (diagnostics: readonly TransformationDiagnostic[]) =>
+    diagnostics.filter((d) =>
+      d.type === "jsx:misnamed-prop" && d.severity === "warning"
+    );
+  const inPattern = (jsx: string) =>
+    [
+      "/// <cts-enable />",
+      'import { pattern, UI } from "commonfabric";',
+      "export default pattern<{ open: boolean }>(({ open }) => ({",
+      `  [UI]: (${jsx}),`,
+      "}));",
+    ].join("\n");
+
+  await t.step(
+    "refuses a hyphenated prop on an element and names the property to write",
+    async () => {
+      const { diagnostics } = await validateSource(
+        inPattern('<cf-resizable-panel default-size={28} min-size="20" />'),
+        { types: COMMONFABRIC_TYPES },
+      );
+      const errors = misnamed(diagnostics);
+      assertEquals(errors.length, 2);
+      assertStringIncludes(
+        errors[0]!.message,
+        "Rename it to `defaultSize` (`default-size=` → `defaultSize=`)",
+      );
+      assertStringIncludes(errors[1]!.message, "Rename it to `minSize`");
+    },
+  );
+
+  await t.step(
+    "says so when the element declares no camel-case property either",
+    async () => {
+      const { diagnostics } = await validateSource(
+        inPattern('<cf-button no-such-prop="x" />'),
+        { types: COMMONFABRIC_TYPES },
+      );
+      const errors = misnamed(diagnostics);
+      assertEquals(errors.length, 1);
+      assertStringIncludes(errors[0]!.message, "declares no `noSuchProp` prop");
+      assertStringIncludes(errors[0]!.message, "`data-no-such-prop`");
+    },
+  );
+
+  await t.step(
+    "finds a hyphenated prop inside a nested JSX expression",
+    async () => {
+      const { diagnostics } = await validateSource(
+        inPattern(
+          '<div>{open ? <cf-input timing-strategy="immediate" /> : null}</div>',
+        ),
+        { types: COMMONFABRIC_TYPES },
+      );
+      assertEquals(misnamed(diagnostics).length, 1);
+    },
+  );
+
+  await t.step(
+    "leaves a component's props and a namespaced name alone",
+    async () => {
+      const { diagnostics } = await validateSource(
+        [
+          "/// <cts-enable />",
+          'import { pattern, UI } from "commonfabric";',
+          'const Badge = (props: { "badge-tone"?: string }) => <span>{props["badge-tone"]}</span>;',
+          "export default pattern<{ open: boolean }>(() => ({",
+          '  [UI]: <div><Badge badge-tone="warm" /><svg xlink:title-text="t" /></div>,',
+          "}));",
+        ].join("\n"),
+        { types: COMMONFABRIC_TYPES },
+      );
+      assertEquals(misnamed(diagnostics), []);
+    },
+  );
+
+  await t.step(
+    "accepts events, data-* and aria-* names, and property names",
+    async () => {
+      const { diagnostics } = await validateSource(
+        inPattern(
+          '<cf-resizable-panel defaultSize={28} data-id="a" aria-label="List" ' +
+            "oncf-change={() => {}} />",
+        ),
+        { types: COMMONFABRIC_TYPES },
+      );
+      assertEquals(misnamed(diagnostics), []);
+    },
+  );
+});

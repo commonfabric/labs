@@ -313,8 +313,8 @@ document.querySelector("cf-button").addEventListener("cf-click", (e) => {
 });
 
 document.querySelector("cf-form").addEventListener("cf-submit", (e) => {
-  e.preventDefault();
-  console.log("Form data:", e.detail.formData);
+  e.preventDefault(); // stays on the page rather than posting to `action`
+  console.log("Form submitted; its fields' cells hold the values");
 });
 ```
 

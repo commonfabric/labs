@@ -3831,6 +3831,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
         const provider: SpaceMembershipProvider = {
           readerRole: (space) =>
             granted && space === teamSpace ? "reader" : null,
+          load: () => Promise.resolve(),
           subscribe: (space, onChange) => {
             const entry = { space, onChange };
             listeners.push(entry);
@@ -3954,6 +3955,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
           }),
           membershipProvider: {
             readerRole: () => null,
+            load: () => Promise.resolve(),
             subscribe: (space) => {
               subscribed.push(space);
               return () => {};
@@ -4259,6 +4261,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
         const provider: SpaceMembershipProvider = {
           readerRole: (space) =>
             granted && space === subjectSpace ? "reader" : null,
+          load: () => Promise.resolve(),
           subscribe: (space, onChange) => {
             const entry = { space, onChange };
             listeners.push(entry);
@@ -4359,6 +4362,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
         const provider: SpaceMembershipProvider = {
           readerRole: (space) =>
             granted && space === teamSpace ? "reader" : null,
+          load: () => Promise.resolve(),
           subscribe: (space, onChange) => {
             const entry = { space, onChange };
             listeners.push(entry);

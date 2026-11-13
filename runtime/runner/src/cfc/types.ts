@@ -119,7 +119,7 @@ export const CFC_STRUCTURAL_PROVENANCE_UNDECLARABLE_STORE =
 // measures it there under §8.12.4. The clarification that states this is
 // https://github.com/commonfabric/specs/pull/94. Every other write the
 // transaction makes, an entry it appends to the same document included, is
-// stamped and measured as before.
+// stamped and measured as any write is.
 //
 // The gate takes it only where the input was recorded under
 // {@link runtimeWritePolicyAuthorization} and names a stream's entries

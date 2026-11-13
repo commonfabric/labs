@@ -29,6 +29,17 @@ const PRIMITIVES = LAYER_CORPUS.filter(
     entry[1] instanceof FabricPrimitive,
 );
 
+/**
+ * Each listed class whose instances report a name in the schema `type`
+ * vocabulary, paired with that name.
+ */
+// TODO(danfuzz): Once `FabricRegExp` is deleted, range over `codecClasses()`
+// without the filter.
+const SCHEMA_TYPED_CLASSES = codecClasses().flatMap((cls) => {
+  const type = cls.prototype.schemaType;
+  return (type === "object") ? [] : [[type, cls] as const];
+});
+
 describe("fabric-primitives/impl", () => {
   describe("codecClasses()", () => {
     it("lists classes which each report a distinct `.schemaType`", () => {
@@ -37,15 +48,17 @@ describe("fabric-primitives/impl", () => {
     });
 
     it("lists classes whose reported `.schemaType`s are exactly `FABRIC_PRIMITIVE_SCHEMA_TYPES`", () => {
-      const names = codecClasses().map((cls) => cls.prototype.schemaType);
+      const names = SCHEMA_TYPED_CLASSES.map(([type]) => type);
       expect(new Set<string>(names)).toEqual(
         new Set<string>(FABRIC_PRIMITIVE_SCHEMA_TYPES),
       );
     });
 
     it("lists classes whose JSON codecs' type tags are exactly `FABRIC_PRIMITIVE_CODEC_TYPE_TAGS`", () => {
-      const tags = codecClasses().map((cls) =>
-        cls[JSON_CODEC].recognizedTypeTag
+      // TODO(danfuzz): Once `FabricRegExp` is deleted, map every listed
+      // class's `[JSON_CODEC]` without the filter.
+      const tags = codecClasses().flatMap((cls) =>
+        (JSON_CODEC in cls) ? [cls[JSON_CODEC].recognizedTypeTag] : []
       );
       expect(new Set(tags).size).toBe(tags.length);
       expect(new Set(tags)).toEqual(
@@ -97,21 +110,26 @@ describe("fabric-primitives/impl", () => {
   describe("FABRIC_PRIMITIVE_SCHEMA_TYPES", () => {
     it("is a frozen array with one entry per listed class", () => {
       expect(Object.isFrozen(FABRIC_PRIMITIVE_SCHEMA_TYPES)).toBe(true);
-      expect(FABRIC_PRIMITIVE_SCHEMA_TYPES.length).toBe(codecClasses().length);
+      expect(FABRIC_PRIMITIVE_SCHEMA_TYPES.length).toBe(
+        SCHEMA_TYPED_CLASSES.length,
+      );
     });
   });
 
   describe("fabricPrimitiveClassOfSchemaType()", () => {
     it("returns each listed class given the `.schemaType` it reports", () => {
-      for (const cls of codecClasses()) {
-        expect(fabricPrimitiveClassOfSchemaType(cls.prototype.schemaType))
-          .toBe(cls);
+      for (const [type, cls] of SCHEMA_TYPED_CLASSES) {
+        expect(fabricPrimitiveClassOfSchemaType(type)).toBe(cls);
       }
     });
 
     for (const [label, value] of PRIMITIVES) {
+      // TODO(danfuzz): Once `FabricRegExp` is deleted, take every primitive
+      // without the guard.
+      const { schemaType } = value;
+      if (schemaType === "object") continue;
       it(`returns the class of ${label} given its \`.schemaType\``, () => {
-        expect(fabricPrimitiveClassOfSchemaType(value.schemaType))
+        expect(fabricPrimitiveClassOfSchemaType(schemaType))
           .toBe(value.constructor);
       });
     }
@@ -125,9 +143,8 @@ describe("fabric-primitives/impl", () => {
 
   describe("isFabricPrimitiveSchemaType()", () => {
     it("returns `true` for the `.schemaType` of every listed class", () => {
-      for (const cls of codecClasses()) {
-        expect(isFabricPrimitiveSchemaType(cls.prototype.schemaType))
-          .toBe(true);
+      for (const [type] of SCHEMA_TYPED_CLASSES) {
+        expect(isFabricPrimitiveSchemaType(type)).toBe(true);
       }
     });
 

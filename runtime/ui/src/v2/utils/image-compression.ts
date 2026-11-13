@@ -68,35 +68,41 @@ export async function compressImage(
     qualityTolerance = 0.05,
   } = options;
 
-  // If file is already small enough, return as-is
-  if (file.size <= maxSizeBytes) {
-    const imageBitmap = await createImageBitmap(file);
-    return {
-      blob: file,
-      width: imageBitmap.width,
-      height: imageBitmap.height,
-      quality: 1.0,
-      originalSize: file.size,
-      compressedSize: file.size,
-    };
-  }
+  const imageBitmap = await createImageBitmap(file);
+
+  // The file as given, unchanged, which is what a file already small enough
+  // and a file that fails to compress both come back as.
+  const original: CompressionResult = {
+    blob: file,
+    width: imageBitmap.width,
+    height: imageBitmap.height,
+    quality: 1.0,
+    originalSize: file.size,
+    compressedSize: file.size,
+  };
 
   try {
-    // Create image bitmap for processing
-    const imageBitmap = await createImageBitmap(file);
+    if (file.size <= maxSizeBytes) return original;
+
+    // The size the image is drawn at for a longest side of `maxDim`, never
+    // larger than the image itself.
+    const sizeAt = (maxDim: number) => {
+      const scale = Math.min(
+        1,
+        maxDim / Math.max(imageBitmap.width, imageBitmap.height),
+      );
+      return {
+        width: Math.floor(imageBitmap.width * scale),
+        height: Math.floor(imageBitmap.height * scale),
+      };
+    };
 
     // Helper function to compress at given dimensions and quality
     const compressAtSettings = async (
       maxDim: number,
       quality: number,
     ): Promise<Blob> => {
-      const scale = Math.min(
-        1,
-        maxDim / Math.max(imageBitmap.width, imageBitmap.height),
-      );
-      const width = Math.floor(imageBitmap.width * scale);
-      const height = Math.floor(imageBitmap.height * scale);
-
+      const { width, height } = sizeAt(maxDim);
       const canvas = new OffscreenCanvas(width, height);
       const ctx = canvas.getContext("2d");
 
@@ -112,111 +118,57 @@ export async function compressImage(
       });
     };
 
-    // Binary search for optimal quality at given dimension
+    // The highest quality whose encoding at dimension `maxDim` fits: the
+    // maximum, or else one found by binary search. Where not even the minimum
+    // quality fits, that is what it returns, too large.
     const findOptimalQuality = async (
       maxDim: number,
-    ): Promise<{ blob: Blob; quality: number } | null> => {
-      let bestBlob: Blob | null = null;
-      let bestQuality = minQuality;
+    ): Promise<{ blob: Blob; quality: number }> => {
+      let best = {
+        blob: await compressAtSettings(maxDim, minQuality),
+        quality: minQuality,
+      };
+      if (best.blob.size > maxSizeBytes) return best;
 
-      // First check if even min quality is too large at this dimension
-      const minQualityBlob = await compressAtSettings(maxDim, minQuality);
-      if (minQualityBlob.size > maxSizeBytes) {
-        // Even minimum quality is too large, need to reduce dimension
-        return null;
-      }
+      const top = await compressAtSettings(maxDim, maxQuality);
+      if (top.size <= maxSizeBytes) return { blob: top, quality: maxQuality };
 
-      // Binary search for HIGHEST quality (best visual quality) that still meets size requirement
       let low = minQuality;
       let high = maxQuality;
-
       while (high - low > qualityTolerance) {
         const mid = (low + high) / 2;
         const blob = await compressAtSettings(maxDim, mid);
 
         if (blob.size <= maxSizeBytes) {
-          // File fits! Try HIGHER quality to maximize image quality
-          bestBlob = blob;
-          bestQuality = mid;
-          low = mid; // Move lower bound UP to search higher quality range
+          best = { blob, quality: mid };
+          low = mid;
         } else {
-          // File too large, need LOWER quality (more compression)
-          high = mid; // Move upper bound DOWN to search lower quality range
+          high = mid;
         }
       }
-
-      // If we found a solution during binary search, return it
-      if (bestBlob) {
-        return { blob: bestBlob, quality: bestQuality };
-      }
-
-      // Edge case: tolerance is large or range is small, so loop exited without finding solution
-      // Try both boundaries to find the highest quality that works
-      const highBlob = await compressAtSettings(maxDim, high);
-      if (highBlob.size <= maxSizeBytes) {
-        return { blob: highBlob, quality: high };
-      }
-
-      const lowBlob = await compressAtSettings(maxDim, low);
-      if (lowBlob.size <= maxSizeBytes) {
-        return { blob: lowBlob, quality: low };
-      }
-
-      return null;
+      return best;
     };
 
-    // Try progressively smaller dimensions using binary search for quality
+    // Try progressively smaller dimensions, settling for the smallest at the
+    // minimum quality where nothing fits.
+    let result = original;
     for (const maxDim of dimensions) {
-      const result = await findOptimalQuality(maxDim);
-      if (result) {
-        const scale = Math.min(
-          1,
-          maxDim / Math.max(imageBitmap.width, imageBitmap.height),
-        );
-        const width = Math.floor(imageBitmap.width * scale);
-        const height = Math.floor(imageBitmap.height * scale);
-
-        return {
-          blob: result.blob,
-          width,
-          height,
-          quality: result.quality,
-          originalSize: file.size,
-          compressedSize: result.blob.size,
-        };
-      }
+      const { blob, quality } = await findOptimalQuality(maxDim);
+      result = {
+        blob,
+        ...sizeAt(maxDim),
+        quality,
+        originalSize: file.size,
+        compressedSize: blob.size,
+      };
+      if (blob.size <= maxSizeBytes) break;
     }
-
-    // If all attempts failed, return smallest possible attempt
-    const minDim = dimensions[dimensions.length - 1];
-    const minScale = Math.min(
-      1,
-      minDim / Math.max(imageBitmap.width, imageBitmap.height),
-    );
-    const width = Math.floor(imageBitmap.width * minScale);
-    const height = Math.floor(imageBitmap.height * minScale);
-    const finalBlob = await compressAtSettings(minDim, minQuality);
-
-    return {
-      blob: finalBlob,
-      width,
-      height,
-      quality: minQuality,
-      originalSize: file.size,
-      compressedSize: finalBlob.size,
-    };
+    return result;
   } catch (error) {
     console.error("Compression failed, using original:", error);
-    // Return original file as fallback
-    const imageBitmap = await createImageBitmap(file);
-    return {
-      blob: file,
-      width: imageBitmap.width,
-      height: imageBitmap.height,
-      quality: 1.0,
-      originalSize: file.size,
-      compressedSize: file.size,
-    };
+    return original;
+  } finally {
+    imageBitmap.close();
   }
 }
 

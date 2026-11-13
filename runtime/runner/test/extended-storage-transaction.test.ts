@@ -17,6 +17,7 @@ import { Runtime } from "../src/runtime.ts";
 import {
   createNonReactiveTransaction,
   type ExtendedStorageTransaction,
+  runBeforeAbort,
   TransactionWrapper,
 } from "../src/storage/extended-storage-transaction.ts";
 import type {
@@ -64,6 +65,28 @@ describe("extended-storage-transaction", () => {
     tx.markLazyMaterialize(true);
     return { tx, cell: runtime.getCell(space, cause, SCHEMA, tx) };
   };
+
+  describe("runBeforeAbort()", () => {
+    it("runs the callback first in an abort", () => {
+      const tx = runtime.edit();
+      const seen: string[] = [];
+      runBeforeAbort(tx, () => seen.push(tx.status().status));
+      tx.abort();
+      expect(seen).toEqual(["ready"]);
+    });
+
+    it("drops the callback once the transaction commits", async () => {
+      const tx = runtime.edit();
+      let calls = 0;
+      runBeforeAbort(tx, () => {
+        calls += 1;
+      });
+      expect((await tx.commit().settled).error).toBeUndefined();
+      tx.abort();
+
+      expect(calls).toBe(0);
+    });
+  });
 
   describe("content-addressed document staging", () => {
     const code = "export const staged = 1;";
@@ -428,6 +451,65 @@ describe("extended-storage-transaction", () => {
         expect(state.writePolicyInputs).toHaveLength(1);
         expect(state.dereferenceTraces).toHaveLength(1);
       });
+    });
+  });
+
+  describe("a recorded dereference trace", () => {
+    const address = (id: string, path: string[]) => ({
+      space,
+      id,
+      scope: "space" as const,
+      path,
+    });
+
+    it("is kept frozen where it stands, with its addresses and their paths", () => {
+      const tx = runtime.edit();
+      const trace = {
+        source: address("of:holder", ["value", "link"]),
+        target: address("of:held", []),
+        kind: "value" as const,
+      };
+
+      tx.recordCfcDereferenceTrace(trace);
+
+      expect(tx.getCfcState().dereferenceTraces[0]).toBe(trace);
+      for (
+        const object of [
+          trace,
+          trace.source,
+          trace.source.path,
+          trace.target,
+          trace.target.path,
+        ]
+      ) {
+        expect(Object.isFrozen(object)).toBe(true);
+      }
+      tx.abort("recorded");
+    });
+
+    it("freezes a member that is not a primitive, on the trace or an address", () => {
+      const tx = runtime.edit();
+      const onAddress = { type: "string" };
+      const onTrace = { note: "beside the trace" };
+
+      const withAddressMember = {
+        source: { ...address("of:holder", ["value"]), schema: onAddress },
+        target: address("of:held", []),
+        kind: "value" as const,
+      };
+      const withTraceMember = {
+        source: address("of:holder", ["value"]),
+        target: address("of:held", []),
+        kind: "value" as const,
+        detail: onTrace,
+      };
+
+      tx.recordCfcDereferenceTrace(withAddressMember);
+      tx.recordCfcDereferenceTrace(withTraceMember);
+
+      expect(Object.isFrozen(onAddress)).toBe(true);
+      expect(Object.isFrozen(onTrace)).toBe(true);
+      tx.abort("recorded");
     });
   });
 

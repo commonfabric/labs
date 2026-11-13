@@ -214,6 +214,9 @@ export const localJobSpecOf = async (
     ...(profile.reasoningEffort !== undefined
       ? { reasoningEffort: profile.reasoningEffort }
       : {}),
+    ...(profile.cacheAffinityKey !== undefined
+      ? { cacheAffinityKey: profile.cacheAffinityKey }
+      : {}),
     instructions: framing.length > 0 ? framing.join("\n\n") : undefined,
     model: profile.model ?? options.model,
     loomRetrievalConfigPath: profile.loomRetrievalConfig ??

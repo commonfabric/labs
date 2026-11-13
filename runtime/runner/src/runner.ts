@@ -270,6 +270,16 @@ import {
 } from "./builder/pattern-metadata.ts";
 import { classifyPieceOriginString } from "./piece-origin-kind.ts";
 import {
+  getPieceReconciliation,
+  type PieceReconciliation,
+} from "./piece-reconciliation.ts";
+export {
+  getPieceReconciliation,
+  type PieceReconciliation,
+  type PieceReconciliationOutcome,
+  type PieceReconciliationReason,
+} from "./piece-reconciliation.ts";
+import {
   normalizePatternSource,
   PATTERNS_ROUTE_PREFIX,
   SYSTEM_PATTERN_SOURCE_SCHEME,
@@ -589,8 +599,9 @@ type StartAttempt = {
   >;
 
   // The result this attempt resolved to, which a link start only learns by
-  // following the link.
+  // following the link, by its key and by its address.
   targetKey?: `${MemorySpace}/${ScopeKey}/${URI}`;
+  targetLink?: NormalizedFullLink;
   // The exact registration THIS attempt's `#startCore()` created, when it
   // created one. A walk can also report success for a registration it did
   // NOT create (doStart's already-started returns, including the
@@ -613,6 +624,33 @@ type StartAttempt = {
   // runs again from the top after the read, and must not read again for a
   // grant the durable metadata does not carry.
   authorityReadFor?: Set<string>;
+  // Whether every caller of this attempt asked for it to deliver an event
+  // (`RunnerStartOptions.forEvent`). A caller that joins the attempt for any
+  // other reason clears it.
+  forEventOnly?: boolean;
+};
+
+/** Options of `Runner.start()` and `Runner.startWithCommit()`. */
+export type RunnerStartOptions = {
+  /**
+   * The start delivers an event: the stream the event was sent to has no
+   * handler on this runtime, and starting its piece registers one. A piece
+   * whose every start was such a start is one `Runner.releaseEventStart()`
+   * may stop.
+   */
+  forEvent?: boolean;
+};
+
+/** A piece an event's delivery started, and that no other start has asked for. */
+type EventStart = {
+  /** The registration the event's start installed. */
+  readonly registration: PieceRegistration;
+
+  /** The piece's result document. */
+  readonly link: NormalizedFullLink;
+
+  /** Where the start falls in the runner's count of event starts. */
+  readonly sequence: number;
 };
 
 /**
@@ -751,7 +789,16 @@ function receiptShapeSchema(value: unknown): JSONSchema | undefined {
   return { type: "object", properties };
 }
 
-const recordOutputSchemaPolicyInputs = (
+/**
+ * Records in `tx` an output `kind: "schema"` write-policy input for each
+ * write-redirect link in `outputBinding`, on both the link and the document
+ * it resolves to, with the part of `resultSchema` at the link's position in
+ * the binding. Records nothing without a `resultSchema`, or for a position
+ * the schema does not describe.
+ *
+ * @throws Error for a `FabricInstance` in the binding.
+ */
+export const recordOutputSchemaPolicyInputs = (
   tx: IExtendedStorageTransaction,
   runtime: Runtime,
   resultCell: Cell<any>, // used as the base for output bindings
@@ -883,7 +930,12 @@ const recordSchemaPolicyInputForLink = (
   });
 };
 
-const recordRawBuiltinBindingSchemaPolicyInputs = (
+/**
+ * Like `recordOutputSchemaPolicyInputs()`, for a raw builtin's output binding,
+ * except that each link's schema is the one the link carries, or else the one
+ * the link it resolves to carries.
+ */
+export const recordRawBuiltinBindingSchemaPolicyInputs = (
   tx: IExtendedStorageTransaction,
   runtime: Runtime,
   resultCell: Cell<any>, // used as the base for output bindings
@@ -938,7 +990,13 @@ const recordRawBuiltinBindingSchemaPolicyInputs = (
   }
 };
 
-const schemaForRawBuiltinRootOutputBinding = (
+/**
+ * The schema a raw builtin's output binding carries where the binding is
+ * itself a write-redirect link, taken as
+ * `recordRawBuiltinBindingSchemaPolicyInputs()` takes it, or `undefined` for
+ * any other binding.
+ */
+export const schemaForRawBuiltinRootOutputBinding = (
   tx: IExtendedStorageTransaction,
   runtime: Runtime,
   resultCell: Cell<any>, // used as the base for output bindings
@@ -1874,12 +1932,15 @@ const enrollPieceOwnedStores = (
   }
 };
 
-type SetupResult<R> = {
-  resultCell: Cell<R>;
-  pattern?: Pattern;
-  patternRef?: { identity: string; symbol: string };
-  needsStart: boolean;
-};
+type SetupResult<R> =
+  & {
+    resultCell: Cell<R>;
+    patternRef?: { identity: string; symbol: string };
+  }
+  & (
+    | { needsStart: false; pattern?: undefined }
+    | { needsStart: true; pattern: Pattern }
+  );
 
 /** Receipt for a pattern setup transaction accepted by storage. */
 export interface PatternSetupCommitReceipt {
@@ -2107,71 +2168,6 @@ export interface PieceSourceSnapshot {
   pattern: { identity: string; symbol: string };
   origin: string | null;
   revisionId: string | null;
-}
-
-/**
- * What the last attempt to follow a piece's active origin did. `unreachable`
- * never had a candidate to weigh; `unapplied` had one the piece could take,
- * and the write adopting it did not land, so the next attempt proposes it
- * again; `refused` had one the piece did not take, for the reason recorded.
- */
-export type PieceReconciliationOutcome =
-  | "followed"
-  | "unreachable"
-  | "unapplied"
-  | "refused";
-
-/**
- * Why a reconciliation did not adopt what its origin offered.
- *
- * `incompatible-schema` and `argument-mismatch` are different refusals and
- * only one of them can be overruled. The first says the candidate is not an
- * acceptable replacement for what the piece runs, which its owner may decide
- * to accept anyway. The second says the piece's own stored data does not
- * satisfy the candidate, so the piece could not run it — there is nothing to
- * accept, and the data has to change first.
- */
-export type PieceReconciliationReason =
-  | "incompatible-schema"
-  | "argument-mismatch"
-  | "source-invalid"
-  | "identity-mismatch"
-  | "apply-failed";
-
-/**
- * The outcome of the last attempt to follow a piece's active origin, kept on
- * the piece so a reader can tell a piece that runs what its origin offers from
- * one that does not. It is not a revision: a refused candidate was never
- * accepted, and the revision log records only what the piece adopted.
- */
-export interface PieceReconciliation {
-  outcome: PieceReconciliationOutcome;
-
-  /** When the piece reached this outcome. */
-  at: number;
-
-  /** The origin the attempt was following. */
-  origin: string;
-
-  /** The pattern the origin offered, when one was resolved. */
-  offered?: { identity: string; symbol: string };
-
-  /** Why the candidate was refused. Absent unless `outcome` is `refused`. */
-  reason?: PieceReconciliationReason;
-
-  /** What the attempt reported, in its own words. */
-  detail?: string;
-
-  /**
-   * The source the piece runs, with the latest release time at which its
-   * `system:` origin has offered that source since the piece adopted it, in
-   * milliseconds since the epoch (`pattern-release-time.ts`). A later deploy
-   * of unchanged source moves it forward without adopting anything, which is
-   * what keeps the piece from being moved to a release between the one it
-   * adopted and the one that confirmed it. It never moves backward, and an
-   * accepted transition clears it with the rest of the record.
-   */
-  confirmed?: { identity: string; releasedAt: number };
 }
 
 export type PieceSourceTransitionBaseline =
@@ -2725,10 +2721,9 @@ type StoredSetupMarker = "matches" | "other" | "absent";
 // setup.
 function storedSetupMarker(
   resultCell: Cell<unknown>,
-  entryRef: { identity: string; symbol: string } | undefined,
+  entryRef: { identity: string; symbol: string },
   sessionRef?: { identity: string; symbol: string },
 ): StoredSetupMarker {
-  if (entryRef === undefined) return "absent";
   const stagedRef = getPatternSetupIdentityRef(resultCell) ?? sessionRef;
   if (stagedRef === undefined) return "absent";
   return patternIdentityKey(stagedRef) === patternIdentityKey(entryRef)
@@ -2981,6 +2976,16 @@ export class Runner {
   #independentlyStartedResults = new Set<
     `${MemorySpace}/${ScopeKey}/${URI}`
   >();
+
+  /**
+   * The running pieces whose registration an event's delivery installed
+   * (`RunnerStartOptions.forEvent`), by result document, while no other
+   * start, and no enclosing pattern, has asked for them since.
+   */
+  #eventStarts = new Map<`${MemorySpace}/${ScopeKey}/${URI}`, EventStart>();
+
+  /** How many entries `#eventStarts` has been given, for `eventStartMark`. */
+  #eventStartCount = 0;
 
   /**
    * The patterns a handler's result is set up from. A child one of them
@@ -3377,7 +3382,7 @@ export class Runner {
       node: Node,
       resultCell: Cell<any>,
       pattern: Pattern,
-    ): NodePlan | undefined;
+    ): NodePlan;
     presyncPlanRecorder:
       | ((piece: string, node: Node, site: "node" | "owned") => void)
       | undefined;
@@ -3536,6 +3541,14 @@ export class Runner {
   }
 
   /**
+   * The count of event starts so far, for `eventStartsSince()`: the pieces
+   * an event's delivery starts from now on are the ones it returns.
+   */
+  get eventStartMark(): number {
+    return this.#eventStartCount;
+  }
+
+  /**
    * Served receipt writes skipped as write-once CAS losses: the handling's
    * result cell already held a value when the serving run went to write it.
    * Each skip also logs a warn line; this is the machine-readable half.
@@ -3568,15 +3581,14 @@ export class Runner {
     return this.#sessionPatternPointers.get(key);
   }
 
-  /** Settles local state after both the transaction and its effect are accepted. */
+  /**
+   * Settles local state after both the transaction and its effect are
+   * accepted, on a serving runtime, whose transactions settle with a wave.
+   */
   #afterAcceptedCommit(
     tx: IExtendedStorageTransaction,
     callback: (accepted: boolean) => void,
   ): void {
-    if (!this.#runtime.servingPosture) {
-      tx.addCommitCallback((_committed, result) => callback(!result.error));
-      return;
-    }
     requireWaveAcceptance(tx);
     const lifecycleEpoch = this.#lifecycleEpoch;
     let finished = false;
@@ -4738,9 +4750,6 @@ export class Runner {
       );
 
       argumentLink = newArgumentCell.getAsNormalizedFullLink();
-      if (argumentLink === undefined) {
-        throw new Error("Invalid argument link in updateArgument");
-      }
       // The argument document is new, so a protected field the caller leaves
       // out, and setup fills with its default, is the setup's initialization,
       // whatever later reads or projects the field. A field the caller
@@ -5293,7 +5302,7 @@ export class Runner {
       `previousPatternIdentity=${
         previousIdentityRef ? previousIdentityRef.identity : "none"
       }`,
-      `nextPatternIdentity=${entryRef ? entryRef.identity : "keyless"}`,
+      `nextPatternIdentity=${entryRef.identity}`,
     ]);
 
     if (isCellLink(argument)) {
@@ -5530,9 +5539,16 @@ export class Runner {
    * different docs whose links resolve to the same piece do not join either;
    * they run separate resolutions and converge at the registration guard
    * before instantiation.
+   *
+   * `options.forEvent` says the start delivers an event; any other start of
+   * the piece, this one's join included, takes it off what
+   * `releaseEventStart()` may stop.
    */
-  start<T = any>(resultCell: Cell<T>): Promise<boolean> {
-    return this.#joinOrBeginStart(resultCell).settled;
+  start<T = any>(
+    resultCell: Cell<T>,
+    options?: RunnerStartOptions,
+  ): Promise<boolean> {
+    return this.#joinOrBeginStart(resultCell, options).settled;
   }
 
   /**
@@ -5556,8 +5572,11 @@ export class Runner {
    * @throws Error naming the failed piece-start commit, with storage's
    * verdict, or whatever else cut the commit short, as its `cause`.
    */
-  async startWithCommit<T = any>(resultCell: Cell<T>): Promise<boolean> {
-    const { attempt, settled } = this.#joinOrBeginStart(resultCell);
+  async startWithCommit<T = any>(
+    resultCell: Cell<T>,
+    options?: RunnerStartOptions,
+  ): Promise<boolean> {
+    const { attempt, settled } = this.#joinOrBeginStart(resultCell, options);
     const started = await settled;
     const commits = attempt.instantiationCommits ?? [];
     for (const failure of await Promise.all(commits)) {
@@ -5581,51 +5600,159 @@ export class Runner {
    */
   #joinOrBeginStart<T>(
     resultCell: Cell<T>,
+    options?: RunnerStartOptions,
   ): { attempt: StartAttempt; settled: Promise<boolean> } {
+    const forEvent = options?.forEvent === true;
     const startKey = this.#getDocKey(resultCell);
+    // A start for anything but an event asks for the piece from this moment,
+    // before it has resolved the piece the document leads to.
+    if (!forEvent) this.#eventStarts.delete(startKey);
     const inFlight = this.#inFlightStartsByDoc.get(startKey);
     if (
       inFlight?.settled !== undefined && this.#isStartAttemptCurrent(inFlight)
     ) {
+      if (!forEvent) inFlight.forEventOnly = false;
       return { attempt: inFlight, settled: inFlight.settled };
     }
     const attempt: StartAttempt = {
       lifecycleEpoch: this.#lifecycleEpoch,
       generationsByDoc: new Map(),
       preResolutionStopKeys: new Set(),
+      forEventOnly: forEvent,
     };
     this.#activeStartAttempts.add(attempt);
     this.#trackStartAttempt(attempt, startKey);
+    // A synchronous throw from `#doStart()` settles the attempt the way its
+    // rejection does. The claim below chains straight onto `#doStart()`'s own
+    // promise, so it runs on the turn that promise settles. Each promise
+    // between them is a turn later, and a piece-start commit that fails in
+    // those turns retires the registration the claim reports on, so the start
+    // would report that a piece it installed is not running. Recording an
+    // event start relies on the same: `#doStart()` returns as soon as it has
+    // installed the registration, so no other start settles on that
+    // registration before this claim runs.
+    let outcome: Promise<boolean>;
     try {
-      const settled = this.#doStart(resultCell, new Set(), attempt)
-        .then((started) => {
-          // This start gives the result a lifetime of its own, so an enclosing
-          // pattern releasing it later leaves it running. An attempt whose
-          // target a stop superseded claims nothing: the registration under
-          // the key belongs to whatever replaced it, and a stop that won the
-          // race leaves no registration at all. Both cases report that this
-          // start is not running. The check is scoped to the target: a stop of
-          // an intermediate link doc after the target's registration installed
-          // does not touch that registration, so it neither voids the claim
-          // nor the report.
-          const target = attempt.targetKey;
-          const stillRunning = started && target !== undefined &&
-            this.#isStartAttemptCurrentFor(attempt, target) &&
-            this.#cancels.has(target);
-          if (stillRunning) {
-            this.#independentlyStartedResults.add(target);
-          }
-          return stillRunning;
-        })
-        .finally(() => {
-          this.#finishStartAttempt(attempt);
-        });
-      attempt.settled = settled;
-      this.#inFlightStartsByDoc.set(startKey, attempt);
-      return { attempt, settled };
+      outcome = this.#doStart(resultCell, new Set(), attempt);
     } catch (error) {
-      this.#finishStartAttempt(attempt);
-      return { attempt, settled: Promise.reject(error) };
+      outcome = Promise.reject(error);
+    }
+    const settled = outcome
+      .then((started) => {
+        // This start gives the result a lifetime of its own, so an enclosing
+        // pattern releasing it later leaves it running. An attempt whose
+        // target a stop superseded claims nothing: the registration under
+        // the key belongs to whatever replaced it, and a stop that won the
+        // race leaves no registration at all. Both cases report that this
+        // start is not running. The check is scoped to the target: a stop of
+        // an intermediate link doc after the target's registration installed
+        // does not touch that registration, so it neither voids the claim
+        // nor the report.
+        const target = attempt.targetKey;
+        const stillRunning = started && target !== undefined &&
+          this.#isStartAttemptCurrentFor(attempt, target) &&
+          this.#cancels.has(target);
+        if (stillRunning) {
+          this.#independentlyStartedResults.add(target);
+          this.#noteEventStart(attempt, target);
+        }
+        return stillRunning;
+      })
+      .finally(() => {
+        this.#finishStartAttempt(attempt);
+      });
+    attempt.settled = settled;
+    this.#inFlightStartsByDoc.set(startKey, attempt);
+    return { attempt, settled };
+  }
+
+  /**
+   * Helper for `#joinOrBeginStart()`, which records what a start attempt that
+   * left `target` running says about the piece: one made only to deliver
+   * events, that installed the piece's registration, makes the piece an
+   * event start; any other takes it off them.
+   */
+  #noteEventStart(
+    attempt: StartAttempt,
+    target: `${MemorySpace}/${ScopeKey}/${URI}`,
+  ): void {
+    const registration = this.#cancels.get(target);
+    if (attempt.forEventOnly !== true) {
+      this.#eventStarts.delete(target);
+    } else if (
+      registration !== undefined &&
+      registration === attempt.installedRegistration &&
+      attempt.targetLink !== undefined
+    ) {
+      this.#eventStarts.set(target, {
+        registration,
+        link: attempt.targetLink,
+        sequence: ++this.#eventStartCount,
+      });
+    }
+  }
+
+  /**
+   * The result documents of the running pieces whose registration an event's
+   * delivery installed after `mark`, a value of `eventStartMark`, and that no
+   * other start, and no enclosing pattern, has asked for since: the pieces
+   * `releaseEventStart()` stops.
+   */
+  eventStartsSince(mark: number): NormalizedFullLink[] {
+    const links: NormalizedFullLink[] = [];
+    for (const [key, start] of this.#eventStarts) {
+      if (this.#cancels.get(key) !== start.registration) {
+        this.#eventStarts.delete(key);
+        continue;
+      }
+      if (start.sequence > mark) links.push(start.link);
+    }
+    return links;
+  }
+
+  /**
+   * Stops the piece whose result document is `resultCell`'s when it is one
+   * `eventStartsSince()` names, no start of its document is in flight, and
+   * the scheduler holds no event for it, releasing the documents nothing
+   * reads then, as `stop()` does. An event sent to it later starts it again.
+   * A start that has not yet resolved the document it leads to is left to
+   * start the piece again, where `stop()` would end it. Work a handler of
+   * the piece began and that the scheduler doesn't wait for, such as a fetch
+   * a builtin made, ends with the piece.
+   *
+   * Returns whether it stopped the piece.
+   */
+  releaseEventStart<T>(resultCell: Cell<T>): boolean {
+    const key = this.#getDocKey(resultCell);
+    const start = this.#eventStarts.get(key);
+    if (start === undefined) return false;
+    if (this.#cancels.get(key) !== start.registration) {
+      this.#eventStarts.delete(key);
+      return false;
+    }
+    const { space, id } = start.link;
+    if (
+      (this.#activeStartAttemptsByDoc.get(key)?.size ?? 0) > 0 ||
+      this.#runtime.scheduler.hasQueuedEventFor(space, id)
+    ) {
+      return false;
+    }
+    this.#stopResult(resultCell);
+    void this.#runtime.releaseUnreadDocuments();
+    return true;
+  }
+
+  /**
+   * Helper for the teardowns of `registration`, the registration of the piece
+   * whose result document is `key`, outside `#stopResult()`, which takes it
+   * off `#eventStarts`.
+   */
+  #forgetStartsOf(
+    key: `${MemorySpace}/${ScopeKey}/${URI}`,
+    registration: PieceRegistration,
+  ): void {
+    if (this.#eventStarts.get(key)?.registration === registration) {
+      this.#eventStarts.delete(key);
     }
   }
 
@@ -5680,6 +5807,8 @@ export class Runner {
 
   /** Holds a child for a parent node group's lifetime. */
   retainChild<T>(resultCell: Cell<T>): Cancel {
+    // An enclosing pattern now asks for the piece.
+    this.#eventStarts.delete(this.#getDocKey(resultCell));
     if (!this.#usesScopedPrograms(resultCell)) {
       return () => this.releaseChild(resultCell, undefined);
     }
@@ -6201,7 +6330,7 @@ export class Runner {
    *
    * @param resultCell - The result cell to start
    * @param options.tx - Transaction to use for initial setup (optional)
-   * @param options.givenPattern - Pattern to use instead of looking up by ID
+   * @param options.givenPattern - The pattern to instantiate
    * @param options.onInitialCommit - Receives the settlement of the commit the
    * initial instantiation makes of its own transaction, when it makes one
    * @returns The exact cancel registration installed for this start
@@ -6211,7 +6340,7 @@ export class Runner {
     options: {
       tx?: IExtendedStorageTransaction;
       variantRegistration?: PieceVariantRegistration;
-      givenPattern?: Pattern;
+      givenPattern: Pattern;
       doNotUpdateOnPatternChange?: boolean;
       schedulerRehydration?: SchedulerRehydrationSubscriptionOptions;
       // Resumed-from-synced-state: hold each action's initial rehydration/run
@@ -6220,7 +6349,7 @@ export class Runner {
       // See RunnerRunOptions.parentPieceRootId.
       parentPieceRootId?: string;
       onInitialCommit?: (settlement: PieceInstantiationSettlement) => void;
-    } = {},
+    },
   ): Cancel {
     // Every option is taken out of `options` here, and nothing below names
     // `options` again: a closure that did would keep the object, and through
@@ -6298,6 +6427,9 @@ export class Runner {
     // Helper to clean up on error
     const cleanup = () => {
       registrations.delete(key);
+      if (registrations === this.#cancels) {
+        this.#forgetStartsOf(pieceKey, cancel);
+      }
       this.#allCancels.delete(cancel);
       cancel();
     };
@@ -6559,6 +6691,9 @@ export class Runner {
           const teardownRegistrationIfCurrent = () => {
             if (registrations.get(key) !== cancel) return;
             registrations.delete(key);
+            if (registrations === this.#cancels) {
+              this.#forgetStartsOf(pieceKey, cancel);
+            }
             this.#allCancels.delete(cancel);
             cancel();
           };
@@ -6845,10 +6980,8 @@ export class Runner {
               }
               // A WHOLE contribution drop is recoverable in the same sense the
               // stale-read refusal is, and the helper reports only if its one
-              // retry also loses. A partial drop is not: part of the
-              // contribution stands, so there is no rolled-back view to
-              // re-instantiate against, and it takes the same terminal arm a
-              // second failure takes.
+              // retry also loses. Any other withdrawal takes the same
+              // terminal arm a second failure takes.
               return await recoverInstantiation(
                 settled.error,
                 waveWithdrawalCause === "contribution-dropped"
@@ -7618,108 +7751,74 @@ export class Runner {
     const initialRef = getPatternIdentityRef(resultCellForRead) ??
       this.#sessionPatternPointer(resultCellForRead);
     // Determine initial pattern
-    if (givenPattern) {
-      currentPatternKey = initialRef ? patternIdentityKey(initialRef) : KEYLESS;
-      instantiatedPatternKey = currentPatternKey;
-      // Only for a start that arms the watcher, which is what reads the
-      // pointer, and only while that transaction is open: once it has
-      // settled, the store holds what it wrote, or what it left in place,
-      // and there is no lag. The watcher clears the pointer when the
-      // transaction settles; a start without one would keep it, and the
-      // transaction with it, for as long as the piece runs.
+    currentPatternKey = initialRef ? patternIdentityKey(initialRef) : KEYLESS;
+    instantiatedPatternKey = currentPatternKey;
+    // Only for a start that arms the watcher, which is what reads the
+    // pointer, and only while that transaction is open: once it has
+    // settled, the store holds what it wrote, or what it left in place,
+    // and there is no lag. The watcher clears the pointer when the
+    // transaction settles; a start without one would keep it, and the
+    // transaction with it, for as long as the piece runs.
+    if (
+      tx !== undefined && !doNotUpdateOnPatternChange &&
+      this.#writesDocumentOf(tx, resultCell) && isOpenTransaction(tx)
+    ) {
+      laggingPointer = { startTx: tx };
+    }
+    try {
+      instantiateInitialPattern(givenPattern, initialRef, tx);
+      // Real artifact refs only: setup mints and INDEXES a `keyless:`
+      // session pointer for hand-built patterns, so getArtifactEntryRef
+      // returns it — filter synthetics explicitly, or the roll-forward
+      // would write a pointer no fresh runtime can load. The VALUE is kept
+      // regardless: the roll-forward's keyless arm converges through its
+      // derivation chain to a module-addressed producer when one exists.
+      const givenRef = this.#runtime.patternManager.getArtifactEntryRef(
+        givenPattern,
+      );
+      runningRef = givenRef !== undefined &&
+          !PatternManager.isKeylessPatternIdentity(givenRef.identity)
+        ? givenRef
+        : undefined;
+      runningPattern = givenPattern;
+    } catch (error) {
+      // Without cleanup the piece stays registered in `this.#cancels`, so
+      // every later start() reports "already running" for a piece that has
+      // no nodes or event handlers — events sent to it are then dropped,
+      // and a piece whose start was refused is never judged again.
+      //
+      // Cleanup runs every registered cancel, any of which may itself throw.
+      // Letting that escape would REPLACE the error being handled, so what
+      // surfaced would describe the cleanup rather than the failure that
+      // caused it — and a cancel running against half-initialized state
+      // fails in ways that look nothing like the original. Report it and
+      // rethrow what actually went wrong.
       if (
-        tx !== undefined && !doNotUpdateOnPatternChange &&
-        this.#writesDocumentOf(tx, resultCell) && isOpenTransaction(tx)
+        error instanceof PieceStateMovedError &&
+        error.piece !== resultCell.sourceURI
       ) {
-        laggingPointer = { startTx: tx };
+        // A child the piece sets up was refused, and has been logged as
+        // such; this names the piece whose start it stopped.
+        logger.warn("piece-start-refused", () => [
+          `piece ${resultCell.sourceURI} is not started: the setup of its ` +
+          `child ${error.piece} was refused`,
+        ]);
       }
       try {
-        instantiateInitialPattern(givenPattern, initialRef, tx);
-        // Real artifact refs only: setup mints and INDEXES a `keyless:`
-        // session pointer for hand-built patterns, so getArtifactEntryRef
-        // returns it — filter synthetics explicitly, or the roll-forward
-        // would write a pointer no fresh runtime can load. The VALUE is kept
-        // regardless: the roll-forward's keyless arm converges through its
-        // derivation chain to a module-addressed producer when one exists.
-        const givenRef = this.#runtime.patternManager.getArtifactEntryRef(
-          givenPattern,
+        cleanup();
+      } catch (cleanupError) {
+        logger.warn(
+          "start",
+          "Cleanup failed while handling a start error; reporting the " +
+            "start error, which is the one that matters.",
+          cleanupError,
         );
-        runningRef = givenRef !== undefined &&
-            !PatternManager.isKeylessPatternIdentity(givenRef.identity)
-          ? givenRef
-          : undefined;
-        runningPattern = givenPattern;
-      } catch (error) {
-        // Without cleanup the piece stays registered in `this.#cancels`, so
-        // every later start() reports "already running" for a piece that has
-        // no nodes or event handlers — events sent to it are then dropped,
-        // and a piece whose start was refused is never judged again.
-        //
-        // Cleanup runs every registered cancel, any of which may itself throw.
-        // Letting that escape would REPLACE the error being handled, so what
-        // surfaced would describe the cleanup rather than the failure that
-        // caused it — and a cancel running against half-initialized state
-        // fails in ways that look nothing like the original. Report it and
-        // rethrow what actually went wrong.
-        if (
-          error instanceof PieceStateMovedError &&
-          error.piece !== resultCell.sourceURI
-        ) {
-          // A child the piece sets up was refused, and has been logged as
-          // such; this names the piece whose start it stopped.
-          logger.warn("piece-start-refused", () => [
-            `piece ${resultCell.sourceURI} is not started: the setup of its ` +
-            `child ${error.piece} was refused`,
-          ]);
-        }
-        try {
-          cleanup();
-        } catch (cleanupError) {
-          logger.warn(
-            "start",
-            "Cleanup failed while handling a start error; reporting the " +
-              "start error, which is the one that matters.",
-            cleanupError,
-          );
-        }
-        throw error;
       }
-      if (!doNotUpdateOnPatternChange) {
-        setupPatternWatcher();
-      }
-      return cancel;
+      throw error;
     }
-
-    if (!initialRef) {
-      cleanup();
-      throw new Error("Cannot start: no pattern identity");
-    }
-
-    // Sync lookup by identity (the module is live this session).
-    const initialResolved = this.#runtime.patternManager
-      .artifactFromIdentitySyncInSpace(
-        initialRef.identity,
-        initialRef.symbol,
-        resultCell.space,
-      ) as Pattern | undefined;
-    if (!initialResolved) {
-      cleanup();
-      throw new Error(
-        `Unknown pattern: ${initialRef.identity}#${initialRef.symbol}`,
-      );
-    }
-
-    // Sync path - instantiate immediately
-    currentPatternKey = patternIdentityKey(initialRef);
-    instantiatedPatternKey = currentPatternKey;
-    const initialPattern = this.#resolveToPattern(initialResolved);
-    instantiateInitialPattern(initialPattern, initialRef, tx);
-    runningRef = initialRef;
-    runningPattern = initialPattern;
     if (!doNotUpdateOnPatternChange) {
       setupPatternWatcher();
     }
-
     return cancel;
   }
 
@@ -7872,7 +7971,7 @@ export class Runner {
    */
   #doStart<T = any>(
     resultCell: Cell<T>,
-    seenCells: Set<Cell>,
+    seenDocs: Set<string>,
     attempt: StartAttempt,
   ): Promise<boolean> {
     if (
@@ -7899,6 +7998,7 @@ export class Runner {
 
     const key = this.#getDocKey(rootCell);
     attempt.targetKey = key;
+    attempt.targetLink = { ...link, path: [] };
     // Step 2: Already started? Return success
     if (this.#cancels.has(key)) return Promise.resolve(true);
 
@@ -7927,7 +8027,7 @@ export class Runner {
               : new Error("No data at cell"),
           );
         } else {
-          return this.#doStart(rootCell, seenCells, attempt);
+          return this.#doStart(rootCell, seenDocs, attempt);
         }
       });
     }
@@ -7943,17 +8043,17 @@ export class Runner {
       const maybeLink = parseLink(rootCell.getRaw(), rootCell);
       if (maybeLink) {
         const nextCell = this.#runtime.getCellFromLink(maybeLink);
-        if (seenCells.has(nextCell)) {
+        const nextStartKey = this.#getDocKey(nextCell);
+        if (seenDocs.has(nextStartKey)) {
           return Promise.reject(new Error("Circular link detected"));
         }
-        seenCells.add(nextCell);
+        seenDocs.add(nextStartKey);
         // A slug/link only locates the piece; once resolved, stopping the
         // target doc must invalidate any asynchronous work that follows.
         // Track that doc and capture its current generation before entering
         // the target's start cascade.
-        const nextStartKey = this.#getDocKey(nextCell);
         this.#trackStartAttempt(attempt, nextStartKey);
-        return this.#doStart(nextCell, seenCells, attempt);
+        return this.#doStart(nextCell, seenDocs, attempt);
       }
 
       return Promise.reject(
@@ -7980,7 +8080,7 @@ export class Runner {
         if (!this.#isStartAttemptCurrent(attempt)) return false;
         // The piece may have started, or its pointer moved, while the read
         // was in flight, so the walk runs again from the top.
-        return this.#doStart(rootCell, seenCells, attempt);
+        return this.#doStart(rootCell, seenDocs, attempt);
       });
     }
     return this.#startAvailablePattern(
@@ -7989,7 +8089,7 @@ export class Runner {
       wasSyncedAtEntry,
       wasPreparedLocally,
       wasStoppedLocally,
-      seenCells,
+      seenDocs,
       attempt,
     );
   }
@@ -8035,12 +8135,9 @@ export class Runner {
     wasSyncedAtEntry: boolean,
     wasPreparedLocally: boolean,
     wasStoppedLocally: boolean,
-    seenCells: Set<Cell>,
+    seenDocs: Set<string>,
     attempt: StartAttempt,
   ): Promise<boolean> {
-    if (!this.#isStartAttemptCurrent(attempt)) {
-      return Promise.resolve(false);
-    }
     const pm = this.#runtime.patternManager;
     const pattern = pm.artifactFromIdentitySyncInSpace(
       identityRef.identity,
@@ -8087,7 +8184,7 @@ export class Runner {
             "loadPatternByIdentity",
           );
           if (loaded) {
-            return this.#doStart(rootCell, seenCells, attempt);
+            return this.#doStart(rootCell, seenDocs, attempt);
           } else {
             return Promise.reject(
               new Error(
@@ -8121,7 +8218,6 @@ export class Runner {
     // diagnostics).
     void wasSyncedAtEntry;
     if (wasPreparedLocally || wasStoppedLocally) {
-      if (!this.#isStartAttemptCurrent(attempt)) return Promise.resolve(false);
       try {
         attempt.installedRegistration = this.#startCore(rootCell, {
           ...attempt.options,
@@ -8165,7 +8261,7 @@ export class Runner {
       // I/O. Never carry the old resolved Pattern into the new identity; restart
       // the resolution cascade against the current metadata instead.
       if (!patternIdentityStillCurrent()) {
-        return await this.#doStart(rootCell, seenCells, attempt);
+        return await this.#doStart(rootCell, seenDocs, attempt);
       }
 
       // Another path may have installed this piece's registration while the
@@ -8216,16 +8312,20 @@ export class Runner {
   #startWithTx<T = any>(
     tx: IExtendedStorageTransaction,
     resultCell: Cell<T>,
-    givenPattern?: Pattern,
+    givenPattern: Pattern,
     options: RunnerRunOptions = {},
   ): Cancel | undefined {
     const key = this.#getDocKey(resultCell);
     const scoped = this.#scopedPieces.get(key);
-    if (scoped !== undefined && givenPattern !== undefined) {
+    if (scoped !== undefined) {
       scoped.ensure(tx, givenPattern);
       return undefined;
     }
-    if (this.#cancels.has(key)) return undefined;
+    if (this.#cancels.has(key)) {
+      // A run of a piece that is running asks for it.
+      this.#eventStarts.delete(key);
+      return undefined;
+    }
 
     const registration = this.#startCore(resultCell, {
       tx,
@@ -8400,7 +8500,7 @@ export class Runner {
   #startAfterSuccessfulCommit<T = any>(
     tx: IExtendedStorageTransaction,
     resultCell: Cell<T>,
-    givenPattern?: Pattern,
+    givenPattern: Pattern,
     options: RunnerRunOptions = {},
     speculativeConsequence?: { eventId: string },
   ): Cancel {
@@ -9548,7 +9648,6 @@ export class Runner {
       return false;
     }
     if (scheduledLifecycleEpoch !== this.#lifecycleEpoch) return false;
-    if (ownership.isCancelled()) return false;
     const key = this.#getDocKey(resultCell);
     // The cancellation-authority gate: recover only an attempt whose install is
     // still the current registration as the refusal lands. A stop or release
@@ -9599,15 +9698,6 @@ export class Runner {
           ownership.isCancelled() ||
           scheduledLifecycleEpoch !== this.#lifecycleEpoch
         ) {
-          return;
-        }
-        if (this.#cancels.has(key)) {
-          // Another start took the key while the recovery waited — the
-          // same yield `#startWithTx()` makes on an owned key. The piece HAS
-          // a context under someone else's authority; the recovery's purpose
-          // is met and its claim dissolves. Settling the token touches no
-          // live registration (its stale install no longer matches).
-          ownership.cancel();
           return;
         }
         try {
@@ -9982,7 +10072,8 @@ export class Runner {
    * it. Starting instantiates the piece's graph in the transaction, which
    * stores what the patterns nested in it set up, and stopping leaves nothing
    * of the piece running here. Such a run leaves a piece whose setup is
-   * stored already as it is.
+   * stored already as it is. It is given only with `providedTx`, which its
+   * caller commits.
    */
   #runWithStartOwnership<T, R = any>(
     providedTx: IExtendedStorageTransaction | undefined,
@@ -10044,13 +10135,7 @@ export class Runner {
       tx,
       resultCell,
     );
-    if (toName !== undefined && !retain) {
-      if (!providedTx) {
-        this.#runtime.prepareTxForCommit(tx);
-        tx.commit();
-      }
-      return { resultCell };
-    }
+    if (toName !== undefined && !retain) return { resultCell };
     if (toName !== undefined) {
       const cancelDeferredStart = this.#runAfterNamedFamilyLands(
         tx,
@@ -10124,10 +10209,6 @@ export class Runner {
       // shared one.
       cancelDeferredStart?.();
       if (needsStart) this.#releaseUnownedChild(resultCell, installedCancel);
-      if (!providedTx) {
-        this.#runtime.prepareTxForCommit(tx);
-        tx.commit();
-      }
       return { resultCell };
     }
 
@@ -10311,6 +10392,8 @@ export class Runner {
       // entry points pass through, before any work is done.
       throw new Error("a synced run requires a pattern");
     }
+    // A run asks for the piece, whether or not it finds it running.
+    this.#eventStarts.delete(this.#getDocKey(resultCell));
     // A module runs as the one-node pattern `run()` wraps it in, and the
     // pre-sync names what that node reads: `inputs` under the module's
     // argument schema.
@@ -11477,7 +11560,7 @@ export class Runner {
     const plans: NodePlan[] = [];
     let skipped = 0;
     for (const node of pattern.nodes) {
-      let plan: NodePlan | undefined;
+      let plan: NodePlan;
       try {
         plan = this.#nodePlan(tx, node, resultCell, pattern, argumentLink);
       } catch (error) {
@@ -11488,7 +11571,6 @@ export class Runner {
         skipped++;
         continue;
       }
-      if (plan === undefined) continue;
       plans.push(plan);
       this.#presyncPlanRecorder?.(
         resultCell.getAsNormalizedFullLink().id,
@@ -11551,11 +11633,18 @@ export class Runner {
    * The manager's settled pool is not what is awaited: on a client it
    * holds the runtime's other work, sinks' first loads and coordinators'
    * republishes among it, which a resume must not wait behind.
+   *
+   * Only a serving runtime names them. A client's resume would otherwise
+   * load, from every space the piece links to, what each node declares it
+   * reads there, whether or not a run of the client's reads it: a manager
+   * listing a person's rooms would load every room. A client's run loads a
+   * document in another space when its read reaches the link.
    */
   async #syncCrossSpaceReads(
     plans: readonly NodePlan[],
     identity: ScopeKeyIdentity | undefined,
   ): Promise<void> {
+    if (!this.#runtime.servingPosture) return;
     const manager = this.#runtime.storageManager;
     if (!manager.loadsSettled || !manager.pendingLoadAddresses) return;
     const awaited = new Set<string>();
@@ -12246,7 +12335,7 @@ export class Runner {
       // it: the plan resolves the node's output spot to its end, so a
       // multi-hop binding yields the same `resultFor` identity the child's
       // setup mints rather than the unresolved head.
-      let plan: NodePlan | undefined;
+      let plan: NodePlan;
       try {
         plan = this.#nodePlan(tx, node, resultCell, pattern, argumentLink);
       } catch (error) {
@@ -12261,7 +12350,7 @@ export class Runner {
         ]);
         continue;
       }
-      if (plan?.kind !== "pattern") continue;
+      if (plan.kind !== "pattern") continue;
       this.#presyncPlanRecorder?.(link.id, node, "owned");
       if (plan.childResultCell === undefined) {
         // The same two skips as the catch above — this node's owned-cell
@@ -12514,6 +12603,7 @@ export class Runner {
     const setupKey = this.#getSetupKey(resultCell);
     this.#scopedChildOwners.delete(key);
     this.#independentlyStartedResults.delete(key);
+    this.#eventStarts.delete(key);
     this.#registrationsInstalledByRefusedRuns.delete(key);
     // TODO(hixie): This reaches every pending commit-gated start for the result,
     // which is wider than a release's authority: one that another launch
@@ -12580,8 +12670,7 @@ export class Runner {
         this.#inFlightStartsByDoc.delete(key);
       }
       const active = this.#activeStartAttemptsByDoc.get(key);
-      if (!active?.delete(attempt)) continue;
-      if (active.size === 0) {
+      if (active?.delete(attempt) && active.size === 0) {
         this.#activeStartAttemptsByDoc.delete(key);
         this.#startGenerationByDoc.delete(key);
       }
@@ -12773,6 +12862,7 @@ export class Runner {
     // later start can join one; dropping the index releases the attempts too.
     this.#inFlightStartsByDoc.clear();
     this.#independentlyStartedResults.clear();
+    this.#eventStarts.clear();
     this.#registrationsInstalledByRefusedRuns.clear();
     for (const key of [...this.#pendingDeferredStarts.keys()]) {
       this.#cancelPendingDeferredStarts(key);
@@ -12816,7 +12906,6 @@ export class Runner {
     schedulerRehydration: SchedulerRehydrationSubscriptionOptions,
   ) {
     const plan = this.#nodePlan(tx, node, resultCell, pattern);
-    if (plan === undefined) return;
     switch (plan.kind) {
       case "javascript":
         this.#instantiateJavaScriptNode(
@@ -12889,15 +12978,8 @@ export class Runner {
     resultCell: Cell<any>,
     pattern: Pattern,
     argumentLink?: NormalizedFullLink,
-  ): NodePlan | undefined {
+  ): NodePlan {
     const nodeModule = node.module;
-    if (!isModule(nodeModule)) {
-      if (isWriteRedirectLink(nodeModule) || isAliasBinding(nodeModule)) {
-        // TODO(seefeld): Implement, a dynamic node
-        return undefined;
-      }
-      throw new Error(debugStr`Unknown module: $quote${nodeModule}`);
-    }
     // `.asScope(scope)` records its scope on the *ref* module (the node's
     // module), but resolving the ref swaps in the registry's module — so
     // hand the declared default scope to the registry, or it is silently
@@ -14323,16 +14405,14 @@ export class Runner {
   ): Promise<never> | undefined {
     const creation = bringUpHomeRootForRefusedWrite(this.#runtime, error, tx);
     if (creation === undefined) return undefined;
-    return creation.then(
-      () => {
-        throw new RetryImmediately("Bringing up the user's Home root");
-      },
-      (failure: unknown) => {
-        (error as Error & { frame?: Frame }).cause = failure;
-        (error as Error & { frame?: Frame }).frame = frame;
-        throw error;
-      },
-    );
+    const reportFailedCreation = (failure: unknown): never => {
+      (error as Error & { frame?: Frame }).cause = failure;
+      (error as Error & { frame?: Frame }).frame = frame;
+      throw error;
+    };
+    return creation.then(() => {
+      throw new RetryImmediately("Bringing up the user's Home root");
+    }, reportFailedCreation);
   }
 
   #handlerResultPatternHasNavigateTo(
@@ -14721,7 +14801,7 @@ export class Runner {
             throw error;
           }
         }
-        const postRun = (result: any) => {
+        const postRun = (result: any): Promise<unknown> => {
           logger.timeStart("stream", "postRun");
           try {
             if (frame.pendingSpaceNames && frame.pendingSpaceNames.size > 0) {
@@ -14777,11 +14857,8 @@ export class Runner {
             },
           )
           : postRun(result);
-        if (postRunResult instanceof Promise) {
-          popFrameAfterReturn = false;
-          return postRunResult.finally(() => popFrame(frame));
-        }
-        return postRunResult;
+        popFrameAfterReturn = false;
+        return postRunResult.finally(() => popFrame(frame));
       } catch (error) {
         // The handler body may throw while materializing a not-yet-resolved
         // inSpace("name") child (e.g. set into a cell). If so, resolve the
@@ -17228,7 +17305,14 @@ export class Runner {
       if (leftAlone && this.isRunning(childResultCell)) {
         this.#stopResult(childResultCell);
       }
-      const childRun: RunResult<unknown> = leftAlone
+      // Reached for a child in the space this runtime serves whose parent
+      // lives in another, or on a serving runtime that serves no space.
+      const resumesScoped = !leftAlone && resumeExisting &&
+        this.#usesScopedPrograms(childResultCell);
+      if (resumesScoped) {
+        this.#startScopedPrograms(storedChild, { ...options, tx: instanceTx });
+      }
+      const childRun: RunResult<unknown> = leftAlone || resumesScoped
         ? { resultCell: childResultCell }
         : !resumeExisting
         ? this.#runWithStartOwnership(
@@ -17242,18 +17326,6 @@ export class Runner {
           },
           !derivedElsewhere,
         )
-        // Reached for a child in the space this runtime serves whose parent
-        // lives in another, or on a serving runtime that serves no space.
-        : this.#usesScopedPrograms(childResultCell)
-        ? {
-          resultCell: childResultCell,
-          installedCancel: this.#startWithTx(
-            instanceTx,
-            storedChild,
-            undefined,
-            options,
-          ),
-        }
         : this.#resumeChildAfterCommit(instanceTx, childResultCell, options);
       if (childRun.cancelDeferredStart !== undefined) {
         // Each actor initializer may own a separate pending start. Register
@@ -17549,51 +17621,6 @@ export function pieceSourceMovedPast(
 }
 
 /**
- * Read the outcome of the last attempt to follow this piece's active origin.
- *
- * A value this runtime cannot read is reported as absent. This state describes
- * a piece rather than guarding a write, so an unreadable one leaves the panel
- * saying nothing instead of failing the read that carries it.
- */
-export function getPieceReconciliation(
-  resultCell: Cell<unknown>,
-): PieceReconciliation | undefined {
-  const raw = resultCell.getMetaRaw("pieceReconciliation", {
-    meta: ignoreReadForScheduling,
-  });
-  if (!isObjectOrArray(raw)) return undefined;
-  const { outcome, at, origin, offered, reason, detail, confirmed } = raw;
-  if (
-    !isPieceReconciliationOutcome(outcome) ||
-    typeof at !== "number" || !Number.isFinite(at) || at < 0 ||
-    typeof origin !== "string" || origin.length === 0
-  ) {
-    return undefined;
-  }
-  const offeredRef = asPatternIdentityRef(offered);
-  return {
-    outcome,
-    at,
-    origin,
-    ...(offeredRef === undefined ? {} : { offered: offeredRef }),
-    ...(isPieceReconciliationReason(reason) ? { reason } : {}),
-    ...(typeof detail === "string" && detail.length > 0 ? { detail } : {}),
-    ...(isObjectNotArray(confirmed) &&
-        typeof confirmed.identity === "string" &&
-        confirmed.identity.length > 0 &&
-        typeof confirmed.releasedAt === "number" &&
-        Number.isFinite(confirmed.releasedAt) && confirmed.releasedAt >= 0
-      ? {
-        confirmed: {
-          identity: confirmed.identity,
-          releasedAt: confirmed.releasedAt,
-        },
-      }
-      : {}),
-  };
-}
-
-/**
  * Record what following the active origin just did. Meta writes are
  * transactional, so a transaction is required.
  */
@@ -17645,21 +17672,6 @@ export function samePieceReconciliation(
     (left.offered === undefined || right.offered === undefined
       ? left.offered === right.offered
       : patternIdentityKey(left.offered) === patternIdentityKey(right.offered));
-}
-
-function isPieceReconciliationOutcome(
-  value: unknown,
-): value is PieceReconciliationOutcome {
-  return value === "followed" || value === "unreachable" ||
-    value === "unapplied" || value === "refused";
-}
-
-function isPieceReconciliationReason(
-  value: unknown,
-): value is PieceReconciliationReason {
-  return value === "incompatible-schema" || value === "argument-mismatch" ||
-    value === "source-invalid" || value === "identity-mismatch" ||
-    value === "apply-failed";
 }
 
 /**

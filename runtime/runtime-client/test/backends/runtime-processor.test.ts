@@ -108,6 +108,11 @@ import { txToReactivityLog } from "../../../runner/src/scheduler.ts";
 import { interceptTransaction } from "../../../runner/test/support/intercept-transaction.ts";
 import { patchableCell } from "../../../runner/test/support/patchable-cell.ts";
 import { createTrustedBuilder } from "../../../runner/test/support/trusted-builder.ts";
+import {
+  SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
+  writeSeedEnvelopeDoc,
+} from "../../../runner/test/cfc-seed-envelope.ts";
 import { buildProcessor } from "./build-processor.ts";
 import { stubWorkerBoot } from "./stub-worker-boot.ts";
 import { createTransactionCommitReceipt } from "../../../runner/src/storage/commit-receipt.ts";
@@ -4309,7 +4314,7 @@ describe("runtime-processor", () => {
         stub(
           PiecesController.prototype,
           "adoptCatalogRooms",
-          () => Promise.resolve(),
+          () => Promise.resolve(0),
         ),
       ];
       return {
@@ -5858,7 +5863,7 @@ describe("runtime-processor", () => {
       >;
     }
 
-    it('fails closed on the raw `meta: "cfc"` seam', () => {
+    it('fails closed on the raw `meta: "cfc"` seam', async () => {
       const ref: CellRef = {
         id: "of:cfc-raw-meta-cell" as CellRef["id"],
         space: "did:key:test" as CellRef["space"],
@@ -5896,13 +5901,13 @@ describe("runtime-processor", () => {
 
       // `cfc` is not a `MetaField`, but the wire is untyped JSON — a request
       // that sends it must get an error, never the raw metadata.
-      expect(() =>
+      await expect(
         processor.handleCellGet({
           type: RequestType.CellGet,
           cell: ref,
           meta: "cfc" as never,
-        })
-      ).toThrow(/cfc/);
+        }),
+      ).rejects.toThrow(/cfc/);
     });
 
     it("returns a label view for a cell ref", async () => {
@@ -6011,10 +6016,12 @@ describe("runtime-processor", () => {
           },
         });
 
-        const response = admitted(processor.handleCellGet({
-          type: RequestType.CellGet,
-          cell: ref,
-        }));
+        const response = admitted(
+          await processor.handleCellGet({
+            type: RequestType.CellGet,
+            cell: ref,
+          }),
+        );
         const atom = sourcedCaveatOf(
           (response.value as { nested: SigilLink }).nested,
         );
@@ -6027,7 +6034,7 @@ describe("runtime-processor", () => {
       }
     });
 
-    it("returns the read cell's schema-bearing ref when `includeRef` is set", () => {
+    it("returns the read cell's schema-bearing ref when `includeRef` is set", async () => {
       const ref: CellRef = {
         id: "of:include-ref-cell" as CellRef["id"],
         space: "did:key:test" as CellRef["space"],
@@ -6052,23 +6059,27 @@ describe("runtime-processor", () => {
         },
       });
 
-      const withRef = admitted(processor.handleCellGet({
-        type: RequestType.CellGet,
-        cell: ref,
-        includeRef: true,
-      }));
+      const withRef = admitted(
+        await processor.handleCellGet({
+          type: RequestType.CellGet,
+          cell: ref,
+          includeRef: true,
+        }),
+      );
       expect(withRef.cell?.id).toBe("of:include-ref-cell");
       expect(withRef.cell?.schema).toEqual({ type: "string" });
 
       // Not requested: not returned.
-      const without = admitted(processor.handleCellGet({
-        type: RequestType.CellGet,
-        cell: ref,
-      }));
+      const without = admitted(
+        await processor.handleCellGet({
+          type: RequestType.CellGet,
+          cell: ref,
+        }),
+      );
       expect(without.cell).toBeUndefined();
     });
 
-    it("returns the ref alongside the CFC label when both are requested", () => {
+    it("returns the ref alongside the CFC label when both are requested", async () => {
       const ref: CellRef = {
         id: "of:include-ref-label-cell" as CellRef["id"],
         space: "did:key:test" as CellRef["space"],
@@ -6101,19 +6112,21 @@ describe("runtime-processor", () => {
         },
       });
 
-      const response = admitted(processor.handleCellGet({
-        type: RequestType.CellGet,
-        cell: ref,
-        includeRef: true,
-        includeCfcLabel: true,
-      }));
+      const response = admitted(
+        await processor.handleCellGet({
+          type: RequestType.CellGet,
+          cell: ref,
+          includeRef: true,
+          includeCfcLabel: true,
+        }),
+      );
       expect(response.cell?.id).toBe("of:include-ref-label-cell");
       // The cell carries no label; the field is present-but-undefined.
       expect(response.cfcLabel).toBeUndefined();
       expect(response.value).toBe("plain value");
     });
 
-    it("leaves a view on a link the read handed it, which stored data never carries", () => {
+    it("leaves a view on a link the read handed it, which stored data never carries", async () => {
       // The response path redacts the views the conversion attaches from live
       // cells and no others: a link already in the read is rebuilt as the
       // container it is. Stored data holds no view on a link, the persist
@@ -6158,10 +6171,12 @@ describe("runtime-processor", () => {
         },
       });
 
-      const response = admitted(processor.handleCellGet({
-        type: RequestType.CellGet,
-        cell: ref,
-      }));
+      const response = admitted(
+        await processor.handleCellGet({
+          type: RequestType.CellGet,
+          cell: ref,
+        }),
+      );
       const atom = sourcedCaveatOf(
         (response.value as { nested: SigilLink }).nested,
       );
@@ -10103,6 +10118,162 @@ describe("runtime-processor", () => {
           await runtime.dispose();
         }
       });
+    });
+  });
+
+  describe("`RuntimeProcessor` host reads under the render policy", () => {
+    it("decides a host's read under the ceiling it renders with, and returns it as read with none", async () => {
+      // A host's read is a display sink like a render, so the ceiling every
+      // mount starts from decides it, and a read of a value whose label the
+      // ceiling does not admit answers with a refusal.
+      const { runtime } = createRuntime();
+      try {
+        const tx = runtime.edit();
+        const cell = runtime.getCell<string>(
+          cfcSigner.did(),
+          "host-read-under-ceiling",
+          undefined,
+          tx,
+        );
+        cell.set("credential-behind-the-ceiling");
+        expect((await tx.commit().settled).ok).toBeDefined();
+        const ref = {
+          ...cell.getAsNormalizedFullLink(),
+          schema: {
+            type: "string",
+            ifc: { confidentiality: [cfcAtom.resource("CredentialSecret")] },
+          },
+        } as unknown as CellRef;
+        const state = buildProcessor({ runtime });
+        const read = () =>
+          state.handleCellGet({ type: RequestType.CellGet, cell: ref });
+
+        expect(await read()).toEqual({
+          value: "credential-behind-the-ceiling",
+        });
+        state.accessForTestingOnly.renderConfidentialityCeiling = {
+          atoms: [],
+        } as never;
+        expect(await read()).toEqual({
+          refused: { refusedBy: "display-ceiling" },
+        });
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
+    it("decides a host's read of a document's metadata under the ceiling, on the document's labels", async () => {
+      // A metadata field sits beside the document's value, where no label
+      // covers it, so its read is decided on the labels the document holds.
+
+      const { runtime } = createRuntime();
+      try {
+        const tx = runtime.edit();
+        const cell = runtime.getCell<string>(
+          cfcSigner.did(),
+          "host-metadata-read-under-ceiling",
+          undefined,
+          tx,
+        );
+        cell.set("credential-behind-the-ceiling");
+        expect((await tx.commit().settled).ok).toBeDefined();
+        const ref = {
+          ...cell.getAsNormalizedFullLink(),
+          schema: {
+            type: "string",
+            ifc: { confidentiality: [cfcAtom.resource("CredentialSecret")] },
+          },
+        } as unknown as CellRef;
+        const state = buildProcessor({ runtime });
+        const read = () =>
+          state.handleCellGet({
+            type: RequestType.CellGet,
+            cell: ref,
+            meta: "internal",
+          });
+
+        expect("refused" in await read()).toBe(false);
+        state.accessForTestingOnly.renderConfidentialityCeiling = {
+          atoms: [],
+        } as never;
+        expect(await read()).toEqual({
+          refused: { refusedBy: "display-ceiling" },
+        });
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
+    it("decides a host's read under the ceiling `initialize()` configures, with the resolver a mount gets", async () => {
+      // The ceiling admits what the acting user may see. A value labeled with
+      // the session's own space is admitted through the exchange rules alone,
+      // which the resolver built for that space applies, and a value labeled
+      // with a resource the ceiling does not name is refused.
+      const space = cfcSigner.did();
+      const server = new MemoryV2Server.Server({
+        authorizeSessionOpen: () => cfcSigner.did(),
+        sessionOpenAuth: { audience: testSessionOpenAudience },
+      });
+      const storageManager = new SharedV2StorageManager({
+        as: cfcSigner,
+        memoryHost: new URL("memory://"),
+      }, server);
+      const restoreBoot = stubWorkerBoot(() => storageManager);
+      try {
+        const processor = await RuntimeProcessor.initialize({
+          apiUrl: "http://worker.test/",
+          identity: cfcSigner.keyPair,
+          spaceDid: space,
+          renderConfidentialityCeiling: { atoms: [cfcAtom.user(space)] },
+        });
+        try {
+          const runtime = processor.accessForTestingOnly.runtime;
+          const labeled = async (id: string, atom: unknown) => {
+            const tx = runtime.edit();
+            const cell = runtime.getCell<string>(space, id, undefined, tx);
+            writeSeedEnvelopeDoc(tx, space);
+            seedStoredEnvelope(tx, {
+              space,
+              id: cell.getAsNormalizedFullLink().id!,
+              type: "application/json",
+              path: [],
+            }, {
+              value: `value-of-${id}`,
+              cfc: {
+                version: 1,
+                schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+                labelMap: {
+                  version: 1,
+                  entries: [{ path: [], label: { confidentiality: [atom] } }],
+                },
+              },
+            } as never);
+            expect((await tx.commit().settled).ok).toBeDefined();
+            return processor.handleCellGet({
+              type: RequestType.CellGet,
+              cell: {
+                ...cell.getAsNormalizedFullLink(),
+                schema: { type: "string" },
+              } as unknown as CellRef,
+            });
+          };
+
+          expect(await labeled("session-space-note", cfcAtom.space(space)))
+            .toEqual({ value: "value-of-session-space-note" });
+          expect(
+            await labeled(
+              "credential-note",
+              cfcAtom.resource("CredentialSecret"),
+            ),
+          ).toEqual({ refused: { refusedBy: "display-ceiling" } });
+        } finally {
+          await processor.dispose();
+        }
+      } finally {
+        restoreBoot();
+        await storageManager.close();
+        await server.close();
+      }
     });
   });
 

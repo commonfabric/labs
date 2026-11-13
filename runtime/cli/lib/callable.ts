@@ -253,7 +253,7 @@ export interface InvocationOutcome {
   /** True when the handling's outcome is withheld: under server execution
    * it read data its stream's space doesn't admit, so whether it committed,
    * and what it returned, is not told. Such an outcome is `"settled"` with
-   * no `result`, and its receipt is not read. */
+   * no `result` and no `receipt`. */
   withheld?: true;
 
   /** Under `--show-links` only: result paths mapped to their backing cell
@@ -1075,7 +1075,7 @@ export async function executeResolvedCallable(
       );
     }
     // A withheld handling may never have written its receipt, so nothing is
-    // read back.
+    // read back, and no receipt is named.
     if (handling.status === "withheld") {
       return {
         invocation: {
@@ -1083,7 +1083,6 @@ export async function executeResolvedCallable(
           status: "settled",
           withheld: true,
           ...(deduplicated ? { deduplicated: true } : {}),
-          ...(receiptAddress !== undefined ? { receipt: receiptAddress } : {}),
         },
       };
     }

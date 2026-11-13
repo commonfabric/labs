@@ -58,7 +58,7 @@ describe("split-clock readiness decisions", () => {
       setScheduled: () => {},
       resetSettlingTracker: () => {},
       resetConvergenceHoldPasses: () => {},
-      setPendingQueueTaskTimer: () => {},
+      setQueuedPass: () => {},
       execute: () => {},
     } satisfies ExecuteContinuationState;
 
@@ -88,7 +88,7 @@ describe("split-clock readiness decisions", () => {
       setScheduled: () => {},
       resetSettlingTracker: () => {},
       resetConvergenceHoldPasses: () => holdResets++,
-      setPendingQueueTaskTimer: () => {},
+      setQueuedPass: () => {},
       execute: () => {},
     } satisfies ExecuteContinuationState;
 
@@ -122,7 +122,7 @@ describe("split-clock readiness decisions", () => {
       setScheduled: () => {},
       resetSettlingTracker: () => {},
       resetConvergenceHoldPasses: () => holdResets++,
-      setPendingQueueTaskTimer: () => {},
+      setQueuedPass: () => {},
       execute: () => {},
     } satisfies ExecuteContinuationState;
 
@@ -150,7 +150,7 @@ describe("split-clock readiness decisions", () => {
       setScheduled: () => {},
       resetSettlingTracker: () => {},
       resetConvergenceHoldPasses: () => holdResets++,
-      setPendingQueueTaskTimer: () => {},
+      setQueuedPass: () => {},
       execute: () => {},
     } satisfies ExecuteContinuationState;
 

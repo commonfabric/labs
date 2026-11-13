@@ -40,7 +40,6 @@ export class ExampleSearchInput extends LitElement {
         .value="${this.value}"
         placeholder="${this.placeholder}"
         @input="${this.handleInput}"
-        @focus="${this.handleFocus}"
         @blur="${this.handleBlur}"
       />
     `;
@@ -59,10 +58,6 @@ export class ExampleSearchInput extends LitElement {
         }),
       );
     });
-  }
-
-  private handleFocus() {
-    this.inputTiming.onFocus();
   }
 
   private handleBlur() {
@@ -137,7 +132,6 @@ export class ExampleFormField extends LitElement {
         .value="${this.value}"
         placeholder="${this.placeholder}"
         @input="${this.handleInput}"
-        @focus="${this.handleFocus}"
         @blur="${this.handleBlur}"
       />
     `;
@@ -151,10 +145,6 @@ export class ExampleFormField extends LitElement {
     this.inputTiming.schedule(() => {
       this.validateAndDispatch();
     });
-  }
-
-  private handleFocus() {
-    this.inputTiming.onFocus();
   }
 
   private handleBlur() {

@@ -101,8 +101,9 @@ const MEMORY_CFC_SOURCE: readonly RegExp[] = [
  * The source files the CFC rule in `.claude/rules/cfc.md` governs, which is
  * where a `SPEC-PENDING` marker may sit: the runner's CFC sources and their
  * tests, the memory package's CFC sources and the store's test of them, the
- * render boundaries in `html`, the harness's CFC modules, and the harness
- * console's display ceiling. The two lists are kept in step by hand.
+ * render boundaries in `html`, the worker's host read gate, the harness's CFC
+ * modules, and the harness console's display ceiling. The two lists are kept
+ * in step by hand.
  */
 export const GOVERNED_SOURCE: readonly RegExp[] = [
   /^runtime\/runner\/src\/cfc\/.*\.tsx?$/,
@@ -110,6 +111,7 @@ export const GOVERNED_SOURCE: readonly RegExp[] = [
   /^runtime\/runner\/test\/cfc[^/]*\.test\.tsx?$/,
   /^runtime\/runner\/test\/cfc\/.*\.tsx?$/,
   /^runtime\/html\/src\/worker\/(?:reconciler|display-fit|display-fit-atoms)\.ts$/,
+  /^runtime\/runtime-client\/src\/backends\/host-read-gate\.ts$/,
   /^runtime\/cf-harness\/src\/cfc-[^/]*\.ts$/,
   /^runtime\/cf-harness\/src\/contracts\/cfc-[^/]*\.ts$/,
   /^runtime\/cf-harness\/src\/sandbox\/runsc-cfc-result\.ts$/,
@@ -154,7 +156,14 @@ export interface Exemption {
  * Every `§` citation under `runtime/runner/src/cfc/` that names something
  * other than a section of the specification, on purpose.
  */
-export const EXEMPTIONS: readonly Exemption[] = [];
+export const EXEMPTIONS: readonly Exemption[] = [{
+  file: "runtime/runner/src/cfc/prepare.ts",
+  citation: "§8.12.5.1",
+  reason: "the served-run holder rule cites the section " +
+    "https://github.com/commonfabric/specs/pull/95 adds, which the pinned " +
+    "snapshot (specs#88's head) does not hold; its SPEC-PENDING marker names " +
+    "that pull request",
+}];
 
 /** A file this check reads. */
 export interface SourceFile {

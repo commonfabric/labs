@@ -211,9 +211,7 @@ export const modalStyles = css`
   }
 
   :host(:not([dismissible])) .close-button,
-  :host([dismissible="false"]) .close-button,
-  :host(:not([dismissable])) .close-button,
-  :host([dismissable="false"]) .close-button {
+  :host([dismissible="false"]) .close-button {
     display: none;
   }
 
