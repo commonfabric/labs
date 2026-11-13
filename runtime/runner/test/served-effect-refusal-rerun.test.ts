@@ -127,6 +127,12 @@ type Fixture = {
   /** The serving runtime's stamps for abandoned requests' endings. */
   abandonedStamps: ServerRunInfo[];
 
+  /**
+   * How many times a staging of each request was abandoned, by the request's
+   * effect id, as the sink-request seam reports each abandonment.
+   */
+  abandonments: () => ReadonlyMap<string, number>;
+
   /** Alice's client runtime. */
   client: Runtime;
 
@@ -278,6 +284,7 @@ async function withFixture<T>(
   const managers = new Map<Runtime, EmulatedStorageManager>();
   const servingRuntimes: Runtime[] = [];
   const abandonedStamps: ServerRunInfo[] = [];
+  const abandonments = new Map<string, number>();
   let host: ExecutorHost | undefined;
   let ceiling: readonly string[] | undefined = refusal === "ceiling"
     ? []
@@ -307,6 +314,18 @@ async function withFixture<T>(
     }
   });
   let cancel: (() => void) | undefined;
+  const originalError = console.error;
+  console.error = (...args: unknown[]) => {
+    const [line, details] = args;
+    if (
+      typeof line === "string" && line.includes("was abandoned before it") &&
+      typeof (details as { effectId?: unknown })?.effectId === "string"
+    ) {
+      const { effectId } = details as { effectId: string };
+      abandonments.set(effectId, (abandonments.get(effectId) ?? 0) + 1);
+    }
+    originalError(...args);
+  };
   try {
     globalThis.fetch = (input, init) => {
       const requestedUrl = input instanceof Request ? input.url : String(input);
@@ -429,6 +448,7 @@ export default pattern<
       refusals: () => refusals,
       requests: () => requests,
       abandonedStamps,
+      abandonments: () => abandonments,
       client,
       fetched: result.key("fetched"),
       argument,
@@ -493,6 +513,7 @@ export default pattern<
   } finally {
     cancel?.();
     stopListening();
+    console.error = originalError;
     globalThis.fetch = originalFetch;
     await host?.close();
     for (const runtime of managers.keys()) {
@@ -615,6 +636,13 @@ async function expectRefusedEnding(
     expect(f.refusals()).toBeGreaterThan(0);
     expect(f.refusals()).toBeLessThanOrEqual(RUN_BOUND);
     expect(f.requests()).toBe(0);
+    // Each request is staged again at most once after its refusal. A
+    // user-scoped node can first stage a request built before its `PerUser`
+    // input reached the serving runtime, which is a request of its own.
+    expect(f.abandonments().size).toBeGreaterThan(0);
+    for (const [effectId, count] of f.abandonments()) {
+      expect(count, effectId).toBeLessThanOrEqual(2);
+    }
     const requester = f.client.scopeKeyIdentity;
     const errorLink = await f.errorLink();
     const ending = { pending: false, error: refusedMessage(builtin) };
