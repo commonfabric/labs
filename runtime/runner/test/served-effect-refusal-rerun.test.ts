@@ -21,6 +21,7 @@ import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
 import * as Engine from "@commonfabric/memory/v2/engine";
 
 import type { Cell } from "../src/cell.ts";
+import { LLMMessageSchema } from "../src/builtins/llm-schemas.ts";
 import { addCfcDenialListener } from "../src/cfc/denial-report.ts";
 import { ExecutorHost } from "../src/executor/host.ts";
 import type { NormalizedFullLink } from "../src/link-types.ts";
@@ -45,7 +46,13 @@ const url = "https://example.test/served-effect-rerun";
 /** A builtin the case drives, and how a pattern calls it. */
 type Builtin = {
   /** The builtin's name, which is also the sink its ceiling names. */
-  name: "fetchText" | "fetchJson" | "generateText" | "generateObject";
+  name:
+    | "fetchText"
+    | "fetchJson"
+    | "generateText"
+    | "generateObject"
+    | "compileAndRun"
+    | "llmDialog";
 
   /** The call, over the pattern's `url` and `tag` inputs. */
   call: string;
@@ -100,7 +107,7 @@ type Fixture = {
 
   /** Alice's view of the node's result, and her argument cell. */
   fetched: Cell<NodeView>;
-  argument: Cell<{ url: string; tag: string }>;
+  argument: Cell<{ url: string; tag: string; messages: unknown[] }>;
 
   /** The owner's runtime, which writes the document the URL comes from. */
   ownerRuntime: Runtime;
@@ -215,7 +222,8 @@ async function seedSource(
  * (see `seedSource()`), which the ceiling refuses when that document is
  * labeled. With `refusal: "holder"` the serving runtime declares no ceiling,
  * and what the case counts as a refusal is the served-run holder rule's
- * (§8.12.5.1) refusal of the node's own state write.
+ * (§8.12.5.1) refusal of the run's own state write: not the refusal of an
+ * ending's separate request-hash write.
  */
 async function withFixture<T>(
   { builtin, scope, input, refusal = "ceiling" }: {
@@ -246,11 +254,12 @@ async function withFixture<T>(
     const reasons = (denial.inputs.reasons ?? []) as readonly string[];
     if (
       reasons.some((reason) =>
-        reason.includes(
-          refusal === "holder"
-            ? "(cross-holder, §8.12.5.1)"
-            : `exceeds ceiling for ${builtin.name}`,
-        )
+        refusal === "holder"
+          // A refusal of an ending's request-hash write alone, which a
+          // builtin makes in a transaction of its own, is not a run.
+          ? reason.includes("(cross-holder, §8.12.5.1)") &&
+            !reason.includes(" at /requestHash ")
+          : reason.includes(`exceeds ceiling for ${builtin.name}`)
       )
     ) {
       refusals += 1;
@@ -334,15 +343,17 @@ async function withFixture<T>(
         contents: `
 import { ${builtin.name}, pattern, PerUser, Writable } from "commonfabric";
 export default pattern<
-  { url: Writable<string>; tag: ${tagType} },
+  { url: Writable<string>; tag: ${tagType}; messages: Writable<any[]> },
   { fetched: any }
->(({ url, tag }) => ({
+>(({ url, tag, messages }) => ({
   fetched: ${builtin.call},
 }));
 `,
       }],
     }, { space });
-    const argument = client.getCell<{ url: string; tag: string }>(
+    const argument = client.getCell<
+      { url: string; tag: string; messages: unknown[] }
+    >(
       space,
       "served-effect-rerun-input",
       pattern.argumentSchema,
@@ -362,6 +373,8 @@ export default pattern<
         : client.getCellFromLink(urlInput)) as never,
     );
     argument.withTx(start).key("tag").set("alice's tag");
+    // The conversation a dialog keeps; no other builtin reads it.
+    argument.withTx(start).key("messages").set([]);
     client.run(start, pattern, argument, result);
     expect((await start.commit().settled).error).toBeUndefined();
     cancel = result.sink(() => {});
@@ -647,6 +660,128 @@ describe("served-effect-refusal-rerun", () => {
       expect(await f.freshView()).toMatchObject(ending);
       expect(f.unstampedSealRefusals()).toBe(0);
     });
+  });
+
+  it("leaves a served compileAndRun whose state write the holder rule refuses without an ending, reporting its refusal", async () => {
+    // The program's source comes through a link to another space's document
+    // labeled with that space owner's `User` clause, so the holder rule
+    // refuses the run that stages its compile, and then refuses its ending
+    // too: the node is left showing no error.
+    //
+    // TODO(danfuzz): The node should end showing "compileAndRun request was
+    // refused before it started", as the `llm` builtins' nodes do. It can't
+    // yet: the ending decides whether its request is still the target's by
+    // reading the program, which is labeled, so the holder rule refuses
+    // everything the ending writes. Deciding from an in-memory record of the
+    // latest run's program instead would lose the guarantee that an abandoned
+    // request's ending never lands over a program that replaced it
+    // ("leaves an abandoned request's outputs to the program that replaced
+    // it", in `compile-and-run-served.test.ts`). See the paired TODO at the
+    // ending in `compile-and-run.ts`.
+
+    const compileAndRun: Builtin = {
+      name: "compileAndRun",
+      call:
+        `compileAndRun({ files: [{ name: "/main.tsx", contents: url }], main: "/main.tsx" })`,
+    };
+    const rejected: string[] = [];
+    const originalError = console.error;
+    console.error = (...args: unknown[]) => {
+      const line = args.map(String).join(" ");
+      if (line.includes("[compileAndRun]")) rejected.push(line);
+      originalError(...args);
+    };
+    try {
+      await withFixture({
+        builtin: compileAndRun,
+        scope: "space",
+        refusal: "holder",
+        input: (ownerRuntime) =>
+          seedSource(
+            ownerRuntime,
+            "export default 1;",
+            true,
+            ownerUserClause,
+          ),
+      }, async (f) => {
+        await f.settle();
+
+        expect(f.refusals()).toBeGreaterThan(0);
+        expect(f.refusals()).toBeLessThanOrEqual(RUN_BOUND);
+        expect(rejected.length).toBeGreaterThan(0);
+        expect(
+          rejected.every((line) =>
+            line.includes("Writing the abandoned request's error") &&
+            line.includes("was rejected")
+          ),
+        ).toBe(true);
+        const servingView = f.servingView(
+          f.fetched.getAsNormalizedFullLink(),
+          undefined,
+        );
+        expect(servingView?.error).toBeUndefined();
+        expect((await f.freshView())?.error).toBeUndefined();
+      });
+    } finally {
+      console.error = originalError;
+    }
+  });
+
+  it("ends a served llmDialog turn whose staging the holder rule refuses, with no rejected ending", async () => {
+    // The dialog's system prompt comes through a link to another space's
+    // document labeled with that space owner's `User` clause, so the holder
+    // rule refuses the handler run that stages a turn. A dialog's ending
+    // leaves its conversation alone and takes its pending flag down, and
+    // that write must land rather than be refused in turn.
+
+    const llmDialog: Builtin = {
+      name: "llmDialog",
+      call: `llmDialog({ messages, system: url, builtinTools: false })`,
+    };
+    const rejected: string[] = [];
+    const originalError = console.error;
+    console.error = (...args: unknown[]) => {
+      const line = args.map(String).join(" ");
+      if (line.includes("[llmDialog]")) rejected.push(line);
+      originalError(...args);
+    };
+    try {
+      await withFixture({
+        builtin: llmDialog,
+        scope: "space",
+        refusal: "holder",
+        input: (ownerRuntime) =>
+          seedSource(
+            ownerRuntime,
+            "the system prompt",
+            true,
+            ownerUserClause,
+          ),
+      }, async (f) => {
+        await waitForCellValue(
+          f.client,
+          f.fetched,
+          (view) =>
+            !!(view as { addMessage?: unknown } | undefined)?.addMessage,
+        );
+        await f.settle(async () => {
+          f.fetched.key("addMessage" as never).asSchema({
+            ...LLMMessageSchema,
+            asCell: ["stream"],
+          }).send({ role: "user", content: "hello" } as never);
+          await f.client.idle();
+        });
+
+        expect(f.refusals()).toBeGreaterThan(0);
+        expect(f.runsSinceTrigger()).toBeLessThanOrEqual(RUN_BOUND);
+        expect(rejected).toEqual([]);
+        expect(
+          f.servingView(f.fetched.getAsNormalizedFullLink(), undefined),
+        ).toMatchObject({ pending: false });
+      });
+    } finally {
+      console.error = originalError;
+    }
   });
 
   it("ends a served fetchText that nobody demands, whose request the sink ceiling refuses", async () => {

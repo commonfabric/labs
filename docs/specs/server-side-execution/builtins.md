@@ -149,6 +149,20 @@ inputs; the node's own run on the new inputs counts as newer in the serving
 runtime, so the ending's ownership check stops a late one there, and the new
 run's request, staged afresh, replaces whatever an earlier one wrote.
 
+`llm-dialog`'s ending reads its inputs only to find the scope they select,
+which only a caller with no publication binding needs, so an ending with one
+reads none, and the holder rule has no label of theirs to refuse it by.
+
+`compileAndRun`'s ending is not yet written that way. It decides whether a
+refused request is still its target's by reading the program, so where the
+holder rule refuses the request over the program's label, it refuses the ending
+too, and the node shows no error. Deciding from an in-memory record of the
+latest run's program would end it, but would let an abandoned request's ending
+land over a program another transaction put in its place before the node ran
+again, which the ending is held not to do. `agent`'s ending reads no input, but
+writes the request hash, which derives from the request, from what the staging
+run left in memory, so the hash is stored without the request's labels.
+
 | built-in | request inputs (memo key basis) | result cell | authority | notes |
 | --- | --- | --- | --- | --- |
 | `fetch` (`fetchData`) | url, method, headers (allowlisted), body, response schema | `{ result?, error?, pending }`; the memo hash is committed in the internal cell `{requestId, lastActivity, inputHash}` (`fetch.ts`) | capability handle bound at wiring (README §3.8) | redirects/deadlines per existing `fetch-request-deadlines` doc; the memo base is `` `${kind.name}:${inputHash}` ``; the served outbox key also names the target document and its resolved user or session instance |
