@@ -452,9 +452,11 @@ the element is keyed by the identity of that cell.
   show the same plain value would therefore share it: two rows showing
   `"glazed"` would open together. That sharing is not allowed. A body over
   plain-value elements that declares a state cell without using the index
-  is a compile error. The author either uses the index, which puts it in
-  the key, or makes the elements cells, which a list of records written by
-  a handler already is. Sharing a cone for pure computation is unaffected.
+  is a compile error (`collection:shared-element-state` in
+  `language-subset.md` §10.3). The author either uses the index, which
+  puts it in the key, or makes the elements cells, which a list of
+  records written by a handler already is. Sharing a cone for pure
+  computation is unaffected.
   Whether an element is a plain value is a fact of storage that a type such
   as `Donut[]` does not state; see open question 5.
 - *A handler bound over plain values is shared.* A body over plain-value
@@ -472,10 +474,18 @@ the element is keyed by the identity of that cell.
   position joins the element key, as it does when the callback uses the
   index. Two equal plain elements then have two children, and a factory
   element in `factories.map((F) => F({ ... }))` has a child per position.
-  The cost is the one of using the index: an entry that moves is a new
-  element for that body. *Assumed:* a state cell that such a body declares
-  is accepted, because the position is in the key and no two positions
-  share the cell (open question 14).
+  The plan records it in `Collection.bodyUses.child`
+  (`plan-and-label-templates.md` §1.1 and §1.3). A statically resolved
+  pattern called in the body is compiled into the body and is no child,
+  so it does not put the position in the key, and a state cell it
+  declares is a state cell of the body. Under nested bodies the position
+  joins the key at every enclosing level whose elements are plain
+  values, which that document assumes (its §8, question 37). An element
+  that is a link is keyed by its cell alone, so two positions that link
+  to one cell share the child. The cost is the one of using the index:
+  an entry that moves is a new element for that body. *Assumed:* a state
+  cell that such a body declares is accepted, because the position is in
+  the key and no two positions share the cell (open question 14).
 - *The same cell twice shares one cone.* The occurrence count is dropped,
   for the same reason: two positions that hold the same cell are the same
   element.
@@ -547,7 +557,8 @@ the element is keyed by the identity of that cell.
 `plan-and-label-templates.md` §1.3 states the same rule. The plan does not
 record the element part of the key, which the runtime computes from each
 element. It records in `Collection.bodyUses.index` whether a body uses the
-index, which is what puts the position in the key. The key joins a cause
+index, and in `Collection.bodyUses.child` whether it instantiates a child,
+which are the two things that put the position in the key. The key joins a cause
 through the `within` steps of the declaration (`WithinStep` in its §1.1): a
 state cell, an operation, a child, a body, or a binding declared in an
 element body has an `element` step that names the collection, and each
@@ -938,12 +949,23 @@ loop; a system prompt rendered again from the live context; and, for a
 dialog, the live transcript on each model call. The check at the request
 alone is therefore not sufficient. The egress ceiling is checked again on
 each send, on the content of that send as it is then, with references
-followed as the **Request operands** paragraph of the entry says. A send
-that fails the check is not made, and the built-in's result takes the
-error state. The entries [`generateText`](#llm-generatetext),
+followed as the **Request operands** paragraph of the entry says
+(`plan-and-label-templates.md` §3.14, "Each later send is checked"). The
+boundary makes the reads of a send in a transaction of its own, the send
+transaction, which checks the ceiling before the send is made. A send
+that fails the check is not made:
+
+- the failure rejects the send transaction and no other;
+- the effect makes no further send for that request;
+- the built-in's result takes the error state;
+- what the effect stored before the refused send stays stored;
+- the event whose handler requested the effect, where a handler did, has
+  committed and is not rejected.
+
+The entries [`generateText`](#llm-generatetext),
 [`generateObject`](#generateobject), and [`llmDialog`](#llmdialog) each
-have a **Sends** paragraph that lists the sends of the built-in. These
-checks are made in the boundary's own transactions and are not part of a
+have a **Sends** paragraph that lists the sends of the built-in and says
+what its result is on a refused send. The checks are not part of a
 template, because what a tool returns depends on data.
 
 **A pattern closure given to a language model as a tool.** A model's call
@@ -955,9 +977,40 @@ the model does not supply them (`language-subset.md` §4.4.2). The result
 of the call carries the label of the instance's own result, by the
 ordinary rules for the outputs of an instance. What the built-in sends
 back to the model of that result is a send, checked as the paragraph
-above says. `plan-and-label-templates.md` states the rule, and each of
-the three entries says under **Tools** what the label of a generation is
-for that built-in.
+above says. `plan-and-label-templates.md` §3.15 ("A pattern closure given
+to a language model as a tool") states the rule, and each of the three
+entries says under **Tools** what the label of a generation is for that
+built-in. A handler given as a tool, and the tools a dialog has built
+in, are not covered by this rule.
+
+**The instance of a tool call.** The plan has no `Child` and no
+`instantiate` site for it: whether it is made, and how often, follows
+from the model's output. Today the instance runs into a result cell in
+the space of the built-in whose cause is the tool-call identifier the
+model supplied, and it is left running (`handleInvoke` in
+`builtins/llm-dialog.ts`). In the compiled design:
+
+- **Which transaction.** The boundary's transaction that handles the tool
+  call creates the instance and writes the argument the model supplied
+  into the instance's argument document, each path under the label of the
+  generation that produced the call. No body's template joins it.
+- **Identity.** *Assumed:* the identifier derives from the identity of the
+  built-in's operation, the request (the request hash of a one-shot
+  built-in, the turn of a dialog), the ordinal of the model call within
+  that request, and the position of the tool call in that generation. It
+  does not hold the identifier the model supplied, so two executions name
+  the same instance and the model chooses no document identifier.
+- **Space and scope.** *Assumed:* the instance is made in the space of
+  the built-in's operation and at the scope of the built-in's result, as
+  the result cell is today. An `asScope` on the closure sets the scope of
+  the state the instance declares, as for any child.
+- **Teardown.** *Assumed:* the instance is torn down when the request
+  that made it settles: when a one-shot built-in has its result or its
+  error, and when the turn of a dialog ends, a refused send included.
+  What the instance wrote into cells it was given stays. Today it is not
+  torn down.
+
+The three assumptions are open question 6.
 
 The staged changes are effect requests too, and their operands are under
 [Staged changes](#staged-changes).
@@ -975,9 +1028,12 @@ much as a `navigateTo`, and it is made once
 (`scheduler-and-serving-loop.md` §6.2). A request of a handler that is
 still pending when the serving runtime restarts is made again at
 activation: the references of the stored request are followed again, and
-the egress ceiling is checked on the content as it is then (its §10.6).
-Such a request can therefore be refused at activation although it passed
-when the event committed, and the event's other writes stay stored. The
+the egress ceiling is checked on the content as it is then (its §10.6;
+`plan-and-label-templates.md` §3.14, "Which transaction"). It is made in
+a request transaction of its own. Such a request can therefore be refused
+at activation although it passed when the event committed: the failure
+rejects that transaction alone, the result takes the error state, and
+the event's other writes stay stored. The
 staged changes are requests of
 a handler and differ from the others in what the commit does with them.
 A staged access change is a step of the commit of the event's
@@ -1240,8 +1296,18 @@ counterpart in this inventory.
     the tool catalog are those of the request and are not rendered again.
 
   The egress ceiling is checked on the request, and again on each later
-  model call, on the content of that call. A call that fails the check is
-  not made, and the result takes the error state.
+  model call, on the content of that call, in a send transaction. The
+  content of each later send is what its send transaction read: the
+  built-in does not read a tool result or a cell again between the
+  check and the send (`scheduler-and-serving-loop.md` §6.3). A call
+  that fails the check is not made, and no further call is made for the
+  request. The result is the one result of the request,
+  `{ pending, result, error, partial, requestHash }`: `pending` becomes
+  false, `error` holds the refusal, and `result` stays unset. The request
+  hash stays stored, so the refused request is not made again until the
+  request changes. What the tool calls before the refused send wrote
+  stays stored. Where a handler made the request, its event has committed
+  and is not rejected.
 - **Label rule:** the request slots are every parameter read by value, the
   value of every context cell, and the tool catalog. The result's
   confidentiality is the join of the request slots; its integrity is the
@@ -1284,8 +1350,15 @@ counterpart in this inventory.
 
   The egress ceiling is checked on each of them. A system prompt that is
   rendered again is checked as it is rendered for that send, so the
-  content that leaves is the content that was checked. A send that fails
-  the check is not made, and the result takes the error state.
+  content that leaves is the content that was checked. The content of
+  each later send is what its send transaction read, and the built-in
+  reads neither the context nor a tool result again between the check
+  and the send (`scheduler-and-serving-loop.md` §6.3). A send that fails
+  the check is not made, and no further send is made for the request. The
+  result is the one result of the request, as for `generateText`: `error`
+  holds the refusal and `result` stays unset, at every path of the result
+  schema. The conversation stored in `messages` before the refused send
+  stays stored.
 - **Label rule:** as `generateText`. The result has per-path labels declared
   by the result schema, so the boundary's declared rule is per output path.
 
@@ -1328,7 +1401,8 @@ counterpart in this inventory.
   two gates run: the tool's declared maximum confidentiality against what
   the model has observed (`toolAllowsObservedConfidentiality`), and in
   enforcing modes the target's required integrity against the model-supplied
-  input (`toolInputRequiredIntegrityFailure`).
+  input (`toolInputRequiredIntegrityFailure`). Both functions are in
+  `builtins/llm-dialog.ts`.
 - **Execution:** effectful: server only. A computation that is a
   materializer; not replayable. It reads the clock and generates random
   identifiers.
@@ -1355,8 +1429,20 @@ counterpart in this inventory.
   - a system prompt rendered from the live context and the pinned cells.
 
   The egress ceiling is checked on each model call, on the transcript and
-  the prompt as they are at that call. A call that fails the check is not
-  made, and the dialog's result takes the error state.
+  the prompt as they are at that call, in a send transaction. The
+  content of each send after the first is what its send transaction
+  read: the dialog does not read the transcript, the context or the
+  pinned cells again between the check and the send
+  (`scheduler-and-serving-loop.md` §6.3). A dialog
+  has a result per turn, and the result that takes the error state is the
+  one of the turn the refused call belongs to. The call is not made, no
+  further call is made for that turn, the turn's claim is released, and
+  the turn ends with the refusal as its error. The messages the turn
+  added to the transcript before the refused call, tool results among
+  them, stay stored, and so do the results of earlier turns. The
+  `addMessage` event that started the turn has committed and is not
+  rejected. A later `addMessage` event starts a new turn, whose calls are
+  checked on the content as it is then.
 - **New design:** class B. It is the clearest case of a built-in pattern:
   it has handlers, state cells, and effects, and its write surface is the
   caller's `messages` cell plus whatever its tools write. It splits three
@@ -1684,7 +1770,12 @@ counterpart in this inventory.
   a change to the table declarations does not name a different database:
   it derives from the name of the variable the declaration is assigned to
   and the `within` steps of the declaration, as a state cell's does (open
-  question 8).
+  question 8). The handle's `id` is that identifier without its scheme
+  where the compiled path first writes the handle. For an instance of a
+  space switched from the builder path, the switch copies the stored
+  handle, so its `id` names the database the instance had and is not
+  the identifier of the document that holds the handle
+  (`execution-and-storage.md` §6.8, where the copy is an assumption).
 - **Where it is legal.** In the reactive tier only, as the initializer of
   a `const` of a pattern body, like a cell declaration. It is not legal
   at module scope, where no instance exists to name it, and not in a
@@ -1703,7 +1794,10 @@ counterpart in this inventory.
   `db.exec(...)` is a write to it.
 - **Label rule:** none of its own. The table declarations are constants of
   the plan. The `owner` is state written once, from the acting principal
-  of the transaction that first writes the handle. *Assumed:* where that
+  of the transaction that first writes the handle. The state document
+  that holds the handle carries no label beyond what the table
+  declarations declare, which `plan-and-label-templates.md` assumes (its
+  §3.14 and §8, question 40). *Assumed:* where that
   transaction has no principal, which is the case for a declaration of
   space scope first written in a derivation transaction, the handle has
   no owner and stays without one, as today
@@ -1820,8 +1914,8 @@ export it and the pattern corpus does not call it.
     handling of the event, which its receipt identifies, and a
     per-invocation counter is sufficient. A cell it creates under an
     explicit cause, `X.for(cause)`, is the same cell on every event: its
-    identifier derives from the handler's instance and the cause, and not
-    from the event
+    identifier derives from the enclosing instance, the handler's name
+    and `within` steps, and the cause, and not from the event
     ([What the plan records](#what-the-plan-records-for-calls-in-bodies)).
   - A pattern body and a lift are re-evaluated, so their cells need
     identifiers that are the same on every evaluation: the variable name in
@@ -2489,11 +2583,17 @@ name, or a generated ordinal (`factoryFromPattern`).
   cause; the resolved target space.
 - **Identity.** Without an explicit cause the identifier derives from the
   handling and the order of the request, so it derives from the event, as
-  today. With `.for(tag)` it derives from the handler's instance and the
-  tag, and not from the handling: the tag names the same instance on
-  every event (`plan-and-label-templates.md` §1.3). An event that names
+  today. With `.for(tag)` it derives from the enclosing instance, the
+  handler's name and `within` steps, the site, and the tag, and not from
+  the handling: the tag names the same instance on every event, and two
+  handlers that pass equal tags name two instances
+  (`plan-and-label-templates.md` §1.3). Such a request counts toward the
+  order of the handler's later requests. An event that names
   an instance an earlier event made creates nothing, and the existence
-  label of the instance is fixed when it is first created. Today the
+  label of the instance is fixed when it is first created. *Assumed,*
+  with that document (its §8, question 39): such an event does not write
+  the argument again, so the instance keeps the argument of the event
+  that created it. Today the
   identifier of a `.for(tag)` site derives from the event as well
   ([Pattern instantiation in bodies](#pattern-instantiation-in-bodies)).
 - **Links to instances not yet created.** A request returns a link whose
@@ -2599,8 +2699,13 @@ synthesized pattern.
     `.for(cause)` with a cause taken from the item.
   - The compiler warns on an instantiation inside a loop or a callback
     in a function body that has no `.for(cause)`, because of the case
-    above. It is a warning and not an error, and `language-subset.md`
-    has its entry in the diagnostic catalog.
+    above (`function-body:instantiation-without-cause`). It is a warning
+    and not an error, and `language-subset.md` §10.3 has its entry in
+    the diagnostic catalog. *Assumed,* with that document (its §13,
+    question 26): the warning is reported in a `lift`, a `computed`, an
+    `assert`, and an authored function that one of them or the reactive
+    tier calls, and not in a `handler`, an `action`, or an inline event
+    handler.
   - The ordinal is per site, where today's generated ordinal counts every
     anonymous cell of the frame. A branch that makes an instance on some
     evaluations only therefore does not rename the instances of the other
@@ -2677,8 +2782,10 @@ initial value is stored as the schema's default.
   the body's template, as any path the handler writes does.
 - **An explicit cause.** A cell that a handler creates with
   `X.for(cause)` is the same cell on every event. Its identifier derives
-  from the handler's instance and the cause, and not from the handling
-  (`plan-and-label-templates.md` §1.3). An event that names a cell an
+  from the enclosing instance, the handler's name and `within` steps,
+  and the cause, and not from the handling
+  (`plan-and-label-templates.md` §1.3). Two handlers of one instance
+  that pass equal causes name two cells. An event that names a cell an
   earlier event created creates nothing and finds the cell as it is
   stored. The existence label of the cell is fixed when it is first
   created: it is the template of the cause as the creating event
@@ -3374,12 +3481,17 @@ with the project owner names its entry in the
    supplies, and the dialog's built-in tools let a model read, invoke, and
    write whatever it can name by link. The labels of the argument and of
    the result of a pattern closure, and the check of each send, are
-   decided ([Effectful built-ins](#effectful-built-ins)). Two things are
-   left. *Assumed:* the identifier of the instance derives from the turn
-   and the call's position, and not from the identifier the model
-   supplies. *Assumed:* what the dialog's built-in tools may read, invoke,
-   and write is out of scope for the language and is specified with the
-   model boundary's declared rule.
+   decided ([Effectful built-ins](#effectful-built-ins)). Four things are
+   left, and the first three are stated under "The instance of a tool
+   call" there. *Assumed:* the identifier of the instance derives from
+   the built-in's operation, the request or the turn, the ordinal of the
+   model call, and the position of the tool call, and not from the
+   identifier the model supplies. *Assumed:* the instance is made in the
+   space of the built-in's operation, at the scope of the built-in's
+   result. *Assumed:* it is torn down when the request or the turn that
+   made it settles. *Assumed:* what the dialog's built-in tools may read,
+   invoke, and write is out of scope for the language and is specified
+   with the model boundary's declared rule.
 7. **Value checkpoints for `reduce`.** *Assumed:* none in the baseline; the
    fold is recomputed, and only its label is maintained incrementally.
 8. **`sqliteDatabase` identity.** Its handle is keyed on the whole cause,
@@ -3444,4 +3556,5 @@ with the project owner names its entry in the
     *Assumed:* its state cell is accepted, because the position is in the
     key and no two positions share the cell. The other reading keeps the
     error wherever the source does not use the index. The question is
-    with the project owner.
+    with the project owner (`plan-and-label-templates.md` §8, question
+    34, which makes the same assumption).

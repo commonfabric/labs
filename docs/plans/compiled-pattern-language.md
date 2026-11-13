@@ -44,14 +44,19 @@ next.
   decisions for the findings that offered a choice. A check of the seams
   between the documents followed, and its corrections are applied.
 - **Prototype:** branch `claude/compiled-pattern-prototype` holds a Rust
-  crate at `base/pattern-compiler/`, the front end of stage 2. It is not
-  part of this branch. It parses the corpus with the `oxc` parser,
-  classifies code into tiers, and applies the rules of
-  `language-subset.md` that need no types. It accepts 355 of the 425
-  corpus modules without an error. Most of the 259 errors are `any` in a
-  type (184) and `patternTool` (31). `language-subset.md` is corrected
-  for the places its author found ambiguous or without a diagnostic
-  identifier; the crate's `SPEC-NOTES.md` lists them.
+  crate at `base/pattern-compiler/`, stage 2 in progress. It is not part
+  of this branch. It parses the corpus with the `oxc` parser, classifies
+  code into tiers, applies the rules of `language-subset.md` that need no
+  types, and holds the type checker as far as evaluating written types
+  and inferring the types of expressions. At prototype commit
+  `bcacc19240`, on 426 corpus modules, it accepts 358 without an error
+  and reports 283 errors, most of them `any` in a type (182), a function
+  type in data from one declaration (35), and `patternTool` (31). It
+  gives a type to 95.5% of the 7,633 receivers of method calls. Not yet
+  in it: narrowing, assignability, 13 catalog entries that need the type
+  checker, promotion by the typed criterion, and footprint analysis. The
+  crate's `SPEC-NOTES.md` lists the places where it found the document
+  ambiguous.
 - **Specification change:** draft pull request #91 in `commonfabric/specs`
   (branch `claude/compiled-pattern-label-templates`) carries the label
   semantics as prose, pseudocode, and Lean statements. It includes the
@@ -342,8 +347,8 @@ answer goes to the specification with the document.
     that holds an instance whose source the compiler refuses is not
     switched.
 27. **State inside a compiled-in sub-pattern** (ES §5.7, §9.3). Matching it
-    to a call site needs the builder form, so an instance migrated after
-    stage 6 loses that state.
+    to a call site needs the builder form, so an instance of a space
+    switched after stage 6 loses that state.
 
 **The language.**
 
@@ -522,22 +527,103 @@ assumption.
     materializer has run. A materializer that stays invalid keeps the
     event waiting.
 
+**From the rulings of 2026-11-13.** Each is written into the documents
+as an assumption.
+
+72. **A state cell beside a child in a per-element body over plain
+    values** (PL §8 question 34; LS question 21). *Assumed:* accepted,
+    because the key holds the position.
+73. **Which instantiations put the position in the key** (PL question
+    37; FA question 3). *Assumed:* a factory value called in the body's
+    reactive tier, and a pattern a `lift` or `computed` in the body
+    instantiates; not a handler's instance and not a statically resolved
+    pattern; under nested bodies, at every enclosing level over plain
+    values.
+74. **A cell a computation creates under the element key over plain
+    values** (FA question 4). *Assumed:* the compile error covers it
+    where the body does not use the index.
+75. **The element slots of a handler whose stream several positions
+    share** (PL question 35). *Assumed:* they resolve to the join over
+    the positions.
+76. **The child of a plain element that moved** (PL question 36; ES
+    question 67). A child does not move with its value: a reorder tears
+    down the child of each key that left and sets up a new one, and an
+    insertion at the head of n distinct plain values replaces n children.
+    *Assumed:* accepted, with the advice to make the elements cells.
+77. **The argument of a `.for(tag)` instance on a later event** (PL
+    question 39). *Assumed:* not written again. The alternative writes it
+    on every event, as a computation does.
+78. **Which bodies the warning for an instantiation without a cause
+    covers** (LS question 26). *Assumed:* a `lift`, a `computed`, an
+    `assert`, and an authored function one of them or the reactive tier
+    calls; not a `handler`, an `action`, or an inline event handler.
+79. **The label of the error state after a refused send** (PL question
+    38). *Assumed:* the join of the request's label, what was sent and
+    received before, and the label the refused check was evaluated on.
+80. **The instance of a tool call** (BI question 6). *Assumed:*
+    identified by the built-in's operation, the request or turn, the
+    ordinal of the model call, and the position of the tool call, not by
+    the identifier the model supplies; made in the operation's space at
+    the result's scope; torn down when the request or turn settles.
+81. **The label of a database declaration's state document** (PL
+    question 40). *Assumed:* empty.
+82. **Which initializers are static for a default** (LS question 25).
+    *Assumed:* a literal, an array or object literal of static
+    initializers, and a reference to a constant with one.
+83. **When a space is switched** (ES question 69). *Assumed:* the
+    deployment names the spaces, the switch runs at an activation before
+    the first cycle and evaluates nothing, and each instance has its
+    first compiled evaluation at its first load.
+84. **A space with an instance whose source the compiler refuses** (ES
+    questions 4 and 70). *Assumed:* it is not switched; when the builder
+    path is retired it is switched without that instance, which stops
+    running until its source is updated. It extends question 26.
+85. **Reversing a switch** (ES question 71). *Assumed:* not reversed.
+86. **A link between a switched space and one that is not** (ES question
+    72; SS question 41). *Assumed:* the reader reads the value and label
+    as the other path stored them, so the tighter labels hold only along
+    switched spaces.
+87. **Events across the switch** (ES question 73). *Assumed:* the switch
+    starts once the builder path has handled the queued events; a later
+    event on a stream whose identifier is not kept is deferred and then
+    dropped.
+88. **How a validation run compares the two paths** (ES question 74).
+    *Assumed:* between two spaces, one on each path. Nothing is designed.
+89. **A client that holds spaces of both kinds** (SS question 42).
+    *Assumed:* one runtime runs, per space, the path the space's mark
+    names.
+90. **A handle of `T` where the same kind of handle of `unknown` is
+    declared** (LS question 29; 49 corpus sites). *Assumed:* assignable,
+    at the root of the value type only, and a write through it is allowed
+    and contained at run time by the rule for stored data that does not
+    match its schema.
+91. **`typeof CONSTANT` in a label argument** (LS question 30; 48 sites
+    as a label atom, 72 as an action or pattern name). *Assumed:* legal
+    for a module-scope constant with a static initializer, standing for
+    the constant's value, as the schema generator reads it today.
+92. **Three choices the language document made** in settling the type
+    checker's findings: `object` is a type of the subset; an authored
+    function called in the reactive tier is not bound by reference, so
+    its argument is `count.get()` and not `count`; and `Cell<T>` is not
+    assignable to `Cell<T | undefined>` or the reverse.
+
 ## Open, and not needing the owner
 
-- **`execution-and-storage.md` §6 does not cover a `sqliteDatabase`
-  handle:** whether its state document is recomputable or stored once.
-  The owner of the database is written once and cannot be recomputed.
 - **The pattern closure's remaining gaps** (K12): which output or argument
-  path holds which entry of `Plan.closures`, a conditional between two
-  closures, and a closure called through `inSpace`.
+  path holds which entry of `Plan.closures`, and a closure called through
+  `inSpace`. A conditional between two closures is a factory value
+  (`language-subset.md` §4.4.2).
+- **The label of a model's output has no definition in the
+  specification.** The rules for a tool closure and for a later send both
+  rest on it, and specs pull request #91 refers to a contract rule for a
+  language-model effect that no chapter states.
+- **A statically resolved pattern called with `inSpace`** in the reactive
+  tier of an element body is addressed by no document.
 - **`execution-and-storage.md` leaves two things unspecified:** how the
   arrangement of part documents is computed again when a conflict
   withdraws writes at the commit, after the size rule ran; and how the
   instances that belong to a torn-down instance are found when it is not
   loaded.
-- **`scheduler-and-serving-loop.md` does not say** whether a compiled
-  handler that reads an output of a builder-path instance reads a current
-  value (§10.8).
 - **`footprint-analysis.md`, owner question 2** says the current treatment
   of a value passed on unchanged "is what keeps such a body from reading
   the record". A probe showed that a `lift` that returns an input record
@@ -554,17 +640,6 @@ assumption.
   `Default<typeof INITIAL_SHOTS>` names a call result and is to take a
   static default; and `aboutRecordOf` in FabriChat's `manager.tsx` needs
   no overload once `key` flattens.
-- **The rulings of 2026-11-13 are being written into the documents,**
-  and specs pull request #91 does not follow them yet.
-- **Four rulings are not yet in `language-subset.md`:** the per-element
-  rule narrowed to state cells (§4.4.1, §12.8, and the catalog entry),
-  `key` flattening handles, the function type in data, and the static
-  default.
-- **The type checker's notes are not yet in `language-subset.md`:** what
-  an intersection with a handle or an opaque API type evaluates to,
-  `Default<T, typeof NAME>` for an annotated constant, `get()` on a type
-  that declares `get`, a label list given as an alias, and the
-  conditional utility types.
 - **Uneven wording.** `language-subset.md` says selector where the other
   documents say key function, and it cites open questions of the newer
   documents by number.

@@ -139,9 +139,10 @@ dispositions:
 - **Changed:** it remains with a different unit or a different mechanism,
   which the row and the section it names describe.
 
-The dispositions hold for compiled instances. An instance that still runs
-on the builder path keeps the mechanisms it runs on today, and section 10.8
-says how the two kinds share one space.
+The dispositions hold for a space that runs the compiled path. The
+scheduler is switched per space, by ruling: a space that is not switched
+runs the builder path with Scheduler v2 and keeps every mechanism it runs
+on today, and no space runs both (section 10.8).
 
 Five places where the Scheduler v2 document and the source differ are
 recorded here because the tables depend on them.
@@ -530,9 +531,14 @@ beside the basis index (section 10.4).
   of a row.
 
 That the recovered request is checked and sent with the content as it is
-at the recovery is *assumed* (open question 38). The alternative stores
-with the state document the content the first request read, which is a
-copy of data under a label of its own.
+at the recovery is ruled. The rule is: after a restart, a handler's
+pending effect is requested again at activation, with the references of
+the stored request followed and the egress ceiling checked on the content
+as it is then. Two things follow. A request that passed its ceiling when
+the event committed can be refused at the recovery, after the event's
+other writes are stored. And the content that leaves can differ from the
+content the first request read. The runtime stores no copy of what the
+first request read.
 
 ### 2.4 The record of a materializer
 
@@ -637,7 +643,7 @@ its own.
 
 A `lift` or a `computed` may instantiate a pattern, by ruling, and that
 pattern may request effects. A `lift` or a `computed` does not request an
-effect itself (*assumed*, question 38 of the continuation plan). Such a
+effect itself, by ruling. Such a
 `computed` is not promoted (`language-subset.md` §6.1), so the call is made
 by a sandboxed body. `plan-and-label-templates.md` §3.14 has the label
 rules, and `execution-and-storage.md` §2.8 has what one transaction does
@@ -1419,8 +1425,10 @@ Three kinds of instance are not loaded in any of these ways.
 - **An instance marked as torn down** (section 2.7). The setup record of
   its result document holds the mark. Demand that reaches it evaluates
   nothing, and the reader reads the values last stored.
-- **An instance whose setup record the builder path wrote.** It is migrated
-  first, or it runs on the builder path (section 10.8).
+- **An instance that has had no compiled evaluation since its space was
+  switched.** Its first load runs its first compiled evaluation, a setup
+  transaction, and the instance is loaded when that commit is accepted
+  (section 10.8).
 - **An instance in another space** (section 9.2).
 
 ### 4.5 A change of demand is a cause
@@ -1690,8 +1698,16 @@ in the place of the walk.
    key, and each resolves to the join over those positions. The value is
    the same at each of them, because they hold equal values or link to
    one cell, and the label is the join of the labels the positions give.
-   The join is *assumed* (open question 27 of that document; question 40
-   of the continuation plan; open question 37 here).
+   The join is ruled for what is stored once per element key
+   (`execution-and-storage.md` §2.5). It is the third deliberate
+   exception to "equal to or tighter", and is marked to be revisited.
+   *Assumed,* as `plan-and-label-templates.md` §2.6 assumes it (its open
+   question 35): the ruling covers these slots as well, although it
+   lists what is stored, and a slot resolved when an event arrives is
+   not stored. By ruling, positions that hold equal plain values
+   in a body that binds a handler, declares no state cell, does not use
+   the index and instantiates no child share one stream, so this step is
+   what an event on such a stream runs through.
 
 An event that cannot be routed is treated as today.
 
@@ -1736,12 +1752,12 @@ An event that cannot be routed is treated as today.
   on its stream is unrunnable.
 - **An instance that is marked as torn down,** or whose result document
   holds no pattern reference. The event is unrunnable (section 2.7).
-- **An instance that cannot be loaded yet.** A load that waits for a
-  compiled pattern or for a migration holds the event's place in the
-  queue (sections 10.5 and 10.8). A load that fails defers the event with
-  the events that arrived after it, under the deferral budget of
-  [events](../server-side-execution/events.md) §5, and a compiled pattern
-  the space does not hold yet is waited for as a program is today.
+- **An instance that cannot be loaded yet.** A load that waits for a compiled
+  pattern or for the instance's first compiled evaluation holds the event's
+  place in the queue (sections 10.5 and 10.8). A load that fails defers the
+  event with the events that arrived after it, under the deferral budget of
+  [events](../server-side-execution/events.md) §5, and a compiled pattern the
+  space does not hold yet is waited for as a program is today.
 
 The alternative to the index is a document per binding written at setup
 with a back-link, as today. It costs one document for each binding of
@@ -2203,9 +2219,8 @@ and it comes to exist in one of two ways:
   holds a back-link to the instance whose handler requested it, and while
   its request is pending it has a pending-effect row (section 2.3).
 
-A `lift` or a `computed` requests no effect itself (*assumed*, question 38
-of the continuation plan). It reaches an effect through a pattern it
-instantiates.
+A `lift` or a `computed` requests no effect itself, by ruling. It reaches
+an effect through a pattern it instantiates.
 
 The inventory's sentence governs both: requesting an effect "behaves like
 instantiating a built-in pattern". An effect operation therefore has a
@@ -2361,6 +2376,7 @@ and 10.6).
 | The result's label: the built-in's declared rule over the request's label, which is the joined label of the first row, with the constants the result schema declares and the integrity the boundary declares, such as `LlmDerived` | | Yes, from the request as it stands at write-back |
 | Validation of the result: a response schema, declared ceilings on rows | | Yes. A failure is an error result |
 | Gates on a tool call of a language-model turn | | During the effect, before each call |
+| Egress ceiling on what a language-model built-in sends after its request | | During the effect, before each send, in a send transaction (below) |
 | Constraints of the cones that read the result | | In the derivation transaction that follows the completion's commit (section 6.5), and not in the completion. A failure there drops one derived write and cannot lose the result |
 
 For a request made in the reactive tier, a failed egress ceiling rejects the
@@ -2371,6 +2387,79 @@ transaction, under the joined label, as a built-in's rejected staging
 settles today ([built-in contracts](../server-side-execution/builtins.md),
 §2). For a request a handler makes, the failure rejects the event (section
 6.2).
+
+**What a language-model built-in sends after its request.** The request
+transaction checks what the first model call sends. `generateText`,
+`generateObject` and `llmDialog` send more during the effect, which no
+checked request held (`builtin-inventory.md`, "Effectful built-ins" and
+the entry of each): the results of a tool loop sent back to the model, a
+system prompt rendered again from the live context and the pinned cells,
+and, for a dialog, the live transcript with each model call of a turn. By
+ruling, the egress ceiling is checked again on each of those sends. The
+check at the request alone is not sufficient.
+
+- **The send transaction.** Before each send after the first, the operation
+  runs a **send transaction**, which is the operation's own, as its request
+  transaction and its completion transaction are. It reads what the send
+  will hold: the tool results, the context entries and pinned cells as they
+  are then, and for a dialog the transcript as it is then, each followed as
+  far as the built-in serializes it. It checks the label of everything the
+  send serializes against the ceiling configured for the sink, as the first
+  row of the table does for the request: the join of what its reads consume
+  and of the labels under which the effect holds what it sent or received
+  before (`plan-and-label-templates.md` §3.14, "Each later send is
+  checked"). It acts as the principal the request transaction acted as: for
+  an operation a handler requested, the requester the event was stamped
+  with.
+- **What leaves is what was checked.** The content of the send is the
+  content the send transaction read. The built-in does not read the
+  context, the pinned cells or the transcript again between the check
+  and the send, so the release check of the second row holds for each
+  send as it does for the request.
+- **A boundary transaction.** The request transaction, the send
+  transaction and the completion transaction are the three kinds of
+  transaction an effect operation has. None of them is the transaction
+  of an event or of a derivation, and each commits or is rejected by
+  itself. Its reads are the check's and join the label of nothing a
+  handler or a cone writes.
+- **What it writes.** Where the operation stores the conversation so that
+  a tool loop survives a restart (`execution-and-storage.md` §6.4), the
+  send transaction writes the part of it the send adds, under the joined
+  label, and commits by itself, outside a wave, as a completion
+  transaction does. Otherwise it writes nothing.
+- **Where it runs.** In the loop, like a request transaction, and never
+  in the outbox. The outbox holds the model call that follows it. A send
+  transaction is not a cause: it makes nothing stale and no derivation
+  follows it, unless it wrote the conversation, whose commit is matched
+  against the index like any commit.
+- **A send that is refused.** The send is not made. The failure rejects
+  the send transaction and no other, and no later send of that effect is
+  made (`plan-and-label-templates.md` §3.14, "Each later send is
+  checked"). The scheduler ends the effect: it marks the
+  operation as having no request outstanding, and the operation's result
+  takes the refusal as an error state, written with the request hash by
+  the operation's completion transaction, under the label that section
+  gives it: the join of the request's joined label, the labels of what
+  was sent and received before, and the label the refused check was
+  evaluated on. That commit clears the pending mark, deletes
+  the pending-effect row of an operation a handler requested, and is a
+  cause of the third kind like any completion (section 6.5). No event is
+  rejected: the event that requested the effect committed before.
+- **What a refused send leaves.** What the effect did before the refusal
+  stays: what the instances its tool calls made wrote into cells they
+  were given, the events they sent, and the messages a dialog appended
+  to its transcript. A refusal does not withdraw them, because each was
+  committed by a transaction of its own. The instances themselves are
+  torn down when the request or the turn settles, a refused send
+  included, which `builtin-inventory.md` assumes ("The instance of a
+  tool call"; its open question 6).
+- **No retry.** The refusal is stored with the request hash, as a failed
+  request is (section 6.4). The effect is requested again when its
+  request changes, and a dialog's next turn starts with the next event
+  on `addMessage`. A change of a label alone does not request it again.
+
+A client requests no effect (section 6.7), so it runs no send
+transaction and predicts no refusal of one.
 
 ### 6.4 Time gates and retries, as they exist
 
@@ -2753,19 +2842,24 @@ nodes:
 
 ### 8.4 Two cycles the budgets do not close
 
-- **An effect that feeds itself.** Each round is a request that leaves the
-  process, and the budget of section 8.3 limits the rounds per cycle, not in
-  total. What limits the rate is the outbox's budget per space. Whether an
-  operation whose request changes as a consequence of its own completion
-  should stop after a number of rounds is open (open question 9; question
-  20 of the continuation plan). An effect in an instance a computation
-  made can close such a cycle through the computation: its result changes
-  what the computation reads, and the computation writes another argument.
-- **A cycle across spaces.** Each space has its own serving loop and its own
-  cycles, so a round is one commit in each space and no budget of either
-  loop counts it. Telling that cycle from a stream of ordinary changes
-  would need the chain of causes to be carried on commits between spaces,
-  which it is not (open question 9).
+By ruling, this design has no bound of its own on either of the two
+cycles below. Both fall under rate limits in general, which this design
+does not specify. The ruling is marked to be revisited.
+
+- **An effect whose completion changes its own request.** Each round is a
+  request that leaves the process, and the budget of section 8.3 limits
+  the rounds per cycle, not in total. No rule of this design stops such
+  an operation after a number of rounds. The one limit that exists is
+  the outbox's budget per space, which is a rate limit of the serving
+  loop and holds the dispatch without ending the cycle (section 6.4). An
+  effect in an instance a computation made can close such a cycle through
+  the computation: its result changes what the computation reads, and
+  the computation writes another argument.
+- **A cycle across two spaces.** Each space has its own serving loop and
+  its own cycles, so a round is one commit in each space and no budget of
+  either loop counts it. Telling that cycle from a stream of ordinary
+  changes would need the chain of causes to be carried on commits between
+  spaces, which it is not, and this design does not add it.
 
 **A cone instance has no gate.** The instance record holds no backoff and
 no remote-echo state, and cone evaluation checks no time gate before it
@@ -2784,8 +2878,8 @@ today therefore have no counterpart for a cone instance.
   client's evaluations write to its overlay, so the loop does not arise
   between a client and the server. The same loop inside one runtime is two
   cone instances in one transaction, which the bound of section 8.1 ends.
-  The gate would not cover the cycle across spaces above either (open
-  question 29).
+  The gate would not cover the cycle across two spaces above either
+  (open question 29).
 
 ## 9. Links across spaces
 
@@ -2866,8 +2960,8 @@ when something there demands it, and never in the transaction that requested
 it (`plan-and-label-templates.md`, §3.15).
 
 **An `inSpace` instantiation that a computation makes.** A `lift` or a
-`computed` may instantiate with `inSpace` (*assumed*, with question 38 of
-the continuation plan; `builtin-inventory.md`, "An instantiation request
+`computed` may instantiate with `inSpace` (*assumed*, question 50 of the
+continuation plan; `builtin-inventory.md`, "An instantiation request
 from a `lift` or a `computed`"). The request is then staged by a
 derivation transaction, and its step in the other space is authored like a
 handler's. It acts as the acting principal of the evaluation that made the
@@ -3408,7 +3502,10 @@ one of two ways. For an `Operation` of a plan it is found when the instance is
 loaded: the operation's request transaction compares the stored hash and finds
 a pending mark with no request outstanding in the process (section 6.2). For an
 operation a handler requested, activation reads the pending-effect rows of the
-space and runs a request transaction for each (section 2.3). Which
+space and runs a request transaction for each (section 2.3). By ruling,
+that transaction follows the references of the stored request again and
+checks the egress ceiling on the content as it is then, and the request
+that leaves holds that content. Which
 materializers are valid is read from their basis rows (section 7.2). The memo
 of evaluated cone instances is process memory and starts empty, and so do the
 element tables, the bindings of slots whose path holds `*`, the registered
@@ -3428,40 +3525,46 @@ outbox dispatches after each commit. A batch is the events queued when the
 runtime begins to handle them, and the derivation transaction behind it
 commits after theirs. Nothing in sections 3 to 8 depends on the wave.
 
-### 10.8 Setup transactions, and a space with instances of both kinds
+### 10.8 Setup transactions, and one scheduler per space
 
-**Setup transactions.** Three transactions are not the transaction of one
-of the four causes. Each commits by itself, ahead of the wave, as the
-setup transaction of a source update does today
+**Setup transactions.** Four kinds of transaction are not the transaction
+of one of the four causes. Each commits by itself, ahead of the wave, as
+the setup transaction of a source update does today
 ([serving loop](../server-side-execution/serving-loop.md), §3e).
 
 | Transaction | When it runs | What the scheduler does |
 | --- | --- | --- |
-| The migration of an instance (`execution-and-storage.md` §9.4) | When demand or a queued event causes the load of an instance whose stored setup record the builder path wrote | The instance stays unloaded, with its demand pending and its events holding their place in the queue, until the commit is accepted. The transaction evaluates every cone instance, with every kept output of the space's scope instance demanded, and every kept output of narrower scope for the scope keys that demand the instance. Then the record is built, and the builder-path graph of the instance is released. A withdrawn commit leaves the builder-path instance running |
+| The switch of a space: the transactions that write the compiled setup of every instance, and the one that marks the space (`execution-and-storage.md` §9.4) | *Assumed:* at an activation of a space the deployment names for the compiled path, after the lease is held and before the first cycle | No scheduler runs a cycle of the space until the mark commits. Scheduler v2 is not started for the space. Demand that sessions register is pending and events appended meanwhile hold their place in their stream documents. The switch evaluates nothing. When the mark commits, the scheduler of this document starts with no instance loaded and no basis row, and its first cycle counts the pending demand and drains the queue. A switch that does not reach the mark leaves the space on the builder path, and the next activation starts Scheduler v2 or the switch again |
+| The first compiled evaluation of an instance (`execution-and-storage.md` §9.4) | When demand or a queued event first causes the load of an instance of a switched space | The instance stays unloaded, with its demand pending and its events holding their place in the queue, until the commit is accepted. The transaction evaluates every cone instance, with every kept output of the space's scope instance demanded, and every kept output of narrower scope for the scope keys that demand the instance. Then the record is built. A withdrawn commit leaves the instance unloaded, and the next load runs the transaction again |
 | The setup of an instance under a new compiled pattern, after a source update | When the update is applied | The same. The basis rows under the earlier compiled identity are deleted, so every cone instance starts stale |
 | The deletion of a retired document (`execution-and-storage.md` §9.6) | At idle priority, after the cycle's transactions have sealed | None beyond matching the commit |
 
-**The rows a setup transaction writes.** A migration and a setup under a
-new compiled pattern evaluate every cone instance and compute the
-identifiers of the instance's streams, in a transaction that is in no
-wave. The memo then holds those evaluations, so no later transaction of
-the process would compute them again and write their rows. The store
-transaction of a setup transaction therefore writes rows as a wave's
-does:
+**The rows a setup transaction writes.** A first compiled evaluation and
+a setup under a new compiled pattern evaluate every cone instance and
+compute the identifiers of the instance's streams, in a transaction that
+is in no wave. The memo then holds those evaluations, so no later
+transaction of the process would compute them again and write their
+rows. The store transaction of such a setup transaction therefore writes
+rows as a wave's does:
 
 - the basis rows of the cone instances it evaluated, under the compiled
   identity the setup gives the instance;
 - the stream rows of the streams whose identifiers it computed (section
-  5.1), which for a migrated instance are all of its rows, since the
-  builder path keeps none;
+  5.1);
 - and it deletes the basis rows under the earlier compiled identity, the
-  rows of the instance's materializers among them, and for a migration
-  the rows the builder path kept for the instance's nodes.
+  rows of the instance's materializers among them.
+
+The transactions of a switch write rows as well. The store transaction
+that writes an instance's compiled setup writes the stream rows of the
+instance's bindings outside every element body, whose identifiers need no
+evaluation, so that an event for an instance that has had no compiled
+evaluation yet is routed to it and loads it. The transaction that marks
+the space deletes every basis row the builder path kept for the space.
 
 A stream row of a binding the new plan lacks is kept (section 5.1), and so
 is a pending-effect row, which names no compiled identity.
-`execution-and-storage.md` §9.4, step 5, names the rows among what the
-migration writes.
+`execution-and-storage.md` §9.4 names the rows among what each
+transaction writes.
 
 The commit of a setup transaction is matched against the address index in
 the process that made it, like a completion commit, so the slots of other
@@ -3469,39 +3572,59 @@ instances that are bound to what it wrote become dirty and are evaluated
 in the next derivation transaction. Binding a migrated instance reads its
 carry-over record (section 3.2).
 
-**Instances of both kinds in one space.** Instances are migrated one at a
-time, when they are loaded, and an instance whose source the compiler
-refuses stays on the builder path (`execution-and-storage.md` §9.4). A
-space can therefore hold compiled instances and builder-path instances
-that read each other through links. Whether one serving runtime runs both
-is a question of scope for the owner (question 24 of the continuation
-plan; open question 35). *Assumed:* until the builder form is retired, it
-does, as follows.
+**One scheduler per space.** By ruling, the scheduler is switched per
+space. A space runs either the builder path with Scheduler v2 or the
+compiled path with the scheduler of this document, and never both. The
+two paths exist side by side only for validation, and the builder path
+is to be retired soon after. `execution-and-storage.md` §9 has the
+switch. For the scheduler the rule means the following.
 
-- **Two schedulers, one loop.** The serving runtime hosts Scheduler v2 for
-  the builder-path instances and the scheduler of this document for the
-  compiled ones. The dispositions of section 1 apply to compiled instances
-  only: the node record, ordering, preflight, and provisional demand stay
-  for a builder-path instance.
-- **One change channel.** Both match each committed change, the builder
-  path against its trigger index and this scheduler against the address
-  index. A write one of them stages is matched by the other when its
-  transaction seals.
-- **Transactions.** A node run of a builder-path instance is a transaction
-  of its own, as today, and seals into the same wave. The label of what it
-  writes is today's join over its reads.
-- **A slot bound to a builder-path output** is an ordinary slot. Its writer
-  is not in the writer map. It holds demand through the liveness of the
-  builder-path node that writes it, and a change of the output reaches the
-  slot through the index. Within a cycle the two schedulers alternate
-  until neither has work, under the budget of section 8.3.
-- **A builder-path node that reads a compiled kept output** reads it
-  through its stored address, and its read is a demand source on that
-  output for as long as the node is live.
-- **Events** share one queue and one order (section 5.4). An event for a
-  builder-path instance is handled as today, with its preflight.
-- **The basis index** holds rows of both kinds, keyed as each scheduler
-  keys them.
+- **One scheduler in a space's loop.** The serving runtime of a space
+  reads the space's mark at activation and starts one scheduler for it.
+  No loop hosts two schedulers for one space, and nothing in a cycle
+  alternates between two.
+- **The dispositions of section 1 hold for a switched space as a whole.**
+  In a space that is not switched, the node record, ordering, preflight
+  and provisional demand stay as they are, for every instance.
+- **Every instance of a switched space is a compiled instance.** No slot
+  is bound to an output a builder-path node of the same space writes, no
+  builder-path node reads a compiled kept output of its own space, and
+  the writer map covers every derived write of the space.
+- **One event queue, handled by one scheduler.** Every event of a
+  switched space is handled as section 5 says, with no preflight.
+- **One kind of basis row per space.** The basis index of a switched
+  space holds the rows of section 10.4 and no row keyed by a node. The
+  transaction that marks the space deletes the builder path's rows.
+- **A serving process can serve spaces of both kinds,** each with its own
+  loop and its own scheduler. *Assumed:* a client that holds a switched
+  space and one that is not runs, for each space, the path that space's
+  mark names, in one runtime (open question 42).
+
+**A link between a switched space and one that is not.** Section 9
+applies unchanged: a slot bound through a link to a document of another
+space is an ordinary slot, the read goes over a session on that space,
+and no transaction of one space evaluates anything in the other.
+*Assumed* (open question 41; `execution-and-storage.md` §9.9):
+
+- The reading side reads the stored value and the stored label as the
+  other path wrote them. A compiled instance that reads an output of a
+  space that is not switched resolves the slot's label from the envelope
+  the builder path stored, which is today's join over the writing node's
+  reads. The tighter labels of this design therefore hold for an output
+  only where every space in the chain of links it was derived through is
+  switched.
+- A compiled handler that reads an output of a builder-path instance
+  can do so only across spaces. It reads the value as stored, like every
+  derived value of another space (section 9.2), and whether that value
+  is current is decided in the other space: by what Scheduler v2 has
+  demanded and run there, and under option B of section 9.2 by the
+  demand the reader's session adds. The check of section 10.4 does not
+  apply, because it reads the basis rows of the home space alone.
+- An event for a stream of the other space leaves through the outbox and
+  is handled by that space's scheduler, whichever it is (section 9.3).
+
+This document says nothing on how a validation run compares the two
+paths, beyond that it compares two spaces, one on each path.
 
 ## 11. Client speculation
 
@@ -3534,7 +3657,7 @@ document. Three kinds of thing are affected.
 
 | What | Why a client cannot name it | What the client does until a stored link arrives |
 | --- | --- | --- |
-| A state cell declared in an element body over plain values, which exists only where the index is in the key, and the state of an operation declared in such a body | The `element` step of its cause holds a salted value hash | The `state` or `operation` slot has no bound address. The cone instances that read it are pending, and what they feed renders its committed value or its loading state |
+| A state cell declared in an element body over plain values, which exists only where the position is in the key; the state of an operation declared in such a body; a child instantiated there; and the stream of a handler bound there, which positions that hold equal values share where the position is not in the key (`execution-and-storage.md` §2.5) | The `element` step of its cause holds a salted value hash | The `state` or `operation` slot has no bound address. The cone instances that read it are pending, and what they feed renders its committed value or its loading state |
 | A part document at or below a row of a kept collection | Its identifier is derived under the secret of the space for every key, a cell's identity included (`plan-and-label-templates.md` §2.3) | Nothing: a client names a kept path by the result cell and the path, never a part document, and its overlay entries are per kept path (section 11.6) |
 | A binding made in a function body that has a copied path | The stream's identifier holds the salted hash of the copy | The stream is pending. A control the speculative run rendered for it sends nothing until the server's link to the stream arrives. A speculative handler that makes such a binding stores no link to it in its overlay entry |
 
@@ -3825,7 +3948,18 @@ loaded through a stream index, aligned with what server-primary execution
 does for a queued event (5.1); a read of a cell whose writer is in an
 instance that is not loaded returns the stored value where the basis index
 shows it current, and loads the instance only where it shows it stale
-(4.4, 5.3, 10.4).
+(4.4, 5.3, 10.4); the egress ceiling is checked again on each send a
+language-model built-in makes after its request, and a refused send ends
+the effect with an error state (6.3); what is stored or bound once per
+element key carries the join over the positions that hold the key, which
+is marked to be revisited (5.1); a `lift` or a `computed` requests no
+effect itself (2.7, 6.1); a handler's pending effect is requested again
+at activation after a restart, with the ceiling checked on the content
+as it is then (2.3, 10.6); this design sets no bound on an effect whose
+completion changes its own request or on a cycle across two spaces,
+which is marked to be revisited (8.4); the scheduler is switched per
+space, and no space runs the builder path beside the compiled path
+(10.8).
 
 ### Needing the project owner
 
@@ -3873,8 +4007,10 @@ shows it current, and loads the instance only where it shows it stale
    version (section 8.1). *Proposed:* 10 runs of a materializer or of an
    effect's request transaction per cycle (section 8.3). Two cycles are
    not closed: an effect whose completion changes its own request, and
-   derivations in two spaces that read each other (section 8.4). They are
-   question 20 of the continuation plan.
+   derivations in two spaces that read each other (section 8.4). Ruled:
+   this design sets no bound on them. They fall under rate limits in
+   general, which this design does not specify. The ruling is marked to
+   be revisited.
 10. **Event order per space.** *Assumed:* the proposal in Scheduler v2 §7.5,
     which awaits a ruling there. It is question 21 of the continuation
     plan.
@@ -3893,11 +4029,13 @@ shows it current, and loads the instance only where it shows it stale
     the second is to author the step as the principal whose event or
     demand caused the evaluation, which a derivation transaction behind a
     batch of several principals' events cannot name.
-35. **Compiled and builder-path instances in one space.** *Assumed:* until
-    the builder form is retired, one serving runtime hosts Scheduler v2
-    for the builder-path instances of a space beside the scheduler of this
-    document, with one change channel, one event queue and one wave
-    (section 10.8). It is question 24 of the continuation plan.
+35. **Compiled and builder-path instances in one space.** Ruled: the
+    scheduler is switched per space, and no space runs both (section
+    10.8). What the ruling leaves open about the switch itself is in
+    `execution-and-storage.md`, section 11: when a space is switched, a
+    space that holds an instance whose source the compiler refuses,
+    whether a switch can be reversed, events across the switch, and how
+    a validation run compares the two paths (its questions 69 to 74).
 36. **The requester of an effect that a cone instance of space scope
     requests.** *Assumed:* the request transaction of an operation of a
     plan acts as the principal of the scope key of the cone instance that
@@ -3913,19 +4051,17 @@ shows it current, and loads the instance only where it shows it stale
     transaction and of a materializer's run is not decided.
 37. **The element slots of a handler whose key two positions hold.**
     *Assumed:* they are bound at every position that holds the key, and
-    each resolves to the join over those positions (section 5.1). It is
-    open question 27 of `plan-and-label-templates.md` and part of
-    question 40 of the continuation plan.
-38. **The recovery of a pending effect that a handler requested.**
-    *Assumed:* activation reads the pending-effect rows and runs a request
+    each resolves to the join over those positions (section 5.1), under
+    the ruling on what is stored once per element key, which is marked
+    to be revisited. That ruling lists what is stored, and these slots
+    are resolved when an event arrives. It is question 35 of
+    `plan-and-label-templates.md`.
+38. **The recovery of a pending effect that a handler requested.** Ruled:
+    activation reads the pending-effect rows and runs a request
     transaction for each, which follows the references of the stored
     request again, checks the egress ceiling on the content as it is
     then, and sends that content, acting as the principal the row names
-    (section 2.3). A request that passed its ceiling when the event
-    committed can therefore be refused at the recovery, after the event's
-    other writes are stored, and the content that leaves can differ from
-    the content the first request read. The alternative stores what the
-    first request read with the operation's state.
+    (section 2.3).
 39. **A read of something that an instance that is not loaded writes and
     that names it nowhere.** *Assumed:* the read returns what is stored,
     for a cell written through a handle and for a path of a child's
@@ -3942,6 +4078,20 @@ shows it current, and loads the instance only where it shows it stale
     and writes the marks of the instances that belong to the torn-down one
     in its space (section 9.3). That `inSpace` is legal at such a site is
     question 50 of the continuation plan.
+41. **A link between a switched space and one that is not** (section
+    10.8). *Assumed:* the reading side reads the stored value and the
+    stored label as the other path wrote them, so the tighter labels hold
+    only where every space in the chain is switched; and a compiled
+    handler that reads an output of a builder-path instance, which it can
+    only across spaces, reads it as stored, with its currency decided in
+    the other space (section 9.2; question 5). It is question 72 of
+    `execution-and-storage.md`.
+42. **A client that holds spaces of both kinds** (section 10.8). *Assumed:* a
+    client's runtime runs Scheduler v2 for the spaces that are not switched and
+    the scheduler of this document for the switched ones, chosen per space from
+    the space's mark, with the per-space event order of question 10. The
+    alternative has a client speculate only in switched spaces during the
+    validation period.
 
 ### For another document or the prototype
 

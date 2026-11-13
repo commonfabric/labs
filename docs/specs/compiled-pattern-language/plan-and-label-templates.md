@@ -1143,9 +1143,26 @@ the body's element: a factory value called in the reactive tier of the
 body, or a pattern that a `lift` or a `computed` written in the body
 instantiates, whose instances are named through that body's `within`
 (below). *Assumed* for the second kind, which the ruling does not name
-(section 8, question 37). An instance that only a `handler` or an `action`
-requests does not count: it is identified by the handling, or by an
-explicit tag, and by no element key.
+(section 8, question 37). Two things do not count.
+
+- An instance that only a `handler` or an `action` requests. It is
+  identified by the handling, or by an explicit tag, and by no element
+  key.
+- A statically resolved pattern called in the reactive tier of the body.
+  The call is compiled into the body: it is a `site` step of `within` and
+  no `Child`, it has no result cell, and a state cell it declares is a
+  state cell of the body for the rule on state below
+  (`language-subset.md` §4.4.1). Its own body can instantiate a child,
+  and that child counts.
+
+Where element bodies nest, the `within` of the `Child`, or of the
+instantiating body, has one `element` step per enclosing element body.
+`bodyUses.child` is set on the collection of every one of those steps,
+so the position joins the key at each level at which the element is a
+plain value. Set on the innermost collection alone, two equal plain
+elements of an outer collection would share the inner cone instances,
+and with them the child. *Assumed,* with the second kind above (section
+8, question 37).
 
 The purpose of the rule is that an element that moves keeps its cone
 instances, so reordering a collection recomputes nothing. Keeping the
@@ -1168,7 +1185,8 @@ Consequences, which later sections rely on:
 - **State needs an element with an identity.** A state cell with an
   `element` step in `within` exists only where the element's key is a
   cell's identity or holds the position. An element body over plain values
-  that declares a state cell without using the index is a compile error:
+  that declares a state cell without using the index is a compile error
+  (`collection:shared-element-state`):
   two rows that show the same value would otherwise share one flag. The
   author uses the index, or makes the elements cells, which a list of
   records written by a handler already is. Two positions that link to the
@@ -1250,7 +1268,7 @@ follows.
 | Created in | Identified by |
 | --- | --- |
 | A handler, no explicit cause | The handling and the occurrence's ordinal among the handler's requests in that invocation. A retry of the same event on the same stream with the same control flow names the same things. A handler binding is the exception: it is identified as in the last row everywhere |
-| A handler, `.for(tag)`, or a cell created under an explicit cause | The handler's instance and the tag or the cause, so that different events name the same thing. A later event then finds what an earlier one made, and a read through the link or the handle is dynamic (section 3.9). The existence label of what the first event made is fixed at that creation (section 3.14). Today every identifier a handler's frame mints derives from a cause that holds the event's identifier, the ones with an explicit cause included (`#ensureLink` in `runtime/runner/src/cell.ts`) |
+| A handler, `.for(tag)`, or a cell created under an explicit cause | The enclosing instance, the handler's `name` and `within`, for an instance the site, and the tag or the cause, and not the handling, so that different events name the same thing. Two handlers of one instance that pass equal causes name two things, as two bodies do. Such a request counts toward the ordinal of the handler's later requests, although its own identifier does not hold the ordinal. A later event then finds what an earlier one made, and a read through the link or the handle is dynamic (section 3.9). The existence label of what the first event made is fixed at that creation (section 3.14). Today every identifier a handler's frame mints derives from a cause that holds the event's identifier, the ones with an explicit cause included (`#ensureLink` in `runtime/runner/src/cell.ts`) |
 | A `lift` or `computed` | A cell: an explicit cause (`createCell`). A binding: the enclosing instance, the handler, and what the binding holds, and not the place of the site, so no step of `within` (`bind`, section 3.14). An instance: the enclosing instance, the body's `name` and `within`, the site, and the ordinal of the instantiation among those the evaluation makes at that site, or, with `.for(cause)`, that cause in place of the ordinal (`instantiate`, section 3.14). No identifier holds an ordinal among all the requests of an evaluation, because such a body is re-evaluated. Such a body does not request an effect itself |
 
 **A handling** is identified by its receipt: the event's identifier and the
@@ -1707,6 +1725,7 @@ tool.
 | The provenance record of a kept output path: its selections, its instantiation key, the addresses of its dynamic reads | The confidentiality of the output's instantiated label, joined with the label of the label-metadata observation at the path, and no integrity |
 | The origin facts of a kept derived collection | The collection's instantiated membership label |
 | The record of which instances the last evaluation of a `lift` or a `computed` made at each site (section 3.14) | The confidentiality of the body's template, instantiated, and no integrity |
+| The record of the children an element body has under an element key (`execution-and-storage.md` §2.5) | The collection's instantiated membership label, for each collection whose element key the record is stored under, and no integrity |
 | The allocation record of a space an `inSpace` request creates (section 3.14) | The confidentiality of the requesting body's template, instantiated as section 3.14 says for a record that commits ahead of its unit, and no integrity |
 | A path of any of these that holds label identifiers, such as the count per identifier a `fold` keeps (section 4.3) | The label of its row above, joined with the label of the label-metadata observation of each label it names |
 
@@ -1742,6 +1761,15 @@ Why each label covers what is stored:
 - **The instances a computation made.** How many instances an evaluation
   makes at a site, and under which causes, is a function of what the body
   read, which the body's template joins.
+- **The children of an element body.** A child that a factory value
+  called in the reactive tier of an element body makes is no instance a
+  computation made, and no body's template covers it. The runtime lists
+  it all the same, per element key, in the instances document of the
+  enclosing instance, so that a child whose key no position holds any
+  more is found and torn down after a restart. The record says that the
+  collection has an element with that key, which is what the membership
+  label covers. Which child the record names follows from the key and
+  the `Child` record, and adds nothing.
 - **An allocation record.** That a space exists under a name, or for a
   request, is a function of what the requesting body read, and so is a
   name the body computed. The identifier the record holds is obtained and
@@ -1823,11 +1851,12 @@ everything else an element cone stores once per key.
   value is the salted one in every layout (section 1.3). Two documents
   hold several element keys: the cache document, with one entry per
   element key of a promoted element cone, and the instances document,
-  with one record per element key of an element cone that makes instances
-  (`execution-and-storage.md` §8.4 and §2.8). In each, the set of keys
-  under one cone carries that membership label. Under a nested element
-  body the keys of the inner collection carry the inner collection's
-  membership label, instantiated for the outer element.
+  with one record per element key of an element cone that makes
+  instances, and one per element key under which an element body has
+  children (`execution-and-storage.md` §8.4, §2.8 and §2.5). In each,
+  the set of keys under one cone carries that membership label. Under a
+  nested element body the keys of the inner collection carry the inner
+  collection's membership label, instantiated for the outer element.
 - **Positions that hold one key share what is stored once.** Positions
   hold one key where they hold equal plain values and the position is not
   part of the key, or where they link to one cell (section 1.3). Their
@@ -2829,7 +2858,7 @@ pattern factory value. The runtime creates the child instance (section
 | The argument | Each path is written into the child's argument document with `T_b`, or with the reference rules of section 3.9 for a reference the body was given |
 | The captures of an inline `pattern(...)` written at the call | The private parameters of the child (section 3.15). Each path is bound as a path of a handler's state is bound in a function body (below), and is stored with the instance |
 | A link to an instance requested earlier in the same invocation, passed as an argument | A reference like any other: it carries its own identity label, `T_b`. It is legal before either instance exists, because both are created by the same commit |
-| `.for(tag)` | The tag's value is part of the footprint. The instance's existence label is frozen when it is first created (§8.12.8, `08-12-store-label-monotonicity.md`); a later event that names the same instance creates nothing |
+| `.for(tag)` | The tag's value is part of the footprint. The instance's existence label is frozen when it is first created (§8.12.8, `08-12-store-label-monotonicity.md`); a later event that names the same instance creates nothing. *Assumed:* it does not write the argument again either, so the instance keeps the argument the creating event wrote, as a cell created under an explicit cause keeps its initial value (section 8, question 39) |
 | `asScope(scope)` | A constant of the site. It sets the scope of the state the child declares |
 | `inSpace(space, options)` | The target is a space identifier, the space of a given cell, a name, or anonymous. `Child.space` records which of the four it is, and the options `grants`, `root`, `spaceKind` and `selfOwned` where the site writes them. The target and each option is a constant of the site, a slot, or a value the body computes at the request (`RequestValue`). A computed one carries `T_b`. The argument is written into another space, so the write-side checks of that space apply to the argument's templates joined with `T_b`. The instance's identifier is known at the request, as for any instantiation. The identifier of a space the request creates is obtained when the request is made, and is not derived from the request (below) |
 
@@ -2953,7 +2982,12 @@ above apply, with the following differences.
   taken from the item keeps the instance with the item. The compiler
   therefore warns, and does not refuse, where an instantiation sits in a
   loop or a callback of a function body and has no `.for(cause)`
-  (`language-subset.md` has the catalog entry).
+  (`function-body:instantiation-without-cause`; `language-subset.md`
+  §10.3 has the catalog entry). *Assumed,* with that document (its §13,
+  question 26): the warning is reported in a `lift`, a `computed`, an
+  `assert`, and an authored function that one of them or the reactive
+  tier calls. It is not reported in a `handler`, an `action`, or an
+  inline event handler, where each event makes its instances anew.
 - **When the instance exists.** The condition on the link does not apply.
   The first evaluation that makes an instance stages its result document
   and its argument, whatever the body does with the link, and the instance
@@ -3009,7 +3043,8 @@ above apply, with the following differences.
   invocation. Its initial value and its existence carry `T_b`, and so
   does the identity of the handle the body holds. Writing the handle into
   state is a reference write. A cell created under an explicit cause is
-  identified by the handler's instance and the cause (section 1.3), so a
+  identified by the enclosing instance, the handler's `name` and
+  `within`, and the cause (section 1.3), so a
   later event names the same cell and creates nothing. Its
   existence label is frozen when it is first created, as an instance's is
   with `.for(tag)`, and a read through its handle is dynamic (section
@@ -3058,7 +3093,12 @@ an operand of a `sqliteQuery` request, and `db.exec(...)` in a handler is
 a write through the handle, a `WriteEdge` with target `handle` whose slot
 is the handle's `identity` slot. The declaration has no label rule of its
 own. The handle's `owner` is written once, from the acting principal of
-the transaction that first writes the handle.
+the transaction that first writes the handle. *Assumed:* the state
+document carries what section 2.6 gives the bookkeeping of an operation,
+the confidentiality of `Operation.input`, which is `const` here and so
+empty, and no integrity. The handle then carries no label beyond what
+the table declarations in it declare, as today
+(`execution-and-storage.md` §6.8; section 8, question 40).
 
 **Requesting an effect** (`effect`, legal in a handler and an action). The
 request is staged in the event's transaction. Each path of it is a
@@ -5538,7 +5578,7 @@ once per element key carries the join over the positions that hold the key,
 the third exception to "equal or tighter", to be revisited (2.6, 3.1); a
 conditional read through a handle stays dynamic (2.5, 3.9); a tie in `minBy`,
 `maxBy` and a keyed lookup goes to the first position in source order (3.8,
-3.17); a child replaced under the same
+3.18); a child replaced under the same
 name (3.15); the identifier of an `inSpace` instance known at the request, and
 the identifier of a space the request creates obtained and recorded in a step
 that commits before the step in the foreign space (3.14); salted value-derived
@@ -5933,7 +5973,10 @@ this document made.
     is a factory value called in the reactive tier of the body, and also a
     pattern that a `lift` or a `computed` written in the body
     instantiates, because its instances are named through the element key
-    as well; an instance a handler requests does not count (section 1.3).
+    as well; an instance a handler requests does not count, and neither
+    does a statically resolved pattern compiled into the body; and where
+    element bodies nest, the position joins the key at every enclosing
+    level at which the element is a plain value (section 1.3).
     Under the narrower reading, two equal plain elements share the
     instances a computation in the body makes, and the arguments of those
     instances carry the join of section 2.6.
@@ -5942,3 +5985,22 @@ this document made.
     joined label, the labels of what was sent and received before, and
     the label the refused check was evaluated on. The ruling says the
     result takes the error state and names no label. *Assumed.*
+39. **The argument of an instance a later event names.** By ruling, an
+    instantiation with `.for(tag)` in a handler names the same instance
+    on every event, and a later event creates nothing. The ruling does
+    not say whether the later event writes the argument it passes.
+    *Assumed:* it does not. The request returns the link, and the
+    instance keeps the argument the creating event wrote, as a cell
+    created under an explicit cause keeps its initial value (sections
+    1.3 and 3.14). The alternative writes the argument on every event,
+    as an evaluation of a `lift` or a `computed` does for an instance it
+    names again. A handler that has to change what such an instance
+    reads passes a cell in the argument and writes the cell.
+40. **The label of a database declaration's state document.** Section
+    3.14 gives a `sqliteDatabase` declaration no label rule of its own.
+    *Assumed:* its state document, which holds the handle, carries the
+    label section 2.6 gives the bookkeeping of an operation, which is
+    empty for an `input` of `const`. The `owner` is a principal the
+    runtime attests (section 3.16), and the `rev` counts the writes made
+    through the handle. `execution-and-storage.md` §6.8 stores the
+    document on this assumption.
