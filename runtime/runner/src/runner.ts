@@ -246,6 +246,7 @@ import {
   machineryRead,
   markDurableReadTx,
   schedulerDependencyRead,
+  writeDestinationRead,
 } from "./storage/reactivity-log.ts";
 import {
   isCfcEnforcementRejection,
@@ -4341,14 +4342,20 @@ export class Runner {
       resultCell,
       { derivedInternalCells: pattern.derivedInternalCells },
     ) as R;
+    // A write-destination read (CFC §18.6.2): the stored projection decides
+    // whether setup writes the one it builds (`changed`, below), never what it
+    // writes, which is the pattern's own result bound to this piece. The name
+    // a setup carries over is what it writes, so that one is read again
+    // without the marker, at its own slot.
     const previousResult = writableResultCell.getRaw({
-      meta: ignoreReadForScheduling,
+      meta: { ...ignoreReadForScheduling, ...writeDestinationRead },
     });
-    const nameCarried = options.preserveName &&
-      isObjectOrArray(previousResult) &&
-      Boolean(previousResult[NAME]);
+    const storedName = options.preserveName && isObjectOrArray(previousResult)
+      ? writableResultCell.key(NAME).getRaw({ meta: ignoreReadForScheduling })
+      : undefined;
+    const nameCarried = Boolean(storedName);
     if (nameCarried) {
-      result = { ...result, [NAME]: previousResult[NAME] };
+      result = { ...result, [NAME]: storedName };
     }
     // Convert-and-freeze (default): a deep-frozen value lets the storage write
     // boundary's `cloneIfNecessary` identity-pass instead of
