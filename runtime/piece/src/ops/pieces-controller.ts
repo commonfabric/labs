@@ -1531,7 +1531,11 @@ export class PiecesController<T = unknown> {
   }
 
   /**
-   * Returns the `Cell` with argument content, loading the pattern if needed.
+   * Returns the cell over `piece`'s argument, as the argument link in the
+   * piece's metadata names it. This reads that metadata synchronously, so
+   * the piece's own document must be loaded, and it does not sync the
+   * argument: a caller that reads the argument's value syncs or pulls the
+   * returned cell first.
    */
   getArgument<T = unknown>(
     piece: Cell<unknown | T>,
@@ -3518,12 +3522,14 @@ export class PiecesController<T = unknown> {
 
   /**
    * Helper for `getReadingFrom()` and `getReadByPieces()`, which read
-   * `piece`'s argument raw: its argument cell, synced, since the replica need
-   * not hold that document, whether because nothing here loaded it or because
-   * a release pass dropped it once the piece stopped
-   * (`docs/features/document-release.md`).
+   * `piece`'s argument raw: its argument cell, synced. The replica need not
+   * hold either the piece's own document, whose metadata names the argument,
+   * or the argument's, whether because nothing here loaded them or because a
+   * release pass dropped them (`docs/features/document-release.md`), so both
+   * are synced before they are read.
    */
   async #syncedArgument(piece: Cell<unknown>): Promise<Cell<unknown>> {
+    await piece.asSchema(undefined).sync();
     const argument = this.getArgument(piece);
     await argument.sync();
     return argument;

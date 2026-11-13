@@ -204,6 +204,17 @@ stands on the server:
   immutable document, so the next read through such a link kicks the load
   again.
 
+The read that starts a load does not wait for it. A synchronous read of a
+document that is not loaded, such as `Cell.get()` or `Cell.getRaw()` or a read
+of the document's metadata, returns `undefined` and starts the load, as it does
+for a document nothing here ever loaded. So a caller that needs the value of a
+document no cell of its own holds, such as a stopped piece's argument read
+through a cell made after the stop, syncs or pulls that cell first
+(`Cell.sync()`, `Cell.pull()`). A read inside `Runtime.editWithRetry()` needs
+neither: before the transaction commits, the runtime waits for the loads its
+reads of absent documents started, and runs the attempt again if any of those
+documents exists.
+
 ## Measuring
 
 `getLoggerCounts().sizes.storage` reports a runtime's `documents` and

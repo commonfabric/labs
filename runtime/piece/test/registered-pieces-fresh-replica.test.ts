@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { createSession, Identity } from "@commonfabric/identity";
 import {
+  entityIdFrom,
   getPatternIdentityRef,
   type MemorySpace,
   Runtime,
@@ -162,9 +163,9 @@ describe("pieces-controller", () => {
   });
 
   describe("a piece whose argument links to another piece", () => {
-    // The reader has loaded none of the pieces' documents, which is also where
-    // a replica stands after a release pass drops a stopped piece's argument
-    // (`docs/features/document-release.md`).
+    // The reader has loaded none of the pieces' argument documents, which is
+    // also where a replica stands after a release pass drops a stopped piece's
+    // argument (`docs/features/document-release.md`).
 
     let sourceId: string;
     let targetId: string;
@@ -200,7 +201,7 @@ describe("pieces-controller", () => {
       await creator.synced();
     });
 
-    it("is listed by `getReadingFrom()` as reading from the other", async () => {
+    it("names the other in its `getReadingFrom()` list", async () => {
       // The registry's entry, unlike `get()`, does not load the argument.
       const target = (await reader.getRegisteredPieces())
         .find((piece) => piece.id === targetId)!;
@@ -210,12 +211,49 @@ describe("pieces-controller", () => {
       ).toEqual([sourceId]);
     });
 
-    it("is listed by `getReadByPieces()` as reading the other", async () => {
+    it("is named in the other's `getReadByPieces()` list", async () => {
       const source = await reader.get(sourceId, false);
 
       expect(
         (await reader.getReadByPieces(source.getCell())).map(pieceId),
       ).toEqual([targetId]);
+    });
+
+    describe("whose own document the reader has not loaded", () => {
+      // The registry's own pull loads each entry's document, so the reader's
+      // registry here names cells that nothing has loaded, as a registry whose
+      // entries a release pass dropped would.
+
+      beforeEach(() => {
+        const unloaded = (id: string) =>
+          readerRuntime.getCellFromEntityId(space, entityIdFrom(id));
+        Object.defineProperty(reader, "getPieceRegistry", {
+          configurable: true,
+          value: () =>
+            Promise.resolve({
+              get: () => [unloaded(sourceId), unloaded(targetId)],
+            }),
+        });
+      });
+
+      it("names the other in its `getReadingFrom()` list", async () => {
+        const target = readerRuntime.getCellFromEntityId(
+          space,
+          entityIdFrom(targetId),
+        );
+
+        expect((await reader.getReadingFrom(target)).map(pieceId)).toEqual([
+          sourceId,
+        ]);
+      });
+
+      it("is named in the other's `getReadByPieces()` list", async () => {
+        const source = await reader.get(sourceId, false);
+
+        expect(
+          (await reader.getReadByPieces(source.getCell())).map(pieceId),
+        ).toEqual([targetId]);
+      });
     });
   });
 });
