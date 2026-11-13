@@ -142,6 +142,11 @@ impl<'a> Resolver<'_, 'a> {
                 _ => match self.typed_at(module, &member.object, next) {
                     Ok(object) => Ok(match self.shape(object) {
                         Shape::Object(_, Some(index)) => index,
+                        // A chosen child of a closed object type: one of
+                        // its properties.
+                        Shape::Object(properties, None) if !properties.is_empty() => {
+                            self.union_of(properties.iter().map(|property| property.ty).collect())
+                        }
                         _ => self
                             .element_of(object)
                             .unwrap_or_else(|| self.add_unresolved()),

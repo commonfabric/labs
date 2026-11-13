@@ -1115,7 +1115,23 @@ impl<'a> Resolver<'_, 'a> {
                 Some(Shape::HandlerFactory(_, state)) => self.add(Shape::Tuple(vec![state])),
                 _ => self.unresolved(Why::NotEvaluated),
             },
-            "Exclude" | "Extract" => self.unresolved(Why::NotEvaluated),
+            "Exclude" | "Extract" => match (first, arguments.get(1)) {
+                (Some(subject), Some(test))
+                    if self.first_unresolved(subject, 0).is_none()
+                        && self.first_unresolved(*test, 0).is_none() =>
+                {
+                    let members = match self.shape(subject) {
+                        Shape::Union(members) => members,
+                        _ => vec![subject],
+                    };
+                    let kept = members
+                        .into_iter()
+                        .filter(|member| self.fits(*member, *test) == (name == "Extract"))
+                        .collect();
+                    self.union(kept)
+                }
+                _ => self.unresolved(Why::NotEvaluated),
+            },
             "PropertyKey" => self.add(Shape::String),
             "Awaited"
             | "InstanceType"
@@ -1340,6 +1356,27 @@ impl<'a> Resolver<'_, 'a> {
             Shape::Tuple(members) | Shape::Union(members) => members
                 .iter()
                 .any(|member| self.contains_function(*member, depth + 1)),
+            _ => false,
+        }
+    }
+
+    /// Whether a member of a union is assignable to `target`, for `Exclude`
+    /// and `Extract` (§7.10): to a member of a union target, to an equal
+    /// type, or, for a literal, to its primitive type.
+    fn fits(&self, member: TypeId, target: TypeId) -> bool {
+        let (from, to) = (self.shape(member), self.shape(target));
+        if let Shape::Union(targets) = &to {
+            return targets.iter().any(|target| self.fits(member, *target));
+        }
+        if matches!(to, Shape::Unknown) || self.display(member) == self.display(target) {
+            return true;
+        }
+        match (&from, &to) {
+            (Shape::Literal(text), Shape::String) => text.starts_with(['"', '\'']),
+            (Shape::Literal(text), Shape::Number) => {
+                text.starts_with(|c: char| c.is_ascii_digit() || c == '-')
+            }
+            (Shape::Literal(text), Shape::Boolean) => text == "true" || text == "false",
             _ => false,
         }
     }

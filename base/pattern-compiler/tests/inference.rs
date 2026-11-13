@@ -250,3 +250,20 @@ fn map_and_set_have_key_and_value_types() {
          }\n",
     );
 }
+
+#[test]
+fn exclude_and_extract_are_computed() {
+    assert_typed(
+        "type Glaze = \"plain\" | \"sugar\" | undefined;\n\
+         interface Order { glaze: Exclude<Glaze, undefined>; size: Extract<\"small\" | 12, string> }\n\
+         function show(order: Order) { return order.glaze.trim() + order.size.toUpperCase(); }\n",
+    );
+}
+
+#[test]
+fn property_chosen_by_a_key_that_is_not_static_has_the_union_of_the_property_types() {
+    assert_typed(
+        "const STYLE = { open: \"green\", done: \"gray\" };\n\
+         function show(status: \"open\" | \"done\") { return STYLE[status].toUpperCase(); }\n",
+    );
+}
