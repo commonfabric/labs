@@ -46,17 +46,22 @@ next.
 - **Prototype:** branch `claude/compiled-pattern-prototype` holds a Rust
   crate at `base/pattern-compiler/`, stage 2 in progress. It is not part
   of this branch. It parses the corpus with the `oxc` parser, classifies
-  code into tiers, applies the rules of `language-subset.md` that need no
-  types, and holds the type checker as far as evaluating written types
-  and inferring the types of expressions. At prototype commit
-  `bcacc19240`, on 426 corpus modules, it accepts 358 without an error
-  and reports 283 errors, most of them `any` in a type (182), a function
-  type in data from one declaration (35), and `patternTool` (31). It
-  gives a type to 95.5% of the 7,633 receivers of method calls. Not yet
-  in it: narrowing, assignability, 13 catalog entries that need the type
-  checker, promotion by the typed criterion, and footprint analysis. The
-  crate's `SPEC-NOTES.md` lists the places where it found the document
-  ambiguous.
+  code into tiers, and holds the subset type checker: written types,
+  inference, narrowing, assignability, and promotion by the typed
+  criterion, which agrees with the syntactic one wherever it decides. At
+  prototype commit `09d0f15bfc`, on 426 corpus modules, it accepts 334
+  without an error and reports 382 errors: `any` in a type (182), 71
+  type mismatches, a function type in data from one declaration (35),
+  and `patternTool` (31) are most of them. Of the 71 mismatches it
+  classes 29 as real refusals, 15 as gaps of the checker, and 37 as
+  places where the document refuses something that looks intended.
+  FabriChat has 11 errors. Footprint analysis is started: the core of
+  `footprint-analysis.md` §2 to §7 is implemented and measured, and
+  finds 90 of 1,972 bodies widening (4.6%) where the document's script
+  found 83 of 1,962. Not yet in it: runtime calls and context reads
+  (§8), resolutions, outputs, and the twelve diagnostics that need the
+  footprint. The crate's `SPEC-NOTES.md` lists the places where it found
+  the documents ambiguous.
 - **Specification change:** draft pull request #91 in `commonfabric/specs`
   (branch `claude/compiled-pattern-label-templates`) carries the label
   semantics as prose, pseudocode, and Lean statements. It includes the
