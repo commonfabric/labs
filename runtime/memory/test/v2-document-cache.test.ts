@@ -1194,13 +1194,18 @@ describe("v2 document cache", () => {
         sessionId: "s:a",
         commit: commit(1, {
           operations: [
-            { op: "set", id: x, value: { value: body } },
+            { op: "set", id: x, value: { value: "" } },
+            {
+              op: "patch",
+              id: x,
+              patches: [{ op: "replace", path: "/value", value: body }],
+            },
             ...andThen,
           ],
         }),
       } as never);
     await withEngine((engine) => {
-      // A commit that writes X and Y, then fails while reading its own rows
+      // A commit that patches X and Y, then fails while reading its own rows
       // back (materialization reconstructs Y's patch, which cannot apply):
       // by then X's read-back is staged. SQLite rolls both revisions back,
       // and the staged read must go with them — it answers to the retry's

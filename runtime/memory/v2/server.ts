@@ -5390,8 +5390,9 @@ export class Server {
       if (Engine.serverSeq(engine) === 0) {
         throw new Error("Cannot flush a space without history");
       }
-      const checkpoint = engine.database.prepare("PRAGMA wal_checkpoint(FULL)")
-        .get<{ busy: number }>();
+      const checkpoint = engine.prepare("PRAGMA wal_checkpoint(FULL)").get() as
+        | { busy: number }
+        | undefined;
       if (checkpoint?.busy !== 0) {
         throw new Error("Space durability checkpoint could not complete");
       }

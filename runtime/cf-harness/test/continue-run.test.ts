@@ -335,6 +335,23 @@ describe("continue-run", () => {
     await unchanged();
   });
 
+  it("keeps one record and one token for a held input attached again under its name", async () => {
+    const refs = await attachmentCells();
+    await save();
+    expect(await run(["--input-cell", `original=${refs.oldRef}`])).toBe(0);
+    const next = await nextArtifacts();
+    expect(next.runState.inputCells).toEqual([{
+      name: "original",
+      ref: refs.oldRef,
+      token: refs.oldToken,
+    }]);
+    const context = requests[0].transcript.filter((message) =>
+      message.role === "user" && message.turnLocal
+    ).map((message) => message.content).join("\n");
+    expect(context).toContain(`${refs.oldToken} — original`);
+    await unchanged();
+  });
+
   for (const source of ["assigned piece", "grant"] as const) {
     it(`refuses an input name held by a prior ${source}`, async () => {
       const refs = await attachmentCells();
