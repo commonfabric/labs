@@ -99,15 +99,17 @@ every token. When a marked token that is still its document's current one is
 collected while its space is open, the storage manager tells the runtime
 (`IStorageManager.subscribeHoldsCollected()`), which asks for a pass. That pass
 marks nothing, so a collection completes a release something already asked for
-and never begins one: a runtime that stops nothing and loses no client sees no
-pass on any collection's account, and the passes collections ask for end once
-the tokens marked have been collected. The pass decides as any other does, so a
-document held again under a new token since, read by a scheduler action, or held
-some other way, stays; a marked token whose document an action reads costs a
-pass that releases nothing. A collection that takes many marked tokens reports
-each one, and the requests share one pass, as requests made before a pass begins
-always do; a pass shared by such a request and any other marks as the other
-would.
+and never begins one: a runtime that asks for no pass, so one with no stopped
+piece, no served handler's result released, no catalog adoption, no cancelled
+subscription or departed client, no pass after Home's bring-up, and no call of
+its host's own, sees no pass on any collection's account, and the passes
+collections ask for end once the tokens marked have been collected. The pass
+decides as any other does, so a document held again under a new token since,
+read by a scheduler action, or held some other way, stays; a marked token whose
+document an action reads costs a pass that releases nothing. A collection that
+takes many marked tokens reports each one, and the requests share one pass, as
+requests made before a pass begins always do; a pass shared by such a request
+and any other marks as the other would.
 
 A pass keeps the watches rooted at a document loaded or read since the
 previous pass began, and removes only those rooted at one neither loaded nor
