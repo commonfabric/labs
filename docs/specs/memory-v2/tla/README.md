@@ -1,4 +1,4 @@
-# TLA+ models: pending-stack commits and session delivery
+# TLA+ models: pending-stack commits, local session documents, and session delivery
 
 `PendingStacks.tla` is a bounded, model-checked specification of the Memory v2
 pending-stack commit protocol (`03-commit-model.md` §3.3–3.6), built to check
@@ -60,10 +60,12 @@ Repaired result certifies the rule, not the whole pipeline:
   which is one reason the shipped exclusion is the DECLARED SET (own
   commits the read's array names) rather than session-wide — an own write
   the array does not name conflicts like a foreign one, whether admitted
-  out of order or omitted while durably integrated. Modeling issued
-  versus admitted commits separately, with FIFO as a checked invariant
-  rather than a structural given, is the natural refinement if this area
-  churns.
+  out of order or omitted while durably integrated.
+  `LocalSessionDocuments.tla` models issued and admitted commits
+  separately for the hold a client makes over its local session document,
+  with FIFO as a checked invariant rather than a structural given
+  ([below](#model-local-session-documents)); a hold of another kind is
+  modeled there first.
 - **Canonical dependency arrays.** `Build` records the layers of the
   CURRENT stack — under channel delivery that set can be sparse relative
   to session history (processed rejections are gone from `pend`), but it
@@ -103,7 +105,20 @@ java -cp tla2tools.jar tlc2.TLC -config SessionDelivery_MemoryFull.cfg \
   -workers auto SessionDelivery.tla
 ```
 
-Only the Holdings run is expected to pass. The Memory and MemoryFull runs
+The local-session model extends `PendingStacks.tla`, so TLC is given the
+extending module and finds the other beside it:
+
+```bash
+java -cp tla2tools.jar tlc2.TLC -config LocalSessionDocuments_Hold.cfg \
+  -workers auto LocalSessionDocuments.tla
+```
+
+Its three `LocalSessionDocuments_Hold*.cfg` runs are expected to pass, and
+its other four are witnesses that MUST each report the violation their table
+row describes.
+
+Of the delivery runs, only the Holdings run is expected to pass. The Memory
+and MemoryFull runs
 are regression witnesses: each MUST report the violation its table row
 describes and exits nonzero doing so — a clean exit from either means the
 old design's defect became unreproducible and the model needs examining,
@@ -251,7 +266,111 @@ or missed contributor directly.
   explicit checked property, not a structural given — model that change here
   first.
 - **No branches, scopes, preconditions, or schema sync.** Orthogonal to the
-  pending-stack machinery under study.
+  pending-stack machinery under study. The exception is the scope a client
+  keeps to itself, which changes when a commit is sent:
+  `LocalSessionDocuments.tla` adds it.
+
+## Model: local session documents
+
+`LocalSessionDocuments.tla` extends `PendingStacks.tla` with a client that
+keeps its own session-scoped document in its replica and sends none of it
+(`03-commit-model.md` §3.2; the `localSessionDocuments` flag under client
+execution). The server's side is the pending-stack model's, operator for
+operator: it is given no session read, write, or dependency, so it admits
+what it is sent by the dead-dependency rule and the staleness scan that the
+rows above certify. What the module adds is the client's side:
+
+- **A local document per session**, with leaf paths `LocalPaths`. Only its
+  own session reads or writes it, its confirmed tier lives on the client,
+  and a write to it is confirmed under its commit's `localSeq`.
+- **Dependency arrays per document.** A read of the shared document names
+  the pending layers that wrote the shared document, and a read of the
+  local document names the layers that wrote the local one. A commit that
+  wrote only the local document is therefore never named to the server,
+  which holds no commit row for it.
+- **Three dispositions.** A commit that touched nothing shared settles on
+  the client. A mixed commit travels with its shared writes, and a commit
+  whose writes are all local travels with none, for validation of its
+  shared reads. Either way the verdict decides the local writes too: an
+  accept promotes them when the commit integrates, and a rejection drops
+  the whole layer.
+- **The hold.** Before a commit is sent or settled it waits for every
+  pending layer of the local document that stood beneath it, when it read
+  the local document or wrote it. A held commit is sent after later
+  commits of its session that were not held, so the server admits in the
+  order of a send queue, and INV-5 is a checked property here rather than
+  a structural one.
+- **The cascade over local dependencies**, which only the client can run:
+  a processed rejection drops every standing commit that read either
+  document through the rejected layer.
+
+`HoldMode` removes one clause of the hold at a time. Checked with TLC 2.19,
+with two sessions, one shared path, one local path, and `MaxTotal = 4` in
+every row that does not say otherwise:
+
+| Config | HoldMode | Result |
+| --- | --- | --- |
+| `LocalSessionDocuments_Hold.cfg` | `shipped` | **All invariants hold** (72,210,125 distinct states, exhaustive, ~4 min): `ReadCoherence`, `CascadeTotality` and `AcceptedVersusDropped` for the shared document with sends reordered, and `LocalReadCoherence`, `LocalConfirmedExact` and `LocalStackAboveConfirmed` for the local one. |
+| `LocalSessionDocuments_HoldSharedPaths.cfg` | `shipped` | **All invariants hold** with two shared paths at `MaxTotal = 3` (62,283,213 distinct states, ~4 min): a held commit and the commit that overtakes it write different paths, so both are accepted out of `localSeq` order with a read of either path in play. |
+| `LocalSessionDocuments_HoldLocalPaths.cfg` | `shipped` | **All invariants hold** with two local paths at `MaxTotal = 3` (38,451,865 distinct states, ~2.5 min): a read of one local path names, and waits for, a layer that wrote only the other. |
+| `LocalSessionDocuments_Monotonic.cfg` | `shipped` | **MonotonicResolution violated** in a trace of 10 states. One session builds a mixed commit, a second mixed commit that is held behind the first, and a third that writes only the shared document. The third is sent at once and accepted; the second is sent once the first has integrated, and is accepted at a higher seq than the commit built after it. The witness that the hold reorders a session's commits. |
+| `LocalSessionDocuments_HeldDependency.cfg` | `shipped` | **NoRefusalOnHeldDependency violated** in a trace of 7 states. A commit reads the shared document through a mixed commit the client is still holding, names it, and is refused, because the server holds no commit row for a commit that has not been sent. Not a safety failure: the refusal is the dead-dependency rule applied to a dependency that is late rather than dead, and the row records what the hold costs. |
+| `LocalSessionDocuments_NoWriteOrder.cfg` | `noWriteOrder` | **LocalConfirmedExact violated** in a trace of 8 states. A local-only write confirms while a mixed commit beneath it awaits its verdict, and the accepted mixed commit's promotion finds a confirmed seq above its own `localSeq` and is skipped, so its session write is lost. The write clause of the hold is what makes that unreachable. |
+| `LocalSessionDocuments_NoReadHold.cfg` | `noReadHold` | **AcceptedVersusDropped violated** in a trace of 9 states. A commit that read the local document through a validation-only commit's layer is sent before that commit's verdict. A foreign write makes the validation-only commit stale and it is rejected, the client's cascade drops the reader, and the server, which was not told of the dependency, accepts it. The read clause of the hold is what makes that unreachable. |
+
+The three local invariants are the catalog's, restated for a document the
+server holds no history of. `LocalReadCoherence` is INV-1: what an accepted
+commit observed at a local path, its confirmed writes plus the layers it
+read through, is exactly the accepted writes to that path beneath it, so no
+accepted commit read a session write that was rolled back and none lacks
+one that was accepted. `LocalConfirmedExact` is INV-8 across the two
+documents: the local confirmed tier holds exactly the local writes of the
+accepted commits that have left the stack, so the session write of a
+rejected mixed commit never stays and that of an accepted one is never
+lost. `LocalStackAboveConfirmed` is the order of the view: every pending
+layer of the local document is above its confirmed tier, so folding the
+confirmed tier and then the layers replays the writes in the order they
+were made.
+
+**INV-5 does not hold in this mode**, and neither does the submission order
+`04-protocol.md` §4.11.1 asks of a client; `09-invariants.md` lists the
+deviation under INV-5. The three passing rows are checked with that
+reordering in play. The shared document stays coherent
+under it because the confirmed basis excludes from a read's scan only the
+own layers the read names (`03-commit-model.md` §3.6.3): a commit of the
+reader's own session that overtook it conflicts like a foreign write. What
+the model does not check is anything else that leans on the order. The
+catch-up marker is one: both sides keep it as a high-water mark over
+`localSeq` (`04-protocol.md` §4.11.2), so a commit resolved after a later
+commit of its session is already covered when its verdict arrives, whereas
+`Integrate` here promotes an own accept at its log entry whatever its
+`localSeq`.
+
+**Scope of the certification.**
+
+- **The shipped shapes only.** Full-stack recording, the confirmed basis,
+  delayed verdict delivery, no identity elision, and the replay view; the
+  module's `ASSUME` pins them. One path per document keeps four commits
+  exhaustive, and the two three-commit rows widen each document in turn.
+  Certifying the shared matcher itself is left to the rows above.
+- **Dispatch at build.** A commit with no hold is sent, or settled, in the
+  action that builds it. The implementation reaches the wire a few
+  microtask turns after the build, in build order, so the only commits
+  that can precede it there are ones a held commit could precede too.
+- **Verdicts processed in decision order.** `LocalDeliver` processes a
+  session's verdicts in the order the server decided them, which is
+  `Deliver`'s order wherever sends are in `localSeq` order. An accept
+  processed ahead of an earlier rejection's drop, which the read-repair
+  gate allows, is outside both models.
+- **A validation-only commit takes a seq.** It is accepted as a log entry
+  with no writes, as the engine records a commit row for it.
+- **No preconditions, route replacement, or foreign instances.** The
+  `origin-committed` guard a client checks against its own settled
+  commits, the transfer of local state to a replacement replica, and an
+  explicitly named foreign session instance, which the server admits like
+  any shared document, are pinned by
+  `runtime/runner/test/storage/local-session-documents.test.ts`, not by
+  TLC.
 
 ## Model: session delivery across a reconnect
 
@@ -330,7 +449,13 @@ a change to the reconnect diff base, to what a declaration may claim or how
 the server reads one, or to removal semantics (union shrink, the zero-watch
 reconcile, uncovered-document retraction) is a reason to rerun all three
 `SessionDelivery` configs, and a new base or declaration shape is added as a
-`Mode` variant plus a config with its expected/observed row. Keep the
+`Mode` variant plus a config with its expected/observed row. The
+local-session model has the obligation on the client's side: a change to
+what the hold waits for, to which commits settle without a verdict, to how
+a local write is promoted or rolled back, or to the cascade over local
+dependencies is a reason to rerun all seven `LocalSessionDocuments`
+configs, and a new hold rule is added as a `HoldMode` variant plus a
+config with its row. Keep the
 existing modes in both models — the violated configs are regression witnesses
 (they document *why* the current shape is what it is), not dead code. If TLC
 finds a violation in a mode expected to pass, the trace is the ticket:

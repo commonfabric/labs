@@ -43,6 +43,13 @@ Checkers referenced below:
   dependency-recording, staleness-basis, and identity-acceptance variant,
   and — in its delayed-verdict-delivery mode (the `PendingStacks_Channel*.cfg`
   configs) — INV-6 over the decided-but-not-yet-processed window.
+- the **local-session model**:
+  `docs/specs/memory-v2/tla/LocalSessionDocuments.tla`, which extends the
+  TLA+ model with a client that keeps its own session-scoped document to
+  itself and admits commits in the order they were sent rather than in
+  `localSeq` order, and model-checks INV-1, INV-4, INV-5, INV-6 and INV-8
+  under that client's hold and under the hold with each clause removed
+  (`LocalSessionDocuments_*.cfg`).
 - the **delivery model**: `docs/specs/memory-v2/tla/SessionDelivery.tla`,
   which model-checks INV-14 over one session's watch delivery across lost
   pushes, a wiped replica, and both reconnect paths (resumed and
@@ -321,6 +328,27 @@ holds) must re-establish it.
 
 Checked by: the TLA+ model (FIFO processing is load-bearing there; any
 future relaxation should be modeled first); reconnect/race unit tests.
+
+Known deviations: **Topic 1104** on the team's Topics board
+(`of:fid1:2hILY1ucojRmGBaJpmxXZVP6Sem-balOUzWMhAaw5Ic`), a client's hold
+under `localSessionDocuments` (`03-commit-model.md` §3.2). The server
+neither holds nor reorders anything there; the order is lost at submission.
+A commit that read or wrote the client's own session document waits, before
+it is sent, for the pending layers of that document beneath it, and later
+commits of its session that touched no session document are sent meanwhile,
+against `04-protocol.md` §4.11.1. The server then resolves the later
+`localSeq` first. INV-1, INV-4 and INV-6 do not lean on the order for a
+reader that declares `basisSeq`, which every such client does: its scan
+excludes only the own layers it names, so an own commit that overtook it
+conflicts like a foreign one (`03-commit-model.md` §3.6.3). The
+local-session model certifies those three with the reordering in play, and
+keeps `LocalSessionDocuments_Monotonic.cfg` as the witness of this one.
+What does lean on the order is the catch-up marker, which the server and
+the client each keep as a high-water mark over `localSeq`
+(`04-protocol.md` §4.11.2): a commit resolved after a later commit of its
+session is covered by a marker sent before its verdict was decided. The
+flag is off by default. The deviation retires when a held commit is no
+longer overtaken at submission.
 
 ### INV-6 — Accepted-versus-dropped agreement
 
