@@ -429,29 +429,6 @@ export class UnionFormatter implements TypeFormatter {
   }
 
   /**
-   * Adds the checker's optional-property alternative to a declared reading.
-   * A reading whose root carries CFC labels is returned unchanged: its labels
-   * stay on the property, since the runtime's policy merge refuses labels on
-   * one branch of a union whose other branches it cannot prove type-disjoint,
-   * as a labeled `$ref` is not. The property's optionality already admits an
-   * absent value.
-   */
-  withUndefined(
-    schema: MutableJSONSchema,
-    context: GenerationContext,
-  ): MutableJSONSchema {
-    if (isObjectNotArray(schema) && schema.ifc !== undefined) return schema;
-    const { default: value, ...payload } = typeof schema === "object"
-      ? schema
-      : { default: undefined };
-    const union = this.#combineUnionSchemas(
-      [typeof schema === "object" ? payload : schema, { type: "undefined" }],
-      context,
-    );
-    return this.#applySchemaDefault(union, value);
-  }
-
-  /**
    * Formats a written union containing a default under its parameter bindings,
    * or returns `undefined` when the union declares no default. The instantiated
    * type supplies the semantic members used for default coverage checks.

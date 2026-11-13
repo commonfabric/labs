@@ -6817,6 +6817,167 @@ describe("piece schema compatibility", () => {
       expect(message).not.toMatch(/value\.b/);
     });
   });
+
+  describe("an `undefined` alternative of a property", () => {
+    // A reader whose schema leaves `undefined` out reads a property holding
+    // it as absent, and a reader of a property it does not require already
+    // handles its absence. So at such a property the alternative is outside
+    // the proof, in either role and under either spelling. At a property the
+    // reader requires it is compared as any other alternative.
+
+    const objectWith = (
+      x: JSONSchema,
+      required: string[] = [],
+    ): JSONSchema => ({
+      type: "object",
+      properties: { x },
+      required,
+    });
+
+    for (
+      const [spelling, withUndefined, without] of [
+        [
+          "an `anyOf` arm",
+          { anyOf: [{ type: "number" }, { type: "undefined" }] },
+          { type: "number" },
+        ],
+        [
+          "a `type` list member",
+          { type: ["number", "undefined"] },
+          { type: "number" },
+        ],
+      ] as const
+    ) {
+      it(`accepts a candidate argument whose optional property no longer admits \`undefined\` as ${spelling}`, () => {
+        expect(() =>
+          assertPatternSchemasBackwardCompatible(
+            pattern(objectWith(withUndefined), { type: "object" }),
+            pattern(objectWith(without), { type: "object" }),
+          )
+        ).not.toThrow();
+      });
+
+      it(`accepts a candidate result whose optional property comes to admit \`undefined\` as ${spelling}`, () => {
+        expect(() =>
+          assertPatternSchemasBackwardCompatible(
+            pattern({ type: "object" }, objectWith(without)),
+            pattern({ type: "object" }, objectWith(withUndefined)),
+          )
+        ).not.toThrow();
+      });
+
+      it(`still refuses a candidate argument whose required property no longer admits \`undefined\` as ${spelling}`, () => {
+        expect(() =>
+          assertPatternSchemasBackwardCompatible(
+            pattern(objectWith(withUndefined, ["x"]), { type: "object" }),
+            pattern(objectWith(without, ["x"]), { type: "object" }),
+          )
+        ).toThrow(/x: /);
+      });
+
+      it(`still refuses a candidate result whose required property comes to admit \`undefined\` as ${spelling}`, () => {
+        expect(() =>
+          assertPatternSchemasBackwardCompatible(
+            pattern({ type: "object" }, objectWith(without, ["x"])),
+            pattern({ type: "object" }, objectWith(withUndefined, ["x"])),
+          )
+        ).toThrow(/x: /);
+      });
+    }
+
+    it("accepts a candidate argument whose optional property no longer admits `undefined` beside a cell", () => {
+      // The cell's own value still admits `undefined`; only the alternative
+      // beside the cell goes.
+      const cell: JSONSchema = {
+        anyOf: [{ type: "undefined" }, { type: "string" }],
+        asCell: ["cell"],
+      };
+      expect(() =>
+        assertPatternSchemasBackwardCompatible(
+          pattern(
+            objectWith({ anyOf: [cell, { type: "undefined" }] }),
+            { type: "object" },
+          ),
+          pattern(objectWith(cell), { type: "object" }),
+        )
+      ).not.toThrow();
+    });
+
+    it("accepts a candidate result whose optional property no longer admits `undefined` beside a cell", () => {
+      const cell: JSONSchema = {
+        anyOf: [{ type: "undefined" }, { type: "string" }],
+        asCell: ["cell"],
+      };
+      expect(() =>
+        assertPatternSchemasBackwardCompatible(
+          pattern(
+            { type: "object" },
+            objectWith({ anyOf: [{ type: "undefined" }, cell] }),
+          ),
+          pattern({ type: "object" }, objectWith(cell)),
+        )
+      ).not.toThrow();
+    });
+
+    it("accepts a candidate argument whose optional property comes to admit `undefined` beside a cell", () => {
+      const cell: JSONSchema = {
+        anyOf: [{ type: "undefined" }, { type: "string" }],
+        asCell: ["cell"],
+      };
+      expect(() =>
+        assertPatternSchemasBackwardCompatible(
+          pattern(objectWith(cell), { type: "object" }),
+          pattern(
+            objectWith({ anyOf: [cell, { type: "undefined" }] }),
+            { type: "object" },
+          ),
+        )
+      ).not.toThrow();
+    });
+
+    it("still refuses a candidate argument whose cell no longer admits an `undefined` value", () => {
+      expect(() =>
+        assertPatternSchemasBackwardCompatible(
+          pattern(
+            objectWith({
+              anyOf: [{ type: "undefined" }, { type: "string" }],
+              asCell: ["cell"],
+            }),
+            { type: "object" },
+          ),
+          pattern(
+            objectWith({ type: "string", asCell: ["cell"] }),
+            { type: "object" },
+          ),
+        )
+      ).toThrow();
+    });
+
+    it("reads an optional property whose only alternative is `undefined` as holding no value", () => {
+      expect(() =>
+        assertSchemaSubset(
+          objectWith({ type: "undefined" }),
+          objectWith({ type: "number" }),
+        )
+      ).not.toThrow();
+    });
+
+    it("still refuses a candidate argument that no longer admits a defined alternative", () => {
+      expect(() =>
+        assertPatternSchemasBackwardCompatible(
+          pattern(
+            objectWith({
+              anyOf: [{ type: "number" }, { type: "string" }, {
+                type: "undefined",
+              }],
+            }),
+            { type: "object" },
+          ),
+          pattern(objectWith({ type: "number" }), { type: "object" }),
+        )
+      ).toThrow(/x: a schema alternative accepted previously is not accepted/);
+    });
+  });
 });
 
 describe("verb event closed-world transitions", () => {

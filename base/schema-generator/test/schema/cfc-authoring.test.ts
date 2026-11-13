@@ -3219,13 +3219,11 @@ describe("Schema: CFC authoring aliases", () => {
         const reference = schema.properties?.[field] as { $ref: string };
         const name = reference.$ref.split("/").pop()!;
         const def = schema.$defs?.[name] as {
-          properties: { value: unknown; next: { anyOf: { $ref?: string }[] } };
+          properties: { value: unknown; next: { $ref?: string } };
         };
         return {
           value: def.properties.value,
-          self: def.properties.next.anyOf.some((arm) =>
-            arm.$ref === reference.$ref
-          ),
+          self: def.properties.next.$ref === reference.$ref,
         };
       };
       expect(readsOf("value")).toEqual({

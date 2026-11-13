@@ -320,7 +320,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.crossrefs[].fid",
       "result.crossrefs[].commentCount",
       "result.index[].fid",
-      "result.index[].createdBy",
+      "result.index[].createdBy.kind",
       "result.mentionable[].addComment",
       // The unsigned caller retires: `agentName` is required on every verb, and the display-name mirrors that path filled go with it.
       "result.myName",
@@ -330,7 +330,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.topics[].addComment",
       "result.topics[].crossrefs",
       "result.topics[].links",
-      "result.topics[].createdBy",
+      "result.topics[].createdBy.kind",
       "result.index[].topic",
       "result.crossrefs[].title",
       "result.topics[].mention",
@@ -459,21 +459,21 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       // closed enum widening to `string` is a type widening the proof
       // admits).
       "argument.mentionable",
-      "result.createdBy",
-      "result.referencedBy[].createdBy",
+      "result.createdBy.kind",
+      "result.referencedBy[].createdBy.kind",
       // The paths from here on are recorded in
       // `docs/history/pattern-compat-every-issue-paths.md`, which names the
       // recorded change each one comes from.
       "result.addComment.agentName",
       "result.addLink.agentName",
-      "result.bodyUpdatedBy",
+      "result.bodyUpdatedBy.kind",
       "result.comments[].authorName",
       "result.comments[].author.kind",
       "result.linkKindDraft",
       "result.links[].addedBy.kind",
       "result.links[].kind",
       "result.setBody.agentName",
-      "result.titleUpdatedBy",
+      "result.titleUpdatedBy.kind",
     ],
     reason:
       "Three accepted breaks on one pattern: the reference-graph rebuild on " +
@@ -719,12 +719,12 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "20260904T063417Z-pWfbKiYw-7bd7xpC",
       "20260905T003604Z-uX940wR7R4lVwuOt",
     ],
-    // The one spelling seen from the two roles a contract has: an optional
-    // property carries no default, so the demand's defaults move, and the
-    // published row stops requiring the name. Stable cell metadata lets the
-    // proof identify the incompatible type at `shortName`.
+    // The one spelling seen from the published side: an optional property
+    // carries no default, so the published row stops requiring the name. The
+    // demand's side is no break: a stored name holding `undefined` is read
+    // through the optional demand as absent, which the proof admits at a
+    // property the reader does not require.
     paths: [
-      "argument.items[].shortName",
       "result.index[].shortName",
       "result.items[].shortName",
     ],
@@ -2552,7 +2552,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "20260920T171659Z-3vmp5U6KQQHIKzya",
       "20261004T000822Z-RG9CkXhT9Y8zMON8",
     ],
-    paths: ["result.recommendation.result"],
+    paths: ["result.recommendation.result.picks[].book"],
     reason:
       "a pick is the recommended book inline with an optional `basedOn` link, where the recorded result required a `book` link to a finished book",
     record: "docs/history/book-recommendations-picks-break.md",
@@ -2564,7 +2564,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "20260922T074703Z-x2D--ODNVd-Doeie",
       "20261004T000822Z-Uae2gNquN1m1hysE",
     ],
-    paths: ["result.recommendation.result"],
+    paths: ["result.recommendation.result.picks[].book"],
     reason:
       "a pick is the recommended book inline with an optional `basedOn` link, where the recorded result required a `book` link to a finished book",
     record: "docs/history/book-recommendations-picks-break.md",

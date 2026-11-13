@@ -1296,6 +1296,53 @@ function additionalPropertiesOf(schema: SchemaObject): JSONSchema {
 }
 
 /**
+ * `schema`, the schema of an object property its holder does not require,
+ * without an `undefined` alternative, as an `anyOf` arm or a `type` list
+ * member. `undefined` is a value, and a property holding it is present
+ * (`docs/specs/json_schema.md`), but a reader whose schema leaves the
+ * alternative out reads such a property as absent, with no error, and a
+ * reader of a property it does not require already handles its absence. So
+ * the alternative is left out of both sides of the proof: a candidate that
+ * stops admitting it narrows nothing such a reader can act on, and one that
+ * comes to admit it promises nothing less. A property whose only alternative
+ * is `undefined` holds no value its reader can see, and reads as `false`; one
+ * with a single other alternative reads as that alternative. Beside `asCell`,
+ * the alternatives describe the cell's value, which may be `undefined`, and
+ * the schema is returned as written.
+ */
+function withoutUndefinedAlternative(schema: JSONSchema): JSONSchema {
+  if (!isObjectNotArray(schema) || schema.asCell !== undefined) return schema;
+  if (schema.type === "undefined") return false;
+  if (Array.isArray(schema.type) && schema.type.includes("undefined")) {
+    const types = schema.type.filter((type) => type !== "undefined");
+    if (types.length === 0) return false;
+    return { ...schema, type: types.length === 1 ? types[0]! : types };
+  }
+  if (Array.isArray(schema.anyOf)) {
+    const alternatives = schema.anyOf.filter((alternative) =>
+      !isObjectNotArray(alternative) || alternative.type !== "undefined" ||
+      Object.keys(alternative).some((key) =>
+        key !== "type" && !DESCRIPTIVE_ANNOTATION_KEYS.has(key)
+      )
+    );
+    if (alternatives.length === schema.anyOf.length) return schema;
+    if (alternatives.length === 0) return false;
+    // One alternative left is the property's schema itself, read with the
+    // node's other keywords where they do not overlap it.
+    const { anyOf: _, ...rest } = schema;
+    const [only] = alternatives;
+    if (
+      alternatives.length === 1 && isObjectNotArray(only) &&
+      Object.keys(rest).every((key) => !Object.hasOwn(only, key))
+    ) {
+      return { ...rest, ...only };
+    }
+    return { ...schema, anyOf: alternatives };
+  }
+  return schema;
+}
+
+/**
  * Helper for {@link schemaSubsetIssues}, which proves an object's named fields,
  * its pattern properties, and its additional properties.
  */
@@ -1630,7 +1677,15 @@ function objectSubsetIssues(
   for (const property of Object.keys(previousProperties)) {
     if (failed.has(property) || removed.has(property)) continue;
     const propertyPath = `${path}.${property}`;
-    const sourceDirect = sourceProperties[property];
+    // The target is the schema the stored value is read through: the
+    // candidate's for an argument, the previous contract's for a result. At
+    // a property it does not require, an `undefined` alternative is outside
+    // the proof; at one it requires, a present `undefined` is no absence the
+    // reader handles, so the alternative is compared as any other.
+    const readsAsPresent = targetRequired.has(property);
+    const sourceDirect = readsAsPresent
+      ? sourceProperties[property]
+      : withoutUndefinedAlternative(sourceProperties[property]);
     const sourceContracts = [
       sourceDirect,
       ...matchingPatternPropertySchemas(source.patternProperties, property),
@@ -1643,7 +1698,9 @@ function objectSubsetIssues(
     if (Object.hasOwn(targetProperties, property)) {
       const directIssues = schemaSubsetIssues(
         sourceDirect,
-        targetProperties[property],
+        readsAsPresent
+          ? targetProperties[property]
+          : withoutUndefinedAlternative(targetProperties[property]),
         propertyPath,
         context.resultPropertyNames === undefined ? context : {
           ...context,
