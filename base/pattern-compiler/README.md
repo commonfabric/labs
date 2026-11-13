@@ -117,6 +117,7 @@ cargo run --release -- types path/to/module.tsx
 cargo run --release -- corpus ../../patterns
 cargo run --release -- corpus ../../patterns --json
 cargo run --release -- corpus ../../patterns --files
+cargo run --release -- corpus ../../patterns --diagnostics
 ```
 
 `check` takes the modules of one program: an import between two of them is

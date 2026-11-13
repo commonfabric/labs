@@ -16,9 +16,10 @@ commands:
   check <file>...
       Check the given modules as one program and print their diagnostics.
       With --hints, print hints as well.
-  corpus <patterns directory> [--json] [--files]
+  corpus <patterns directory> [--json] [--files] [--diagnostics]
       Check the pattern corpus and print the report. With --json, print the
       report as JSON. With --files, print the corpus's file list instead.
+      With --diagnostics, print every error and warning instead.
   bodies <file>...
       Print the bodies of the given modules as JSON.
   types <file>...
@@ -176,6 +177,19 @@ fn corpus_report(root: &str, flags: &[&str]) -> std::io::Result<bool> {
         .map(|file| file.text.matches('\n').count())
         .sum();
     let analysis = analyze(&files);
+    if flags.contains(&"--diagnostics") {
+        for diagnostic in analysis
+            .modules
+            .iter()
+            .flat_map(|module| &module.diagnostics)
+            .filter(|diagnostic| {
+                diagnostic.severity != pattern_compiler::diagnostics::Severity::Hint
+            })
+        {
+            println!("{diagnostic}");
+        }
+        return Ok(parsed(&analysis));
+    }
     let report = Report::build(&analysis, lines);
     if flags.contains(&"--json") {
         println!(
