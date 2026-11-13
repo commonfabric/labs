@@ -2396,22 +2396,26 @@ when the authored type declares a field the body does not read.
 
 ### 11.1 Method
 
-The corpus is the one `language-subset.md` §11.1 defines: every `.ts` and
-`.tsx` file under the six pattern categories that imports `commonfabric`,
-or is reachable by relative import from a file that does, without test
-files, the test fixture `patterns/system/fabrichat/room-test-fixture.ts`,
-the iframe guest scripts, and the Topics command-line tools. A throwaway
-script, which is not part of the repository, parsed each file with the
-TypeScript parser, found the bodies of §1.2, applied the promotion criterion
-of `language-subset.md` §6.1 by syntax, and looked in each remaining body
-for the constructs of §5.2, §6, and §7.
-
-By that rule the script counts 423 modules and about 119,000 lines.
-`language-subset.md` counts 403 modules by the same rule. The difference of
-20 modules was not traced. The counts of definitions agree with
-`builtin-inventory.md` to within a few: 620 `handler` definitions, 73
+The corpus, and the way a construct is counted, are those of
+`language-subset.md` §11.1: one script that uses the TypeScript parser and
+no type checker, over 425 modules. It holds 621 `handler` definitions, 73
 `lift` definitions, 1,493 `computed` calls, 249 `action` calls, and 188
-inline event handlers.
+inline event handlers. That script finds the bodies of §1.2 and applies the
+promotion criterion of `language-subset.md` §6.1 by syntax, which gives
+the counts of §11.2: 1,966 bodies.
+
+A second throwaway script, also not part of the repository, looked in each
+body for the constructs of §5.2, §6, and §7. The counts of §11.3, the split
+of §11.4, and the rows of §11.5 are its results. It read 1,962 of the 1,966
+bodies. The four it did not read are the handler `writeProfile` in
+`patterns/system/fabrichat/room-test-fixture.ts` and three `computed`
+bodies that are not promoted because each holds an inline event handler:
+one each in `patterns/dev/gideon-tests/computed-array-repro.tsx`,
+`patterns/examples/fair-share/main.tsx`, and
+`patterns/examples/reading-list/reading-list.tsx`. Those tables are
+therefore over 1,962 bodies, and for the four bodies they are not
+reproduced. The one exception is the `handler` row of §11.5, which includes
+`writeProfile`, read by hand.
 
 **The numbers are syntactic.** The script has no type information. It
 marks a local as holding an input by following property accesses,
@@ -2436,21 +2440,21 @@ the construct.
 
 | Kind | Corpus | FabriChat |
 | --- | --- | --- |
-| `handler` | 620 | 25 |
+| `handler` | 621 | 25 |
 | `action` | 249 | 10 |
 | Inline event handler | 188 | 0 |
 | `lift` | 73 | 0 |
-| `computed`, not promoted | 121 of 1,493 | 3 of 112 |
+| `computed`, not promoted | 124 of 1,493 | 3 of 112 |
 | Authored function | 711 | 91 |
-| **Bodies and summaries analyzed** | **1,962** | **129** |
+| **Bodies and summaries analyzed** | **1,966** | **129** |
 
-The other 1,372 `computed` calls (92%) meet the promotion criterion by
-syntax and are not bodies. `language-subset.md` §11.5 reports 1,351 of
-1,466 on its count of the corpus, the same share.
+The other 1,369 `computed` calls (92%) meet the promotion criterion by
+syntax and are not bodies (`language-subset.md` §11.5).
 
 ### 11.3 Where the analysis gives up
 
-Bodies that contain each cause, directly and through helpers, of 1,962:
+Bodies that contain each cause, directly and through helpers, of the 1,962
+that the second script read (§11.1):
 
 | Cause | Sites | Directly | Through helpers | By kind, through helpers |
 | --- | --- | --- | --- | --- |
@@ -2501,8 +2505,10 @@ a subtree.
 
 ### 11.4 Reads through handles
 
-The script counted every `get()` and `sample()` with no argument: 1,201
-reads in 649 bodies.
+The bodies hold 1,205 calls of `get()` or `sample()` with no argument, in
+650 bodies. The table splits the 1,201 reads, in 649 bodies, of the 1,962
+bodies that the second script read (§11.1). The 4 reads in the three
+`computed` bodies it did not read are not reproduced.
 
 | Reads | Count | Share |
 | --- | --- | --- |
@@ -2530,16 +2536,17 @@ is too broad to predict (§6.2).
 
 | Kind | Bodies that write through a handle | Every target at a static path | Write sites | Sites at a static path |
 | --- | --- | --- | --- | --- |
-| `handler` | 567 | 519 | 1,005 | 940 |
+| `handler`, with `writeProfile` read by hand | 568 | 520 | 1,006 | 941 |
 | `action` | 233 | 226 | 450 | 436 |
 | Inline event handler | 185 | 183 | 219 | 217 |
 | `computed`, not promoted | 23 | 23 | 32 | 32 |
 | `lift` | 1 | 0 | 2 | 0 |
 | Authored function | 51 | 28 | 115 | 83 |
 
-Of the 194 computations (73 `lift` bodies and 121 `computed` bodies that
-are not promoted), 33 write anything beside their result in their own
-text.
+The corpus has 197 computations: 73 `lift` bodies and 124 `computed`
+bodies that are not promoted. The second script read 194 of them (§11.1),
+and 33 of those write anything beside their result in their own text. For
+the other three `computed` bodies the count is not reproduced.
 
 - **23 `computed` bodies write through a captured cell, and every one of
   their 32 write sites is a `set` at a static path.** Under §6.3 all 23
