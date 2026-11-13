@@ -161,6 +161,42 @@ describe("settleAbandonedRequest", () => {
     });
   }
 
+  it("commits a user-scoped ending without an identity as a completion on a serving runtime without server execution", async () => {
+    // No serving loop runs without server execution, so nothing seals into a
+    // wave, and the ending commits as it does on a client.
+
+    const servingManager = StorageManager.emulate({ as: signer });
+    const serving = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: servingManager,
+      servingPosture: true,
+      experimental: { serverExecution: false },
+    });
+    try {
+      let ending: IExtendedStorageTransaction | undefined;
+      await settleAbandonedRequest(
+        serving,
+        {
+          builtinId: "streamData",
+          effectKey: "streamData:unserved",
+          identity: undefined,
+          scope: "user",
+          attributeToBuiltin: true,
+        },
+        (tx) => {
+          ending = tx;
+        },
+      );
+
+      expect(ending).toBeDefined();
+      expect(effectCompletionKeyOf(ending!)).toBe("streamData:unserved");
+      expect(reported).toEqual([]);
+    } finally {
+      await serving.dispose({ closeStorage: false });
+      await servingManager.close();
+    }
+  });
+
   describe("under the serving posture", () => {
     let servingManager: ReturnType<typeof StorageManager.emulate>;
     let serving: Runtime;

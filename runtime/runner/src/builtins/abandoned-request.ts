@@ -61,13 +61,13 @@ export type AbandonedRequest = {
  *
  * How it commits depends on where it runs:
  *
- * - Under the serving posture, when the run that staged the request has
- *   sealed, the serving loop holds that run's identity carriage, and the ending
- *   commits as a completion of the request under it, like any other
- *   completion (serving-loop.md §4).
- * - Under the serving posture, when that run never sealed, there is no
- *   carriage. The ending is stamped as a `bookkeeping` run and seals into the
- *   open wave (serving-loop.md §3d). The cells it overwrites may still hold an
+ * - Under the serving posture, with server execution on, when the run that
+ *   staged the request has sealed, the serving loop holds that run's identity
+ *   carriage, and the ending commits as a completion of the request under it,
+ *   like any other completion (serving-loop.md §4).
+ * - Under the serving posture, with server execution on, when that run never
+ *   sealed, there is no carriage. The ending is stamped as a `bookkeeping` run
+ *   and seals into the open wave (serving-loop.md §3d). The cells it overwrites may still hold an
  *   earlier run's writes, pending in that wave; sealing behind them is what
  *   keeps the ending in front of them, in the serving runtime's view as well as
  *   in the store. Without an identity the wave resolves the cells against the
@@ -75,8 +75,8 @@ export type AbandonedRequest = {
  *   and the ending is written. For a user- or session-scoped cell there is no
  *   instance the run could be said to have written, so the ending is not
  *   written, and the cells keep what the refused run left.
- * - Everywhere else, it commits on its own, marked as a completion of the
- *   request.
+ * - Everywhere else, a serving runtime without server execution included, it
+ *   commits on its own, marked as a completion of the request.
  */
 export async function settleAbandonedRequest(
   runtime: Runtime,
@@ -84,10 +84,13 @@ export async function settleAbandonedRequest(
   write: (tx: IExtendedStorageTransaction) => void,
 ): Promise<void> {
   const { builtinId, effectKey, identity } = request;
-  const sealed = runtime.servingPosture &&
-    runtime.hasServedEffectCarriage(effectKey);
+  // A serving loop runs only with server execution on; a serving runtime
+  // without it commits every transaction to the store, as a client does.
+  const served = runtime.servingPosture &&
+    runtime.experimental.serverExecution === true;
+  const sealed = served && runtime.hasServedEffectCarriage(effectKey);
   if (
-    runtime.servingPosture && !sealed && identity === undefined &&
+    served && !sealed && identity === undefined &&
     request.scope !== "space"
   ) {
     console.error(
@@ -111,7 +114,7 @@ export async function settleAbandonedRequest(
     // Set here as well as by the stamp, which leaves it unset where no serving
     // loop has installed a stamper.
     if (identity !== undefined) tx.tx.scopeKeyIdentity = identity;
-    if (runtime.servingPosture && !sealed) {
+    if (served && !sealed) {
       runtime.stampServerRun(tx, {
         actionId: `${builtinId}/abandoned/${effectKey}`,
         kind: "bookkeeping",
