@@ -1187,8 +1187,7 @@ export class PiecesController<T = unknown> {
 
     try {
       // Get the argument data - this is where references to other pieces are stored
-      const argumentCell = await this.getArgument(piece);
-      if (!argumentCell) return result;
+      const argumentCell = await this.#syncedArgument(piece);
 
       // Get the raw argument value
       let argumentValue;
@@ -1475,33 +1474,41 @@ export class PiecesController<T = unknown> {
       return false;
     };
 
-    // Check each piece to see if it references this piece
-    for (const otherPiece of registeredPieces) {
-      if (otherPiece.resolveAsCell().equals(resolvedPiece)) continue; // Skip self
+    const others = registeredPieces.filter((otherPiece) =>
+      !otherPiece.resolveAsCell().equals(resolvedPiece)
+    );
+    // The arguments, where references are commonly found, are synced all at
+    // once, and a piece whose argument cannot be read is passed over alone.
+    const argumentCells = await Promise.all(
+      others.map((otherPiece) =>
+        this.#syncedArgument(otherPiece).catch(() => undefined)
+      ),
+    );
 
+    // Check each piece to see if it references this piece
+    for (const [index, otherPiece] of others.entries()) {
       if (checkRefersToTarget(otherPiece, otherPiece, new Set(), 0)) {
         addReadingPiece(otherPiece);
         continue; // Skip additional checks for this piece
       }
 
-      // Also specifically check the argument data where references are commonly found
+      // Also specifically check the argument data
+      const argumentCell = argumentCells[index];
+      if (argumentCell === undefined) continue;
       try {
-        const argumentCell = await this.getArgument(otherPiece);
-        if (argumentCell) {
-          const argumentValue = argumentCell.getRaw();
+        const argumentValue = argumentCell.getRaw();
 
-          // Check if the argument references our target
-          if (argumentValue && typeof argumentValue === "object") {
-            if (
-              checkRefersToTarget(
-                argumentValue,
-                argumentCell,
-                new Set(),
-                0,
-              )
-            ) {
-              addReadingPiece(otherPiece);
-            }
+        // Check if the argument references our target
+        if (argumentValue && typeof argumentValue === "object") {
+          if (
+            checkRefersToTarget(
+              argumentValue,
+              argumentCell,
+              new Set(),
+              0,
+            )
+          ) {
+            addReadingPiece(otherPiece);
           }
         }
       } catch (_) {
@@ -1531,7 +1538,11 @@ export class PiecesController<T = unknown> {
   }
 
   /**
-   * Returns the `Cell` with argument content, loading the pattern if needed.
+   * Returns the cell over `piece`'s argument, as the argument link in the
+   * piece's metadata names it. This reads that metadata synchronously, so
+   * the piece's own document must be loaded, and it does not sync the
+   * argument: a caller that reads the argument's value syncs or pulls the
+   * returned cell first.
    */
   getArgument<T = unknown>(
     piece: Cell<unknown | T>,
@@ -3514,6 +3525,21 @@ export class PiecesController<T = unknown> {
       );
     }
     return root;
+  }
+
+  /**
+   * Helper for `getReadingFrom()` and `getReadByPieces()`, which read
+   * `piece`'s argument raw: its argument cell, synced. The replica need not
+   * hold either the piece's own document, whose metadata names the argument,
+   * or the argument's, whether because nothing here loaded them or because a
+   * release pass dropped them (`docs/features/document-release.md`), so both
+   * are synced before they are read.
+   */
+  async #syncedArgument(piece: Cell<unknown>): Promise<Cell<unknown>> {
+    await piece.asSchema(undefined).sync();
+    const argument = this.getArgument(piece);
+    await argument.sync();
+    return argument;
   }
 }
 
