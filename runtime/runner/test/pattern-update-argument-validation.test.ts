@@ -1757,6 +1757,61 @@ describe("pattern update validates the stored argument", () => {
     });
   });
 
+  it("leaves the label stored at a carried link's slot off what the update writes", async () => {
+    // A slot holding a link is read as the link alone, a wiring read: the
+    // update only writes that link again, to the same slot, and the label
+    // stored at the slot stays there.
+
+    const counter = rt.getCell<Record<string, unknown>>(
+      space,
+      "carried-link-counter",
+    );
+    const { error: writeError } = await rt.editWithRetry((tx) => {
+      counter.withTx(tx).set({ count: 3 });
+    });
+    expect(writeError?.message).toBeUndefined();
+    const { cell } = await setupVintage(
+      openArgument("v1"),
+      { tally: counter },
+      "carried-labeled-link",
+    );
+    const argument = getMetaLink(cell, "argument")!;
+    const seed = rt.edit();
+    writeSeedEnvelopeDoc(seed, space);
+    seedStoredEnvelope(seed, {
+      space,
+      scope: "space",
+      id: argument.id,
+      path: ["cfc"],
+    }, {
+      version: 1,
+      schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+      labelMap: {
+        version: 1,
+        // The slot's own restriction, as a probe of which reference sits
+        // there reads it.
+        entries: [{
+          path: ["tally"],
+          label: { confidentiality: [personalSpaceOf(space)] },
+          origin: "declared",
+          observes: "followRef",
+        }],
+      },
+    } as never);
+    expect((await seed.commit().settled).error).toBeUndefined();
+
+    const { error } = await rollForward(cell, openArgument("v2"));
+
+    expect(error).toBeUndefined();
+    await cell.pull();
+    expect(cell.getRaw()).toEqual({ marker: "v2" });
+    expect(await confidentialityOf(cell.getAsNormalizedFullLink().id))
+      .not.toContainEqual(personalSpaceOf(space));
+    expect(await confidentialityOf(argument.id)).toContainEqual(
+      personalSpaceOf(space),
+    );
+  });
+
   it("carries the label of content the update carries over onto what it writes", async () => {
     // A slot holding content is read as content when the update stages it
     // again, so its label joins what the update writes; only a slot holding
