@@ -785,7 +785,7 @@ export async function runBuildBinaries(
       // V8's default limit of about 4 GB is less than a serving worker can need
       // on a busy board. The limit applies to each isolate, so a worker gets
       // its own.
-      "--v8-flags=--max-old-space-size=8192",
+      "--v8-flags=--max-old-space-size=16384",
     ],
     binaries: requestedBinaries(args),
     cachedOnly: Deno.env.get("CF_DENO_DEPENDENCIES_INSTALLED") === "1",
