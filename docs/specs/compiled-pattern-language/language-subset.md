@@ -2202,37 +2202,48 @@ construct found and the replacement given here.
 
 ### 11.1 Method
 
-The measurements below come from throwaway scripts that parse each file with
-the TypeScript parser and classify every node by tier, using the syntactic
-tier boundaries of §1. The scripts are not part of the repository. Counts
-are of syntax nodes, and the file counts are of files containing at least
-one.
+The measurements below, and the corpus figures of `builtin-inventory.md`,
+come from one throwaway script, which is not part of the repository. It
+parses each file with the TypeScript parser and uses no type checker. It
+recognizes a builder or a built-in by its import from `commonfabric`, not
+by its name, and assigns every node to its nearest enclosing body, using
+the syntactic tier boundaries of §1: the function argument of `pattern`,
+`handler`, `lift`, `computed`, or `action`, an inline JSX event handler, or
+a function at module scope. Counts are of syntax nodes, and "n (m)" is n
+nodes in m files.
 
-**The corpus** is every `.ts` and `.tsx` file under the six pattern
-categories (`patterns/system`, `product`, `apps`, `examples`, `showcase`,
-`dev`) that imports `commonfabric`, or is reachable by relative import from
-a file that does, excluding test files and the test fixture
-`patterns/system/fabrichat/room-test-fixture.ts`. That is 403 modules and
-about 114,000 lines. It holds 475 `pattern` definitions, 593 `handler` and
-45 `lift` definitions at module scope, 1,466 `computed` calls, 246 `action`
-calls, and 188 inline JSX event handlers.
+**The corpus** is every file under `patterns/` that `deno task cfcheck`
+compiles, with the modules those files import by relative path: each `.ts`
+and `.tsx` file that is not a test file, is not under `integration/`,
+`tools/`, or `apps/topics/tools/`, and is not an iframe guest script. Nine
+modules of the iframe examples that only guest scripts import are left out.
+That is 425 modules and about 118,000 lines. It holds 507 `pattern`
+definitions, 621 `handler` and 73 `lift` definitions at module scope, 1,493
+`computed` calls, 249 `action` calls, and 188 inline JSX event handlers.
 
-Files that are not patterns were left out: the iframe guest scripts
-(`guest.ts`), which are browser programs, the Topics command-line tools
-under `patterns/apps/topics/tools/`, and plain unit tests. Pattern test
-files (`*.test.tsx`) are patterns too; they were measured separately and are
-reported only where they differ.
+Three sets were measured apart and are reported only where a row names
+them. Pattern test files (`*.test.tsx`) are patterns too: 281 modules. The
+integration fixtures under `patterns/integration/fixtures/` are patterns
+that browser tests deploy: 64 modules. The nine iframe modules, the guest
+scripts, the Topics command-line tools, and plain unit tests are not
+patterns.
 
 **FabriChat** is the eight source modules of `patterns/system/fabrichat/`,
-without its tests and its test fixture: about 9,000 lines, 14 patterns, 24
-handlers bound at 19 sites in pattern bodies, 111 `computed` calls, and 10
-actions. Its design is in [`docs/specs/fabrichat/`](../fabrichat/README.md).
+without its tests and its test fixture: about 9,100 lines, 14 patterns, 25
+handlers, 50 applications of a handler to its state, all in pattern bodies,
+112 `computed` calls, and 10 actions. Of the 50 applications, 47 are of the
+25 handlers and 3 are of two handlers imported from other modules. Its
+design is in [`docs/specs/fabrichat/`](../fabrichat/README.md).
 
 Two limits of the method matter. Receiver types were not resolved, so method
 counts are by name. And nothing was type-checked, so the measurements show
 which constructs the subset would refuse, not whether the remaining code
 passes the subset's type rules. The second is the prototype of the
 overview's stage 2.
+
+Two marks separate the figures the script did not measure. "Needs types"
+is on a figure that depends on a type the script does not have. "Not
+reproduced" is on a figure the script did not confirm.
 
 ### 11.2 Constructs with no occurrence
 
@@ -2246,8 +2257,8 @@ function body; and a stateful regular expression at module scope.
 
 The current transformer and the module verifier already refuse several of
 these, which is why they are absent. The tier-R statement rules are in the
-same position: the 452 block-bodied pattern callbacks consist of 2,819
-`const` statements, 452 final `return` statements, 15 expression statements,
+same position: the 472 block-bodied pattern callbacks consist of 2,919
+`const` statements, 472 final `return` statements, 20 expression statements,
 and 2 local type declarations, and nothing else.
 
 ### 11.3 What the subset refuses in the corpus
@@ -2256,27 +2267,28 @@ and 2 local type declarations, and nothing else.
 | --- | --- | --- | --- |
 | Function overloads | 5 (2) | `patterns/system/fabrichat/manager.tsx` (4), `patterns/system/private-inbox/private-inbox.tsx` (1); 34 more in 29 pattern test files | Rewrite. Every occurrence is one idiom: a one-line function whose overload signature re-types a cell (`function inboxOf(pointer: Cell<A>): Cell<B>`) over an implementation that returns its argument as `unknown`. It exists because the double cast is refused. [§12.4](#124-replace-the-re-typing-overloads-with-declared-types) gives the two rewrites, which need no new construct |
 | Mapped type | 1 (1) | `patterns/apps/topics/topic.tsx` | Rewrite as `Readonly<Record<K, number \| undefined>>` |
-| `ifElse`, `when`, `str` | 155 (53); 1 (1); 1 (1). No `unless` | for example `patterns/system/self/self.tsx`, `patterns/system/loom/main.tsx`; `when` in `patterns/system/omnibox-fab/omnibox-fab.tsx`; `str` in `patterns/apps/deep-research/deep-research.tsx` | Accepted for the interim with a warning (§4.4.3). The rewrite is mechanical: all 157 are direct calls with the plain arguments |
+| `ifElse`, `when`, `str` | 156 (54); 1 (1); 1 (1). No `unless` | for example `patterns/system/self/self.tsx`, `patterns/system/loom/main.tsx`; `when` in `patterns/system/omnibox-fab/omnibox-fab.tsx`; `str` in `patterns/apps/deep-research/deep-research.tsx` | Accepted for the interim with a warning (§4.4.3). The rewrite is mechanical: all 158 are direct calls. That each has the plain arguments is not reproduced |
 | `patternTool` | 31 (12) | pattern bodies | Rewrite to a pattern closure (§4.4.3) |
-| A collection method called on a cell handle in a handler | 2, as `builtin-inventory.md` counts them | handlers | Rewrite by one of the two corrections of §4.7: an inline `pattern(...)` that is instantiated, or `cell.get().map(...)` (`cell:collection-method-in-function`) |
-| A per-element body over plain values that binds a handler without using the index | 6 (6) where the collection is a module-scope constant or a call result, for example `patterns/apps/weekly-calendar/event.tsx` and `patterns/examples/group-chat-room/group-chat-room.tsx`. A further 95 callbacks over stored lists bind a handler without the index; which of those have a primitive element type needs the type checker. No callback in the corpus declares a state cell | handler bindings in `map` callbacks | Rewrite: use the index, or make the elements cells (`collection:shared-element-state`) |
-| `any` in a type | 126 (see below) | for example `patterns/system/link-tool/link-tool.tsx`, `patterns/system/knowledge-graph/knowledge-graph.tsx` | Rewrite with the explicit forms of §7.8 |
+| A collection method called on a cell handle in a handler | 2, as `builtin-inventory.md` counts them (needs types) | handlers | Rewrite by one of the two corrections of §4.7: an inline `pattern(...)` that is instantiated, or `cell.get().map(...)` (`cell:collection-method-in-function`) |
+| A per-element body over plain values that binds a handler without using the index | 7 (7) where the collection is a module-scope constant or a call result, for example `patterns/apps/weekly-calendar/event.tsx` and `patterns/examples/group-chat-room/group-chat-room.tsx`. A further 95 callbacks, over a local constant or a parameter, bind a handler without the index; which of those collections are stored lists, and which have a primitive element type, needs types. No callback in the corpus declares a state cell | handler bindings in `map` callbacks | Rewrite: use the index, or make the elements cells (`collection:shared-element-state`) |
+| `any` in a type | 132 (see below) | for example `patterns/system/link-tool/link-tool.tsx`, `patterns/system/knowledge-graph/knowledge-graph.tsx` | Rewrite with the explicit forms of §7.8 |
 | `as any` | 52 (21) | for example `patterns/system/notes/daily-journal.tsx`, `patterns/system/agent-queue/agent-queue.tsx` | Remove: the rules of §7.5, §7.6, and §8.6 make most of them unnecessary |
 | `new` of a non-cell constructor in the pattern body | 4 (3) | `new Date(value)` in `patterns/system/notes/voice-note.tsx` and `patterns/apps/activity-log/activity-log.tsx`; `new Uint8Array` in a catalog story | Rewrite: wrap in `computed(() => ...)` |
 | `void name;` in the pattern body | 2 (2) | `patterns/system/home/home-ben.tsx`, `patterns/apps/store-mapper/store-mapper.tsx` | Rewrite: delete the statement |
+| A `console.log(...)` statement in the pattern body | 1 (1) | `patterns/dev/test/data-model-test.tsx` | Rewrite: delete the statement, which is not one of the recorded calls of §4.2 |
 | Ambient authority | 2 (2) | `globalThis.prompt` in `patterns/showcase/scrabble/scrabble.tsx`; `Promise.resolve().then(...)` in a `patterns/dev/` test fixture | Refused with no rewrite. Both rely on something the sandbox is meant not to offer |
 | Reflection | 1 (1) | `Object.getOwnPropertySymbols` in a `patterns/dev/` test | Refused. `Object.getPrototypeOf` (4 uses) and `Object.create(null)` (2) were added to §9.3 instead, because the plain-object test they implement has no other spelling |
 
-`any` occurs 178 times in 48 modules, 126 times in a type and 52 times as
+`any` occurs 184 times in 49 modules, 132 times in a type and 52 times as
 the target of a cast. By what it stands for:
 
 | Use | Occurrences | Explicit form (§7.8) |
 | --- | --- | --- |
-| A reference to another piece or a cell of unknown content: a property typed `any` (33), `Writable<any>` (27), `any[]` and `Array<any>` (6), `AnyCell<any>` (1) | 67 | `unknown`, `Cell<unknown>` |
-| A parameter over such a value: a lambda parameter in `map`, `find`, `findIndex`, `filter`, `some` (21), a function parameter (10) | 31 | Follows from typing the collection or the parameter |
+| A reference to another piece or a cell of unknown content: a property typed `any` (34), `Writable<any>` (29), `any[]` and `Array<any>` (6), `AnyCell<any>` (1) | 70 | `unknown`, `Cell<unknown>` |
+| A parameter over such a value: a lambda parameter in `map`, `find`, `findIndex`, `filter`, `some` (21), a function parameter (11) | 32 | Follows from typing the collection or the parameter |
 | An open record: `Record<string, any>` (12), an index signature (2) | 14 | `Record<string, unknown>`, `JSONValue` |
 | A type argument of a builder: `handler<any, State>`, `pattern<Input, any>` | 9 | `unknown`; a declared result |
-| Other type positions | 5 | Case by case |
+| Other type positions | 7 | Case by case |
 | Cast: `(error as any).message` and similar member reads | 23 | Narrowing with `instanceof Error` |
 | Cast: a pattern instance or a cell passed where a view of it is declared: an object property (7), `navigateTo` (5), `push` (5), and 5 others | 22 | No cast: instance-to-view assignability (§7.5), labels outside assignability (§8.6) |
 | Cast: a JSX attribute value (5), `Object.keys(x as any)` (2) | 7 | Type the value |
@@ -2302,59 +2314,68 @@ counts shown or because the project owner asked for them.
 | Construct | Occurrences (files) | Decision |
 | --- | --- | --- |
 | Inline event-handler arrows in JSX built inside a function body | 8 (5), for example `patterns/apps/habit-tracker/habit-tracker.tsx` | Accepted as a handler binding (§5.2) |
-| `action` created inside a function body | 1 (1) | Accepted, the same way |
-| A module-scope handler applied to its state inside a `computed` | 16 (3): `patterns/apps/base/person.tsx`, `patterns/apps/base/family-member.tsx`, `patterns/apps/store-mapper/store-mapper.tsx` | Accepted as a handler binding (§5.2). The same form occurs 672 times in pattern bodies |
+| A module-scope handler applied to its state inside a `computed` | 16 (3): `patterns/apps/base/person.tsx`, `patterns/apps/base/family-member.tsx`, `patterns/apps/store-mapper/store-mapper.tsx` | Accepted as a handler binding (§5.2). The same form occurs 764 times in pattern bodies |
 | `reduce` | 29 calls, all in function bodies today: 20 with an expression-bodied callback and an initial value, 2 expression-bodied without one, 7 block-bodied | A reactive construct in tier R for the first 20 (§4.4.1). The other 9 stay tier-F code, where `reduce` is ordinary JavaScript |
-| `some`, `every`, `find`, `findIndex` with a callback | 135, 14, 65, and 78 calls, all but 2 `some` in function bodies today | Reactive constructs in tier R (§4.4.1), and ordinary methods in tier F |
-| The index parameter of a `map` callback in a pattern body | Used in 44 of 303 callbacks (28 files); none in FabriChat | Accepted, with the hint `collection:index-keyed` |
-| `as T` casts other than `as const` and `as any` | 240 (57) | Accepted as assertions between related types (§7.7) |
-| Non-null `!` | 56 (33) | Accepted |
-| `typeof name` in a type, outside label arguments | 125 (43) | Accepted (§7.1). Common forms are `Default<typeof EMPTY>`, `ReturnType<typeof handler>`, and `(typeof LIST)[number]` |
+| `some`, `every`, `find`, `findIndex` with a callback | 136, 14, 70, and 78 calls, all but 2 `some` in function bodies today | Reactive constructs in tier R (§4.4.1), and ordinary methods in tier F |
+| The index parameter of a `map` callback in a pattern body | Used in 44 of 326 callbacks (28 files); none in FabriChat | Accepted, with the hint `collection:index-keyed` |
+| `as T` casts other than `as const` and `as any` | 243 (58) | Accepted as assertions between related types (§7.7) |
+| Non-null `!` | 57 (34) | Accepted |
+| `typeof name` in a type, outside label arguments | 127 (45) | Accepted (§7.1). Common forms are `Default<typeof EMPTY>`, `ReturnType<typeof handler>`, and `(typeof LIST)[number]` |
 | Indexed access types | 29 (13) | Accepted, eager |
 | Type predicates | 22 (13) | Accepted, trusted |
-| Generic functions; generic aliases and interfaces | 25 (14); 27 (14) | Accepted (§7.3) |
-| Intersection types | 17 (13) | Accepted, eager (§7.4) |
+| Generic functions; generic aliases and interfaces | 24 (13); 28 (15) | Accepted (§7.3) |
+| Intersection types | 25 (19) | Accepted, eager (§7.4) |
 | Function types and method signatures in types | 16 (10); 20 (7) | Accepted as code types. Most describe a structural "cell-like" parameter of a helper |
 | `Parameters<typeof P>[0]`, `ReturnType<typeof h>` | 12 (2); 5 (1) | Accepted on factory types (§7.2) |
-| `Pick`, `Omit`, `Partial`, `Required`, `Readonly`, `Exclude`, `NonNullable` | 46 in total | Native operators |
+| `Pick`, `Omit`, `Partial`, `Required`, `Readonly`, `Exclude`, `NonNullable` | 47 in total | Native operators |
 | Module-scope constant computed by a call or an immediately invoked function | 7 (6) | Accepted as frozen data (§3.2), for example the board tables of `patterns/showcase/scrabble/scrabble.tsx` |
 | Default exports and default imports of patterns | 187 imports (52) | In the grammar (§3.1) |
 | Module-scope `new Set(...)` | 2 (2) | Accepted, typed `ReadonlySet` |
 | Module-scope regular expressions | 9 (6), none stateful | Accepted |
-| `try`, `throw`, `instanceof Error` in function bodies | 29 (16); 145 (20); 8 (6) | Accepted (§5.1) |
+| `try`, `throw`, `instanceof` on an error constructor in function bodies | 31 (18); 149 (23); 8 (6) | Accepted (§5.1) |
 | `delete` in a function body | 1 (1) | Accepted on local values |
-| Expression statements in the pattern body | 15 (13): 11 `computed` calls kept for their writes, 2 calls of `lift` results, 2 `void` | The first 13 are accepted (§4.2) |
-| `.get()` in the pattern body | 66 (23) | Accepted on cells at every site (§4.4) |
-| Dynamic keys in the pattern body | 17 (7) | Accepted (§4.4) |
-| Handler or lift callback passed by local name | 6 (2) | Accepted (§3.2) |
+| Expression statements in the pattern body | 20 (18): 15 `computed` calls kept for their writes, 2 calls of `lift` results, 2 `void`, 1 `console.log` | The first 17 are accepted (§4.2) |
+| `.get()` in the pattern body | 68 (24) | Accepted on cells at every site (§4.4) |
+| Dynamic keys in the pattern body | 18 (8) | Accepted (§4.4) |
+| Handler or lift callback passed by local name | 6 (2), not reproduced | Accepted (§3.2) |
 | Tagged templates in function bodies | 7 (4), all `debugStr` | Accepted as calls |
 
 ### 11.5 Promotion
 
-Of the 1,466 `computed` calls, 11 are in statement position and exist for
-their writes. Applying the criterion of §6.1 by syntax to all 1,466:
+Of the 1,493 `computed` calls, 15 are in statement position and exist for
+their writes. Applying the criterion of §6.1 by syntax to all 1,493:
 
 | Outcome | Count | Share |
 | --- | --- | --- |
-| Promoted: expression or `const`-then-`return` body, structural operations only | 996 | 68% |
-| Promoted: the same, with at least one call of an authored function | 242 | 17% |
-| Promoted through the guard form (`if (...) return ...;` chains) | 113 | 8% |
-| Not promoted: a statement body (loops, `let`, expression statements, `try`) | 81 | 6% |
-| Not promoted: an expression with a disqualifying construct | 34 | 2% |
+| Promoted: expression or `const`-then-`return` body, structural operations only | 1,039 | 70% |
+| Promoted: the same, with at least one call of an authored function | 222 | 15% |
+| Promoted through the guard form (`if (...) return ...;` chains) | 108 | 7% |
+| Not promoted: in statement position | 15 | 1% |
+| Not promoted: a statement body (loops, `let`, expression statements, `try`) | 62 | 4% |
+| Not promoted: an expression with a disqualifying construct | 47 | 3% |
 
-So 1,351 of 1,466 (92%) are promoted. Without the guard form the figure is
+So 1,369 of 1,493 (92%) are promoted. Without the guard form the figure is
 84%, which is the reason the criterion includes it. Counting `reduce`,
 `findIndex`, `some`, `every`, and `find` as reactive constructs accounts for
-56 of the promoted calls; with those five in the function tier the figure
-was 88%.
+54 of the promoted calls; with those five in the function tier the figure
+is 88%.
 
-The 34 disqualified expressions fail on: the mutating `sort` or `reverse` on
-a copy (14); a collection callback with a statement body (9); `new Set` or
-`new Date` (9); and a function created outside a callback position, a write
-through a cell, or a `reduce` callback that is not an expression.
+The 47 disqualified expressions fail, at the first such construct in each,
+on: the mutating `sort` or `reverse` on a copy (14); a handler binding (10:
+a named handler applied to its state in 7, an inline event handler in 3);
+`new Set` or `new Date` (9); a collection method given a function by name,
+as in `filter(Boolean)` (4); a pattern instantiation (2); a collection
+callback with a statement body (2); the comma operator (2); and a function
+passed to `replace` or `toSorted`, a `reduce` callback that is not an
+expression, or a call the script could not classify (4).
 
-In FabriChat, 102 of 111 (92%) are promoted by the expression and
-`const`-then-`return` forms and 4 more by the guard form, 106 in all.
+The 10 that fail on a handler binding fail on nothing else. Without the
+clause of condition 5 that refuses a binding
+([§13](#13-open-questions), question 15), 1,379 of 1,493 are promoted.
+
+In FabriChat, 105 of 112 (94%) are promoted by the expression and
+`const`-then-`return` forms and 4 more by the guard form, 109 in all. No
+`computed` in FabriChat binds a handler.
 
 The count is syntactic. It treats a method as pure by its name, and it does
 not check condition 5 of §6.1 against types, so the type-checked figure will
@@ -2362,16 +2383,16 @@ differ slightly.
 
 ### 11.6 Labels
 
-The corpus writes 197 references to label aliases outside `AnyOf` and
-`PolicyOf`. `TrustedActionWrite` (55) and `WriteAuthorizedBy` (40) dominate,
-then `Confidential` (30) and `AddIntegrity` (15).
+The corpus writes 208 references to label aliases outside `AnyOf` and
+`PolicyOf`. `TrustedActionWrite` (57) and `WriteAuthorizedBy` (45) dominate,
+then `Confidential` (32) and `AddIntegrity` (15).
 
-- 220 label arguments are `typeof` binding references, 56 are tuples written
-  in place, 12 name an alias, 12 are object literal types, and 8 are string
+- 231 label arguments are `typeof` binding references, 58 are tuples written
+  in place, 12 name an alias, 12 are object literal types, and 10 are string
   literals. All are in the constant language of §8.5.
-- 41 payloads are themselves label aliases (nesting), 10 are arrays, and 1
+- 42 payloads are themselves label aliases (nesting), 11 are arrays, and 1
   is a union with `undefined`. None is an intersection.
-- 10 generic aliases wrap a label alias, such as `OwnerPrivate<T>` in
+- 12 generic aliases wrap a label alias, such as `OwnerPrivate<T>` in
   `patterns/system/private-inbox/private-inbox.tsx`.
 - 4 casts target a labeled type, in
   `patterns/examples/cfc-spec-gallery/main.tsx` and
@@ -2386,17 +2407,22 @@ ones the brand encoding has to defend against, not ones patterns rely on.
 ### 11.7 Standard library
 
 The members listed in §9 without a † each occur in the corpus. The most
-frequent in function bodies, by name, are `trim` (346), `map` (338),
-`filter` (296), `push` (292), `some` (134), `Date.now` (105), `slice`
-(100), `join` (99), `findIndex` (77), `includes` (71), `toLowerCase` (71),
-`find` (63), `sort` (49), `Math.floor` (49), `split` (44), `has` (42),
-`toString` (41), and `Array.from` (41). `new Error` occurs 114 times,
-`new Date` 54, `new Set` 44, and `new Map` 42.
+frequent in function bodies, by name, are `trim` (401), `map` (365),
+`filter` (314), `push` (297), `some` (135), `Date.now` (112), `slice`
+(108), `join` (108), `includes` (84), `findIndex` (78), `toLowerCase` (76),
+`find` (70), `console.log` (59), `Math.floor` (51), `has` (51), `sort`
+(49), `split` (44), `toString` (42), `flatMap` (40), `replace` (40), and
+`Array.from` (39). `new Error` occurs 118 times, `new Date` 59, `new Set`
+54, and `new Map` 45.
 
-`Date.now` (105 occurrences in 45 files) and `Math.random` (31 in 23) are
-the two ambient reads. The script did not determine how many sit in a
-handler, where they are allowed, and how many in a `lift` or a `computed`,
-where the sandbox refuses them at run time today.
+`Date.now` (112 occurrences in 48 files) and `Math.random` (33 in 25) are
+the two ambient reads. Of the `Date.now` calls, 84 are in a handler, an
+action, or an inline event handler, where they are allowed, 1 is in a
+`computed`, where the sandbox refuses it at run time today, and 27 are in
+authored functions. Of the `Math.random` calls, 15 are in a handler or an
+action, 1 is in a `computed`, and 17 are in authored functions. None of
+either is in a `lift`. The script does not follow an authored function to
+the bodies that call it.
 
 ## 12. Recommended syntax changes
 
@@ -2407,9 +2433,9 @@ say otherwise.
 
 `ifElse`, `when`, `unless`, and the `str` tag are removed (§4.4.3). The
 conditional operators and the template literal are the only spellings. The
-corpus has 155 `ifElse` calls in 53 files, one `when`, and one `str`,
-against 439 conditional expressions in pattern bodies; all 157 are rewritten
-mechanically.
+corpus has 156 `ifElse` calls in 54 files, one `when`, and one `str`,
+against 466 conditional expressions (`?:`) in pattern bodies; all 158 are
+rewritten mechanically.
 
 ```tsx
 // Shown for illustration only.

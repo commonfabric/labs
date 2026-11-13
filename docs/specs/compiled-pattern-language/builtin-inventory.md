@@ -690,7 +690,7 @@ the element to the cause.
   (`assertNotInActionExecution`), and it has no content-addressed identity.
   In the corpus the method form is not used on a reactive receiver in a
   pattern body. Authors write `reduce` on a plain array inside a function
-  body: 8 times in a `computed`, once in a `lift`, and 42 times in helper
+  body: 8 times in a `computed`, once in a `lift`, and 20 times in helper
   functions.
 - **New design:** class A. `reduce` is a reactive construct, and its
   callback is restricted to an expression over the accumulator, the element,
@@ -777,7 +777,7 @@ the element to the cause.
 - **Does:** returns the first element for which the predicate is truthy, or
   `undefined`.
 - **Corpus:** with a callback, in source files, 17 times in a `computed`
-  (12 files), and 25 times in handlers and actions.
+  (12 files), and 26 times in handlers and actions.
 - **Execution:** as part of the enclosing body.
 - **New design:** class A, a reactive construct.
 - **Label rule:**
@@ -790,8 +790,9 @@ the element to the cause.
   - The *choice* of element depends on the membership and order of the
     input and on the predicate's result for the prefix that ends at the
     match, or for every element when the result is `undefined`.
-  - `findLast` and `findLastIndex` stay in the function tier: the corpus
-    uses them three times, outside any pattern.
+  - `findLast` and `findLastIndex` stay in the function tier: no pattern
+    module uses them. The Topics command-line tools, which are not patterns,
+    use them three times.
 
 ### `anchorsOf`
 
@@ -2069,39 +2070,41 @@ The reasons, from the implementation:
 
 ### Method
 
-A script parsed every TypeScript file under `patterns/` and attributed each
-call to its innermost enclosing body. A body is the function argument of a
-call to `handler`, `action`, `lift`, or `computed` imported from
-`commonfabric`, or an inline JSX event handler. Calls in plain helper
-functions were followed through a call graph over same-file and relative
-imports. The analysis resolves names and does not run the type checker.
-Fifteen sampled instantiation sites were all classified correctly. The corpus
-holds 467 pattern source files, 486 test files, and 89 integration fixtures.
-The source files contain 619 handler bodies, 249 action bodies, 72 lift
-bodies, 1,499 computed bodies, and 193 inline JSX event handlers. Counts
-below are for source files unless a row says otherwise.
+The corpus, and the way a construct is counted, are those of
+`language-subset.md` §11.1: one script that uses the TypeScript parser and
+no type checker, over 425 modules. Each call is attributed to its innermost
+enclosing body. A body is the function argument of a call to `handler`,
+`action`, `lift`, or `computed` imported from `commonfabric`, or an inline
+JSX event handler. A call in a plain helper function is counted apart. The
+script does not follow a helper to the bodies that call it, so a figure
+given as "through helpers" is not reproduced by the measurement. A figure
+marked "needs types" depends on a type the script does not have. The corpus
+contains 621 handler bodies, 249 action bodies, 73 lift bodies, 1,493
+computed bodies, and 188 inline JSX event handlers. The 281 pattern-test
+modules and the 64 integration-fixture modules are counted apart. Counts
+below are for the corpus unless a row says otherwise.
 
 ### What the corpus calls inside bodies
 
 | Call | Sites | Enclosing bodies | Legal under the rule | Rewrite |
 | --- | --- | --- | --- | --- |
 | Pattern instantiation `P({...})` | 121 | 64 in one computed, 28 in handlers, 28 in actions, 1 in an inline JSX handler | Yes | None in syntax; see below for timing and for the computed |
-| `P.inSpace(space, options)({...})` | 3 (plus 21 in fixtures and 8 in tests) | handlers | Yes | None in syntax; a cross-space request |
+| `P.inSpace(space, options)({...})` | 3 (plus 19 in fixtures and 8 in tests) | handlers | Yes | None in syntax; a cross-space request |
 | `P.asScope("user")({...})` | 2 | computeds | Yes | None. The instance belongs to the computed; see below |
 | `navigateTo(target)` | 48 | 33 in handlers, 13 in actions, 2 in inline JSX handlers | Yes, an effect request | None |
 | Handler binding `h({ state })` | 16 | computeds | Yes | None |
-| `new Writable(value)` | 3, plus 4 through helpers | handlers | Yes | None |
-| `Cell.for(cause)`, `Writable.for(cause)` | 9, plus 1 through a helper | lifts | Yes | None |
-| `.map(fn)` on a cell | 2 found | handlers | No (`cell:collection-method-in-function`) | Either wrap the expression in an inline `pattern(...)` and instantiate it, which keeps it reactive, or read first, `cell.get().map(...)`, which maps the values synchronously |
+| `new Writable(value)` | 3, plus 4 through helpers (not reproduced) | handlers | Yes | None |
+| `Cell.for(cause)`, `Writable.for(cause)` | 9, plus 1 through a helper (not reproduced) | lifts | Yes | None |
+| `.map(fn)` on a cell | 2 found (needs types) | handlers | No (`cell:collection-method-in-function`) | Either wrap the expression in an inline `pattern(...)` and instantiate it, which keeps it reactive, or read first, `cell.get().map(...)`, which maps the values synchronously |
 | `grantSpaceAccess`, `revokeSpaceAccess` | 4 | handlers | Yes, effect requests | None |
 | `nameBlob` | 2 | handlers | Yes, an effect request | None |
-| Context reads | `equals` 108, `spaceOf` 28, `profileOwnerOf` 11, `eventKey` 9, `resultOwnerOf` 9, `spaceAccess` 6, `linksOf` 6, `currentPrincipal` 5, `principalOf` 3, `spaceDeleted` 3, `spaceMembers` 1 | handlers, lifts, computeds | Yes, context reads | None |
+| Context reads | `equals` 109, `spaceOf` 28, `profileOwnerOf` 12, `eventKey` 9, `resultOwnerOf` 9, `spaceAccess` 6, `linksOf` 6, `currentPrincipal` 5, `principalOf` 3, `spaceDeleted` 3, `spaceMembers` 1 | handlers, lifts, computeds | Yes, context reads | None |
 
 Everything else is absent. No body in the sources, tests, or fixtures calls
 `computed`, `lift`, `handler`, `action`, `ifElse`, `when`, `unless`, `str`,
 an inline `pattern(...)`, `wish`, any of the fetch family, any language-model
 built-in, `sqliteDatabase`, `compileAndRun`, or `cellFromUrl`. Those built-ins
-are requested in pattern scope: `wish` 121 times, `ifElse` 155, the fetch
+are requested in pattern scope: `wish` 111 times, `ifElse` 156, the fetch
 family 15, the language-model built-ins 35, `patternTool` 31. The corpus
 never uses `unless`, `llm`, `streamData`, `byRef`, `uiVariant`, or `cell`.
 
@@ -2125,7 +2128,8 @@ none calls a factory received as a value; one integration fixture does
 (`patterns/integration/fixtures/owner-private-inbox/main.tsx`).
 
 What happens to the instance, for the 62 sites outside the one large
-computed:
+computed. The split is by reading, and the measurement reproduces the total
+only:
 
 | Use of the result | Sites | Representative path |
 | --- | --- | --- |
@@ -2201,14 +2205,14 @@ The rewrites, by case:
   or an index into a record of sub-patterns, where a statically resolved
   callee is compiled into the surrounding instance and has no result cell
   of its own.
-- **No lift returns a pattern.** The 72 lift bodies in the sources contain
+- **No lift returns a pattern.** The 73 lift bodies in the sources contain
   no instantiation.
 
 ### Handler bindings in computeds
 
 Sixteen sites bind a handler inside JSX that a computed returns:
 `patterns/apps/base/person.tsx` (7), `patterns/apps/base/family-member.tsx`
-(6), and `patterns/apps/store-mapper/store-mapper.tsx` (3). Eleven more
+(6), and `patterns/apps/store-mapper/store-mapper.tsx` (3). Eight more
 inline JSX event handlers sit inside a computed. All are legal and need no
 rewrite. A `computed` that binds a handler is not promoted
 (`language-subset.md` §6.1), so each of these bindings is one made while
@@ -2256,17 +2260,19 @@ binding holds, with no synthesized pattern.
 
 FabriChat (`patterns/system/fabrichat/`, specified in
 [`docs/specs/fabrichat/`](../fabrichat/README.md)) is the overview's
-reference pattern. Its sources define 14 patterns and 24 module-level
-handlers bound at 49 sites, and call `computed` 111 times, `action` 10
-times, and `wish` 8 times. They use no `lift`, `ifElse`, `when`, `unless`,
-`str`, fetch, language-model built-in, SQLite built-in, or `navigateTo`.
+reference pattern. Its sources define 14 patterns and 25 module-level
+handlers. They apply a handler to its state at 50 sites, 47 of them for
+those 25 and 3 for two handlers imported from other modules, and call
+`computed` 112 times, `action` 10 times, and `wish` 8 times. They use no
+`lift`, `ifElse`, `when`, `unless`, `str`, fetch, language-model built-in,
+SQLite built-in, or `navigateTo`.
 
 - **Per-row instances are already reactive constructs.** The message rows
   are `facts.main.map((message) => <FabriChatMessageRow ... />)` in the
   pattern body of `patterns/system/fabrichat/room.tsx`, and the per-user room
   lookups are `savedRooms.map((entry) => FoundRoom.asScope("user")({...}))`
   in `patterns/system/fabrichat/manager.tsx`. Neither is in a function body.
-  Under the compiled design these 15 `map` calls are where the saving lands:
+  Under the compiled design these 16 `map` calls are where the saving lands:
   a row is a cone keyed by element identity, with no sub-pattern instance.
   The `asScope` modifier inside a `map` body is a modifier of the anonymous
   sub-pattern: it sets the scope of the state the sub-pattern declares.
@@ -2853,8 +2859,8 @@ captures of an inline pattern, private to it, so a model that is given the
 closure as a tool supplies the public input only. Pattern factory values
 also give `compileAndRun` an ordinary reading: compilation returns a pattern
 factory value, and the author instantiates it. The corpus has no source
-site that calls or binds a received factory in a body, so nothing has to be
-rewritten.
+site that calls or binds a received factory in a body (by reading; it needs
+types to confirm), so nothing has to be rewritten.
 
 ### Binding a handler received by reference
 
