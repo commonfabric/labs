@@ -184,11 +184,13 @@ transaction the verb seals joins that cycle's wave. The request settles once the
 wave has committed and the verb's `confirm` step — a read of the durable state
 the verb was to leave — has passed. A seal's acceptance is not durability, since the wave commit can
 withdraw a contribution, and this is what keeps a receipt from naming a piece
-that is not there. The verb is held to the `bookkeeping` contributions sealed
-while it runs, the kind its own writes are stamped. The space's served pieces
-keep deriving and handling events into the same wave meanwhile, and the wave
-commit loses no write of theirs when it drops a superseded derivation, which
-runs again, or requeues a handler run, which replays; neither fails the verb. A
+that is not there. The verb is held only to its own contributions: those
+sealed from within its run and stamped `bookkeeping`, the kind its writes carry.
+The space's served pieces keep deriving and handling events into the same wave
+meanwhile, and other work of the loop, such as a root ensure its deadline left
+running, can seal into it too. The wave commit can withdraw a derivation's
+write, superseded by a client's commit, and requeue a handler run. Neither fails
+the verb: the derivation runs again and the handler run replays. A
 space that parks before a queued verb runs rejects it, and the host queues the
 verb once more on the successor tenure.
 
@@ -451,7 +453,8 @@ shape. Moving it is its own change; the served operations and the
 - `runtime/runner/test/executor-lifecycle-verbs.test.ts` — the queue: a verb
   activates a sessionless space and resolves once its write is durable, a failed
   run or a failed confirmation rejects and is counted, a served piece's
-  derivation that seals during the verb and is dropped does not fail it while
+  derivation that seals during the verb and is dropped does not fail it, nor
+  does a dropped bookkeeping write of work that started before the verb, while
   a verb's own write that is dropped does, queued verbs run in order, and an
   inactive server refuses; and a direct commit is durable when its
   `commit().settled` resolves, refuses a document that moved past its stamp, and lets a

@@ -7,6 +7,7 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
+import { defer } from "@commonfabric/async/defer";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { getLogger } from "@commonfabric/logger";
@@ -293,6 +294,59 @@ describe("ExecutorHost.runLifecycleVerb", () => {
     );
     await marker.sync();
     expect(marker.get()).toEqual({ marker: "beside-a-derivation" });
+  });
+
+  it("holds a verb to the writes of its own run, not to the loop's bookkeeping that started before it and seals while it runs", async () => {
+    // Work of the loop that outlives the step that started it, as a root
+    // ensure its deadline cut does, can seal a bookkeeping write while a
+    // later verb runs. The wave commit drops that write here, superseded by
+    // a client's commit; the verb's own write commits.
+    host = newHost();
+    let serving: Runtime | undefined;
+    await host.runLifecycleVerb(space, {
+      name: "first",
+      run: async (runtime) => {
+        serving = runtime;
+        await writeMarker(runtime, "first");
+        return "first";
+      },
+    });
+    const client = clientRuntime();
+    const other = client.getCell<{ by: string }>(
+      space,
+      "outside-bookkeeping",
+      undefined,
+    );
+    await other.sync();
+
+    const go = defer<void>();
+    const outside = (async () => {
+      await go.promise;
+      const runtime = serving!;
+      return await runtime.editWithRetry((tx) => {
+        runtime.stampServerRun(tx, {
+          actionId: "test-loop/outside-bookkeeping",
+          kind: "bookkeeping",
+        });
+        runtime.getCell<{ by: string }>(space, "outside-bookkeeping", undefined)
+          .withTx(tx).set({ by: "the loop" });
+      });
+    })();
+
+    const receipt = await host.runLifecycleVerb(space, {
+      name: "mark-beside-outside-work",
+      run: async (runtime) => {
+        go.resolve();
+        expect((await outside).error).toBeUndefined();
+        const tx = client.edit();
+        other.withTx(tx).set({ by: "the client" });
+        expect((await tx.commit().settled).error).toBeUndefined();
+        await writeMarker(runtime, "beside-outside-work");
+        return "marked";
+      },
+    });
+    expect(receipt).toBe("marked");
+    expect(host.stats().lifecycleVerbs).toEqual({ runs: 2, failures: 0 });
   });
 
   it("rejects a verb whose own write the wave commit drops, superseded by a client's commit while it ran", async () => {

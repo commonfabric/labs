@@ -182,6 +182,7 @@ import {
   waveRunContextOf,
   type WaveWriteAnnotation,
 } from "./wave.ts";
+import { servingLocalStore } from "./serving-context.ts";
 import { DemandMirror } from "./demand-mirror.ts";
 import { engineReadThrough } from "./engine-read-through.ts";
 import { EngineWaveCommitSink } from "./engine-wave-sink.ts";
@@ -1465,15 +1466,24 @@ export class SpaceServer implements TransactionSealDestination {
    * contribution, by wave and index. Seals are chained one at a time, so
    * the count right after a seal resolves names that seal's contribution.
    *
-   * Only `bookkeeping` transactions are recorded
-   * ({@link #lifecycleVerbHolding}). A verb's own writes are stamped that
-   * way, and the served pieces of the space keep deriving and handling
-   * events while it runs, into the same wave. A derivation or a handler run
-   * that seals meanwhile is not the verb's, and the wave commit loses none
-   * of its writes: it drops a superseded derivation, which runs again, and
-   * requeues a handler run, which replays (`WaveRunKind`).
+   * Only the verb's own transactions are recorded
+   * ({@link #lifecycleVerbHolding}): those stamped `bookkeeping`, the kind
+   * its writes carry, and sealed from within its run. The served pieces of
+   * the space keep deriving and handling events into the same wave while it
+   * runs, and other work of the loop can seal into it too. A derivation the
+   * wave commit drops runs again and a handler run it requeues replays
+   * (`WaveRunKind`), so neither fails the verb, even when the verb's run
+   * started it.
    */
   #runningLifecycleVerb: RunningLifecycleVerb | undefined;
+
+  /**
+   * The verb whose run the code sealing now belongs to, bound around the
+   * verb's run and inherited by everything it awaits. Work that started
+   * outside the run, such as a root ensure its deadline left running
+   * detached, carries none, though it seals while a verb runs.
+   */
+  readonly #lifecycleVerbContext = servingLocalStore<RunningLifecycleVerb>();
 
   /**
    * Transactions stamped `directCommit` (runtime.ts `ServerRunInfo`),
@@ -3424,6 +3434,7 @@ export class SpaceServer implements TransactionSealDestination {
         `space replica for ${this.#options.space} does not support sealing`,
       );
     }
+    const verb = this.#lifecycleVerbHolding(tx);
     this.#recordLifecycleVerbWrites(tx);
     // A transaction that names a principal's instance — a served source
     // change to a requester's piece held at a user or session scope —
@@ -3599,7 +3610,7 @@ export class SpaceServer implements TransactionSealDestination {
       // (wave.ts).
       this.#currentWave?.noteOwnCommit(committedSeq, written);
     }
-    this.#runningLifecycleVerb?.directCommitSeqs.push(committedSeq);
+    verb?.directCommitSeqs.push(committedSeq);
     bumpDerivedCommits(this.#options.stats, String(this.#options.space));
     // The commit entered the store on the engine plane: report it so push
     // fires and the feed carries it, as the wave commit step does for its
@@ -7205,7 +7216,10 @@ export class SpaceServer implements TransactionSealDestination {
       };
       this.#runningLifecycleVerb = running;
       try {
-        const ok = await queued.verb.run(runtime);
+        const ok = await this.#lifecycleVerbContext.run(
+          running,
+          () => queued.verb.run(runtime),
+        );
         const demandRoots = queued.verb.demandRoots?.(ok) ?? [];
         for (const id of demandRoots) {
           staged.set(toDirtyKey(id, "space"), { id, scopeKey: "space" });
@@ -7266,15 +7280,18 @@ export class SpaceServer implements TransactionSealDestination {
 
   /**
    * The running verb a transaction sealed now is held to: the verb running,
-   * when the transaction is stamped `bookkeeping`, the kind a verb's own
-   * writes carry, and `undefined` for any other kind or outside a verb's
-   * run (see {@link #runningLifecycleVerb}).
+   * when the transaction is stamped `bookkeeping` and is sealed from within
+   * that verb's run, and `undefined` otherwise (see
+   * {@link #runningLifecycleVerb}).
    */
   #lifecycleVerbHolding(
     tx: IExtendedStorageTransaction,
   ): RunningLifecycleVerb | undefined {
-    return waveRunContextOf(tx)?.kind === "bookkeeping"
-      ? this.#runningLifecycleVerb
+    const running = this.#runningLifecycleVerb;
+    return running !== undefined &&
+        this.#lifecycleVerbContext.getStore() === running &&
+        waveRunContextOf(tx)?.kind === "bookkeeping"
+      ? running
       : undefined;
   }
 
