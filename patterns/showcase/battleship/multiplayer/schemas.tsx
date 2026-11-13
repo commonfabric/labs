@@ -27,7 +27,7 @@ export type {
   Ship,
   ShipType,
   SquareState,
-} from "../shared/index.tsx";
+} from "../shared/types.tsx";
 
 // ============ RE-EXPORT SHARED CONSTANTS ============
 export {
@@ -38,7 +38,7 @@ export {
   ROWS,
   SHIP_NAMES,
   SHIP_SIZES,
-} from "../shared/index.tsx";
+} from "../shared/constants.tsx";
 
 // ============ RE-EXPORT SHARED GAME LOGIC ============
 export {
@@ -51,12 +51,12 @@ export {
   getRandomColor,
   getShipCoordinates,
   isShipSunk,
-} from "../shared/index.tsx";
+} from "../shared/game-logic.tsx";
 
 // ============ MULTIPLAYER-SPECIFIC TYPES ============
 
-import type { Ship, SquareState } from "../shared/index.tsx";
-import { createEmptyGrid } from "../shared/index.tsx";
+import type { Ship, SquareState } from "../shared/types.tsx";
+import { createEmptyGrid } from "../shared/game-logic.tsx";
 
 // ============ PLAYER DATA ============
 

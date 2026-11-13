@@ -21,17 +21,36 @@
  *   before joining), so pre-join isolation is asserted via `myName` and via
  *   Alice's rack surviving Bob's join.
  *
- * Join order is deterministic (markers): Alice first, then Bob.
+ * Join order is deterministic (markers): Alice first, then Bob. After both
+ * join, Bob puts a tile on the center square without submitting, Alice scores
+ * a word across that square, and Bob's submission then hands his tile back.
+ *
+ * The bag is fixed, so Alice draws the first seven tiles and Bob the next
+ * seven, and each places tiles by id.
  */
 import { action, assert, multiUserTest, pattern, TESTS } from "commonfabric";
-import Scrabble, { type GameOutput } from "./scrabble.tsx";
+import Scrabble, { type GameOutput, type Letter } from "./scrabble.tsx";
+
+const tile = (char: string, id: string): Letter => ({
+  char,
+  points: 1,
+  id,
+  isBlank: false,
+});
+
+const TEST_BAG: Letter[] = [
+  ..."ATESRNO".split("").map((char, i) => tile(char, `alice-${i}`)),
+  ..."LINEUPS".split("").map((char, i) => tile(char, `bob-${i}`)),
+  tile("E", "spare-0"),
+  tile("D", "spare-1"),
+];
 
 interface Setup {
   game: GameOutput;
 }
 
 export const setup = pattern(() => ({
-  game: Scrabble({ gameName: "Multi-user Scrabble" }),
+  game: Scrabble({ gameName: "Multi-user Scrabble", bag: TEST_BAG }),
 }));
 
 export const alice = pattern<{ setup: Setup }>(({ setup }) => {
@@ -58,6 +77,7 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
   );
   // Two players drew 7 tiles each from the one shared bag.
   const assert_bag_consumed = assert(() => game.bagIndex === 14);
+  const assert_scored = assert(() => game.message === "Scored 4: AT: 4");
 
   return {
     [TESTS]: [
@@ -67,6 +87,18 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
       { await: "bob-joined" },
       { assertion: assert_sees_both },
       { assertion: assert_bag_consumed },
+      { await: "bob-placed" },
+      {
+        action: game.placeTile,
+        event: { letterId: "alice-0", row: 7, col: 7 },
+      },
+      {
+        action: game.placeTile,
+        event: { letterId: "alice-1", row: 7, col: 8 },
+      },
+      { action: game.submitTurn },
+      { assertion: assert_scored },
+      { label: "alice-scored" },
     ],
   };
 });
@@ -102,6 +134,16 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
     game.players?.[1]?.name === "Bob"
   );
 
+  // Bob's tile on the center square, which Alice's word took, comes back to
+  // his rack; the one above it stays on the board.
+  const assert_conflict_returned = assert(() =>
+    game.message === "Some squares were taken. Conflicting tiles returned." &&
+    (game.placed ?? []).length === 1 &&
+    game.placed?.[0]?.letter.id === "bob-1" &&
+    (game.rack ?? []).length === 6 &&
+    game.rack?.[5]?.id === "bob-0"
+  );
+
   return {
     [TESTS]: [
       { await: "alice-joined" },
@@ -112,6 +154,18 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
       { action: action_join },
       { assertion: assert_joined },
       { label: "bob-joined" },
+      {
+        action: game.placeTile,
+        event: { letterId: "bob-0", row: 7, col: 7 },
+      },
+      {
+        action: game.placeTile,
+        event: { letterId: "bob-1", row: 6, col: 7 },
+      },
+      { label: "bob-placed" },
+      { await: "alice-scored" },
+      { action: game.submitTurn },
+      { assertion: assert_conflict_returned },
     ],
   };
 });

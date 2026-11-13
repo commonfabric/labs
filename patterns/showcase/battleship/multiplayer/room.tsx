@@ -66,6 +66,14 @@ const gridContainerStyle = {
   padding: "2px",
 };
 
+/**
+ * The player whose card shows them active: the one whose turn it is, or once
+ * the match is over the winner, who fired last. Nobody is until both fleets
+ * are deployed.
+ */
+const activePlayer = (gs: GameState): 1 | 2 | null =>
+  gs.phase === "waiting" ? null : gs.currentTurn;
+
 // =============================================================================
 // PATTERN
 // =============================================================================
@@ -113,30 +121,11 @@ const BattleshipRoom = pattern<RoomInput, RoomOutput>(
         : player2.get();
       if (!opponentData) return;
 
-      // Debug: Log the raw ships data to understand reactive proxy behavior
-      console.log("[fireShot] opponentData:", opponentData);
-      console.log("[fireShot] opponentData.ships:", opponentData.ships);
-      console.log(
-        "[fireShot] ships array length:",
-        opponentData.ships?.length,
-      );
-      if (opponentData.ships && opponentData.ships.length > 0) {
-        console.log("[fireShot] first ship element:", opponentData.ships[0]);
-        console.log(
-          "[fireShot] first ship type:",
-          opponentData.ships[0]?.type,
-        );
-      }
-
       // Get ships array, filtering out any undefined elements (can happen with reactive proxies)
       const ships = (opponentData.ships || []).filter(
         (s): s is NonNullable<typeof s> => s != null && s.type != null,
       );
-      console.log("[fireShot] filtered ships length:", ships.length);
-      if (ships.length === 0) {
-        console.warn("[fireShot] No valid ships found in opponent data");
-        return;
-      }
+      if (ships.length === 0) return;
 
       // Check if hit
       const hitShip = findShipAt(ships, { row, col });
@@ -146,7 +135,7 @@ const BattleshipRoom = pattern<RoomInput, RoomOutput>(
         r.map((c, ci) =>
           ri === row && ci === col ? (hitShip ? "hit" : "miss") : c
         )
-      ) as SquareState[][];
+      );
 
       const updatedShotsData: ShotsState = {
         ...currentShots,
@@ -170,11 +159,7 @@ const BattleshipRoom = pattern<RoomInput, RoomOutput>(
         message = `${coordStr}: Miss.`;
       }
 
-      // Check for win (use filtered ships array)
-      const allSunk = ships.length > 0 &&
-        areAllShipsSunk(ships, newTargetShots);
-
-      if (allSunk) {
+      if (areAllShipsSunk(ships, newTargetShots)) {
         // Get winner's data directly
         const winnerData = playerNum === 1 ? player1.get() : player2.get();
         const winnerName = winnerData?.name || `Player ${playerNum}`;
@@ -252,8 +237,8 @@ const BattleshipRoom = pattern<RoomInput, RoomOutput>(
       const gs = gameState.get();
       const currentShots = shots.get();
 
-      // Guard against null state during hydration
-      if (!gs || !currentShots) {
+      // Guard against shots not yet written during hydration
+      if (!currentShots) {
         return [];
       }
 
@@ -304,9 +289,9 @@ const BattleshipRoom = pattern<RoomInput, RoomOutput>(
       return {
         color: p1?.color || "#3b82f6",
         name: p1?.name || "Player 1",
-        initials: getInitials(p1?.name || "P1"),
-        bgColor: gs?.currentTurn === 1 ? "#1e40af" : "#1e293b",
-        status: gs?.currentTurn === 1 ? "Active" : "Waiting",
+        initials: p1?.name ? getInitials(p1.name) : "P1",
+        bgColor: activePlayer(gs) === 1 ? "#1e40af" : "#1e293b",
+        status: activePlayer(gs) === 1 ? "Active" : "Waiting",
       };
     });
 
@@ -317,21 +302,22 @@ const BattleshipRoom = pattern<RoomInput, RoomOutput>(
       return {
         color: p2?.color || "#ef4444",
         name: p2?.name || "Player 2",
-        initials: getInitials(p2?.name || "P2"),
-        bgColor: gs?.currentTurn === 2 ? "#1e40af" : "#1e293b",
-        status: gs?.currentTurn === 2 ? "Active" : "Waiting",
+        initials: p2?.name ? getInitials(p2.name) : "P2",
+        bgColor: activePlayer(gs) === 2 ? "#1e40af" : "#1e293b",
+        status: activePlayer(gs) === 2 ? "Active" : "Waiting",
       };
     });
 
     // Consolidated status display data
     const statusDisplay = computed(() => {
       const gs = gameState.get();
-      if (!gs) {
+      // Nobody's turn until both fleets are deployed.
+      if (gs.phase === "waiting") {
         return {
           showTurnIndicator: "none",
           bgColor: "#1e293b",
-          message: "Loading...",
-          lastMessage: "",
+          message: "Waiting for an opponent to join...",
+          lastMessage: gs.lastMessage,
         };
       }
       const finished = gs.phase === "finished";
@@ -352,7 +338,7 @@ const BattleshipRoom = pattern<RoomInput, RoomOutput>(
           : (myTurn
             ? "Your turn - fire at the enemy fleet!"
             : "Waiting for opponent..."),
-        lastMessage: gs.lastMessage || "",
+        lastMessage: gs.lastMessage,
       };
     });
 

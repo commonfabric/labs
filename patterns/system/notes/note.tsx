@@ -8,6 +8,7 @@ import {
   FS,
   generateText,
   handler,
+  lift,
   NAME,
   navigateTo,
   pattern,
@@ -108,14 +109,11 @@ export interface NoteOutput extends NotePiece {
 
 // ===== Module-scope handlers (reused with different bindings) =====
 
-// Used in cf-code-editor - binds mentionable and pieceRegistry
+// Used in cf-code-editor - binds mentionable and pieceRegistry. The editor
+// stays where the person is typing, so its `navigate` is always false and the
+// new piece only joins the mentionables.
 const handleNewBacklink = handler<
-  {
-    detail: {
-      piece: Writable<MentionablePiece>;
-      navigate: boolean;
-    };
-  },
+  { detail: { piece: Writable<MentionablePiece> } },
   {
     mentionable: Writable<MentionablePiece[]>;
     pieceRegistry: Writable<MinimalPiece[]>;
@@ -123,12 +121,7 @@ const handleNewBacklink = handler<
 >(({ detail }, { mentionable, pieceRegistry }) => {
   // Register the piece so it appears in default-app.
   pieceRegistry.push(detail.piece);
-
-  if (detail.navigate) {
-    return navigateTo(detail.piece);
-  } else {
-    mentionable.push(detail.piece);
-  }
+  mentionable.push(detail.piece);
 });
 
 // Used in .map() over notebooks - binds different notebook each time
@@ -150,8 +143,9 @@ const handleBacklinkClick = handler<
 
 // ===== Utility functions =====
 
-// Grep sub-pattern for patternTool - filters content lines by query
-const grepPattern = pattern<
+// Grep sub-pattern for patternTool - filters content lines by query.
+// Exported, like the translate pattern below, so a pattern test can run it.
+export const grepPattern = pattern<
   { query: string; content: string },
   string[]
 >(({ query, content }) => {
@@ -161,7 +155,7 @@ const grepPattern = pattern<
 });
 
 // Translate sub-pattern for patternTool - translates content to specified language
-const translatePattern = pattern<
+export const translatePattern = pattern<
   { language: string; content: string },
   string | undefined
 >(({ language, content }) => {
@@ -176,6 +170,22 @@ const translatePattern = pattern<
     return genResult.result;
   });
 });
+
+/**
+ * Whether each resolution named a cell, once every one has answered. The
+ * resolved cell is read here as the `unknown` value it names, because that is
+ * what is absent when an address names nothing: a handle on the resolution's
+ * slot, which is what a reader typed with a cell gets, is present either way.
+ */
+const namedByResolutions = lift((
+  { resolutions }: {
+    resolutions: { pending?: boolean; cell?: unknown }[] | Default<[]>;
+  },
+): boolean[] | undefined =>
+  resolutions.some((r) => r?.pending !== false)
+    ? undefined
+    : resolutions.map((r) => r?.cell !== undefined)
+);
 
 // ===== Pattern =====
 
@@ -439,6 +449,9 @@ const Note = pattern<NoteInput, NoteOutput>(
     const pendingResolutions = pendingAddresses.map((address) =>
       cellFromUrl({ url: address })
     );
+    const pendingNamed = namedByResolutions({
+      resolutions: pendingResolutions,
+    });
 
     // Apply the staged edit once every address has an answer. Writing from a
     // computed is what lets the result of a resolution land in the cells that
@@ -448,27 +461,27 @@ const Note = pattern<NoteInput, NoteOutput>(
       if (body === null) return;
 
       const split = splitDefinitions(body);
+      const named = pendingNamed;
       const resolutions = pendingResolutions;
       // Read once, before anything is written: these are the addresses the
       // map held when the edit arrived, and what a definition is compared
       // against to decide whether it has been repointed.
       const before = referenceAddresses(references);
-      // An empty array passes `some`, and "not resolved yet" looks exactly
+      // An empty array is complete, and "not resolved yet" can look exactly
       // like "nothing to resolve" through it. The count is what tells them
       // apart, and applying the edit early would drop every mention in it.
-      if (resolutions.length !== split.definitions.length) return;
-      if (resolutions.some((r) => r?.pending !== false)) return;
+      if (named?.length !== split.definitions.length) return;
       const previous = references?.get() ?? {};
       const kept: { key: string; address: string }[] = [];
       const next: Record<string, unknown> = {};
 
       split.definitions.forEach((definition, index) => {
-        const destination = resolutions[index]?.cell;
-        if (!destination) {
+        if (!named[index]) {
           // Not a piece, so not a mention: the definition stays in the text.
           kept.push(definition);
           return;
         }
+        const destination = resolutions[index]?.cell;
         // A key whose destination is unchanged keeps whatever the user
         // decided about its label; one that has been repointed starts over,
         // so the label follows the piece it now names.

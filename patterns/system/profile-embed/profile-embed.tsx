@@ -100,7 +100,7 @@ const saveName = handler<
 });
 
 /** Amend the picture with the image `<cf-avatar-input>` hands on. */
-const savePicture = handler<
+export const savePicture = handler<
   SetProfilePictureEvent,
   { setPicture?: Stream<SetProfilePictureEvent> }
 >((event, state) => {

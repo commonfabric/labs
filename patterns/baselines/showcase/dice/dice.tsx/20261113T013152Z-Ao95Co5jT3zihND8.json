@@ -1,0 +1,54 @@
+{
+  "argumentSchema": {
+    "properties": {
+      "value": {
+        "default": 1,
+        "type": "number"
+      }
+    },
+    "required": [
+      "value"
+    ],
+    "type": "object"
+  },
+  "pattern": "showcase/dice/dice.tsx",
+  "resultSchema": {
+    "properties": {
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "roll": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "sides": {
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "something": {
+        "properties": {
+          "nested": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "nested"
+        ],
+        "type": "object"
+      },
+      "value": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "value",
+      "something",
+      "roll",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

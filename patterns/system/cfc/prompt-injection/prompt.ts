@@ -4,7 +4,13 @@ export type PromptAttachment = {
   id: string;
   name: string;
   type: "file" | "clipboard" | "mention";
-  data?: unknown;
+  /**
+   * The pasted text, for a clipboard attachment. `cf-prompt-input` declares
+   * this `unknown`, and a schema field typed `unknown` reads as a reference
+   * rather than the value, so `any` is what lets a handler read the text.
+   */
+  // deno-lint-ignore no-explicit-any
+  data?: any;
 };
 
 export type PromptSendEvent = {
