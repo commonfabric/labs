@@ -1750,6 +1750,64 @@ describe("speculation arrival gate (speculation.md §4, RULED 2026-08-16)", () =
       destination.close();
     });
 
+    it("reports, in the retirement view, the schema and label documents a confirmed envelope names", async () => {
+      const manager = StorageManager.emulate({ as: aliceSigner });
+      const runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: manager,
+        experimental: { serverExecution: true },
+      });
+      try {
+        const replica = runtime.storageManager.open(space)
+          .replica as SpaceReplica;
+        replica.accessForTestingOnly.applySessionSync({
+          type: "sync",
+          fromSeq: 0,
+          toSeq: 5,
+          upserts: [{
+            branch: "",
+            id: "of:enveloped",
+            scope: "space",
+            seq: 5,
+            coverClass: "derived",
+            doc: {
+              value: { n: 1 },
+              cfc: {
+                version: 2,
+                schemaHash: "fid1:envelope-schema",
+                labelMap: {
+                  version: 1,
+                  entries: [{
+                    path: ["n"],
+                    label: { $ref: "cid:fid1:envelope-label" },
+                  }],
+                },
+              },
+            },
+          }, {
+            branch: "",
+            id: "of:bare",
+            scope: "space",
+            seq: 5,
+            coverClass: "derived",
+            doc: { value: { n: 2 } },
+          }],
+          removes: [],
+        }, "integrate");
+        expect(
+          replica.speculationRetirementView("of:enveloped", "space")
+            .envelopeDocuments,
+        ).toEqual(["cid:fid1:envelope-schema", "cid:fid1:envelope-label"]);
+        expect(
+          replica.speculationRetirementView("of:bare", "space")
+            .envelopeDocuments,
+        ).toEqual([]);
+      } finally {
+        await runtime.dispose();
+        await manager.close();
+      }
+    });
+
     it("keeps the entry while an arrived document's names are unknown", async () => {
       const covers = new Map<string, ScriptedCover>([
         [stateDoc, { confirmedSeq: 50, coverClass: "derived" }],
