@@ -49,10 +49,7 @@ export const buildTestDir = async (manifest: Manifest) => {
   }
 
   // Deploy harness files to server root.
-  if (!import.meta.dirname) {
-    throw new Error("Cannot resolve local dirname");
-  }
-  const harnessDir = path.join(import.meta.dirname, "harness");
+  const harnessDir = path.fromFileUrl(new URL("harness", import.meta.url));
   for await (const { name } of Deno.readDir(harnessDir)) {
     await Deno.copyFile(
       path.join(harnessDir, name),
@@ -69,7 +66,7 @@ export function summarize(results: TestFileResults[]): Summary {
     for (const result of fileResults.tests) {
       duration += result.duration;
       if (result.error) {
-        failed.push(result);
+        failed.push({ name: result.name, error: result.error });
       } else {
         passed++;
       }
@@ -98,8 +95,10 @@ async function bundleModule(
     args.push("--config", configPath);
   }
 
+  // `--external` takes any number of values, so each is joined to its flag
+  // and the input after them is not read as one more.
   for (const specifier of manifest.config.esbuildConfig?.external ?? []) {
-    args.push("--external", specifier);
+    args.push(`--external=${specifier}`);
   }
 
   args.push(input);
@@ -359,7 +358,7 @@ function toUnknownRecord(
   if (!value || typeof value !== "object") {
     return {};
   }
-  return value as Record<string, unknown>;
+  return { ...value };
 }
 
 // Use this instead of `@std/fs#copy`, because we want to copy resolved

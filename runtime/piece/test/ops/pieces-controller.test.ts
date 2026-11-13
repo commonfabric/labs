@@ -419,6 +419,109 @@ export default pattern<{panels: Writable<Writable<unknown>[]>}>(({panels}) => ({
         });
       });
 
+      describe("add()", () => {
+        it("throws when the space has no default pattern", async () => {
+          await pieces.unlinkDefaultPattern();
+
+          await expect(pieces.add([piece])).rejects.toThrow(
+            "Cannot add pieces: default pattern not available",
+          );
+        });
+
+        it("throws when the default pattern has no `addPiece` stream, registering nothing", async () => {
+          const other = await pieces.runPersistent(
+            valuePattern(),
+            { value: 1 },
+            "pieces-controller-unregistered-piece",
+          );
+          await pieces.linkDefaultPattern(piece);
+
+          await expect(pieces.add([other])).rejects.toThrow(
+            "The default pattern has no addPiece handler",
+          );
+          await pieces.linkDefaultPattern(defaultRoot);
+          expect(await registeredIds()).toEqual([pieceId(piece)]);
+        });
+
+        it("throws when the `addPiece` handling fails, registering nothing", async () => {
+          const compiled = await runtime.patternManager.compilePattern({
+            main: "/main.tsx",
+            files: [{
+              name: "/main.tsx",
+              contents: `
+import { handler, pattern, Writable } from "commonfabric";
+const addPiece = handler<{piece: Writable<unknown>}, {pieceRegistry: Writable<Writable<unknown>[]>}>(
+  () => { throw new Error("registration refused"); }
+);
+export default pattern<{pieceRegistry: Writable<Writable<unknown>[]>}>(({pieceRegistry}) => ({
+  pieceRegistry,
+  addPiece: addPiece({pieceRegistry}),
+}));`,
+            }],
+          }, { space: pieces.getSpace() });
+          const root = await pieces.runPersistent(
+            compiled,
+            { pieceRegistry: [] },
+            "pieces-controller-refusing-root",
+          );
+          await pieces.linkDefaultPattern(root);
+          await runtime.idle();
+
+          await expect(pieces.add([piece])).rejects.toThrow(
+            "Piece registration failed: addPiece transaction aborted after retries",
+          );
+          expect(await registeredIds()).toEqual([]);
+        });
+      });
+
+      describe("references between registered pieces", () => {
+        // `reader` takes its `value` from `piece`'s, so its argument holds a
+        // link to `piece`'s result.
+
+        async function registerReader(): Promise<Cell<unknown>> {
+          const reader = await pieces.runPersistent(
+            valuePattern(),
+            { value: piece.key("value" as never) },
+            "pieces-controller-reader",
+          );
+          await pieces.add([reader]);
+          await runtime.idle();
+          return reader;
+        }
+
+        describe("getReadByPieces()", () => {
+          it("returns the registered pieces whose argument links the piece", async () => {
+            const reader = await registerReader();
+
+            const readers = await pieces.getReadByPieces(piece);
+
+            expect(readers.map(address)).toEqual([address(reader)]);
+          });
+
+          it("returns no pieces for a piece nothing links", async () => {
+            const reader = await registerReader();
+
+            expect(await pieces.getReadByPieces(reader)).toEqual([]);
+          });
+        });
+
+        describe("getReadingFrom()", () => {
+          it("returns the registered pieces the piece's argument links", async () => {
+            const reader = await registerReader();
+
+            const sources = await pieces.getReadingFrom(reader);
+
+            expect(sources.map(address)).toEqual([address(piece)]);
+          });
+
+          it("returns no pieces for a piece whose argument links none", async () => {
+            await registerReader();
+
+            expect(await pieces.getReadingFrom(piece)).toEqual([]);
+          });
+        });
+      });
+
       describe("remove()", () => {
         it("refuses to unlink a computed default root through member removal", async () => {
           const root = await installComputedRegistry("noop");

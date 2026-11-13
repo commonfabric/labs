@@ -18,13 +18,19 @@
  */
 
 import { assert, assertEquals } from "@std/assert";
+import { expect } from "@std/expect";
 import { Database } from "@db/sqlite";
 import { jsonFromFabricValue } from "@commonfabric/data-model/codecs";
 import { FabricLink } from "@commonfabric/data-model/fabric-instances";
 
 import { openSpace } from "../db.ts";
 import { listCommits } from "../queries.ts";
-import { describePiece, listEntityModels } from "../model.ts";
+import {
+  buildModuleIndex,
+  describePiece,
+  listEntityModels,
+  modelEntity,
+} from "../model.ts";
 
 const SCHEMA = `
 CREATE TABLE "commit" (
@@ -414,6 +420,60 @@ Deno.test("unified entity model + encoded commit decode", async (t) => {
           assertEquals(piece.ownedCells.length, 8);
           assertEquals(piece.ownedCells[0].id, "of:owned");
           assert(piece.resultKeys.includes("$NAME"));
+        },
+      );
+
+      await t.step(
+        "describePiece includes the pattern source only when asked",
+        () => {
+          const withCode = describePiece(space, "of:piece", {
+            includeCode: true,
+          });
+          const withoutCode = describePiece(space, "of:piece");
+          if ("error" in withCode || "error" in withoutCode) {
+            throw new Error("of:piece is not a piece");
+          }
+          expect(withCode.pattern?.code).toBe("export default () => null;\n");
+          expect(withCode.pattern?.codeLines).toBe(2);
+          expect(withoutCode.pattern?.code).toBeUndefined();
+          expect(withoutCode.pattern?.codeLines).toBe(2);
+        },
+      );
+
+      await t.step("modelEntity models one entity as the listing does", () => {
+        const listed = listEntityModels(space).entities.find((e) =>
+          e.id === "of:piece"
+        );
+        const modeled = modelEntity(
+          space,
+          { id: "of:piece" },
+          buildModuleIndex(space),
+        );
+        expect(modeled?.lineage.pattern?.moduleId).toBe("of:mod");
+        expect(listed).toMatchObject({ ...modeled });
+        expect(
+          modelEntity(space, { id: "of:piece" })?.lineage.pattern?.moduleId,
+        )
+          .toBeUndefined();
+        expect(modelEntity(space, { id: "of:nonexistent" })).toBeUndefined();
+      });
+
+      await t.step(
+        "listCommits reports zero counts for a payload that does not parse",
+        () => {
+          const writable = new Database(dbPath);
+          try {
+            writable.exec(
+              `INSERT INTO "commit" (seq, session_id, local_seq, original, resolution)
+               VALUES (99, 'session:unparseable', 1, '{"operations":[', '{}')`,
+            );
+          } finally {
+            writable.close();
+          }
+          const row = listCommits(space).find((r) => r.seq === 99);
+          expect(row).toMatchObject({ ops: 0, reads: 0 });
+          expect(row?.compactionRun).toBeUndefined();
+          expect(row?.hollowedBy).toBeUndefined();
         },
       );
 

@@ -141,7 +141,7 @@ import {
 import { ensurePrivateInboxOf } from "./private-inbox.ts";
 import { repairProfileRootsOf } from "./profile-space-root.ts";
 import { type ShareIntake, startShareIntakeOf } from "./share-intake.ts";
-import { compileProgram, instanceTx } from "./utils.ts";
+import { addPieceHandlerOf, compileProgram, instanceTx } from "./utils.ts";
 export {
   DEFAULT_APP_PATTERN_SOURCE,
   deriveSystemPatternSource,
@@ -935,19 +935,7 @@ export class PiecesController<T = unknown> {
       throw new Error("Cannot add pieces: default pattern not available");
     }
 
-    const cell = defaultPattern.asSchema({
-      type: "object",
-      properties: {
-        addPiece: { asCell: ["stream"] },
-      },
-    });
-
-    const addPieceHandler = await cell.key("addPiece").pull();
-    if (!isStream(addPieceHandler)) {
-      throw new Error(
-        "Cannot add pieces: addPiece handler not found on default pattern",
-      );
-    }
+    const addPieceHandler = await addPieceHandlerOf(defaultPattern);
 
     const registry = this.#pieceRegistryExport(defaultPattern);
     // A handler's commit updates composition. Keep the derived registry
@@ -1183,8 +1171,6 @@ export class PiecesController<T = unknown> {
     const maxResults = 50; // Prevent too many results from overwhelming the UI
     const resolvedPiece = piece.resolveAsCell();
 
-    if (!piece) return result;
-
     try {
       // Get the argument data - this is where references to other pieces are stored
       const argumentCell = await this.#syncedArgument(piece);
@@ -1348,8 +1334,6 @@ export class PiecesController<T = unknown> {
     const seenEntityIds = new Set<string>(); // Track entities we've already processed
     const maxDepth = 10; // Prevent infinite recursion
     const maxResults = 50; // Prevent too many results from overwhelming the UI
-
-    if (!piece) return result;
 
     const pieceEntityId = getEntityId(piece);
     if (!pieceEntityId) return result;
@@ -1973,7 +1957,6 @@ export class PiecesController<T = unknown> {
         () => this.getPieceCell<T>(pieceOrId),
       )
       : pieceOrId;
-    if (!piece) throw new Error("Piece not found");
     const outcome = await timePiecePhase(
       "openPiece.reconcileSource",
       () => reconcilePieceSource(this.runtime, piece),
@@ -2053,7 +2036,6 @@ export class PiecesController<T = unknown> {
         () => this.getPieceCell<T>(pieceOrId, false, undefined, scope),
       )
       : pieceOrId;
-    if (!piece) throw new Error("Piece not found");
     if (
       this.runtime.viewScopedReplicationRequested &&
       await this.runtime.viewReplication.enable(piece.space)
@@ -2087,7 +2069,6 @@ export class PiecesController<T = unknown> {
     const piece = typeof pieceOrId === "string"
       ? await this.getPieceCell<T>(pieceOrId, false, undefined, scope)
       : pieceOrId;
-    if (!piece) throw new Error("Piece not found");
     this.runtime.runner.stop(piece);
     await this.runtime.idle();
   }
@@ -2146,17 +2127,12 @@ export class PiecesController<T = unknown> {
   }
 
   async syncPatternByIdentity(ref: { identity: string; symbol: string }) {
-    if (!ref) throw new Error("pattern identity is required");
     const pattern = await this.runtime.patternManager.loadPatternByIdentity(
       ref.identity,
       ref.symbol,
       this.#space,
     );
     return pattern;
-  }
-
-  async sync(entity: Cell<unknown>, _waitForStorage: boolean = false) {
-    await entity.sync();
   }
 
   /**
@@ -3565,9 +3541,6 @@ async function getCellByIdOrPiece(
       undefined,
       options?.targetScope,
     );
-    if (!piece) {
-      throw new Error(`Piece ${cellId} not found`);
-    }
     if (
       getMetaLink(piece, "result") === undefined &&
       getPatternIdentityRef(piece) === undefined &&

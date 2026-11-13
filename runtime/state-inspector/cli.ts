@@ -53,59 +53,53 @@ const BOOLEAN_FLAGS = new Set(["json", "doc", "full-depth", "help"]);
 /** Value-taking flags for which an empty string has defined semantics. */
 const FLAGS_ALLOWING_EMPTY_VALUES = new Set(["branch", "path", "scope"]);
 
-const COMMAND_FLAGS = new Map<string, ReadonlySet<string>>([
-  ["summary", new Set(["json"])],
-  ["commits", new Set(["session", "limit", "json"])],
-  ["hot", new Set(["limit", "branch", "json"])],
-  ["history", new Set(["scope", "branch", "limit", "json"])],
-  [
-    "operations",
-    new Set([
-      "scope",
-      "branch",
-      "limit",
-      "history-limit",
-      "submission-after-seq",
-      "json",
-    ]),
-  ],
-  [
-    "value-at",
-    new Set([
-      "seq",
-      "path",
-      "path-json",
-      "scope",
-      "branch",
-      "doc",
-      "full-depth",
-      "json",
-    ]),
-  ],
-  [
-    "converge",
-    new Set([
-      "spaces",
-      "dir",
-      "path",
-      "path-json",
-      "scope",
-      "branch",
-      "json",
-    ]),
-  ],
-  [
-    "converge-scan",
-    new Set([
-      "spaces",
-      "dir",
-      "limit",
-      "scope",
-      "branch",
-      "json",
-    ]),
-  ],
-]);
+const COMMAND_FLAGS = {
+  summary: new Set(["json"]),
+  commits: new Set(["session", "limit", "json"]),
+  hot: new Set(["limit", "branch", "json"]),
+  history: new Set(["scope", "branch", "limit", "json"]),
+  operations: new Set([
+    "scope",
+    "branch",
+    "limit",
+    "history-limit",
+    "submission-after-seq",
+    "json",
+  ]),
+  "value-at": new Set([
+    "seq",
+    "path",
+    "path-json",
+    "scope",
+    "branch",
+    "doc",
+    "full-depth",
+    "json",
+  ]),
+  converge: new Set([
+    "spaces",
+    "dir",
+    "path",
+    "path-json",
+    "scope",
+    "branch",
+    "json",
+  ]),
+  "converge-scan": new Set([
+    "spaces",
+    "dir",
+    "limit",
+    "scope",
+    "branch",
+    "json",
+  ]),
+} satisfies Record<string, ReadonlySet<string>>;
+
+type Command = keyof typeof COMMAND_FLAGS;
+
+function isCommand(name: string): name is Command {
+  return Object.hasOwn(COMMAND_FLAGS, name);
+}
 
 /**
  * Separates positional arguments from flags and validates flag values.
@@ -204,25 +198,19 @@ function validateOperationLimits(
 /**
  * Parses one of the supported path flags into exact string segments.
  *
- * @throws {Error} When path flags conflict, omit a value, or `path-json` is
- * not a JSON array of strings.
+ * @throws {Error} When path flags conflict or `path-json` is not a JSON array
+ * of strings.
  */
 function parsePathFlags(flags: Record<string, string | boolean>): string[] {
-  const path = flags.path;
-  const pathJson = flags["path-json"];
+  const path = str(flags.path);
+  const pathJson = str(flags["path-json"]);
   if (path !== undefined && pathJson !== undefined) {
     throw new Error("Use either `--path` or `--path-json`, not both.");
   }
   if (flags.doc === true && (path !== undefined || pathJson !== undefined)) {
     throw new Error("Use `--doc` without `--path` or `--path-json`.");
   }
-  if (path !== undefined && typeof path !== "string") {
-    throw new Error("`--path` requires a value.");
-  }
   if (pathJson === undefined) return splitPath(path);
-  if (typeof pathJson !== "string") {
-    throw new Error("`--path-json` requires a value.");
-  }
 
   let parsed: unknown;
   try {
@@ -243,17 +231,24 @@ function parsePathFlags(flags: Record<string, string | boolean>): string[] {
   return parsed;
 }
 
-type OutputStringifier = (value: unknown) => string | undefined;
+/** Where the CLI writes its report and its diagnostics. */
+export interface CliOutput {
+  log(text: string): void;
+  error(text: string): void;
+}
+
+type OutputStringifier = (value: unknown) => string;
 
 const prettyJson: OutputStringifier = (value) => JSON.stringify(value, null, 2);
 
 function out(
+  output: CliOutput,
   json: boolean,
   data: unknown,
   render: () => void,
   stringify: OutputStringifier = prettyJson,
 ) {
-  if (json) console.log(stringify(data));
+  if (json) output.log(stringify(data));
   else render();
 }
 
@@ -297,7 +292,8 @@ function resolveSpaces(flags: Record<string, string | boolean>): SpaceRef[] {
 }
 
 function runMultiSpace(
-  cmd: string,
+  output: CliOutput,
+  cmd: "converge" | "converge-scan",
   rest: string[],
   flags: Record<string, string | boolean>,
   json: boolean,
@@ -305,18 +301,18 @@ function runMultiSpace(
 ): number {
   const id = rest[0];
   if (cmd === "converge" && !id) {
-    console.error("error: converge needs <entity-id>");
+    output.error("error: converge needs <entity-id>");
     return 1;
   }
   let refs: SpaceRef[];
   try {
     refs = resolveSpaces(flags);
   } catch (e) {
-    console.error(`error: ${(e as Error).message}`);
+    output.error(`error: ${(e as Error).message}`);
     return 1;
   }
   if (refs.length === 0) {
-    console.error("error: no space DBs resolved");
+    output.error("error: no space DBs resolved");
     return 1;
   }
   try {
@@ -331,14 +327,14 @@ function runMultiSpace(
         branch: str(flags.branch),
         path,
       }, index);
-      out(json, result, () => {
-        console.log(
+      out(output, json, result, () => {
+        output.log(
           `verdict: ${result.verdict.toUpperCase()}` +
             (result.relationship && result.relationship !== "n/a"
               ? `  [${result.relationship}]`
               : ""),
         );
-        console.log(
+        output.log(
           `entity:  ${result.id}  scope=${result.scope}  branch=${
             result.branch || "(default)"
           }` +
@@ -353,11 +349,11 @@ function runMultiSpace(
         );
         for (const v of result.views) {
           if (!v.present) {
-            console.log(`  ${escapeTerminalText(v.label)}\tABSENT`);
+            output.log(`  ${escapeTerminalText(v.label)}\tABSENT`);
             continue;
           }
           if (v.error) {
-            console.log(
+            output.log(
               `  ${escapeTerminalText(v.label)}\tERROR\t${
                 escapeTerminalText(v.error)
               }`,
@@ -367,7 +363,7 @@ function runMultiSpace(
           const cluster = result.clusters.findIndex((c) =>
             c.valueKey === v.valueKey
           ) + 1;
-          console.log(
+          output.log(
             `  ${
               escapeTerminalText(v.label)
             }\thead=${v.headSeq}\trevs=${v.revisions}\tlast=${
@@ -377,68 +373,68 @@ function runMultiSpace(
           );
         }
         if (result.clusters.length > 1) {
-          console.log("clusters:");
+          output.log("clusters:");
           result.clusters.forEach((c, i) =>
-            console.log(
+            output.log(
               `  #${i + 1} [${c.labels.length}]\t${
                 c.pathExists === false ? "(path missing)" : summarize(c.value)
               }`,
             )
           );
         }
-        console.log(`note: ${result.caveat}`);
+        output.log(`note: ${result.caveat}`);
       });
       return 0;
     }
-    if (cmd === "converge-scan") {
-      const result = convergenceScanExact(refs, {
-        scope: str(flags.scope),
-        branch: str(flags.branch),
-        limit: num(flags.limit),
-      });
-      out(json, result, () => {
-        console.log(
-          `shared entities (in >=2 spaces): ${result.sharedEntities}  examined: ${result.examined}`,
+    const result = convergenceScanExact(refs, {
+      scope: str(flags.scope),
+      branch: str(flags.branch),
+      limit: num(flags.limit),
+    });
+    out(output, json, result, () => {
+      output.log(
+        `shared entities (in >=2 spaces): ${result.sharedEntities}  examined: ${result.examined}`,
+      );
+      output.log(
+        `cross-space link edges: ${result.crossSpaceLinkEdges}` +
+          `  (${result.linkedFindings} real-drift / ` +
+          `${result.unlinkedFindings} likely-independent-instances / ` +
+          `${result.unknownFindings} unknown)`,
+      );
+      output.log(
+        `findings (diverged/partial/unknown): ${result.findings.length}`,
+      );
+      for (const f of result.findings) {
+        const present = f.views.filter((v) => v.present).map((v) => v.label);
+        const absent = f.views.filter((v) => !v.present).map((v) => v.label);
+        const rel = f.relationship === "cross-space-linked"
+          ? "DRIFT"
+          : f.relationship === "no-cross-space-link"
+          ? "instance?"
+          : "?";
+        output.log(
+          `  ${f.verdict.toUpperCase()}\t${rel}\t${f.id}\tpresent=${present.length}` +
+            (absent.length ? `\tmissing=${absent.length}` : "") +
+            `\tclusters=${f.clusters.length}`,
         );
-        console.log(
-          `cross-space link edges: ${result.crossSpaceLinkEdges}` +
-            `  (${result.linkedFindings} real-drift / ` +
-            `${result.unlinkedFindings} likely-independent-instances / ` +
-            `${result.unknownFindings} unknown)`,
-        );
-        console.log(
-          `findings (diverged/partial/unknown): ${result.findings.length}`,
-        );
-        for (const f of result.findings) {
-          const present = f.views.filter((v) => v.present).map((v) => v.label);
-          const absent = f.views.filter((v) => !v.present).map((v) => v.label);
-          const rel = f.relationship === "cross-space-linked"
-            ? "DRIFT"
-            : f.relationship === "no-cross-space-link"
-            ? "instance?"
-            : "?";
-          console.log(
-            `  ${f.verdict.toUpperCase()}\t${rel}\t${f.id}\tpresent=${present.length}` +
-              (absent.length ? `\tmissing=${absent.length}` : "") +
-              `\tclusters=${f.clusters.length}`,
-          );
-        }
-      });
-      return 0;
-    }
-    console.error(`unknown command: ${cmd}`);
-    return 1;
+      }
+    });
+    return 0;
   } finally {
     for (const r of refs) r.space.close();
   }
 }
 
-export function main(argv: string[]): number {
+/**
+ * Runs one inspector command, writing what it reports to `output`, and returns
+ * the process exit status.
+ */
+export function main(argv: string[], output: CliOutput): number {
   let parsed: Args;
   try {
     parsed = parseArgs(argv);
   } catch (e) {
-    console.error(`error: ${(e as Error).message}`);
+    output.error(`error: ${(e as Error).message}`);
     return 1;
   }
   const { positional, flags } = parsed;
@@ -446,21 +442,21 @@ export function main(argv: string[]): number {
   const json = flags.json === true;
 
   if (!cmd || cmd === "help" || flags.help) {
-    console.log(USAGE);
+    output.log(USAGE);
     return cmd || flags.help ? 0 : 1;
   }
 
-  const allowedFlags = COMMAND_FLAGS.get(cmd);
-  if (allowedFlags === undefined) {
-    console.error(`unknown command: ${cmd}\n`);
-    console.log(USAGE);
+  if (!isCommand(cmd)) {
+    output.error(`unknown command: ${cmd}\n`);
+    output.log(USAGE);
     return 1;
   }
+  const allowedFlags: ReadonlySet<string> = COMMAND_FLAGS[cmd];
   const unsupportedFlag = Object.keys(flags).find((flag) =>
     !allowedFlags.has(flag)
   );
   if (unsupportedFlag !== undefined) {
-    console.error(`error: \`--${unsupportedFlag}\` is not valid for ${cmd}.`);
+    output.error(`error: \`--${unsupportedFlag}\` is not valid for ${cmd}.`);
     return 1;
   }
   try {
@@ -468,7 +464,7 @@ export function main(argv: string[]): number {
     validateNumericFlags(flags);
     validateOperationLimits(cmd, flags);
   } catch (e) {
-    console.error(`error: ${(e as Error).message}`);
+    output.error(`error: ${(e as Error).message}`);
     return 1;
   }
 
@@ -477,29 +473,29 @@ export function main(argv: string[]): number {
     try {
       path = parsePathFlags(flags);
     } catch (e) {
-      console.error(`error: ${(e as Error).message}`);
+      output.error(`error: ${(e as Error).message}`);
       return 1;
     }
-    return runMultiSpace(cmd, rest, flags, json, path);
+    return runMultiSpace(output, cmd, rest, flags, json, path);
   }
   if (cmd === "converge-scan") {
-    return runMultiSpace(cmd, rest, flags, json);
+    return runMultiSpace(output, cmd, rest, flags, json);
   }
 
   // Single-space commands take <db> as the first positional.
   const dbPath = rest[0];
   const tail = rest.slice(1);
   if (!dbPath) {
-    console.error("error: missing <db> path\n");
-    console.log(USAGE);
+    output.error("error: missing <db> path\n");
+    output.log(USAGE);
     return 1;
   }
   if (cmd === "history" && !tail[0]) {
-    console.error("error: history needs <entity-id>");
+    output.error("error: history needs <entity-id>");
     return 1;
   }
   if (cmd === "value-at" && !tail[0]) {
-    console.error("error: value-at needs <entity-id>");
+    output.error("error: value-at needs <entity-id>");
     return 1;
   }
 
@@ -508,7 +504,7 @@ export function main(argv: string[]): number {
     try {
       valuePath = parsePathFlags(flags);
     } catch (e) {
-      console.error(`error: ${(e as Error).message}`);
+      output.error(`error: ${(e as Error).message}`);
       return 1;
     }
   }
@@ -518,33 +514,33 @@ export function main(argv: string[]): number {
     switch (cmd) {
       case "summary": {
         const s = summarizeSpace(space);
-        out(json, s, () => {
-          console.log(`space: ${s.path}`);
-          console.log(
+        out(output, json, s, () => {
+          output.log(`space: ${s.path}`);
+          output.log(
             `commits: ${s.commits}` +
               (s.commitSeqRange
                 ? ` (seq ${s.commitSeqRange[0]}–${s.commitSeqRange[1]})`
                 : ""),
           );
-          console.log(`sessions: ${s.sessions}`);
-          console.log(`entities: ${s.entities}  revisions: ${s.revisions}`);
-          console.log(
+          output.log(`sessions: ${s.sessions}`);
+          output.log(`entities: ${s.entities}  revisions: ${s.revisions}`);
+          output.log(
             `ops: ${
               Object.entries(s.ops).map(([k, v]) => `${k}=${v}`).join(" ")
             }`,
           );
-          console.log(
+          output.log(
             `scopes: ${
               s.scopes.map((sc) => `${sc.scope_key}=${sc.count}`).join(" ")
             }`,
           );
-          console.log(
+          output.log(
             `branches: ${
               s.branches.map((b) => `${b.name || "(default)"}@${b.head_seq}`)
                 .join(" ")
             }`,
           );
-          console.log(
+          output.log(
             `scheduler basis table: ${s.hasSchedulerBasisTable ? "yes" : "no"}`,
           );
         });
@@ -555,9 +551,9 @@ export function main(argv: string[]): number {
           session: str(flags.session),
           limit: num(flags.limit),
         });
-        out(json, rows, () => {
+        out(output, json, rows, () => {
           for (const r of rows) {
-            console.log(
+            output.log(
               `#${r.seq}\t${r.session.slice(0, 14)}\tlocal=${r.localSeq}\t${
                 describeCommitPayload(r)
               }\t${r.createdAt}`,
@@ -571,9 +567,9 @@ export function main(argv: string[]): number {
           limit: num(flags.limit),
           branch: str(flags.branch),
         });
-        out(json, rows, () => {
+        out(output, json, rows, () => {
           for (const r of rows) {
-            console.log(
+            output.log(
               `${r.writes}\twrites\t${r.sessions} sessions\t${r.id}\t(${r.scope})`,
             );
           }
@@ -588,9 +584,9 @@ export function main(argv: string[]): number {
           branch: str(flags.branch),
           limit: num(flags.limit),
         });
-        out(json, rows, () => {
+        out(output, json, rows, () => {
           for (const r of rows) {
-            console.log(
+            output.log(
               `seq=${r.seq}\tcommit=${r.commitSeq}\t${r.op}\t${
                 r.session.slice(0, 14)
               }\tlocal=${r.localSeq}\t${r.createdAt}`,
@@ -608,13 +604,13 @@ export function main(argv: string[]): number {
           historyLimit: num(flags["history-limit"]),
           submissionAfterSeq: num(flags["submission-after-seq"]),
         });
-        out(json, report, () => {
+        out(output, json, report, () => {
           if (!report.available) {
-            console.log("operation tables are absent");
+            output.log("operation tables are absent");
             return;
           }
           for (const field of report.fields) {
-            console.log(
+            output.log(
               `${field.active ? "active" : "inactive"}\t${field.address.id}` +
                 `\t${field.address.scope}\t${field.address.pathPointer}` +
                 `\t${field.codec}` +
@@ -622,14 +618,14 @@ export function main(argv: string[]): number {
                 `\tretained=${field.retainedFrom.version}` +
                 `\t${field.consistency.healthy ? "healthy" : "INCONSISTENT"}`,
             );
-            console.log(
+            output.log(
               `  submissions=${field.submissions.length}` +
                 ` integrated=${field.integrated.length}` +
                 ` checkpoints=${field.checkpoints.length}`,
             );
           }
           if (report.fieldsTruncated) {
-            console.log(`field list truncated at ${report.fieldLimit}`);
+            output.log(`field list truncated at ${report.fieldLimit}`);
           }
         });
         return 0;
@@ -655,27 +651,24 @@ export function main(argv: string[]): number {
         );
         const stringify = fullDepth ? stringifyInspectorJson : prettyJson;
         out(
+          output,
           json,
           { exists: res.exists, pathExists, value: annotated },
           () => {
             if (!res.exists) {
-              console.log("(absent at this seq)");
+              output.log("(absent at this seq)");
               return;
             }
             if (!pathExists) {
-              console.log("(entity present, but nothing at that path)");
+              output.log("(entity present, but nothing at that path)");
               return;
             }
-            console.log(stringify(annotated));
+            output.log(stringify(annotated));
           },
           stringify,
         );
         return 0;
       }
-      default:
-        console.error(`unknown command: ${cmd}\n`);
-        console.log(USAGE);
-        return 1;
     }
   } finally {
     space.close();
@@ -683,5 +676,5 @@ export function main(argv: string[]): number {
 }
 
 if (import.meta.main) {
-  Deno.exit(main(Deno.args));
+  Deno.exit(main(Deno.args, console));
 }

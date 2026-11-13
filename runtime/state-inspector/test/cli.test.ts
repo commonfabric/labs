@@ -83,21 +83,15 @@ function seed(path: string) {
   db.close();
 }
 
-/** Run `main` while capturing its output. */
+/** Run `main`, capturing what it writes. */
 function run(argv: string[]): { code: number; out: string; err: string } {
   const out: string[] = [];
   const err: string[] = [];
-  const originalLog = console.log;
-  const originalError = console.error;
-  console.log = (...args: unknown[]) => out.push(args.join(" "));
-  console.error = (...args: unknown[]) => err.push(args.join(" "));
-  try {
-    const code = main(argv);
-    return { code, out: out.join("\n"), err: err.join("\n") };
-  } finally {
-    console.log = originalLog;
-    console.error = originalError;
-  }
+  const code = main(argv, {
+    log: (text) => out.push(text),
+    error: (text) => err.push(text),
+  });
+  return { code, out: out.join("\n"), err: err.join("\n") };
 }
 
 Deno.test("cli: single-space commands dispatch over a seeded DB", async (t) => {
@@ -648,6 +642,238 @@ Deno.test("cli: single-space commands dispatch over a seeded DB", async (t) => {
     await t.step("missing <db> is a usage error (exit 1)", () => {
       assertEquals(run(["summary"]).code, 1);
     });
+
+    await t.step("summary renders a human-readable report", () => {
+      const result = run(["summary", db]);
+      expect(result.code).toBe(0);
+      expect(result.out).toContain(`space: ${db}`);
+      expect(result.out).toContain("commits: 2 (seq 1–2)");
+      expect(result.out).toContain("entities: 2  revisions: 3");
+      expect(result.out).toContain("ops: patch=1 set=2");
+      expect(result.out).toContain("scopes: space=3");
+      expect(result.out).toContain("branches: (default)@2");
+      expect(result.out).toContain("scheduler basis table: no");
+      expect(result.out.trimStart().startsWith("{")).toBe(false);
+    });
+
+    await t.step("commits, hot and history render one line per row", () => {
+      const commits = run(["commits", db]).out.split("\n");
+      expect(commits).toHaveLength(2);
+      expect(
+        commits.every((line) =>
+          /^#[12]\tsession:did:ke\tlocal=[12]\t/.test(line)
+        ),
+      )
+        .toBe(true);
+
+      const hot = run(["hot", db, "--limit", "1"]).out.split("\n");
+      expect(hot).toEqual(["2\twrites\t1 sessions\tof:a\t(space)"]);
+
+      const history = run(["history", db, "of:a"]).out.split("\n");
+      expect(history).toHaveLength(2);
+      expect(history[0]).toMatch(
+        /^seq=1\tcommit=1\tset\tsession:did:ke\tlocal=1\t/,
+      );
+      expect(history[1]).toMatch(/^seq=2\tcommit=2\tpatch\t/);
+    });
+
+    await t.step(
+      "value-at renders the value, an absence, or a missing path",
+      () => {
+        const present = run(["value-at", db, "of:a", "--path", "a"]);
+        expect(present.code).toBe(0);
+        expect(JSON.parse(present.out)).toEqual({ b: "nested key" });
+
+        const fullDepth = run([
+          "value-at",
+          db,
+          "of:a",
+          "--path",
+          "a",
+          "--full-depth",
+        ]);
+        expect(JSON.parse(fullDepth.out)).toEqual({ b: "nested key" });
+
+        const earlier = run([
+          "value-at",
+          db,
+          "of:a",
+          "--seq",
+          "1",
+          "--path",
+          "n",
+        ]);
+        expect(earlier.out).toBe("1");
+
+        expect(run(["value-at", db, "of:missing"]).out).toBe(
+          "(absent at this seq)",
+        );
+        expect(run(["value-at", db, "of:a", "--path", "nowhere"]).out).toBe(
+          "(entity present, but nothing at that path)",
+        );
+      },
+    );
+
+    await t.step("--path-json rejects text that is not JSON", () => {
+      const result = run(["value-at", db, "of:a", "--path-json", "[oops"]);
+      expect(result.code).toBe(1);
+      expect(result.err).toContain("JSON array of string segments");
+      expect(result.out).toBe("");
+    });
+
+    await t.step("multi-space commands check their arguments", () => {
+      const noId = run(["converge", "--spaces", db]);
+      expect(noId.code).toBe(1);
+      expect(noId.err).toBe("error: converge needs <entity-id>");
+
+      const noSelector = run(["converge-scan"]);
+      expect(noSelector.code).toBe(1);
+      expect(noSelector.err).toBe(
+        "error: provide --spaces a,b,… or --dir <dir>",
+      );
+    });
+
+    await t.step("an empty --dir resolves no spaces", async () => {
+      const empty = `${dir}/empty`;
+      await Deno.mkdir(empty);
+      const result = run(["converge-scan", "--dir", empty]);
+      expect(result.code).toBe(1);
+      expect(result.err).toBe("error: no space DBs resolved");
+    });
+
+    await t.step(
+      "converge and converge-scan render each space's view",
+      async () => {
+        // Five spaces seeded with `of:a`: two agreeing on the seeded value,
+        // one that moved on, one whose revisions of it are deleted, and one
+        // whose payload cannot be decoded.
+        const multi = `${dir}/multi`;
+        await Deno.mkdir(multi);
+        for (const name of ["a", "b", "c", "d", "e"]) {
+          seed(`${multi}/${name}.sqlite`);
+        }
+        const edit = (name: string, sql: string) => {
+          const writable = new Database(`${multi}/${name}.sqlite`);
+          try {
+            writable.exec(sql);
+          } finally {
+            writable.close();
+          }
+        };
+        edit(
+          "c",
+          `INSERT INTO "commit" (seq, session_id, local_seq, original, resolution)
+           VALUES (3, 'session:other', 1, '{}', '{}');
+         INSERT INTO revision (id, seq, op_index, op, data, commit_seq)
+           VALUES ('of:a', 3, 0, 'patch',
+             '[{"op":"replace","path":"/value/n","value":3}]', 3);`,
+        );
+        edit("d", `DELETE FROM revision WHERE id = 'of:a'`);
+        edit("e", `UPDATE revision SET data = '{not json' WHERE id = 'of:a'`);
+
+        const converge = run([
+          "converge",
+          "of:a",
+          "--dir",
+          multi,
+          "--path",
+          "n",
+        ]);
+        expect(converge.code).toBe(0);
+        const lines = converge.out.split("\n");
+        expect(lines[0]).toBe("verdict: UNKNOWN");
+        expect(lines[1]).toBe(
+          "entity:  of:a  scope=space  branch=(default)  path=/n",
+        );
+        expect(lines[2]).toMatch(
+          /^ {2}a\.sqlite\thead=2\trevs=2\tlast=session:did:ke@.+\tcluster#1$/,
+        );
+        expect(lines[3]).toMatch(
+          /^ {2}b\.sqlite\thead=2\trevs=2\t.*\tcluster#1$/,
+        );
+        expect(lines[4]).toMatch(
+          /^ {2}c\.sqlite\thead=3\trevs=3\tlast=session:other@.+\tcluster#2$/,
+        );
+        expect(lines[5]).toBe("  d.sqlite\tABSENT");
+        expect(lines[6]).toMatch(/^ {2}e\.sqlite\tERROR\t/);
+        expect(lines.slice(7, 10)).toEqual([
+          "clusters:",
+          "  #1 [2]\t2",
+          "  #2 [1]\t3",
+        ]);
+        expect(lines[10]).toMatch(/^note: /);
+
+        const missingPath = run([
+          "converge",
+          "of:a",
+          "--spaces",
+          `${multi}/a.sqlite,${multi}/c.sqlite`,
+          "--path",
+          "a/b",
+        ]);
+        expect(missingPath.out).toContain("verdict: CONVERGED");
+        expect(missingPath.out).not.toContain("path=MISSING");
+        expect(missingPath.out).not.toContain("clusters:");
+
+        const diverged = run([
+          "converge",
+          "of:a",
+          "--spaces",
+          `${multi}/a.sqlite,${multi}/c.sqlite`,
+        ]);
+        expect(diverged.out.split("\n")[0]).toBe(
+          "verdict: DIVERGED  [no-cross-space-link]",
+        );
+
+        const absentPath = run([
+          "converge",
+          "of:a",
+          "--spaces",
+          `${multi}/a.sqlite,${multi}/b.sqlite`,
+          "--path",
+          "nowhere",
+        ]);
+        expect(absentPath.out).toContain("\tpath=MISSING");
+
+        const scan = run(["converge-scan", "--dir", multi]);
+        expect(scan.code).toBe(0);
+        expect(scan.out.split("\n")).toEqual([
+          "shared entities (in >=2 spaces): 1  examined: 1",
+          "cross-space link edges: 0  (0 real-drift / 0 likely-independent-instances / 1 unknown)",
+          "findings (diverged/partial/unknown): 1",
+          "  UNKNOWN\t?\tof:a\tpresent=4\tmissing=1\tclusters=2",
+        ]);
+
+        const pair = run([
+          "converge-scan",
+          "--spaces",
+          `${multi}/a.sqlite,${multi}/c.sqlite`,
+          "--json",
+        ]);
+        const parsed = JSON.parse(pair.out);
+        expect(parsed.findings.map((f: { id: string }) => f.id)).toEqual([
+          "of:a",
+        ]);
+        expect(parsed.unlinkedFindings).toBe(1);
+        const pairHuman = run([
+          "converge-scan",
+          "--spaces",
+          `${multi}/a.sqlite,${multi}/c.sqlite`,
+        ]);
+        expect(pairHuman.out).toContain(
+          "  DIVERGED\tinstance?\tof:a\tpresent=2\tclusters=2",
+        );
+
+        const agreeing = run([
+          "converge-scan",
+          "--spaces",
+          `${multi}/a.sqlite,${multi}/b.sqlite`,
+        ]);
+        expect(agreeing.out).toContain(
+          "findings (diverged/partial/unknown): 0",
+        );
+      },
+    );
   } finally {
     await Deno.remove(dir, { recursive: true });
   }

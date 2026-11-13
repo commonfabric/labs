@@ -4,6 +4,7 @@
 // user-world with the right roles + a placeholder for an absent referenced space.
 
 import { assert, assertEquals } from "@std/assert";
+import { expect } from "@std/expect";
 import { Database } from "@db/sqlite";
 
 import type { DiscoveredSpace } from "../discover.ts";
@@ -146,6 +147,49 @@ Deno.test("space grouping recovers a user's world", async (t) => {
 
       assertEquals(result.ungrouped.length, 0);
     });
+
+    await t.step(
+      "a space written by an absent principal groups under an unknown home",
+      async () => {
+        const stranger = "did:key:zStrangerDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD";
+        const otherPath = `${dir}/did:key:zOtherEEEE.sqlite`;
+        const db = newDb(otherPath);
+        commit(db, 1, `session:${stranger}:cccc1111`);
+        setRev(db, "of:doc", 1, { value: { count: 1 } });
+        // A cross-space carrier whose payload does not decode.
+        db.prepare(
+          `INSERT INTO revision (id, seq, op_index, op, data, commit_seq)
+           VALUES ('of:broken', 1, 0, 'set', ?, 1)`,
+        ).run(`{"space":"did:key:zElsewhere"`);
+        db.close();
+        const junkPath = `${dir}/junk.sqlite`;
+        await Deno.writeTextFile(junkPath, "not a database");
+
+        const result = groupDiscoveredSpaces([disc(otherPath), disc(junkPath)]);
+        expect(result.groups.map((g) => g.principal)).toEqual([stranger]);
+        expect(result.groups[0].spaces).toEqual([
+          {
+            did: "did:key:zOtherEEEE",
+            role: "main",
+            present: true,
+            empty: false,
+            commits: 1,
+            entities: 2,
+            evidence: ["written by principal zStran…DDDD"],
+          },
+          {
+            did: stranger,
+            role: "unknown",
+            present: false,
+            empty: false,
+            commits: undefined,
+            entities: undefined,
+            evidence: ["group principal (owner home)"],
+          },
+        ]);
+        expect(result.ungrouped).toEqual([]);
+      },
+    );
   } finally {
     await Deno.remove(dir, { recursive: true });
   }

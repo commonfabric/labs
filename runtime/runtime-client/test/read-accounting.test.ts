@@ -10,7 +10,7 @@ import {
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import { RuntimeClient } from "@/runtime-client.ts";
-import type { IPCClientRequest } from "@/protocol/mod.ts";
+import type { ProcessorRequest } from "@/backends/runtime-processor.ts";
 import { buildProcessor } from "./backends/build-processor.ts";
 
 describe("worker read accounting", () => {
@@ -31,7 +31,7 @@ describe("worker read accounting", () => {
       });
       const connection = {
         on: () => {},
-        request: (message: IPCClientRequest) =>
+        request: (message: ProcessorRequest) =>
           processor.handleRequest(message),
       } as unknown as never;
       const client = new (RuntimeClient as unknown as {

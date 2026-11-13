@@ -6365,6 +6365,28 @@ describe("piece schema compatibility", () => {
     ).toThrow(/result\.xMode/);
   });
 
+  it("throws from `assertSchemaSubset()` for a new named field narrower than the prior patternProperties matching it", () => {
+    const previous: JSONSchema = {
+      type: "object",
+      patternProperties: { "^x": { type: "string" } },
+    };
+
+    expect(() =>
+      assertSchemaSubset(previous, {
+        type: "object",
+        properties: { xMode: { type: "number" } },
+        patternProperties: { "^x": { type: "string" } },
+      })
+    ).toThrow(/value\.xMode/);
+    expect(() =>
+      assertSchemaSubset(previous, {
+        type: "object",
+        properties: { xMode: { type: "string" } },
+        patternProperties: { "^x": { type: "string" } },
+      })
+    ).not.toThrow();
+  });
+
   it("checks scalar constraints that cannot be safely changed", () => {
     const previous = (value: JSONSchema) =>
       pattern(

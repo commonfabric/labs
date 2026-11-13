@@ -3,7 +3,9 @@
 // entity edited by a patch and another that is created then deleted.
 
 import { assert, assertEquals, assertThrows } from "@std/assert";
+import { expect } from "@std/expect";
 import { Database } from "@db/sqlite";
+import type { FabricValue } from "@commonfabric/data-model";
 import { jsonFromFabricValue } from "@commonfabric/data-model/codecs";
 
 import { openSpace } from "../db.ts";
@@ -513,6 +515,117 @@ Deno.test("time travel: diff + timelines", async (t) => {
         assertEquals(t1[7].created, 0); // patch E after its delete
         assertEquals(t1[7].cumulativeEntities, 3);
       });
+
+      await t.step("diffValues compares repeated containers once each", () => {
+        const before = { k: [1] };
+        const after = { k: [1] };
+        const beforeList = [2];
+        const afterList = [2];
+        expect(
+          diffValues(
+            {
+              list: [before, before, beforeList, beforeList],
+              record: { x: before, y: before },
+            },
+            {
+              list: [after, after, afterList, afterList],
+              record: { x: after, y: after },
+            },
+          ),
+        ).toEqual([]);
+        expect(
+          diffValues({ a: 1 }, { b: 1 }).map(({ path, kind }) => ({
+            path,
+            kind,
+          })),
+        ).toEqual([
+          { path: "a", kind: "removed" },
+          { path: "b", kind: "added" },
+        ]);
+      });
+
+      await t.step(
+        "diffValues returns nothing when both sides are absent",
+        () => {
+          expect(diffValues(undefined, undefined)).toEqual([]);
+        },
+      );
+
+      await t.step(
+        "diffValues names the stored kinds when display annotations collide",
+        () => {
+          const kinds = (before: FabricValue, after: FabricValue) => {
+            const [change] = diffValues(before, after, [], 0);
+            return [
+              change.annotationCollision,
+              change.beforeValueKind,
+              change.afterValueKind,
+            ];
+          };
+          expect(
+            kinds({ "/": { "link@1": { id: "of:x" } } }, {
+              $link: { id: "of:x" },
+            }),
+          ).toEqual([true, "link", "object"]);
+          expect(kinds({ $stream: true }, "$stream")).toEqual([
+            true,
+            "stream",
+            "string",
+          ]);
+          expect(kinds({ "/": "of:x" }, { $ref: "of:x" })).toEqual([
+            true,
+            "reference",
+            "object",
+          ]);
+          const sparse: FabricValue[] = new Array(2);
+          sparse[1] = "x";
+          expect(
+            kinds(sparse, { $sparseArray: { length: 2, entries: { 1: "x" } } }),
+          ).toEqual([true, "array", "object"]);
+          expect(kinds({ n: 1 }, { n: 2 })).toEqual([
+            undefined,
+            undefined,
+            undefined,
+          ]);
+        },
+      );
+
+      await t.step(
+        "diffEntity and entityTimeline report documents without a value and unknown operations",
+        () => {
+          const writable = new Database(dbPath);
+          try {
+            writable.exec(
+              `INSERT INTO "commit" (seq, session_id, local_seq, original, resolution)
+                 VALUES (9, 'session:did:key:zX:u', 9, '{}', '{}');
+               INSERT INTO revision (id, seq, op_index, op, data, commit_seq)
+                 VALUES ('of:NoValue', 9, 0, 'set', '{"argument":1}', 9),
+                        ('of:W', 9, 0, 'set', '{"value":1}', 9),
+                        ('of:W', 9, 1, 'weird', NULL, 9);`,
+            );
+          } finally {
+            writable.close();
+          }
+
+          const noValue = diffEntity(space, { id: "of:NoValue" });
+          expect(noValue.toExists).toBe(true);
+          expect(noValue.changes).toEqual([]);
+          expect(
+            diffEntity(space, { id: "of:NoValue", doc: true }).changes.map((
+              change,
+            ) => change.kind),
+          ).toEqual(["added"]);
+
+          const steps = entityTimeline(space, { id: "of:W" });
+          expect(steps.map((step) => step.op)).toEqual(["set", "weird"]);
+          expect(steps[0].stateKnown).toBeUndefined();
+          expect(steps[1]).toMatchObject({
+            exists: false,
+            stateKnown: false,
+            error: "Unsupported revision operation: weird",
+          });
+        },
+      );
     } finally {
       space.close();
     }

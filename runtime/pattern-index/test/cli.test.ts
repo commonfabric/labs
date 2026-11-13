@@ -153,13 +153,16 @@ describe("cli", () => {
     });
     expect(calls.map((call) => call.did)).toEqual([did, did, did, did]);
     expect(calls[0].body).toEqual({ text: "test", tags: ["test"], limit: 3 });
+    // The client reads each listed pattern's metadata concurrently, so the
+    // index can see those reads in either order.
     expect(
-      calls.filter((call) => call.fn === "getPattern").map((call) => call.body),
-    )
-      .toEqual([{ patternId: "old", includeSource: false }, {
-        patternId: "fresh",
-        includeSource: false,
-      }]);
+      calls.filter((call) => call.fn === "getPattern")
+        .map((call) => call.body)
+        .sort((a, b) => String(a.patternId).localeCompare(String(b.patternId))),
+    ).toEqual([
+      { patternId: "fresh", includeSource: false },
+      { patternId: "old", includeSource: false },
+    ]);
   });
 
   for (
@@ -287,6 +290,32 @@ describe("cli", () => {
     expect(output.code).not.toBe(0);
     expect(output.stdout).toBe("");
     expect(output.stderr).toContain("successor chain is ambiguous or cyclic");
+  });
+
+  it("exits 2 with usage on stderr when a required flag is missing", async () => {
+    const child = new Deno.Command(Deno.execPath(), {
+      cwd: directory,
+      args: [
+        "run",
+        "--no-lock",
+        "--config",
+        `${root}/deno.jsonc`,
+        entry,
+        "--identity",
+        `${directory}/identity.key`,
+      ],
+      stdin: "null",
+      stdout: "piped",
+      stderr: "piped",
+    });
+    const output = await child.output();
+
+    expect(output.code).toBe(2);
+    expect(decoder.decode(output.stdout)).toBe("");
+    expect(decoder.decode(output.stderr)).toContain(
+      "usage: cli.ts --identity <path> --base-url <url>",
+    );
+    expect(calls).toEqual([]);
   });
 
   it("exits nonzero with only stderr when the identity key cannot be read", async () => {

@@ -522,6 +522,68 @@ describe("PatternIndexClient", () => {
     expect(Object.hasOwn(body, "discoverabilityReason")).toBe(false);
   });
 
+  it("requests a publication withheld from search with the reason it gives", async () => {
+    const { client, requests } = createClient([
+      jsonResponse({ patternId: "pat-3", created: true }),
+    ]);
+    await client.publishPattern({
+      patternId: "pat-3",
+      description: "Doubles a number",
+      directQuery: "double a number",
+      hashtags: ["math"],
+      program: {
+        main: "/main.tsx",
+        files: [{ name: "/main.tsx", contents: "export default 1;" }],
+      },
+      discoverable: true,
+      nonDiscoverable: { reason: "render-gate-failed" },
+    });
+
+    const body = JSON.parse(requests[0].body);
+    expect(body.discoverable).toBe(false);
+    expect(body.discoverabilityReason).toBe("render-gate-failed");
+  });
+
+  it("reads the index's health with an unsigned GET", async () => {
+    const { client, requests } = createClient([jsonResponse({ ok: true })]);
+
+    expect(await client.health()).toEqual({ ok: true });
+    expect(requests).toHaveLength(1);
+    expect(requests[0].url).toBe("https://index.test/api/health");
+    expect(requests[0].method).toBe("GET");
+    for (const header of Object.values(FIRST_PARTY_HTTP_AUTH_HEADERS)) {
+      expect(requests[0].headers.has(header)).toBe(false);
+    }
+  });
+
+  it("reads enrollment for the DID it signs as", async () => {
+    const { client, requests } = createClient([
+      jsonResponse({ enrolled: true }),
+    ]);
+
+    expect(await client.enrollmentStatus()).toEqual({ enrolled: true });
+    const url = new URL(requests[0].url);
+    expect(url.origin + url.pathname).toBe(
+      "https://index.test/api/enrollmentStatus",
+    );
+    expect(url.searchParams.get("did")).toBe(signer.did());
+    expect(requests[0].method).toBe("GET");
+  });
+
+  it("throws a typed error when health or enrollment is refused", async () => {
+    const { client } = createClient([
+      jsonResponse({ error: "down" }, 503),
+      jsonResponse({ error: "down" }, 503),
+    ]);
+
+    await expect(client.health()).rejects.toThrow(
+      "pattern index health failed (503)",
+    );
+    await expect(client.enrollmentStatus()).rejects.toThrow(
+      "pattern index enrollmentStatus failed (503)",
+    );
+  });
+
   it("throws a typed error carrying the status and the index's message", async () => {
     const { client } = createClient([
       jsonResponse({ error: "unknown pattern" }, 404),

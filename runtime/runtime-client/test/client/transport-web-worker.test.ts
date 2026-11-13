@@ -9,7 +9,9 @@ import { defer } from "@commonfabric/async/defer";
 import {
   ClientTransportNotificationType,
   type ErrorNotification,
+  type IPCClientMessage,
   NotificationType,
+  RequestType,
   TransportNotificationType,
 } from "@/protocol/mod.ts";
 import { WebWorkerRuntimeTransport } from "@/client/transports/web-worker/transport-web-worker.ts";
@@ -197,6 +199,78 @@ describe("WebWorkerRuntimeTransport", () => {
     });
   });
 
+  describe("[Symbol.asyncDispose]()", () => {
+    it("terminates the worker at the end of an `await using` scope", async () => {
+      const { connection, worker } = connectWithFakeWorker();
+      worker.dispatchEvent(
+        posted({ type: TransportNotificationType.WorkerReady }),
+      );
+      {
+        await using _transport = await connection;
+        expect(worker.terminated).toBe(false);
+      }
+      expect(worker.terminated).toBe(true);
+    });
+  });
+
+  describe("a worker error", () => {
+    /** An error event carrying `error`, as a worker's uncaught throw does. */
+    function errorEvent(error: unknown): ErrorEvent {
+      return new ErrorEvent("error", {
+        message: "Uncaught Error",
+        error,
+        cancelable: true,
+      });
+    }
+
+    it("rejects `ready()` before ready with the error's message, name and stack", async () => {
+      const { connection, worker } = connectWithFakeWorker();
+      worker.dispatchEvent(
+        errorEvent({ message: "boom", name: "RangeError", stack: "at here" }),
+      );
+      const error = await connection.then(() => undefined, (e) => e);
+      expect(error).toBeInstanceOf(Error);
+      expect([error.message, error.name, error.stack]).toEqual([
+        "boom",
+        "RangeError",
+        "at here",
+      ]);
+    });
+
+    it("emits an error report once ready, and does not fail the transport", async () => {
+      const { connection, worker } = connectWithFakeWorker();
+      worker.dispatchEvent(
+        posted({ type: TransportNotificationType.WorkerReady }),
+      );
+      const transport = await connection;
+      const messages: unknown[] = [];
+      transport.on("message", (message) => messages.push(message));
+      const event = errorEvent({
+        message: "late",
+        stack: "Error: late\n  at w",
+      });
+      worker.dispatchEvent(event);
+
+      expect(event.defaultPrevented).toBe(true);
+      expect(messages).toEqual([{
+        type: NotificationType.ErrorReport,
+        message: "Error: late",
+        stackTrace: "Error: late\n  at w",
+      }]);
+      await transport.dispose();
+    });
+
+    it("falls back to the event's message when it carries no error", async () => {
+      const { connection, worker } = connectWithFakeWorker();
+      worker.dispatchEvent(
+        new ErrorEvent("error", { message: "", cancelable: true }),
+      );
+      await expect(connection).rejects.toThrow(
+        "Web worker failed before initialization",
+      );
+    });
+  });
+
   describe("what a decode delivers", () => {
     it("emits a message the consumer cannot edit", () => {
       // `BaseRequest` states this as one contract for both directions: a
@@ -361,6 +435,22 @@ describe("WebWorkerRuntimeTransport", () => {
       handlerOf(transport)(posted(ipc));
       expect(emitted).toContainEqual(ipc);
 
+      await transport.dispose();
+    });
+  });
+
+  describe("send()", () => {
+    it("posts the message to the worker in its realm encoding, with nothing transferred", async () => {
+      const transport = makeTransport();
+      const worker = FakeWorker.instances[FakeWorker.instances.length - 1];
+      const message = {
+        msgId: 3,
+        data: { type: RequestType.Idle },
+      } satisfies IPCClientMessage;
+      transport.send(message);
+      expect(worker.posted).toHaveLength(1);
+      expect(fabricFromRealmValue(structuredClone(worker.posted[0]) as never))
+        .toEqual(message);
       await transport.dispose();
     });
   });

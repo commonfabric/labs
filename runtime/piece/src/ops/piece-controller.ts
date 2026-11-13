@@ -3944,14 +3944,13 @@ class PiecePropIo implements PieceCellIo {
   }
 
   #getTargetCell(): Promise<Cell<unknown>> {
-    if (this.#type === "input") {
-      return Promise.resolve(
-        this.#cc.pieces().getArgument(this.#cc.getCell()),
-      );
-    } else if (this.#type === "result") {
-      return Promise.resolve(this.#cc.pieces().getResult(this.#cc.getCell()));
-    }
-    throw new Error(`Unknown property type "${this.#type}"`);
+    const pieces = this.#cc.pieces();
+    const cell = this.#cc.getCell();
+    return Promise.resolve(
+      this.#type === "input"
+        ? pieces.getArgument(cell)
+        : pieces.getResult(cell),
+    );
   }
 }
 

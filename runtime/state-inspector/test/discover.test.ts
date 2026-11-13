@@ -3,6 +3,7 @@
 // and quick stats. Side-effect free.
 
 import { assert, assertEquals, assertThrows } from "@std/assert";
+import { expect } from "@std/expect";
 import * as Path from "@std/path";
 import { Database } from "@db/sqlite";
 
@@ -136,6 +137,53 @@ Deno.test("discovery + resolution", async (t) => {
         // the same async entry point still honors DID-prefix and path matching
         const byPrefix = await resolveSpace("zAlpha", found);
         assert(byPrefix.endsWith(`${DID_1}.sqlite`));
+      },
+    );
+
+    await t.step(
+      "resolveSpacePath matches a path-shaped token that is no file against DIDs",
+      () => {
+        const found = discoverSpaceDbs({
+          dirs: [`${dir}/cache/memory`],
+          defaultRoots: false,
+        });
+        expect(() => resolveSpacePath(`${dir}/missing.sqlite`, found))
+          .toThrow(`no space matches "${dir}/missing.sqlite"`);
+        expect(resolveSpacePath(`${DID_1}.sqlite`, [{
+          did: `${DID_1}.sqlite`,
+          path: "/elsewhere",
+          sizeBytes: 0,
+          mtimeMs: 0,
+        }])).toBe("/elsewhere");
+      },
+    );
+
+    await t.step(
+      "resolveSpace reports a name or path that matches no DB",
+      async () => {
+        const found = discoverSpaceDbs({
+          dirs: [`${dir}/cache/memory`],
+          defaultRoots: false,
+        });
+        const did = await legacySpaceDid("no-such-space");
+        await expect(resolveSpace("no-such-space", found)).rejects.toThrow(
+          `as a name it derives to ${did}`,
+        );
+        await expect(resolveSpace(`${dir}/missing.sqlite`, found)).rejects
+          .toThrow(`no space matches "${dir}/missing.sqlite" (run:`);
+        await expect(resolveSpace("did:key:zNothing", found)).rejects.toThrow(
+          'no space matches "did:key:zNothing" (run:',
+        );
+      },
+    );
+
+    await t.step(
+      "quickStats returns null for what is not a space DB",
+      () => {
+        expect(quickStats(`${dir}/missing.sqlite`)).toBeNull();
+        const empty = `${dir}/empty.sqlite`;
+        new Database(empty, { create: true }).close();
+        expect(quickStats(empty)).toBeNull();
       },
     );
   } finally {

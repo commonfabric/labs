@@ -176,6 +176,7 @@
  */
 
 import { isDeno } from "@commonfabric/platform/env";
+import { logSinks } from "./log-sinks.ts";
 
 /**
  * A message argument: either the value to log, or a function returning it. The
@@ -487,6 +488,14 @@ export const LOG_COLORS = {
   taggedWarn: "color: #eab308; font-weight: 500",
   taggedError: "color: #ef4444; font-weight: 500",
 } as const;
+
+/** The `console` method each level prints through. */
+const CONSOLE_METHODS = {
+  debug: "debug",
+  info: "log",
+  warn: "warn",
+  error: "error",
+} as const satisfies Record<ActiveLogLevel, keyof Console>;
 
 /**
  * Global log level floor. When set, `shouldLog()` uses the more restrictive
@@ -1182,18 +1191,7 @@ export class Logger {
     this.#incrementKeyCount(key, "debug");
     if (this.#disabled) return;
     this.#maybeLogCountSummary();
-    if (shouldLog("debug", this.#level)) {
-      const { prefix, color } = this.#getLogFormat("debug");
-      if (shouldLogToStderr()) {
-        logToStderr(
-          prefix.replace("%c", ""),
-          key,
-          ...resolveMessages(messages),
-        );
-      } else {
-        console.debug(prefix, color, key, ...resolveMessages(messages));
-      }
-    }
+    if (shouldLog("debug", this.#level)) this.#emit("debug", key, messages);
   }
 
   /** Logs a message at info level, this being the default method. */
@@ -1207,18 +1205,7 @@ export class Logger {
     this.#incrementKeyCount(key, "info");
     if (this.#disabled) return;
     this.#maybeLogCountSummary();
-    if (shouldLog("info", this.#level)) {
-      const { prefix, color } = this.#getLogFormat("info");
-      if (shouldLogToStderr()) {
-        logToStderr(
-          prefix.replace("%c", ""),
-          key,
-          ...resolveMessages(messages),
-        );
-      } else {
-        console.log(prefix, color, key, ...resolveMessages(messages));
-      }
-    }
+    if (shouldLog("info", this.#level)) this.#emit("info", key, messages);
   }
 
   /** Logs a warning message. */
@@ -1227,18 +1214,7 @@ export class Logger {
     this.#incrementKeyCount(key, "warn");
     if (this.#disabled) return;
     this.#maybeLogCountSummary();
-    if (shouldLog("warn", this.#level)) {
-      const { prefix, color } = this.#getLogFormat("warn");
-      if (shouldLogToStderr()) {
-        logToStderr(
-          prefix.replace("%c", ""),
-          key,
-          ...resolveMessages(messages),
-        );
-      } else {
-        console.warn(prefix, color, key, ...resolveMessages(messages));
-      }
-    }
+    if (shouldLog("warn", this.#level)) this.#emit("warn", key, messages);
   }
 
   /** Logs an error message. */
@@ -1248,18 +1224,7 @@ export class Logger {
     this.#keepErrorMessage(key, messages);
     if (this.#disabled) return;
     this.#maybeLogCountSummary();
-    if (shouldLog("error", this.#level)) {
-      const { prefix, color } = this.#getLogFormat("error");
-      if (shouldLogToStderr()) {
-        logToStderr(
-          prefix.replace("%c", ""),
-          key,
-          ...resolveMessages(messages),
-        );
-      } else {
-        console.error(prefix, color, key, ...resolveMessages(messages));
-      }
-    }
+    if (shouldLog("error", this.#level)) this.#emit("error", key, messages);
   }
 
   //
@@ -1502,6 +1467,25 @@ export class Logger {
   }
 
   /**
+   * Prints one line at `level`: to the logger's capture while a test holds
+   * one, and otherwise to stderr or `console`.
+   */
+  #emit(level: ActiveLogLevel, key: string, messages: LogMessage[]): void {
+    const resolved = resolveMessages(messages);
+    const sink = logSinks.get(this);
+    if (sink !== undefined) {
+      sink(level, key, resolved);
+      return;
+    }
+    const { prefix, color } = this.#getLogFormat(level);
+    if (shouldLogToStderr()) {
+      logToStderr(prefix.replace("%c", ""), key, ...resolved);
+    } else {
+      console[CONSOLE_METHODS[level]](prefix, color, key, ...resolved);
+    }
+  }
+
+  /**
    * Logs the count summary, if incrementing the counter has just carried the
    * total past another multiple of the configured threshold.
    */
@@ -1516,8 +1500,9 @@ export class Logger {
     if (threshold > this.#lastLoggedAt) {
       this.#lastLoggedAt = threshold;
 
-      // Only log if debug level is enabled
-      if (shouldLog("debug", this.#level)) {
+      // Only log if debug level is enabled, and leave a capture's record to
+      // the lines logged.
+      if (shouldLog("debug", this.#level) && !logSinks.has(this)) {
         const { prefix, color } = this.#getLogFormat("debug");
         const moduleName = this.#moduleName || "logger";
         const message =

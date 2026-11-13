@@ -89,6 +89,16 @@ getLogger("chatty", { logCountEvery: 50 });  // every 50 calls
 getLogger("quiet", { logCountEvery: 0 });    // disable summaries
 ```
 
+### Capturing a logger in a test
+
+`captureLogsForTestingOnly(moduleName)`, from the package's
+`./for-testing-only` entry, turns one logger on at `debug`, lifts the global
+floor, and records each line that logger emits, with its level, key and
+resolved text, instead of printing it, whether or not `LOG_TO_STDERR` is set.
+While a capture holds a logger, the logger prints no count summary, so the
+record holds only the lines the code logged. Disposing the capture puts the
+logger, the floor and the output back as they were.
+
 ## Timing
 
 Loggers can track operation timing with reservoir-sampled percentiles:
