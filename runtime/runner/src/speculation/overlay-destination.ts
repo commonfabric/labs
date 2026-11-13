@@ -2247,6 +2247,10 @@ export class SpeculationOverlayDestination
         // confirmed cover witnesses, whatever its class: the store has
         // moved past everything this speculation consumed.
         let arrived = true;
+        const unservedCids: string[] = [];
+        const namedCids = new Set<string>();
+        let namesUnknown = false;
+        let arrivedDocs = 0;
         for (const doc of entry.writtenDocs) {
           const state = view(doc.id, doc.scope);
           // A content-addressed doc the store holds witnesses at ANY
@@ -2266,10 +2270,10 @@ export class SpeculationOverlayDestination
           // speculative cid layer is inadmissible content that can
           // never arrive, so holding the entry for it would strand
           // the entry, and its sibling layers, forever. A cid doc
-          // with NO confirmed cover still holds the entry: nothing
-          // has served the schema document yet, and dropping the
-          // layer would flip local schema resolution to nothing.
-          if (doc.id.startsWith("cid:") && state.confirmedSeq > 0) {
+          // with NO confirmed cover is decided once every other doc has
+          // arrived, below.
+          if (doc.id.startsWith("cid:")) {
+            if (state.confirmedSeq === 0) unservedCids.push(doc.id);
             continue;
           }
           if (state.confirmedSeq === 0 || state.confirmedSeq < floor) {
@@ -2280,6 +2284,32 @@ export class SpeculationOverlayDestination
             arrived = false;
             break;
           }
+          arrivedDocs += 1;
+          if (state.envelopeDocuments === undefined) {
+            namesUnknown = true;
+          } else {
+            for (const id of state.envelopeDocuments) namedCids.add(id);
+          }
+        }
+        // A cid doc the store has not served holds the entry while a
+        // document it wrote names it, as the store has that document (the
+        // arrived envelope's schema or label document, which a frame
+        // delivers apart from the envelope, so it can arrive after), and
+        // while the entry wrote no other document at all: nothing has
+        // served the cid doc, and the layer may be all that holds it here.
+        // Otherwise no arrived document needs it: the speculative run
+        // minted it for an envelope the served derivation did not write —
+        // a labeled write the serving runtime refused, or a schema it
+        // stamps differently — so the store never comes to hold it, and
+        // holding the entry for it would strand the entry and its sibling
+        // layers forever, masking the served values. Only the documents
+        // this entry wrote are consulted.
+        if (
+          arrived && unservedCids.length > 0 &&
+          (arrivedDocs === 0 || namesUnknown ||
+            unservedCids.some((id) => namedCids.has(id)))
+        ) {
+          arrived = false;
         }
         if (!arrived) continue;
         entries.delete(entry.localSeq);
