@@ -1,0 +1,126 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "MentionablePiece": {
+        "properties": {
+          "$NAME": {
+            "type": "string"
+          },
+          "backlinks": {
+            "items": {
+              "$ref": "#/$defs/MentionablePiece"
+            },
+            "type": "array"
+          },
+          "isHidden": {
+            "type": "boolean"
+          },
+          "isMentionable": {
+            "type": "boolean"
+          },
+          "mentionable": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/$defs/MentionablePiece"
+                },
+                "type": "array"
+              },
+              {
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          },
+          "mentioned": {
+            "items": {
+              "$ref": "#/$defs/MentionablePiece"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "properties": {
+      "pieceRegistry": {
+        "items": {
+          "$ref": "#/$defs/MentionablePiece",
+          "asCell": [
+            "cell"
+          ]
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "pieceRegistry"
+    ],
+    "type": "object"
+  },
+  "pattern": "system/backlinks-index/backlinks-index.tsx",
+  "resultSchema": {
+    "$defs": {
+      "MentionablePiece": {
+        "properties": {
+          "$NAME": {
+            "type": "string"
+          },
+          "backlinks": {
+            "items": {
+              "$ref": "#/$defs/MentionablePiece"
+            },
+            "type": "array"
+          },
+          "isHidden": {
+            "type": "boolean"
+          },
+          "isMentionable": {
+            "type": "boolean"
+          },
+          "mentionable": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/$defs/MentionablePiece"
+                },
+                "type": "array"
+              },
+              {
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          },
+          "mentioned": {
+            "items": {
+              "$ref": "#/$defs/MentionablePiece"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "mentionable": {
+        "items": {
+          "$ref": "#/$defs/MentionablePiece"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "mentionable",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

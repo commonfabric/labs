@@ -255,11 +255,8 @@ export default pattern(() => {
     profile.setAvatar.send({ avatar: "" });
   });
 
-  // CT-1748 note: the presentation-vs-edit *content* lives behind `ifElse`, and
-  // [UI] vnode traversal doesn't resolve through this test harness's `.get()`,
-  // so the toggle is asserted via the exported `isEditing` and the bound data
-  // below. The rendered presentation itself (real cf-profile-badge + card tiles,
-  // distinct from the edit form) is verified in the browser.
+  // The toggle is asserted via the exported `isEditing` and the bound data
+  // below. `profile-home.elements.test.tsx` walks the rendered presentation.
 
   // Visiting a profile starts in the read-only presentation, not the edit form.
   const assert_not_editing = assert(() => profile.isEditing === false);

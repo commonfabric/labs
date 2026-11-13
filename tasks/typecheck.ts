@@ -137,7 +137,6 @@ const DIRS = [
   "patterns/system/home",
   "patterns/system/journal",
   "patterns/system/knowledge-graph",
-  "patterns/system/link-tool",
   "patterns/system/mentionables-inspector",
   "patterns/system/notes",
   "patterns/system/omnibox-fab",
