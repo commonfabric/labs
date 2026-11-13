@@ -204,6 +204,11 @@ const CASES: &[Case] = &[
         "const Box = pattern<{ prices: number[] }>(({ prices }) => ({ total: prices.reduce((sum, price) => sum + price, 0) }));",
     ),
     case(
+        "collection:reduce-accumulator",
+        "const Box = pattern<{ names: string[] }>(({ names }) => ({ seen: /*!*/names.reduce((seen, name) => seen.add(name), new Set<string>()) }));",
+        "const Box = pattern<{ names: string[] }>(({ names }) => ({ joined: names.reduce((joined, name) => joined + name, \"\") }));",
+    ),
+    case(
         "collection:index-keyed",
         "const Box = pattern<{ names: string[] }>(({ names }) => ({ rows: names.map(/*!*/(name, index) => `${index}. ${name}`) }));",
         "const Box = pattern<{ names: string[] }>(({ names }) => ({ rows: names.map((name) => `${name}!`) }));",

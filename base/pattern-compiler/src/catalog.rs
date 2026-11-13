@@ -194,10 +194,12 @@ pub const CATALOG: &[Entry] = &[
     done("collection:callback-parameters", Error),
     done("collection:reduce-callback", Error),
     done("collection:reduce-initial", Error),
-    types(
+    part(
         "collection:reduce-accumulator",
         Error,
-        "whether the accumulator's type is a code type",
+        "reported where the initial value has a standard-library object type or a \
+         function type; an accumulator whose code type shows only in the step's \
+         expression is not decided",
     ),
     done("collection:index-keyed", Hint),
     part("cell:unsupported-method", Error, HANDLE_REST),

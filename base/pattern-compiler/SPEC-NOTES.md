@@ -42,43 +42,31 @@ one that accepts less. The crate implements the document as it stands at commit
 
 ## The type system (§7, §8)
 
-13. **`Default<T, typeof NAME>`** (§8.8, §11.4). §8.8 requires a literal-like
-    type, and §11.4 lists `Default<typeof EMPTY>` as a common accepted form. The
-    type of an annotated constant, `const EMPTY: Viewer = {}`, is `Viewer`,
-    which is not literal-like. Chosen: `typeof NAME` in a default takes the
-    value from the initializer of `NAME`, whatever its annotation, and a
-    primitive literal there has its literal type. It is static when the
-    initializer is a literal expression, refused (`default:not-static`) when the
-    initializer is a call or a `new`, and not decided when the initializer
-    refers to other values. One corpus site is refused:
-    `INITIAL_SHOTS = createInitialShots()` in
-    `patterns/showcase/battleship/multiplayer/schemas.tsx`.
+13. **`Default<T, typeof NAME>`** (§8.8). Ruled: a default named by `typeof` of
+    a constant whose initializer is a call is refused. Still open: an
+    initializer that is not a literal and not a call, such as one that spreads
+    another constant. Chosen: not decided, and not reported.
 14. **An intersection with a handle, a function, or an opaque API type** (§7.4).
     "Any other combination is `never`" would refuse `Cell<A> & { ... }` and
     `VNode & { ... }`. The document does not give the structure of the opaque
     API types. Chosen: such an intersection is left unevaluated and is not
     reported. This is the one place the crate does not take the reading that
     accepts less.
-15. **A function type inside a data type that describes a cell-like value**
-    (§7.9, §11.4). `MentionablePiece` in
-    `patterns/system/backlinks-index/backlinks-index.tsx` declares
-    `mentionable?: MentionablePiece[] | { get?: () => MentionablePiece[] }`, and
-    the type is a pattern input, a cell value, and a handler state in ten
-    modules. §11.4 accepts function types "as code types". Chosen: as §7.9 says,
-    so each use is `subset-type:function-in-data`, 35 reports from the one
-    declaration.
+15. **`Default<V>` as a member of a union** (§8.8). `T | Default<V>` gives the
+    value type `T`. Chosen: the member is dropped from the union when the type
+    is resolved, and the default annotation is not kept on the union, because no
+    rule of this slice reads it there.
 16. **`.get()` on a value whose type declares a `get` of its own** (§4.4). A
     helper's parameter typed `{ get(): T }` is not a `Cell`, and
     `opaque-get:invalid-call` names the three cell types only. Chosen: not
     reported, since the call is an ordinary method call of that object type.
-17. **`key` on a handle whose property is itself a handle** (§4.7, §12.4). §4.7
-    says `key(k)` "yields a handle of the same kind for the property". For a
-    property of type `Cell<T>` that is `Cell<Cell<T>>`. `aboutRecordOf` in
-    `patterns/system/fabrichat/manager.tsx` returns
-    `room.key("about").key("record")` under the result type `Cell<AboutRecord>`,
-    where the declared type gives `Cell<Cell<AboutRecord>>`. Neither rewrite of
-    §12.4 covers it: the function does not return its argument. Chosen: the
-    crate reports the declared type and proposes no replacement.
+17. **`get()` after a `key` that flattens to a stream** (§4.7, ruling R2). `key`
+    flattens every handle it passes through, so `inbox.key("receive")` on a
+    `Cell<{ receive: Stream<E> }>` is a `Stream<E>`.
+    `patterns/system/fabrichat/manager.tsx` line 632 then calls `.get()` on it
+    to obtain the stream, and a `Stream` has no `get` (§4.7). Chosen: as the two
+    rules say, so the call is `opaque-get:invalid-call`, and the rewrite drops
+    the `.get()`.
 18. **Label arguments** (§8.5). A label list written as a reference to an alias,
     and the arguments of `PolicyOf` and of the trusted-action aliases, are not
     evaluated, so `cfc-label:not-a-list` and `cfc-label:not-static` are decided
@@ -102,15 +90,50 @@ one that accepts less. The crate implements the document as it stands at commit
 10. **`map` callbacks in the pattern body** (§11.4): 326 against 325. The one
     the crate does not count is `.map(toMentionable)`, which has no callback
     body.
-11. **Per-element bodies over plain values** (§11.3): 7 in 7 files against 9
-    callbacks in 7 files. With declared types the crate also finds a stored list
-    of strings in `patterns/dev/map-captured-object-spread/main.tsx`. The crate
-    reports per callback, and three are in
-    `patterns/apps/weekly-calendar/weekly-calendar.tsx`. The document counts a
-    collection that is a call result, and the crate decides those only for
-    `Object.keys`, `Object.entries`, and `split`; the plainness of any other
-    call result needs the body record of the function (§4.4.1).
+11. **Per-element bodies over plain values** (§11.3). The ruling of 2026-11-13
+    limits `collection:shared-element-state` to a state cell. No callback in the
+    corpus declares one, so the crate reports none, where §11.3 as it stands
+    counts 7 handler bindings.
 12. **The split of the promotion table** (§11.5). The totals agree: 1,369
     promoted, 109 not, 15 in statement position. The crate counts a body under
     "guard" whenever it uses a guard, and a collection callback with a statement
     body as a disqualifying expression, so the rows differ by a few calls each.
+
+## The rulings of 2026-11-13, and inference
+
+20. **Where the warning for an instantiation without a cause applies** (ruling
+    R10). The ruling says "inside a loop or a callback in a function body".
+    Chosen: a `lift`, a `computed`, and an `assert`, where an instance is named
+    by its ordinal. A `handler` and an `action` are not warned, and neither is
+    an authored function a computation calls. A nested function counts as a
+    callback whatever it is passed to. The identifier is provisional:
+    `function-body:instantiation-without-cause`.
+21. **A state cell in a per-element body that also instantiates a child**
+    (ruling R11). The ruling puts the position in the key where such a body
+    instantiates a child, and asks whether the body's own state cell is then
+    accepted. The documents do not say. Chosen: the state cell is still refused
+    when the callback does not use its index. The crate counts the bodies over
+    plain values that instantiate a child; the corpus has none. This is a
+    question for the owner.
+22. **A call of an overloaded function** (§7.9). Overloads are refused, and a
+    call of one still has to have a type for the code around it. Chosen: the
+    result type of the first signature.
+23. **A value of a function type** (§7.1). The representation keeps no signature
+    for a function type, so the result of calling a parameter or a property of
+    function type has no type. Six receivers in the corpus.
+24. **Generic functions** (§7.3). A type parameter is bound from a written type
+    argument, or from the argument whose parameter is the type parameter, an
+    array of it, or a handle of it. Any other parameter stays unbound, and the
+    function body is not checked per instantiation.
+25. **Narrowing** (§7.6). Not applied. A method called on a union is typed when
+    the union has one member besides `null` and `undefined`.
+26. **The result of `computed`** (§7.2). `Reactive<T>` is `T`, so the result of
+    `computed(() => e)` has the type of `e`, and `.get()` on it is
+    `opaque-get:invalid-call`.
+27. **Built-ins whose result this slice types.** `wish`, `fetchJson`,
+    `fetchJsonUnchecked`, and `generateObject` have the result
+    `{ pending: boolean; result: T | undefined; error: unknown }` with `T` the
+    written type argument, and `generateText` and `fetchText` the same with
+    `string`. The declarations in `base/api/index.ts` have more fields, which
+    read as untyped here. The other effectful built-ins have no signature in
+    this slice.

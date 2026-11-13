@@ -114,6 +114,10 @@ pub fn rewrite(id: &str) -> &'static str {
              that needs statements is a loop inside `computed(() => ...)`."
         }
         "collection:reduce-initial" => "Pass the initial value as the second argument.",
+        "collection:reduce-accumulator" => {
+            "Accumulate into an object, an array, or a primitive. To fold into a `Map`, write \
+             the loop inside `computed(() => ...)` and return data."
+        }
         "collection:index-keyed" => {
             "Drop the index if the element can supply what it was used for, such as a \
              stable identifier in place of `key={index}`."

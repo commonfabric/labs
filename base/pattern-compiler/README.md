@@ -31,12 +31,13 @@ job builds or tests it. It is not a Deno workspace member.
 
 ## What it does not cover
 
-It has no footprint analysis and no code or plan emission. Its type checker is a
-first slice: it resolves written types and the declared types of bindings, and
-infers nothing from an expression apart from a literal. A rule that needs an
-inferred type is not reported. `SPEC-NOTES.md` lists the places where the
-specification was ambiguous or could not be implemented as written, with the
-reading this crate chose.
+It has no footprint analysis and no code or plan emission. Its type checker is
+two slices: it resolves written types and the declared types of bindings, and it
+infers the types of call results, standard-library members, operators, literals,
+and callback parameters. It has no assignability check and no narrowing. A rule
+that needs a type it does not have is not reported. `SPEC-NOTES.md` lists the
+places where the specification was ambiguous or could not be implemented as
+written, with the reading this crate chose.
 
 The `catalog` command prints, for each entry of the diagnostics catalog, whether
 the crate implements it, implements the part syntax decides, leaves it to the
@@ -69,8 +70,8 @@ release that builds with the Rust 1.93 toolchain.
 | `catalog`, `diagnostics` | The diagnostics catalog and the diagnostic record                                                                     |
 | `corpus`, `report`       | Which files are the corpus, and the report over them                                                                  |
 
-Expression inference is the next part of `types`. Footprint analysis reads the
-body records of `tiers`.
+Assignability (`language-subset.md` §7.5) is the next part of the type checker.
+Footprint analysis reads the body records of `tiers`.
 
 ## Build, test, and run
 

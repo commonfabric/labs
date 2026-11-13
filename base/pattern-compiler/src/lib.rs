@@ -12,6 +12,7 @@ pub mod check;
 pub mod corpus;
 pub mod declared;
 pub mod diagnostics;
+pub mod infer;
 pub mod messages;
 pub mod module;
 pub mod parse;

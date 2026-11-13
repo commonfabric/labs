@@ -37,6 +37,9 @@ pub struct ModuleAnalysis {
     pub counts: BTreeMap<String, usize>,
     /// The overload signatures of the module, with what replaces each.
     pub overloads: Vec<OverloadNote>,
+    /// The receivers of method calls that have no type: the reason, the
+    /// line, and the start of the receiver's text.
+    pub untyped: Vec<(&'static str, u32, String)>,
 }
 
 impl ModuleAnalysis {
@@ -285,6 +288,7 @@ pub fn analyze(files: &[SourceFile]) -> ProgramAnalysis {
                 counts
             },
             overloads: resolver.overloads(index),
+            untyped: check.untyped,
         });
     }
     ProgramAnalysis { modules, failures }

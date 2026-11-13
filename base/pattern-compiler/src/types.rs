@@ -154,6 +154,8 @@ pub struct TypeStore {
     /// The number of written types of each module by how far they were
     /// evaluated.
     pub written: HashMap<(usize, &'static str), usize>,
+    /// The functions whose return type is being inferred.
+    in_progress: std::collections::HashSet<(usize, u32)>,
 }
 
 impl TypeStore {
@@ -697,10 +699,14 @@ impl<'a> Resolver<'_, 'a> {
             _ => self.unresolved(Why::NotEvaluated),
         };
         if plain {
-            self.types
-                .borrow_mut()
-                .declarations
-                .insert((module, symbol), Some(resolved));
+            // A type resolved while another declaration is being resolved
+            // may hold a recursive reference to that declaration, so only
+            // the outermost resolution is kept.
+            let mut types = self.types.borrow_mut();
+            types.declarations.remove(&(module, symbol));
+            if types.declarations.values().all(Option::is_some) {
+                types.declarations.insert((module, symbol), Some(resolved));
+            }
         }
         resolved
     }
@@ -806,6 +812,11 @@ impl<'a> Resolver<'_, 'a> {
                             "A `Default` value that is not literal-like",
                         );
                     }
+                }
+                // `T | Default<V>`: the member gives the union a default and
+                // is not a member of the value's type.
+                if arguments.len() == 1 {
+                    return self.annotate(self.add(Shape::Never), "default", argument_text(0));
                 }
                 self.annotate(
                     first(),
@@ -1093,6 +1104,7 @@ impl<'a> Resolver<'_, 'a> {
                 _ => self.unresolved(Why::NotEvaluated),
             },
             "Exclude" | "Extract" => self.unresolved(Why::NotEvaluated),
+            "PropertyKey" => self.add(Shape::String),
             "Date" | "RegExp" | "Error" | "TypeError" | "RangeError" | "Map" | "Set"
             | "ReadonlyMap" | "ReadonlySet" | "URL" | "Uint8Array" | "Iterable" => {
                 self.add(Shape::Code(name.to_string()))
@@ -1332,6 +1344,32 @@ impl<'a> Resolver<'_, 'a> {
             .written
             .entry((module, label))
             .or_insert(0) += 1;
+    }
+
+    /// A union of `members`.
+    pub(crate) fn union_of(&self, members: Vec<TypeId>) -> TypeId {
+        self.union(members)
+    }
+
+    /// Resolves a type written in module `module` with type parameters
+    /// bound.
+    pub(crate) fn resolve_with(
+        &self,
+        module: usize,
+        ty: &TSType<'a>,
+        env: &[(SymbolId, TypeId)],
+    ) -> TypeId {
+        self.resolve(module, ty, &env.to_vec(), 0)
+    }
+
+    /// Marks the function at `key` as being inferred. Returns false when it
+    /// already is, which is a recursive call.
+    pub(crate) fn enter(&self, key: (usize, u32)) -> bool {
+        self.types.borrow_mut().in_progress.insert(key)
+    }
+
+    pub(crate) fn leave(&self, key: (usize, u32)) {
+        self.types.borrow_mut().in_progress.remove(&key);
     }
 
     /// A type as text, for reports.

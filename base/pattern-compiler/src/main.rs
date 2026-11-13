@@ -27,6 +27,8 @@ commands:
       overload signature with the declared type that replaces it. With
       --only=<text>, print for the modules whose path contains the text; the
       other modules are still read, so that imports between them resolve.
+      With --show=<text>, list the receivers that have no type for a reason
+      whose description contains the text.
 ";
 
 fn main() -> ExitCode {
@@ -126,6 +128,15 @@ fn types(paths: &[&str], flags: &[&str]) -> std::io::Result<bool> {
     }
     for (key, count) in counts {
         println!("{count:6}  {key}");
+    }
+    if let Some(show) = flags.iter().find_map(|flag| flag.strip_prefix("--show=")) {
+        for module in &analysis.modules {
+            for (label, line, text) in &module.untyped {
+                if label.contains(show) {
+                    println!("{}:{line}: {text}", module.path);
+                }
+            }
+        }
     }
     for module in &analysis.modules {
         for overload in &module.overloads {

@@ -100,6 +100,9 @@ pub struct ModuleCheck {
     /// The facts of each authored function, by the index of its definition.
     pub facts: HashMap<usize, Facts>,
     pub pending: Vec<Pending>,
+    /// The receivers of method calls that have no type: the reason, the
+    /// line, and the start of the receiver's text.
+    pub untyped: Vec<(&'static str, u32, String)>,
 }
 
 /// The kind of body a function-tier context belongs to, for the rules that
@@ -2147,7 +2150,25 @@ impl<'p, 'a> Checker<'p, 'a> {
 
         let receiver = self.declared(object);
         let label = self.resolver.outcome_label(&receiver);
-        self.count(&format!("types:receiver:{label}"));
+        // A cell constructor or a value of `commonfabric` before the dot is
+        // not a receiver whose type is in question.
+        let named = self.is_cell_constructor(object) || self.api_of(object).is_some();
+        if !named {
+            self.count(&format!("types:receiver:{label}"));
+        }
+        if label != "typed" && !named {
+            let (line, _) = self
+                .parsed
+                .lines
+                .position(self.parsed.source, object.span().start);
+            let text: String = object
+                .span()
+                .source_text(self.parsed.source)
+                .chars()
+                .take(60)
+                .collect();
+            self.out.untyped.push((label, line, text));
+        }
         if name == "get" && call.arguments.is_empty() {
             let readable = match self.declared_shape(object) {
                 Some(Shape::Handle(kind, _)) => kind.is_readable(),
@@ -2440,6 +2461,21 @@ impl<'p, 'a> Checker<'p, 'a> {
                 call.span,
                 "A `reduce` without an initial value",
             );
+        }
+        if reduce {
+            let code = call
+                .arguments
+                .get(1)
+                .and_then(Argument::as_expression)
+                .and_then(|initial| self.declared_shape(initial))
+                .is_some_and(|shape| matches!(shape, Shape::Code(_) | Shape::Function));
+            if code {
+                self.report(
+                    "collection:reduce-accumulator",
+                    call.span,
+                    "A `reduce` whose accumulator has a code type",
+                );
+            }
         }
         for argument in call.arguments.iter().skip(1) {
             self.argument(argument, false);

@@ -23,12 +23,24 @@ use crate::types::{HandleKind, Shape, TypeId, Why};
 /// declaration gives it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Origin {
+    /// A call this slice has no rule for.
     CallResult,
+    /// A call of a value of a function type, whose signature the type
+    /// representation does not keep.
+    FunctionValue,
+    /// A call of a `commonfabric` function this slice has no signature for.
+    ApiResult,
+    /// A member of a typed value that this slice has no typing for.
+    UnlistedMember,
+    /// A call of a function whose body is not one expression or one
+    /// `return`, and that has no return annotation.
+    UninferredReturn,
+    /// A member of a receiver that has no type.
+    UntypedReceiver,
     Operator,
     Literal,
     PropertyOfInferred,
-    /// A parameter of a callback, whose type is the element type of a
-    /// collection that has no declared type.
+    /// A parameter of a callback whose callee gives it no type.
     CallbackParameter,
     /// A parameter with no annotation that is not a callback's.
     UntypedParameter,
@@ -43,17 +55,24 @@ pub enum Origin {
 impl Origin {
     pub fn label(self) -> &'static str {
         match self {
-            Origin::CallResult => "needs inference: a call result",
-            Origin::Operator => "needs inference: an operator",
-            Origin::Literal => "needs inference: an object, array, or regular-expression literal",
-            Origin::PropertyOfInferred => "needs inference: a property of an inferred value",
-            Origin::CallbackParameter => {
-                "needs inference: a callback parameter of an inferred collection"
+            Origin::CallResult => "untyped: the result of a call with no rule in this slice",
+            Origin::FunctionValue => "untyped: the result of a call of a function value",
+            Origin::ApiResult => {
+                "untyped: the result of a built-in with no signature in this slice"
             }
-            Origin::UntypedParameter => "needs inference: a parameter without an annotation",
-            Origin::Reassigned => "needs inference: a `let` or a `catch` variable",
-            Origin::External => "needs inference: a global or a value from outside the program",
-            Origin::Other => "needs inference: another expression",
+            Origin::UnlistedMember => "untyped: a member with no typing in this slice",
+            Origin::UninferredReturn => {
+                "untyped: the result of a function whose body is not one expression or one return"
+            }
+            Origin::UntypedReceiver => "untyped: a member of an untyped receiver",
+            Origin::Operator => "untyped: an operator on untyped operands",
+            Origin::Literal => "untyped: a literal",
+            Origin::PropertyOfInferred => "untyped: a property of an untyped value",
+            Origin::CallbackParameter => "untyped: a callback parameter its callee gives no type",
+            Origin::UntypedParameter => "untyped: a parameter without an annotation",
+            Origin::Reassigned => "untyped: a `let` without an annotation, or a `catch` variable",
+            Origin::External => "untyped: a global or a value from outside the program",
+            Origin::Other => "untyped: another expression",
         }
     }
 }
@@ -72,7 +91,7 @@ impl<'a> Resolver<'_, 'a> {
                 Shape::Unresolved(Why::External) => "declared with a type from outside the program",
                 Shape::Unresolved(_) => "declared with a type this slice does not evaluate",
                 Shape::Parameter(_) => "declared with a type parameter",
-                _ => "declared",
+                _ => "typed",
             },
             Err(origin) => origin.label(),
         }
@@ -80,29 +99,34 @@ impl<'a> Resolver<'_, 'a> {
 
     /// The declared type of an expression of module `module`.
     pub fn declared(&self, module: usize, expression: &Expression<'a>) -> Declared {
-        self.declared_at(module, expression, 0)
+        self.typed_at(module, expression, 0)
     }
 
-    fn declared_at(&self, module: usize, expression: &Expression<'a>, depth: u32) -> Declared {
+    pub(crate) fn typed_at(
+        &self,
+        module: usize,
+        expression: &Expression<'a>,
+        depth: u32,
+    ) -> Declared {
         if depth > MAX_DEPTH {
             return Err(Origin::Other);
         }
         let next = depth + 1;
         match expression {
             Expression::ParenthesizedExpression(inner) => {
-                self.declared_at(module, &inner.expression, next)
+                self.typed_at(module, &inner.expression, next)
             }
             Expression::TSNonNullExpression(inner) => {
-                self.declared_at(module, &inner.expression, next)
+                self.typed_at(module, &inner.expression, next)
             }
             Expression::TSSatisfiesExpression(inner) => {
-                self.declared_at(module, &inner.expression, next)
+                self.typed_at(module, &inner.expression, next)
             }
             Expression::TSAsExpression(cast) => {
                 let constant = matches!(&cast.type_annotation, TSType::TSTypeReference(reference)
                     if matches!(&reference.type_name, TSTypeName::IdentifierReference(name) if name.name == "const"));
                 if constant {
-                    self.declared_at(module, &cast.expression, next)
+                    self.typed_at(module, &cast.expression, next)
                 } else {
                     Ok(self.resolve_type(module, &cast.type_annotation))
                 }
@@ -115,10 +139,12 @@ impl<'a> Resolver<'_, 'a> {
                 Expression::StringLiteral(key) => {
                     self.declared_property(module, &member.object, key.value.as_str(), next)
                 }
-                _ => match self.declared_at(module, &member.object, next) {
+                _ => match self.typed_at(module, &member.object, next) {
                     Ok(object) => Ok(match self.shape(object) {
-                        Shape::Array(element) => element,
-                        _ => self.add_unresolved(),
+                        Shape::Object(_, Some(index)) => index,
+                        _ => self
+                            .element_of(object)
+                            .unwrap_or_else(|| self.add_unresolved()),
                     }),
                     Err(_) => Err(Origin::PropertyOfInferred),
                 },
@@ -130,10 +156,14 @@ impl<'a> Resolver<'_, 'a> {
                     member.property.name.as_str(),
                     next,
                 ),
-                ChainElement::CallExpression(call) => self.declared_call(module, call, next),
+                ChainElement::CallExpression(call) => self
+                    .declared_call(module, call, next)
+                    .or_else(|_| self.infer_call(module, call, next)),
                 _ => Err(Origin::Other),
             },
-            Expression::CallExpression(call) => self.declared_call(module, call, next),
+            Expression::CallExpression(call) => self
+                .declared_call(module, call, next)
+                .or_else(|_| self.infer_call(module, call, next)),
             Expression::NewExpression(new) => match self.handle_kind(module, &new.callee) {
                 Some(kind) => Ok(self.created(
                     module,
@@ -141,7 +171,7 @@ impl<'a> Resolver<'_, 'a> {
                     new.type_arguments.as_deref(),
                     new.arguments.first(),
                 )),
-                None => Err(Origin::CallResult),
+                None => self.infer_new(module, new),
             },
             Expression::StringLiteral(_)
             | Expression::NumericLiteral(_)
@@ -153,15 +183,16 @@ impl<'a> Resolver<'_, 'a> {
             }
             Expression::ArrayExpression(_)
             | Expression::ObjectExpression(_)
-            | Expression::RegExpLiteral(_) => Err(Origin::Literal),
+            | Expression::RegExpLiteral(_) => self.infer_literal(module, expression, next),
             Expression::TemplateLiteral(_)
             | Expression::BinaryExpression(_)
             | Expression::LogicalExpression(_)
             | Expression::ConditionalExpression(_)
             | Expression::UnaryExpression(_)
             | Expression::UpdateExpression(_)
-            | Expression::AssignmentExpression(_) => Err(Origin::Operator),
-            _ => Err(Origin::Other),
+            | Expression::SequenceExpression(_)
+            | Expression::AssignmentExpression(_) => self.infer_operator(module, expression, next),
+            _ => self.infer_other(expression),
         }
     }
 
@@ -176,7 +207,7 @@ impl<'a> Resolver<'_, 'a> {
         name: &str,
         depth: u32,
     ) -> Declared {
-        match self.declared_at(module, object, depth) {
+        match self.typed_at(module, object, depth) {
             Ok(object) => Ok(match self.shape(object) {
                 Shape::Unresolved(why) => self.intern(Shape::Unresolved(why)),
                 Shape::Array(_) | Shape::Tuple(_) | Shape::String if name == "length" => {
@@ -184,6 +215,7 @@ impl<'a> Resolver<'_, 'a> {
                 }
                 _ => self
                     .property(object, name)
+                    .or_else(|| self.member_of(object, name))
                     .unwrap_or_else(|| self.add_unresolved()),
             }),
             Err(Origin::External) => Err(Origin::External),
@@ -219,7 +251,7 @@ impl<'a> Resolver<'_, 'a> {
         if !matches!(name, "get" | "sample" | "key") {
             return Err(Origin::CallResult);
         }
-        let Ok(receiver) = self.declared_at(module, &member.object, depth) else {
+        let Ok(receiver) = self.typed_at(module, &member.object, depth) else {
             return Err(Origin::CallResult);
         };
         let Shape::Handle(kind, value) = self.shape(receiver) else {
@@ -252,8 +284,18 @@ impl<'a> Resolver<'_, 'a> {
     /// through its import.
     fn handle_kind(&self, module: usize, callee: &Expression<'a>) -> Option<HandleKind> {
         let parsed = self.parsed(module)?;
-        let Expression::Identifier(identifier) = unwrap(callee) else {
-            return None;
+        let identifier = match unwrap(callee) {
+            Expression::Identifier(identifier) => identifier,
+            // A constructor under a scope: `X.perUser`.
+            Expression::StaticMemberExpression(scoped)
+                if api::is_cell_scope(scoped.property.name.as_str()) =>
+            {
+                match unwrap(&scoped.object) {
+                    Expression::Identifier(identifier) => identifier,
+                    _ => return None,
+                }
+            }
+            _ => return None,
         };
         let symbol = symbol_of(parsed.semantic.scoping(), identifier)?;
         let api = self.model(module)?.api_ref(symbol)?;
@@ -294,7 +336,13 @@ impl<'a> Resolver<'_, 'a> {
         depth: u32,
     ) -> Declared {
         let parsed = self.parsed(module).ok_or(Origin::External)?;
-        let symbol = symbol_of(parsed.semantic.scoping(), identifier).ok_or(Origin::External)?;
+        let Some(symbol) = symbol_of(parsed.semantic.scoping(), identifier) else {
+            return match identifier.name.as_str() {
+                "undefined" => Ok(self.intern(Shape::Undefined)),
+                "NaN" | "Infinity" => Ok(self.intern(Shape::Number)),
+                _ => Err(Origin::External),
+            };
+        };
         self.declared_symbol(module, symbol, depth)
     }
 
@@ -327,7 +375,7 @@ impl<'a> Resolver<'_, 'a> {
                         Err(Origin::Reassigned)
                     }
                     (None, Some(init)) => self.declared_initializer(module, init, depth + 1),
-                    (None, None) => Err(Origin::Other),
+                    (None, None) => self.loop_variable(module, declarator, depth + 1),
                 };
                 (&declarator.id, base)
             }
@@ -354,15 +402,58 @@ impl<'a> Resolver<'_, 'a> {
             Err(Origin::External) => return Err(Origin::External),
             Err(_) => return Err(Origin::PropertyOfInferred),
         };
-        for key in path {
-            ty = match self.shape(ty) {
-                Shape::Unresolved(why) => self.intern(Shape::Unresolved(why)),
-                _ => self
+        for step in path {
+            ty = match (self.shape(ty), step) {
+                (Shape::Unresolved(why), _) => self.intern(Shape::Unresolved(why)),
+                (_, Step::Key(key)) => self
                     .property(ty, key)
                     .unwrap_or_else(|| self.add_unresolved()),
+                (Shape::Tuple(elements), Step::Index(index)) => elements
+                    .get(index)
+                    .copied()
+                    .unwrap_or_else(|| self.add_unresolved()),
+                (_, Step::Index(_)) => self.element_of(ty).unwrap_or_else(|| self.add_unresolved()),
             };
         }
         Ok(ty)
+    }
+
+    /// The type of the variable of a `for...of` or `for...in` loop.
+    fn loop_variable(
+        &self,
+        module: usize,
+        declarator: &VariableDeclarator<'a>,
+        depth: u32,
+    ) -> Declared {
+        let parsed = self.parsed(module).ok_or(Origin::External)?;
+        for kind in parsed
+            .semantic
+            .nodes()
+            .ancestor_kinds(declarator.node_id.get())
+            .take(3)
+        {
+            match kind {
+                AstKind::ForOfStatement(statement) => {
+                    let collection = self.typed_at(module, &statement.right, depth)?;
+                    return Ok(self
+                        .element_of(collection)
+                        .unwrap_or_else(|| self.add_unresolved()));
+                }
+                AstKind::ForInStatement(_) => return Ok(self.intern(Shape::String)),
+                _ => {}
+            }
+        }
+        Err(Origin::Other)
+    }
+
+    /// The type of a symbol of module `module`.
+    pub(crate) fn declared_symbol_type(
+        &self,
+        module: usize,
+        symbol: SymbolId,
+        depth: u32,
+    ) -> Declared {
+        self.declared_symbol(module, symbol, depth)
     }
 
     /// The declared type of an initializer: a builder definition has a
@@ -380,10 +471,10 @@ impl<'a> Resolver<'_, 'a> {
                 builder,
                 Some(ApiValue::Builder(Builder::Handler | Builder::Pattern))
             ) {
-                return Ok(self.initializer_type(module, init));
+                return Ok(self.factory_type(module, call, depth));
             }
         }
-        self.declared_at(module, init, depth)
+        self.typed_at(module, init, depth)
     }
 
     /// The type of a parameter without an annotation: what the type
@@ -468,31 +559,7 @@ impl<'a> Resolver<'_, 'a> {
                 .map(|written| self.resolve_type(module, written))
                 .ok_or(Origin::UntypedParameter);
         }
-        // The element of a collection method's callback.
-        let Expression::StaticMemberExpression(member) = unwrap(&call.callee) else {
-            return Err(Origin::UntypedParameter);
-        };
-        let method = member.property.name.as_str();
-        let element = position == 0
-            && index == 0
-            && (api::is_element_method(method)
-                || api::is_selector_method(method)
-                || method == "forEach");
-        if !element {
-            return Err(Origin::CallbackParameter);
-        }
-        match self.declared_at(module, &member.object, depth) {
-            Ok(collection) => Ok(match self.shape(collection) {
-                Shape::Array(element) => element,
-                Shape::Handle(_, value) => match self.shape(value) {
-                    Shape::Array(element) => element,
-                    _ => self.add_unresolved(),
-                },
-                Shape::Unresolved(why) => self.intern(Shape::Unresolved(why)),
-                _ => self.add_unresolved(),
-            }),
-            Err(_) => Err(Origin::CallbackParameter),
-        }
+        self.contextual_parameter(module, call, position, index, depth)
     }
 
     /// Whether the elements of a collection of this type are plain values
@@ -671,11 +738,21 @@ impl<'a> Resolver<'_, 'a> {
     }
 }
 
-/// Finds the binding of `symbol` in `pattern` and collects the property
-/// names that lead to it. Returns false when the binding is not in the
-/// pattern or is reached through an array pattern, a rest element, or a
-/// computed key.
-fn path_to<'a>(pattern: &'a BindingPattern<'a>, symbol: SymbolId, path: &mut Vec<&'a str>) -> bool {
+/// One step from a destructured value to a binding in it.
+#[derive(Debug, Clone, Copy)]
+enum Step<'p> {
+    Key(&'p str),
+    Index(usize),
+}
+
+/// Finds the binding of `symbol` in `pattern` and collects the steps that
+/// lead to it. Returns false when the binding is not in the pattern or is
+/// reached through a rest element or a computed key.
+fn path_to<'a>(
+    pattern: &'a BindingPattern<'a>,
+    symbol: SymbolId,
+    path: &mut Vec<Step<'a>>,
+) -> bool {
     match pattern {
         BindingPattern::BindingIdentifier(identifier) => identifier.symbol_id.get() == Some(symbol),
         BindingPattern::AssignmentPattern(assignment) => path_to(&assignment.left, symbol, path),
@@ -685,14 +762,26 @@ fn path_to<'a>(pattern: &'a BindingPattern<'a>, symbol: SymbolId, path: &mut Vec
                 PropertyKey::StringLiteral(literal) => literal.value.as_str(),
                 _ => return false,
             };
-            path.push(key);
+            path.push(Step::Key(key));
             if path_to(&property.value, symbol, path) {
                 return true;
             }
             path.pop();
             false
         }),
-        BindingPattern::ArrayPattern(_) => false,
+        BindingPattern::ArrayPattern(array) => {
+            array.elements.iter().enumerate().any(|(index, element)| {
+                let Some(element) = element else {
+                    return false;
+                };
+                path.push(Step::Index(index));
+                if path_to(element, symbol, path) {
+                    return true;
+                }
+                path.pop();
+                false
+            })
+        }
     }
 }
 
