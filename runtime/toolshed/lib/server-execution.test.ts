@@ -1,5 +1,6 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { stub } from "@std/testing/mock";
 import { toFileUrl } from "@std/path";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryClient from "@commonfabric/memory/v2/client";
@@ -686,6 +687,82 @@ describe("startServerExecutionHost with owner routing", () => {
       await stopServerExecutionHost();
       await server.close();
     }
+  });
+});
+
+describe("startServerExecutionHost's report of its policy knobs", () => {
+  // Starts a main-thread loop under `knobs`, and returns what it logged and
+  // warned while starting.
+  const reportFor = async (knobs: Record<string, string>) => {
+    const server = new MemoryServer({
+      store: new URL(`memory://policy-report-${crypto.randomUUID()}`),
+      subscriptionRefreshDelayMs: 0,
+      authorizeSessionOpen: authorizeLoopbackSessionOpen,
+      sessionOpenAuth: { audience: "did:key:z6Mk-policy-report" },
+    });
+    const identity = await Identity.fromPassphrase("policy report service");
+    const logged: string[] = [];
+    const warned: string[] = [];
+    try {
+      using _log = stub(console, "log", (...args: unknown[]) => {
+        logged.push(args.map(String).join(" "));
+      });
+      using _warn = stub(console, "warn", (...args: unknown[]) => {
+        warned.push(args.map(String).join(" "));
+      });
+      startServerExecutionHost({
+        server,
+        identity,
+        apiUrl: new URL("http://toolshed.test"),
+        envGet: (name) =>
+          ({
+            EXPERIMENTAL_SERVER_EXECUTION: "true",
+            SERVER_EXECUTION_ENSURE_SPACE_ROOTS: "false",
+            SERVER_EXECUTION_OWNER_ROUTING: "false",
+            ...knobs,
+          })[name],
+      });
+    } finally {
+      await stopServerExecutionHost();
+      await server.close();
+    }
+    return { logged, warned };
+  };
+
+  it("reports a flush deadline cap longer than the deadline as growing", async () => {
+    const { logged, warned } = await reportFor({
+      SERVER_EXECUTION_FLUSH_DEADLINE_MAX_MS: "400",
+    });
+
+    expect(logged.some((line) => line.includes("up to 400 ms"))).toBe(true);
+    expect(warned).toEqual([]);
+  });
+
+  it("warns that it ignores a flush deadline cap no longer than the deadline", async () => {
+    const { logged, warned } = await reportFor({
+      SERVER_EXECUTION_FLUSH_DEADLINE_MS: "200",
+      SERVER_EXECUTION_FLUSH_DEADLINE_MAX_MS: "200",
+    });
+
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toContain(
+      "ignoring SERVER_EXECUTION_FLUSH_DEADLINE_MAX_MS=200 (no longer than " +
+        "the 200 ms deadline)",
+    );
+    expect(logged.some((line) => line.includes("flush deadline grows")))
+      .toBe(false);
+  });
+
+  it("reports the overlapped wave commit only when it is on", async () => {
+    const on = await reportFor({ SERVER_EXECUTION_OVERLAP_COMMIT: "true" });
+    const off = await reportFor({});
+
+    const mentionsOverlap = (lines: string[]) =>
+      lines.some((line) => line.includes("overlapped wave commit ON"));
+    expect(mentionsOverlap(on.logged)).toBe(true);
+    expect(mentionsOverlap(off.logged)).toBe(false);
+    expect(off.logged.some((line) => line.includes("flush deadline")))
+      .toBe(false);
   });
 });
 

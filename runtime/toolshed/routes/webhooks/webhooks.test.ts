@@ -1,4 +1,5 @@
 import { expect } from "@std/expect";
+import { refuseCommits } from "@/test/support/refuse-commits.ts";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
@@ -6,7 +7,9 @@ import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import {
   type Cell,
   cellRuntime,
+  type CommitError,
   type IExtendedStorageTransaction,
+  type JSONSchema,
   Runtime,
 } from "@commonfabric/runner";
 import {
@@ -14,22 +17,33 @@ import {
   linkRefPayloadToString,
 } from "@commonfabric/runner/shared";
 
+import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+
 import {
   addToIndex,
+  addToServiceIndex,
+  deleteRegistration,
   extractSpaceFromCellLink,
   generateWebhookId,
   generateWebhookSecret,
+  getRegistration,
+  getServiceIndex,
   removeFromIndex,
+  removeFromServiceIndex,
+  saveRegistration,
+  sendToStream,
   verifyWebhookSecret,
   webhookEntityId,
+  type WebhookRegistration,
 } from "./webhooks.utils.ts";
 import env from "@/env.ts";
+import { identity } from "@/lib/identity.ts";
 import { sha256 } from "@/lib/sha2.ts";
 import {
   createAclServer,
   LoopbackSessionFactory,
   TestStorageManager,
-} from "@/lib/test-support/memory-acl.ts";
+} from "@/test/support/memory-acl.ts";
 
 if (env.ENV !== "test") {
   throw new Error("ENV must be 'test'");
@@ -88,6 +102,11 @@ describe("Webhook Utilities", () => {
       const hash = await hashPromise;
       const result = await verifyWebhookSecret("whsec_wrong", hash);
       expect(result).toBe(false);
+    });
+
+    it("returns false for a stored hash of another length", async () => {
+      const { secret } = generateWebhookSecret();
+      expect(await verifyWebhookSecret(secret, "0".repeat(63))).toBe(false);
     });
 
     it("returns false for empty secret", async () => {
@@ -287,6 +306,167 @@ describe("Webhook Utilities", () => {
       ];
       expect(reads.map((read) => read.id)).toContain(entityId);
       await tx.commit().settled;
+    });
+  });
+
+  describe("writes the storage layer refuses", () => {
+    // Each write below commits through `editWithRetry()`, and each reports a
+    // commit the storage layer refuses by throwing the refusal rather than
+    // returning as though the write had landed.
+
+    /**
+     * The refusal every case injects. `AuthorizationError` without the
+     * server's `retriable` marker is outside the retryable vocabulary, so
+     * `editWithRetry()` reports it after a single commit.
+     */
+    const REFUSAL: CommitError = {
+      name: "AuthorizationError",
+      message: "the space refused the write",
+    };
+
+    const STREAM_SCHEMA: JSONSchema = {
+      asCell: ["stream"],
+      type: "object",
+      properties: { data: { type: "string" } },
+    };
+
+    const registration = (id: string): WebhookRegistration => ({
+      id,
+      name: "refused",
+      cellLink: "fcl1:unused",
+      secretHash: "0".repeat(64),
+      createdBy: identity.did(),
+      createdAt: "2026-11-12T00:00:00.000Z",
+      enabled: true,
+    });
+
+    let storageManager: ReturnType<typeof StorageManager.emulate>;
+    let runtime: Runtime;
+
+    /** Starts a runtime over emulated storage, with `serverExecution`. */
+    const start = (serverExecution: boolean) => {
+      storageManager = StorageManager.emulate({ as: identity });
+      runtime = new Runtime({
+        apiUrl: new URL("https://webhooks-refused-test.invalid"),
+        storageManager,
+        experimental: { serverExecution },
+      });
+    };
+
+    afterEach(async () => {
+      await runtime.dispose();
+      await storageManager.close();
+    });
+
+    const refuse = (wanted: (written: readonly string[]) => boolean) =>
+      refuseCommits(runtime, REFUSAL, wanted);
+
+    /** Accepts a transaction that writes the document `id`. */
+    const writing = (id: string) => (written: readonly string[]) =>
+      written.includes(id);
+
+    /** The document holding the service index of `space`. */
+    const indexDocument = async (space: string) =>
+      `of:${await sha256("cf:webhooks-for:" + space)}`;
+
+    /** The inbox stream a delivery targets, as an `fcl1:` wire string. */
+    const inboxLink = async (): Promise<string> => {
+      const tx = runtime.edit();
+      const inbox = runtime.getCell(
+        identity.did(),
+        "webhook-inbox",
+        STREAM_SCHEMA,
+        tx,
+      );
+      await tx.commit().settled;
+      const link = inbox.getAsNormalizedFullLink();
+      return linkRefPayloadToString({
+        id: link.id,
+        space: link.space,
+        path: link.path.map((p) => String(p)),
+      });
+    };
+
+    it("throws the refusal from `saveRegistration()`, saving nothing", async () => {
+      start(false);
+      const refused = refuse(writing(await webhookEntityId("wh_save")));
+
+      await expect(saveRegistration(runtime, registration("wh_save")))
+        .rejects.toEqual(REFUSAL);
+
+      expect(refused()).toBe(1);
+      expect(await getRegistration(runtime, "wh_save")).toBe(null);
+    });
+
+    it("throws the refusal from `deleteRegistration()`, keeping the registration", async () => {
+      start(false);
+      await saveRegistration(runtime, registration("wh_delete"));
+      const refused = refuse(
+        writing(await webhookEntityId("wh_delete")),
+      );
+
+      await expect(deleteRegistration(runtime, "wh_delete"))
+        .rejects.toEqual(REFUSAL);
+
+      expect(refused()).toBe(1);
+      expect(await getRegistration(runtime, "wh_delete")).toEqual(
+        registration("wh_delete"),
+      );
+    });
+
+    it("throws the refusal from `addToServiceIndex()`, adding nothing", async () => {
+      start(false);
+      const refused = refuse(
+        writing(await indexDocument(identity.did())),
+      );
+
+      await expect(addToServiceIndex(runtime, identity.did(), "wh_add"))
+        .rejects.toEqual(REFUSAL);
+
+      expect(refused()).toBe(1);
+      expect(await getServiceIndex(runtime, identity.did())).toEqual([]);
+    });
+
+    it("throws the refusal from `removeFromServiceIndex()`, removing nothing", async () => {
+      start(false);
+      await addToServiceIndex(runtime, identity.did(), "wh_remove");
+      const refused = refuse(
+        writing(await indexDocument(identity.did())),
+      );
+
+      await expect(removeFromServiceIndex(runtime, identity.did(), "wh_remove"))
+        .rejects.toEqual(REFUSAL);
+
+      expect(refused()).toBe(1);
+      expect(await getServiceIndex(runtime, identity.did())).toEqual([
+        "wh_remove",
+      ]);
+    });
+
+    it("throws the refusal from `sendToStream()` with `serverExecution` false", async () => {
+      start(false);
+      const link = await inboxLink();
+      // The send queues the event rather than writing it, so the transaction
+      // that carries it writes no document to name it by.
+      const refused = refuse(() => true);
+
+      await expect(sendToStream(runtime, link, { data: "x" }))
+        .rejects.toEqual(REFUSAL);
+
+      expect(refused()).toBe(1);
+    });
+
+    it("throws the refusal from `sendToStream()` with `serverExecution` true", async () => {
+      start(true);
+      const link = await inboxLink();
+      // The send queues the event rather than writing it, so the transaction
+      // that carries it writes no document to name it by.
+      const refused = refuse(() => true);
+
+      await expect(sendToStream(runtime, link, { data: "x" }))
+        .rejects.toEqual(REFUSAL);
+
+      expect(refused()).toBe(1);
     });
   });
 });

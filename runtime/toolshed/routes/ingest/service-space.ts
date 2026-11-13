@@ -2,14 +2,22 @@ import env from "@/env.ts";
 import { identity } from "@/lib/identity.ts";
 import { isValidSpaceDid } from "@/lib/space-authority.ts";
 
-/** Helper for `ingestServiceSpace`, which reads and checks the setting. */
-const configuredServiceSpace = (): string => {
-  const configured = env.INGEST_SERVICE_SPACE.trim();
-  if (configured === "") return identity.did();
-  if (!isValidSpaceDid(configured)) {
+/**
+ * Returns the space an `INGEST_SERVICE_SPACE` setting of `configured` names,
+ * or `fallback` where the setting is blank.
+ *
+ * @throws If `configured` is neither blank nor a space DID.
+ */
+export const serviceSpaceFrom = (
+  configured: string,
+  fallback: string,
+): string => {
+  const trimmed = configured.trim();
+  if (trimmed === "") return fallback;
+  if (!isValidSpaceDid(trimmed)) {
     throw new Error("`INGEST_SERVICE_SPACE` is not a space DID.");
   }
-  return configured;
+  return trimmed;
 };
 
 /**
@@ -22,4 +30,7 @@ const configuredServiceSpace = (): string => {
  * this space in its path instead, so that whatever dispatches requests by
  * space sends it to the deployment holding the registry.
  */
-export const ingestServiceSpace: string = configuredServiceSpace();
+export const ingestServiceSpace: string = serviceSpaceFrom(
+  env.INGEST_SERVICE_SPACE,
+  identity.did(),
+);

@@ -15,12 +15,13 @@ import {
 } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
-import { Runtime } from "@commonfabric/runner";
+import { cellRuntime, Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import {
   fetchGmailMailbox,
   getMailboxChannels,
+  gmailMailboxProof,
   type GmailPushDeps,
   isPlausibleAddress,
   MailboxBindingFullError,
@@ -303,6 +304,12 @@ describe("gmail-push.utils", () => {
           expect(result.status).toBe(502);
         });
 
+        it("returns 502 when reading them fails some other way", async () => {
+          expect((await failingWith(new Error("unexpected"))).status).toBe(
+            502,
+          );
+        });
+
         it("returns 401 when no published key matches the token", async () => {
           const result = await failingWith(new errors.JWKSNoMatchingKey());
           expect(result.status).toBe(401);
@@ -314,6 +321,29 @@ describe("gmail-push.utils", () => {
       it("acknowledges a body that is not JSON, delivering nothing", async () => {
         await bind(await channel("a"), MAILBOX);
         expect(await push("not json")).toEqual({
+          status: 200,
+          body: { delivered: 0 },
+        });
+      });
+
+      it("acknowledges an envelope whose message is not an object", async () => {
+        await bind(await channel("a"), MAILBOX);
+        expect(await push(JSON.stringify({ message: "m-1" }))).toEqual({
+          status: 200,
+          body: { delivered: 0 },
+        });
+      });
+
+      it("acknowledges a message without a message id, delivering nothing", async () => {
+        const a = await bind(await channel("a"), MAILBOX);
+        expect(await push(envelope(notification(), { messageId: 7 })))
+          .toEqual({ status: 200, body: { delivered: 0 } });
+        expect(await latest(a)).toBeUndefined();
+      });
+
+      it("acknowledges a message whose data is JSON but not an object", async () => {
+        await bind(await channel("a"), MAILBOX);
+        expect(await push(envelope(42))).toEqual({
           status: 200,
           body: { delivered: 0 },
         });
@@ -422,6 +452,21 @@ describe("gmail-push.utils", () => {
         });
       });
 
+      it("replaces a record that carries no history id", async () => {
+        const a = await bind(await channel("a"), MAILBOX);
+        const cell = latestCell(runtime, a);
+        await cell.sync();
+        const { error } = await cellRuntime(cell).editWithRetry((tx) => {
+          cell.withTx(tx).set({ type: "other" });
+        });
+        expect(error).toBeUndefined();
+
+        const result = await push(envelope(notification()));
+
+        expect(result).toEqual({ status: 200, body: { delivered: 1 } });
+        expect(await latest(a)).toMatchObject({ historyId: "4242" });
+      });
+
       it("leaves the cell as it is when the same history id is delivered again", async () => {
         const a = await bind(await channel("a"), MAILBOX);
         await push(envelope(notification(), { publishTime: PUBLISH_TIME }));
@@ -494,6 +539,32 @@ describe("gmail-push.utils", () => {
         expect(result).toEqual({ status: 200, body: { delivered: 0 } });
       });
 
+      it("skips a listed channel whose registration is bound to another mailbox", async () => {
+        const a = await bind(await channel("a"), MAILBOX);
+        // Rebound without its place in the lists moving, as a rebind landing
+        // between the list read and the registration read leaves it.
+        await saveRegistration(runtime, space, {
+          ...a,
+          mailboxKey: mailboxKey("bob@example.com"),
+        });
+
+        const result = await push(envelope(notification()));
+
+        expect(result).toEqual({ status: 200, body: { delivered: 0 } });
+        expect(await latest(a)).toBeUndefined();
+      });
+
+      it("returns 502 when a delivery fails", async () => {
+        // A gmail channel stored without a target has no cell to write.
+
+        const a = await channel("a");
+        await bind({ ...a, target: undefined }, MAILBOX);
+        expect(await push(envelope(notification()))).toEqual({
+          status: 502,
+          body: { error: "Failed to write records" },
+        });
+      });
+
       it("stamps the channel's last-seen time", async () => {
         const a = await bind(await channel("a"), MAILBOX);
         expect(await getLastSeen(runtime, space, a.id)).toBeNull();
@@ -554,6 +625,52 @@ describe("gmail-push.utils", () => {
       );
 
       expect(await getMailboxChannels(runtime, space, MAILBOX)).toEqual([b.id]);
+    });
+
+    describe("a channel that joins the list after `prepare()`", () => {
+      // `prepare()` reads the registrations of the channels listed when it
+      // runs. A channel joining the list between then and the write has no
+      // registration read, so the write takes it as live, which it was when it
+      // joined.
+
+      /** Prepares binding a new channel to `MAILBOX`, and returns its update. */
+      const prepared = async () => {
+        const update = mailboxListUpdate(
+          runtime,
+          space,
+          (await channel("late")).id,
+          { next: mailboxKey(MAILBOX) },
+          NOW,
+        );
+        await update.prepare();
+        return update;
+      };
+
+      it("keeps that channel in the list", async () => {
+        const update = await prepared();
+        const joined = await bind(await channel("joined"), MAILBOX);
+
+        const result = await runtime.editWithRetry((tx) => update.apply(tx));
+
+        expect(result).toEqual({ ok: undefined });
+        expect(await getMailboxChannels(runtime, space, MAILBOX)).toEqual([
+          joined.id,
+          channelId(space, "late"),
+        ]);
+      });
+
+      it("returns `MailboxBindingFullError` when such channels fill the list", async () => {
+        const update = await prepared();
+        for (let i = 0; i < MAX_CHANNELS_PER_MAILBOX; i++) {
+          await bind(await channel(`c${i}`), MAILBOX);
+        }
+
+        const result = await runtime.editWithRetry((tx) => update.apply(tx));
+
+        expect(result.ok).toBeInstanceOf(MailboxBindingFullError);
+        expect(await getMailboxChannels(runtime, space, MAILBOX)).not
+          .toContain(channelId(space, "late"));
+      });
     });
 
     it("frees the place of a retired channel for a new one", async () => {
@@ -646,11 +763,47 @@ describe("gmail-push.utils", () => {
       });
     });
 
+    it("throws a failure that is neither a key fetch nor a refusal", async () => {
+      const failing: JWTVerifyGetKey = () => {
+        throw new Error("unexpected");
+      };
+      await expect(
+        verifyGmailIdToken(failing, [CLIENT_ID], await idToken()),
+      ).rejects.toThrow("unexpected");
+    });
+
     it("returns `unsupported` when no client id is configured", async () => {
       expect(await verify(await idToken(), [])).toEqual({
         ok: false,
         reason: "unsupported",
       });
+    });
+  });
+
+  describe("gmailMailboxProof()", () => {
+    it("returns nothing where Gmail push is off", () => {
+      expect(gmailMailboxProof(false, keys, ["client"])).toBeUndefined();
+    });
+
+    it("returns a proof that verifies ID tokens against the given keys and clients", async () => {
+      const proof = gmailMailboxProof(true, keys, ["client"]);
+      const token = (audience: string) =>
+        new SignJWT({ email: "alice@gmail.com", email_verified: true })
+          .setProtectedHeader({ alg: "RS256", kid: "google-1" })
+          .setIssuer("https://accounts.google.com")
+          .setAudience(audience)
+          .setIssuedAt()
+          .setExpirationTime("1h")
+          .sign(signingKey);
+      expect(await proof?.verifyIdToken(await token("client"))).toEqual({
+        ok: true,
+        emailAddress: "alice@gmail.com",
+      });
+      expect(await proof?.verifyIdToken(await token("other"))).toEqual({
+        ok: false,
+        reason: "rejected",
+      });
+      expect(proof?.fetchMailbox).toBe(fetchGmailMailbox);
     });
   });
 
@@ -728,6 +881,14 @@ describe("gmail-push.utils", () => {
 
     it("returns `unavailable` when the request itself fails", async () => {
       globalThis.fetch = () => Promise.reject(new TypeError("offline"));
+      expect(await fetchGmailMailbox("token-1")).toEqual({
+        ok: false,
+        reason: "unavailable",
+      });
+    });
+
+    it("returns `unavailable` when the profile is not JSON", async () => {
+      respond(() => new Response("not json"));
       expect(await fetchGmailMailbox("token-1")).toEqual({
         ok: false,
         reason: "unavailable",

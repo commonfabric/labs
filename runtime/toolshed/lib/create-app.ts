@@ -14,7 +14,14 @@ export function createRouter() {
   });
 }
 
-export default function createApp() {
+/**
+ * The app every router is mounted on: request tracing when
+ * `environment.OTEL_ENABLED` is set, the favicon, the request logger, and the
+ * JSON 404.
+ */
+export default function createApp(
+  environment: Pick<typeof env, "OTEL_ENABLED"> = env,
+) {
   // Initialize OpenTelemetry before creating the app
   initOpenTelemetry();
 
@@ -25,7 +32,7 @@ export default function createApp() {
   // set on the provider in lib/otel.ts. We intentionally don't re-inject them as
   // per-span attributes here — doing so duplicated the keys on every span (with a
   // conflicting default: span-level "toolshed" vs resource-level "toolshed-dev").
-  if (env.OTEL_ENABLED) {
+  if (environment.OTEL_ENABLED) {
     app.use("*", otelTracing());
   }
 

@@ -3,13 +3,13 @@ import { assert } from "@std/assert";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
-import { type MemorySpace, Runtime } from "@commonfabric/runner";
+import { cellRuntime, type MemorySpace, Runtime } from "@commonfabric/runner";
 import {
   createAclServer,
   genesisAcl,
   LoopbackSessionFactory,
   TestStorageManager,
-} from "@/lib/test-support/memory-acl.ts";
+} from "@/test/support/memory-acl.ts";
 import {
   type ControlDeps,
   type ControlResult,
@@ -28,6 +28,7 @@ import {
   getRegistrationIndex,
   getSpaceLifetimeChannelCount,
   processIngest,
+  requestClaim,
   saveRegistration,
 } from "@/routes/ingest/ingest.utils.ts";
 import { linkRefPayloadToString } from "@commonfabric/runner/shared";
@@ -528,6 +529,38 @@ describe("ingest-channels control plane", () => {
 
       lookup = { ok: false, reason: "unavailable" };
       expect((await gmailMint("req-2")).status).toBe(502);
+    });
+
+    it("returns 502 and mints nothing when asking Google fails", async () => {
+      const failing: ControlDeps = {
+        ...deps,
+        gmail: {
+          fetchMailbox: () => Promise.reject(new TypeError("offline")),
+          verifyIdToken: () => Promise.reject(new TypeError("offline")),
+        },
+      };
+      const res = await gmailMint("req-1", {}, alice, failing);
+      expect(res).toEqual({
+        status: 502,
+        body: { error: "Google could not be reached" },
+      });
+      expect(await bound()).toEqual([]);
+    });
+
+    it("returns 409 for a re-mint of a gmail channel that names a cause prefix", async () => {
+      const first = await gmailMint("req-1");
+      const res = await processMint(deps, alice.did(), {
+        space,
+        installId: "gmail-1",
+        causePrefix: "location",
+        requestId: "req-2",
+      });
+      expect(res.status).toBe(409);
+      expect(err(res)).toContain("is a gmail channel");
+      expect(
+        (await getRegistration(runtime, operator.did(), ok(first).id))
+          ?.causePrefix,
+      ).toBeUndefined();
     });
 
     it("asks Google nothing for a caller who does not own the space", async () => {
@@ -1094,6 +1127,111 @@ describe("ingest-channels control plane", () => {
         body,
       )).status,
     ).toBe(401);
+  });
+
+  describe("a full request-claim store", () => {
+    // The store holds a bounded number of live claims per owner. Filled here
+    // directly, as a burst of requests would fill it.
+
+    const fill = async () => {
+      const now = Date.now();
+      const { cell } = requestClaim(runtime, operator.did(), {
+        owner: alice.did(),
+        requestId: "unused",
+        channel: "unused",
+      });
+      await cell.sync();
+      const { error } = await cellRuntime(cell).editWithRetry((tx) => {
+        cell.withTx(tx).set(
+          Array.from({ length: 500 }, (_, i) => ({
+            id: `burst-${i}`,
+            at: now,
+            channel: `ing_${i}`,
+          })),
+        );
+      });
+      expect(error).toBeUndefined();
+    };
+
+    it("returns 429 for a mint, minting nothing", async () => {
+      await fill();
+      const res = await mint(alice, "req-full");
+      expect(res).toEqual({
+        status: 429,
+        body: { error: "Too many recent requests — retry in a few minutes" },
+      });
+      expect(
+        await getOwnerRegistrationIndex(runtime, operator.did(), alice.did()),
+      )
+        .toEqual([]);
+    });
+
+    it("revokes anyway, without recording the request id", async () => {
+      const id = ok(await mint(alice, "req-before")).id;
+      await fill();
+      const res = await processRevoke(deps, alice.did(), {
+        id,
+        requestId: "rv-full",
+        expectedRevision: await revOf(id),
+      });
+      expect(res.status).toBe(200);
+      expect((await getRegistration(runtime, operator.did(), id))?.revoked?.by)
+        .toBe(alice.did());
+    });
+  });
+
+  it("returns 409 and no token for a rotate whose requestId was already used", async () => {
+    const first = await mint(alice, "req-used");
+    const res = await processRotate(deps, alice.did(), {
+      id: ok(first).id,
+      requestId: "req-used",
+    });
+    expect(res.status).toBe(409);
+    expect("token" in res.body).toBe(false);
+  });
+
+  it("returns 400 for a revoke with a malformed requestId", async () => {
+    const id = ok(await mint(alice, "req-rv")).id;
+    const res = await processRevoke(deps, alice.did(), {
+      id,
+      requestId: "bad id",
+      expectedRevision: await revOf(id),
+    });
+    expect(res).toEqual({ status: 400, body: { error: "Invalid requestId" } });
+  });
+
+  it("returns the ownership denial for a list scoped to a malformed space", async () => {
+    const res = await processList(deps, alice.did(), { space: "not-a-did" });
+    expect(res.status).toBe(403);
+    expect(res.body).toEqual(
+      (await processList(deps, mallory.did(), { space })).body,
+    );
+  });
+
+  it("refuses a list scoped to a space with channels to someone who does not own it", async () => {
+    await mint(alice, "req-owned");
+    const res = await processList(deps, mallory.did(), { space });
+    expect(res.status).toBe(403);
+  });
+
+  it("lists a registration written without a revision at revision 0", async () => {
+    await saveRegistration(runtime, operator.did(), {
+      id: WELL_FORMED_ID,
+      name: "operator",
+      space,
+      causePrefix: "location",
+      installId: "phone-9",
+      kind: "device",
+      secretHash: "unused",
+      owner: alice.did(),
+      createdBy: operator.did(),
+      createdAt: "2026-11-12T00:00:00.000Z",
+      enabled: true,
+    });
+    const { channels } = ok(await processList(deps, alice.did(), {}));
+    expect(channels.map((c) => [c.id, c.revision])).toEqual([
+      [WELL_FORMED_ID, 0],
+    ]);
   });
 
   describe("storage faults", () => {
@@ -1933,6 +2071,192 @@ describe("ingest-channels control plane", () => {
     expect(
       (await getRegistration(runtime, operator.did(), id))?.owner,
     ).toBe(alice.did());
+  });
+
+  describe("a write that lands while a verb is in flight", () => {
+    // Each verb reads the registration and peeks at the request-id claims
+    // before it opens the one transaction that writes them, and only that
+    // transaction's reads decide. A rival write landing between the two is
+    // the state a concurrent request leaves behind, so each case constructs
+    // it by running the rival when the verb's write arrives.
+
+    /**
+     * Runs `rival` to completion when the next `editWithRetry()` call on
+     * `runtime` arrives, before that call goes on. Shadows the method on the
+     * instance, as `withFault` below does `getCell`, and removes the shadow
+     * before `rival` runs, so the rival's own writes and the held call both go
+     * through the real method.
+     */
+    const beforeNextEdit = (rival: () => Promise<unknown>): void => {
+      runtime.editWithRetry = async (...args) => {
+        Reflect.deleteProperty(runtime, "editWithRetry");
+        await rival();
+        return await runtime.editWithRetry(...args);
+      };
+    };
+
+    it("returns 409 for a mint whose requestId another mint claims meanwhile", async () => {
+      let rival: ControlResult<MintedChannel> | undefined;
+      beforeNextEdit(async () => {
+        rival = await mint(alice, "req-race", { installId: "phone-2" });
+      });
+
+      const res = await mint(alice, "req-race");
+
+      const rivalId = ok(rival!).id;
+      expect(res).toEqual({
+        status: 409,
+        body: {
+          error: `requestId already used for channel ${rivalId}. A replay ` +
+            `never returns a token; retry with a fresh requestId.`,
+        },
+      });
+      expect(
+        await getRegistration(
+          runtime,
+          operator.did(),
+          channelId(space, "phone-1"),
+        ),
+      ).toBeNull();
+    });
+
+    it("returns 409 for a mint whose channel moves meanwhile, leaving its requestId unused", async () => {
+      const id = ok(await mint(alice, "req-mv1")).id;
+      let rotated: ControlResult<MintedChannel> | undefined;
+      beforeNextEdit(async () => {
+        rotated = await processRotate(deps, alice.did(), {
+          id,
+          requestId: "req-mv-rotate",
+        });
+      });
+
+      const res = await mint(alice, "req-mv2");
+
+      expect(rotated?.status).toBe(200);
+      expect(res).toEqual({
+        status: 409,
+        body: {
+          error: `Channel ${id} changed while this request was in flight. ` +
+            `Retry.`,
+        },
+      });
+      expect(await revOf(id)).toBe(2);
+      expect((await mint(alice, "req-mv2")).status).toBe(200);
+    });
+
+    it("returns 409 for a revoke whose requestId a mint claims meanwhile, revoking nothing", async () => {
+      const id = ok(await mint(alice, "req-rc1")).id;
+      const at = await revOf(id);
+      let rival: ControlResult<MintedChannel> | undefined;
+      beforeNextEdit(async () => {
+        rival = await mint(alice, "rv-race", { installId: "phone-2" });
+      });
+
+      const res = await processRevoke(deps, alice.did(), {
+        id,
+        requestId: "rv-race",
+        expectedRevision: at,
+      });
+
+      const rivalId = ok(rival!).id;
+      expect(res).toEqual({
+        status: 409,
+        body: {
+          error: `requestId already used for channel ${rivalId}. Retry ` +
+            `with a fresh requestId.`,
+        },
+      });
+      const stored = await getRegistration(runtime, operator.did(), id);
+      expect(stored?.revoked).toBeUndefined();
+      expect(stored?.enabled).toBe(true);
+    });
+
+    it("returns 409 for a revoke whose channel moves meanwhile, revoking nothing", async () => {
+      const id = ok(await mint(alice, "req-rm1")).id;
+      const at = await revOf(id);
+      let rotated: ControlResult<MintedChannel> | undefined;
+      beforeNextEdit(async () => {
+        rotated = await processRotate(deps, alice.did(), {
+          id,
+          requestId: "req-rm-rotate",
+        });
+      });
+
+      const res = await processRevoke(deps, alice.did(), {
+        id,
+        requestId: "rv-rm",
+        expectedRevision: at,
+      });
+
+      expect(rotated?.status).toBe(200);
+      expect(res).toEqual({
+        status: 409,
+        body: {
+          error: `Channel ${id} changed while this request was in flight. ` +
+            `List it again and re-issue the revoke against what you see.`,
+        },
+      });
+      const stored = await getRegistration(runtime, operator.did(), id);
+      expect(stored?.revoked).toBeUndefined();
+      expect(stored?.revision).toBe(at + 1);
+    });
+  });
+
+  describe("a list over an index that disagrees with the registrations", () => {
+    // The indexes are written with the registrations, so they agree with
+    // them, but a reader is not broken by one that does not: it skips an id
+    // that resolves to nothing and a registration the index does not answer
+    // for.
+
+    /** Appends `ids` to the service-space index made with `cause`. */
+    const append = async (cause: string, ids: string[]) => {
+      const index = runtime.getCell<string[]>(
+        operator.did() as MemorySpace,
+        cause,
+        { type: "array", items: { type: "string" } },
+      );
+      await index.sync();
+      await runtime.storageManager.synced();
+      const written = await runtime.editWithRetry((tx) => {
+        const bound = index.withTx(tx);
+        bound.set([...(bound.get() ?? []), ...ids]);
+      });
+      expect(written.error).toBeUndefined();
+    };
+
+    /** Mints alice's channel in `space` and mallory's in another space. */
+    const mintBoth = async () => {
+      const own = ok(await mint(alice, "req-ix1")).id;
+      const foreign = ok(
+        await processMint(deps, mallory.did(), {
+          space: await sharedSpace(),
+          installId: "phone-1",
+          requestId: "req-ix2",
+        }),
+      ).id;
+      return { own, foreign };
+    };
+
+    it("lists only the caller's resolvable channels from their own index", async () => {
+      const { own, foreign } = await mintBoth();
+      await append(`cf:ingest:by-owner:${alice.did()}`, [
+        WELL_FORMED_ID,
+        foreign,
+      ]);
+
+      const listed = ok(await processList(deps, alice.did(), {}));
+
+      expect(listed.channels.map((channel) => channel.id)).toEqual([own]);
+    });
+
+    it("lists only the space's resolvable channels from its index", async () => {
+      const { own, foreign } = await mintBoth();
+      await append(`cf:ingest:by-space:${space}`, [WELL_FORMED_ID, foreign]);
+
+      const listed = ok(await processList(deps, alice.did(), { space }));
+
+      expect(listed.channels.map((channel) => channel.id)).toEqual([own]);
+    });
   });
 
   describe("lifecycle writes are optimistic", () => {

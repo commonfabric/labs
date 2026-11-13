@@ -12,8 +12,10 @@ import {
   publishExperimentalPosture,
 } from "@/lib/experimental-posture.ts";
 import router, {
+  compiledShellRoot,
   compiledShellRouter,
   shellDeploymentPage,
+  shellFrontendRouter,
 } from "@/routes/shell/shell.index.ts";
 import {
   createShellStaticRouter,
@@ -177,6 +179,166 @@ describe("Shell dev fallback without a compiled build or proxy", () => {
     expect(response.status).toBe(404);
     expect(/Shell app not available/.test(body)).toBe(true);
     expect(/SHELL_URL=http:\/\/localhost:\d+/.test(body)).toBe(true);
+  });
+});
+
+describe("compiledShellRoot()", () => {
+  const packageRoot = path.fromFileUrl(new URL("../../", import.meta.url));
+
+  it("returns the production bundle beside the package in production", () => {
+    expect(compiledShellRoot({ ENV: "production" })).toBe(
+      path.join(packageRoot, "shell-frontend"),
+    );
+  });
+
+  it("returns the development bundle beside the package anywhere else", () => {
+    for (const ENV of ["development", "test", "staging"]) {
+      expect(compiledShellRoot({ ENV })).toBe(
+        path.join(packageRoot, "shell-frontend-dev"),
+      );
+    }
+  });
+});
+
+describe("shellFrontendRouter()", () => {
+  interface Proxied {
+    url: string;
+    method: string | undefined;
+    header: string | null;
+  }
+
+  // A shell dev server that records each request proxied to it, and answers
+  // with the path it was asked for.
+  const devServer = () => {
+    const proxied: Proxied[] = [];
+    const fetch: typeof globalThis.fetch = (input, init) => {
+      proxied.push({
+        url: String(input),
+        method: init?.method,
+        header: new Headers(init?.headers).get("x-donut"),
+      });
+      return Promise.resolve(
+        new Response(`dev ${new URL(String(input)).pathname}`),
+      );
+    };
+    return { proxied, fetch };
+  };
+  const notCompiled = () => {
+    throw new Error("Only a compiled toolshed builds the compiled router");
+  };
+
+  it("serves the compiled bundle in a compiled toolshed, whatever SHELL_URL says", async () => {
+    const server = devServer();
+    const app = createApp().route(
+      "/",
+      await shellFrontendRouter({
+        compiled: true,
+        shellUrl: "http://shell.test",
+        compiledRouter: () => Promise.resolve(createShellStaticRouter(tempDir)),
+        fetch: server.fetch,
+      }),
+    );
+
+    const response = await app.request("/");
+
+    expect(await response.text()).toBe(INDEX_HTML);
+    expect(server.proxied).toEqual([]);
+  });
+
+  it("proxies the shell's root-level resources to its dev server", async () => {
+    const server = devServer();
+    const app = createApp().route(
+      "/",
+      await shellFrontendRouter({
+        compiled: false,
+        shellUrl: "http://shell.test",
+        compiledRouter: notCompiled,
+        fetch: server.fetch,
+      }),
+    );
+
+    for (
+      const resource of [
+        "/DEV_SOCKET.js",
+        "/scripts/main.js",
+        "/styles/app.css",
+        "/assets/logo.svg",
+      ]
+    ) {
+      const response = await app.request(resource);
+      expect(await response.text()).toBe(`dev ${resource}`);
+    }
+    expect(server.proxied.map(({ url }) => url)).toEqual([
+      "http://shell.test/DEV_SOCKET.js",
+      "http://shell.test/scripts/main.js",
+      "http://shell.test/styles/app.css",
+      "http://shell.test/assets/logo.svg",
+    ]);
+  });
+
+  it("proxies any other page with its method and headers", async () => {
+    const server = devServer();
+    const app = createApp().route(
+      "/",
+      await shellFrontendRouter({
+        compiled: false,
+        shellUrl: "http://shell.test",
+        compiledRouter: notCompiled,
+        fetch: server.fetch,
+      }),
+    );
+
+    const response = await app.request("/spaces/home", {
+      headers: { "x-donut": "glazed" },
+    });
+
+    expect(await response.text()).toBe("dev /spaces/home");
+    expect(server.proxied).toEqual([{
+      url: "http://shell.test/spaces/home",
+      method: "GET",
+      header: "glazed",
+    }]);
+  });
+
+  it("returns 502 naming the target when the dev server does not answer", async () => {
+    const app = createApp().route(
+      "/",
+      await shellFrontendRouter({
+        compiled: false,
+        shellUrl: "http://shell.test",
+        compiledRouter: notCompiled,
+        fetch: () => Promise.reject(new TypeError("connection refused")),
+      }),
+    );
+
+    const response = await app.request("/spaces/home");
+
+    expect(response.status).toBe(502);
+    expect(await response.text()).toBe(
+      "Failed to proxy to http://shell.test/spaces/home. " +
+        "Is the shell dev server running?",
+    );
+  });
+
+  it("returns the 404 hint, proxying nothing, when SHELL_URL is unset or empty", async () => {
+    for (const shellUrl of [undefined, ""]) {
+      const server = devServer();
+      const app = createApp().route(
+        "/",
+        await shellFrontendRouter({
+          compiled: false,
+          shellUrl,
+          compiledRouter: notCompiled,
+          fetch: server.fetch,
+        }),
+      );
+
+      const response = await app.request("/scripts/main.js");
+
+      expect(response.status).toBe(404);
+      expect(await response.text()).toMatch(/^Shell app not available/);
+      expect(server.proxied).toEqual([]);
+    }
   });
 });
 

@@ -9,9 +9,9 @@ import {
 } from "@commonfabric/runner/space-host";
 
 // Parse CLI args for --port (needed because deno --watch doesn't pass env vars)
-function parseCliArgs(): Record<string, string> {
+function parseCliArgs(args: readonly string[]): Record<string, string> {
   const overrides: Record<string, string> = {};
-  for (const arg of Deno.args) {
+  for (const arg of args) {
     if (arg.startsWith("--port=")) {
       overrides.PORT = arg.split("=")[1];
     }
@@ -271,9 +271,8 @@ export const EnvSchema = z.object({
 
   PLAID_CLIENT_ID: z.string().default(""),
   PLAID_SECRET: z.string().default(""),
-  PLAID_ENV: z.enum(["sandbox", "development", "production"]).default(
-    "sandbox",
-  ),
+  // The environments the Plaid SDK has an address for.
+  PLAID_ENV: z.enum(["sandbox", "production"]).default("sandbox"),
   PLAID_PRODUCTS: z.string().default("transactions"),
   PLAID_COUNTRY_CODES: z.string().default("US"),
   PLAID_REDIRECT_URI: z.string().optional(),
@@ -508,17 +507,27 @@ export const EnvSchema = z.object({
 
 export type env = z.infer<typeof EnvSchema>;
 
-// CLI args override env vars (needed for --watch compatibility)
-const cliOverrides = parseCliArgs();
-const { data: env, error } = EnvSchema.safeParse({
-  ...Deno.env.toObject(),
-  ...cliOverrides,
-});
-
-if (error) {
-  console.error("❌ Invalid env:");
-  console.error(JSON.stringify(error.flatten().fieldErrors, null, 2));
-  Deno.exit(1);
+/**
+ * Parses the server's environment from `variables`, with a `--port=` among
+ * `args` overriding `PORT` (needed for `--watch`, which passes no
+ * environment). An invalid environment is reported through `error`, field by
+ * field, and ends the process through `exit` with status 1.
+ */
+export function loadEnv(
+  variables: Record<string, string>,
+  args: readonly string[],
+  exit: (code: number) => never,
+  error: (...data: unknown[]) => void = console.error,
+): env {
+  const parsed = EnvSchema.safeParse({ ...variables, ...parseCliArgs(args) });
+  if (!parsed.success) {
+    error("❌ Invalid env:");
+    error(JSON.stringify(parsed.error.flatten().fieldErrors, null, 2));
+    return exit(1);
+  }
+  return parsed.data;
 }
 
-export default env!;
+const env = loadEnv(Deno.env.toObject(), Deno.args, Deno.exit);
+
+export default env;

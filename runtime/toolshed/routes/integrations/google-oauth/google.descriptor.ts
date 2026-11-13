@@ -7,7 +7,6 @@
  */
 
 import { AuthSchema } from "@commonfabric/runner";
-import type { JSONSchema } from "@commonfabric/runner";
 
 import env from "@/env.ts";
 import type {
@@ -54,6 +53,6 @@ export const GoogleDescriptor: ProviderDescriptor = {
     prompt: "consent",
   },
   tokenMapper: tokenToAuthData,
-  authSchema: AuthSchema as unknown as JSONSchema,
+  authSchema: AuthSchema,
   emptyAuthData: EMPTY_GOOGLE_AUTH_DATA,
 };

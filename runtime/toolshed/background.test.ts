@@ -1,4 +1,7 @@
 import { assertEquals, assertStringIncludes } from "@std/assert";
+import { expect } from "@std/expect";
+import { describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
 import { toFileUrl } from "@std/path";
 
 import {
@@ -6,6 +9,7 @@ import {
   backgroundLogStream,
   buildBackgroundChildCommand,
   classifyLaunch,
+  logUncaughtErrors,
   READY_MARKER,
   redirectConsoleToFile,
   runBackgroundParent,
@@ -323,4 +327,155 @@ Deno.test({
     await Deno.remove(logFile);
   }
   assertEquals(exitCode, 0);
+});
+
+describe("background", () => {
+  describe("runBackgroundParent()", () => {
+    it("reports the failure alone, with a code of 1 for a clean exit, when the child left no log", async () => {
+      let exitCode: number | undefined;
+      const errs: unknown[] = [];
+      using _error = stub(console, "error", (line: unknown) => {
+        errs.push(line);
+      });
+
+      await runBackgroundParent(
+        {
+          execPath: "/opt/common-binaries/toolshed",
+          mainModule: "file:///proj/index.ts",
+          serverArgs: [],
+          logFile: undefined,
+        },
+        {
+          spawn: () => ({
+            pid: 4321,
+            stdout: stdoutOf([]),
+            status: Promise.resolve({ success: true, code: 0, signal: null }),
+            unref: () => {},
+          }),
+          exit: (code) => {
+            exitCode = code;
+          },
+          readLog: () => Promise.reject(new Deno.errors.NotFound("no log")),
+          makeTempLog: () => "/tmp/toolshed-made.log",
+        },
+      );
+
+      expect(errs).toEqual([
+        "toolshed failed to start (the server exited with code 0).",
+      ]);
+      expect(exitCode).toBe(1);
+    });
+
+    it("reports on stdout the temporary log a listening child writes to, and exits 0", async () => {
+      let exitCode: number | undefined;
+      const out: unknown[] = [];
+      using _log = stub(console, "log", (line: unknown) => {
+        out.push(line);
+      });
+
+      await runBackgroundParent(
+        {
+          execPath: "/opt/common-binaries/toolshed",
+          mainModule: "file:///proj/index.ts",
+          serverArgs: [],
+          logFile: undefined,
+        },
+        {
+          spawn: () => ({
+            pid: 4321,
+            stdout: stdoutOf([`${READY_MARKER}\n`]),
+            status: new Promise<Deno.CommandStatus>(() => {}),
+            unref: () => {},
+          }),
+          exit: (code) => {
+            exitCode = code;
+          },
+        },
+      );
+
+      expect(out).toHaveLength(1);
+      const logFile = String(out[0]).match(/Logs: (.*)$/)?.[1];
+      try {
+        expect(String(out[0])).toMatch(
+          /^Toolshed is listening; the server is running in the background \(pid 4321\)\. Logs: .*toolshed-[^/]*\.log$/,
+        );
+        // The log is a fresh temporary file, made for this launch.
+        expect(logFile && Deno.statSync(logFile).isFile).toBe(true);
+      } finally {
+        if (logFile) Deno.removeSync(logFile);
+      }
+      expect(exitCode).toBe(0);
+    });
+  });
+
+  describe("backgroundLogStream()", () => {
+    it("keeps writing until a line lands whole across short writes", () => {
+      const landed: number[] = [];
+      const stream = backgroundLogStream("/logs/toolshed.log", () => ({
+        // Each write takes at most three bytes.
+        writeSync: (bytes: Uint8Array) => {
+          const taken = bytes.subarray(0, 3);
+          for (const byte of taken) landed.push(byte);
+          return taken.length;
+        },
+      }));
+
+      stream.write("glazed donut\n");
+
+      expect(new TextDecoder().decode(new Uint8Array(landed))).toBe(
+        "glazed donut\n",
+      );
+    });
+
+    it("drops a line whose write fails without throwing", () => {
+      let attempts = 0;
+      const stream = backgroundLogStream("/logs/toolshed.log", () => ({
+        writeSync: () => {
+          attempts++;
+          throw new Deno.errors.BrokenPipe("disk gone");
+        },
+      }));
+
+      expect(() => stream.write("lost line\n")).not.toThrow();
+      expect(attempts).toBe(1);
+    });
+  });
+
+  describe("logUncaughtErrors()", () => {
+    it("logs an uncaught error by its error, or its message when it has none", () => {
+      const target = new EventTarget();
+      const logged: unknown[][] = [];
+      using _error = stub(console, "error", (...args: unknown[]) => {
+        logged.push(args);
+      });
+      const failure = new Error("sprinkles everywhere");
+
+      logUncaughtErrors(target);
+      target.dispatchEvent(new ErrorEvent("error", { error: failure }));
+      target.dispatchEvent(new ErrorEvent("error", { message: "no filling" }));
+
+      expect(logged).toEqual([
+        ["Uncaught error:", failure],
+        ["Uncaught error:", "no filling"],
+      ]);
+    });
+
+    it("logs an unhandled rejection by its reason", () => {
+      const target = new EventTarget();
+      const logged: unknown[][] = [];
+      using _error = stub(console, "error", (...args: unknown[]) => {
+        logged.push(args);
+      });
+      const reason = new Error("stale batch");
+      const promise = Promise.reject(reason);
+      promise.catch(() => {});
+
+      logUncaughtErrors(target);
+      target.dispatchEvent(
+        new PromiseRejectionEvent("unhandledrejection", { promise, reason }),
+      );
+
+      expect(logged).toEqual([["Unhandled promise rejection:", reason]]);
+    });
+  });
 });

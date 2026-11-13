@@ -1,7 +1,12 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { refuseCommits } from "@/test/support/refuse-commits.ts";
 import { Identity } from "@commonfabric/identity";
-import { type MemorySpace, Runtime } from "@commonfabric/runner";
+import {
+  type CommitError,
+  type MemorySpace,
+  Runtime,
+} from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import {
   channelId,
@@ -19,6 +24,7 @@ import {
   runAudit,
 } from "./audit-ingest-channels.ts";
 import {
+  defaultRuntime as provisionRuntime,
   main as provisionMain,
   provisionChannel,
 } from "./provision-ingest-channel.ts";
@@ -70,6 +76,59 @@ describe("ingest channel operator scripts", () => {
     await runtime.dispose();
     await storageManager.close();
   });
+
+  /**
+   * `runtime`, except that its `editWithRetry()` holds each call until
+   * `count` calls have arrived. Two lifecycle writes racing one channel then
+   * both finish reading before either writes, so exactly one of them loses,
+   * rather than a fast first call completing outright. `saveRegistration` is
+   * the only thing that reaches `editWithRetry`, so holding there holds
+   * exactly at the read/write seam.
+   */
+  const barrierAt = (count: number): Runtime => {
+    let arrived = 0;
+    let release!: () => void;
+    const allHaveRead = new Promise<void>((r) => (release = r));
+    return new Proxy(runtime, {
+      get(target, prop, receiver) {
+        if (prop === "editWithRetry") {
+          return async (...args: unknown[]) => {
+            if (++arrived === count) release();
+            await allHaveRead;
+            return await (target as unknown as {
+              editWithRetry: (...a: unknown[]) => Promise<unknown>;
+            }).editWithRetry(...args);
+          };
+        }
+        const value = Reflect.get(target, prop, receiver);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as typeof runtime;
+  };
+
+  /**
+   * The refusal a case injects. `AuthorizationError` without the server's
+   * `retriable` marker is outside the retryable vocabulary, so
+   * `editWithRetry()` reports it after a single commit.
+   */
+  const REFUSAL: CommitError = {
+    name: "AuthorizationError",
+    message: "the space refused the write",
+  };
+
+  /**
+   * Refuses the commit of every transaction that writes the service-space
+   * document made with `cause`, and returns a count of the commits refused.
+   */
+  const refuseWritesOf = (cause: string): () => number => {
+    const document = runtime.getCell(serviceSpace as MemorySpace, cause)
+      .getAsNormalizedFullLink().id;
+    return refuseCommits(
+      runtime,
+      REFUSAL,
+      (written) => written.includes(document),
+    );
+  };
 
   it("audits every registered channel, with owner and state", async () => {
     await saveRegistration(runtime, serviceSpace, reg({ owner: "did:key:zA" }));
@@ -192,6 +251,22 @@ describe("ingest channel operator scripts", () => {
     expect(render([], false).join("\n")).toContain("none.");
   });
 
+  it("renders when a revoked channel was revoked", async () => {
+    await saveRegistration(
+      runtime,
+      serviceSpace,
+      reg({
+        enabled: false,
+        revoked: { at: "2026-08-02T00:00:00.000Z", by: "did:key:zA" },
+      }),
+    );
+    const human = render(await collectRows(runtime, serviceSpace), false)
+      .join("\n");
+    expect(human).toContain("[revoked]");
+    expect(human).toContain("revoked:   2026-08-02T00:00:00.000Z");
+    expect(human).toContain("1 channel(s), 0 active.");
+  });
+
   it("retires nothing unless confirmed", async () => {
     await saveRegistration(runtime, serviceSpace, reg());
 
@@ -265,6 +340,100 @@ describe("ingest channel operator scripts", () => {
     const after = await getRegistration(runtime, serviceSpace, "ing_a");
     expect(after?.enabled).toBe(false);
     expect(after?.revoked?.by).toBe("operator:cutover");
+  });
+
+  it("reports a channel that changed mid-sweep as not retired", async () => {
+    // Two confirmed sweeps race one channel: both read its revision before
+    // either writes, so one retires it and the other loses the precondition.
+
+    await saveRegistration(runtime, serviceSpace, reg({ revision: 1 }));
+    const barrier = barrierAt(2);
+    const outputs = await Promise.all([
+      runRetire(barrier, serviceSpace, { reason: "a", confirm: true }),
+      runRetire(barrier, serviceSpace, { reason: "b", confirm: true }),
+    ]);
+    const lost = outputs.map((lines) => lines.join("\n"))
+      .filter((out) => out.includes("changed mid-sweep"));
+    expect(lost.length).toBe(1);
+    expect(lost[0]).toContain("1 channel(s) changed mid-sweep");
+    expect(lost[0]).toContain("ing_a");
+    expect(lost[0]).toContain("Retired 0 channel(s)");
+    expect((await getRegistration(runtime, serviceSpace, "ing_a"))?.revision)
+      .toBe(2);
+  });
+
+  it("skips an index entry that resolves to no registration", async () => {
+    await saveRegistration(runtime, serviceSpace, reg());
+    const legacy = runtime.getCell<string[]>(
+      serviceSpace as MemorySpace,
+      "cf:ingest:index",
+      { type: "array", items: { type: "string" } },
+    );
+    await legacy.sync();
+    await runtime.storageManager.synced();
+    const written = await runtime.editWithRetry((tx) => {
+      legacy.withTx(tx).set(["ing_missing"]);
+    });
+    expect(written.error).toBeUndefined();
+    expect(await getRegistrationIndex(runtime, serviceSpace)).toContain(
+      "ing_missing",
+    );
+
+    const plan = await retireChannels(runtime, serviceSpace, {
+      reason: "cutover",
+      confirm: true,
+    });
+
+    expect(plan).toEqual({
+      retired: [{
+        id: "ing_a",
+        space: "did:key:z6MkspaceAAAA",
+        installId: "phone-1",
+        owner: "<operator-provisioned>",
+      }],
+      skipped: 0,
+      conflicted: [],
+    });
+  });
+
+  it("throws a retirement write failure other than a conflict", async () => {
+    await saveRegistration(runtime, serviceSpace, reg());
+    const refused = refuseWritesOf("cf:ingest:ing_a");
+
+    await expect(
+      retireChannels(runtime, serviceSpace, { reason: "a", confirm: true }),
+    ).rejects.toThrow(REFUSAL.message);
+
+    expect(refused()).toBe(1);
+    expect((await getRegistration(runtime, serviceSpace, "ing_a"))?.enabled)
+      .toBe(true);
+  });
+
+  it("throws an index repair write failure other than a conflict", async () => {
+    // A repair writes only an index that lacks the channel, so the channel's
+    // space index is emptied first.
+
+    await saveRegistration(runtime, serviceSpace, reg());
+    const bySpace = "cf:ingest:by-space:did:key:z6MkspaceAAAA";
+    const index = runtime.getCell<string[]>(
+      serviceSpace as MemorySpace,
+      bySpace,
+      { type: "array", items: { type: "string" } },
+    );
+    await index.sync();
+    await runtime.storageManager.synced();
+    const emptied = await runtime.editWithRetry((tx) => {
+      index.withTx(tx).set([]);
+    });
+    expect(emptied.error).toBeUndefined();
+    const refused = refuseWritesOf(bySpace);
+
+    await expect(collectRows(runtime, serviceSpace, true)).rejects.toThrow(
+      REFUSAL.message,
+    );
+
+    expect(refused()).toBe(1);
+    expect(index.get()).toEqual([]);
   });
 
   it("scopes to one space when asked", async () => {
@@ -344,7 +513,7 @@ describe("ingest channel operator scripts", () => {
       // — so this stays a unit test while still pinning that the wiring is
       // valid.
 
-      for (const make of [auditRuntime, retireRuntime]) {
+      for (const make of [auditRuntime, retireRuntime, provisionRuntime]) {
         const rt = make();
         await rt.dispose();
       }
@@ -562,31 +731,7 @@ describe("ingest channel operator scripts", () => {
         reg({ id, space: SPACE, installId: "phone-race", revision: 2 }),
       );
 
-      // A barrier, so the interleaving is forced rather than hoped for. Both
-      // provisions must finish READING before either is allowed to WRITE —
-      // otherwise a fast first call completes outright, the second reads the
-      // revision it just wrote, and both succeed. `saveRegistration` is the
-      // only thing that reaches `editWithRetry`, so holding there holds
-      // exactly at the read/write seam.
-      let arrived = 0;
-      let release!: () => void;
-      const bothHaveRead = new Promise<void>((r) => (release = r));
-      const barrier = new Proxy(runtime, {
-        get(target, prop, receiver) {
-          if (prop === "editWithRetry") {
-            return async (...args: unknown[]) => {
-              if (++arrived === 2) release();
-              await bothHaveRead;
-              return await (target as unknown as {
-                editWithRetry: (...a: unknown[]) => Promise<unknown>;
-              }).editWithRetry(...args);
-            };
-          }
-          const value = Reflect.get(target, prop, receiver);
-          return typeof value === "function" ? value.bind(target) : value;
-        },
-      }) as typeof runtime;
-
+      const barrier = barrierAt(2);
       const race = (installId: string) =>
         provisionChannel(barrier, serviceSpace, { space: SPACE, installId });
       const outcomes = await Promise.all([
@@ -637,6 +782,104 @@ describe("ingest channel operator scripts", () => {
       expect(after?.enabled).toBe(true);
       expect(after?.revision).toBe(4);
       expect(after?.revocations?.[0].by).toBe("did:key:zAlice");
+    });
+
+    it("appends the live revocation to the history a revoked channel already has", async () => {
+      const id = channelId(SPACE, "phone-h");
+      await saveRegistration(
+        runtime,
+        serviceSpace,
+        reg({
+          id,
+          space: SPACE,
+          installId: "phone-h",
+          enabled: false,
+          revoked: { at: "2026-08-03T00:00:00.000Z", by: "did:key:zB" },
+          revocations: [{ at: "2026-08-01T00:00:00.000Z", by: "did:key:zA" }],
+        }),
+      );
+
+      expect((await provision({ installId: "phone-h" })).ok).toBe(true);
+      const after = await getRegistration(runtime, serviceSpace, id);
+      expect(after?.revoked).toBeUndefined();
+      expect(after?.revocations?.map((r) => r.by)).toEqual([
+        "did:key:zA",
+        "did:key:zB",
+      ]);
+    });
+
+    it("keeps the revocation history of a channel that is live again", async () => {
+      const id = channelId(SPACE, "phone-l");
+      await saveRegistration(
+        runtime,
+        serviceSpace,
+        reg({
+          id,
+          space: SPACE,
+          installId: "phone-l",
+          revocations: [{ at: "2026-08-01T00:00:00.000Z", by: "did:key:zA" }],
+        }),
+      );
+
+      expect((await provision({ installId: "phone-l" })).ok).toBe(true);
+      expect(
+        (await getRegistration(runtime, serviceSpace, id))?.revocations,
+      ).toEqual([{ at: "2026-08-01T00:00:00.000Z", by: "did:key:zA" }]);
+    });
+
+    it("throws a write failure other than a conflict", async () => {
+      await runtime.dispose();
+      await expect(provision({ installId: "phone-gone" })).rejects.toThrow();
+    });
+
+    /** A runtime of its own, for a `main` that disposes what it is handed. */
+    const ownRuntime = () =>
+      new Runtime({
+        apiUrl: new URL("https://provision-entry.invalid"),
+        storageManager: StorageManager.emulate({ as: signer }),
+      });
+
+    it("main prints the channel and its token once, and exits 0", async () => {
+      const lines: string[] = [];
+      expect(
+        await provisionMain(
+          ["--space", SPACE, "--install-id", "phone-m", "--name", "kitchen"],
+          ownRuntime,
+          serviceSpace,
+          (l) => lines.push(l),
+          () => {},
+        ),
+      ).toBe(0);
+      const out = lines.join("\n");
+      const id = channelId(SPACE, "phone-m");
+      expect(out).toContain(`id:          ${id}`);
+      expect(out).toContain("name:        kitchen");
+      expect(out).toMatch(/token \(shown once[^]*ingsec_/);
+    });
+
+    it("main prints the refusal and exits with its code", async () => {
+      const own = ownRuntime();
+      await saveRegistration(
+        own,
+        serviceSpace,
+        reg({
+          id: channelId(SPACE, "phone-g"),
+          space: SPACE,
+          installId: "phone-g",
+          kind: "gmail",
+        }),
+      );
+      const errors: string[] = [];
+      expect(
+        await provisionMain(
+          ["--space", SPACE, "--install-id", "phone-g"],
+          () => own,
+          serviceSpace,
+          () => {},
+          (l) => errors.push(l),
+        ),
+      ).toBe(2);
+      expect(errors.join("\n")).toContain("is a gmail channel");
     });
 
     it("rejects bad input without ever constructing a runtime", async () => {

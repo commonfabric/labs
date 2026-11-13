@@ -8,12 +8,14 @@ import { Database } from "@db/sqlite";
 import { Identity } from "@commonfabric/identity";
 import { aclDocId } from "@commonfabric/memory/acl";
 import type { DID } from "@commonfabric/memory/interface";
+import { encodeMemoryBoundary } from "@commonfabric/memory/v2";
 import { Server } from "@commonfabric/memory/v2/server";
 import { verifySessionOpenAuthorization } from "@commonfabric/memory/v2/session-open-auth";
 import { LoopbackStorageManager } from "@commonfabric/runner/executor/loopback-storage";
 import { signFirstPartyHttpRequest } from "@commonfabric/runner/toolshed-http-auth";
 
 import {
+  loomSpaceCreator,
   MeetingRoomError,
   type MeetingRoomRequest,
   MeetingRooms,
@@ -58,21 +60,18 @@ describe("meeting-rooms", () => {
 
   /** An independent service object sharing only the host's durable store. */
   function rooms(): MeetingRooms {
+    const create = loomSpaceCreator(
+      (options: { as: Identity }) =>
+        LoopbackStorageManager.connect(server, options),
+      { as: alice },
+    );
     return new MeetingRooms({
       path,
       server,
       createSpace: async (creator, root) => {
-        const storage = LoopbackStorageManager.connect(server, { as: alice });
-        try {
-          const space = await storage.createSpace({ [creator]: "OWNER" }, {
-            root,
-            spaceKind: "loom",
-          });
-          candidates.push(space);
-          return space;
-        } finally {
-          await storage.close();
-        }
+        const space = await create(creator, root);
+        candidates.push(space);
+        return space;
       },
     });
   }
@@ -283,13 +282,89 @@ describe("meeting-rooms", () => {
         read.restore();
       }
     });
+
+    it("throws for a principal that is not a space DID, and records nothing", async () => {
+      await expect(rooms().ensure("not-a-did", proposal())).rejects.toThrow(
+        "Invalid principal",
+      );
+      expect(candidates).toEqual([]);
+      expect(Array.from(Deno.readDirSync(directory))).toHaveLength(0);
+    });
+
+    it("throws when the created space is not a space DID, and records nothing", async () => {
+      const bogus = new MeetingRooms({
+        path,
+        server,
+        createSpace: () => Promise.resolve("did:key:bogus"),
+      });
+
+      await expect(bogus.ensure(alice.did(), proposal())).rejects.toThrow(
+        "Invalid created space DID",
+      );
+      expect(allocations()).toEqual([]);
+    });
+
+    it("throws for the allocating principal when its retained root no longer decodes as one", async () => {
+      const request = proposal();
+      const original = await rooms().ensure(alice.did(), request);
+      const db = new Database(path);
+      try {
+        db.prepare("UPDATE meeting_rooms SET root = ?").run(
+          encodeMemoryBoundary({ cause: "" }),
+        );
+      } finally {
+        db.close();
+      }
+
+      await expect(rooms().ensure(alice.did(), request)).rejects.toThrow(
+        "Invalid retained genesis root",
+      );
+      // Another caller is never handed the intent, so it never decodes it.
+      expect(await rooms().ensure(bob.did(), proposal())).toEqual({
+        space: original.space,
+        creator: alice.did(),
+      });
+    });
+  });
+
+  describe("loomSpaceCreator()", () => {
+    it("closes the storage it opened when creating the space fails", async () => {
+      const opened: string[] = [];
+      const closed: string[] = [];
+      const create = loomSpaceCreator((name: string) => {
+        opened.push(name);
+        return {
+          createSpace: () => Promise.reject(new Error("genesis refused")),
+          close: () => {
+            closed.push(name);
+            return Promise.resolve();
+          },
+        };
+      }, "storage-options");
+
+      await expect(create(alice.did(), { cause: "room" })).rejects.toThrow(
+        "genesis refused",
+      );
+      expect(opened).toEqual(["storage-options"]);
+      expect(closed).toEqual(["storage-options"]);
+    });
   });
 
   describe("HTTP boundary", () => {
     /** A proof bound to the configured public authority and exact request body. */
-    async function signed(body: unknown, signer = alice): Promise<Request> {
+    function signed(body: unknown, signer = alice): Promise<Request> {
+      return signedBytes(
+        new TextEncoder().encode(JSON.stringify(body)),
+        signer,
+      );
+    }
+
+    /** A proof bound to the configured public authority and these bytes. */
+    async function signedBytes(
+      bytes: Uint8Array<ArrayBuffer>,
+      signer = alice,
+    ): Promise<Request> {
       const url = HOST + "/api/meeting-rooms/ensure";
-      const bytes = new TextEncoder().encode(JSON.stringify(body));
       const headers = await signFirstPartyHttpRequest({
         signer,
         method: "POST",
@@ -372,6 +447,81 @@ describe("meeting-rooms", () => {
         .toEqual({ scope: "host", available: false });
       expect((await app.fetch(await signed(proposal()))).status).toBe(503);
       expect(Array.from(Deno.readDirSync(directory))).toHaveLength(0);
+    });
+
+    it("returns 400 for a signed body that is not JSON", async () => {
+      const app = createMeetingRoomRouter({ rooms: rooms(), host: HOST });
+
+      const response = await app.fetch(
+        await signedBytes(new TextEncoder().encode("{not json")),
+      );
+
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ code: "invalid-request" });
+      expect(Array.from(Deno.readDirSync(directory))).toHaveLength(0);
+    });
+
+    it("returns 413 for a body over the size limit before checking its proof", async () => {
+      const app = createMeetingRoomRouter({ rooms: rooms(), host: HOST });
+
+      const response = await app.fetch(
+        new Request(HOST + "/api/meeting-rooms/ensure", {
+          method: "POST",
+          body: "x".repeat(16385),
+        }),
+      );
+
+      expect(response.status).toBe(413);
+      expect(await response.json()).toEqual({ code: "invalid-request" });
+    });
+
+    it("returns 403 to a caller that does not own its candidate space", async () => {
+      const storage = LoopbackStorageManager.connect(server, { as: alice });
+      let space: DID;
+      try {
+        space = await storage.createSpace({ [alice.did()]: "OWNER" });
+      } finally {
+        await storage.close();
+      }
+      const app = createMeetingRoomRouter({ rooms: rooms(), host: HOST });
+
+      const response = await app.fetch(
+        await signed({ ...proposal(), candidate: { space } }, bob),
+      );
+
+      expect(response.status).toBe(403);
+      expect(await response.json()).toEqual({ code: "not-owner" });
+      expect(allocations()).toEqual([]);
+    });
+
+    it("returns 409 for a request id retained for another occurrence", async () => {
+      const app = createMeetingRoomRouter({ rooms: rooms(), host: HOST });
+      const request = proposal();
+      expect((await app.fetch(await signed(request))).status).toBe(200);
+
+      const response = await app.fetch(
+        await signed({
+          ...request,
+          key: { ...request.key, occurrence_key: "c".repeat(64) },
+        }),
+      );
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({ code: "request-conflict" });
+      expect(allocations()).toHaveLength(1);
+    });
+
+    it("returns 500 with a fixed code for any other failure, and records nothing", async () => {
+      using _flush = stub(server, "flushSpace", () => {
+        throw new Error("disk on fire");
+      });
+      const app = createMeetingRoomRouter({ rooms: rooms(), host: HOST });
+
+      const response = await app.fetch(await signed(proposal()));
+
+      expect(response.status).toBe(500);
+      expect(await response.json()).toEqual({ code: "service-error" });
+      expect(allocations()).toEqual([]);
     });
   });
 });
