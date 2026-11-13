@@ -1,9 +1,9 @@
 /**
  * Freezing a value all the way down, and asking whether it already is.
  *
- * Both walks are memoized in a `WeakSet`, which is what makes the ordinary
- * case cheap: a value frozen once takes constant time ever after, and a
- * primitive never needs asking at all. Both fast paths run before any per-walk
+ * Both walks are memoized in a weak identity cache, which is what makes the
+ * ordinary case cheap: a value frozen once takes constant time for as long as
+ * the cache remembers it, and a primitive never needs asking at all. Both fast paths run before any per-walk
  * state is allocated, so the cheap path costs nothing.
  *
  * A `FabricInstance` keeps its contents private, so neither walk can descend
@@ -13,6 +13,7 @@
  */
 
 import { isObjectOrArray } from "@commonfabric/js-values/types";
+import { GenerationalWeakSet } from "./generational-weak-set.ts";
 import type { FabricValue } from "./interface.ts";
 import {
   BaseFabricInstance,
@@ -22,8 +23,32 @@ import {
 import { BaseFabricPrimitive } from "./fabric-bases/BaseFabricPrimitive.ts";
 import { isValidFabricValueWithCache } from "./types/validation.ts";
 
-/** Cache of confirmed deep-frozen objects. */
-const deepFrozenCache = new WeakSet<object>();
+/**
+ * Most entries one generation of `deepFrozenCache` takes. V8's ceiling for a
+ * weak table is about 23 million live entries; a generation stays well below
+ * it however many of its keys are still alive.
+ */
+const DEEP_FROZEN_GENERATION_SIZE = 4_000_000;
+
+/** Generations `deepFrozenCache` keeps: at most 16 million entries in all. */
+const DEEP_FROZEN_GENERATIONS = 4;
+
+/**
+ * Cache of confirmed deep-frozen objects.
+ *
+ * Both walks record every container they confirm, not only the root, so this
+ * holds an entry for every object of every deep-frozen value still alive. On
+ * a server that keeps gigabytes of decoded documents that is tens of millions
+ * of entries, past the ceiling V8 puts on one weak table, where the process
+ * ends rather than the cache failing. So it is kept in generations of at most
+ * `DEEP_FROZEN_GENERATION_SIZE` entries each (see `GenerationalWeakSet`), and
+ * an object the oldest generation took is forgotten when that generation is
+ * dropped, to be proven and recorded again the next time it is asked about.
+ */
+const deepFrozenCache = new GenerationalWeakSet<object>(
+  DEEP_FROZEN_GENERATION_SIZE,
+  DEEP_FROZEN_GENERATIONS,
+);
 
 /**
  * Object graphs proven to be deep-frozen `FabricValue`s, memoized by root
