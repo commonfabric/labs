@@ -1817,19 +1817,20 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         });
       });
 
-      it("keeps a served bookkeeping run's copy into a runtime-owned store in its derived stamps", async () => {
+      it("refuses a served bookkeeping run's copy of another space's private data into a runtime-owned store", async () => {
         await withRuntime(true, async (runtime) => {
-          const { reasons } = await preparedCopy(runtime, {
-            sources: [ownersOffers("wf-served-x-bookkeeping-source")],
-            targetName: "wf-served-x-bookkeeping",
-            owned: "enrolled",
-            served: true,
-            kind: "bookkeeping",
-          });
-          expect(reasons).toHaveLength(1);
-          expect(reasons[0]).toContain(
-            "writer-fit(runtime-owned-store-derived)",
+          const { reasons, declared, targetId } = await preparedCopy(
+            runtime,
+            {
+              sources: [ownersOffers("wf-served-x-bookkeeping-source")],
+              targetName: "wf-served-x-bookkeeping",
+              owned: "enrolled",
+              served: true,
+              kind: "bookkeeping",
+            },
           );
+          expectCrossHolderMisfit(reasons, targetId);
+          expect(declared).toEqual([]);
         });
       });
 

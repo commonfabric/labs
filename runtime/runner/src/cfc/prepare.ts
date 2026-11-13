@@ -3918,27 +3918,24 @@ const scopedResidencyPrincipal = (
     waveRunContextOf(tx)?.scopeKeyIdentity?.principal;
 
 /**
- * Whether `tx` is a served run the holder rule of §8.12.5.1 governs: an event
- * handler, or a reactive computation, that the serving posture runs for an
- * acting principal rather than that principal's own runtime running it. Only
- * the serving posture stamps a wave run context. A serving host can read what
- * the acting principal's own runtime could not, and code the acting principal
- * controls chooses where a handler's or a computation's writes land, so both
- * kinds are held to the rule. A bookkeeping run, such as a piece's deferred
- * start, carries what the run that scheduled it wrote, and is not.
+ * Whether `tx` is a served run the holder rule of §8.12.5.1 governs: any run
+ * the serving posture executes, an event handler, a reactive computation or
+ * bookkeeping, rather than the acting principal's own runtime running it.
+ * Only the serving posture stamps a wave run context. A serving host can read
+ * what the acting principal's own runtime could not, and code the acting
+ * principal controls chooses where a handler's or a computation's writes
+ * land, so every kind is held to the rule.
  */
 const isServedRunUnderHolderRule = (
   tx: IExtendedStorageTransaction,
-): boolean => {
+): boolean =>
   // SPEC-PENDING https://github.com/commonfabric/specs/pull/95
   // The rule runs ahead of its ruling, at the strict default, because it
   // only refuses more than the pinned §8.12.5 and persists nothing new. As
-  // proposed, it names a served event handling alone; a served reactive
-  // computation is held to it too. The marker goes when a ruling covering
-  // both merges and the snapshot is re-pinned.
-  const kind = waveRunContextOf(tx)?.kind;
-  return kind === "event-handler" || kind === "derivation";
-};
+  // proposed, it names a served event handling alone; every other served run
+  // is held to it too. The marker goes when a ruling covering them merges and
+  // the snapshot is re-pinned.
+  waveRunContextOf(tx) !== undefined;
 
 /**
  * Whether every `user` or `session` instance `tx` reads, and every one it
