@@ -562,8 +562,9 @@ as an operand, records the following.
 | Any other export of that list that takes an operand | Each operand is consumed, as in the third row | `Computed` |
 
 The inventory states the rule of `getEntityId` for a handle and a
-reference. *Assumed,* for a container operand: the function returns
-the identifier of the stored address the value carries
+reference, and the same assumption for a container. *Assumed,* for a
+container operand: the function returns the identifier of the stored
+address the value carries
 ([§3.8](#38-what-leaves-the-body)), and `undefined` for a container the
 body computed. Today it returns an identifier for a cell, for a value that
 stands for a cell, and for a link, and `undefined` for any other object
@@ -3149,8 +3150,8 @@ asked.
     follows, and `language-subset.md` §4.4.4 says in which tier each
     call is legal. *Assumed:* `getEntityId` of a container that carries a
     stored address returns the identifier of that address and reads no
-    content. The inventory states the rule for a handle and a reference
-    only (§3.4).
+    content. The inventory's row states the same, as an assumption
+    (§3.4).
 22. **A reference below the cut of a recursive type** (to
     `plan-and-label-templates.md` and the prototype). A `value` entry is
     accompanied by an `identity` entry at each position of handle,
@@ -3162,8 +3163,7 @@ asked.
     measure whether any body of the corpus reads a handle or a reference
     below a second entry into a recursive type.
 23. **Six further forms of the record** (to
-    `plan-and-label-templates.md`). Met by §1.1 there, form by form,
-    apart from the last sentence of the last entry.
+    `plan-and-label-templates.md`). Met by §1.1 there, form by form.
     - **`passes` names an entry whose path has no `*`,** and an entry
       whose path has one is named in `oneOf` (`BodyOutput.reference`;
       §3.8, §6.5, §8.5 here).
@@ -3184,7 +3184,8 @@ asked.
       member, a write through such a handle is listed by an envelope, and
       such a container bound in a binding has `capture: "link"`, no
       `reference`, and the body's template (§3.9 there; §2.1, §3.8,
-      §6.2, §8.5). *Assumed,* and not stated there: a projection of
-      factory type that a body binds unchanged is bound as a reference
-      at a position typed `unknown` is, so the body records `identity`
-      and the binding holds the factory value (§8.5).
+      §6.2, §8.5). A projection of factory type that a body binds
+      unchanged is bound as a reference at a position typed `unknown`
+      is, so the body records `identity` and the binding holds the
+      factory value (§3.9 there, "A factory value passed on", and the
+      binding table of §3.14; §8.5).

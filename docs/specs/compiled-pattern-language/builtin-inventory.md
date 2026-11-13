@@ -1891,7 +1891,7 @@ every tier in which its operands can exist.
 | Function | Tiers | Observes of its operands | Today |
 | --- | --- | --- | --- |
 | `valueEqual(a, b)` | M, R, F | Both operands by `value`, over the whole subtree of each. It follows no link and resolves no cell, so at a position that holds a handle or a reference it compares the two references as they are stored: `identity`, not resolved | Deep structural equality by hash, with `Object.is` for primitives (`valueEqual` in `base/data-model/src/comparison/valueEqual.ts`) |
-| `getEntityId(value)` | R, F | A handle or a reference operand by `identity`, not resolved: the identifier and path of the link it holds. Nothing the link leads to is read. A string operand by `value` | `parseLink` on the operand, then the entity reference of the link's identifier, or one derived from the identifier and the path (`getEntityId` in `runtime/runner/src/create-ref.ts`) |
+| `getEntityId(value)` | R, F | A handle or a reference operand by `identity`, not resolved: the identifier and path of the link it holds. Nothing the link leads to is read. A string operand by `value`. *Assumed,* with `footprint-analysis.md` §3.4: a container operand that the body read from an input or a cell is observed by `identity` as well, the result is the identifier of the stored address the value carries, and no content is read; a container the body computed gives `undefined` | `parseLink` on the operand, then the entity reference of the link's identifier, or one derived from the identifier and the path (`getEntityId` in `runtime/runner/src/create-ref.ts`) |
 | `entityRefToString(ref)` | M, R, F | The operand by `value`. It is an entity reference, which is plain data | Formats the reference (`entityRefToString` in `base/data-model`) |
 | `renderCellReference(link, context?)` | M, R, F | Both operands by `value`. Each is a plain record of a space, an identifier, a path, and a scope, and not a handle: the function resolves nothing and reads no cell | Formats the record as a cell address relative to the context (`renderCellReference` in `runtime/runner/src/cell-reference.ts`) |
 | `isWellFormedDID(value)`, `parseDID(value)` | M, R, F | The operand by `value` | String parsing (`base/identity`) |
@@ -1907,9 +1907,10 @@ first kind reads its operands by `value` over the whole subtree, with
 `identity` at each position of handle or reference type inside it; every
 row but `getEntityId` is of this kind. `getEntityId`, with
 [`uiVariant`](#tool-and-factory-helpers) for its first operand, is of the
-second kind: it observes a handle or a reference operand for `identity`
-and reads nothing below it. `toSchema<T>()` is not in the table: it is a
-compile-time intrinsic with a type argument and no operand.
+second kind: it observes a handle, a reference, or a container operand
+for `identity` and reads nothing below it. `toSchema<T>()` is not in the
+table: it is a compile-time intrinsic with a type argument and no
+operand.
 
 In the grammar of `language-subset.md` §3.2, a module-scope *builder* is a
 call that takes a callback and yields a definition the compiler hoists and
@@ -2097,7 +2098,7 @@ below are for the corpus unless a row says otherwise.
 | `Cell.for(cause)`, `Writable.for(cause)` | 9, plus 1 through a helper (not reproduced) | lifts | Yes | None |
 | `.map(fn)` on a cell | 2 found (needs types) | handlers | No (`cell:collection-method-in-function`) | Either wrap the expression in an inline `pattern(...)` and instantiate it, which keeps it reactive, or read first, `cell.get().map(...)`, which maps the values synchronously |
 | `grantSpaceAccess`, `revokeSpaceAccess` | 4 | handlers | Yes, effect requests | None |
-| `nameBlob` | 2 | handlers | Yes, an effect request | None |
+| `nameBlob` | 2 | handlers | Yes, a staged change: a document staged in the event's transaction | None |
 | Context reads | `equals` 109, `spaceOf` 28, `profileOwnerOf` 12, `eventKey` 9, `resultOwnerOf` 9, `spaceAccess` 6, `linksOf` 6, `currentPrincipal` 5, `principalOf` 3, `spaceDeleted` 3, `spaceMembers` 1 | handlers, lifts, computeds | Yes, context reads | None |
 
 Everything else is absent. No body in the sources, tests, or fixtures calls

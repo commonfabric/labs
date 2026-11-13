@@ -467,8 +467,8 @@ memo holds the values (`MemoEntry.unstored` in
 **An operation a handler requested** is named durably by its state
 document. The document's identifier derives from the handling and the
 request's ordinal (`execution-and-storage.md` §5.4), and the document
-holds a back-link to the result cell of the instance whose handler
-requested it (§6.4 there). Three things follow from the back-link.
+holds a `result` back-link to the result cell of the instance whose
+handler requested it (§6.4 there). Three things follow from the back-link.
 
 - The operation belongs to that instance. When the instance is torn down,
   the operation leaves the registry with the instance's other operations

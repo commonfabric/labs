@@ -4770,7 +4770,7 @@ FabriChat's labels none changes an instantiated label.
 
 The listings of this section leave out four more things that the rules
 of section 3 and of `footprint-analysis.md` give the record of the same
-source (`footprint-analysis.md` §12.5 leaves out the same). None changes
+source (`footprint-analysis.md` §12.5 lists the same). None changes
 an instantiated label with FabriChat's labels.
 
 - `T_send` has three further `dynamic` nodes of kind `link`, through

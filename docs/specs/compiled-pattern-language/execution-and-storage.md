@@ -408,7 +408,10 @@ evaluation, and what is written.
 
   Such a write is instantiated after the staged writes it uses
   (`plan-and-label-templates.md` §4.5), which are instantiated and checked
-  first. A write the check drops is unstaged at once. A slot or a
+  first. That section counts the same writes in another division: the
+  second and third groups here are its one group of writes the body reads
+  by address, and the staged writes one of these uses are its third. A
+  write the check drops is unstaged at once. A slot or a
   journaled read at its address reads what is stored and resolves to the
   stored label. A cone instance that had read the dropped value through a
   slot is stale again and is evaluated again, against what is stored,
@@ -1618,9 +1621,8 @@ changes the fingerprint as well.
   instance, so that after a restart, when the entry is gone, the cone
   instance is found stale and evaluated again
   (`scheduler-and-serving-loop.md` §10.4). It records a refusal with the
-  instance (`plan-and-label-templates.md` §4.4). In the terms of that
-  document such a cone "stays stale". In this process the entry is current
-  and unstored, which gives the same stored result without an evaluation.
+  instance (`plan-and-label-templates.md` §4.4, which has the same two
+  states: the cone instance is current and its output is unstored).
 - **A failed cone instance.** Its entry holds the error state and the reads
   made up to the failure. It is current until one of those reads changes.
   The failed evaluation advances the basis rows like any evaluation.
