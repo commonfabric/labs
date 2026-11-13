@@ -30,6 +30,7 @@ import {
   type Cell,
   isCell,
   type MemorySpace,
+  normalizeSpaceHost,
 } from "@commonfabric/runner";
 import { namesInstancesByDefault } from "@commonfabric/runner/storage/cache.deno";
 import {
@@ -47,6 +48,7 @@ import {
 } from "@commonfabric/runner/executor/serving-memory-server.deno";
 import { getTimingStatsBreakdown } from "@commonfabric/logger";
 import { adoptionRequestId } from "@commonfabric/piece/ops";
+import { sendVerbEvent } from "@commonfabric/piece/verb-call";
 import { rendererVDOMSchema } from "@commonfabric/runner/schemas";
 import {
   claimPatternEnvironment,
@@ -846,9 +848,10 @@ describe("fabrichat-room-list", () => {
     });
 
     it("stops the piece of each room it joins", () => {
-      // Under server execution a client starts a room only for its own echo
-      // of the join, and how many of the rooms it starts for that varies from
-      // run to run.
+      // Under server execution a client starts a room's piece only where its
+      // own echo of the join reaches the room, which it does for some of the
+      // rooms and not others from run to run; each piece it does start is
+      // stopped, and none is left running, as the next case says.
       if (serving) return;
       expect(stopped).toBe(rooms.length);
     });
@@ -909,6 +912,148 @@ describe("fabrichat-room-list", () => {
         expect(secondStopped).toBe(0);
         expect(arrivedWhileAdopting).toEqual(rooms.map(() => 0));
       });
+    });
+  });
+
+  /**
+   * The profile spaces the roster of `room` lists, as `runtime` reads the
+   * room's stored argument.
+   */
+  async function rosterOf(
+    controller: PiecesController,
+    room: Cell<unknown>,
+  ): Promise<string[]> {
+    const cell = controller.runtime.getCellFromLink(
+      room.getAsNormalizedFullLink(),
+    );
+    await cell.sync();
+    const roster = cell.getArgumentCell()?.key("participants").asSchema<
+      { items?: Cell<unknown>[] }
+    >({
+      type: "object",
+      properties: { items: { type: "array", items: HANDLE } },
+    });
+    if (roster === undefined) throw new Error("The room has no argument");
+    const value = await roster.pull();
+    return (value?.items ?? []).map((profile) => profile.space);
+  }
+
+  describe("adopting a room whose roster lacks the person", () => {
+    // Ivan makes the room with the person as a member, so its roster lists
+    // Ivan alone until the person joins it, which adopting it does.
+
+    let person: Identity;
+    let room: DID;
+
+    /** The room, as Ivan's manager links it. */
+    let roomCell: Cell<unknown>;
+
+    let profileSpace: DID;
+    let rosterBefore: string[];
+    let client: Client;
+    let stopped: number;
+    let outcome: { status?: string; room?: Cell<unknown> };
+    let rosterAfter: string[];
+    let second: Client;
+    let secondStopped: number;
+
+    /** The documents the room's space delivered to `second` as it adopted. */
+    let arrivedWhileAdopting: number[];
+
+    beforeAll(async () => {
+      const made = await personWithRooms("hana", 0);
+      person = made.person;
+      const ivanIdentity = await Identity.fromPassphrase(
+        `fabrichat-room-list ivan ${crypto.randomUUID()}`,
+        { implementation: "noble" },
+      );
+      const ivan = await openMember(server.url, ivanIdentity, 0);
+      try {
+        room = await createGroup(ivan, "ivans", "Ivan's room", [person.did()]);
+        roomCell = await ivan.home.key("chatManager").key("requests")
+          .key("ivans").key("entry").key("room").asSchema<Cell<unknown>>(
+            HANDLE,
+          ).pull();
+        rosterBefore = await rosterOf(ivan.controller, roomCell);
+      } finally {
+        await closeMember(ivan);
+      }
+
+      // The person's Home registers the room as its share intake registers
+      // an offered one, and no acceptance follows, as when the intake's
+      // acceptance did not land: the catalog lists the room with no
+      // membership, and its roster doesn't list the person.
+      const member = await openMember(server.url, person, 0);
+      try {
+        const runtime = member.controller.runtime;
+        const registered = await sendVerbEvent(
+          member.home.key("registerSharedSpace"),
+          {
+            space: room,
+            host: normalizeSpaceHost(new URL(runtime.apiUrl).origin).origin,
+            kind: "fabrichat-room",
+            title: "Ivan's room",
+            offer: { from: ivanIdentity.did(), id: "ivans" },
+          },
+        );
+        if (registered.status !== "committed") {
+          throw new Error("Registering the room did not commit");
+        }
+        await settle(member.controller);
+        const profile = await member.home.key("profiles").key(0)
+          .asSchema<Cell<unknown>>({ asCell: ["cell"] }).pull();
+        profileSpace = profile.space as DID;
+      } finally {
+        await closeMember(member);
+      }
+
+      client = await bootClient({ adopt: false, person });
+      stopped = await client.controller.adoptCatalogRooms();
+      await settle(client.controller);
+      [outcome] = await adoptedRooms(client, [room]);
+
+      second = await bootClient({ adopt: false, person });
+      secondStopped = await second.controller.adoptCatalogRooms();
+      await settle(second.controller);
+      arrivedWhileAdopting = arrivedIn(second, [room]);
+      rosterAfter = await rosterOf(second.controller, roomCell);
+    });
+
+    afterAll(async () => {
+      await client?.controller.dispose();
+      await second?.controller.dispose();
+    });
+
+    it("finds the roster listing Ivan alone before the adoption", () => {
+      expect(rosterBefore.length).toBe(1);
+      expect(rosterBefore).not.toContain(profileSpace);
+    });
+
+    it("records the room's adoption, and stops the room's piece", () => {
+      const runtime = client.controller.runtime;
+      expect(outcome.status).toBe("done");
+      expect(
+        runtime.runner.isRunning(
+          runtime.getCellFromLink(roomCell.getAsNormalizedFullLink()),
+        ),
+      ).toBe(false);
+      // As for the rooms above: under server execution a client starts the
+      // room's piece only where its echo of the join reaches the room.
+      if (!serving) expect(stopped).toBe(1);
+    });
+
+    it("lists the room for the person", async () => {
+      const rows = await listRooms(client, 1);
+      expect(rows.map((row) => row.room.space)).toContain(room);
+    });
+
+    it("leaves the person on the room's roster", () => {
+      expect(rosterAfter).toEqual([...rosterBefore, profileSpace]);
+    });
+
+    it("adopts nothing at a later boot, and receives no document from the room's space", () => {
+      expect(secondStopped).toBe(0);
+      expect(arrivedWhileAdopting).toEqual([0]);
     });
   });
 
