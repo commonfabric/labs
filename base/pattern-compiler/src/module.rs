@@ -11,6 +11,7 @@ use oxc_ast::ast::{
     ImportDeclarationSpecifier, ImportOrExportKind, ModuleExportName, Statement,
     VariableDeclarationKind,
 };
+use oxc_ast_visit::{walk, Visit};
 use oxc_semantic::Scoping;
 use oxc_span::GetSpan;
 use oxc_syntax::symbol::SymbolId;
@@ -18,7 +19,7 @@ use serde::Serialize;
 
 use crate::api::{api_value, ApiValue, Builder};
 use crate::parse::Parsed;
-use crate::syntax::{offsets, unwrap};
+use crate::syntax::{offsets, unwrap, FunctionLike};
 
 /// The directive that marks a module as imported TypeScript (§5.5).
 pub const IMPORTED_DIRECTIVE: &str = "use typescript";
@@ -178,6 +179,20 @@ pub struct Def {
     /// The span of the declaration's name, or of the expression for a
     /// default export.
     pub span: (u32, u32),
+    /// What the signature of a function shows, for a function of an
+    /// imported TypeScript module (§5.5).
+    pub signature: Option<Signature>,
+}
+
+/// What the written signature of a function shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct Signature {
+    /// Every parameter and the result have a type annotation.
+    pub annotated: bool,
+    /// The signature uses a type form the subset refuses.
+    pub refused_type: bool,
+    /// The signature has a cell handle type or a function type.
+    pub code_type: bool,
 }
 
 /// What an export refers to.
@@ -424,6 +439,7 @@ impl ModuleModel {
                             symbol,
                             kind,
                             form: None,
+                            signature: None,
                             exported: true,
                             span: offsets(span),
                         });
@@ -487,6 +503,11 @@ impl ModuleModel {
                     };
                     let mut names = Vec::new();
                     bound_names(&declarator.id, &mut names);
+                    let signature = match &declarator.init {
+                        Some(init) if self.tier == ModuleTier::Imported => FunctionLike::of(init)
+                            .map(|function| self.signature_of(scoping, function)),
+                        _ => None,
+                    };
                     for (name, symbol, span) in names {
                         self.push_named_def(Def {
                             name,
@@ -495,6 +516,7 @@ impl ModuleModel {
                             form,
                             exported,
                             span,
+                            signature,
                         });
                     }
                 }
@@ -506,11 +528,14 @@ impl ModuleModel {
                     let symbol = id.symbol_id.get();
                     let known = symbol.is_some_and(|symbol| self.bindings.contains_key(&symbol));
                     if !known {
+                        let signature = (self.tier == ModuleTier::Imported)
+                            .then(|| self.signature_of(scoping, FunctionLike::Function(function)));
                         self.push_named_def(Def {
                             name: id.name.as_str().to_string(),
                             symbol,
                             kind: DefKind::Function,
                             form: None,
+                            signature,
                             exported,
                             span: offsets(id.span),
                         });
@@ -524,6 +549,7 @@ impl ModuleModel {
                         symbol: id.symbol_id.get(),
                         kind: DefKind::Class,
                         form: None,
+                        signature: None,
                         exported,
                         span: offsets(id.span),
                     });
@@ -539,6 +565,7 @@ impl ModuleModel {
                     symbol: declaration.id.symbol_id.get(),
                     kind: DefKind::Other,
                     form: None,
+                    signature: None,
                     exported,
                     span: offsets(declaration.id.span),
                 });
@@ -546,6 +573,50 @@ impl ModuleModel {
             Declaration::TSModuleDeclaration(_)
             | Declaration::TSGlobalDeclaration(_)
             | Declaration::TSImportEqualsDeclaration(_) => {}
+        }
+    }
+
+    /// What the written signature of a function shows (§5.5).
+    fn signature_of(&self, scoping: &Scoping, function: FunctionLike<'_, '_>) -> Signature {
+        let parameters = function.params();
+        let return_type = match function {
+            FunctionLike::Arrow(arrow) => arrow.return_type.as_deref(),
+            FunctionLike::Function(function) => function.return_type.as_deref(),
+        };
+        let annotated = return_type.is_some()
+            && parameters
+                .rest
+                .as_ref()
+                .is_none_or(|rest| rest.type_annotation.is_some())
+            && parameters
+                .items
+                .iter()
+                .all(|parameter| parameter.type_annotation.is_some());
+        let mut scan = SignatureScan {
+            model: self,
+            scoping,
+            refused_type: false,
+            code_type: false,
+        };
+        for parameter in &parameters.items {
+            if let Some(annotation) = &parameter.type_annotation {
+                scan.visit_ts_type_annotation(annotation);
+            }
+        }
+        if let Some(annotation) = parameters
+            .rest
+            .as_ref()
+            .and_then(|rest| rest.type_annotation.as_ref())
+        {
+            scan.visit_ts_type_annotation(annotation);
+        }
+        if let Some(annotation) = return_type {
+            scan.visit_ts_type_annotation(annotation);
+        }
+        Signature {
+            annotated,
+            refused_type: scan.refused_type,
+            code_type: scan.code_type,
         }
     }
 
@@ -560,6 +631,7 @@ impl ModuleModel {
             symbol,
             kind: DefKind::Type,
             form: None,
+            signature: None,
             exported,
             span: offsets(id.span),
         });
@@ -772,5 +844,45 @@ fn bound_names(
             }
         }
         BindingPattern::AssignmentPattern(assignment) => bound_names(&assignment.left, out),
+    }
+}
+
+/// Reads the types written in a signature for the forms `Signature` records.
+struct SignatureScan<'m> {
+    model: &'m ModuleModel,
+    scoping: &'m Scoping,
+    refused_type: bool,
+    code_type: bool,
+}
+
+impl<'a> Visit<'a> for SignatureScan<'_> {
+    fn visit_ts_any_keyword(&mut self, _it: &oxc_ast::ast::TSAnyKeyword) {
+        self.refused_type = true;
+    }
+
+    fn visit_ts_conditional_type(&mut self, _it: &oxc_ast::ast::TSConditionalType<'a>) {
+        self.refused_type = true;
+    }
+
+    fn visit_ts_mapped_type(&mut self, _it: &oxc_ast::ast::TSMappedType<'a>) {
+        self.refused_type = true;
+    }
+
+    fn visit_ts_template_literal_type(&mut self, _it: &oxc_ast::ast::TSTemplateLiteralType<'a>) {
+        self.refused_type = true;
+    }
+
+    fn visit_ts_function_type(&mut self, _it: &oxc_ast::ast::TSFunctionType<'a>) {
+        self.code_type = true;
+    }
+
+    fn visit_ts_type_reference(&mut self, it: &oxc_ast::ast::TSTypeReference<'a>) {
+        if let oxc_ast::ast::TSTypeName::IdentifierReference(name) = &it.type_name {
+            let api = symbol_of(self.scoping, name).and_then(|symbol| self.model.api_ref(symbol));
+            if api.is_some_and(|api| crate::api::is_cell_type(&api.name) || api.name == "Stream") {
+                self.code_type = true;
+            }
+        }
+        walk::walk_ts_type_reference(self, it);
     }
 }

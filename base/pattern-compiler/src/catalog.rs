@@ -195,6 +195,21 @@ pub const CATALOG: &[Entry] = &[
     done("collection:index-keyed", Hint),
     part("cell:unsupported-method", Error, HANDLE_REST),
     part("cell:collection-method-in-function", Error, HANDLE_REST),
+    done("cell:cause-not-literal", Error),
+    part(
+        "cell:method-tier",
+        Error,
+        "reported when an annotation or a cell constructor declares the receiver as a \
+         cell handle, for `.for(cause)` on an instantiation, and for `sqliteDatabase` \
+         in a function body; any other receiver needs its type",
+    ),
+    part(
+        "sqlite:tables-not-static",
+        Error,
+        "reported when the `tables` option is not an object literal with static keys \
+         whose values are `table(...)` calls or names; whether a name is bound to a \
+         `table(...)` call and whether its arguments are constant is not followed",
+    ),
     part(
         "collection:nested-scan",
         Warning,

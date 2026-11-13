@@ -8,8 +8,14 @@
 
 pub mod api;
 pub mod catalog;
+pub mod check;
+pub mod corpus;
 pub mod diagnostics;
+pub mod messages;
 pub mod module;
 pub mod parse;
+pub mod program;
+pub mod report;
 pub mod source;
 pub mod syntax;
+pub mod tiers;

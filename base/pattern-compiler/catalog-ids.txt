@@ -40,6 +40,9 @@ collection:reduce-accumulator error
 collection:index-keyed hint
 cell:unsupported-method error
 cell:collection-method-in-function error
+cell:cause-not-literal error
+cell:method-tier error
+sqlite:tables-not-static error
 collection:nested-scan warning
 pattern-context:get-call retired
 pattern-context:optional-chaining retired

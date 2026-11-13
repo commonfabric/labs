@@ -1,0 +1,625 @@
+//! One refused and one accepted snippet for each diagnostic the front end
+//! implements.
+//!
+//! In a refused snippet, `/*!*/` stands just before the node the diagnostic
+//! is reported at.
+
+use pattern_compiler::catalog::{Status, CATALOG};
+use pattern_compiler::diagnostics::{Diagnostic, Severity};
+use pattern_compiler::program::{analyze, SourceFile};
+
+const PRELUDE: &str = "import { action, Cell, computed, eventKey, fetchJson, generateText, \
+handler, ifElse, lift, llm, pattern, patternTool, SELF, sqliteDatabase, table, Writable, \
+type Reactive } from \"commonfabric\";\n";
+const MARKER: &str = "/*!*/";
+
+struct Case {
+    id: &'static str,
+    refused: &'static str,
+    accepted: &'static str,
+}
+
+const fn case(id: &'static str, refused: &'static str, accepted: &'static str) -> Case {
+    Case {
+        id,
+        refused,
+        accepted,
+    }
+}
+
+const CASES: &[Case] = &[
+    case(
+        "module-scope:let-declaration",
+        "/*!*/let count = 0;",
+        "const count = 0;",
+    ),
+    case(
+        "module-scope:var-declaration",
+        "/*!*/var count = 0;",
+        "const count = 0;",
+    ),
+    case(
+        "module-scope:class-declaration",
+        "/*!*/class Donut {}",
+        "interface Donut { name: string }",
+    ),
+    case(
+        "module-scope:statement",
+        "/*!*/console.log(\"glazed\");",
+        "const GLAZED = String(1);",
+    ),
+    case(
+        "module-scope:frozen-data-type",
+        "const TOOLS = { glaze: /*!*/() => 1 };",
+        "const glaze = () => 1;",
+    ),
+    case(
+        "module-scope:frozen-data-write",
+        "const GLAZES = [\"plain\"];\nfunction add() { /*!*/GLAZES.push(\"sugar\"); }",
+        "const GLAZES = [\"plain\"];\nfunction add() { const copy = [...GLAZES]; copy.push(\"sugar\"); return copy; }",
+    ),
+    case(
+        "module-scope:stateful-regexp",
+        "const SPRINKLES = /*!*//sprinkle/g;",
+        "const SPRINKLES = /sprinkle/;",
+    ),
+    case(
+        "module-scope:import-form",
+        "/*!*/import React from \"npm:react\";",
+        "import { NAME } from \"commonfabric\";",
+    ),
+    case(
+        "builder-callback:indirect-reference",
+        "import { save } from \"./elsewhere.ts\";\nconst saveDonut = handler(/*!*/save);",
+        "const save = (_event: unknown, _state: unknown) => {};\nconst saveDonut = handler(save);",
+    ),
+    case(
+        "cell-factory:empty-array",
+        "const Box = pattern(() => { const donuts = /*!*/new Writable([]); return { donuts }; });",
+        "const Box = pattern(() => { const donuts = new Writable<string[]>([]); return { donuts }; });",
+    ),
+    case(
+        "pattern-context:let-declaration",
+        "const Box = pattern(() => { /*!*/let count = 1; return { count }; });",
+        "const Box = pattern(() => { const count = 1; return { count }; });",
+    ),
+    case(
+        "pattern-context:var-declaration",
+        "const Box = pattern(() => { /*!*/var count = 1; return { count }; });",
+        "const Box = pattern(() => { const count = 1; return { count }; });",
+    ),
+    case(
+        "pattern-context:assignment",
+        "const Box = pattern<{ count: number }>(({ count }) => ({ next: /*!*/count++ }));",
+        "const Box = pattern<{ count: number }>(({ count }) => ({ next: count + 1 }));",
+    ),
+    case(
+        "pattern-context:loop",
+        "const Box = pattern(() => { /*!*/for (const glaze of [\"plain\"]) {} return {}; });",
+        "const Box = pattern(() => { const glazes = [\"plain\"].map((glaze) => glaze); return { glazes }; });",
+    ),
+    case(
+        "pattern-context:early-return",
+        "const Box = pattern<{ count: number }>(({ count }) => { /*!*/return { count }; const more = 1; });",
+        "const Box = pattern<{ count: number }>(({ count }) => { const more = 1; return { count, more }; });",
+    ),
+    case(
+        "pattern-context:control-flow",
+        "const Box = pattern<{ count: number }>(({ count }) => { /*!*/if (count) {} return { count }; });",
+        "const Box = pattern<{ count: number }>(({ count }) => { const label = count ? \"some\" : \"none\"; return { label }; });",
+    ),
+    case(
+        "pattern-context:statement",
+        "const Box = pattern<{ price: number }>(({ price }) => { /*!*/price.toFixed(2); return { price }; });",
+        "const Box = pattern<{ price: Writable<number> }>(({ price }) => { computed(() => { price.set(2); }); return { price }; });",
+    ),
+    case(
+        "pattern-context:function-creation",
+        "const Box = pattern(() => { const glaze = /*!*/() => 1; return {}; });",
+        "const glaze = () => 1;\nconst Box = pattern(() => { const glazed = glaze(); return { glazed }; });",
+    ),
+    case(
+        "pattern-context:object-member",
+        "const Box = pattern(() => ({ /*!*/get count() { return 1; } }));",
+        "const Box = pattern(() => ({ count: 1 }));",
+    ),
+    case(
+        "pattern-context:parameter-form",
+        "const Box = pattern<{ glaze?: string }>(({ /*!*/glaze = \"plain\" }) => ({ glaze }));",
+        "const Box = pattern<{ glaze: string }>(({ glaze }) => ({ glaze }));",
+    ),
+    case(
+        "pattern-context:builder-placement",
+        "const Box = pattern(() => { const save = /*!*/handler(() => {}); return { save }; });",
+        "const Box = pattern(() => { const save = action(() => {}); return { save }; });",
+    ),
+    case(
+        "pattern-context:callback-container",
+        "const Box = pattern<{ prices: number[] }>(({ prices }) => ({ sorted: prices.toSorted(/*!*/(a, b) => a - b) }));",
+        "const Box = pattern<{ prices: number[] }>(({ prices }) => ({ sorted: computed(() => prices.toSorted((a, b) => a - b)) }));",
+    ),
+    case(
+        "reactive:unsupported-call",
+        "const Box = pattern<{ prices: number[] }>(({ prices }) => ({ reversed: /*!*/prices.reverse() }));",
+        "const Box = pattern<{ prices: number[] }>(({ prices }) => ({ reversed: prices.toReversed() }));",
+    ),
+    case(
+        "reactive:unsupported-expression",
+        "const Box = pattern<{ baked: number }>(({ baked }) => ({ date: /*!*/new Date(baked) }));",
+        "const Box = pattern<{ baked: number }>(({ baked }) => ({ date: computed(() => new Date(baked).toISOString()) }));",
+    ),
+    case(
+        "pattern-context:self-access",
+        "const Box = pattern<{ child: { count: number } }>(({ child }) => ({ self: /*!*/child[SELF] }));",
+        "const Box = pattern<{ count: number }>((input) => ({ self: input[SELF] }));",
+    ),
+    case(
+        "ses-callback:callable-capture",
+        "function render() { const glaze = () => 1; return <button onClick={/*!*/() => glaze()} />; }",
+        "const glaze = () => 1;\nfunction render() { return <button onClick={() => glaze()} />; }",
+    ),
+    case(
+        "removed-form:helper",
+        "const Box = pattern<{ fresh: boolean }>(({ fresh }) => ({ label: /*!*/ifElse(fresh, \"fresh\", \"stale\") }));",
+        "const Box = pattern<{ fresh: boolean }>(({ fresh }) => ({ label: fresh ? \"fresh\" : \"stale\" }));",
+    ),
+    case(
+        "removed-form:helper-unsupported",
+        "const Box = pattern<{ fresh: boolean }>(({ fresh }) => ({ label: /*!*/ifElse(fresh, \"fresh\") }));",
+        "const Box = pattern<{ fresh: boolean }>(({ fresh }) => ({ label: fresh ? \"fresh\" : \"stale\" }));",
+    ),
+    case(
+        "removed-form:pattern-tool",
+        "const Search = pattern<{ flavor: string; donuts: string[] }>(({ flavor, donuts }) => donuts.filter((donut) => donut === flavor));\nconst Box = pattern<{ donuts: string[] }>(({ donuts }) => ({ tool: /*!*/patternTool(Search, { donuts }) }));",
+        "const Box = pattern<{ donuts: string[] }>(({ donuts }) => ({ tool: pattern<{ flavor: string }>(({ flavor }) => donuts.filter((donut) => donut === flavor)) }));",
+    ),
+    case(
+        "removed-form:builtin",
+        "const Box = pattern<{ prompt: string }>(({ prompt }) => ({ text: /*!*/llm({ prompt }) }));",
+        "const Box = pattern<{ prompt: string }>(({ prompt }) => ({ text: generateText({ prompt }) }));",
+    ),
+    case(
+        "collection:callback-parameters",
+        "const Box = pattern<{ prices: number[] }>(({ prices }) => ({ shares: prices.map(/*!*/(price, index, all) => price / all.length + index) }));",
+        "const Box = pattern<{ prices: number[] }>(({ prices }) => ({ shares: prices.map((price) => price / prices.length) }));",
+    ),
+    case(
+        "collection:reduce-callback",
+        "const Box = pattern<{ prices: number[] }>(({ prices }) => ({ total: prices.reduce(/*!*/(sum, price) => { return sum + price; }, 0) }));",
+        "const Box = pattern<{ prices: number[] }>(({ prices }) => ({ total: prices.reduce((sum, price) => sum + price, 0) }));",
+    ),
+    case(
+        "collection:reduce-initial",
+        "const Box = pattern<{ prices: number[] }>(({ prices }) => ({ total: /*!*/prices.reduce((sum, price) => sum + price) }));",
+        "const Box = pattern<{ prices: number[] }>(({ prices }) => ({ total: prices.reduce((sum, price) => sum + price, 0) }));",
+    ),
+    case(
+        "collection:index-keyed",
+        "const Box = pattern<{ names: string[] }>(({ names }) => ({ rows: names.map(/*!*/(name, index) => `${index}. ${name}`) }));",
+        "const Box = pattern<{ names: string[] }>(({ names }) => ({ rows: names.map((name) => `${name}!`) }));",
+    ),
+    case(
+        "cell:unsupported-method",
+        "const peek = handler<unknown, { count: Writable<number> }>((_, { count }) => { /*!*/count.getRaw(); });",
+        "const peek = handler<unknown, { count: Writable<number> }>((_, { count }) => { count.get(); });",
+    ),
+    case(
+        "cell:collection-method-in-function",
+        "const list = handler<unknown, { donuts: Writable<string[]> }>((_, { donuts }) => { const names = /*!*/donuts.map((donut) => donut); console.log(names); });",
+        "const list = handler<unknown, { donuts: Writable<string[]> }>((_, { donuts }) => { const names = donuts.get().map((donut) => donut); console.log(names); });",
+    ),
+    case(
+        "cell:cause-not-literal",
+        "const Box = pattern<{ id: string }>(({ id }) => { const count = /*!*/Writable.for<number>(id); return { count }; });",
+        "const Box = pattern(() => { const count = Writable.for<number>(\"count\"); return { count }; });",
+    ),
+    case(
+        "cell:method-tier",
+        "const Box = pattern(() => { const count = new Writable(0); /*!*/count.set(1); return { count }; });",
+        "const Box = pattern(() => { const count = new Writable(0); const bump = action(() => count.set(1)); return { count, bump }; });",
+    ),
+    case(
+        "sqlite:tables-not-static",
+        "const Box = pattern(() => { const db = sqliteDatabase({ tables: /*!*/[\"notes\"] }); return { db }; });",
+        "const Box = pattern(() => { const db = sqliteDatabase({ tables: { notes: table({ id: \"text\" }) } }); return { db }; });",
+    ),
+    case(
+        "collection:nested-scan",
+        "const Box = pattern<{ donuts: { id: string }[]; orders: { id: string }[] }>(({ donuts, orders }) => ({ rows: donuts.map((donut) => /*!*/orders.find((order) => order.id === donut.id)) }));",
+        "const Box = pattern<{ donuts: { id: string; toppings: string[] }[] }>(({ donuts }) => ({ rows: donuts.map((donut) => donut.toppings.map((topping) => topping)) }));",
+    ),
+    case(
+        "function-body:async",
+        "const load = /*!*/async () => 1;",
+        "const load = () => 1;",
+    ),
+    case(
+        "function-body:generator",
+        "/*!*/function* glazes() { yield \"plain\"; }",
+        "function glazes() { return [\"plain\"]; }",
+    ),
+    case(
+        "function-body:class",
+        "function make() { /*!*/class Donut {} return new Donut(); }",
+        "function make() { return { name: \"plain\" }; }",
+    ),
+    case(
+        "function-body:this",
+        "function self() { return /*!*/this; }",
+        "function self(donut: { name: string }) { return donut; }",
+    ),
+    case(
+        "function-body:var",
+        "function count() { /*!*/var total = 1; return total; }",
+        "function count() { let total = 1; total += 1; return total; }",
+    ),
+    case(
+        "function-body:for-in",
+        "function keys(box: Record<string, number>) { const out: string[] = []; /*!*/for (const key in box) { out.push(key); } return out; }",
+        "function keys(box: Record<string, number>) { const out: string[] = []; for (const key of Object.keys(box)) { out.push(key); } return out; }",
+    ),
+    case(
+        "function-body:dynamic-code",
+        "function stop() { /*!*/debugger; }",
+        "function stop() { return; }",
+    ),
+    case(
+        "function-body:accessor",
+        "function make() { return { /*!*/get count() { return 1; } }; }",
+        "function make() { return { count: () => 1 }; }",
+    ),
+    case(
+        "function-body:unsupported-global",
+        "function later() { return /*!*/Promise.resolve(1); }",
+        "function later() { return 1; }",
+    ),
+    case(
+        "function-body:global-write",
+        "function leak() { /*!*/Math.glazed = 1; }",
+        "function keep() { const box = { glazed: 0 }; box.glazed = 1; return box; }",
+    ),
+    case(
+        "function-body:ambient-read",
+        "const stamp = lift((name: string) => `${name} ${/*!*/Date.now()}`);",
+        "const stamp = handler<unknown, { at: Writable<number> }>((_, { at }) => { at.set(Date.now()); });",
+    ),
+    case(
+        "function-body:builder-call",
+        "const save = handler(() => { const total = /*!*/computed(() => 1); console.log(total); });",
+        "const save = handler(() => { const more = action(() => {}); console.log(more); });",
+    ),
+    case(
+        "function-body:handler-capture",
+        "function render() { let count = 0; count += 1; return <button onClick={/*!*/() => console.log(count)} />; }",
+        "function render() { let count = 0; count += 1; const shown = count; return <button onClick={() => console.log(shown)} />; }",
+    ),
+    case(
+        "function-body:cell-needs-cause",
+        "const make = lift((name: string) => { const box = /*!*/new Writable(name); return box; });",
+        "const make = lift((name: string) => { const box = Writable.for<string>(name); return box; });",
+    ),
+    case(
+        "function-body:effect-in-computation",
+        "const quote = lift((url: string) => /*!*/fetchJson({ url }));",
+        "const Quote = pattern<{ url: string }>(({ url }) => fetchJson({ url }));",
+    ),
+    case(
+        "function-body:event-context-in-computation",
+        "const key = lift((name: string) => name + /*!*/eventKey());",
+        "const key = handler<unknown, { last: Writable<string> }>((_, { last }) => { last.set(eventKey()); });",
+    ),
+    case(
+        "collection:shared-element-state",
+        "const GLAZES = [\"plain\", \"glazed\"];\nconst Box = pattern(() => { const rows = GLAZES.map((glaze) => { const open = /*!*/new Writable(false); return <li onClick={() => open.set(!open.get())}>{glaze}</li>; }); return { rows }; });",
+        "const GLAZES = [\"plain\", \"glazed\"];\nconst Box = pattern(() => { const rows = GLAZES.map((glaze, index) => { const open = new Writable(false); return <li onClick={() => open.set(!open.get())}>{index + 1}. {glaze}</li>; }); return { rows }; });",
+    ),
+    case(
+        "verb-result:undeclared-return",
+        "const save = handler(() => { /*!*/return { saved: true }; });",
+        "const save = handler<unknown, unknown, { saved: boolean }>(() => { return { saved: true }; });",
+    ),
+    case(
+        "computed:not-promoted",
+        "const Box = pattern<{ prices: number[] }>(({ prices }) => ({ total: /*!*/computed(() => { let sum = 0; for (const price of prices) sum += price; return sum; }) }));",
+        "const Box = pattern<{ prices: number[] }>(({ prices }) => ({ count: computed(() => prices.length) }));",
+    ),
+    case(
+        "computed:redundant",
+        "const Box = pattern<{ prices: number[] }>(({ prices }) => ({ count: /*!*/computed(() => prices.length) }));",
+        "const Box = pattern<{ prices: number[] }>(({ prices }) => ({ count: prices.length }));",
+    ),
+    case(
+        "subset-type:conditional",
+        "type Glaze<T> = /*!*/T extends string ? \"named\" : \"plain\";",
+        "type Glaze = \"named\" | \"plain\";",
+    ),
+    case(
+        "subset-type:mapped",
+        "type Prices = /*!*/{ [K in \"plain\" | \"sugar\"]: number };",
+        "type Prices = Record<\"plain\" | \"sugar\", number>;",
+    ),
+    case(
+        "subset-type:template-literal",
+        "type Sku = /*!*/`donut-${string}`;",
+        "type Sku = string;",
+    ),
+    case(
+        "subset-type:overload",
+        "/*!*/function boxOf(box: unknown): Cell<string>;\nfunction boxOf(box: unknown): unknown { return box; }",
+        "function boxOf(box: unknown): unknown { return box; }",
+    ),
+    case(
+        "subset-type:class",
+        "type Maker = /*!*/new () => object;",
+        "type Maker = () => object;",
+    ),
+    case(
+        "subset-type:callable-object",
+        "interface Glazer { /*!*/(name: string): string }",
+        "type Glazer = (name: string) => string;",
+    ),
+    case(
+        "subset-type:assertion-signature",
+        "function check(name: unknown): /*!*/asserts name is string { if (typeof name !== \"string\") throw new Error(\"no name\"); }",
+        "function check(name: unknown): name is string { return typeof name === \"string\"; }",
+    ),
+    case(
+        "subset-type:unsupported-modifier",
+        "interface Sink</*!*/in T> { put: (value: T) => void }",
+        "interface Sink<T> { put: (value: T) => void }",
+    ),
+    case(
+        "subset-type:index-signature-key",
+        "interface Tray { /*!*/[slot: number]: string }",
+        "interface Tray { [slot: string]: string }",
+    ),
+    case(
+        "subset-syntax:enum",
+        "/*!*/enum Glaze { Plain }",
+        "type Glaze = \"plain\";",
+    ),
+    case(
+        "subset-syntax:namespace",
+        "/*!*/namespace Bakery { export const open = true; }",
+        "const open = true;",
+    ),
+    case(
+        "subset-syntax:ambient-declaration",
+        "/*!*/declare global { interface Bakery { open: boolean } }",
+        "interface Bakery { open: boolean }",
+    ),
+    case(
+        "subset-syntax:decorator",
+        "function sealed(target: unknown) { return target; }\n/*!*/@sealed class Donut {}",
+        "function sealed(target: unknown) { return target; }",
+    ),
+    case(
+        "subset-type:non-regular-recursion",
+        "type Nest<T> = { value: T; inner: /*!*/Nest<T[]> | null };",
+        "type Tree<T> = { value: T; children: Tree<T>[] };",
+    ),
+    case(
+        "subset-type:any",
+        "const glaze: /*!*/any = 1;",
+        "const glaze: unknown = 1;",
+    ),
+    case(
+        "cast-validation:forbidden-cast",
+        "const Box = pattern<{ count: number }>(({ count }) => ({ count: /*!*/count as Reactive<number> }));",
+        "const Box = pattern<{ count: number }>(({ count }) => ({ count }));",
+    ),
+    case(
+        "cast-validation:cell-cast",
+        "function boxOf(box: unknown) { return /*!*/box as Writable<number>; }",
+        "function boxOf(box: Writable<number>) { return box; }",
+    ),
+    case(
+        "schema-type:symbol",
+        "type Key = /*!*/symbol;",
+        "type Key = string;",
+    ),
+    case(
+        "stdlib:unsupported-member",
+        "function root(volume: number) { return /*!*/Math.cbrt(volume); }",
+        "function root(volume: number) { return Math.sqrt(volume); }",
+    ),
+];
+
+fn check_program(files: &[(&str, &str)]) -> Vec<Diagnostic> {
+    let files: Vec<SourceFile> = files
+        .iter()
+        .map(|(path, text)| SourceFile {
+            path: path.to_string(),
+            text: text.to_string(),
+        })
+        .collect();
+    let analysis = analyze(&files);
+    assert!(
+        analysis.failures.is_empty(),
+        "parse failure: {:?}",
+        analysis.failures
+    );
+    analysis
+        .modules
+        .into_iter()
+        .flat_map(|module| module.diagnostics)
+        .collect()
+}
+
+fn check(snippet: &str) -> Vec<Diagnostic> {
+    check_program(&[("case.tsx", &format!("{PRELUDE}{snippet}"))])
+}
+
+/// The line and column of the marker in `snippet` once the prelude is in
+/// front of it, and the snippet without the marker.
+fn marked(snippet: &str) -> ((u32, u32), String) {
+    let offset = snippet
+        .find(MARKER)
+        .expect("a refused snippet has a marker");
+    let before = format!("{PRELUDE}{}", &snippet[..offset]);
+    let line = before.matches('\n').count() as u32 + 1;
+    let column = before.rsplit('\n').next().unwrap().encode_utf16().count() as u32 + 1;
+    ((line, column), snippet.replace(MARKER, ""))
+}
+
+#[test]
+fn every_implemented_diagnostic_refuses_its_snippet_at_the_marked_position() {
+    for case in CASES {
+        let (position, snippet) = marked(case.refused);
+        let diagnostics = check(&snippet);
+        let found = diagnostics.iter().any(|diagnostic| {
+            diagnostic.id == case.id && (diagnostic.line, diagnostic.column) == position
+        });
+        assert!(
+            found,
+            "{} is not reported at {position:?} for:\n{snippet}\ngot: {:#?}",
+            case.id,
+            diagnostics
+                .iter()
+                .map(|diagnostic| (diagnostic.id, diagnostic.line, diagnostic.column))
+                .collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
+fn every_implemented_diagnostic_accepts_its_neighboring_snippet() {
+    for case in CASES {
+        let diagnostics = check(case.accepted);
+        let refused: Vec<_> = diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.is_error() || diagnostic.id == case.id)
+            .map(|diagnostic| diagnostic.to_string())
+            .collect();
+        assert!(
+            refused.is_empty(),
+            "the accepted snippet for {} is reported:\n{}\n{refused:#?}",
+            case.id,
+            case.accepted
+        );
+    }
+}
+
+#[test]
+fn every_diagnostic_has_the_severity_of_the_catalog() {
+    for case in CASES {
+        let (_, snippet) = marked(case.refused);
+        let entry = CATALOG.iter().find(|entry| entry.id == case.id).unwrap();
+        for diagnostic in check(&snippet) {
+            if diagnostic.id == case.id {
+                assert_eq!(Some(diagnostic.severity), entry.severity, "{}", case.id);
+            }
+        }
+    }
+}
+
+/// The diagnostics that need more than one module, which have tests of
+/// their own below.
+const PROGRAM_CASES: [&str; 4] = [
+    "import:signature-not-in-subset",
+    "import:not-a-function",
+    "import:signature-not-data",
+    "import:commonfabric-value",
+];
+
+#[test]
+fn every_implemented_catalog_entry_has_a_case() {
+    for entry in CATALOG {
+        if !matches!(entry.status, Status::Implemented { .. }) {
+            continue;
+        }
+        let covered =
+            CASES.iter().any(|case| case.id == entry.id) || PROGRAM_CASES.contains(&entry.id);
+        assert!(covered, "{} has no test case", entry.id);
+    }
+}
+
+const MATH: &str = "\"use typescript\";\n\
+export function unitPrice(basePrice: number, glaze: string): number { return basePrice + glaze.length; }\n\
+export function loose(basePrice) { return basePrice; }\n\
+export function withCell(price: Cell<number>): number { return price.get(); }\n\
+export const TAX = 0.2;\n\
+import type { Cell } from \"commonfabric\";\n";
+
+fn ids(diagnostics: &[Diagnostic]) -> Vec<&'static str> {
+    diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Error)
+        .map(|diagnostic| diagnostic.id)
+        .collect()
+}
+
+#[test]
+fn import_of_an_annotated_function_of_an_imported_module_is_accepted() {
+    let user =
+        "import { unitPrice } from \"./math.ts\";\nexport const price = unitPrice(2, \"plain\");\n";
+    assert_eq!(
+        ids(&check_program(&[("math.ts", MATH), ("user.ts", user)])),
+        Vec::<&str>::new()
+    );
+}
+
+#[test]
+fn import_of_a_function_without_annotations_is_refused() {
+    let user = "import { loose } from \"./math.ts\";\nexport const price = loose(2);\n";
+    assert_eq!(
+        ids(&check_program(&[("math.ts", MATH), ("user.ts", user)])),
+        ["import:signature-not-in-subset"]
+    );
+}
+
+#[test]
+fn import_of_a_function_that_takes_a_cell_is_refused() {
+    let user = "import { withCell } from \"./math.ts\";\nexport const price = withCell;\n";
+    assert_eq!(
+        ids(&check_program(&[("math.ts", MATH), ("user.ts", user)])),
+        ["import:signature-not-data"]
+    );
+}
+
+#[test]
+fn import_of_a_constant_of_an_imported_module_is_refused() {
+    let user = "import { TAX } from \"./math.ts\";\nexport const tax = TAX;\n";
+    assert_eq!(
+        ids(&check_program(&[("math.ts", MATH), ("user.ts", user)])),
+        ["import:not-a-function"]
+    );
+}
+
+#[test]
+fn value_import_from_commonfabric_in_an_imported_module_is_refused() {
+    let module = "\"use typescript\";\nimport { lift } from \"commonfabric\";\nexport const double = lift((n: number) => n * 2);\n";
+    assert_eq!(
+        ids(&check_program(&[("math.ts", module)])),
+        ["import:commonfabric-value"]
+    );
+}
+
+#[test]
+fn computation_that_reads_the_clock_through_an_authored_function_is_refused() {
+    let module = "function stamp() { return Date.now(); }\nconst at = lift((name: string) => name + stamp());\n";
+    assert_eq!(ids(&check(module)), ["function-body:ambient-read"]);
+    let handled = "function stamp() { return Date.now(); }\nconst at = handler<unknown, { at: Writable<number> }>((_, { at }) => { at.set(stamp()); });\n";
+    assert_eq!(ids(&check(handled)), Vec::<&str>::new());
+}
+
+#[test]
+fn local_binding_named_like_a_removed_helper_is_not_the_helper() {
+    let module = "function choose(ifElse: (a: number) => number) { return ifElse(1); }\n";
+    let diagnostics = check_program(&[("case.ts", module)]);
+    assert_eq!(ids(&diagnostics), Vec::<&str>::new());
+}
+
+#[test]
+fn builder_reached_through_an_alias_and_a_namespace_is_recognized() {
+    let alias = "import { handler as on, pattern as view } from \"commonfabric\";\nexport const Box = view(() => { const save = on(() => {}); return { save }; });\n";
+    assert_eq!(
+        ids(&check_program(&[("case.ts", alias)])),
+        ["pattern-context:builder-placement"]
+    );
+    let namespace = "import * as cf from \"commonfabric\";\nexport const Box = cf.pattern(() => { const save = cf.handler(() => {}); return { save }; });\n";
+    assert_eq!(
+        ids(&check_program(&[("case.ts", namespace)])),
+        ["pattern-context:builder-placement"]
+    );
+}

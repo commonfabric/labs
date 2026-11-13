@@ -41,6 +41,10 @@ pub struct Diagnostic {
     pub line: u32,
     pub column: u32,
     pub message: String,
+    /// The key of the entry of `SPEC-NOTES.md` the report depends on, when
+    /// the specification leaves the case open and the front end chose a
+    /// reading.
+    pub note: Option<&'static str>,
 }
 
 impl Diagnostic {
@@ -67,6 +71,7 @@ impl Diagnostic {
             line,
             column,
             message,
+            note: None,
         }
     }
 
