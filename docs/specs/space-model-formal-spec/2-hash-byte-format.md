@@ -74,7 +74,7 @@ The tags are organized into four categories by high nibble:
 | `TAG_EPOCH_DAY`   | `0x28` | 40      | `FabricEpochDay`                  |
 | `TAG_HASH`        | `0x29` | 41      | `FabricHash`                      |
 | `TAG_SYMBOL`      | `0x2A` | 42      | `symbol` (registry-interned only) |
-| `TAG_REGEXP`      | `0x2B` | 43      | `FabricRegExp`                    |
+| _(retired)_       | `0x2B` | 43      | nothing; never to be reassigned   |
 | `TAG_KEY_PAIR`    | `0x2C` | 44      | `FabricKeyPair` (holding material) |
 | `TAG_UNAVAILABLE` | `0x2D` | 45      | `FabricUnavailable`               |
 | `TAG_DURATION_NSEC` | `0x2E` | 46    | `FabricDurationNsec`              |
@@ -251,9 +251,9 @@ threshold when deciding which form to emit.
 The hashed form applies everywhere this spec encodes a string via the
 `TAG_STRING` layout: standalone strings (this section), `symbol` keys (Section
 4.6), object keys (Section 4.13), `FabricInstance` type tags (Section 4.14),
-`FabricHash` algorithm tags (Section 4.11), `FabricRegExp` source/flags/flavor
-strings (Section 4.16), `FabricKeyPair` algorithm names (Section 4.17), and
-`FabricUnavailable` reasons, kinds, and messages (Section 4.18).
+`FabricHash` algorithm tags (Section 4.11), `FabricKeyPair` algorithm names
+(Section 4.17), and `FabricUnavailable` reasons, kinds, and messages (Section
+4.18).
 
 ### 4.5 `bigint`
 
@@ -456,10 +456,10 @@ Bytes: TAG_INSTANCE  TYPE_TAG_STRING  STATE
   recursively as a complete tagged value.
 
 > **Note on types with dedicated tags.** `FabricBytes`, `FabricEpochNsec`,
-> `FabricEpochDay`, `FabricHash`, `FabricRegExp`, `FabricKeyPair`,
+> `FabricEpochDay`, `FabricHash`, `FabricKeyPair`,
 > `FabricUnavailable`, `FabricDurationNsec`, and `FabricDurationDay` are
 > **not** hashed via `TAG_INSTANCE`. Each has a dedicated type tag and is
-> encoded directly (see Sections 4.8, 4.9, 4.10, 4.11, 4.16, 4.17, 4.18, 4.20
+> encoded directly (see Sections 4.8, 4.9, 4.10, 4.11, 4.17, 4.18, 4.20
 > and 4.21 respectively). These are all `FabricPrimitive` subclasses — at this
 > layer they are hashed from their own stored values, not via their wire
 > codecs.
@@ -488,29 +488,10 @@ Holes appear only within array encodings (Section 4.12). Consecutive holes are
 > (`0x20`) are all distinct. The arrays `[1, , 3]`, `[1, undefined, 3]`, and
 > `[1, null, 3]` produce three different hashes.
 
-### 4.16 `FabricRegExp`
+### 4.16 (Removed)
 
-```
-Bytes: TAG_REGEXP  SOURCE_STRING   FLAGS_STRING    FLAVOR_STRING
-       0x2B        <string, §4.4>  <string, §4.4>  <string, §4.4>
-```
-
-`FabricRegExp` represents a regular-expression value. It is a
-`FabricPrimitive` subclass and has a dedicated type tag; it is hashed from
-its own stored strings (below) and is **not** hashed via `TAG_INSTANCE`.
-
-- **Source**: The pattern source string (`regex.source`), encoded as a
-  complete tagged string value per Section 4.4 (direct form for sources of 64
-  UTF-8 bytes or fewer, hashed form for longer).
-- **Flags**: The flag string (e.g. `"gi"`), encoded as a complete tagged
-  string value per Section 4.4.
-- **Flavor**: The regex dialect identifier (e.g. `"es2025"`), encoded as a
-  complete tagged string value per Section 4.4.
-
-The three strings are fed in order — source, then flags, then flavor — with no
-enclosing container and no `TAG_END` terminator, since the field count is
-fixed. Distinct regex dialects with identical source and flags therefore
-produce distinct hashes (the `flavor` field disambiguates them).
+This section was removed. Its number is kept so that later sections keep
+theirs.
 
 ### 4.17 `FabricKeyPair`
 
@@ -818,30 +799,10 @@ payload is 4 bytes: `0xDE`, `0xAD`, `0xBE`, `0xEF`.
 - Hash byte length 4 (`0x04`)
 - Hash bytes: `DE AD BE EF`
 
-### 7.12 `FabricRegExp(/abc/gi)`
+### 7.12 (Removed)
 
-`FabricRegExp` is a `FabricPrimitive` with the dedicated tag `TAG_REGEXP`
-(`0x2B`); it is hashed by feeding its three component strings — source, flags,
-flavor — in that order (Section 4.16). A `FabricRegExp` built from `/abc/gi`
-has source `"abc"`, flags `"gi"`, and flavor `"es2025"`, the dialect of a JS
-`RegExp`. All three strings are under the 64-byte threshold, so each uses the
-direct string form.
-
-- RegExp tag: `2B`
-- Source `"abc"` (3 bytes UTF-8): `24 03 61 62 63`
-- Flags `"gi"` (2 bytes UTF-8): `24 02 67 69`
-- Flavor `"es2025"` (6 bytes UTF-8): `24 06 65 73 32 30 32 35`
-
-There is no enclosing object and no `TAG_END` terminator — the three fields are
-fed positionally.
-
-Full byte stream:
-```
-2B
-24 03 61 62 63
-24 02 67 69
-24 06 65 73 32 30 32 35
-```
+This section was removed. Its number is kept so that later sections keep
+theirs.
 
 ### 7.13 `FabricKeyPair("Ed25519", [DE AD], [BE EF 01])`
 
@@ -953,8 +914,7 @@ hashed form.
 This rule applies to every string the hasher feeds, including standalone strings
 (Section 4.4), `symbol` keys (Section 4.6), object keys (Section 4.13),
 `FabricInstance` type tags (Section 4.14), `FabricHash` algorithm tags (Section
-4.11), `FabricRegExp` source/flags/flavor strings (Section 4.16),
-`FabricKeyPair` algorithm names (Section 4.17), and `FabricUnavailable`
+4.11), `FabricKeyPair` algorithm names (Section 4.17), and `FabricUnavailable`
 reasons, kinds, and messages (Section 4.18). The threshold is evaluated
 per-string independently: an object may mix short keys (direct form) and long
 keys (hashed form) in the same key-value sequence.
