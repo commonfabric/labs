@@ -42,7 +42,8 @@ next.
   seam between documents: 85 findings, numbered 1.1 to 5.17, of which 23
   would stop an implementer. Its corrections are applied in all seven
   documents, by seven authors working at the same time from one list of
-  decisions for the findings that offered a choice.
+  decisions for the findings that offered a choice. A check of the seams
+  between the documents followed, and its corrections are applied.
 - **Prototype:** branch `claude/compiled-pattern-prototype` holds a Rust
   crate at `base/pattern-compiler/`, the front end of stage 2. It is not
   part of this branch.
@@ -518,14 +519,9 @@ assumption.
 
 ## Open, and not needing the owner
 
-- **The corrections after the second cross-read were written in
-  parallel.** Each author checked that the sections of other documents it
-  cites exist, and not what the others were writing into them at the same
-  time. The overview's sentences that cite `scheduler-and-serving-loop.md`
-  §5.5, §6.1, §7.2, §10.2 and `language-subset.md` §4.7, §6.1 were
-  written from the list of decisions. A short read of those seams is
-  owed, and `execution-and-storage.md` lists new requests 53 to 63 to the
-  scheduler and plan documents that nobody has checked.
+- **`execution-and-storage.md` §6 does not cover a `sqliteDatabase`
+  handle:** whether its state document is recomputable or stored once.
+  The owner of the database is written once and cannot be recomputed.
 - **The pattern closure's remaining gaps** (K12): which output or argument
   path holds which entry of `Plan.closures`, a conditional between two
   closures, and a closure called through `inSpace`.
@@ -613,16 +609,13 @@ The open questions each document ends with stay where they are.
 
 1. **The owner rules** on the questions above. A ruling is added to
    [Decided](#decided) and the question removed.
-2. **Read the seams the last corrections touched,** as
-   [Open, and not needing the owner](#open-and-not-needing-the-owner)
-   lists them, and correct what differs.
-3. **Stage 2 of the overview's staging,** on branch
+2. **Stage 2 of the overview's staging,** on branch
    `claude/compiled-pattern-prototype`: after the front end, the subset
    type checker, then footprint analysis, and then the corpus numbers
    that need types. A place where the prototype finds the specification
    ambiguous or not implementable is corrected in the document that owns
    the rule.
-4. **Post the drafted description to specs pull request #91** and ask for
+3. **Post the drafted description to specs pull request #91** and ask for
    its review, when the owner decides it leaves draft.
 
 ### Briefing an author
