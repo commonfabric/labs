@@ -24,6 +24,7 @@ import ProfileHome from "../profile-home/profile-home.tsx";
 import PrivateInbox, {
   createOwnPrivateInbox,
   ensurePrivateInbox,
+  ensurePrivateInboxOnly,
   pointProfilesAtPrivateInbox,
   type PointTarget,
   PrivateInboxAnswering,
@@ -100,7 +101,7 @@ const RequestingHome = pattern<
         pointProfiles,
         createOwn: createOwnPrivateInbox({
           ownPrivateInbox: own,
-          ensure: ensurePrivateInbox({
+          ensure: ensurePrivateInboxOnly({
             privateInbox,
             ownPrivateInbox: own,
             retainedPrivateInboxes,

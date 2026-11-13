@@ -51,6 +51,7 @@ import {
   createOwnPrivateInbox,
   ensurePrivateInbox,
   type EnsurePrivateInboxEvent,
+  ensurePrivateInboxOnly,
   pointProfilesAtPrivateInbox,
   PrivateInboxAnswering,
   type PrivateInboxHolder,
@@ -471,7 +472,7 @@ const Home = pattern(
       privateInbox,
       profiles: profiles as any,
     });
-    const ensureOnceOwned = ensurePrivateInbox({
+    const ensureOnceOwned = ensurePrivateInboxOnly({
       privateInbox,
       ownPrivateInbox,
       retainedPrivateInboxes,
