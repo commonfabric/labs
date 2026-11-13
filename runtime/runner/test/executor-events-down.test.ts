@@ -2599,6 +2599,14 @@ describe("Phase 3 events-down (serving side)", () => {
           tx.abort(new Error("the probe aborted"));
           return;
         }
+        if (kind === "notrun") {
+          // As a load wait names the document it reached, which can be one
+          // the foreign value chose.
+          tx.dispatchedHandlerNotRun = {
+            reason: `the document \`${read?.secret}\` was still loading`,
+          };
+          return;
+        }
         if (kind === "acl") {
           // The space's ACL document, which no served run may write.
           servingRuntime!.getCellFromLink(
@@ -2712,6 +2720,20 @@ describe("Phase 3 events-down (serving side)", () => {
       const plain = fired.plain.entries[0];
       expect(plain.status).not.toBe("error");
       expect(isWithheldDelivery(plain.tx)).toBe(false);
+
+      // A handling whose body records that it did not run is withdrawn and
+      // re-delivered until its deferrals harden into a drop, whose notice
+      // names nothing a foreign join's run reached. Fired last, since each
+      // deferral holds the same space's later entries behind it.
+      fireVerb(result, "bump", { kind: "notrun" }, "withheld-7");
+      await clientRuntime.idle();
+      await awaitAdmitted(
+        server,
+        () => entryByKind("notrun")?.status === "dropped",
+      );
+      const dropped = entryByKind("notrun")!;
+      expect(dropped.reason).toContain("handler did not run after");
+      expect(JSON.stringify(dropped)).not.toContain("s3cr3t");
     } finally {
       cancelProbe();
       cancelDemand();

@@ -3053,6 +3053,13 @@ export async function dispatchQueuedEvent(state: {
         // Taken before the abort, since the read set is what the client arm
         // parks on.
         const runLog = txToReactivityLog(tx);
+        // The reason can name a document the run reached, which a foreign
+        // join's value may have chosen, and the drop notice it can harden
+        // into is written on the entry. Decided before the abort below takes
+        // the observations it reads.
+        const notRunMessage = servedOutcomeWithheld()
+          ? "the handler did not run, and its outcome is withheld"
+          : reason;
         if (tx.status().status === "ready") {
           tx.abort(new Error(`handler did not run: ${reason}`));
         }
@@ -3076,7 +3083,7 @@ export async function dispatchQueuedEvent(state: {
           reportServedEventFailure(served, {
             kind: "deferred",
             cause: "handler-not-run",
-            message: reason,
+            message: notRunMessage,
           });
           // The withdrawal is a deferral, and a deferral carries the
           // drain's arrival-order BARRIER (events.md §2; review-6459 F1):
