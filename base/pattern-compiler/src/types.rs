@@ -408,6 +408,20 @@ impl<'a> Resolver<'_, 'a> {
         }
     }
 
+    /// A union of `members` with members of equal text merged.
+    pub(crate) fn union_by_text(&self, members: Vec<TypeId>) -> TypeId {
+        let mut seen: Vec<String> = Vec::new();
+        let mut kept = Vec::new();
+        for member in members {
+            let text = self.display(member);
+            if !seen.contains(&text) {
+                seen.push(text);
+                kept.push(member);
+            }
+        }
+        self.union(kept)
+    }
+
     /// `scope:union-member`: a scope wrapper on a member of a union that has
     /// a member other than `null` and `undefined` (§8.8).
     fn scope_in_union(&self, module: usize, span: Span, members: &[TypeId]) {
@@ -546,7 +560,18 @@ impl<'a> Resolver<'_, 'a> {
                     .collect();
                 match present.as_slice() {
                     [one] => self.property(*one, name),
-                    _ => None,
+                    // A property every member declares has the union of
+                    // the members' types for it.
+                    several => {
+                        let types = several
+                            .iter()
+                            .map(|member| match self.shape(*member) {
+                                Shape::Object(..) => self.property(*member, name),
+                                _ => None,
+                            })
+                            .collect::<Option<Vec<TypeId>>>()?;
+                        Some(self.union_by_text(types))
+                    }
                 }
             }
             _ => None,
@@ -1415,7 +1440,7 @@ impl<'a> Resolver<'_, 'a> {
     /// Whether a member of a union is assignable to `target`, for `Exclude`
     /// and `Extract` (§7.10): to a member of a union target, to an equal
     /// type, or, for a literal, to its primitive type.
-    fn fits(&self, member: TypeId, target: TypeId) -> bool {
+    pub(crate) fn fits(&self, member: TypeId, target: TypeId) -> bool {
         let (from, to) = (self.shape(member), self.shape(target));
         if let Shape::Union(targets) = &to {
             return targets.iter().any(|target| self.fits(member, *target));

@@ -294,6 +294,73 @@ pub fn analyze(files: &[SourceFile]) -> ProgramAnalysis {
     ProgramAnalysis { modules, failures }
 }
 
+/// The marker [`types_at_markers`] looks for.
+pub const TYPE_MARKER: &str = "/*?*/";
+
+/// The types of the expressions of a program that are marked with
+/// [`TYPE_MARKER`], in the order of the files and of the source. A marker
+/// stands just before the expression, and where several expressions start
+/// at that offset it names the innermost, so that a larger expression is
+/// marked by writing it in parentheses. An expression with no type is given
+/// as the label the measurement counts it under.
+pub fn types_at_markers(files: &[SourceFile]) -> Vec<String> {
+    use oxc_ast::ast::Expression;
+    use oxc_ast_visit::{walk, Visit};
+    use oxc_span::GetSpan;
+
+    struct Find<'r, 'm, 'a> {
+        resolver: &'r Resolver<'m, 'a>,
+        module: usize,
+        start: u32,
+        found: Option<String>,
+    }
+    impl<'a> Visit<'a> for Find<'_, '_, 'a> {
+        fn visit_expression(&mut self, it: &Expression<'a>) {
+            if it.span().start == self.start {
+                self.found = Some(match self.resolver.declared(self.module, it) {
+                    Ok(ty) => self.resolver.display(ty),
+                    Err(origin) => origin.label().to_string(),
+                });
+            }
+            walk::walk_expression(self, it);
+        }
+    }
+
+    let allocators: Vec<Allocator> = files.iter().map(|_| Allocator::default()).collect();
+    let parsed: Vec<Option<Parsed<'_>>> = files
+        .iter()
+        .zip(&allocators)
+        .map(|(file, allocator)| parse::parse(allocator, &file.path, &file.text).ok())
+        .collect();
+    let models: Vec<Option<ModuleModel>> = parsed
+        .iter()
+        .map(|parsed| parsed.as_ref().map(ModuleModel::build))
+        .collect();
+    let resolver = Resolver::new(files, &models, &parsed);
+    let mut types = Vec::new();
+    for (module, file) in files.iter().enumerate() {
+        let Some(parsed) = &parsed[module] else {
+            continue;
+        };
+        for (offset, _) in file.text.match_indices(TYPE_MARKER) {
+            let after = &file.text[offset + TYPE_MARKER.len()..];
+            let blank = after.len() - after.trim_start().len();
+            let mut find = Find {
+                resolver: &resolver,
+                module,
+                start: (offset + TYPE_MARKER.len() + blank) as u32,
+                found: None,
+            };
+            find.visit_program(parsed.program);
+            types.push(
+                find.found
+                    .unwrap_or_else(|| "no expression at the marker".to_string()),
+            );
+        }
+    }
+    types
+}
+
 /// Reports what a computation or the reactive tier may not do when it does
 /// it through an authored function it calls (`language-subset.md` §5.2: an
 /// authored function is held to the rules of the bodies that call it).

@@ -122,8 +122,24 @@ one that accepts less. The crate implements the document as it stands at commit
     argument, or from the argument whose parameter is the type parameter, an
     array of it, or a handle of it. Any other parameter stays unbound, and the
     function body is not checked per instantiation.
-25. **Narrowing** (§7.6). Not applied. A method called on a union is typed when
-    the union has one member besides `null` and `undefined`.
+25. **Narrowing** (§7.6). Implemented in `src/narrow.rs` for every test the
+    section lists except an assignment to a `let`. A binding that is assigned
+    anywhere in the module is not narrowed at all, which is the reading that
+    types less. Three cases narrow less than TypeScript does: the false
+    branch of `a && b` and the true branch of `a || b`, the `default` case of
+    a `switch`, and a case another case can fall into. One case narrows more
+    than it should: a path such as `order.note` stays narrowed after an
+    assignment to `order.note` between the test and the use, because the
+    walk does not look for writes to a path. A type that a condition would
+    narrow to `never` is left as it was.
+30. **A kind test on `unknown`** (§7.8, §7.6). A kind test narrows a value
+    typed `unknown` that the body computed and does not narrow a data
+    position typed `unknown`. The document does not say how the checker
+    tells the two apart. Chosen: a reference rooted at a parameter of a
+    builder's callback is a data position, and `typeof`, `Array.isArray`,
+    and `instanceof` leave its `unknown` as it is. A reference rooted at any
+    other binding, a parameter of an authored function included, is
+    narrowed. A type predicate narrows both.
 26. **The result of `computed`** (§7.2). `Reactive<T>` is `T`, so the result of
     `computed(() => e)` has the type of `e`, and `.get()` on it is
     `opaque-get:invalid-call`.

@@ -44,7 +44,7 @@ pub enum Origin {
     CallbackParameter,
     /// A parameter with no annotation that is not a callback's.
     UntypedParameter,
-    /// A `let` without an annotation, or a `catch` variable.
+    /// A `let` without an annotation or an initializer.
     Reassigned,
     /// A value imported from a module the program does not hold, or a
     /// global.
@@ -70,7 +70,7 @@ impl Origin {
             Origin::PropertyOfInferred => "untyped: a property of an untyped value",
             Origin::CallbackParameter => "untyped: a callback parameter its callee gives no type",
             Origin::UntypedParameter => "untyped: a parameter without an annotation",
-            Origin::Reassigned => "untyped: a `let` without an annotation, or a `catch` variable",
+            Origin::Reassigned => "untyped: a `let` without an annotation or an initializer",
             Origin::External => "untyped: a global or a value from outside the program",
             Origin::Other => "untyped: another expression",
         }
@@ -116,9 +116,9 @@ impl<'a> Resolver<'_, 'a> {
             Expression::ParenthesizedExpression(inner) => {
                 self.typed_at(module, &inner.expression, next)
             }
-            Expression::TSNonNullExpression(inner) => {
-                self.typed_at(module, &inner.expression, next)
-            }
+            Expression::TSNonNullExpression(inner) => self
+                .typed_at(module, &inner.expression, next)
+                .map(|ty| self.present(ty)),
             Expression::TSSatisfiesExpression(inner) => {
                 self.typed_at(module, &inner.expression, next)
             }
@@ -131,10 +131,12 @@ impl<'a> Resolver<'_, 'a> {
                     Ok(self.resolve_type(module, &cast.type_annotation))
                 }
             }
-            Expression::Identifier(identifier) => self.declared_name(module, identifier, next),
-            Expression::StaticMemberExpression(member) => {
-                self.declared_property(module, &member.object, member.property.name.as_str(), next)
-            }
+            Expression::Identifier(identifier) => self
+                .declared_name(module, identifier, next)
+                .map(|ty| self.narrowed(module, expression, ty)),
+            Expression::StaticMemberExpression(member) => self
+                .declared_property(module, &member.object, member.property.name.as_str(), next)
+                .map(|ty| self.narrowed(module, expression, ty)),
             Expression::ComputedMemberExpression(member) => match unwrap(&member.expression) {
                 Expression::StringLiteral(key) => {
                     self.declared_property(module, &member.object, key.value.as_str(), next)
@@ -391,7 +393,8 @@ impl<'a> Resolver<'_, 'a> {
                 };
                 (&parameter.pattern, base)
             }
-            AstKind::CatchParameter(_) => return Err(Origin::Reassigned),
+            // The variable of a `catch` clause has type `unknown` (§7.6).
+            AstKind::CatchParameter(_) => return Ok(self.intern(Shape::Unknown)),
             AstKind::Function(function) => {
                 return Ok(self.function_value(
                     module,

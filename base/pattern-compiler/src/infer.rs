@@ -36,7 +36,7 @@ impl<'a> Resolver<'_, 'a> {
     }
 
     /// `ty` without its `null` and `undefined` members.
-    fn present(&self, ty: TypeId) -> TypeId {
+    pub(crate) fn present(&self, ty: TypeId) -> TypeId {
         match self.shape(ty) {
             Shape::Union(members) => {
                 let kept = members
@@ -49,18 +49,8 @@ impl<'a> Resolver<'_, 'a> {
         }
     }
 
-    /// A union of `members` with members of equal text merged.
     fn union_distinct(&self, members: Vec<TypeId>) -> TypeId {
-        let mut seen: Vec<String> = Vec::new();
-        let mut kept = Vec::new();
-        for member in members {
-            let text = self.display(member);
-            if !seen.contains(&text) {
-                seen.push(text);
-                kept.push(member);
-            }
-        }
-        self.union_of(kept)
+        self.union_by_text(members)
     }
 
     /// The element type of a collection type: of an array, a tuple, a
@@ -89,7 +79,7 @@ impl<'a> Resolver<'_, 'a> {
 
     /// The declaration a symbol of module `module` names, an import
     /// followed.
-    fn origin(&self, module: usize, symbol: SymbolId) -> Option<(usize, SymbolId)> {
+    pub(crate) fn origin(&self, module: usize, symbol: SymbolId) -> Option<(usize, SymbolId)> {
         let model = self.model(module)?;
         match model.binding(symbol) {
             Some(Binding::Import(import, binding)) => {

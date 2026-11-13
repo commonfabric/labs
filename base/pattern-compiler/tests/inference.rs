@@ -145,12 +145,11 @@ fn variable_of_a_for_of_loop_has_the_element_type() {
 
 #[test]
 fn receiver_inference_gives_up_on_is_counted_with_its_reason() {
-    let (labels, errors) = untyped(
-        "function show(run: () => void) { try { run(); return \"\"; } catch (error) { return error.toString(); } }\n",
-    );
+    let (labels, errors) =
+        untyped("function show(first: string) { let name; name = first; return name.trim(); }\n");
     assert_eq!(
         labels,
-        ["untyped: a `let` without an annotation, or a `catch` variable"]
+        ["untyped: a `let` without an annotation or an initializer"]
     );
     assert!(errors.is_empty());
 }

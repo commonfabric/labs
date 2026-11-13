@@ -7,6 +7,7 @@
 //! diagnostics of that document's §10.
 
 pub mod api;
+pub mod assign;
 pub mod catalog;
 pub mod check;
 pub mod corpus;
@@ -15,6 +16,7 @@ pub mod diagnostics;
 pub mod infer;
 pub mod messages;
 pub mod module;
+pub mod narrow;
 pub mod parse;
 pub mod program;
 pub mod report;
