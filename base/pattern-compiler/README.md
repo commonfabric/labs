@@ -36,16 +36,18 @@ job builds or tests it. It is not a Deno workspace member.
 It has no footprint analysis and no code or plan emission. Its type checker
 resolves written types and the declared types of bindings, infers the types of
 call results, standard-library members, operators, literals, and callback
-parameters, narrows a reference by the conditions around it, and decides
-assignability (`language-subset.md` §7.5) at three sites: an argument, a
+parameters, narrows a reference by the conditions around it and by the
+assignments to a `let`, and decides assignability (`language-subset.md` §7.5)
+at four sites: an argument, an attribute of a tag that names a pattern, a
 returned value under a written return type, and an initializer under an
-annotation. It does not check a generic function per instantiation, and it does
-not apply assignability at an assignment or at the argument of a handle method.
-Where it has no type for an expression, the expression is counted under the
-reason, and a rule that needs the type counts the site as not decided and
-reports nothing. `SPEC-NOTES.md` lists the places where the specification was
-ambiguous or could not be implemented as written, with the reading this crate
-chose.
+annotation. The arguments of a pattern, of a handler, and of a `lift` result
+written in the reactive tier are bound by reference (§7.5.2). It does not check
+a generic function per instantiation, and it does not apply assignability at an
+assignment or at the argument of a handle method. Where it has no type for an
+expression, the expression is counted under the reason, and a rule that needs
+the type counts the site as not decided and reports nothing. `SPEC-NOTES.md`
+lists the places where the specification was ambiguous or could not be
+implemented as written, with the reading this crate chose.
 
 The `catalog` command prints, for each entry of the diagnostics catalog, whether
 the crate implements it, implements the part syntax decides, leaves it to the
@@ -76,7 +78,7 @@ release that builds with the Rust 1.93 toolchain.
 | `declared`               | The declared type of a binding and of an expression that names one                                                    |
 | `infer`                  | The types no declaration gives: call results, standard-library members, operators, literals, and callback parameters  |
 | `narrow`                 | The type of a reference where a condition has been tested (`language-subset.md` §7.6)                                 |
-| `assign`                 | Assignability (`language-subset.md` §7.5) and the three sites it is checked at                                        |
+| `assign`                 | Assignability (`language-subset.md` §7.5, §7.5.1, §7.5.2) and the sites it is checked at                              |
 | `typed`                  | The other catalog rules that read the type of an expression: property reads, casts, pattern results, generic calls    |
 | `program`                | A set of modules, the resolution of imports between them, and the rules that follow a call into another function      |
 | `catalog`, `diagnostics` | The diagnostics catalog and the diagnostic record                                                                     |
@@ -90,11 +92,18 @@ Beside the diagnostics, `corpus` prints counts whose names begin with `types:`.
 `types:receiver:` and `types:collection:` say, for the receiver of each method
 call and for each per-element collection, whether it has a type, and if not,
 why. `types:written:` says how far each written type was evaluated.
-`types:assignability:` says, for each argument, returned value, and initializer,
-whether it is assignable, refused (with the kind of difference), or not decided.
-`types:rule:` says the same for the rules of `typed`. The report also prints the
-promotion of `computed` by the syntactic and by the typed criterion, and the
-calls the two decide differently.
+`types:assignability:` says, for each argument by its callee and by where the
+call is written, and for each attribute of a pattern tag, returned value, and
+initializer, whether it is assignable, refused (with the kind of difference), or
+not decided. `types:rule:` says the same for the rules of `typed`.
+`types:by-reference:` counts each value bound where a writable handle is
+declared by what the value is, and `types:sites:` counts the sites the open
+questions of the specification ask about: a handle of a known type given where a
+handle of `unknown` is declared, a write through a handle of `unknown`, a type
+name of the DOM library, and an argument of an authored function called in the
+reactive tier that is not accepted. `corpus --sites` lists those sites with
+their source text. The report also prints the promotion of `computed` by the
+syntactic and by the typed criterion, and the calls the two decide differently.
 
 `tests/narrowing.rs` reads the type of an expression through
 `program::types_at_markers`, which takes a source text with `/*?*/` before each
@@ -118,6 +127,7 @@ cargo run --release -- corpus ../../patterns
 cargo run --release -- corpus ../../patterns --json
 cargo run --release -- corpus ../../patterns --files
 cargo run --release -- corpus ../../patterns --diagnostics
+cargo run --release -- corpus ../../patterns --sites
 ```
 
 `check` takes the modules of one program: an import between two of them is
@@ -131,7 +141,7 @@ code.
 
 ## The specification it implements
 
-The crate follows `language-subset.md` as it stands at commit `d24ff348c7`.
+The crate follows `language-subset.md` as it stands at commit `d0973bc0de`.
 `catalog-ids.txt` holds the identifiers of that document's catalog, and
 `cargo test` fails when the document's catalog and the copy differ. To follow a
 change of the catalog, edit `catalog-ids.txt` and the table in `src/catalog.rs`

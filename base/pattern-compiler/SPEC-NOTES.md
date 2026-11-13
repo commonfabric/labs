@@ -5,7 +5,7 @@ Places where
 is ambiguous, says two things, or cannot be implemented as written, with the
 reading this crate chose. Where the document leaves a choice, the reading is the
 one that accepts less. The crate implements the document as it stands at commit
-`d24ff348c7`. A note that the document has since settled is removed, so the
+`d0973bc0de`. A note that the document has since settled is removed, so the
 numbers have gaps.
 
 ## The front end (§3 to §6)
@@ -68,14 +68,6 @@ numbers have gaps.
     the program resolve to a type that is not evaluated. No rule refuses a
     program because of one, and every rule that reads one counts the site as not
     decided.
-18. **`typeof` of a string constant in a label argument** (§8.5, §7.1). The
-    document says `typeof name` in a label argument names the binding and never
-    its type, and allows a binding reference in `WriteAuthorizedBy`, in
-    `PolicyOf`, and as the writer of a trusted-action alias. The corpus writes
-    `typeof SOME_CONSTANT`, with the constant a string literal, as a label atom
-    (48 sites) and as the action or the pattern of a trusted-action alias (72
-    sites). Read with TypeScript's meaning of `typeof` these are string literal
-    types. Chosen: as the document states, so each is `cfc-label:not-static`.
 19. **`cfc-label:conflict`** (§8.4, §10.5). The entry names "a key other than
     `confidentiality`". Chosen: every annotation key the crate keeps, the
     default and the scope included, and `addIntegrity` although its name says it
@@ -138,23 +130,6 @@ numbers have gaps.
     `subset-type:cannot-infer-type-argument` is reported only where no parameter
     given an argument names the type parameter, and a parameter an argument
     names in another form is counted as not decided.
-25. **Narrowing** (§7.6). Implemented in `src/narrow.rs` for every test the
-    section lists except an assignment to a `let`. A binding that is assigned
-    anywhere in the module is not narrowed at all, which is the reading that
-    types less. Three cases narrow less than TypeScript does: the false branch
-    of `a && b` and the true branch of `a || b`, the `default` case of a
-    `switch`, and a case another case can fall into. One case narrows more than
-    it should: a path such as `order.note` stays narrowed after an assignment to
-    `order.note` between the test and the use, because the walk does not look
-    for writes to a path. A type that a condition would narrow to `never` is
-    left as it was.
-26. **A kind test on `unknown`** (§7.8, §7.6). A kind test narrows a value typed
-    `unknown` that the body computed and does not narrow a data position typed
-    `unknown`. The document does not say how the checker tells the two apart.
-    Chosen: a reference rooted at a parameter of a builder's callback is a data
-    position, and `typeof`, `Array.isArray`, and `instanceof` leave its
-    `unknown` as it is. A reference rooted at any other binding, a parameter of
-    an authored function included, is narrowed. A type predicate narrows both.
 27. **Built-ins whose result the crate types.** `wish`, `fetchJson`,
     `fetchJsonUnchecked`, and `generateObject` have the result
     `{ pending: boolean; result: T | undefined }` with `T` the written type
@@ -162,81 +137,103 @@ numbers have gaps.
     declarations in `base/api/index.ts` have more fields. The crate does not
     read them, so any other field of such a result has a type that is not
     evaluated. The other effectful built-ins have no signature here.
-28. **The parts of §7 the crate does not apply.** Assignability is applied at an
-    argument, a returned value, and an initializer, and not at an assignment, a
-    property of an object literal outside those sites, an argument of a handle
-    method such as `set`, `push`, or `send`, or a JSX attribute. `e as T` is not
-    tested for relatedness unless it goes through `unknown`, and `e satisfies T`
-    is not checked (§7.7). A generic function is not checked per instantiation
-    (§7.3).
 29. **Iterators of `Map` and `Set`** (§9.9). `keys()`, `values()`, and
     `entries()` are given array types, which is enough for spread, `for...of`,
     and `Array.from`, and wrong for a method called on the iterator itself.
 
-## Assignability (§7.5)
+## Assignability (§7.5, §7.5.1, §7.5.2)
 
-31. **A value named where a cell is declared, in the reactive tier** (§7.5,
-    §4.6). §4.6 says the state of a handler applied in tier R is bound by
-    reference, and each path of it is an input, a state cell, an element, or a
-    computed value. So `save({ items })` with `items` an input declared
-    `Donut[]` binds a state declared `Writable<Donut[]>`, and the corpus writes
-    this at about 200 sites. The same holds in the other direction for a cell
-    named where a pattern input, or the parameter of a `lift` called in tier R,
-    declares the value type. §7.5 has no rule for either: it makes a handle type
-    assignable only to handle types and `unknown`, and makes nothing but a
-    pattern instance assignable to a handle type. Chosen: both are refused
-    (`subset-type:mismatch`), and counted under "a value where a cell is
-    declared" and "a cell where a value is declared" so that the corpus report
-    can tell them from other refusals.
-32. **`Cell<T>` where `Cell<unknown>` is declared** (§7.5, §7.8). §7.8 gives
-    `Cell<unknown>` as the type of a handle whose content the body does not
-    know. §7.5 makes `Cell<T>` assignable to `Cell<U>` only when `T` and `U` are
-    the same type, and `unknown` is not the same type as a declared `T`. Chosen:
-    refused, as §7.5 states, and counted on its own.
-33. **Handles §7.5 gives no value rule for.** The section states the value rule
-    for a `ReadonlyCell` target (the value type is assignable) and for a `Cell`
-    target (the same type). Chosen for a `WriteonlyCell`, a `ComparableCell`, an
-    `OpaqueCell`, and a `Stream` target: the same type, which is the rule that
-    accepts less.
-34. **Where a literal type is widened** (§7.5). The section names `let` bindings
-    and mutable properties. Chosen in addition: an element of an array literal,
-    and the inferred result type of a function that returns one literal. A
-    literal written where a type is expected is checked part by part against
-    that type and is not widened there. The crate does not carry an expected
-    type into the body of a callback through a generic method, so
-    `rows.map((row) => ({ kind: "mix" }))` returned under a result type with a
-    literal `kind` is refused. That is a gap of the crate and not a rule of the
-    document; the count "a primitive type where its literal types are declared"
-    holds these.
-35. **An opaque API type** (§7.2, §7.5). The structure of `VNode`, `JSONSchema`,
-    and the other opaque named types is not part of the language. Chosen:
-    assignability between an opaque type and any other type but itself is not
-    decided, and nothing is reported.
-36. **Tuples.** The type representation does not keep which elements of a tuple
-    are optional. Chosen: a shorter tuple against a longer one is not decided.
+44. **A read of an optional property, where the property holds a handle or
+    has a default** (§7.6, §7.5.2, §12.7). §7.6 gives the read of an optional
+    property `undefined`, and refuses a receiver that is one. The corpus
+    declares a pattern input that may be left out as an optional property,
+    `bookmarks?: Writable<Bookmark[] | Default<[]>>`, and uses the binding as
+    present: `bookmarks.get()`. Chosen: as §7.6 states, the read has
+    `undefined`, whatever the property holds and whether or not its type
+    declares a default. 503 receivers are refused for this alone (434 hold a
+    handle), and 223 arguments. §12.7 writes the input without the `?`,
+    `glaze: Default<string, "plain">`, and the document does not say whether a
+    caller may leave out a property whose type declares a default. The crate
+    requires it of the caller.
+45. **An argument that is an optional property of the caller, where the
+    callee declares the property required** (§7.5.2, the point on
+    `undefined`). The sentence "an argument of type `string | undefined` is
+    accepted, as an argument that is an optional property of the caller's own
+    input is" can be read to accept the second case wherever it occurs. Its
+    reason names the callee's declaration. Chosen: both are accepted only
+    where the callee declares the property optional.
+46. **A literal where a cell is declared, in an argument bound by reference**
+    (§7.5.2, the second row). The row asks whether a `Cell<T>` of the
+    argument's type is assignable to the declared handle, and a literal has a
+    literal type: `Cell<"ring">` is not a `Cell<string>`. Chosen: a literal
+    written at such a position is checked part by part against the value type
+    of the declared cell, as a literal is wherever a type is expected (§7.5).
+47. **The body of a `computed` and §7.5.2.** The rule holds in tier R. §6.2
+    has every `computed` checked under the rules of tier F, promoted or not.
+    Chosen: a call in the body of a `computed` is not bound by reference.
+48. **`AnyCell<T>`** (§7.2). The document does not list the type, and
+    `base/api/index.ts` declares the parameters of `equals` and of the context
+    reads with it. Chosen: a handle kind with no method. A handle of every
+    kind but `SqliteDb` is assignable to it, with the value type compared
+    forward, and it is assignable to itself alone.
+49. **API types the crate does not read** (§7.2). `VNode` is opaque, and
+    `JSONValue` and `JSONSchema` are structural, as the document states. Every
+    other type `commonfabric` exports that is not a constructor of §7.2, such
+    as a built-in's parameter type, is an ordinary object type whose
+    declaration the crate does not read. Chosen: nothing is decided against
+    one. An optional property of an object type is assignable to `JSONValue`
+    by its declared type.
+50. **Where a literal type is widened** (§7.5). The inferred result type of a
+    function is widened where the function returns a literal, in each branch
+    of a conditional too. Chosen: a returned value of a declared union of
+    literal types keeps that type, and so does a property of an object
+    literal and a `let` initialized with one. The crate carries the expected
+    type into the callback of `map` and `flatMap`, into a `computed`, and into
+    a function written where a function type is expected. It does not carry
+    it into the callback of an authored generic function.
+51. **A pattern instantiated in a function body with a value where it declares
+    a cell** (§7.5.2, §5.2). `Note({ title: "New Notebook" })` in a handler,
+    with `title?: Writable<string | Default<"">>`, is refused as §7.5.2
+    states: a function body passes a handle where a handle is declared. The
+    corpus has 35 such arguments, and the document names no form for giving a
+    new instance its initial values.
 
-## The rules that read a type (§10.4)
+## Narrowing and data positions (§7.6, §7.8)
 
-40. **A property read on `unknown`** (§10.4, §7.8). The entry
-    `schema:unknown-type-access` names "a function body". §7.8 lists `?.` among
-    the tests of presence of a position typed `unknown`. Chosen: `x.p` and
-    `x?.p` with `x` typed `unknown` are both reported, because both read the
-    property `p`, and they are reported in every function, a pattern's callback
-    included.
-41. **A receiver that may be absent** (§10.4). `subset-type:mismatch` names "a
-    possibly-`undefined` receiver". The crate gives the read of an optional
-    property the declared type without `undefined`, so a receiver that is an
-    optional property is not reported. A receiver whose type names `null` or
-    `undefined` is.
-42. **A type name of the browser** (§7.10). `Event`, `CustomEvent`, and the
-    other names of the DOM library resolve to no declaration of the program, no
-    API type, and no standard-library type of §7.1. Chosen: as the document
-    states for a name that resolves to nothing, `subset-type:mismatch`.
-43. **`ReturnType` of a pattern factory and `Parameters` of a handler factory**
-    (§7.10, §7.2). The table defines `ReturnType` on a handler factory and
-    `Parameters` on a pattern factory, so the letter of the table refuses the
-    other two (`subset-type:operator-operand`). The crate gives them the
-    pattern's result type and a tuple of the handler's state type and reports
-    nothing. This is the one place where the crate accepts more than the
-    document states, and it was left so because the previous slice computed both
-    and the corpus was not measured without them.
+52. **Narrowing** (§7.6). Implemented for every test the section lists. An
+    assignment to a `let` narrows a reference where it is the last assignment
+    written before the reference, is a statement of a block around it, and no
+    loop around the reference assigns the binding outside that statement. The
+    crate computes no join: after an `if` that assigns in one branch, the
+    binding has its declared type. A binding assigned in another function
+    than the one that reads it is not narrowed. Three cases narrow less than
+    TypeScript does: the `default` case of a `switch`, a case another case can
+    fall into, and a path such as `order.note` of a binding that is assigned.
+    One case narrows more than it should: a path stays narrowed after an
+    assignment to that path. A type that a condition would narrow to `never`
+    is left as it was. An optional chain that is truthy, is compared with a
+    value that is never absent, or is not `undefined`, narrows each receiver
+    it tests and the path it reads.
+53. **`"k" in x` on `object`** (§7.6, §7.8). `typeof x === "object"` narrows
+    an ordinary `unknown` to a type with no property. The corpus then tests
+    `"id" in x` and reads `x.id` (14 reads in 4 modules). §7.6 lists `"k" in
+    x` without saying what it gives a type that declares no property. Chosen:
+    nothing, so the read is `schema:path-not-in-type`.
+54. **Which expressions are data positions** (§7.8). As the section lists
+    them. Two readings were chosen. A `let`, and a `const` whose initializer
+    is an operator or a call other than `get()` and `sample()`, is an ordinary
+    value, `detail ?? fallback` included. The parameter of an inline event
+    handler is a root, with the event of an `action`.
+55. **The type names of the browser** (§7.10). The document names four and
+    "every other name of the DOM library". Chosen: a global type name that
+    ends in `Event`, or begins with `HTML`, `SVG`, or `DOM`, and a list of
+    other names in `is_dom_type_name` of `src/api.rs`.
+56. **The parts of §7 the crate does not apply.** Assignability is applied at
+    an argument, an attribute of a tag that names a pattern, a returned value,
+    and an initializer, and not at an assignment, a property of an object
+    literal outside those sites, or an argument of a handle method such as
+    `set`, `push`, or `send`. `e as T` is not tested for relatedness unless it
+    goes through `unknown`, and `e satisfies T` is not checked (§7.7). A
+    generic function is not checked per instantiation; a property read on a
+    type parameter reads its constraint (§7.3). The predicate of
+    `isWellFormedDID` is the one built-in predicate the crate knows.
