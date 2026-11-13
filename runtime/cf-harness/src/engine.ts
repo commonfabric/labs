@@ -2045,7 +2045,9 @@ export class CfHarnessEngine {
    * Establishes the run's input cells: mints tokens for host-supplied attachments
    * or session-retained targets, records them in run state, and returns them.
    * With no argument, cells already recorded are returned as they stand.
-   * An explicit list adds new attachments, refusing names already held.
+   * An explicit list adds new attachments. One that gives a held cell the name
+   * it is held under adds nothing, and one that gives that name to any other
+   * cell is refused.
    *
    * An input cell names a task target, so failure is closed and loud rather
    * than tolerated: cells configured on a
@@ -2061,9 +2063,13 @@ export class CfHarnessEngine {
     ) {
       return structuredClone(this.#runState.inputCells);
     }
-    const specs = additionalCells ?? this.#inputCells;
     const retained = this.#runState.inputCells ?? [];
-    assertInputCellNamesAvailable(specs, retained.map((cell) => cell.name));
+    const requested = additionalCells ?? this.#inputCells;
+    assertInputCellNamesAvailable(requested, retained);
+    // A name that passed while held is the held cell's, already minted.
+    const specs = requested.filter((spec) =>
+      !retained.some((cell) => cell.name === spec.name)
+    );
     if (specs.length === 0) return structuredClone(retained);
     if (this.#fabricSessionFactory === undefined) {
       throw new Error(

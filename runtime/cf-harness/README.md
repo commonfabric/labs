@@ -834,10 +834,13 @@ A follow-up accepts `--image` and `--input-cell` with the same formats and
 limits as a first run. Images are snapshotted under the new run's artifact
 directory and attached to its new prompt. New input cells mint handles into the
 carried table, so earlier tokens still resolve. Attachment names are retained
-across continuations; a new input cell whose name is already held is refused
-before any model request. `assignedPieces` also carries forward. When no new
-input cells are supplied, their confirmed slugs are announced as attachments, as
-in later chat turns.
+across continuations. An input cell that gives a held name to the cell the name
+already stands for adds nothing, so a host may attach on a follow-up what it
+attached before. One that gives a held name to any other cell is refused before
+any model request, and so is a piece address spelled by slug under a held name,
+since the check compares the references as written. `assignedPieces` also
+carries forward. When no new input cells are supplied, their confirmed slugs are
+announced as attachments, as in later chat turns.
 
 The gateway and subscription routes have different billing, workspace policy,
 retention, and model availability. The model catalog is read live from the
@@ -1603,8 +1606,9 @@ parse, targets an unadmitted space, names a piece the space does not hold, or
 arrives on a run without a fabric session fails the run before the model is
 involved. The cells are recorded in run state (`inputCells`), replayed rather
 than re-minted on resume, and reported in the operator summary as `inputCells:`.
-A continuation retains those names and tokens and appends its new attachments;
-reusing a held attachment name is refused.
+A continuation retains those names and tokens and appends its new attachments. A
+held attachment name stays available to the cell it names and is refused for any
+other.
 
 #### Inspecting a handle's shape
 

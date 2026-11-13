@@ -20,6 +20,10 @@ import {
   type SummaryIndexEntry,
 } from "../summary-index/summary-index.tsx";
 import { type MentionablePiece } from "../backlinks-index/backlinks-index.tsx";
+import {
+  promptInputMessage,
+  type PromptSendEvent,
+} from "../cfc/prompt-injection/prompt.ts";
 
 // ===== Input/Output Types =====
 
@@ -33,14 +37,6 @@ export interface QuickCaptureOutput {
   summary: string;
   capture: Stream<{ text: string; attachments?: Writable<any>[] }>;
 }
-
-type PromptAttachment = {
-  id: string;
-  name: string;
-  type: "file" | "clipboard" | "mention";
-  data?: any;
-  piece?: any;
-};
 
 const clearChat = handler(
   (
@@ -56,24 +52,10 @@ const clearChat = handler(
 );
 
 const sendMessage = handler<
-  { detail: { text: string; attachments?: PromptAttachment[] } },
+  PromptSendEvent,
   { addMessage: Stream<BuiltInLLMMessage> }
 >((event, { addMessage }) => {
-  const { text, attachments } = event.detail;
-
-  // Resolve pasted content attachments inline so the LLM sees actual content
-  // instead of just a reference like [Pasted content (4799 chars)](#attachment-xxx)
-  let resolved = text;
-  for (const att of attachments ?? []) {
-    if (att.type === "clipboard" && typeof att.data === "string") {
-      resolved = resolved.replace(`[${att.name}](#${att.id})`, att.data);
-    }
-  }
-
-  addMessage.send({
-    role: "user",
-    content: [{ type: "text" as const, text: resolved }],
-  });
+  addMessage.send(promptInputMessage(event));
 });
 
 const captureHandler = handler<

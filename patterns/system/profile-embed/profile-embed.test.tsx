@@ -1,5 +1,5 @@
 import { action, assert, FabricBytes, pattern, TESTS } from "commonfabric";
-import ProfileEmbed from "./profile-embed.tsx";
+import ProfileEmbed, { savePicture } from "./profile-embed.tsx";
 import ProfileHome from "../profile-home/profile-home.tsx";
 
 /**
@@ -49,15 +49,17 @@ export default pattern(() => {
     if (draft.trim()) profile.setName.send({ name: draft });
   });
 
-  // The embed's picture picker forwards the picked bytes into setPicture,
-  // suppressing an empty pick.
+  // The embed's picture picker forwards the bytes `<cf-avatar-input>` hands
+  // on into setPicture, suppressing an empty pick.
+  const pickPicture = savePicture({ setPicture: profile.setPicture });
   const action_amend_picture = action(() => {
-    const picked = new FabricBytes(new Uint8Array(PICKED_PICTURE));
-    if (picked.length) profile.setPicture.send({ picture: picked });
+    pickPicture.send({
+      detail: { bytes: new FabricBytes(new Uint8Array(PICKED_PICTURE)) },
+    });
   });
   const action_amend_picture_empty = action(() => {
-    const picked = new FabricBytes(new Uint8Array());
-    if (picked.length) profile.setPicture.send({ picture: picked });
+    pickPicture.send({ detail: { bytes: new FabricBytes(new Uint8Array()) } });
+    pickPicture.send({ detail: {} });
   });
 
   // Bio is deliberately clearable (unlike name/picture); the embed sends the

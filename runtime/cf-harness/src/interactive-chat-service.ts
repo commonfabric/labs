@@ -1,6 +1,7 @@
 import { inputCellsForHarnessTurn } from "./input-cells.ts";
 import {
-  inputNamesHeldByHarnessRun,
+  inputsHeldByHarnessRun,
+  joinHeldInputs,
   prepareNextHarnessRun,
 } from "./run-continuation.ts";
 import { createHarnessRunState, type HarnessRunState } from "./run-state.ts";
@@ -35,7 +36,10 @@ import type { SandboxRuntimeKind } from "./sandbox/types.ts";
 import { pieceTargetingContextMessages } from "./piece-targeting.ts";
 import { REVISION_VERIFICATION_GUIDANCE } from "./revision-verification.ts";
 import type { HarnessBrowserHost } from "./contracts/browser-host.ts";
-import type { HarnessInputCellSpec } from "./contracts/input-cells.ts";
+import type {
+  HarnessHeldInput,
+  HarnessInputCellSpec,
+} from "./contracts/input-cells.ts";
 import type { HarnessAssignedPiece } from "./contracts/assigned-piece.ts";
 import type { HarnessHandleTable } from "./contracts/handle-table.ts";
 import type { HarnessPatternRefSpec } from "./contracts/pattern-refs.ts";
@@ -201,8 +205,8 @@ interface HarnessInteractiveChatSessionRecord {
    */
   handleTable?: HarnessHandleTable;
 
-  /** Names bound to handles in the retained history. */
-  heldInputNames?: readonly string[];
+  /** Names bound to handles in the retained history, each with its cell. */
+  heldInputs?: readonly HarnessHeldInput[];
 
   /**
    * Why a restored session cannot be resumed. Set when the recorded history
@@ -268,8 +272,8 @@ interface HarnessInteractiveChatEmitOptions {
   /** The handle table matching `transcript`, committed and adopted with it. */
   handleTable?: HarnessHandleTable;
 
-  /** Names bound to handles in the retained history. */
-  heldInputNames?: readonly string[];
+  /** Names bound to handles in the retained history, each with its cell. */
+  heldInputs?: readonly HarnessHeldInput[];
 }
 
 /**
@@ -287,8 +291,8 @@ interface HarnessChatTurnCheckpoint {
    */
   handleTable?: HarnessHandleTable;
 
-  /** Names bound to handles in the retained history. */
-  heldInputNames?: readonly string[];
+  /** Names bound to handles in the retained history, each with its cell. */
+  heldInputs?: readonly HarnessHeldInput[];
 }
 
 const defaultPromptLoopFactory: HarnessInteractivePromptLoopFactory = (
@@ -1001,7 +1005,7 @@ export class HarnessInteractiveChatService {
         }),
         status: snapshot.session,
         transcript: [...snapshot.transcript],
-        heldInputNames: snapshot.heldInputNames,
+        heldInputs: snapshot.heldInputs,
         ...(snapshot.researchContext === undefined
           ? {}
           : { researchContext: snapshot.researchContext }),
@@ -1787,7 +1791,7 @@ export class HarnessInteractiveChatService {
             isResumableHarnessTranscript(transcript)
           ? {
             transcript,
-            heldInputNames: interrupted?.heldInputNames,
+            heldInputs: interrupted?.heldInputs,
             ...(interrupted?.researchContext === undefined
               ? {}
               : { researchContext: interrupted.researchContext }),
@@ -1944,12 +1948,11 @@ export class HarnessInteractiveChatService {
     // `subagent_started` this turn already wrote.
     const startedSubagents = new Map<string, HarnessChatSubagentSummary>();
 
-    const heldInputNames = (state?: HarnessRunState): string[] => [
-      ...new Set([
-        ...(record.heldInputNames ?? []),
-        ...inputNamesHeldByHarnessRun(state ?? {}),
-      ]),
-    ];
+    const heldInputs = (state?: HarnessRunState): HarnessHeldInput[] =>
+      joinHeldInputs(
+        record.heldInputs ?? [],
+        inputsHeldByHarnessRun(state ?? {}),
+      );
 
     try {
       let started: {
@@ -1981,7 +1984,7 @@ export class HarnessInteractiveChatService {
         prompt: params.input.text,
         imageAttachments: params.input.imageAttachments,
         inputCells: params.inputCells,
-        heldInputNames: record.heldInputNames,
+        heldInputs: record.heldInputs,
         ...(this.#basePromptLoopOptions.loomAuthoring === undefined
           ? {}
           : { loomContext: { loomId: params.input.loomId } }),
@@ -2033,7 +2036,7 @@ export class HarnessInteractiveChatService {
       const { loop, handleTable: startupHandleTable } = started!;
       interruptedCheckpoint = {
         transcript: [...transcript],
-        heldInputNames: heldInputNames(started!.runState),
+        heldInputs: heldInputs(started!.runState),
         ...(startupHandleTable === undefined
           ? {}
           : { handleTable: startupHandleTable }),
@@ -2085,7 +2088,7 @@ export class HarnessInteractiveChatService {
           );
           completedCheckpoint = {
             transcript,
-            heldInputNames: heldInputNames(checkpoint.runState),
+            heldInputs: heldInputs(checkpoint.runState),
             researchContext: structuredClone({
               researchGoal,
               runs: selectResearchContext(
@@ -2144,7 +2147,7 @@ export class HarnessInteractiveChatService {
           : {}),
       }, {
         transcript: [...result.transcript],
-        heldInputNames: heldInputNames(result.runState),
+        heldInputs: heldInputs(result.runState),
         researchContext: {
           researchGoal,
           runs: selectResearchContext(result.runState.researchRuns ?? []),
@@ -2672,10 +2675,8 @@ export class HarnessInteractiveChatService {
     const pieceSnapshot = assignedPieces === undefined
       ? {}
       : { assignedPieces };
-    const heldInputNames = options.heldInputNames ?? record?.heldInputNames;
-    const heldNameSnapshot = heldInputNames === undefined
-      ? {}
-      : { heldInputNames };
+    const heldInputs = options.heldInputs ?? record?.heldInputs;
+    const heldInputSnapshot = heldInputs === undefined ? {} : { heldInputs };
     const handleTable = options.handleTable ?? record?.handleTable;
     const handleSnapshot = handleTable === undefined ? {} : { handleTable };
     const clientActionCatalogAnswers =
@@ -2705,7 +2706,7 @@ export class HarnessInteractiveChatService {
             ...researchSnapshot,
             ...pieceSnapshot,
             ...handleSnapshot,
-            ...heldNameSnapshot,
+            ...heldInputSnapshot,
             ...answerSnapshot,
           },
           turn: nextTurn,
@@ -2722,7 +2723,7 @@ export class HarnessInteractiveChatService {
           ...researchSnapshot,
           ...pieceSnapshot,
           ...handleSnapshot,
-          ...heldNameSnapshot,
+          ...heldInputSnapshot,
           ...answerSnapshot,
         }, envelope);
       }
@@ -2741,8 +2742,8 @@ export class HarnessInteractiveChatService {
     if (record !== undefined && options.assignedPieces !== undefined) {
       record.assignedPieces = options.assignedPieces;
     }
-    if (record !== undefined && options.heldInputNames !== undefined) {
-      record.heldInputNames = options.heldInputNames;
+    if (record !== undefined && options.heldInputs !== undefined) {
+      record.heldInputs = options.heldInputs;
     }
     if (record !== undefined && options.handleTable !== undefined) {
       record.handleTable = options.handleTable;

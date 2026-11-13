@@ -168,6 +168,7 @@ import {
   type PieceSourceTransition,
   Runner,
   type RunnerRunOptions,
+  type RunnerStartOptions,
   type RunSyncedCommitResult,
   type RunSyncedOptions,
   type RunSyncedWithCommitOptions,
@@ -1625,6 +1626,12 @@ export class Runtime {
   #serverRunDemanderResolver:
     | ServerRunDemanderResolver
     | undefined;
+
+  /**
+   * Whether the serving loop holds the identity carriage of an effect whose
+   * request has gone out (installed _with_ the destination).
+   */
+  #dispatchedEffectCarriage: ((effectKey: string) => boolean) | undefined;
 
   /**
    * The client speculation overlay (`speculation.md`): the _default_ seal
@@ -3234,6 +3241,12 @@ export class Runtime {
        * the run identity). Absent (or returning nothing) the run keeps
        * the wave-level fallback — the Phase-1 cardinality-1 posture. */
       runDemanderResolver?: ServerRunDemanderResolver;
+
+      /** Whether the serving loop's outbox holds the identity carriage of
+       * an effect whose request has gone out: captured when the run that
+       * staged the effect sealed, held until the effect retires
+       * (serving-loop.md §4). */
+      dispatchedEffectCarriage?: (effectKey: string) => boolean;
     } = {},
   ): void {
     if (this.experimental.serverExecution !== true) {
@@ -3252,6 +3265,7 @@ export class Runtime {
     this.#transactionSealDestination = destination;
     this.#serverRunStamper = options.runStamper;
     this.#serverRunDemanderResolver = options.runDemanderResolver;
+    this.#dispatchedEffectCarriage = options.dispatchedEffectCarriage;
   }
 
   /** The installed seal destination (the serving loop), if any —
@@ -3274,6 +3288,19 @@ export class Runtime {
     this.#transactionSealDestination = undefined;
     this.#serverRunStamper = undefined;
     this.#serverRunDemanderResolver = undefined;
+    this.#dispatchedEffectCarriage = undefined;
+  }
+
+  /**
+   * Whether `effectKey`'s request has gone out and the serving loop still
+   * holds the identity carriage the staging run's seal recorded: an effect
+   * completion committed now commits under that carriage (serving-loop.md
+   * §4). False for a request whose release check refused it, whose carriage
+   * retires without a request going out, and everywhere a serving loop
+   * installed no answer.
+   */
+  hasDispatchedEffectCarriage(effectKey: string): boolean {
+    return this.#dispatchedEffectCarriage?.(effectKey) ?? false;
   }
 
   /**
@@ -5414,8 +5441,11 @@ export class Runtime {
     );
   }
 
-  start<T = any>(resultCell: Cell<T>): Promise<boolean> {
-    return this.runner.start(resultCell);
+  start<T = any>(
+    resultCell: Cell<T>,
+    options?: RunnerStartOptions,
+  ): Promise<boolean> {
+    return this.runner.start(resultCell, options);
   }
 
   /**
@@ -5423,8 +5453,11 @@ export class Runtime {
    * it instantiates, rejecting when that commit failed; see
    * `Runner.startWithCommit()`.
    */
-  startWithCommit<T = any>(resultCell: Cell<T>): Promise<boolean> {
-    return this.runner.startWithCommit(resultCell);
+  startWithCommit<T = any>(
+    resultCell: Cell<T>,
+    options?: RunnerStartOptions,
+  ): Promise<boolean> {
+    return this.runner.startWithCommit(resultCell, options);
   }
 
   /**

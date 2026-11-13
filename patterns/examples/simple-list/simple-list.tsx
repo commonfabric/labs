@@ -196,7 +196,7 @@ export const SimpleListModule = pattern<
         {/* Add item input - at bottom for natural list growth */}
         <cf-message-input
           placeholder="Add item..."
-          button-text="+"
+          buttonText="+"
           style={{
             fontSize: "14px",
           }}

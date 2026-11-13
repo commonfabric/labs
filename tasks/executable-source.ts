@@ -26,6 +26,13 @@ const TRANSPILE_OPTIONS: ts.CompilerOptions = {
  * holding a value, and an import kept for its side effects all emit code. A
  * type-only import, a namespace holding only types, and a comment do not.
  *
+ * An export declaration in the output, such as `export * from "./a.ts"`,
+ * `export { b } from "./b.ts"`, or the `export {}` the compiler emits to keep
+ * an otherwise empty file a module, only binds names. A module's evaluation
+ * runs no step for it, so a file of nothing else has no statement a test could
+ * execute. Pattern coverage instrumentation skips export declarations for the
+ * same reason.
+ *
  * The answer is what the TypeScript compiler emits. What runs is what Deno
  * emits, which is swc's work, so the two agreeing is a property held by test
  * rather than one this function can enforce.
@@ -46,19 +53,7 @@ export function hasExecutableCode(content: string, filePath: string): boolean {
     false,
     ts.ScriptKind.JS,
   );
-  return parsed.statements.some((statement) => !isEmptyExportMarker(statement));
-}
-
-/**
- * Helper for `hasExecutableCode()`, which returns whether `statement` is an
- * `export {}` with nothing in it. The compiler emits one to keep a file that
- * emitted nothing else a module rather than a script. It declares no binding
- * and runs no code.
- */
-function isEmptyExportMarker(statement: ts.Statement): boolean {
-  return ts.isExportDeclaration(statement) &&
-    statement.moduleSpecifier === undefined &&
-    statement.exportClause !== undefined &&
-    ts.isNamedExports(statement.exportClause) &&
-    statement.exportClause.elements.length === 0;
+  return parsed.statements.some((statement) =>
+    !ts.isExportDeclaration(statement)
+  );
 }

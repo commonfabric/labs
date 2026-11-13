@@ -189,10 +189,10 @@ describe("interactive chat session context", () => {
         model: "gpt-test",
       });
       await runTurn(first, "first", "Make a piece");
-      expect(store.getSession("session-1")?.heldInputNames).toEqual([
-        "attached",
-        "assigned",
-        "piece-registry",
+      expect(store.getSession("session-1")?.heldInputs).toEqual([
+        { name: "attached", ref: "/of:fid1:old" },
+        { name: "assigned", ref: "/of:fid1:piece" },
+        { name: "piece-registry", ref: "/of:fid1:registry" },
       ]);
       store.close();
       store = await openSqliteHarnessChatSessionStore({ url: toFileUrl(path) });
@@ -223,10 +223,125 @@ describe("interactive chat session context", () => {
       }]);
       expect(seen).toHaveLength(1);
       expect(seen[0].map((m) => m.content).join("\n")).toContain("fresh");
-      expect(store.getSession("session-1")?.heldInputNames).toEqual([
-        "attached",
-        "assigned",
-        "piece-registry",
+      expect(store.getSession("session-1")?.heldInputs).toEqual([
+        { name: "attached", ref: "/of:fid1:old" },
+        { name: "assigned", ref: "/of:fid1:piece" },
+        { name: "piece-registry", ref: "/of:fid1:registry" },
+      ]);
+    } finally {
+      store.close();
+      await Deno.remove(path);
+    }
+  });
+
+  it("attaches a held name again to the cell it names, and to no other, after restoring a session", async () => {
+    const tracker = { name: "pattern_1", ref: `/of:fid1:${"T".repeat(43)}` };
+    const path = await Deno.makeTempFile({ suffix: ".sqlite" });
+    let store = await openSqliteHarnessChatSessionStore({
+      url: toFileUrl(path),
+    });
+    try {
+      // Every turn's run ends holding the tracker under the host's name for it.
+      const held = createHarnessRunState({
+        currentDir: "/workspace",
+        cfcEnforcementMode: "disabled",
+      });
+      held.inputCells = [{ ...tracker, token: "cfh:a:cell" }];
+      const seen: HarnessTranscriptMessage[][] = [];
+      const open = () =>
+        new HarnessInteractiveChatService({
+          sessionStore: store,
+          basePromptLoopOptions: {
+            engine: stubEngine({ inputCells: [tracker] }),
+          },
+          createPromptLoop: recordingLoop(seen, held),
+        });
+      const first = open();
+      await first.startSession("open", {
+        sessionId: "session-1",
+        workspace: { hostPath: "/workspace" },
+        model: "gpt-test",
+      });
+      await runTurn(first, "first", "Make it more visual", [tracker]);
+      expect(seen).toHaveLength(1);
+      await runTurn(first, "second", "Build a new one", [tracker]);
+      expect(seen).toHaveLength(2);
+      store.close();
+      store = await openSqliteHarnessChatSessionStore({ url: toFileUrl(path) });
+      const next = open();
+      await next.initializeFromStore();
+      await runTurn(next, "restored", "Diagnose that", [tracker]);
+      expect(seen).toHaveLength(3);
+      // Another spelling of the tracker's address names the same cell.
+      await runTurn(next, "respelled", "And again", [{
+        name: "pattern_1",
+        ref: `of:fid1:${"T".repeat(43)}`,
+      }]);
+      expect(seen).toHaveLength(4);
+
+      await runTurn(next, "rebound", "Use this one", [{
+        name: "pattern_1",
+        ref: `/of:fid1:${"O".repeat(43)}`,
+      }]);
+      const failure = next.events("session-1").find((envelope) =>
+        envelope.turnId === "rebound" && envelope.event.kind === "turn_failed"
+      );
+      expect(JSON.stringify(failure)).toContain(
+        "--input-cell name `pattern_1` is already held by this run",
+      );
+      expect(seen).toHaveLength(4);
+    } finally {
+      store.close();
+      await Deno.remove(path);
+    }
+  });
+
+  it("refuses every attachment under a name the stored session holds without a cell", async () => {
+    const tracker = { name: "pattern_1", ref: `/of:fid1:${"T".repeat(43)}` };
+    const path = await Deno.makeTempFile({ suffix: ".sqlite" });
+    let store = await openSqliteHarnessChatSessionStore({
+      url: toFileUrl(path),
+    });
+    try {
+      const first = new HarnessInteractiveChatService({
+        sessionStore: store,
+        createPromptLoop: recordingLoop([]),
+      });
+      await first.startSession("open", {
+        sessionId: "session-1",
+        workspace: { hostPath: "/workspace" },
+        model: "gpt-test",
+      });
+      // A row that records the hold by name alone.
+      store.database.prepare(
+        "UPDATE chat_session SET held_inputs = NULL, held_input_names = :names",
+      ).run({ names: JSON.stringify(["pattern_1"]) });
+      store.close();
+      store = await openSqliteHarnessChatSessionStore({ url: toFileUrl(path) });
+      expect(store.getSession("session-1")?.heldInputs).toEqual([
+        { name: "pattern_1" },
+      ]);
+      const seen: HarnessTranscriptMessage[][] = [];
+      const next = new HarnessInteractiveChatService({
+        sessionStore: store,
+        basePromptLoopOptions: {
+          engine: stubEngine({ inputCells: [tracker] }),
+        },
+        createPromptLoop: recordingLoop(seen),
+      });
+      await next.initializeFromStore();
+      await runTurn(next, "held", "Use this", [tracker]);
+      const failure = next.events("session-1").find((envelope) =>
+        envelope.turnId === "held" && envelope.event.kind === "turn_failed"
+      );
+      expect(JSON.stringify(failure)).toContain(
+        "--input-cell name `pattern_1` is already held by this run",
+      );
+      expect(seen).toHaveLength(0);
+      await runTurn(next, "other", "Use this", [{ ...tracker, name: "other" }]);
+      expect(seen).toHaveLength(1);
+      expect(store.getSession("session-1")?.heldInputs).toEqual([
+        { name: "pattern_1" },
       ]);
     } finally {
       store.close();

@@ -90,7 +90,7 @@ const Checklist = pattern<ChecklistInput, ChecklistOutput>(
             {ifElse(
               response.pending,
               <div style="color: var(--cf-theme-color-text-secondary);">
-                <cf-loader show-elapsed /> Generating checklist...
+                <cf-loader showElapsed /> Generating checklist...
               </div>,
               <div>
                 {items.map((item) => (

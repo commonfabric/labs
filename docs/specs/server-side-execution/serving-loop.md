@@ -136,7 +136,17 @@ A space stays placed on its worker for as long as the worker runs. Counted:
 A space is ACTIVE when it has ≥1 live client session or undelivered
 events; otherwise it MAY be parked (lease released, loop stopped, and
 the runtime disposed or kept for the space's next tenure — Parking
-below).
+below). A client session is any session except a serving loop's own,
+which is a session of the deployment's service identity that
+reached the memory server from the process holding it, declared the
+serving binding (`actingAs: "space-owner"`, a serving runtime of another
+process), or declared that it is not demand (`demand: false`, which the
+toolshed's own webhook runtime declares, since it keeps a session on
+every space it touched for as long as it runs and no one waits on it).
+The connection and the session's declaration decide, not the key: a local
+toolshed that runs under the identity its operator's client also signs
+with still counts that client's sessions as client sessions, for
+activation, parking and demand alike.
 Activation on: session open, event append, or explicit warm request.
 *(AMENDED 2026-09-09: a fourth trigger — a pattern-lifecycle verb
 request, which the host queues on the space's serving loop; the loop
@@ -1349,7 +1359,11 @@ seal resolves its scoped writes (the defaults setup seeds in the
 start's own transaction among them) against the same instances
 rather than the wave-level service identity. The stamp still
 carries no acting principal (protocol.md §1's "The SpaceServer's
-own writes"). A piece-start
+own writes"). A builtin's ending for a request that never
+went out (builtins.md §2) is stamped `bookkeeping` the same way,
+with the staging run's identity, when it has one, as its
+addressing, and seals into the open wave behind the writes that
+run's predecessors left pending there. A piece-start
 commit that FAILS after start() resolved (the path is
 fire-and-forget by design) must SURFACE — loudly logged in every
 arm and counted into §7's `structureLoadFailures` on a serving

@@ -35,7 +35,11 @@ import {
   jsonFromFabricValue,
   realmFromFabricValue,
 } from "@/codecs.ts";
-import { FabricRegExp } from "@/fabric-primitives";
+import {
+  FABRIC_PRIMITIVE_SCHEMA_TYPES,
+  FabricRegExp,
+  isFabricPrimitiveSchemaType,
+} from "@/fabric-primitives";
 
 /** The state a `RegExp@1` would carry for `/abc/gi`. */
 const REGEXP_STATE = { flags: "gi", flavor: "es2025", source: "abc" };
@@ -95,8 +99,15 @@ describe("FabricRegExp", () => {
 
   describe("instance members", () => {
     describe(".schemaType", () => {
-      it("is `FabricRegExp`", () => {
-        expect(new FabricRegExp(/a/).schemaType).toBe("FabricRegExp");
+      it("is `object`", () => {
+        expect(new FabricRegExp(/a/).schemaType).toBe("object");
+      });
+
+      it("is outside the schema `type` vocabulary, as is `FabricRegExp`", () => {
+        const { schemaType } = new FabricRegExp(/a/);
+        expect(isFabricPrimitiveSchemaType(schemaType)).toBe(false);
+        expect(isFabricPrimitiveSchemaType("FabricRegExp")).toBe(false);
+        expect(FABRIC_PRIMITIVE_SCHEMA_TYPES).not.toContain("FabricRegExp");
       });
     });
 

@@ -164,6 +164,14 @@ export const EXEMPTIONS: readonly Exemption[] = [
       "docs/specs/memory-v2/07-op-views-and-annotations.md, where the " +
       "engine's labeling of moved anchors is arranged",
   },
+  {
+    file: "runtime/runner/src/cfc/prepare.ts",
+    citation: "§8.12.5.1",
+    reason: "the served-run holder rule cites the section " +
+      "https://github.com/commonfabric/specs/pull/95 adds, which the pinned " +
+      "snapshot (specs#88's head) does not hold; its SPEC-PENDING marker names " +
+      "that pull request",
+  },
 ];
 
 /** A file this check reads. */

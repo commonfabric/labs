@@ -645,6 +645,7 @@ let assignCfcImplementationIdentity: (
 let unwrapTransaction: (
   tx: object,
 ) => IExtendedStorageTransaction | undefined;
+let assignBeforeAbort: (tx: object, callback: () => void) => boolean;
 let isExtendedStorageTransaction: (value: object) => boolean;
 
 export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
@@ -716,6 +717,12 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   #outboxIdempotencyKeys = new Set<string>();
   #readOnlySource?: string;
   #narrowestReadScope: CellScope = "space";
+
+  /**
+   * The callback `runBeforeAbort()` registered, which the next `abort()` runs
+   * once, first. See that function.
+   */
+  #beforeAbort: (() => void) | undefined;
 
   /**
    * The CFC state. ECMAScript-private (`#`), like `#privilegedSystemWriteDepth`
@@ -2365,6 +2372,11 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
 
   static {
     isExtendedStorageTransaction = (value) => #cfcState in value;
+    assignBeforeAbort = (tx, callback) => {
+      if (!(#cfcState in tx)) return false;
+      tx.#beforeAbort = callback;
+      return true;
+    };
     assignCfcTrustSnapshot = (tx, snapshot) => {
       if (!(#cfcState in tx)) return false;
       tx.#noteCfcActivity();
@@ -4400,6 +4412,17 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
 
   abort(reason?: any): Result<any, InactiveTransactionError> {
     this.#assertWritable("abort()");
+    // Ahead of everything below, since the preparation inputs it releases are
+    // what the callback reads.
+    const beforeAbort = this.#beforeAbort;
+    this.#beforeAbort = undefined;
+    if (beforeAbort !== undefined) {
+      try {
+        beforeAbort();
+      } catch (error) {
+        logger.error("before-abort", "A before-abort callback threw", error);
+      }
+    }
     this.#statusOverride = undefined;
     this.#clearPostCommitOutbox();
     this.#preparationRefused = false;
@@ -4533,6 +4556,10 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
 
   /** Starts this commit attempt and exposes its verdict and settlement. */
   commit(options?: TransactionCommitOptions): TransactionCommitReceipt {
+    // A commit is this transaction's verdict as much as an abort is, so a
+    // callback registered for an abort is dropped here rather than kept for
+    // as long as the transaction is.
+    this.#beforeAbort = undefined;
     const ready = this.status().status === "ready";
     const settled = this.#commit(options);
     return createTransactionCommitReceipt(
@@ -5704,6 +5731,31 @@ const assignTrustState = (
     `${what} requires a transaction the runtime created`,
   );
 };
+
+/**
+ * Registers `callback` to run once, at the start of the next `abort()` of
+ * `tx`, before the abort releases what the transaction recorded for
+ * preparation: the observations its flow join is derived from among them. It
+ * exists for the serving loop's decision whether a served event handling's
+ * outcome is withheld (`runOutcomeIsWithheld()` in
+ * `executor/processed-claim.ts`), which a handler that aborts its own
+ * transaction would otherwise leave to be made with those observations gone.
+ *
+ * A second registration replaces the first. A callback that throws is logged,
+ * and the abort goes ahead. Like `setCfcImplementationIdentity()`, this is no
+ * method of the transaction: only host code, which can import this module,
+ * registers one, and only `abort()` runs it.
+ */
+export function runBeforeAbort(
+  tx: IExtendedStorageTransaction,
+  callback: () => void,
+): void {
+  assignTrustState(
+    tx,
+    (target) => assignBeforeAbort(target, callback),
+    "runBeforeAbort()",
+  );
+}
 
 /**
  * Returns whether `value` is a transaction the runtime created: an

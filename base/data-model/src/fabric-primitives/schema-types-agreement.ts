@@ -16,6 +16,9 @@
  * function of the name. It tells two classes apart by assignability, so two
  * that are mutually assignable read as one. A class holding a `#private`
  * member is assignable to no other, which covers every class with state.
+ *
+ * TODO(danfuzz): Once `FabricRegExp` is deleted, drop this caveat: it reports
+ * `object`, which `SchemaTypesAgree` leaves out of "every class".
  */
 
 import type { IsUnion, MustBeTrue, Same } from "@commonfabric/js-values/types";
@@ -61,9 +64,11 @@ export type NamedClassesSatisfy<ByName, Declared> = {
 }[keyof ByName];
 
 /** Whether the names the classes report are exactly the vocabulary. */
+// TODO(danfuzz): Once `FabricRegExp` is deleted, compare the reported names
+// without excluding `object`.
 export type SchemaTypesAgree = MustBeTrue<
   Same<
-    FabricPrimitiveClass["prototype"]["schemaType"],
+    Exclude<FabricPrimitiveClass["prototype"]["schemaType"], "object">,
     Api.FabricPrimitiveSchemaType
   >
 >;

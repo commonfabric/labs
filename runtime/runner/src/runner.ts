@@ -270,6 +270,16 @@ import {
 } from "./builder/pattern-metadata.ts";
 import { classifyPieceOriginString } from "./piece-origin-kind.ts";
 import {
+  getPieceReconciliation,
+  type PieceReconciliation,
+} from "./piece-reconciliation.ts";
+export {
+  getPieceReconciliation,
+  type PieceReconciliation,
+  type PieceReconciliationOutcome,
+  type PieceReconciliationReason,
+} from "./piece-reconciliation.ts";
+import {
   normalizePatternSource,
   PATTERNS_ROUTE_PREFIX,
   SYSTEM_PATTERN_SOURCE_SCHEME,
@@ -589,8 +599,9 @@ type StartAttempt = {
   >;
 
   // The result this attempt resolved to, which a link start only learns by
-  // following the link.
+  // following the link, by its key and by its address.
   targetKey?: `${MemorySpace}/${ScopeKey}/${URI}`;
+  targetLink?: NormalizedFullLink;
   // The exact registration THIS attempt's `#startCore()` created, when it
   // created one. A walk can also report success for a registration it did
   // NOT create (doStart's already-started returns, including the
@@ -613,6 +624,33 @@ type StartAttempt = {
   // runs again from the top after the read, and must not read again for a
   // grant the durable metadata does not carry.
   authorityReadFor?: Set<string>;
+  // Whether every caller of this attempt asked for it to deliver an event
+  // (`RunnerStartOptions.forEvent`). A caller that joins the attempt for any
+  // other reason clears it.
+  forEventOnly?: boolean;
+};
+
+/** Options of `Runner.start()` and `Runner.startWithCommit()`. */
+export type RunnerStartOptions = {
+  /**
+   * The start delivers an event: the stream the event was sent to has no
+   * handler on this runtime, and starting its piece registers one. A piece
+   * whose every start was such a start is one `Runner.releaseEventStart()`
+   * may stop.
+   */
+  forEvent?: boolean;
+};
+
+/** A piece an event's delivery started, and that no other start has asked for. */
+type EventStart = {
+  /** The registration the event's start installed. */
+  readonly registration: PieceRegistration;
+
+  /** The piece's result document. */
+  readonly link: NormalizedFullLink;
+
+  /** Where the start falls in the runner's count of event starts. */
+  readonly sequence: number;
 };
 
 /**
@@ -2132,71 +2170,6 @@ export interface PieceSourceSnapshot {
   revisionId: string | null;
 }
 
-/**
- * What the last attempt to follow a piece's active origin did. `unreachable`
- * never had a candidate to weigh; `unapplied` had one the piece could take,
- * and the write adopting it did not land, so the next attempt proposes it
- * again; `refused` had one the piece did not take, for the reason recorded.
- */
-export type PieceReconciliationOutcome =
-  | "followed"
-  | "unreachable"
-  | "unapplied"
-  | "refused";
-
-/**
- * Why a reconciliation did not adopt what its origin offered.
- *
- * `incompatible-schema` and `argument-mismatch` are different refusals and
- * only one of them can be overruled. The first says the candidate is not an
- * acceptable replacement for what the piece runs, which its owner may decide
- * to accept anyway. The second says the piece's own stored data does not
- * satisfy the candidate, so the piece could not run it — there is nothing to
- * accept, and the data has to change first.
- */
-export type PieceReconciliationReason =
-  | "incompatible-schema"
-  | "argument-mismatch"
-  | "source-invalid"
-  | "identity-mismatch"
-  | "apply-failed";
-
-/**
- * The outcome of the last attempt to follow a piece's active origin, kept on
- * the piece so a reader can tell a piece that runs what its origin offers from
- * one that does not. It is not a revision: a refused candidate was never
- * accepted, and the revision log records only what the piece adopted.
- */
-export interface PieceReconciliation {
-  outcome: PieceReconciliationOutcome;
-
-  /** When the piece reached this outcome. */
-  at: number;
-
-  /** The origin the attempt was following. */
-  origin: string;
-
-  /** The pattern the origin offered, when one was resolved. */
-  offered?: { identity: string; symbol: string };
-
-  /** Why the candidate was refused. Absent unless `outcome` is `refused`. */
-  reason?: PieceReconciliationReason;
-
-  /** What the attempt reported, in its own words. */
-  detail?: string;
-
-  /**
-   * The source the piece runs, with the latest release time at which its
-   * `system:` origin has offered that source since the piece adopted it, in
-   * milliseconds since the epoch (`pattern-release-time.ts`). A later deploy
-   * of unchanged source moves it forward without adopting anything, which is
-   * what keeps the piece from being moved to a release between the one it
-   * adopted and the one that confirmed it. It never moves backward, and an
-   * accepted transition clears it with the rest of the record.
-   */
-  confirmed?: { identity: string; releasedAt: number };
-}
-
 export type PieceSourceTransitionBaseline =
   | { kind: "retain"; revisionId: string }
   | { kind: "unavailable" };
@@ -3005,6 +2978,16 @@ export class Runner {
   >();
 
   /**
+   * The running pieces whose registration an event's delivery installed
+   * (`RunnerStartOptions.forEvent`), by result document, while no other
+   * start, and no enclosing pattern, has asked for them since.
+   */
+  #eventStarts = new Map<`${MemorySpace}/${ScopeKey}/${URI}`, EventStart>();
+
+  /** How many entries `#eventStarts` has been given, for `eventStartMark`. */
+  #eventStartCount = 0;
+
+  /**
    * The patterns a handler's result is set up from. A child one of them
    * instantiates was made by an event, not by its parent's program, so no
    * release of the parent re-instantiates it, whichever space it is in.
@@ -3555,6 +3538,14 @@ export class Runner {
   /** Registrations of running pieces, by space, scope, and document. */
   get cancels(): Map<`${MemorySpace}/${ScopeKey}/${URI}`, PieceRegistration> {
     return this.#cancels;
+  }
+
+  /**
+   * The count of event starts so far, for `eventStartsSince()`: the pieces
+   * an event's delivery starts from now on are the ones it returns.
+   */
+  get eventStartMark(): number {
+    return this.#eventStartCount;
   }
 
   /**
@@ -5548,9 +5539,16 @@ export class Runner {
    * different docs whose links resolve to the same piece do not join either;
    * they run separate resolutions and converge at the registration guard
    * before instantiation.
+   *
+   * `options.forEvent` says the start delivers an event; any other start of
+   * the piece, this one's join included, takes it off what
+   * `releaseEventStart()` may stop.
    */
-  start<T = any>(resultCell: Cell<T>): Promise<boolean> {
-    return this.#joinOrBeginStart(resultCell).settled;
+  start<T = any>(
+    resultCell: Cell<T>,
+    options?: RunnerStartOptions,
+  ): Promise<boolean> {
+    return this.#joinOrBeginStart(resultCell, options).settled;
   }
 
   /**
@@ -5574,8 +5572,11 @@ export class Runner {
    * @throws Error naming the failed piece-start commit, with storage's
    * verdict, or whatever else cut the commit short, as its `cause`.
    */
-  async startWithCommit<T = any>(resultCell: Cell<T>): Promise<boolean> {
-    const { attempt, settled } = this.#joinOrBeginStart(resultCell);
+  async startWithCommit<T = any>(
+    resultCell: Cell<T>,
+    options?: RunnerStartOptions,
+  ): Promise<boolean> {
+    const { attempt, settled } = this.#joinOrBeginStart(resultCell, options);
     const started = await settled;
     const commits = attempt.instantiationCommits ?? [];
     for (const failure of await Promise.all(commits)) {
@@ -5599,18 +5600,25 @@ export class Runner {
    */
   #joinOrBeginStart<T>(
     resultCell: Cell<T>,
+    options?: RunnerStartOptions,
   ): { attempt: StartAttempt; settled: Promise<boolean> } {
+    const forEvent = options?.forEvent === true;
     const startKey = this.#getDocKey(resultCell);
+    // A start for anything but an event asks for the piece from this moment,
+    // before it has resolved the piece the document leads to.
+    if (!forEvent) this.#eventStarts.delete(startKey);
     const inFlight = this.#inFlightStartsByDoc.get(startKey);
     if (
       inFlight?.settled !== undefined && this.#isStartAttemptCurrent(inFlight)
     ) {
+      if (!forEvent) inFlight.forEventOnly = false;
       return { attempt: inFlight, settled: inFlight.settled };
     }
     const attempt: StartAttempt = {
       lifecycleEpoch: this.#lifecycleEpoch,
       generationsByDoc: new Map(),
       preResolutionStopKeys: new Set(),
+      forEventOnly: forEvent,
     };
     this.#activeStartAttempts.add(attempt);
     this.#trackStartAttempt(attempt, startKey);
@@ -5619,7 +5627,10 @@ export class Runner {
     // promise, so it runs on the turn that promise settles. Each promise
     // between them is a turn later, and a piece-start commit that fails in
     // those turns retires the registration the claim reports on, so the start
-    // would report that a piece it installed is not running.
+    // would report that a piece it installed is not running. Recording an
+    // event start relies on the same: `#doStart()` returns as soon as it has
+    // installed the registration, so no other start settles on that
+    // registration before this claim runs.
     let outcome: Promise<boolean>;
     try {
       outcome = this.#doStart(resultCell, new Set(), attempt);
@@ -5643,6 +5654,7 @@ export class Runner {
           this.#cancels.has(target);
         if (stillRunning) {
           this.#independentlyStartedResults.add(target);
+          this.#noteEventStart(attempt, target);
         }
         return stillRunning;
       })
@@ -5652,6 +5664,96 @@ export class Runner {
     attempt.settled = settled;
     this.#inFlightStartsByDoc.set(startKey, attempt);
     return { attempt, settled };
+  }
+
+  /**
+   * Helper for `#joinOrBeginStart()`, which records what a start attempt that
+   * left `target` running says about the piece: one made only to deliver
+   * events, that installed the piece's registration, makes the piece an
+   * event start; any other takes it off them.
+   */
+  #noteEventStart(
+    attempt: StartAttempt,
+    target: `${MemorySpace}/${ScopeKey}/${URI}`,
+  ): void {
+    const registration = this.#cancels.get(target);
+    if (attempt.forEventOnly !== true) {
+      this.#eventStarts.delete(target);
+    } else if (
+      registration !== undefined &&
+      registration === attempt.installedRegistration &&
+      attempt.targetLink !== undefined
+    ) {
+      this.#eventStarts.set(target, {
+        registration,
+        link: attempt.targetLink,
+        sequence: ++this.#eventStartCount,
+      });
+    }
+  }
+
+  /**
+   * The result documents of the running pieces whose registration an event's
+   * delivery installed after `mark`, a value of `eventStartMark`, and that no
+   * other start, and no enclosing pattern, has asked for since: the pieces
+   * `releaseEventStart()` stops.
+   */
+  eventStartsSince(mark: number): NormalizedFullLink[] {
+    const links: NormalizedFullLink[] = [];
+    for (const [key, start] of this.#eventStarts) {
+      if (this.#cancels.get(key) !== start.registration) {
+        this.#eventStarts.delete(key);
+        continue;
+      }
+      if (start.sequence > mark) links.push(start.link);
+    }
+    return links;
+  }
+
+  /**
+   * Stops the piece whose result document is `resultCell`'s when it is one
+   * `eventStartsSince()` names, no start of its document is in flight, and
+   * the scheduler holds no event for it, releasing the documents nothing
+   * reads then, as `stop()` does. An event sent to it later starts it again.
+   * A start that has not yet resolved the document it leads to is left to
+   * start the piece again, where `stop()` would end it. Work a handler of
+   * the piece began and that the scheduler doesn't wait for, such as a fetch
+   * a builtin made, ends with the piece.
+   *
+   * Returns whether it stopped the piece.
+   */
+  releaseEventStart<T>(resultCell: Cell<T>): boolean {
+    const key = this.#getDocKey(resultCell);
+    const start = this.#eventStarts.get(key);
+    if (start === undefined) return false;
+    if (this.#cancels.get(key) !== start.registration) {
+      this.#eventStarts.delete(key);
+      return false;
+    }
+    const { space, id } = start.link;
+    if (
+      (this.#activeStartAttemptsByDoc.get(key)?.size ?? 0) > 0 ||
+      this.#runtime.scheduler.hasQueuedEventFor(space, id)
+    ) {
+      return false;
+    }
+    this.#stopResult(resultCell);
+    void this.#runtime.releaseUnreadDocuments();
+    return true;
+  }
+
+  /**
+   * Helper for the teardowns of `registration`, the registration of the piece
+   * whose result document is `key`, outside `#stopResult()`, which takes it
+   * off `#eventStarts`.
+   */
+  #forgetStartsOf(
+    key: `${MemorySpace}/${ScopeKey}/${URI}`,
+    registration: PieceRegistration,
+  ): void {
+    if (this.#eventStarts.get(key)?.registration === registration) {
+      this.#eventStarts.delete(key);
+    }
   }
 
   /**
@@ -5705,6 +5807,8 @@ export class Runner {
 
   /** Holds a child for a parent node group's lifetime. */
   retainChild<T>(resultCell: Cell<T>): Cancel {
+    // An enclosing pattern now asks for the piece.
+    this.#eventStarts.delete(this.#getDocKey(resultCell));
     if (!this.#usesScopedPrograms(resultCell)) {
       return () => this.releaseChild(resultCell, undefined);
     }
@@ -6323,6 +6427,9 @@ export class Runner {
     // Helper to clean up on error
     const cleanup = () => {
       registrations.delete(key);
+      if (registrations === this.#cancels) {
+        this.#forgetStartsOf(pieceKey, cancel);
+      }
       this.#allCancels.delete(cancel);
       cancel();
     };
@@ -6584,6 +6691,9 @@ export class Runner {
           const teardownRegistrationIfCurrent = () => {
             if (registrations.get(key) !== cancel) return;
             registrations.delete(key);
+            if (registrations === this.#cancels) {
+              this.#forgetStartsOf(pieceKey, cancel);
+            }
             this.#allCancels.delete(cancel);
             cancel();
           };
@@ -7888,6 +7998,7 @@ export class Runner {
 
     const key = this.#getDocKey(rootCell);
     attempt.targetKey = key;
+    attempt.targetLink = { ...link, path: [] };
     // Step 2: Already started? Return success
     if (this.#cancels.has(key)) return Promise.resolve(true);
 
@@ -8210,7 +8321,11 @@ export class Runner {
       scoped.ensure(tx, givenPattern);
       return undefined;
     }
-    if (this.#cancels.has(key)) return undefined;
+    if (this.#cancels.has(key)) {
+      // A run of a piece that is running asks for it.
+      this.#eventStarts.delete(key);
+      return undefined;
+    }
 
     const registration = this.#startCore(resultCell, {
       tx,
@@ -10277,6 +10392,8 @@ export class Runner {
       // entry points pass through, before any work is done.
       throw new Error("a synced run requires a pattern");
     }
+    // A run asks for the piece, whether or not it finds it running.
+    this.#eventStarts.delete(this.#getDocKey(resultCell));
     // A module runs as the one-node pattern `run()` wraps it in, and the
     // pre-sync names what that node reads: `inputs` under the module's
     // argument schema.
@@ -12486,6 +12603,7 @@ export class Runner {
     const setupKey = this.#getSetupKey(resultCell);
     this.#scopedChildOwners.delete(key);
     this.#independentlyStartedResults.delete(key);
+    this.#eventStarts.delete(key);
     this.#registrationsInstalledByRefusedRuns.delete(key);
     // TODO(hixie): This reaches every pending commit-gated start for the result,
     // which is wider than a release's authority: one that another launch
@@ -12744,6 +12862,7 @@ export class Runner {
     // later start can join one; dropping the index releases the attempts too.
     this.#inFlightStartsByDoc.clear();
     this.#independentlyStartedResults.clear();
+    this.#eventStarts.clear();
     this.#registrationsInstalledByRefusedRuns.clear();
     for (const key of [...this.#pendingDeferredStarts.keys()]) {
       this.#cancelPendingDeferredStarts(key);
@@ -17502,51 +17621,6 @@ export function pieceSourceMovedPast(
 }
 
 /**
- * Read the outcome of the last attempt to follow this piece's active origin.
- *
- * A value this runtime cannot read is reported as absent. This state describes
- * a piece rather than guarding a write, so an unreadable one leaves the panel
- * saying nothing instead of failing the read that carries it.
- */
-export function getPieceReconciliation(
-  resultCell: Cell<unknown>,
-): PieceReconciliation | undefined {
-  const raw = resultCell.getMetaRaw("pieceReconciliation", {
-    meta: ignoreReadForScheduling,
-  });
-  if (!isObjectOrArray(raw)) return undefined;
-  const { outcome, at, origin, offered, reason, detail, confirmed } = raw;
-  if (
-    !isPieceReconciliationOutcome(outcome) ||
-    typeof at !== "number" || !Number.isFinite(at) || at < 0 ||
-    typeof origin !== "string" || origin.length === 0
-  ) {
-    return undefined;
-  }
-  const offeredRef = asPatternIdentityRef(offered);
-  return {
-    outcome,
-    at,
-    origin,
-    ...(offeredRef === undefined ? {} : { offered: offeredRef }),
-    ...(isPieceReconciliationReason(reason) ? { reason } : {}),
-    ...(typeof detail === "string" && detail.length > 0 ? { detail } : {}),
-    ...(isObjectNotArray(confirmed) &&
-        typeof confirmed.identity === "string" &&
-        confirmed.identity.length > 0 &&
-        typeof confirmed.releasedAt === "number" &&
-        Number.isFinite(confirmed.releasedAt) && confirmed.releasedAt >= 0
-      ? {
-        confirmed: {
-          identity: confirmed.identity,
-          releasedAt: confirmed.releasedAt,
-        },
-      }
-      : {}),
-  };
-}
-
-/**
  * Record what following the active origin just did. Meta writes are
  * transactional, so a transaction is required.
  */
@@ -17598,21 +17672,6 @@ export function samePieceReconciliation(
     (left.offered === undefined || right.offered === undefined
       ? left.offered === right.offered
       : patternIdentityKey(left.offered) === patternIdentityKey(right.offered));
-}
-
-function isPieceReconciliationOutcome(
-  value: unknown,
-): value is PieceReconciliationOutcome {
-  return value === "followed" || value === "unreachable" ||
-    value === "unapplied" || value === "refused";
-}
-
-function isPieceReconciliationReason(
-  value: unknown,
-): value is PieceReconciliationReason {
-  return value === "incompatible-schema" || value === "argument-mismatch" ||
-    value === "source-invalid" || value === "identity-mismatch" ||
-    value === "apply-failed";
 }
 
 /**

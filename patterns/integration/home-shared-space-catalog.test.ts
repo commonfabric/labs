@@ -11,6 +11,7 @@ import {
   sharedSpaceReceiptViewSchema,
 } from "@commonfabric/home-schemas";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
+import { getLogger } from "@commonfabric/logger";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import {
   streamEntriesDocId,
@@ -276,7 +277,19 @@ async function invoke<T>(
   return await receipt.pull();
 }
 
-/** Observes a failed handler's generic terminal result without a value receipt. */
+/**
+ * The writer-fit misfits of a served run's cross-holder clauses (§8.12.5.1)
+ * this process has logged, the in-process serving loop's among them.
+ */
+const crossHolderMisfits = (): number =>
+  getLogger("cfc").countsByKey["writer-fit-cross-holder"]?.debug ?? 0;
+
+/**
+ * Observes a failed handler's generic terminal result without a value receipt.
+ * `withheld` says the handling reads data the stream's space doesn't admit, so
+ * a served one records its outcome withheld (events.md §5) and nothing of how
+ * it ended; it is then seen to fail by the holder rule's refusal of its write.
+ */
 async function rejectInvocation<T>(
   runtime: Runtime,
   stream: Cell<T>,
@@ -284,6 +297,7 @@ async function rejectInvocation<T>(
   server: Server,
   serving: boolean,
   message = "",
+  { withheld = false }: { withheld?: boolean } = {},
 ) {
   if (!serving) {
     await expect(invoke(runtime, stream, event, crypto.randomUUID())).rejects
@@ -298,7 +312,22 @@ async function rejectInvocation<T>(
       | StreamEventsDocValue
       | undefined)?.entries ?? [];
   const index = entries().length;
+  const misfitsBefore = crossHolderMisfits();
   sendEvent(stream, event as T);
+  if (withheld) {
+    await awaitAdmitted(server, () => {
+      const entry = entries()[index];
+      return entry?.consequenced === true && entry.withheld === true;
+    });
+    const { error, status, reason } = entries()[index];
+    expect({ error, status, reason }).toStrictEqual({
+      error: undefined,
+      status: undefined,
+      reason: undefined,
+    });
+    expect(crossHolderMisfits()).toBeGreaterThan(misfitsBefore);
+    return;
+  }
   await awaitAdmitted(server, () => {
     const entry = entries()[index];
     return entry?.consequenced === true && typeof entry.error === "string";
@@ -1165,8 +1194,9 @@ describe("Home shared-space catalog", () => {
           server,
           serving,
           "writer-fit confidentiality misfit",
+          { withheld: true },
         );
-        expect(await control.key("messages").pull()).toEqual([]);
+        expect(await control.key("messages").pull()).toStrictEqual([]);
       });
     });
   }

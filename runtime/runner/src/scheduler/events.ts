@@ -16,6 +16,7 @@ import {
   ensurePieceRunningVerdict,
   type EnsurePieceVerdict,
   type OwningRootAddress,
+  type RefusedUpdate,
 } from "../ensure-piece-running.ts";
 import {
   isAclDocumentWriteRefusal,
@@ -23,13 +24,20 @@ import {
   waveSettlementOf,
 } from "../executor/wave.ts";
 import {
+  runOutcomeIsWithheld,
+  withholdProcessedClaimOutcome,
+} from "../executor/processed-claim.ts";
+import {
   addressKey,
   areNormalizedLinksSame,
   type NormalizedFullLink,
 } from "../link-utils.ts";
 import type { Runtime } from "../runtime.ts";
 import { diagnosticPrefix } from "../storage/diagnostics.ts";
-import { commitPromiseRejectionOf } from "../storage/extended-storage-transaction.ts";
+import {
+  commitPromiseRejectionOf,
+  runBeforeAbort,
+} from "../storage/extended-storage-transaction.ts";
 import type {
   CommitError,
   IExtendedStorageTransaction,
@@ -910,6 +918,36 @@ function chainOnCommit(
 }
 
 /**
+ * What a drop for want of a handler adds when the started piece refused its
+ * latest pattern update (`EnsurePieceVerdict.refusedUpdate`): the piece runs
+ * its previous program, which can lack a stream the offered one has. The note
+ * names the offered program and the reason code, and leaves the refusal's own
+ * words in the piece's reconciliation record, to which it points. Those words
+ * are whatever error the refusal raised, and a served drop's reason is
+ * written into the dropped-event notice on the stream (events.md §5).
+ *
+ * The note only explains the drop, so a probe that throws adds nothing and is
+ * logged, and the drop goes ahead as it would without one.
+ */
+function refusedUpdateNote(verdict: EnsurePieceVerdict): string {
+  let refused: RefusedUpdate | undefined;
+  try {
+    refused = verdict.refusedUpdate?.();
+  } catch (error) {
+    logger.warn(
+      "scheduler",
+      "Reading a piece's refused update failed: " + describeFailure(error),
+    );
+    return "";
+  }
+  if (refused === undefined) return "";
+  const reason = refused.reason === undefined ? "" : ` (\`${refused.reason}\`)`;
+  return `, which still runs its previous program because its update to ` +
+    `\`${refused.offered.identity}\` was refused${reason}; the piece's ` +
+    `\`pieceReconciliation\` record has the detail`;
+}
+
+/**
  * Starts the piece an event's stream belongs to. A runtime whose run of the
  * handler is the one that counts, a serving runtime or any runtime with server
  * execution off, starts first the pieces its inputs come from
@@ -935,6 +973,7 @@ function startEventPiece(
     startInputSources: runtime.experimental.serverExecution !== true ||
       runtime.servingPosture,
     originFollowed: runtime.pieceOriginFollowed,
+    forEvent: true,
   });
 }
 
@@ -1155,7 +1194,8 @@ export function queueSchedulerEvent(state: SchedulerEventQueueState, args: {
             // graph probe reads as installed: only a start walk mints
             // one, and its absence says nothing about the piece.
             const reason = `Event dropped: no handler registered for ` +
-              `${args.eventLink.id} after starting its piece`;
+              `${args.eventLink.id} after starting its piece` +
+              refusedUpdateNote(verdict);
             if (queuedEvent.served !== undefined) {
               dropQueuedEvent(state, queuedEvent, reason);
             } else {
@@ -2394,6 +2434,33 @@ export async function dispatchQueuedEvent(state: {
     }
   };
 
+  // Whether a served run's outcome is withheld: whether its join carries a
+  // clause its stream's space doesn't admit, so that its processed claim, and
+  // every failure it reports, says the same thing whatever happened
+  // (`runOutcomeIsWithheld()`). Decided once, while the transaction is still
+  // open: before the commit, before a failed run's transaction is aborted,
+  // or, when the handler aborts the transaction itself, first thing in that
+  // abort.
+  let outcomeWithheld: boolean | undefined;
+  const servedOutcomeWithheld = (): boolean => {
+    if (served === undefined) return false;
+    outcomeWithheld ??= runOutcomeIsWithheld(
+      tx,
+      queuedEvent.eventLink.space,
+    );
+    return outcomeWithheld;
+  };
+  if (served !== undefined) {
+    runBeforeAbort(tx, () => {
+      servedOutcomeWithheld();
+    });
+  }
+  /** `outcome`, with `withheld` set when the served run's outcome is. */
+  const servedErrorOutcome = (message: string): ServedEventFailureOutcome =>
+    servedOutcomeWithheld()
+      ? { kind: "error", message, withheld: true }
+      : { kind: "error", message };
+
   let failureFinalized = false;
   // A failed setup or handler completes every owner notification once, even
   // when one observer throws. The original failure remains the event outcome.
@@ -2403,6 +2470,8 @@ export async function dispatchQueuedEvent(state: {
     const handlerError = error instanceof Error
       ? error
       : new Error(String(error));
+    // Decided before the abort below takes the observations it reads.
+    servedOutcomeWithheld();
     for (
       const complete of [
         () => {
@@ -2414,10 +2483,10 @@ export async function dispatchQueuedEvent(state: {
         releaseLineage,
         () => state.handleError(handlerError, action, queuedEvent.id),
         () =>
-          reportServedEventFailure(served, {
-            kind: "error",
-            message: handlerError.message,
-          }),
+          reportServedEventFailure(
+            served,
+            servedErrorOutcome(handlerError.message),
+          ),
         runFinalCommitCallback,
         () => tx.abandonStagedWork(eventAbandonError("event execution failed")),
       ]
@@ -3025,8 +3094,22 @@ export async function dispatchQueuedEvent(state: {
         // Taken before the abort, since the read set is what the client arm
         // parks on.
         const runLog = txToReactivityLog(tx);
+        // The reason can name a document the run reached, which a foreign
+        // join's value may have chosen, and the drop notice it can harden
+        // into is written on the entry. Decided before the abort below takes
+        // the observations it reads.
+        // The deferral of later events and the abort's error carry it too,
+        // into the serving host's log and the transaction's settle callbacks.
+        const withheld = servedOutcomeWithheld();
+        const notRunMessage = withheld
+          ? "the handler did not run, and its outcome is withheld"
+          : reason;
         if (tx.status().status === "ready") {
-          tx.abort(new Error(`handler did not run: ${reason}`));
+          tx.abort(
+            new Error(
+              withheld ? notRunMessage : `handler did not run: ${reason}`,
+            ),
+          );
         }
         if (served !== undefined) {
           // Mark/effects atomicity (events.md §4, RULED 2026-08-27 — the
@@ -3048,7 +3131,7 @@ export async function dispatchQueuedEvent(state: {
           reportServedEventFailure(served, {
             kind: "deferred",
             cause: "handler-not-run",
-            message: reason,
+            message: notRunMessage,
           });
           // The withdrawal is a deferral, and a deferral carries the
           // drain's arrival-order BARRIER (events.md §2; review-6459 F1):
@@ -3060,7 +3143,9 @@ export async function dispatchQueuedEvent(state: {
           deferLaterSameSpaceServedEvents(
             state,
             queuedEvent,
-            `whose served handler did not run (${reason})`,
+            withheld
+              ? "whose served handler did not run, its outcome withheld"
+              : `whose served handler did not run (${reason})`,
           );
           runFinalCommitCallback();
           return;
@@ -3146,6 +3231,15 @@ export async function dispatchQueuedEvent(state: {
         return;
       }
 
+      if (served !== undefined) {
+        withholdProcessedClaimOutcome(
+          state.runtime,
+          tx,
+          queuedEvent.eventLink.space,
+          served.streamEntry,
+          servedOutcomeWithheld(),
+        );
+      }
       try {
         state.runtime.prepareTxForCommit(tx);
       } catch (error) {
@@ -3267,7 +3361,9 @@ export async function dispatchQueuedEvent(state: {
 
         // A served event's CFC verdict seals an error consequence (events.md
         // §5: the error IS the consequence — the same honesty as the throw arm
-        // in `finalize` above). Without one the durable entry stays
+        // in `finalize` above), or, for a run whose join is foreign to its
+        // stream's space, the same withheld consequence a commit records
+        // (`servedErrorOutcome`). Without one the durable entry stays
         // unconsequenced and every later drain pass runs it into the identical
         // refusal. Scoped to exactly the class `reportDroppedCfcRejectedWrite`
         // reports; a CFC refusal that is not a verdict defers instead
@@ -3277,10 +3373,7 @@ export async function dispatchQueuedEvent(state: {
         // still-"queued" copy.
         const sealCfcRefusalConsequence = (): void => {
           if (served === undefined || !isCfcRejectedCommitError(error)) return;
-          reportServedEventFailure(served, {
-            kind: "error",
-            message: error.message,
-          });
+          reportServedEventFailure(served, servedErrorOutcome(error.message));
         };
         // The seal's refusal of a write to the space's ACL document is
         // deterministic in the same way, so a run delivering a durable entry
@@ -3293,10 +3386,7 @@ export async function dispatchQueuedEvent(state: {
           ) {
             return;
           }
-          reportServedEventFailure(served, {
-            kind: "error",
-            message: error.message,
-          });
+          reportServedEventFailure(served, servedErrorOutcome(error.message));
         };
         // For a served event, a commit preparation that failed for a cause a
         // fresh attempt may clear (`failedCommitPreparation`) is a delivery
@@ -3378,10 +3468,10 @@ export async function dispatchQueuedEvent(state: {
           if (served === undefined || !isExplicitTransactionAbort(error)) {
             return;
           }
-          reportServedEventFailure(served, {
-            kind: "error",
-            message: "Event handler aborted its transaction",
-          });
+          reportServedEventFailure(
+            served,
+            servedErrorOutcome("Event handler aborted its transaction"),
+          );
         };
 
         let requeue: Promise<void> | undefined;

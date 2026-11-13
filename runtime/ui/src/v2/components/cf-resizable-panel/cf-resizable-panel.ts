@@ -1,5 +1,10 @@
 import { css, html } from "lit";
 import { BaseElement } from "../../core/base-element.ts";
+import {
+  groupOf,
+  joinGroup,
+  leaveGroup,
+} from "../cf-resizable-panel-group/membership.ts";
 
 /**
  * @component cf-resizable-panel
@@ -54,7 +59,9 @@ import { BaseElement } from "../../core/base-element.ts";
  * ```
  *
  * @note
- * - Must be used within a cf-resizable-panel-group
+ * - Belongs to the nearest cf-resizable-panel-group above it, whatever
+ *   elements stand between them, so groups nest: a group inside a panel
+ *   sizes its own panels, and the outer group never touches them
  * - Panels are separated by cf-resizable-handle components
  * - Size values are percentages of the total available space
  * - The component automatically validates that min <= default <= max
@@ -76,8 +83,17 @@ export class CFResizablePanel extends BaseElement {
   static override styles = css`
     :host {
       display: block;
-      overflow: auto;
+      overflow: hidden;
       position: relative;
+    }
+
+    /* Set by the group: a panel fills the group across the axis it lies on. */
+    :host([data-orientation="horizontal"]) {
+      height: 100%;
+    }
+
+    :host([data-orientation="vertical"]) {
+      width: 100%;
     }
 
     .panel {
@@ -105,6 +121,12 @@ export class CFResizablePanel extends BaseElement {
   override connectedCallback() {
     super.connectedCallback();
     this.validateSizes();
+    joinGroup(this);
+  }
+
+  override disconnectedCallback() {
+    super.disconnectedCallback();
+    leaveGroup(this);
   }
 
   override updated(changedProperties: Map<string | number | symbol, unknown>) {
@@ -116,9 +138,9 @@ export class CFResizablePanel extends BaseElement {
     if (sized) this.validateSizes();
     // A renderer assigns these as properties, possibly after the group
     // read its panels, so the group reads them again.
-    if (sized) this.emit("cf-panel-sizes", undefined, { composed: false });
+    if (sized) groupOf(this)?.panelSizesChanged(this);
     else if (changedProperties.has("hideWhenStacked")) {
-      this.emit("cf-panel-shown", undefined, { composed: false });
+      groupOf(this)?.panelShownChanged(this);
     }
   }
 

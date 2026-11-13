@@ -20,6 +20,7 @@ import * as MemoryClient from "@commonfabric/memory/v2/client";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import type { ExecutionLeaseAccess } from "@commonfabric/memory/v2/execution-lease";
 import {
+  isServingSessionOf,
   resolveSpaceOwnerOf,
   type ServedAclChange,
   type ServerExecutionObserver,
@@ -106,6 +107,7 @@ type TransportPlane = Extract<
 /** A session as the mirror holds it. */
 type MirroredSession = {
   principal: string | undefined;
+  servingOwn?: true;
   readCeiling: SessionReadCeiling | undefined;
   expiresAt: number | null;
 };
@@ -137,6 +139,7 @@ class SessionMirror {
       case "opened":
         sessions.set(event.sessionId, {
           principal: event.principal,
+          ...(event.servingOwn === true ? { servingOwn: true } : {}),
           readCeiling: event.readCeiling,
           expiresAt: null,
         });
@@ -381,12 +384,7 @@ class PlaneMemoryServer implements HostMemoryServer {
     options: { excludePrincipal?: string } = {},
   ): boolean {
     for (const session of this.#sessions.live(space).values()) {
-      if (
-        options.excludePrincipal === undefined ||
-        session.principal !== options.excludePrincipal
-      ) {
-        return true;
-      }
+      if (!isServingSessionOf(session, options.excludePrincipal)) return true;
     }
     return false;
   }
@@ -628,9 +626,15 @@ export class ServingPlane {
     });
     endpoint.onNotice(
       "observer.demandChanged",
-      ({ space, reason, principal, sessionId }) => {
+      ({ space, reason, principal, sessionId, servingOwn }) => {
         this.#demandShares.noteChanged(space, sessionId);
-        this.#observer?.demandChanged?.(space, reason, principal, sessionId);
+        this.#observer?.demandChanged?.(
+          space,
+          reason,
+          principal,
+          sessionId,
+          servingOwn,
+        );
       },
     );
     // The two things that move a space's view interests: a watch set that

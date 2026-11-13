@@ -28,6 +28,7 @@ const shownAt = (ui: unknown, url: string): number =>
 
 interface Held {
   mine?: Writable<Panel>;
+  other?: Writable<Panel>;
 }
 
 export default pattern(() => {
@@ -90,6 +91,19 @@ export default pattern(() => {
   const removeFromUI = action(() =>
     clickButton(loom[UI], "Remove from my view")
   );
+  const addPair = action(() => {
+    const mine = PrivateUrl.inSpace()({ url: "https://example.com/alpha" });
+    const other = PrivateUrl.inSpace()({ url: "https://example.com/beta" });
+    held.set({ mine, other });
+    loom.addPrivatePanel.send({ panel: mine, before: second });
+    loom.addPrivatePanel.send({ panel: other, before: second });
+  });
+  const moveOtherBeforeMine = action(() => {
+    const { mine, other } = held.get();
+    if (mine && other) {
+      loom.movePrivatePanel.send({ panel: other, before: mine });
+    }
+  });
   return {
     allowRuntimeErrors: true,
     expectRuntimeErrors: 3,
@@ -202,6 +216,30 @@ export default pattern(() => {
         assertion: assert(() =>
           loom.privatePanels.get().length === 0 &&
           countElements(loom[UI], "cf-card") === 2
+        ),
+      },
+      // A private panel moved before another private panel takes that
+      // panel's place, ahead of the shared panel both are anchored to.
+      { action: addPair },
+      { action: moveOtherBeforeMine },
+      {
+        assertion: assert(() =>
+          loom.viewerPanels.length === 4 &&
+          urlOf(loom.viewerPanels[0]) === "https://example.com/first" &&
+          urlOf(loom.viewerPanels[1]) === "https://example.com/beta" &&
+          urlOf(loom.viewerPanels[2]) === "https://example.com/alpha" &&
+          urlOf(loom.viewerPanels[3]) === "https://example.com/second"
+        ),
+      },
+      // The Remove button on a card shown ahead of its anchor takes that
+      // panel off the viewer's private panels.
+      { render: loom[UI] },
+      { action: removeFromUI },
+      {
+        assertion: assert(() =>
+          loom.privatePanels.get().length === 1 &&
+          loom.viewerPanels.length === 3 &&
+          urlOf(loom.viewerPanels[1]) === "https://example.com/alpha"
         ),
       },
     ],

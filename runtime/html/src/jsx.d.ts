@@ -3093,12 +3093,12 @@ interface CFWebhookAttributes<T> extends CFHTMLAttributes<T> {
 interface CFSecretViewerAttributes<T> extends CFHTMLAttributes<T> {
   "label"?: string;
   "value"?: string;
-  "trailing-chars"?: number;
+  "trailingChars"?: number;
 }
 
 interface CFPieceAttributes<T> extends CFHTMLAttributes<T> {
-  "piece-id"?: string;
-  "space-name"?: string;
+  "pieceId"?: string;
+  "spaceName"?: string;
 }
 
 interface CFVoiceInputAttributes<T> extends CFHTMLAttributes<T> {
@@ -3283,8 +3283,8 @@ interface CFTableAttributes<T> extends CFHTMLAttributes<T> {
   "striped"?: boolean;
   "bordered"?: boolean;
   "size"?: "sm" | "md" | "lg";
-  "sticky-header"?: boolean;
-  "full-width"?: boolean;
+  "stickyHeader"?: boolean;
+  "fullWidth"?: boolean;
   "hover"?: boolean;
 }
 
@@ -3295,10 +3295,10 @@ type CFKeybindAttributes<T> = Omit<CFHTMLAttributes<T>, "key"> & {
   "meta"?: boolean;
   "alt"?: boolean;
   "shift"?: boolean;
-  "ignore-editable"?: boolean;
+  "ignoreEditable"?: boolean;
   "preventDefault"?: boolean;
-  "stop-propagation"?: boolean;
-  "allow-repeat"?: boolean;
+  "stopPropagation"?: boolean;
+  "allowRepeat"?: boolean;
   "oncf-keybind"?: EventHandler<any>;
 };
 
@@ -3358,7 +3358,7 @@ interface CTStackLegacyAttributes<T> extends CFHTMLAttributes<T> {
 interface CFMessageInputAttributes<T> extends CFHTMLAttributes<T> {
   "name"?: string;
   "placeholder"?: string;
-  "button-text"?: string;
+  "buttonText"?: string;
   "disabled"?: boolean | CellLike<boolean>;
   "value"?: string | CellLike<string>;
   "size"?: "xs" | "sm" | "md" | "lg" | "xl" | CellLike<string>;
@@ -3512,6 +3512,9 @@ interface CFCalendarAttributes<T> extends CFHTMLAttributes<T> {
 interface CFQuestionAttributes<T> extends CFHTMLAttributes<T> {
   "question"?: CellLike<string>;
   "options"?: CellLike<string[]>;
+  /** Shows a text input for an answer of the person's own beside the
+   * options. */
+  "allowCustom"?: boolean;
   "oncf-answer"?: EventHandler<{ answer: string }>;
 }
 
@@ -3549,8 +3552,8 @@ interface CFCopyButtonAttributes<T> extends CFHTMLAttributes<T> {
     | "md"
     | "lg";
   "disabled"?: boolean;
-  "feedback-duration"?: number;
-  "icon-only"?: boolean;
+  "feedbackDuration"?: number;
+  "iconOnly"?: boolean;
   "oncf-copy-success"?: EventHandler<{ text: string; length: number }>;
   "oncf-copy-error"?: EventHandler<{ error: Error; text: string }>;
 }
@@ -3560,7 +3563,6 @@ interface CFFileDownloadAttributes<T> extends CFHTMLAttributes<T> {
   "data"?: string;
   "$filename"?: CellLike<string>;
   "filename"?: string;
-  "mime-type"?: string;
   "mimeType"?: string;
   "base64"?: boolean;
   "variant"?:
@@ -3583,11 +3585,8 @@ interface CFFileDownloadAttributes<T> extends CFHTMLAttributes<T> {
     | "md"
     | "lg";
   "disabled"?: boolean;
-  "feedback-duration"?: number;
   "feedbackDuration"?: number;
-  "icon-only"?: boolean;
   "iconOnly"?: boolean;
-  "allow-autosave"?: boolean;
   "allowAutosave"?: boolean;
   "oncf-download-success"?: EventHandler<{
     filename: string;
@@ -3641,7 +3640,6 @@ interface CFCFCAuthorshipAttributes<T> extends CFHTMLAttributes<T> {
   "authorName"?: unknown;
   "avatar"?: unknown;
   "badgePlacement"?: "start" | "end";
-  "badge-placement"?: "start" | "end";
   "data-badge-placement"?: "start" | "end";
   "kind"?: string;
   "verifyTextIntegrity"?: boolean;
@@ -3682,8 +3680,8 @@ interface CFDropZoneAttributes<T> extends CFHTMLAttributes<T> {
 
 interface CFLoaderAttributes<T> extends CFHTMLAttributes<T> {
   "size"?: "xs" | "sm" | "md" | "lg" | "xl" | "sm" | "md" | "lg";
-  "show-elapsed"?: boolean;
-  "show-stop"?: boolean;
+  "showElapsed"?: boolean;
+  "showStop"?: boolean;
   /** Fired when stop button is clicked */
   "oncf-stop"?: EventHandler<{}>;
 }
@@ -3714,7 +3712,7 @@ interface CFModalAttributes<T> extends CFHTMLAttributes<T> {
   "presentation"?: "dialog" | "sheet";
   "grabber"?: boolean;
   "detent"?: "auto" | "half" | "full";
-  "prevent-scroll"?: boolean;
+  "preventScroll"?: boolean;
   "label"?: string;
   "oncf-modal-open"?: EventHandler<void>;
   "oncf-modal-close"?: EventHandler<{ reason: string }>;
@@ -3817,9 +3815,9 @@ interface CFTextAreaAttributes<T> extends CFHTMLAttributes<T> {
   "spellcheck"?: boolean;
   "autocomplete"?: string;
   "resize"?: string;
-  "auto-resize"?: boolean;
-  "timing-strategy"?: "immediate" | "debounce" | "throttle" | "blur";
-  "timing-delay"?: number;
+  "autoResize"?: boolean;
+  "timingStrategy"?: "immediate" | "debounce" | "throttle" | "blur";
+  "timingDelay"?: number;
   "oncf-input"?: EventHandler<
     { value: string; oldValue: string; name: string }
   >;
@@ -3905,7 +3903,6 @@ interface CFImageAttributes<T> extends CFHTMLAttributes<T> {
   /** A blob to show, by its space and id, where there are no `bytes`. */
   "blob"?: { space: string; id: string };
   "mediaType"?: string;
-  "media-type"?: string;
   "alt"?: string;
 }
 
@@ -3962,7 +3959,7 @@ interface CFSelectAttributes<T> extends CFHTMLAttributes<T> {
   "disabled"?: boolean;
   "required"?: boolean;
   "size"?: "xs" | "sm" | "md" | "lg" | "xl" | CellLike<string>;
-  "visible-rows"?: number;
+  "visibleRows"?: number;
   "name"?: string;
   "placeholder"?: string;
   "oncf-change"?: EventHandler<
@@ -3988,7 +3985,7 @@ interface CFPickerAttributes<T> extends CFHTMLAttributes<T> {
   "$selectedIndex"?: CellLike<number>;
   "$items": CellLike<any[]>;
   "disabled"?: boolean;
-  "min-height"?: string;
+  "minHeight"?: string;
   "oncf-change"?: EventHandler<
     { index: number; value: any; items: any[] }
   >;
@@ -4016,10 +4013,10 @@ interface CFSuggestionsAttributes<T> extends CFHTMLAttributes<T> {
 
 interface CFToolsChipAttributes<T> extends CFHTMLAttributes<T> {
   "label"?: string;
-  "show-count"?: boolean;
-  "open-on-hover"?: boolean;
-  "toggle-on-click"?: boolean;
-  "close-delay"?: number;
+  "showCount"?: boolean;
+  "openOnHover"?: boolean;
+  "toggleOnClick"?: boolean;
+  "closeDelay"?: number;
   /**
    * Accepts either:
    * - Array: { name, description?, schema? }[]
@@ -4035,7 +4032,7 @@ interface CFToolsChipAttributes<T> extends CFHTMLAttributes<T> {
 
 interface CFHeadingAttributes<T> extends CFHTMLAttributes<T> {
   "level"?: number;
-  "no-margin"?: boolean;
+  "noMargin"?: boolean;
 }
 
 interface CFCollapsibleAttributes<T> extends CFHTMLAttributes<T> {
@@ -4413,6 +4410,9 @@ interface CFProfileBadgeAttributes<T> extends CFHTMLAttributes<T> {
    * as properties, so a lower-cased name would miss the reactive property.)
    */
   "noNavigate"?: boolean;
+  /** A name to show while the profile has none to give, in place of an
+   * unknown one; it is never shown beside the seal. */
+  "fallbackName"?: string | CellLike<string>;
 }
 
 interface CFShareSnapshotAttributes<T> extends CFHTMLAttributes<T> {
@@ -4604,6 +4604,10 @@ interface CFResizablePanelGroupAttributes<T> extends CFHTMLAttributes<T> {
   /** Below this width (px) of a horizontal group itself, its panels lie
    * vertically (the group is stacked). A vertical group never stacks. */
   "stackBelow"?: number | CellLike<number>;
+  /** A person resized the panels: each panel's size, a percentage of the
+   * group, in document order. Fired on this group only, never for a group
+   * nested in one of its panels. */
+  "oncf-resize"?: EventHandler<{ sizes: number[] }>;
 }
 
 interface CFResizableHandleAttributes<T> extends CFHTMLAttributes<T> {

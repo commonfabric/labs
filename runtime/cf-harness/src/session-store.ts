@@ -9,6 +9,7 @@ import type {
 import type { HarnessTranscriptMessage } from "./contracts/transcript.ts";
 import type { HarnessAssignedPiece } from "./contracts/assigned-piece.ts";
 import type { HarnessHandleTable } from "./contracts/handle-table.ts";
+import type { HarnessHeldInput } from "./contracts/input-cells.ts";
 
 /** Bounded prior findings plus the full label influence of retained history. */
 export interface HarnessChatResearchContext {
@@ -42,8 +43,11 @@ export interface HarnessChatSessionSnapshot {
    */
   handleTable?: HarnessHandleTable;
 
-  /** Attachment, assignment, and grant names bound in retained history. */
-  heldInputNames?: readonly string[];
+  /**
+   * Attachment, assignment, and grant names bound in retained history, each
+   * with the cell it names.
+   */
+  heldInputs?: readonly HarnessHeldInput[];
 }
 
 export interface HarnessChatEventListOptions {

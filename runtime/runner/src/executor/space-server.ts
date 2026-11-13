@@ -182,6 +182,7 @@ import {
   waveRunContextOf,
   type WaveWriteAnnotation,
 } from "./wave.ts";
+import { servingLocalStore } from "./serving-context.ts";
 import { DemandMirror } from "./demand-mirror.ts";
 import { engineReadThrough } from "./engine-read-through.ts";
 import { EngineWaveCommitSink } from "./engine-wave-sink.ts";
@@ -194,6 +195,10 @@ import {
   updateDeliveryCheckpointStats,
 } from "./stats.ts";
 import { type SealedEffectBatch, SpaceOutbox } from "./outbox.ts";
+import {
+  writeProcessedClaim,
+  writeWithheldOutcome,
+} from "./processed-claim.ts";
 import { abandonRunnerAcceptanceEffects } from "./runner-acceptance.ts";
 import { effectCompletionKeyOf } from "./effect-completion.ts";
 import { markRendererTrustedEvent } from "../cfc/ui-contract.ts";
@@ -890,6 +895,17 @@ export function lifecycleVerbNotDurable<W>(
   return undefined;
 }
 
+/**
+ * What a running lifecycle verb's transactions sealed so far: the
+ * space-scoped documents they write, each accepted seal's contribution by
+ * wave and index, and the store seqs of its direct commits.
+ */
+type RunningLifecycleVerb = {
+  writes: Map<string, { id: string; scopeKey: "space" }>;
+  contributions: { wave: WaveAccumulator; index: number }[];
+  directCommitSeqs: number[];
+};
+
 /** Where a durable stream entry sits, by the identity no compaction moves. */
 type StreamEntryAddress = {
   /** The stream's sidecar document. */
@@ -1452,17 +1468,26 @@ export class SpaceServer implements TransactionSealDestination {
    * `seal()` while `#runQueuedLifecycleVerbs` awaits the verb: the
    * space-scoped documents they write, and each accepted seal's
    * contribution, by wave and index. Seals are chained one at a time, so
-   * the count right after a seal resolves names that seal's contribution
-   * — another action's transaction sealing meanwhile gets its own entry
-   * nowhere here, and cannot settle the verb.
+   * the count right after a seal resolves names that seal's contribution.
+   *
+   * Only the verb's own transactions are recorded
+   * ({@link #lifecycleVerbHolding}): those stamped `bookkeeping`, the kind
+   * its writes carry, and sealed from within its run. The served pieces of
+   * the space keep deriving and handling events into the same wave while it
+   * runs, and other work of the loop can seal into it too. A derivation the
+   * wave commit drops runs again and a handler run it requeues replays
+   * (`WaveRunKind`), so neither fails the verb, even when the verb's run
+   * started it.
    */
-  #runningLifecycleVerb:
-    | {
-      writes: Map<string, { id: string; scopeKey: "space" }>;
-      contributions: { wave: WaveAccumulator; index: number }[];
-      directCommitSeqs: number[];
-    }
-    | undefined;
+  #runningLifecycleVerb: RunningLifecycleVerb | undefined;
+
+  /**
+   * The verb whose run the code sealing now belongs to, bound around the
+   * verb's run and inherited by everything it awaits. Work that started
+   * outside the run, such as a root ensure its deadline left running
+   * detached, carries none, though it seals while a verb runs.
+   */
+  readonly #lifecycleVerbContext = servingLocalStore<RunningLifecycleVerb>();
 
   /**
    * Transactions stamped `directCommit` (runtime.ts `ServerRunInfo`),
@@ -2121,6 +2146,8 @@ export class SpaceServer implements TransactionSealDestination {
     runtime.installSealDestination(this, {
       runStamper: (tx, info) => this.#stampRun(tx, info),
       runDemanderResolver: (pieceRootIds) => this.#demandersFor(pieceRootIds),
+      dispatchedEffectCarriage: (effectKey) =>
+        this.#outbox?.hasDispatchedCarriage(effectKey) ?? false,
     });
 
     this.#active = true;
@@ -2508,7 +2535,7 @@ export class SpaceServer implements TransactionSealDestination {
     }
     const wave = this.#openWave();
     this.#waveByTx.set(tx, wave);
-    const runningVerb = this.#runningLifecycleVerb;
+    const runningVerb = this.#lifecycleVerbHolding(tx);
     this.#recordLifecycleVerbWrites(tx);
     const sealed = this.#sealChain.then(async () => {
       const before = wave.contributionCount;
@@ -3032,32 +3059,13 @@ export class SpaceServer implements TransactionSealDestination {
       // inside the wave commit's own transaction (applyCommitTransaction
       // — a requeued entry holds it back, matching the model).
       try {
-        this.#runtime!.getCellFromLink<boolean>({
-          space: this.space,
-          id: info.streamEntry.sidecarId as never,
-          scope: "space",
-          path: [
-            "entries",
-            String(info.streamEntry.index),
-            "consequenced",
-          ],
-        }).withTx(tx).set(true);
-        if (
-          info.eventId !== undefined &&
-          (this.#deliveryCheckpoints.has(info.eventId) ||
-            this.#pendingDeliveryCheckpointWrites.has(info.eventId))
-        ) {
-          this.#runtime!.getCellFromLink<DeliveryDeferral | undefined>({
-            space: this.space,
-            id: info.streamEntry.sidecarId as never,
-            scope: "space",
-            path: [
-              "entries",
-              String(info.streamEntry.index),
-              "deliveryDeferral",
-            ],
-          }).withTx(tx).set(undefined);
-        }
+        // The mark, and the cleared deferral beside it, are the event's
+        // processed claim, which takes nothing of what the handler reads.
+        writeProcessedClaim(this.#runtime!, tx, this.space, info.streamEntry, {
+          clearDeferral: info.eventId !== undefined &&
+            (this.#deliveryCheckpoints.has(info.eventId) ||
+              this.#pendingDeliveryCheckpointWrites.has(info.eventId)),
+        });
       } catch (error) {
         // The mark IS the exactly-once record (events.md §4: no window
         // where an event is both consumed and replayable). Letting the
@@ -3411,6 +3419,7 @@ export class SpaceServer implements TransactionSealDestination {
         `space replica for ${this.#options.space} does not support sealing`,
       );
     }
+    const verb = this.#lifecycleVerbHolding(tx);
     this.#recordLifecycleVerbWrites(tx);
     // A transaction that names a principal's instance — a served source
     // change to a requester's piece held at a user or session scope —
@@ -3586,7 +3595,7 @@ export class SpaceServer implements TransactionSealDestination {
       // (wave.ts).
       this.#currentWave?.noteOwnCommit(committedSeq, written);
     }
-    this.#runningLifecycleVerb?.directCommitSeqs.push(committedSeq);
+    verb?.directCommitSeqs.push(committedSeq);
     bumpDerivedCommits(this.#options.stats, String(this.#options.space));
     // The commit entered the store on the engine plane: report it so push
     // fires and the feed carries it, as the wave commit step does for its
@@ -5412,7 +5421,9 @@ export class SpaceServer implements TransactionSealDestination {
                     runtime,
                     entry,
                     streamEntry,
-                    { kind: outcome.kind, message: outcome.message },
+                    outcome.kind === "error" && outcome.withheld === true
+                      ? { kind: "withheld" }
+                      : { kind: outcome.kind, message: outcome.message },
                   );
                 },
               },
@@ -5474,6 +5485,7 @@ export class SpaceServer implements TransactionSealDestination {
     streamEntry: { sidecarId: string; index: number; seq: number },
     outcome?:
       | { kind: "error" | "dropped"; message: string }
+      | { kind: "withheld" }
       | {
         kind: "needs-attention";
         message: string;
@@ -5494,7 +5506,12 @@ export class SpaceServer implements TransactionSealDestination {
           id: streamEntry.sidecarId as never,
           scope: "space" as const,
         };
-        if (outcome.kind === "error") {
+        if (outcome.kind === "withheld") {
+          // The run's join was foreign to this space: the entry records the
+          // outcome withheld, as a committed run's does, and nothing of how
+          // it ended.
+          writeWithheldOutcome(runtime, tx, this.#options.space, streamEntry);
+        } else if (outcome.kind === "error") {
           runtime.getCellFromLink<string>({
             ...base,
             path: ["entries", String(streamEntry.index), "error"],
@@ -5582,6 +5599,7 @@ export class SpaceServer implements TransactionSealDestination {
     entry: StreamEventEntry,
     outcome:
       | { kind: "error" | "dropped"; message: string }
+      | { kind: "withheld" }
       | {
         kind: "needs-attention";
         message: string;
@@ -7185,14 +7203,17 @@ export class SpaceServer implements TransactionSealDestination {
       }
       const start = performance.now();
       const staged = new Map<string, { id: string; scopeKey: "space" }>();
-      const running = {
+      const running: RunningLifecycleVerb = {
         writes: staged,
         contributions: [],
         directCommitSeqs: [],
       };
       this.#runningLifecycleVerb = running;
       try {
-        const ok = await queued.verb.run(runtime);
+        const ok = await this.#lifecycleVerbContext.run(
+          running,
+          () => queued.verb.run(runtime),
+        );
         const demandRoots = queued.verb.demandRoots?.(ok) ?? [];
         for (const id of demandRoots) {
           staged.set(toDirtyKey(id, "space"), { id, scopeKey: "space" });
@@ -7252,11 +7273,28 @@ export class SpaceServer implements TransactionSealDestination {
   }
 
   /**
-   * Record a running verb's space-scoped writes off the transaction's
-   * journal at its seal; no-op outside a verb's run.
+   * The running verb a transaction sealed now is held to: the verb running,
+   * when the transaction is stamped `bookkeeping` and is sealed from within
+   * that verb's run, and `undefined` otherwise (see
+   * {@link #runningLifecycleVerb}).
+   */
+  #lifecycleVerbHolding(
+    tx: IExtendedStorageTransaction,
+  ): RunningLifecycleVerb | undefined {
+    const running = this.#runningLifecycleVerb;
+    return running !== undefined &&
+        this.#lifecycleVerbContext.getStore() === running &&
+        waveRunContextOf(tx)?.kind === "bookkeeping"
+      ? running
+      : undefined;
+  }
+
+  /**
+   * Record a running verb's space-scoped writes off the journal of a
+   * transaction it is held to, at its seal; no-op for any other.
    */
   #recordLifecycleVerbWrites(tx: IExtendedStorageTransaction): void {
-    const staged = this.#runningLifecycleVerb?.writes;
+    const staged = this.#lifecycleVerbHolding(tx)?.writes;
     if (staged === undefined) return;
     for (const detail of tx.tx.getWriteDetails?.(this.#options.space) ?? []) {
       const { id, scope } = detail.address;

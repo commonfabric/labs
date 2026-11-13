@@ -224,6 +224,7 @@ import {
   verifySessionOpenProofs,
 } from "./session-open-auth.ts";
 import {
+  isServingSessionOf,
   type SessionLifecycleEvent,
   SessionRegistry,
   type SessionState,
@@ -273,6 +274,7 @@ import {
 
 export { MAX_DOCUMENT_INTEREST_SESSIONS } from "./document-interests.ts";
 export {
+  isServingSessionOf,
   type SessionLifecycleEvent,
   SessionRegistry,
 } from "./session-registry.ts";
@@ -1234,18 +1236,21 @@ export type ServerExecutionObserver = {
    * waiting for the next input; the session-open trigger fires before
    * any watch exists). Edge-triggered and cheap; the host wakes an
    * active loop's demand pass, nothing else. `principal` is the changed
-   * session's principal (undefined for anonymous) so the host can DROP
-   * the serving runtime's OWN loopback session — the service principal's
-   * tracked-set growth is the serving graph's own reads, not client
-   * demand, and must neither wake the loop nor count in `pushGrowthWakes`
-   * (W1 review MINOR-4). `sessionId` names the changed session where the
-   * change is one session's, so a mirror of the demand set can re-read
-   * that session's share alone. */
+   * session's principal (undefined for anonymous), and `servingOwn` says
+   * whether it is a serving loop's own session (`SessionState.servingOwn`),
+   * so the host can DROP the serving runtime's OWN loopback session — the
+   * service principal's tracked-set growth is the serving graph's own
+   * reads, not client demand, and must neither wake the loop nor count in
+   * `pushGrowthWakes` (W1 review MINOR-4) — and keep a client's session
+   * signed with the service's key. `sessionId` names the changed session
+   * where the change is one session's, so a mirror of the demand set can
+   * re-read that session's share alone. */
   demandChanged?: (
     space: string,
     reason?: DemandChangeReason,
     principal?: string,
     sessionId?: string,
+    servingOwn?: true,
   ) => void;
 
   /**
@@ -5385,8 +5390,9 @@ export class Server {
       if (Engine.serverSeq(engine) === 0) {
         throw new Error("Cannot flush a space without history");
       }
-      const checkpoint = engine.database.prepare("PRAGMA wal_checkpoint(FULL)")
-        .get<{ busy: number }>();
+      const checkpoint = engine.prepare("PRAGMA wal_checkpoint(FULL)").get() as
+        | { busy: number }
+        | undefined;
       if (checkpoint?.busy !== 0) {
         throw new Error("Space durability checkpoint could not complete");
       }
@@ -6781,6 +6787,7 @@ export class Server {
           connection.routed,
           connection.elidedVerdicts,
           capabilityPrincipal,
+          connection.inProcess,
         );
       } catch (error) {
         // Record the refused resume together with its session and connection.
@@ -8474,15 +8481,16 @@ export class Server {
     }
   }
 
-  /** Lists live authenticated views for the co-hosted execution planner. */
+  /** Lists live authenticated views for the co-hosted execution planner,
+   * the views of `excludePrincipal`'s serving sessions
+   * (`isServingSessionOf()`) left out. */
   viewInterestsForSpace(
     space: string,
     options: { excludePrincipal?: string } = {},
   ): readonly SessionViewInterest[] {
     return this.#sessions.sessionsForSpace(space).flatMap((session) => {
       if (
-        options.excludePrincipal !== undefined &&
-        session.principal === options.excludePrincipal
+        isServingSessionOf(session, options.excludePrincipal)
       ) return [];
       return session.views.map((view) => ({
         handle: {
@@ -8493,6 +8501,7 @@ export class Server {
           revision: view.revision,
         },
         principal: session.principal,
+        ...(session.servingOwn === true ? { servingOwn: true as const } : {}),
         attached: session.ownerConnectionId !== null,
         view,
         selectionGeneration: session.viewSelections.get(view.id)?.generation,
@@ -9086,7 +9095,7 @@ export class Server {
       this.#reconcileTrackedInterests(session, changedInterests);
       this.#touchDemand(session);
       session.lastSyncedSeq = serverSeq;
-      this.#notifyDemandChanged(message.space, "watch", session.principal);
+      this.#notifyDemandChanged(message.space, "watch", session);
       recordSlowQueryDuration(
         "session.watch.remove",
         message.space,
@@ -9422,7 +9431,7 @@ export class Server {
       this.#notifyDemandChanged(
         message.space,
         "watch",
-        session.principal,
+        session,
         session.id,
       );
       if (message.views !== undefined) {
@@ -9853,7 +9862,7 @@ export class Server {
       this.#notifyDemandChanged(
         message.space,
         "watch",
-        session.principal,
+        session,
         session.id,
       );
       recordSlowQueryDuration(
@@ -10103,7 +10112,10 @@ export class Server {
         : { principal: session.principal }),
       sessionId: session.id,
     };
-    // The session's watch ROOT keys (instance-keyed like trackedIds).
+    // The session's watch ROOT keys (instance-keyed like trackedIds): the
+    // instance a root names, or else the session's own. A session the read
+    // row admits to name an instance may be a client, of a toolshed that
+    // signs with its operator's key, so a named instance is demand too.
     const rootKeys = new Set<string>();
     for (const watch of [...session.watches, ...viewWatches(session.views)]) {
       if (watch.kind === "operation") continue;
@@ -10111,6 +10123,10 @@ export class Server {
         const scope = root.scope ?? "space";
         if (scope === "space") {
           rootKeys.add(toDirtyKey(root.id, "space"));
+          continue;
+        }
+        if (root.entityScopeKey !== undefined) {
+          rootKeys.add(toDirtyKey(root.id, root.entityScopeKey));
           continue;
         }
         try {
@@ -10933,7 +10949,7 @@ export class Server {
                     this.#notifyDemandChanged(
                       space,
                       "push-growth",
-                      session.principal,
+                      session,
                       session.id,
                     );
                   }
@@ -11185,7 +11201,7 @@ export class Server {
               this.#notifyDemandChanged(
                 space,
                 "push-growth",
-                session.principal,
+                session,
                 session.id,
               );
             }
@@ -11360,15 +11376,15 @@ export class Server {
   /** Whether the space has ≥1 live client session (serving-loop.md §1's
    * ACTIVE criterion; the SpaceServer's parking policy reads it). The
    * SpaceServer's own loopback session is not a CLIENT session — the
-   * parking policy excludes the service principal, or an active space
-   * could never park. */
+   * parking policy excludes the service principal's serving sessions
+   * (`isServingSessionOf()`), or an active space could never park. A
+   * client session signed with the service's key still counts. */
   hasLiveSessionsForSpace(
     space: string,
     options: { excludePrincipal?: string } = {},
   ): boolean {
     return this.#sessions.sessionsForSpace(space).some((session) =>
-      options.excludePrincipal === undefined ||
-      session.principal !== options.excludePrincipal
+      !isServingSessionOf(session, options.excludePrincipal)
     );
   }
 
@@ -11406,22 +11422,21 @@ export class Server {
    * r3731191476): explicit-instance roots are admissible only to the
    * space's serving session and to sessions of the deployment's
    * service identity (#denyExplicitInstanceReads), both of the serving
-   * loop's own principal, and every session of that principal is
+   * loop's own principal, and every serving session of that principal is
    * EXCLUDED here (the serving loop's own reads are not client demand,
-   * from this process or routed from another). So no root that survives the exclusion can carry an
-   * explicit key — client watches cannot express one. If a later phase
-   * admits explicit-instance CLIENT demand (Phase 2's per-instance
-   * demand mapping), the record must grow the key WITH the SpaceServer
-   * side that consumes it; silently dropping it here would serve the
-   * service's own instance in place of the named one.
+   * from this process or routed from another). A client signed with the
+   * service's key survives the exclusion and may name an instance; this
+   * roots-only projection then lists the root without it, which no
+   * production caller reads. `demandForSpace` keys every row, roots
+   * included, by the instance the root names.
    */
   watchedRootsForSpace(
     space: string,
     options: {
-      /** Sessions of this principal are NOT demand (the SpaceServer's
-       * own loopback session watches whatever its graph reads; mapping
-       * those back into demand would make the loop demand its own
-       * reads, recursively). */
+      /** This principal's serving sessions (`isServingSessionOf()`) are
+       * NOT demand (the SpaceServer's own loopback session watches
+       * whatever its graph reads; mapping those back into demand would
+       * make the loop demand its own reads, recursively). */
       excludePrincipal?: string;
     } = {},
   ): Array<{
@@ -11452,8 +11467,7 @@ export class Server {
     }>();
     for (const session of this.#sessions.sessionsForSpace(space)) {
       if (
-        options.excludePrincipal !== undefined &&
-        session.principal === options.excludePrincipal
+        isServingSessionOf(session, options.excludePrincipal)
       ) {
         continue;
       }
@@ -11579,8 +11593,7 @@ export class Server {
     const demand: SessionDemand[] = [];
     for (const session of this.#sessions.sessionsForSpace(space)) {
       if (
-        options.excludePrincipal !== undefined &&
-        session.principal === options.excludePrincipal
+        isServingSessionOf(session, options.excludePrincipal)
       ) {
         continue;
       }
@@ -11597,7 +11610,8 @@ export class Server {
 
   /**
    * The shares of the sessions `sessionIds` name among `space`'s sessions, as
-   * `demandForSpace()` builds them, the sessions of `excludePrincipal` and
+   * `demandForSpace()` builds them, the serving sessions of
+   * `excludePrincipal` (`isServingSessionOf()`) and
    * the ids the registry no longer holds left out: what a mirror of the
    * demand set reads for the sessions whose demand it was told changed.
    */
@@ -11613,8 +11627,7 @@ export class Server {
       const session = this.#sessions.peek(space, sessionId);
       if (
         session === undefined ||
-        (options.excludePrincipal !== undefined &&
-          session.principal === options.excludePrincipal)
+        isServingSessionOf(session, options.excludePrincipal)
       ) {
         continue;
       }
@@ -11657,8 +11670,7 @@ export class Server {
     const union = new Set<string>();
     for (const session of this.#sessions.sessionsForSpace(space)) {
       if (
-        options.excludePrincipal !== undefined &&
-        session.principal === options.excludePrincipal
+        isServingSessionOf(session, options.excludePrincipal)
       ) {
         continue;
       }
@@ -11813,14 +11825,20 @@ export class Server {
 
   #notifyDemandChanged(
     space: string,
-    reason: DemandChangeReason = "watch",
-    principal?: string,
+    reason: DemandChangeReason,
+    session: SessionState,
     sessionId?: string,
   ): void {
     const observer = this.#serverExecutionObserver;
     if (observer?.demandChanged === undefined) return;
     try {
-      observer.demandChanged(space, reason, principal, sessionId);
+      observer.demandChanged(
+        space,
+        reason,
+        session.principal,
+        sessionId,
+        session.servingOwn,
+      );
     } catch (error) {
       console.warn(
         "memory v2: server-execution observer threw on demandChanged",
@@ -13050,6 +13068,10 @@ const parseDecodedClientMessage = (
       parsed.session.instanceNames !== undefined &&
       parsed.session.instanceNames !== true
     ) return null;
+    // Likewise only the literal `false` declares a session not demand.
+    if (
+      parsed.session.demand !== undefined && parsed.session.demand !== false
+    ) return null;
     const client = parseClientInfo(parsed.session.client) ?? undefined;
     // A malformed ceiling refuses the message: a session opened without the
     // ceiling its client asked for would read unbounded, silently.
@@ -13104,6 +13126,7 @@ const parseDecodedClientMessage = (
         ...(parsed.session.instanceNames === true
           ? { instanceNames: true as const }
           : {}),
+        ...(parsed.session.demand === false ? { demand: false as const } : {}),
         ...(invite === undefined ? {} : { invite }),
       },
       invocation: isFabricPlainObject(parsed.invocation)

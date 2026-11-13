@@ -15,37 +15,16 @@ import {
   Writable,
 } from "commonfabric";
 import { type MentionablePiece } from "../backlinks-index/backlinks-index.tsx";
+import {
+  promptInputMessage,
+  type PromptSendEvent,
+} from "../cfc/prompt-injection/prompt.ts";
 
 const sendMessage = handler<
-  {
-    detail: {
-      text: string;
-      attachments: Array<PromptAttachment>;
-      mentions: Array<any>;
-      message: string; // Backward compatibility
-    };
-  },
-  {
-    addMessage: Stream<BuiltInLLMMessage>;
-  }
+  PromptSendEvent,
+  { addMessage: Stream<BuiltInLLMMessage> }
 >((event, { addMessage }) => {
-  const { text, attachments } = event.detail;
-
-  // Resolve pasted content attachments inline so the LLM sees actual content
-  // instead of just a reference like [Pasted content (4799 chars)](#attachment-xxx)
-  let resolved = text;
-  for (const att of attachments ?? []) {
-    if (att.type === "clipboard" && typeof att.data === "string") {
-      resolved = resolved.replace(`[${att.name}](#${att.id})`, att.data);
-    }
-  }
-
-  // Any remaining markdown links like [name](/of:...) are just text that
-  // the LLM can parse and use with tools.
-  addMessage.send({
-    role: "user",
-    content: [{ type: "text" as const, text: resolved }],
-  });
+  addMessage.send(promptInputMessage(event));
 });
 
 const clearChat = handler(
@@ -66,15 +45,6 @@ type ChatInput = {
   tools?: any;
   theme?: any;
   system?: string;
-};
-
-type PromptAttachment = {
-  id: string;
-  name: string;
-  type: "file" | "clipboard" | "mention";
-  data?: any; // File | Blob | string
-  piece?: any;
-  removable?: boolean; // Whether this attachment can be removed
 };
 
 const handlePinToChat = handler<

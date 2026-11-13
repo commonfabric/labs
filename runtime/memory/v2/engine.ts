@@ -519,7 +519,10 @@ CREATE TABLE IF NOT EXISTS execution_outbox (
                                       --   {session:"server"}; grant stays
                                       --   mandatory
   capability_ref    TEXT    NOT NULL, -- validated at the target
-  created_seq       INTEGER NOT NULL  -- the emitting wave's commit seq
+  created_seq       INTEGER NOT NULL, -- the emitting wave's commit seq
+  source_event      TEXT              -- the source event whose handler
+                                      --   emitted the row (JSON), absent
+                                      --   for a derivation's append
 );
 CREATE INDEX IF NOT EXISTS idx_execution_outbox_branch
   ON execution_outbox (branch);
@@ -867,16 +870,26 @@ WHERE branch = :branch AND id = :id AND scope_key = :scope_key
   AND active = 1
 `;
 
+// The newest `set` or `delete` after a basis, and whether any patch follows
+// it, so that a document no write has touched since costs one statement.
 const SELECT_SET_DELETE_CONFLICT = `
-SELECT seq
-FROM revision
-WHERE branch = :branch
-  AND id = :id
-  AND scope_key = :scope_key
-  AND seq > :after_seq
-  AND op IN ('set', 'delete')
-ORDER BY seq DESC, op_index DESC
-LIMIT 1
+SELECT
+  (SELECT seq
+   FROM revision
+   WHERE branch = :branch
+     AND id = :id
+     AND scope_key = :scope_key
+     AND seq > :after_seq
+     AND op IN ('set', 'delete')
+   ORDER BY seq DESC, op_index DESC
+   LIMIT 1) AS seq,
+  EXISTS (SELECT 1
+          FROM revision
+          WHERE branch = :branch
+            AND id = :id
+            AND scope_key = :scope_key
+            AND seq > :after_seq
+            AND op = 'patch') AS patched
 `;
 
 const SELECT_PATCH_CONFLICTS = `
@@ -917,18 +930,31 @@ WHERE session_id = :session_id
 // history at the read path, and the server checks that rather than
 // trusting client discipline.
 const SELECT_SET_DELETE_CONFLICT_EXCLUDING_SESSION = `
-SELECT r.seq AS seq
-FROM revision r
-JOIN "commit" c ON c.seq = r.commit_seq
-WHERE r.branch = :branch
-  AND r.id = :id
-  AND r.scope_key = :scope_key
-  AND r.seq > :after_seq
-  AND r.op IN ('set', 'delete')
-  AND (c.session_id <> :exclude_session
-       OR c.local_seq NOT IN (SELECT value FROM json_each(:named_local_seqs)))
-ORDER BY r.seq DESC, r.op_index DESC
-LIMIT 1
+SELECT
+  (SELECT r.seq
+   FROM revision r
+   JOIN "commit" c ON c.seq = r.commit_seq
+   WHERE r.branch = :branch
+     AND r.id = :id
+     AND r.scope_key = :scope_key
+     AND r.seq > :after_seq
+     AND r.op IN ('set', 'delete')
+     AND (c.session_id <> :exclude_session
+          OR c.local_seq NOT IN
+            (SELECT value FROM json_each(:named_local_seqs)))
+   ORDER BY r.seq DESC, r.op_index DESC
+   LIMIT 1) AS seq,
+  EXISTS (SELECT 1
+          FROM revision r
+          JOIN "commit" c ON c.seq = r.commit_seq
+          WHERE r.branch = :branch
+            AND r.id = :id
+            AND r.scope_key = :scope_key
+            AND r.seq > :after_seq
+            AND r.op = 'patch'
+            AND (c.session_id <> :exclude_session
+                 OR c.local_seq NOT IN
+                   (SELECT value FROM json_each(:named_local_seqs)))) AS patched
 `;
 
 const SELECT_PATCH_CONFLICTS_EXCLUDING_SESSION = `
@@ -1014,52 +1040,6 @@ SELECT 1 AS marked
 FROM instance_name_mark
 `;
 
-interface PreparedStatements {
-  insertAuthorization: PreparedStatement;
-  insertBlob: PreparedStatement;
-  insertBranch: PreparedStatement;
-  insertCommit: PreparedStatement;
-  insertInstanceNameMark: PreparedStatement;
-  insertInvocation: PreparedStatement;
-  insertRevision: PreparedStatement;
-  insertSnapshot: PreparedStatement;
-  selectActiveOperationFields: PreparedStatement;
-  selectAtSeqLocal: PreparedStatement;
-  selectAuthoredSeqThrough: PreparedStatement;
-  selectBlob: PreparedStatement;
-  selectBranch: PreparedStatement;
-  selectBranches: PreparedStatement;
-  selectCommitRevisions: PreparedStatement;
-  selectCurrentLocal: PreparedStatement;
-  selectDataVersion: PreparedStatement;
-  selectCurrentEntityId: PreparedStatement;
-  selectCurrentEntityIds: PreparedStatement;
-  selectCurrentEntityIdPage: PreparedStatement;
-  selectCurrentEntityIdPageAfter: PreparedStatement;
-  selectExistingCommit: PreparedStatement;
-  selectOldestRevisionAttribution: PreparedStatement;
-  selectHead: PreparedStatement;
-  selectInstanceNameMark: PreparedStatement;
-  selectLatestBase: PreparedStatement;
-  selectLatestSnapshot: PreparedStatement;
-  selectLatestSnapshotBelow: PreparedStatement;
-  selectRevisionRow: PreparedStatement;
-  selectNextSeq: PreparedStatement;
-  selectPatchConflicts: PreparedStatement;
-  selectPatchConflictsExcludingSession: PreparedStatement;
-  selectPatchCount: PreparedStatement;
-  selectPatches: PreparedStatement;
-  selectPendingResolution: PreparedStatement;
-  selectServerSeq: PreparedStatement;
-  selectSetDeleteConflict: PreparedStatement;
-  selectSetDeleteConflictExcludingSession: PreparedStatement;
-  upsertHead: PreparedStatement;
-  updateCommitResolution: PreparedStatement;
-  updateBranchHead: PreparedStatement;
-  deleteBranch: PreparedStatement;
-  deleteOldSnapshots: PreparedStatement;
-}
-
 /**
  * The session id prefix of a compaction commit: the `system`-class commit
  * `cf space compact` inserts, which every row it rewrites or re-attributes
@@ -1094,7 +1074,7 @@ const historyCompactedBelow = (
     basisSeq: number;
   },
 ): boolean => {
-  const oldest = engine.statements.selectOldestRevisionAttribution.get({
+  const oldest = engine.statement("selectOldestRevisionAttribution").get({
     branch: options.branch,
     id: options.id,
     scope_key: options.scopeKey,
@@ -1169,7 +1149,15 @@ export type Engine = {
   operationCheckpointInterval: number;
   legacyCommitMetadataRefsRequired: boolean;
   operationCodecs: OperationCodecRegistry;
-  statements: PreparedStatements;
+  /** Returns the statement {@link STATEMENTS} names, from `prepare()`. */
+  statement: (name: StatementName) => PreparedStatement;
+
+  /**
+   * Returns the statement for `sql`, preparing it on its first use. Every
+   * caller with the same SQL shares the statement, which lasts until the
+   * database closes.
+   */
+  prepare: (sql: string) => PreparedStatement;
 
   /** The lease map derived-class admission checks (serving-loop.md §2). */
   executionLeases: ExecutionLeases;
@@ -1837,66 +1825,72 @@ export class DocumentCacheCoordinator {
   }
 }
 
-const prepareStatements = (database: Database): PreparedStatements => ({
-  insertAuthorization: prepare(database, INSERT_AUTHORIZATION),
-  insertBlob: prepare(database, INSERT_BLOB),
-  insertBranch: prepare(database, INSERT_BRANCH),
-  insertCommit: prepare(database, INSERT_COMMIT),
-  insertInstanceNameMark: prepare(database, INSERT_INSTANCE_NAME_MARK),
-  insertInvocation: prepare(database, INSERT_INVOCATION),
-  insertRevision: prepare(database, INSERT_REVISION),
-  insertSnapshot: prepare(database, INSERT_SNAPSHOT),
-  selectActiveOperationFields: prepare(
-    database,
-    SELECT_ACTIVE_OPERATION_FIELDS,
-  ),
-  selectAtSeqLocal: prepare(database, SELECT_AT_SEQ_LOCAL),
-  selectAuthoredSeqThrough: prepare(database, SELECT_AUTHORED_SEQ_THROUGH),
-  selectBlob: prepare(database, SELECT_BLOB),
-  selectBranch: prepare(database, SELECT_BRANCH),
-  selectBranches: prepare(database, SELECT_BRANCHES),
-  selectCommitRevisions: prepare(database, SELECT_COMMIT_REVISIONS),
-  selectCurrentLocal: prepare(database, SELECT_CURRENT_LOCAL),
-  selectDataVersion: prepare(database, SELECT_DATA_VERSION),
-  selectCurrentEntityId: prepare(database, SELECT_CURRENT_ENTITY_ID),
-  selectCurrentEntityIds: prepare(database, SELECT_CURRENT_ENTITY_IDS),
-  selectCurrentEntityIdPage: prepare(database, SELECT_CURRENT_ENTITY_ID_PAGE),
-  selectCurrentEntityIdPageAfter: prepare(
-    database,
-    SELECT_CURRENT_ENTITY_ID_PAGE_AFTER,
-  ),
-  selectExistingCommit: prepare(database, SELECT_EXISTING_COMMIT),
-  selectOldestRevisionAttribution: prepare(
-    database,
-    SELECT_OLDEST_REVISION_ATTRIBUTION,
-  ),
-  selectHead: prepare(database, SELECT_HEAD),
-  selectInstanceNameMark: prepare(database, SELECT_INSTANCE_NAME_MARK),
-  selectLatestBase: prepare(database, SELECT_LATEST_BASE),
-  selectLatestSnapshot: prepare(database, SELECT_LATEST_SNAPSHOT),
-  selectLatestSnapshotBelow: prepare(database, SELECT_LATEST_SNAPSHOT_BELOW),
-  selectRevisionRow: prepare(database, SELECT_REVISION_ROW),
-  selectNextSeq: prepare(database, SELECT_NEXT_SEQ),
-  selectPatchConflicts: prepare(database, SELECT_PATCH_CONFLICTS),
-  selectPatchConflictsExcludingSession: prepare(
-    database,
+/** The SQL of each statement the engine names, by its name. */
+const STATEMENTS = {
+  insertAuthorization: INSERT_AUTHORIZATION,
+  insertBlob: INSERT_BLOB,
+  insertBranch: INSERT_BRANCH,
+  insertCommit: INSERT_COMMIT,
+  insertInstanceNameMark: INSERT_INSTANCE_NAME_MARK,
+  insertInvocation: INSERT_INVOCATION,
+  insertRevision: INSERT_REVISION,
+  insertSnapshot: INSERT_SNAPSHOT,
+  selectActiveOperationFields: SELECT_ACTIVE_OPERATION_FIELDS,
+  selectAtSeqLocal: SELECT_AT_SEQ_LOCAL,
+  selectAuthoredSeqThrough: SELECT_AUTHORED_SEQ_THROUGH,
+  selectBlob: SELECT_BLOB,
+  selectBranch: SELECT_BRANCH,
+  selectBranches: SELECT_BRANCHES,
+  selectCommitRevisions: SELECT_COMMIT_REVISIONS,
+  selectCurrentLocal: SELECT_CURRENT_LOCAL,
+  selectDataVersion: SELECT_DATA_VERSION,
+  selectCurrentEntityId: SELECT_CURRENT_ENTITY_ID,
+  selectCurrentEntityIds: SELECT_CURRENT_ENTITY_IDS,
+  selectCurrentEntityIdPage: SELECT_CURRENT_ENTITY_ID_PAGE,
+  selectCurrentEntityIdPageAfter: SELECT_CURRENT_ENTITY_ID_PAGE_AFTER,
+  selectExistingCommit: SELECT_EXISTING_COMMIT,
+  selectOldestRevisionAttribution: SELECT_OLDEST_REVISION_ATTRIBUTION,
+  selectHead: SELECT_HEAD,
+  selectInstanceNameMark: SELECT_INSTANCE_NAME_MARK,
+  selectLatestBase: SELECT_LATEST_BASE,
+  selectLatestSnapshot: SELECT_LATEST_SNAPSHOT,
+  selectLatestSnapshotBelow: SELECT_LATEST_SNAPSHOT_BELOW,
+  selectRevisionRow: SELECT_REVISION_ROW,
+  selectNextSeq: SELECT_NEXT_SEQ,
+  selectPatchConflicts: SELECT_PATCH_CONFLICTS,
+  selectPatchConflictsExcludingSession:
     SELECT_PATCH_CONFLICTS_EXCLUDING_SESSION,
-  ),
-  selectPatchCount: prepare(database, SELECT_PATCH_COUNT),
-  selectPatches: prepare(database, SELECT_PATCHES),
-  selectPendingResolution: prepare(database, SELECT_PENDING_RESOLUTION),
-  selectServerSeq: prepare(database, SELECT_SERVER_SEQ),
-  selectSetDeleteConflict: prepare(database, SELECT_SET_DELETE_CONFLICT),
-  selectSetDeleteConflictExcludingSession: prepare(
-    database,
+  selectPatchCount: SELECT_PATCH_COUNT,
+  selectPatches: SELECT_PATCHES,
+  selectPendingResolution: SELECT_PENDING_RESOLUTION,
+  selectServerSeq: SELECT_SERVER_SEQ,
+  selectSetDeleteConflict: SELECT_SET_DELETE_CONFLICT,
+  selectSetDeleteConflictExcludingSession:
     SELECT_SET_DELETE_CONFLICT_EXCLUDING_SESSION,
-  ),
-  upsertHead: prepare(database, UPSERT_HEAD),
-  updateCommitResolution: prepare(database, UPDATE_COMMIT_RESOLUTION),
-  updateBranchHead: prepare(database, UPDATE_BRANCH_HEAD),
-  deleteBranch: prepare(database, DELETE_BRANCH),
-  deleteOldSnapshots: prepare(database, DELETE_OLD_SNAPSHOTS),
-});
+  upsertHead: UPSERT_HEAD,
+  updateCommitResolution: UPDATE_COMMIT_RESOLUTION,
+  updateBranchHead: UPDATE_BRANCH_HEAD,
+  deleteBranch: DELETE_BRANCH,
+  deleteOldSnapshots: DELETE_OLD_SNAPSHOTS,
+};
+
+/** The name of a statement in {@link STATEMENTS}. */
+type StatementName = keyof typeof STATEMENTS;
+
+/** Returns {@link Engine.prepare} for `database`. */
+const preparedOnFirstUse = (
+  database: Database,
+): (sql: string) => PreparedStatement => {
+  const prepared = new Map<string, PreparedStatement>();
+  return (sql) => {
+    let statement = prepared.get(sql);
+    if (statement === undefined) {
+      statement = prepare(database, sql);
+      prepared.set(sql, statement);
+    }
+    return statement;
+  };
+};
 
 const hasColumn = (
   database: Database,
@@ -2356,6 +2350,7 @@ export const open = async (
   migrateExecutionOutboxPayloadEncoding(database);
   migrateSchedulerObservationTablesToBasis(database);
   migrateIntegratedOperationIds(database);
+  const prepared = preparedOnFirstUse(database);
   return {
     url,
     database,
@@ -2364,7 +2359,8 @@ export const open = async (
     operationCheckpointInterval,
     legacyCommitMetadataRefsRequired: commitMetadataRefsRequired(database),
     operationCodecs,
-    statements: prepareStatements(database),
+    statement: (name) => prepared(STATEMENTS[name]),
+    prepare: prepared,
     executionLeases,
     documentCache: new Map(),
     documentCacheBytes: 0,
@@ -2461,7 +2457,7 @@ export const createBranch = (
     const parentBranch = options.parentBranch ?? DEFAULT_BRANCH;
     const parent = requireBranch(txEngine, parentBranch);
     const forkSeq = options.forkSeq ?? parent.headSeq;
-    txEngine.statements.insertBranch.run({
+    txEngine.statement("insertBranch").run({
       name,
       parent_branch: parentBranch,
       fork_seq: forkSeq,
@@ -2476,11 +2472,11 @@ export const deleteBranch = (
   branch: BranchName,
 ): void => {
   requireBranch(engine, branch);
-  engine.statements.deleteBranch.run({ branch });
+  engine.statement("deleteBranch").run({ branch });
 };
 
 export const listBranches = (engine: Engine): BranchState[] => {
-  return (engine.statements.selectBranches.all() as BranchRow[]).map(
+  return (engine.statement("selectBranches").all() as BranchRow[]).map(
     toBranchState,
   );
 };
@@ -2488,7 +2484,7 @@ export const listBranches = (engine: Engine): BranchState[] => {
 export const listEntityIds = (
   engine: Engine,
 ): EntityId[] => {
-  return (engine.statements.selectCurrentEntityIds.all({
+  return (engine.statement("selectCurrentEntityIds").all({
     branch: DEFAULT_BRANCH,
     scope_key: DEFAULT_SCOPE_KEY,
   }) as { id: EntityId }[]).map(({ id }) => id);
@@ -2504,8 +2500,8 @@ export const listEntityIdPage = (
   { after, limit }: EntityIdPageOptions,
 ): EntityId[] => {
   const statement = after === undefined
-    ? engine.statements.selectCurrentEntityIdPage
-    : engine.statements.selectCurrentEntityIdPageAfter;
+    ? engine.statement("selectCurrentEntityIdPage")
+    : engine.statement("selectCurrentEntityIdPageAfter");
   return (statement.all({
     branch: DEFAULT_BRANCH,
     scope_key: DEFAULT_SCOPE_KEY,
@@ -2518,7 +2514,7 @@ export const entityIdExists = (
   engine: Engine,
   id: EntityId,
 ): boolean => {
-  return engine.statements.selectCurrentEntityId.get({
+  return engine.statement("selectCurrentEntityId").get({
     branch: DEFAULT_BRANCH,
     scope_key: DEFAULT_SCOPE_KEY,
     id,
@@ -2683,7 +2679,7 @@ export const pruneOperationFieldHistory = (
         "only active operation field history can be pruned",
       );
     }
-    const checkpoint = txEngine.database.prepare(`
+    const checkpoint = txEngine.prepare(`
       SELECT version, materialized, commit_seq
       FROM op_checkpoint
       WHERE branch = :branch AND id = :id AND scope_key = :scope_key
@@ -2756,7 +2752,7 @@ export const pruneOperationFieldHistory = (
         "operation checkpoint diverged from materialized field state",
       );
     }
-    const prunedOperations = txEngine.database.prepare(`
+    const prunedOperations = txEngine.prepare(`
       DELETE FROM op_integrated
       WHERE branch = :branch AND id = :id AND scope_key = :scope_key
         AND path = :path AND epoch = :epoch AND version <= :version
@@ -2909,7 +2905,7 @@ export const selectPendingStreamEventDocs = (
   options: { branch?: BranchName } = {},
 ): PendingStreamEventDoc[] => {
   const branch = options.branch ?? DEFAULT_BRANCH;
-  const heads = engine.database.prepare(`
+  const heads = engine.prepare(`
 SELECT id, scope_key
 FROM head
 WHERE branch = :branch AND id LIKE :prefix AND op != 'delete'
@@ -2988,7 +2984,7 @@ export const selectRetirableEffectsInstances = (
   options: { branch?: BranchName } = {},
 ): RetirableEffectsInstance[] => {
   const branch = options.branch ?? DEFAULT_BRANCH;
-  const heads = engine.database.prepare(`
+  const heads = engine.prepare(`
 SELECT id, scope_key
 FROM head
 WHERE branch = :branch AND id = :id AND op != 'delete'
@@ -3060,7 +3056,7 @@ export const headSeq = (
 ): number => getBranch(engine, branch)?.headSeq ?? 0;
 
 export const serverSeq = (engine: Engine): number => {
-  return (engine.statements.selectServerSeq.get() as { seq: number }).seq;
+  return (engine.statement("selectServerSeq").get() as { seq: number }).seq;
 };
 
 /**
@@ -3068,7 +3064,7 @@ export const serverSeq = (engine: Engine): number => {
  * from a session that names instances has been admitted to the space.
  */
 export const hasInstanceNameMark = (engine: Engine): boolean =>
-  engine.statements.selectInstanceNameMark.get() !== undefined;
+  engine.statement("selectInstanceNameMark").get() !== undefined;
 
 /**
  * Records the instance-naming mark (INV-16) as set by the commit at
@@ -3088,7 +3084,7 @@ export const recordInstanceNameMark = (
         "transaction",
     );
   }
-  return engine.statements.insertInstanceNameMark.run({
+  return engine.statement("insertInstanceNameMark").run({
     commit_seq: commitSeq,
   }) > 0;
 };
@@ -3102,7 +3098,7 @@ export const authoredSeqThrough = (
   if (!Number.isSafeInteger(throughSeq) || throughSeq < 0) {
     throw new Error("Authored commit boundary must be a nonnegative integer");
   }
-  const row = engine.statements.selectAuthoredSeqThrough.get({
+  const row = engine.statement("selectAuthoredSeqThrough").get({
     seq: throughSeq,
     branch,
   }) as { seq: number };
@@ -3121,7 +3117,7 @@ export const authoredSeqThrough = (
  * prepared pragma step.
  */
 export const dataVersion = (engine: Engine): number =>
-  (engine.statements.selectDataVersion.get() as { data_version: number })
+  (engine.statement("selectDataVersion").get() as { data_version: number })
     .data_version;
 
 // Event-append admission (server-execution v2 Phase 3, D-v2-1;
@@ -3368,7 +3364,7 @@ const validateEventAppends = (
 
     // The sidecar-doc write guard (the stamping claim's other half —
     // events.md §1's "a forged actor is UNREPRESENTABLE"): processing
-    // fields (`consequenced`/`error`/`status`/`reason` plus OW54's delivery
+    // fields (`consequenced`/`error`/`withheld`/`status`/`reason` plus OW54's delivery
     // checkpoint, attention, resolution, and retry provenance), the per-stream
     // `eventWatermark`, and stored entries are SERVER-written state.
     // Authored traffic (delegated included) may reach a sidecar doc ONLY
@@ -3578,7 +3574,7 @@ const validateEventAppends = (
       unmatched.delete(key);
       // Processing-side and engine-stamped fields must arrive ABSENT on
       // authored traffic: a pre-supplied seq forges ordering, a
-      // pre-supplied consequenced/error/status forges the processing
+      // pre-supplied consequenced/error/withheld/status forges the processing
       // outcome. DERIVED new appends are exempt from the processing-field
       // half: a same-wave-processed emitted event legitimately commits
       // its entry together with its consequences — already
@@ -3593,6 +3589,7 @@ const validateEventAppends = (
       if (
         commitClass === "authored" &&
         (entry.consequenced !== undefined || entry.error !== undefined ||
+          entry.withheld !== undefined ||
           entry.status !== undefined || entry.reason !== undefined ||
           entry.deliveryDeferral !== undefined ||
           entry.attention !== undefined || entry.resolution !== undefined ||
@@ -4108,9 +4105,8 @@ export const runAtomicCommit = <T>(
   // revision that never happened. A retry then writes its own revision at the
   // sequence and operation index the rolled-back one had.
   const previousSync = options.durable
-    ? engine.database.prepare("PRAGMA synchronous").get<
-      { synchronous: number }
-    >()!.synchronous
+    ? (engine.prepare("PRAGMA synchronous").get() as { synchronous: number })
+      .synchronous
     : undefined;
   if (previousSync !== undefined) {
     engine.database.exec("PRAGMA synchronous = FULL");
@@ -4344,7 +4340,7 @@ export const selectDocHead = (
   engine: Engine,
   options: { branch?: BranchName; id: EntityId; scopeKey: string },
 ): number => {
-  const row = engine.database.prepare(`
+  const row = engine.prepare(`
 SELECT seq FROM head
 WHERE branch = :branch AND id = :id AND scope_key = :scope_key
 `).get({
@@ -4371,7 +4367,7 @@ export const selectWritePathsSince = (
     sinceSeq: number;
   },
 ): Array<readonly string[]> => {
-  const rows = engine.database.prepare(`
+  const rows = engine.prepare(`
 SELECT op, data FROM revision
 WHERE branch = :branch AND id = :id AND scope_key = :scope_key
   AND seq > :since_seq
@@ -4418,7 +4414,7 @@ export const selectSessionOverwritePathsSince = (
     sessionId: SessionId;
   },
 ): Array<readonly string[]> => {
-  const rows = engine.database.prepare(`
+  const rows = engine.prepare(`
 SELECT r.op, r.data FROM revision r JOIN "commit" c ON c.seq = r.commit_seq
 WHERE r.branch = :branch AND r.id = :id AND r.scope_key = :scope_key
   AND r.seq > :since_seq
@@ -4490,7 +4486,7 @@ export const hasIntrusionSince = (
     holder?: string;
   },
 ): boolean =>
-  engine.database.prepare(`
+  engine.prepare(`
 SELECT 1 FROM revision r JOIN "commit" c ON c.seq = r.commit_seq
 WHERE r.branch = :branch AND r.id = :id AND r.scope_key = :scope_key
   AND r.seq > :since_seq
@@ -4531,7 +4527,7 @@ export const findStaleReadSeq = (
     commutes?: (patch: PatchOp) => boolean;
   },
 ): number | null => {
-  const rows = engine.database.prepare(`
+  const rows = engine.prepare(`
 SELECT r.seq, r.op, r.data
 FROM revision r JOIN "commit" c ON c.seq = r.commit_seq
 WHERE r.branch = :branch AND r.id = :id AND r.scope_key = :scope_key
@@ -4713,7 +4709,7 @@ export const commitClassOfSeq = (
   }
   const cached = memo.get(seq);
   if (cached !== undefined) return cached;
-  const row = engine.database.prepare(
+  const row = engine.prepare(
     `SELECT class FROM "commit" WHERE seq = :seq`,
   ).get({ seq }) as { class: CommitClass } | undefined;
   if (row === undefined) return undefined;
@@ -4748,7 +4744,7 @@ export const selectCommitsSince = (
   options: { fromSeq: number; branch?: BranchName; limit?: number },
 ): CommitFeedRecord[] => {
   const branch = options.branch ?? DEFAULT_BRANCH;
-  const commits = engine.database.prepare(`
+  const commits = engine.prepare(`
 SELECT seq, branch, class, holder, session_id
 FROM "commit"
 WHERE seq > :from_seq AND branch = :branch
@@ -4765,7 +4761,7 @@ LIMIT :limit
       holder: string | null;
       session_id: string;
     }>;
-  const writesFor = engine.database.prepare(`
+  const writesFor = engine.prepare(`
 SELECT DISTINCT id, scope_key FROM revision
 WHERE commit_seq = :commit_seq
 `);
@@ -5185,7 +5181,7 @@ const selectOperationField = (
   engine: Engine,
   params: ReturnType<typeof operationFieldParams>,
 ): OperationFieldRow | undefined =>
-  engine.database.prepare(`
+  engine.prepare(`
     SELECT epoch, codec, version, baseline_hash, materialized, active
     FROM op_field_epoch
     WHERE branch = :branch AND id = :id AND scope_key = :scope_key
@@ -5199,7 +5195,7 @@ const selectIntegratedOperations = (
     after_version: number;
   },
 ): IntegratedOperationRow[] =>
-  engine.database.prepare(`
+  engine.prepare(`
     SELECT version, op_id, submission_id, payload
     FROM op_integrated
     WHERE branch = :branch AND id = :id AND scope_key = :scope_key
@@ -5212,7 +5208,7 @@ const retainedOperationVersion = (
   params: ReturnType<typeof operationFieldParams>,
   field: OperationFieldRow,
 ): number => {
-  const row = engine.database.prepare(`
+  const row = engine.prepare(`
     SELECT MIN(version) AS version
     FROM op_integrated
     WHERE branch = :branch AND id = :id AND scope_key = :scope_key
@@ -5624,7 +5620,7 @@ const applyOperation = (
     ? priorField.epoch
     : (priorField?.epoch ?? 0) + 1;
 
-  const duplicate = engine.database.prepare(`
+  const duplicate = engine.prepare(`
     SELECT epoch, submission_id, codec, base_version, submitted_payload,
            integrated_from, integrated_to, integrated_payload
     FROM op_submission
@@ -5688,7 +5684,7 @@ const applyOperation = (
     currentVersion = 0;
     baselineHash = currentHash;
     intervening = [];
-    engine.database.prepare(`
+    engine.prepare(`
       INSERT INTO op_checkpoint (
         branch, id, scope_key, path, epoch, version, materialized, commit_seq
       ) VALUES (
@@ -5848,7 +5844,7 @@ const applyOperation = (
   });
 
   for (const [index, payload] of result.operations.entries()) {
-    engine.database.prepare(`
+    engine.prepare(`
       INSERT INTO op_integrated (
         branch, id, scope_key, path, epoch, version, op_id,
         submission_id, payload, commit_seq
@@ -5875,7 +5871,7 @@ const applyOperation = (
     Math.floor(nextVersion / engine.operationCheckpointInterval) >
       Math.floor(currentVersion / engine.operationCheckpointInterval)
   ) {
-    engine.database.prepare(`
+    engine.prepare(`
       INSERT INTO op_checkpoint (
         branch, id, scope_key, path, epoch, version, materialized, commit_seq
       ) VALUES (
@@ -5889,7 +5885,7 @@ const applyOperation = (
       materialized: encodeMemoryBoundary(result.materialized),
       commit_seq: seq,
     });
-    const priorCheckpoint = engine.database.prepare(`
+    const priorCheckpoint = engine.prepare(`
       SELECT version
       FROM op_checkpoint
       WHERE branch = :branch AND id = :id AND scope_key = :scope_key
@@ -5900,7 +5896,7 @@ const applyOperation = (
       | { version: number }
       | undefined;
     if (priorCheckpoint !== undefined && priorCheckpoint.version > 0) {
-      engine.database.prepare(`
+      engine.prepare(`
         DELETE FROM op_integrated
         WHERE branch = :branch AND id = :id AND scope_key = :scope_key
           AND path = :path AND epoch = :epoch AND version <= :version
@@ -5921,7 +5917,7 @@ const applyOperation = (
     integrated_to: nextVersion,
     integrated_payload: encodeMemoryBoundary(result.operations),
   };
-  engine.database.prepare(`
+  engine.prepare(`
     INSERT INTO op_submission (
       branch, id, scope_key, path, epoch, submission_id, codec,
       base_version, submitted_payload, integrated_from, integrated_to,
@@ -5992,7 +5988,7 @@ const upsertOperationFieldHead = (
     commit_seq: number;
   },
 ): void => {
-  engine.database.prepare(`
+  engine.prepare(`
     INSERT INTO op_field_epoch (
       branch, id, scope_key, path, epoch, codec, version,
       baseline_hash, materialized, active, commit_seq
@@ -6196,7 +6192,7 @@ const releaseOperationField = (
   // The field's anchors stay: a release leaves the value as it is, so they
   // still say where its text is, and whoever replaces the value next reads
   // them to move them (§7.7.4).
-  engine.database.prepare(`
+  engine.prepare(`
     UPDATE op_field_epoch SET active = 0
     WHERE branch = :branch AND id = :id AND scope_key = :scope_key
       AND path = :path
@@ -6330,7 +6326,7 @@ const releaseEntityOperationFields = (
   const { branch, operation, principal, sessionId } = options;
   const scopeKey = options.scopeKeyOverride ??
     resolveScopeKey(operation.scope, { principal, sessionId });
-  engine.database.prepare(`
+  engine.prepare(`
     UPDATE op_field_epoch SET active = 0
     WHERE branch = :branch AND id = :id AND scope_key = :scope_key
   `).run({ branch, id: operation.id, scope_key: scopeKey });
@@ -6349,7 +6345,7 @@ const assertOperationFieldsPreserved = (
   const { branch, operation, principal, sessionId } = options;
   const scopeKey = options.scopeKeyOverride ??
     resolveScopeKey(operation.scope, { principal, sessionId });
-  const activeFields = engine.statements.selectActiveOperationFields.all({
+  const activeFields = engine.statement("selectActiveOperationFields").all({
     branch,
     id: operation.id,
     scope_key: scopeKey,
@@ -6434,7 +6430,7 @@ const applyCommitTransaction = (
   // envelope (class; for derived, the producing holder): a same-key
   // resubmission differing in either is a DIFFERENT submission and is
   // refused, never answered.
-  const existing = engine.statements.selectExistingCommit.get({
+  const existing = engine.statement("selectExistingCommit").get({
     session_id: sessionKey,
     local_seq: commit.localSeq,
   }) as CommitRow | undefined;
@@ -7459,7 +7455,7 @@ const applyCommitTransaction = (
       let document = documentAt(pending.basisSeq);
       const layers = [...pendingReadLayers(pending)].sort((a, b) => a - b);
       for (const localSeq of layers) {
-        const row = engine.statements.selectExistingCommit.get({
+        const row = engine.statement("selectExistingCommit").get({
           session_id: sessionKey,
           local_seq: localSeq,
         }) as CommitRow | undefined;
@@ -7709,7 +7705,7 @@ const applyCommitTransaction = (
     scopeKeyByOpIndex,
   });
 
-  const seq = (engine.statements.selectNextSeq.get() as { seq: number }).seq;
+  const seq = (engine.statement("selectNextSeq").get() as { seq: number }).seq;
   const invocationRef = engine.legacyCommitMetadataRefsRequired
     ? LEGACY_EMPTY_INVOCATION_REF
     : null;
@@ -7722,11 +7718,11 @@ const applyCommitTransaction = (
   );
 
   if (engine.legacyCommitMetadataRefsRequired) {
-    engine.statements.insertAuthorization.run({
+    engine.statement("insertAuthorization").run({
       ref: LEGACY_EMPTY_AUTHORIZATION_REF,
       authorization: encodeMemoryBoundary(LEGACY_EMPTY_AUTHORIZATION),
     });
-    engine.statements.insertInvocation.run({
+    engine.statement("insertInvocation").run({
       ref: LEGACY_EMPTY_INVOCATION_REF,
       iss: LEGACY_EMPTY_INVOCATION.iss,
       aud: LEGACY_EMPTY_INVOCATION.aud ?? null,
@@ -7735,7 +7731,7 @@ const applyCommitTransaction = (
       invocation: encodeMemoryBoundary(LEGACY_EMPTY_INVOCATION),
     });
   }
-  engine.statements.insertCommit.run({
+  engine.statement("insertCommit").run({
     seq,
     branch,
     session_id: sessionKey,
@@ -7888,7 +7884,7 @@ const applyCommitTransaction = (
   }
 
   if (operationResolutions.length > 0) {
-    engine.statements.updateCommitResolution.run({
+    engine.statement("updateCommitResolution").run({
       seq,
       resolution: encodeMemoryBoundary({
         seq,
@@ -7921,7 +7917,7 @@ const applyCommitTransaction = (
     maintainStreamEventWatermarks(engine, branch, seq, sessionId, revisions);
   }
 
-  engine.statements.updateBranchHead.run({ branch, seq });
+  engine.statement("updateBranchHead").run({ branch, seq });
   materializeSnapshots(engine, branch, revisions);
 
   return {
@@ -8146,7 +8142,7 @@ const writeOperation = (
           "memory v2 set operations require explicit document objects",
         );
       }
-      engine.statements.insertRevision.run({
+      engine.statement("insertRevision").run({
         branch,
         id: operation.id,
         scope_key: scopeKey,
@@ -8156,7 +8152,7 @@ const writeOperation = (
         data: encodeMemoryBoundary(operation.value),
         commit_seq: seq,
       });
-      engine.statements.upsertHead.run({
+      engine.statement("upsertHead").run({
         branch,
         id: operation.id,
         scope_key: scopeKey,
@@ -8176,7 +8172,7 @@ const writeOperation = (
       };
     }
     case "patch": {
-      engine.statements.insertRevision.run({
+      engine.statement("insertRevision").run({
         branch,
         id: operation.id,
         scope_key: scopeKey,
@@ -8186,7 +8182,7 @@ const writeOperation = (
         data: encodeMemoryBoundary(operation.patches),
         commit_seq: seq,
       });
-      engine.statements.upsertHead.run({
+      engine.statement("upsertHead").run({
         branch,
         id: operation.id,
         scope_key: scopeKey,
@@ -8206,7 +8202,7 @@ const writeOperation = (
       };
     }
     case "delete": {
-      engine.statements.insertRevision.run({
+      engine.statement("insertRevision").run({
         branch,
         id: operation.id,
         scope_key: scopeKey,
@@ -8216,7 +8212,7 @@ const writeOperation = (
         data: null,
         commit_seq: seq,
       });
-      engine.statements.upsertHead.run({
+      engine.statement("upsertHead").run({
         branch,
         id: operation.id,
         scope_key: scopeKey,
@@ -8259,7 +8255,7 @@ const validateCommitPreconditions = (
         }
         // Same-session commits are applied in order, so the origin's fate is
         // decided when the follow-up arrives; an absent origin means rejection.
-        const row = engine.statements.selectPendingResolution.get({
+        const row = engine.statement("selectPendingResolution").get({
           session_id: sessionKey,
           local_seq: precondition.originLocalSeq,
         }) as { seq: number } | undefined;
@@ -8273,14 +8269,14 @@ const validateCommitPreconditions = (
       }
       case "entity-absent": {
         const scopeKey = resolveScopeKey(precondition.scope, scopeContext);
-        const existingSetOrDelete = engine.statements.selectSetDeleteConflict
+        const existingSetOrDelete = engine.statement("selectSetDeleteConflict")
           .get({
             branch,
             id: precondition.id,
             scope_key: scopeKey,
             after_seq: 0,
-          }) as { seq: number } | undefined;
-        if (existingSetOrDelete !== undefined) {
+          }) as SetDeleteConflictRow;
+        if (existingSetOrDelete.seq !== null) {
           throw new PreconditionFailedError(
             "receipt-exists",
             `entity-absent precondition target already exists: ${precondition.id}`,
@@ -8532,7 +8528,7 @@ const resolvePendingReads = (
     for (const localSeq of layers) {
       let resolution = resolutions.get(localSeq);
       if (!resolution) {
-        const row = engine.statements.selectPendingResolution.get({
+        const row = engine.statement("selectPendingResolution").get({
           session_id: sessionKey,
           local_seq: localSeq,
         }) as { seq: number } | undefined;
@@ -8659,7 +8655,7 @@ const identityLayerBasis = (
     candidate.id === read.id && normalizeScope(candidate.scope) === scope;
   let identityBasis = basisSeq;
   for (const localSeq of layers) {
-    const row = engine.statements.selectExistingCommit.get({
+    const row = engine.statement("selectExistingCommit").get({
       session_id: sessionKey,
       local_seq: localSeq,
     }) as CommitRow | undefined;
@@ -8678,7 +8674,7 @@ const identityLayerBasis = (
     }
     if (!replayable || opIndexes.length === 0) continue;
     const written = new Set(
-      (engine.statements.selectCommitRevisions.all({
+      (engine.statement("selectCommitRevisions").all({
         commit_seq: row.seq,
       }) as RevisionRow[]).map((revision) => revision.op_index),
     );
@@ -8724,12 +8720,19 @@ type PatchIndexes = {
 };
 
 /**
+ * The row {@link SELECT_SET_DELETE_CONFLICT} returns: the newest `set` or
+ * `delete` after a basis, or `null` when there is none, and whether a patch
+ * follows the basis.
+ */
+type SetDeleteConflictRow = { seq: number | null; patched: 0 | 1 };
+
+/**
  * What one commit's read validation has learned of the writes to one
  * document, less those one exclusion removes.
  */
 type DocumentConflicts = {
-  /** The newest `set` or `delete` after each basis a read has named. */
-  readonly newestSetOrDelete: Map<number, number | null>;
+  /** What follows each basis a read has named. */
+  readonly writesAfter: Map<number, SetDeleteConflictRow>;
 
   /**
    * Every patch after `basis`, indexed, once a read at `basis` has reached
@@ -8743,8 +8746,8 @@ type DocumentConflicts = {
 
 /**
  * What one commit's read validation has learned, by document and exclusion:
- * one entry per basis for the `set` or `delete` after it, and at most one
- * patch index however many bases the reads name. Valid only while the
+ * one entry per basis for the writes after it, and at most one patch index
+ * however many bases the reads name. Valid only while the
  * `revision` table is unchanged, which holds from the first read validated to
  * the commit's first write.
  */
@@ -8832,16 +8835,16 @@ const findConflictSeq = (
   const key = conflictScanKey(branch, id, scopeKey, exclude);
   let document = key === undefined ? undefined : scans.get(key);
   if (key !== undefined && document === undefined) {
-    document = { newestSetOrDelete: new Map() };
+    document = { writesAfter: new Map() };
     scans.set(key, document);
   }
 
   const setDeleteStatement = exclude === undefined
-    ? engine.statements.selectSetDeleteConflict
-    : engine.statements.selectSetDeleteConflictExcludingSession;
+    ? engine.statement("selectSetDeleteConflict")
+    : engine.statement("selectSetDeleteConflictExcludingSession");
   const patchStatement = exclude === undefined
-    ? engine.statements.selectPatchConflicts
-    : engine.statements.selectPatchConflictsExcludingSession;
+    ? engine.statement("selectPatchConflicts")
+    : engine.statement("selectPatchConflictsExcludingSession");
   const params = {
     branch,
     id,
@@ -8853,15 +8856,16 @@ const findConflictSeq = (
     }),
   };
 
-  let setOrDeleteSeq = document?.newestSetOrDelete.get(afterSeq);
-  if (setOrDeleteSeq === undefined) {
-    setOrDeleteSeq =
-      (setDeleteStatement.get(params) as { seq: number } | undefined)
-        ?.seq ?? null;
-    document?.newestSetOrDelete.set(afterSeq, setOrDeleteSeq);
+  let writesAfter = document?.writesAfter.get(afterSeq);
+  if (writesAfter === undefined) {
+    writesAfter = setDeleteStatement.get(params) as SetDeleteConflictRow;
+    document?.writesAfter.set(afterSeq, writesAfter);
   }
-  if (setOrDeleteSeq !== null) {
-    return setOrDeleteSeq;
+  if (writesAfter.seq !== null) {
+    return writesAfter.seq;
+  }
+  if (!writesAfter.patched) {
+    return null;
   }
 
   // Kept patches decide a read by comparing `seq`s here, which agrees with the
@@ -9025,7 +9029,7 @@ const selectCommitRevisions = (
   commitSeq: number,
   operations: readonly Operation[],
 ): AppliedRevision[] => {
-  const rows = engine.statements.selectCommitRevisions.all({
+  const rows = engine.statement("selectCommitRevisions").all({
     commit_seq: commitSeq,
   }) as RevisionRow[];
   return rows.map((row) => {
@@ -9070,15 +9074,16 @@ const materializeSnapshots = (
     return;
   }
 
-  const seen = new Set<string>();
+  // Only an entity whose newest revision is a patch can need a snapshot, and
+  // the commit's last revision of each entity is its newest.
+  const newest = new Map<string, AppliedRevision>();
   for (const revision of revisions) {
-    const revisionScopeKey = revision.scopeKey ?? DEFAULT_SCOPE_KEY;
-    const key = revisionKey(branch, revision.id, revisionScopeKey);
-    if (seen.has(key)) {
-      continue;
+    newest.set(revisionKey(branch, revision.id, revision.scopeKey), revision);
+  }
+  for (const revision of newest.values()) {
+    if (revision.op === "patch") {
+      maybeMaterializeSnapshot(engine, branch, revision.id, revision.scopeKey);
     }
-    seen.add(key);
-    maybeMaterializeSnapshot(engine, branch, revision.id, revisionScopeKey);
   }
 };
 
@@ -9230,15 +9235,15 @@ const latestBaseAndSnapshot = (
 ): { baseRow: ReadRow | undefined; snapshotRow: SnapshotRow | undefined } => {
   const { branch, id, scopeKey, seq, opIndex } = options;
   const snapshotStatement = options.snapshotBelow
-    ? engine.statements.selectLatestSnapshotBelow
-    : engine.statements.selectLatestSnapshot;
+    ? engine.statement("selectLatestSnapshotBelow")
+    : engine.statement("selectLatestSnapshot");
   const snapshotRow = snapshotStatement.get({
     branch,
     id,
     scope_key: scopeKey,
     seq,
   }) as SnapshotRow | undefined;
-  const baseRow = engine.statements.selectLatestBase.get({
+  const baseRow = engine.statement("selectLatestBase").get({
     branch,
     id,
     scope_key: scopeKey,
@@ -9287,7 +9292,7 @@ const storedEntitySourcesMayContainRef = (
   }
   if (baseMayContain) return true;
 
-  const patches = engine.statements.selectPatches.all({
+  const patches = engine.statement("selectPatches").all({
     branch,
     id,
     scope_key: scopeKey,
@@ -9320,7 +9325,7 @@ const maybeMaterializeSnapshot = (
     current.seq,
   );
   const patchCount = (
-    engine.statements.selectPatchCount.get({
+    engine.statement("selectPatchCount").get({
       branch,
       id,
       scope_key: scopeKey,
@@ -9332,7 +9337,7 @@ const maybeMaterializeSnapshot = (
     return;
   }
 
-  engine.statements.insertSnapshot.run({
+  engine.statement("insertSnapshot").run({
     branch,
     id,
     scope_key: scopeKey,
@@ -9351,7 +9356,7 @@ const compactSnapshots = (
   if (engine.snapshotRetention <= 0) {
     return;
   }
-  engine.statements.deleteOldSnapshots.run({
+  engine.statement("deleteOldSnapshots").run({
     branch,
     id,
     scope_key: scopeKey,
@@ -9404,7 +9409,7 @@ export const readRevision = (
 ): EntityDocument | null => {
   const branch = options.branch ?? DEFAULT_BRANCH;
   const scopeKey = options.scopeKey ?? DEFAULT_SCOPE_KEY;
-  const row = engine.statements.selectRevisionRow.get({
+  const row = engine.statement("selectRevisionRow").get({
     branch,
     id: options.id,
     scope_key: scopeKey,
@@ -9469,7 +9474,7 @@ const reconstructPatchedDocument = (
     baseOpIndex = baseRow.op_index;
   }
 
-  const patches = engine.statements.selectPatches.all({
+  const patches = engine.statement("selectPatches").all({
     branch,
     id,
     scope_key: scopeKey,
@@ -9617,7 +9622,7 @@ const cachedSnapshottedRevision = (
   },
   seq: number,
 ): EntityDocument | undefined => {
-  const row = engine.statements.selectAtSeqLocal.get({
+  const row = engine.statement("selectAtSeqLocal").get({
     branch,
     id,
     scope_key: scopeKey,
@@ -9828,12 +9833,12 @@ const readRowForBranch = (
 
   // The current row needs no head: the `head` table holds it.
   const row = (seq === undefined
-    ? engine.statements.selectCurrentLocal.get({
+    ? engine.statement("selectCurrentLocal").get({
       branch,
       id,
       scope_key: scopeKey,
     })
-    : engine.statements.selectAtSeqLocal.get({
+    : engine.statement("selectAtSeqLocal").get({
       branch,
       id,
       scope_key: scopeKey,
@@ -9864,7 +9869,7 @@ const getBranch = (
   engine: Engine,
   branch: BranchName,
 ): BranchState | null => {
-  const row = engine.statements.selectBranch.get({
+  const row = engine.statement("selectBranch").get({
     branch,
   }) as BranchRow | undefined;
   if (row === undefined) {

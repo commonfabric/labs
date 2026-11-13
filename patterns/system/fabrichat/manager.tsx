@@ -769,13 +769,6 @@ const deliverOffers = handler<
   Record<PropertyKey, never>
 >(
   (event) => {
-    // TODO(danfuzz): Under server execution, a run the serving loop delivers
-    // from the event's durable entry, rather than in the wave of the
-    // `offerRooms` run that queued it, writes its record that it handled the
-    // event in its own transaction, in this user's space. That space doesn't
-    // admit a label such as its owner's on a pointer the run read, so the run
-    // is refused whole and nothing is sent. Expect it to commit once that
-    // record takes nothing of what the handler read.
     const offer = event?.offer;
     if (offer === undefined) return;
     for (const { pointer } of distinctInboxes(event.profiles ?? [])) {
@@ -2505,7 +2498,7 @@ export const FabriChatManagerCore = pattern<
               <cf-text variant="caption">
                 Your chat address: {myAddressForSession}
               </cf-text>
-              <cf-copy-button text={myAddressForSession} size="sm" icon-only />
+              <cf-copy-button text={myAddressForSession} size="sm" iconOnly />
             </cf-hstack>
           </div>
           <div

@@ -86,6 +86,7 @@ import {
   hasPendingWriteElision,
 } from "../storage/transaction-inspection.ts";
 import { markServedDerivationTx } from "../storage/reactivity-log.ts";
+import { waveClaimIsWithheld } from "./processed-claim.ts";
 
 const logger = getLogger("wave-accumulator", {
   enabled: true,
@@ -122,9 +123,14 @@ const logger = getLogger("wave-accumulator", {
  *   is re-landed only by the next input batch's advance — on a quiet
  *   space the doc simply lags (while the wave's commit metadata and
  *   the loop's in-memory W, decided before the drop, already carry the
- *   advance — see space-server.ts's bookkeeping-write comment).
- *   Watermark forgery is an accepted authored intrusion — protocol.md
- *   §1's threat model.
+ *   advance — see space-server.ts's bookkeeping-write comment). A
+ *   builtin's ending for a request that never went out
+ *   (builtins.md §2) is not input-driven, and the loop does not land a
+ *   dropped one again: it is written again only when its node runs
+ *   again, which the requeue closure's re-arm of a derivation that read
+ *   it causes, and so does a commit to the node's own cells that it
+ *   reads. Watermark forgery is an accepted authored intrusion —
+ *   protocol.md §1's threat model.
  *
  * The remaining §3d non-re-derivable members — `eventWatermark` advances
  * and effect intents — are produced by Phase 3 events and the stage-G
@@ -877,6 +883,11 @@ interface WaveContribution {
   supersededOutputs?: Map<string, SupersededOutput>;
   index: number;
   context: WaveRunContext;
+
+  /** Whether the processed claim this wave writes for the run, a same-wave
+   * copy of an event, records the outcome withheld
+   * (`waveClaimIsWithheld()`). */
+  claimWithheld?: true;
 
   /** Per-space sealed commits, in the tx's commit order (children first,
    * home last — protocol.md §2b). */
@@ -1781,6 +1792,7 @@ export class WaveAccumulator
         spaceAccessChanges: servedAclChanges,
         discoveredScope: assembly.discoveredScope,
         viewSeqs: this.#viewSeqsAtSeal(assembly.spaces, context),
+        ...(waveClaimIsWithheld(tx) ? { claimWithheld: true as const } : {}),
       };
       this.#contributions.push(contribution);
       waveSettlements.set(
@@ -2680,8 +2692,9 @@ export class WaveAccumulator
             // field-level merge for writes that commute with the
             // concurrent commit. A semantic conflict requeues an EVENT
             // contribution whole; a bookkeeping contribution has no
-            // event to requeue and DROPS whole instead — the loop
-            // re-derives its bookkeeping next wave (WaveRunKind doc).
+            // event to requeue and DROPS whole instead — what lands it
+            // again depends on which bookkeeping write it was (WaveRunKind
+            // doc).
             const concurrent = await sink.concurrentWritePaths(
               this.#space,
               doc,
@@ -3961,6 +3974,9 @@ export class WaveAccumulator
     // streamEntry (its re-issued intent dedupes on navigateTo's
     // deterministic nonce at apply), and the effect lands exactly once.
     const survivedEventIds = new Set<string>();
+    // Of those, the runs whose join was foreign to this space, whose entry
+    // records the outcome withheld beside the mark (`processed-claim.ts`).
+    const withheldEventIds = new Set<string>();
     for (const contribution of this.#survivors(requeued, droppedWhole)) {
       if (
         contribution.context.kind === "event-handler" &&
@@ -3968,6 +3984,9 @@ export class WaveAccumulator
         contribution.context.lt1 === true
       ) {
         survivedEventIds.add(contribution.context.eventId);
+        if (contribution.claimWithheld === true) {
+          withheldEventIds.add(contribution.context.eventId);
+        }
       }
     }
     const eventAppends: Array<{ id: string; eventId: string }> = [];
@@ -4061,6 +4080,9 @@ export class WaveAccumulator
             // so the sealed originals stay pristine.
             (list[entryIndex] as { consequenced?: boolean })
               .consequenced = true;
+            if (withheldEventIds.has(entry.eventId)) {
+              (list[entryIndex] as { withheld?: boolean }).withheld = true;
+            }
           }
         }
       }

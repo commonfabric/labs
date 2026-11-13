@@ -4168,18 +4168,24 @@ export function llmDialog(
                 runtime.trackAsyncWork(
                   settleAbandonedRequest(
                     runtime,
-                    "llmDialog",
-                    `llmDialog:${nextRequestId}`,
+                    {
+                      builtinId: "llmDialog",
+                      effectKey: `llmDialog:${nextRequestId}`,
+                      identity: capturedRequest.scopeKeyIdentity,
+                      scope: outputScope,
+                      attributeToBuiltin: true,
+                    },
                     (settleTx) => {
-                      if (capturedRequest.scopeKeyIdentity) {
-                        settleTx.tx.scopeKeyIdentity =
-                          capturedRequest.scopeKeyIdentity;
-                      }
                       // An accepted publication owns the physical binding.
                       // Legacy callers without that coordinate can only check
-                      // whether their input scope still selects this target.
-                      settleTx.resetNarrowestReadScope();
-                      inputs.withTx(settleTx).get();
+                      // whether their input scope still selects this target,
+                      // which reads the inputs; with it, the ending reads none,
+                      // so their labels don't refuse what it writes, none of
+                      // which derives from them.
+                      if (publicationBinding === undefined) {
+                        settleTx.resetNarrowestReadScope();
+                        inputs.withTx(settleTx).get();
+                      }
                       if (
                         ownsPublication() &&
                         (publicationBinding !== undefined ||

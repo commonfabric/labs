@@ -4314,7 +4314,7 @@ describe("runtime-processor", () => {
         stub(
           PiecesController.prototype,
           "adoptCatalogRooms",
-          () => Promise.resolve(),
+          () => Promise.resolve(0),
         ),
       ];
       return {

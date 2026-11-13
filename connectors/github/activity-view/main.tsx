@@ -370,7 +370,7 @@ export default pattern<GithubActivityInput, GithubActivityOutput>((state) => {
                     ? <cf-empty-state message="No synchronized pull requests" />
                     : (
                       <cf-card>
-                        <cf-table full-width hover>
+                        <cf-table fullWidth hover>
                           <thead>
                             <tr>
                               <th>Repository</th>
@@ -511,7 +511,7 @@ export default pattern<GithubActivityInput, GithubActivityOutput>((state) => {
                   <cf-card>
                     <cf-vstack gap="2">
                       <cf-heading level={4}>Published index</cf-heading>
-                      <cf-table full-width>
+                      <cf-table fullWidth>
                         <tbody>
                           <tr>
                             <th>Viewer</th>
@@ -549,7 +549,7 @@ export default pattern<GithubActivityInput, GithubActivityOutput>((state) => {
                       <cf-card>
                         <cf-vstack gap="2">
                           <cf-heading level={4}>Connector host</cf-heading>
-                          <cf-table full-width>
+                          <cf-table fullWidth>
                             <tbody>
                               <tr>
                                 <th>Status</th>
@@ -628,7 +628,7 @@ export default pattern<GithubActivityInput, GithubActivityOutput>((state) => {
           {summary.pending
             ? (
               <div style="margin-bottom: 16px;">
-                <cf-loader show-elapsed /> Generating summary...
+                <cf-loader showElapsed /> Generating summary...
               </div>
             )
             : summary.result
