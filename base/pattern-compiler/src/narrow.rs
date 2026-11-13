@@ -87,6 +87,16 @@ impl<'a> Resolver<'_, 'a> {
                     path.push(member.property.name.to_string());
                     &member.object
                 }
+                Expression::ComputedMemberExpression(member) => {
+                    match unparen(&member.expression) {
+                        Expression::NumericLiteral(index) => {
+                            path.push(format!("[{}]", index.value));
+                        }
+                        Expression::StringLiteral(key) => path.push(key.value.to_string()),
+                        _ => return None,
+                    }
+                    &member.object
+                }
                 Expression::Identifier(identifier) => {
                     let parsed = self.parsed(module)?;
                     let root = symbol_of(parsed.semantic.scoping(), identifier)?;
@@ -292,6 +302,13 @@ impl<'a> Resolver<'_, 'a> {
                 (LogicalOperator::And, true) | (LogicalOperator::Or, false) => {
                     let ty = self.assume(module, &logical.left, sense, reference, ty);
                     self.assume(module, &logical.right, sense, reference, ty)
+                }
+                // One of the two operands decided the result, so the type
+                // is what either of them leaves.
+                (LogicalOperator::And, false) | (LogicalOperator::Or, true) => {
+                    let left = self.assume(module, &logical.left, sense, reference, ty);
+                    let right = self.assume(module, &logical.right, sense, reference, ty);
+                    self.union_by_text(vec![left, right])
                 }
                 _ => ty,
             },

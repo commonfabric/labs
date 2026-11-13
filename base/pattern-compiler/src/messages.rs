@@ -233,6 +233,10 @@ pub fn rewrite(id: &str) -> &'static str {
              `Record<string, unknown>` or `JSONValue` for open data."
         }
         "cast-validation:forbidden-cast" => "Remove the cast.",
+        "subset-type:mismatch" => {
+            "Write a value of the expected type, or declare the position with the type \
+             the value has."
+        }
         "cast-validation:cell-cast" => {
             "Declare the cell type where the value is received: the pattern input or the \
              handler state."

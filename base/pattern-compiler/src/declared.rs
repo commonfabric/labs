@@ -126,7 +126,10 @@ impl<'a> Resolver<'_, 'a> {
                 let constant = matches!(&cast.type_annotation, TSType::TSTypeReference(reference)
                     if matches!(&reference.type_name, TSTypeName::IdentifierReference(name) if name.name == "const"));
                 if constant {
-                    self.typed_at(module, &cast.expression, next)
+                    match self.constant_type(module, &cast.expression) {
+                        Some(constant) => Ok(constant),
+                        None => self.typed_at(module, &cast.expression, next),
+                    }
                 } else {
                     Ok(self.resolve_type(module, &cast.type_annotation))
                 }
@@ -141,6 +144,27 @@ impl<'a> Resolver<'_, 'a> {
                 Expression::StringLiteral(key) => {
                     self.declared_property(module, &member.object, key.value.as_str(), next)
                 }
+                // A well-known key the API exports, such as `[NAME]`, is
+                // the property written with that key.
+                key if self.api_key(module, key).is_some() => {
+                    let name = self.api_key(module, key).expect("the key was just found");
+                    self.typed_at(module, &member.object, next)
+                        .map(|object| {
+                            self.property(object, &name)
+                                .unwrap_or_else(|| self.add_unresolved())
+                        })
+                        .map_err(|_| Origin::PropertyOfInferred)
+                }
+                Expression::NumericLiteral(_) => self
+                    .typed_at(module, &member.object, next)
+                    .map(|object| match self.shape(object) {
+                        Shape::Object(_, Some(index)) => index,
+                        _ => self
+                            .element_of(object)
+                            .unwrap_or_else(|| self.add_unresolved()),
+                    })
+                    .map(|ty| self.narrowed(module, expression, ty))
+                    .map_err(|_| Origin::PropertyOfInferred),
                 _ => match self.typed_at(module, &member.object, next) {
                     Ok(object) => Ok(match self.shape(object) {
                         Shape::Object(_, Some(index)) => index,
@@ -184,10 +208,12 @@ impl<'a> Resolver<'_, 'a> {
             | Expression::NumericLiteral(_)
             | Expression::BooleanLiteral(_)
             | Expression::NullLiteral(_)
-            | Expression::BigIntLiteral(_) => self.literal_type(expression).ok_or(Origin::Literal),
-            Expression::TemplateLiteral(template) if template.expressions.is_empty() => {
-                self.literal_type(expression).ok_or(Origin::Literal)
-            }
+            | Expression::BigIntLiteral(_) => self
+                .exact_literal_type(module, expression)
+                .ok_or(Origin::Literal),
+            Expression::TemplateLiteral(template) if template.expressions.is_empty() => self
+                .exact_literal_type(module, expression)
+                .ok_or(Origin::Literal),
             Expression::ArrayExpression(_)
             | Expression::ObjectExpression(_)
             | Expression::RegExpLiteral(_) => self.infer_literal(module, expression, next),
@@ -201,6 +227,18 @@ impl<'a> Resolver<'_, 'a> {
             | Expression::AssignmentExpression(_) => self.infer_operator(module, expression, next),
             _ => self.infer_other(module, expression, next),
         }
+    }
+
+    /// The property name of a well-known key of the API that `key` names
+    /// through its import, written with its brackets.
+    fn api_key(&self, module: usize, key: &Expression<'a>) -> Option<String> {
+        let Expression::Identifier(identifier) = key else {
+            return None;
+        };
+        let parsed = self.parsed(module)?;
+        let symbol = symbol_of(parsed.semantic.scoping(), identifier)?;
+        self.model(module)?.api_ref(symbol)?;
+        Some(format!("[{}]", identifier.name))
     }
 
     pub(crate) fn add_unresolved(&self) -> TypeId {
@@ -272,16 +310,29 @@ impl<'a> Resolver<'_, 'a> {
                 .map(unwrap),
         ) {
             ("get" | "sample", None) => Ok(value),
-            ("key", Some(Expression::StringLiteral(key))) => {
-                let property = self
-                    .property(value, key.value.as_str())
-                    .unwrap_or_else(|| self.add_unresolved());
-                // `key` flattens a handle it passes through: the property
-                // of a handle that is itself a handle is that handle.
-                Ok(match self.shape(property) {
-                    Shape::Handle(..) => property,
-                    _ => self.intern(Shape::Handle(kind, property)),
-                })
+            ("key", Some(Expression::StringLiteral(_))) => {
+                // `key` takes a path, and flattens a handle it passes
+                // through: the property of a handle that is itself a
+                // handle is that handle.
+                let mut current = receiver;
+                for argument in &call.arguments {
+                    let Some(Expression::StringLiteral(key)) = argument.as_expression().map(unwrap)
+                    else {
+                        return Err(Origin::CallResult);
+                    };
+                    let (kind, value) = match self.shape(current) {
+                        Shape::Handle(kind, value) => (kind, value),
+                        _ => (kind, value),
+                    };
+                    let property = self
+                        .property(value, key.value.as_str())
+                        .unwrap_or_else(|| self.add_unresolved());
+                    current = match self.shape(property) {
+                        Shape::Handle(..) => property,
+                        _ => self.intern(Shape::Handle(kind, property)),
+                    };
+                }
+                Ok(current)
             }
             _ => Err(Origin::CallResult),
         }
@@ -381,7 +432,14 @@ impl<'a> Resolver<'_, 'a> {
                     (None, None) if declarator.kind == VariableDeclarationKind::Let => {
                         Err(Origin::Reassigned)
                     }
-                    (None, Some(init)) => self.declared_initializer(module, init, depth + 1),
+                    // A `const` keeps the literal type of its initializer,
+                    // and any other binding widens it (§7.5).
+                    (None, Some(init)) => self.declared_initializer(module, init, depth + 1).map(
+                        |ty| match declarator.kind {
+                            VariableDeclarationKind::Const => ty,
+                            _ => self.widened(ty),
+                        },
+                    ),
                     (None, None) => self.loop_variable(module, declarator, depth + 1),
                 };
                 (&declarator.id, base)

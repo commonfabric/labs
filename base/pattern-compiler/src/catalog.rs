@@ -332,7 +332,13 @@ pub const CATALOG: &[Entry] = &[
         "inference at a generic call",
     ),
     done("subset-type:any", Error),
-    types("subset-type:mismatch", Error, "assignability"),
+    part(
+        "subset-type:mismatch",
+        Error,
+        "reported for an argument, a returned value under a written return type, and an \
+         initializer under an annotation that is not assignable, and for a wrong argument \
+         count; a value whose type is not evaluated is not decided",
+    ),
     types(
         "cast-validation:double-unknown",
         Error,

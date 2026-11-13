@@ -434,6 +434,11 @@ const CASES: &[Case] = &[
         "const glaze: unknown = 1;",
     ),
     case(
+        "subset-type:mismatch",
+        "function price(count: number) { return count * 2; }\nconst TOTAL = price(/*!*/\"two\");",
+        "function price(count: number) { return count * 2; }\nconst TOTAL = price(2);",
+    ),
+    case(
         "cast-validation:forbidden-cast",
         "const Box = pattern<{ count: number }>(({ count }) => ({ count: /*!*/count as Reactive<number> }));",
         "const Box = pattern<{ count: number }>(({ count }) => ({ count }));",

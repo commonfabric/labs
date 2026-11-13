@@ -197,3 +197,30 @@ fn non_null_assertion_removes_null_and_undefined() {
         ["string"]
     );
 }
+
+#[test]
+fn element_at_a_literal_index_is_narrowed() {
+    assert_eq!(
+        types(
+            "function show(parts: string[]) {\n\
+               if (parts[0] === \"result\" || parts[0] === \"input\") { return \"\"; }\n\
+               if (parts[1] === \"plain\") { return /*?*/(parts[1]); }\n\
+               return /*?*/(parts[1]);\n\
+             }\n"
+        ),
+        ["\"plain\"", "string"]
+    );
+}
+
+#[test]
+fn either_operand_of_or_holding_narrows_to_the_union_of_the_two() {
+    assert_eq!(
+        types(
+            "function show(value: 1 | 2 | null | undefined, name: string | number | undefined) {\n\
+               if (!(typeof name === \"string\" && name)) { /*?*/name; }\n\
+               return value === 1 || value === 2 ? /*?*/value : null;\n\
+             }\n"
+        ),
+        ["number | undefined | string", "1 | 2"]
+    );
+}

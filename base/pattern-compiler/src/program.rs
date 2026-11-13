@@ -247,6 +247,7 @@ pub fn analyze(files: &[SourceFile]) -> ProgramAnalysis {
     // The rules that resolving a written type decides.
     for module in 0..files.len() {
         resolver.check_written_types(module);
+        resolver.check_assignments(module);
     }
     let reports = std::mem::take(&mut resolver.types.borrow_mut().reports);
     for report in reports {
@@ -265,6 +266,7 @@ pub fn analyze(files: &[SourceFile]) -> ProgramAnalysis {
     }
 
     let written = std::mem::take(&mut resolver.types.borrow_mut().written);
+    let type_counts = std::mem::take(&mut resolver.types.borrow_mut().counts);
     let mut modules = Vec::new();
     for (index, check) in checks.into_iter().enumerate() {
         let (Some(check), Some(model)) = (check, models[index].clone()) else {
@@ -283,6 +285,11 @@ pub fn analyze(files: &[SourceFile]) -> ProgramAnalysis {
                 for ((module, label), count) in &written {
                     if *module == index {
                         counts.insert(format!("types:written:{label}"), *count);
+                    }
+                }
+                for ((module, key), count) in &type_counts {
+                    if *module == index {
+                        counts.insert(key.clone(), *count);
                     }
                 }
                 counts

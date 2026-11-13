@@ -160,3 +160,46 @@ one that accepts less. The crate implements the document as it stands at commit
 29. **Iterators of `Map` and `Set`** (§9.9). `keys()`, `values()`, and
     `entries()` are given array types, which is enough for spread, `for...of`,
     and `Array.from`, and wrong for a method called on the iterator itself.
+
+## Assignability (§7.5)
+
+31. **A value named where a cell is declared, in the reactive tier** (§7.5,
+    §4.6). §4.6 says the state of a handler applied in tier R is bound by
+    reference, and each path of it is an input, a state cell, an element, or
+    a computed value. So `save({ items })` with `items` an input declared
+    `Donut[]` binds a state declared `Writable<Donut[]>`, and the corpus
+    writes this at about 200 sites. The same holds in the other direction
+    for a cell named where a pattern input, or the parameter of a `lift`
+    called in tier R, declares the value type. §7.5 has no rule for either:
+    it makes a handle type assignable only to handle types and `unknown`,
+    and makes nothing but a pattern instance assignable to a handle type.
+    Chosen: both are refused (`subset-type:mismatch`), and counted under "a
+    value where a cell is declared" and "a cell where a value is declared"
+    so that the corpus report can tell them from other refusals.
+32. **`Cell<T>` where `Cell<unknown>` is declared** (§7.5, §7.8). §7.8
+    gives `Cell<unknown>` as the type of a handle whose content the body
+    does not know. §7.5 makes `Cell<T>` assignable to `Cell<U>` only when
+    `T` and `U` are the same type, and `unknown` is not the same type as a
+    declared `T`. Chosen: refused, as §7.5 states, and counted on its own.
+33. **Handles §7.5 gives no value rule for.** The section states the value
+    rule for a `ReadonlyCell` target (the value type is assignable) and for
+    a `Cell` target (the same type). Chosen for a `WriteonlyCell`, a
+    `ComparableCell`, an `OpaqueCell`, and a `Stream` target: the same type,
+    which is the rule that accepts less.
+34. **Where a literal type is widened** (§7.5). The section names `let`
+    bindings and mutable properties. Chosen in addition: an element of an
+    array literal, and the inferred result type of a function that returns
+    one literal. A literal written where a type is expected is checked part
+    by part against that type and is not widened there. The crate does not
+    carry an expected type into the body of a callback through a generic
+    method, so `rows.map((row) => ({ kind: "mix" }))` returned under a
+    result type with a literal `kind` is refused. That is a gap of the
+    crate and not a rule of the document; the count "a primitive type where
+    its literal types are declared" holds these.
+35. **An opaque API type** (§7.2, §7.5). The structure of `VNode`,
+    `JSONSchema`, and the other opaque named types is not part of the
+    language. Chosen: assignability between an opaque type and any other
+    type but itself is not decided, and nothing is reported.
+36. **Tuples.** The type representation does not keep which elements of a
+    tuple are optional. Chosen: a shorter tuple against a longer one is not
+    decided.

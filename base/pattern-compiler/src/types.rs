@@ -120,6 +120,8 @@ pub struct Property {
     pub name: String,
     pub ty: TypeId,
     pub optional: bool,
+    /// Whether the property is declared `readonly` (§7.5).
+    pub readonly: bool,
 }
 
 /// One parameter of a function type.
@@ -176,6 +178,10 @@ pub struct TypeStore {
     signatures: HashMap<TypeId, Signature>,
     /// The type arguments of each standard-library object type.
     code_arguments: HashMap<TypeId, Vec<TypeId>>,
+    /// The counts of the type rules, by module and name.
+    pub counts: HashMap<(usize, String), usize>,
+    /// The array and tuple types that are read-only (§7.5).
+    readonly: std::collections::HashSet<TypeId>,
     /// The functions whose return type is being inferred.
     in_progress: std::collections::HashSet<(usize, u32)>,
 }
@@ -243,10 +249,17 @@ impl<'a> Resolver<'_, 'a> {
         let mut annotations = self.types.borrow().annotations(ty).to_vec();
         annotations.push(Annotation { key, argument });
         let annotated = self.add(shape);
-        self.types
-            .borrow_mut()
-            .annotations
-            .insert(annotated, annotations);
+        let mut types = self.types.borrow_mut();
+        types.annotations.insert(annotated, annotations);
+        if types.readonly.contains(&ty) {
+            types.readonly.insert(annotated);
+        }
+        if let Some(signature) = types.signatures.get(&ty).cloned() {
+            types.signatures.insert(annotated, signature);
+        }
+        if let Some(arguments) = types.code_arguments.get(&ty).cloned() {
+            types.code_arguments.insert(annotated, arguments);
+        }
         annotated
     }
 
@@ -361,7 +374,7 @@ impl<'a> Resolver<'_, 'a> {
             TSType::TSTypeOperatorType(operator) => {
                 let operand = self.resolve(module, &operator.type_annotation, env, next);
                 match operator.operator {
-                    TSTypeOperatorOperator::Readonly => operand,
+                    TSTypeOperatorOperator::Readonly => self.read_only(operand, false),
                     TSTypeOperatorOperator::Keyof => self.keyof(operand),
                     TSTypeOperatorOperator::Unique => self.unresolved(Why::RefusedForm),
                 }
@@ -410,15 +423,36 @@ impl<'a> Resolver<'_, 'a> {
 
     /// A union of `members` with members of equal text merged.
     pub(crate) fn union_by_text(&self, members: Vec<TypeId>) -> TypeId {
+        // A union member that is itself a union is taken apart first, so
+        // that equal members of two unions merge.
+        let mut flat = Vec::new();
+        for member in members {
+            match self.shape(member) {
+                Shape::Union(inner) if self.types.borrow().annotations(member).is_empty() => {
+                    flat.extend(inner);
+                }
+                _ => flat.push(member),
+            }
+        }
         let mut seen: Vec<String> = Vec::new();
         let mut kept = Vec::new();
-        for member in members {
+        for member in flat {
             let text = self.display(member);
             if !seen.contains(&text) {
                 seen.push(text);
                 kept.push(member);
             }
         }
+        // A literal type beside the primitive type it belongs to adds
+        // nothing to the union.
+        let primitives: Vec<Shape> = kept.iter().map(|member| self.shape(*member)).collect();
+        let kept = kept
+            .into_iter()
+            .filter(|member| match self.shape(*member) {
+                Shape::Literal(_) => !primitives.contains(&self.shape(self.widened(*member))),
+                _ => true,
+            })
+            .collect();
         self.union(kept)
     }
 
@@ -465,6 +499,7 @@ impl<'a> Resolver<'_, 'a> {
                         name,
                         ty,
                         optional: property.optional,
+                        readonly: property.readonly,
                     });
                 }
                 TSSignature::TSMethodSignature(method) => {
@@ -481,6 +516,7 @@ impl<'a> Resolver<'_, 'a> {
                                 result,
                             }),
                             optional: method.optional,
+                            readonly: false,
                         });
                     }
                 }
@@ -1102,10 +1138,19 @@ impl<'a> Resolver<'_, 'a> {
         };
         match name {
             "Array" | "ReadonlyArray" => match first {
-                Some(element) => self.add(Shape::Array(element)),
+                Some(element) => {
+                    let array = self.add(Shape::Array(element));
+                    if name == "ReadonlyArray" {
+                        self.types.borrow_mut().readonly.insert(array);
+                    }
+                    array
+                }
                 None => self.unresolved(Why::NotEvaluated),
             },
-            "Readonly" => first.unwrap_or_else(|| self.unresolved(Why::NotEvaluated)),
+            "Readonly" => match first {
+                Some(operand) => self.read_only(operand, false),
+                None => self.unresolved(Why::NotEvaluated),
+            },
             "Partial" | "Required" => match operand(self) {
                 Some((_, Shape::Object(mut properties, index))) => {
                     for property in &mut properties {
@@ -1138,6 +1183,7 @@ impl<'a> Resolver<'_, 'a> {
                                     name,
                                     ty: *value,
                                     optional: false,
+                                    readonly: false,
                                 })
                                 .collect();
                             self.add(Shape::Object(properties, None))
@@ -1191,9 +1237,21 @@ impl<'a> Resolver<'_, 'a> {
                         Shape::Union(members) => members,
                         _ => vec![subject],
                     };
+                    // `boolean` is taken as `true | false` (§7.10).
+                    let members: Vec<TypeId> = members
+                        .into_iter()
+                        .flat_map(|member| match self.shape(member) {
+                            Shape::Boolean => ["true", "false"]
+                                .map(|text| self.add(Shape::Literal(text.to_string())))
+                                .to_vec(),
+                            _ => vec![member],
+                        })
+                        .collect();
                     let kept = members
                         .into_iter()
-                        .filter(|member| self.fits(*member, *test) == (name == "Extract"))
+                        .filter(|member| {
+                            (self.assignable(*member, *test) == Some(true)) == (name == "Extract")
+                        })
                         .collect();
                     self.union(kept)
                 }
@@ -1324,6 +1382,102 @@ impl<'a> Resolver<'_, 'a> {
             .unwrap_or_else(|| self.unresolved(Why::TypeofValue))
     }
 
+    /// Whether an array or tuple type is read-only.
+    pub fn is_read_only(&self, ty: TypeId) -> bool {
+        self.types.borrow().readonly.contains(&ty)
+    }
+
+    /// The read-only counterpart of `ty`: of an array or a tuple, and of an
+    /// object type with every property `readonly`. Any other type is
+    /// unchanged. With `deep`, the parts of the type are read-only too, as
+    /// `as const` makes them (§7.5).
+    pub(crate) fn read_only(&self, ty: TypeId, deep: bool) -> TypeId {
+        let inner = |ty: TypeId| if deep { self.read_only(ty, true) } else { ty };
+        let annotations = self.types.borrow().annotations(ty).to_vec();
+        let made = match self.shape(ty) {
+            Shape::Array(element) => {
+                let array = self.add(Shape::Array(inner(element)));
+                self.types.borrow_mut().readonly.insert(array);
+                array
+            }
+            Shape::Tuple(elements) => {
+                let tuple = self.add(Shape::Tuple(elements.into_iter().map(inner).collect()));
+                self.types.borrow_mut().readonly.insert(tuple);
+                tuple
+            }
+            Shape::Object(properties, index) => {
+                let properties = properties
+                    .into_iter()
+                    .map(|property| Property {
+                        ty: inner(property.ty),
+                        readonly: true,
+                        ..property
+                    })
+                    .collect();
+                self.add(Shape::Object(properties, index))
+            }
+            _ => return ty,
+        };
+        if !annotations.is_empty() {
+            self.types
+                .borrow_mut()
+                .annotations
+                .insert(made, annotations);
+        }
+        made
+    }
+
+    /// `ty` with a literal type replaced by the primitive type it belongs
+    /// to, as a `let` binding and a mutable property widen it (§7.5).
+    pub(crate) fn widened(&self, ty: TypeId) -> TypeId {
+        match self.shape(ty) {
+            Shape::Literal(text) => {
+                let quoted = text.starts_with(['"', '\'', '`']);
+                self.add(if quoted {
+                    Shape::String
+                } else if text == "true" || text == "false" {
+                    Shape::Boolean
+                } else if text.ends_with('n') {
+                    Shape::BigInt
+                } else {
+                    Shape::Number
+                })
+            }
+            Shape::Union(members)
+                if members
+                    .iter()
+                    .any(|member| matches!(self.shape(*member), Shape::Literal(_))) =>
+            {
+                let members = members
+                    .into_iter()
+                    .map(|member| self.widened(member))
+                    .collect();
+                self.union_by_text(members)
+            }
+            _ => ty,
+        }
+    }
+
+    /// The type of a literal expression with its literal types kept and
+    /// every part read-only: the type of `expression as const` (§7.5).
+    pub(crate) fn constant_type(
+        &self,
+        module: usize,
+        expression: &Expression<'a>,
+    ) -> Option<TypeId> {
+        self.literal_type_as(expression, true, module)
+            .map(|ty| self.read_only(ty, true))
+    }
+
+    /// The literal type of a primitive literal expression (§7.5).
+    pub(crate) fn exact_literal_type(
+        &self,
+        module: usize,
+        expression: &Expression<'a>,
+    ) -> Option<TypeId> {
+        self.literal_type_as(expression, true, module)
+    }
+
     /// The type of a literal expression: a primitive, or an object or array
     /// literal of literals.
     pub fn literal_type(&self, expression: &Expression<'a>) -> Option<TypeId> {
@@ -1375,6 +1529,7 @@ impl<'a> Resolver<'_, 'a> {
                             name: static_key_name(&property.key)?.to_string(),
                             ty: self.literal_type_as(&property.value, exact, module)?,
                             optional: false,
+                            readonly: false,
                         })
                     })
                     .collect::<Option<Vec<Property>>>()?;
@@ -1437,27 +1592,6 @@ impl<'a> Resolver<'_, 'a> {
         }
     }
 
-    /// Whether a member of a union is assignable to `target`, for `Exclude`
-    /// and `Extract` (§7.10): to a member of a union target, to an equal
-    /// type, or, for a literal, to its primitive type.
-    pub(crate) fn fits(&self, member: TypeId, target: TypeId) -> bool {
-        let (from, to) = (self.shape(member), self.shape(target));
-        if let Shape::Union(targets) = &to {
-            return targets.iter().any(|target| self.fits(member, *target));
-        }
-        if matches!(to, Shape::Unknown) || self.display(member) == self.display(target) {
-            return true;
-        }
-        match (&from, &to) {
-            (Shape::Literal(text), Shape::String) => text.starts_with(['"', '\'']),
-            (Shape::Literal(text), Shape::Number) => {
-                text.starts_with(|c: char| c.is_ascii_digit() || c == '-')
-            }
-            (Shape::Literal(text), Shape::Boolean) => text == "true" || text == "false",
-            _ => false,
-        }
-    }
-
     /// `left & right`, computed (§7.4).
     pub fn intersection(&self, left: TypeId, right: TypeId) -> TypeId {
         self.intersect(left, right, 0)
@@ -1497,6 +1631,16 @@ impl<'a> Resolver<'_, 'a> {
             .borrow_mut()
             .written
             .entry((module, label))
+            .or_insert(0) += 1;
+    }
+
+    /// Adds one to the count `key` of module `module`.
+    pub(crate) fn count(&self, module: usize, key: String) {
+        *self
+            .types
+            .borrow_mut()
+            .counts
+            .entry((module, key))
             .or_insert(0) += 1;
     }
 

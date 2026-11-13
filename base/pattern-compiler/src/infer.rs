@@ -77,6 +77,12 @@ impl<'a> Resolver<'_, 'a> {
         }
     }
 
+    /// Whether a type is the element type of an empty array literal, which
+    /// says nothing about what the array holds.
+    fn is_unresolved_element(&self, ty: TypeId) -> bool {
+        matches!(self.shape(ty), Shape::Unresolved(_))
+    }
+
     /// The declaration a symbol of module `module` names, an import
     /// followed.
     pub(crate) fn origin(&self, module: usize, symbol: SymbolId) -> Option<(usize, SymbolId)> {
@@ -334,7 +340,12 @@ impl<'a> Resolver<'_, 'a> {
             }
         };
         self.leave(key);
-        result
+        // A function that returns one literal has the primitive type as
+        // its inferred result type.
+        result.map(|ty| match self.shape(ty) {
+            Shape::Literal(_) => self.widened(ty),
+            _ => ty,
+        })
     }
 
     /// Binds the type parameters of a function for one call: from the
@@ -429,6 +440,7 @@ impl<'a> Resolver<'_, 'a> {
                 name: name.to_string(),
                 ty,
                 optional: false,
+                readonly: false,
             };
             self.of(Shape::Object(
                 vec![
@@ -739,9 +751,27 @@ impl<'a> Resolver<'_, 'a> {
         match name {
             "map" => self.of(Shape::Array(returned())),
             "flatMap" => {
+                // Each array the callback returns is taken apart, and any
+                // other value it returns is an element as it is.
                 let result = returned();
-                let flat = self.element_of(result).unwrap_or(result);
-                self.of(Shape::Array(flat))
+                let members = match self.shape(result) {
+                    Shape::Union(members) => members,
+                    _ => vec![result],
+                };
+                let flat = members
+                    .into_iter()
+                    .map(|member| match self.shape(member) {
+                        Shape::Array(_) | Shape::Tuple(_) => {
+                            self.element_of(member).unwrap_or(member)
+                        }
+                        _ => member,
+                    })
+                    .filter(|member| !self.is_unresolved_element(*member))
+                    .collect::<Vec<_>>();
+                if flat.is_empty() {
+                    return self.of(Shape::Array(self.add_unresolved()));
+                }
+                self.of(Shape::Array(self.union_distinct(flat)))
             }
             "filter" | "slice" | "concat" | "toReversed" | "toSorted" | "toSpliced" | "reverse"
             | "sort" | "splice" | "fill" | "with" => self.of(Shape::Array(element)),
@@ -870,7 +900,31 @@ impl<'a> Resolver<'_, 'a> {
                 UnaryOperator::LogicalNot | UnaryOperator::Delete => self.of(Shape::Boolean),
                 UnaryOperator::Typeof => self.of(Shape::String),
                 UnaryOperator::Void => self.of(Shape::Undefined),
-                _ => self.of(Shape::Number),
+                // A negative numeric literal has its literal type.
+                UnaryOperator::UnaryNegation
+                    if matches!(
+                        unary.argument,
+                        Expression::NumericLiteral(_) | Expression::BigIntLiteral(_)
+                    ) =>
+                {
+                    let text = self
+                        .parsed(module)
+                        .map(|parsed| {
+                            oxc_span::GetSpan::span(expression)
+                                .source_text(parsed.source)
+                                .replace(' ', "")
+                        })
+                        .ok_or(Origin::Operator)?;
+                    self.of(Shape::Literal(text))
+                }
+                _ => match self
+                    .typed_at(module, &unary.argument, next)
+                    .map(|ty| self.shape(ty))
+                {
+                    Ok(Shape::BigInt) => self.of(Shape::BigInt),
+                    Ok(Shape::Literal(text)) if text.ends_with('n') => self.of(Shape::BigInt),
+                    _ => self.of(Shape::Number),
+                },
             },
             Expression::BinaryExpression(binary) => match binary.operator {
                 BinaryOperator::Addition => {
@@ -901,7 +955,25 @@ impl<'a> Resolver<'_, 'a> {
                 | BinaryOperator::ShiftRightZeroFill
                 | BinaryOperator::BitwiseOR
                 | BinaryOperator::BitwiseXOR
-                | BinaryOperator::BitwiseAnd => self.of(Shape::Number),
+                | BinaryOperator::BitwiseAnd => {
+                    // Arithmetic on `bigint` operands gives a `bigint`.
+                    let is_bigint = |side: &Expression<'a>| {
+                        self.typed_at(module, side, next).is_ok_and(|ty| {
+                            match self.shape(self.present(ty)) {
+                                Shape::BigInt => true,
+                                Shape::Literal(text) => {
+                                    text.ends_with('n') && !text.starts_with(['"', '\'', '`'])
+                                }
+                                _ => false,
+                            }
+                        })
+                    };
+                    if is_bigint(&binary.left) || is_bigint(&binary.right) {
+                        self.of(Shape::BigInt)
+                    } else {
+                        self.of(Shape::Number)
+                    }
+                }
                 _ => self.of(Shape::Boolean),
             },
             Expression::LogicalExpression(logical) => {
@@ -943,7 +1015,11 @@ impl<'a> Resolver<'_, 'a> {
                             );
                         }
                         ArrayExpressionElement::Elision(_) => {}
-                        other => elements.push(self.part(module, other.to_expression(), next)),
+                        other => elements.push(self.widened(self.part(
+                            module,
+                            other.to_expression(),
+                            next,
+                        ))),
                     }
                 }
                 if elements.is_empty() {
@@ -978,12 +1054,13 @@ impl<'a> Resolver<'_, 'a> {
                                 index = Some(self.add_unresolved());
                                 continue;
                             };
-                            let ty = self.part(module, &property.value, next);
+                            let ty = self.widened(self.part(module, &property.value, next));
                             properties.retain(|own| own.name != name);
                             properties.push(Property {
                                 name: name.to_string(),
                                 ty,
                                 optional: false,
+                                readonly: false,
                             });
                         }
                     }
