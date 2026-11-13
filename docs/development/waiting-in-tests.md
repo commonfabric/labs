@@ -447,7 +447,12 @@ contract as a client applies it, so past the barrier a consequence that never
 arrived is an absence to assert on. It is a barrier, not a delivery signal: a
 wave that requeues the event it drained still commits, and its advance still
 covers that event's seq, so a test whose subject is the re-run's own output
-waits for that output on the replica.
+waits for that output on the replica. Nothing short of the watermark covers the
+serving loop: `settled()` on a serving runtime, and a client's
+`storageManager.synced()` and `idle()`, can all resolve before the loop has
+drained the commit at all, and a client that runs the pattern itself shows its
+own speculation of the served node until W covers the commit
+([speculation.md §4](../specs/server-side-execution/speculation.md)).
 
 `ArrivalLog` records what a callback the test already registers hands it — a
 navigate callback, a scheduler `onError`, a fault injector, a settle gate — with
