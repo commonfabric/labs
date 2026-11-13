@@ -14,8 +14,10 @@
  * than `generations` of them the oldest is dropped. No one table ever holds
  * more than `limit` keys, so none reaches V8's ceiling, and a key in a dropped
  * generation is simply forgotten, which is all a cache may do with an entry.
- * A key the cache still answers for is re-added when its owner proves it
- * again, so the keys in use keep moving into the newest generation.
+ * Only `add()` puts a key in the newest generation: a hit in an older one
+ * answers `true` and leaves the key where it is, so a key in steady use is
+ * forgotten with its generation too, and enters the newest one again when its
+ * owner next proves and adds it.
  */
 export class GenerationalWeakSet<T extends WeakKey> {
   #newest = new WeakSet<T>();

@@ -227,8 +227,8 @@ function isDeepFrozenWithCache(
  *
  * Arrays and plain objects are frozen after their children are recursively
  * frozen. Primitives pass through unchanged. Records the result in the
- * deep-frozen cache so subsequent `isDeepFrozen()` checks return in O(1).
- * Returns the (now-frozen) value.
+ * deep-frozen cache so subsequent `isDeepFrozen()` checks return in O(1) for as
+ * long as the cache remembers it. Returns the (now-frozen) value.
  *
  * Handles circular references: a shared `inProgress` set is threaded through
  * all recursive calls -- including into participating `FabricInstance`s'
@@ -281,7 +281,8 @@ export function deepFreeze<T>(value: T): T {
     if (BaseFabricInstance.isInstance(value)) {
       const result = value[DEEP_FREEZE](freeze) as U;
       // Cache the now-deep-frozen result so subsequent `isDeepFrozen()` checks
-      // short-circuit in O(1), mirroring arm 4's cache-write below.
+      // short-circuit in O(1) while the cache remembers it, mirroring arm 4's
+      // cache-write below.
       addToDeepFrozenCache(result as object);
       return result;
     }
