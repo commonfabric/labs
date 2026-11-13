@@ -434,7 +434,11 @@ object written into an array by `set`, `push`, or `addUnique` a document of
 its own and stores a link (`nextAnchorId`). A list of records built by
 handlers therefore holds links, and its elements are keyed by identity.
 Plain-value elements are primitives, and records in an array that a
-computation returned, which are stored inline.
+computation built, which are stored inline. A record that a computation
+read and passes on unchanged is a reference
+([What the plan records](#what-the-plan-records-for-calls-in-bodies),
+"References"): the array holds a link to where the record was read, and
+the element is keyed by the identity of that cell.
 
 **Consequences.**
 
@@ -912,13 +916,23 @@ such paragraph, because both are removed.
 The staged changes are effect requests too, and their operands are under
 [Staged changes](#staged-changes).
 
-**When an effect is demanded, and its time gates.** An effect operation is
-demanded when something demands a path of its result. Two kinds of request
-are made in order to act and have no result that a pattern reads. A staged
-change is a step of the commit of the event's transaction and waits for no
-demand. A `navigateTo` requested by a handler is staged in the event's
-transaction, and one written in the reactive tier is demanded whenever its
-instance is (`scheduler-and-serving-loop.md` §6.2). The time gates are the
+**When an effect is demanded, and its time gates.** The demand rule is for
+an operation of a plan: an effect written in the reactive tier, or in the
+body of a pattern that a handler or a computation instantiates. Such an
+operation is demanded when something demands a path of its result, and
+its request transaction runs when the request of a demanded operation is
+stale. A `navigateTo` written in the reactive tier has no result that a
+pattern reads, and is demanded whenever its instance is. A request that a
+handler makes waits for no demand: every request a handler makes is sent
+when its event's transaction commits, a `fetchJson` or a `generateText` as
+much as a `navigateTo`, and it is made once
+(`scheduler-and-serving-loop.md` §6.2). The staged changes are requests of
+a handler and differ from the others in what the commit does with them.
+A staged access change is a step of the commit of the event's
+transaction. `nameBlob` stages a document in the event's transaction: it
+has no request transaction and no completion, it is not a unit of the
+scheduler, and its document commits with the handler's other writes
+([Staged changes](#staged-changes)). The time gates are the
 ones the entries state, and they stay as they are: the claim of the fetch
 family goes stale after five seconds or `options.mutexTimeoutMs`
 (`MUTEX_STALE_AFTER` in `builtins/fetch-utils.ts`), and the turn claim of
@@ -927,6 +941,55 @@ family goes stale after five seconds or `options.mutexTimeoutMs`
 50 ms debounce of `wish` (`WISH_DEBOUNCE_MS` in `builtins/index.ts`) has no
 counterpart. `wish` is structural, its parts are evaluated on demand like
 any cone, and no action remains for a debounce to apply to.
+
+**The requester of a request.** A request that a handler makes is part of
+the event's transaction, which has the actor of the event. The request
+transaction of an operation of a plan acts as the principal of the scope
+key of the cone instance that staged the request
+(`scheduler-and-serving-loop.md` §6.2). A cone instance of space scope has
+no such principal. The table says, for each effectful built-in, whether it
+needs a requester and what it does without one. The column "Today" is the
+behavior of a run on a serving runtime that carries no principal, by
+source. *Assumed:* the compiled design keeps each row's behavior, and
+where a row has none the request is refused, as
+`scheduler-and-serving-loop.md` §9.3 refuses an `inSpace` instantiation
+by a computation of space scope. A refused request has the outcome that a
+failed egress ceiling has for an operation of a plan: the request is not
+made, and the operation's result takes the refusal as an error state.
+The question is with the project owner (the continuation plan, question
+45, which this extends).
+
+| Built-in | Needs a requester for | Today, with no principal | Compiled design, at space scope |
+| --- | --- | --- | --- |
+| The fetch family, `fetchProgram` | Nothing. A request to a protected first-party route is signed with the runtime's identity, not a user's | The request is made. The identity of the run is used only to address the result stores at the scope the input read touched (`fetchBuiltin` in `builtins/fetch.ts`, `fetchProgram` in `builtins/fetch-program.ts`) | The request is made, with no principal |
+| `generateText`, `generateObject` | Nothing in the request. In enforcing modes the integrity gate of a tool call resolves a floor that names a concept against the runtime's ambient acting principal, which is not the principal of the run (`executeToolCalls` in `builtins/llm-dialog.ts`) | The request is made (`generateText` and `generateObject` in `builtins/llm.ts` use the run's identity only to address the result store) | The request is made, with no principal. *Assumed:* a tool call's gate resolves such a floor for no principal |
+| `llmDialog` | The actor of the `addMessage` event, which every turn has, because a turn starts from an event | Not reached: no turn starts without an event | Not reached, for the same reason |
+| `agent` | The requester's home space, whose queue lists the run, and the record, which is stored at user scope | Resolving the requester narrows the run's read scope to the user (`Runtime.homeSpacePrincipalFor` in `runtime/runner/src/runtime.ts`), so the node is evaluated per demanding principal. A run that still has no principal settles with an error and stages nothing (`agent` in `builtins/agent.ts`: "the agent request has no requesting identity whose home space could index its run") | The operation has user scope whatever the scope of the cone instance that computes its request: its unit exists per principal that demands its result, and its request transaction acts as that principal. With no demanding principal it is not requested |
+| `sqliteQuery`, same space, no `readClearance` | Nothing | The request is made | The request is made, with no principal |
+| `sqliteQuery`, a database in another space, or with `readClearance` | The reader: the other space admits the read for the reader, and a clearance read filters rows for the reader | The result is forced to user scope or narrower (`narrowestScope` in `sqliteQuery`, `builtins/sqlite-builtins.ts`). A served run on a database in another space with no principal throws ("cross-space served queries require a complete scoped reader identity"), and a clearance read with no reader fails the query (`computeRowLabelRead` in `builtins/sqlite/row-label-read.ts`) | The operation has user scope, or session scope where the result is declared so, as for `agent`. With no demanding principal it is refused |
+| `navigateTo` | The session that fired the event: the intent is appended to that session's effects document, and the result is a session-scoped cell | A served run with no event context, or with an event that no client session fired, throws (`servedNavigate` in `builtins/navigate-to.ts`) | The operation has session scope. A request that is not a consequence of an event a client fired is refused, which is the boundary's declared rule ([`navigateTo`](#navigateto)) |
+| `compileAndRun`, compilation | Nothing | The request is made; the run's identity addresses the result stores (`compileAndRun` in `builtins/compile-and-run.ts`) | The request is made, with no principal. The instantiation half follows the rule for an instantiation |
+| `cellFromUrl`, resolution | Nothing | The resolution is made (`builtins/cell-from-url.ts` reads no principal) | The request is made, with no principal |
+| The staged changes | The actor of the event | Not reached: each is legal in a handler only | Not reached |
+
+Two entries that are not effect requests read a principal as well.
+`sqliteDatabase` writes the `owner` of its handle once, from the acting
+principal of the transaction that first writes the handle, and a
+transaction with no principal writes a handle with no owner, which stays
+without one ([`sqliteDatabase`](#sqlitedatabase)). The home-space targets
+of `wish` resolve against the demanding principal and make the output
+user-scoped, and a run with no principal resolves none of them
+(`homeSpaceUserDID` in `builtins/wish.ts`).
+
+**The refused globals.** `language-subset.md` §9.11 refuses `Promise`,
+`fetch`, timers, and `structuredClone` among others. This inventory has a
+counterpart for two of the four. `fetch` is replaced by the fetch family,
+which is class B. A timer is replaced by the clock of
+[`wish`](#wish), which is class A: a reference to a clock cell that the
+runtime writes. `Promise` has no counterpart: a function body is
+synchronous, and the result of an effect is read as the fields `pending`,
+`result`, and `error` of the boundary's result. `structuredClone` has no
+counterpart in this inventory.
 
 ### `fetchBinary`, `fetchText`, `fetchJson`, `fetchJsonUnchecked`
 
@@ -1239,7 +1302,10 @@ any cone, and no action remains for a debounce to apply to.
   tool names, and `progress` is a boolean. `resultSchema` and
   `maxConfidentiality` are read in full. No entry of `inputs` is
   followed.
-- **New design:** class B.
+- **New design:** class B. The operation has user scope, because the
+  request needs a requester
+  ([Effectful built-ins](#effectful-built-ins), "The requester of a
+  request").
 - **Label rule:** the request slots are the task text, the tool names, the
   result schema, and the *identity* of each input. The record carries links,
   so input values cross the boundary by reference and are labeled where the
@@ -1296,7 +1362,11 @@ any cone, and no action remains for a debounce to apply to.
   cells, the table declarations, and the operands that are hashed and
   not sent.
 - **New design:** class B. It is the model for a declared label rule at a
-  boundary, because it already has one.
+  boundary, because it already has one. A query on a database in another
+  space, or with `readClearance`, needs a reader and has user scope or a
+  narrower one
+  ([Effectful built-ins](#effectful-built-ins), "The requester of a
+  request").
 - **Label rule:** the request slots are the statement, the parameters, the
   handle, `reactOn`, and the reader. The result's enumeration carries the
   request label. Each column carries the label its table schema declares,
@@ -1328,8 +1398,9 @@ any cone, and no action remains for a debounce to apply to.
   target and nothing of its content. Nothing is followed.
 - **New design:** class B, as a client-enacted effect. It is the one
   effect a client enacts. A client enacts it from its speculative run of
-  the handler that requests it, and the navigation is reconciled with the
-  server's result as it is today: `deferSealedEffects` in
+  the event, in the handler or in a derivation that follows from it, and
+  the navigation is reconciled with the server's result as it is today:
+  `deferSealedEffects` in
   `runtime/runner/src/speculation/overlay-destination.ts` enacts a
   speculative run's effects of kind `navigateTo` and of no other kind. A
   client requests no other effect.
@@ -1487,23 +1558,55 @@ any cone, and no action remains for a debounce to apply to.
 - **Does:** publishes a handle `{ id, tables, scope, owner, rev }` for a
   database. It does not create the database file.
 - **Reads:** its options by value, and its own prior output. It also reads
-  the acting principal, which is ambient.
+  the acting principal of the run (`sqliteRunActingPrincipal` in
+  `builtins/sqlite-builtins.ts`): the runtime's user on a client, and on a
+  serving runtime the actor the run carries, never the service's own
+  identity.
 - **Writes and state:** one handle cell with cause
   `{ sqliteDatabase: { result: cause } }` at the author-declared scope. The
   `owner` is minted once from the acting principal of the first run and
-  never changed. Table labels merge grow-only across re-derivations
-  (`growOnlyMergeDbTables`).
+  never changed. A first run on a serving runtime that carries no actor
+  mints no owner, and the handle stays without one: a rule that names the
+  owner of the database then admits nobody. Table labels merge grow-only
+  across re-derivations (`growOnlyMergeDbTables`).
 - **CFC:** the handle carries the per-column label declarations that queries
   and writes later enforce.
 - **Execution:** computation; listed as replayable although it reads ambient
   identity and its own prior output.
-- **New design:** class C. It declares a state cell of kind SQLite, in the
-  same family as the cell constructors below: it receives a causal
-  identifier, is written when first assigned, and has no request. Its
-  identifier must not depend on the inputs document, so that a change to the
-  table declarations does not name a different database.
+- **New design:** class C. It is a declaration, in the same family as the
+  cell constructors below: it receives a causal identifier, its handle is
+  written when first assigned, and it has no request. The plan records it
+  as an `Operation` with no request, whose state is the handle
+  (`plan-and-label-templates.md` §1.1 and §3.14 have the form of the
+  record). Its identifier must not depend on the inputs document, so that
+  a change to the table declarations does not name a different database:
+  it derives from the name of the variable the declaration is assigned to
+  and the `within` steps of the declaration, as a state cell's does (open
+  question 8).
+- **Where it is legal.** In the reactive tier only, as the initializer of
+  a `const` of a pattern body, like a cell declaration. It is not legal
+  at module scope, where no instance exists to name it, and not in a
+  function body: no body in the corpus calls it
+  ([What the corpus calls inside bodies](#what-the-corpus-calls-inside-bodies)),
+  and a body would have to name the same database on every evaluation.
+  *Assumed;* `language-subset.md` §4.7 owns the row.
+- **Operands.** The options are read by value and in full: `tables`,
+  with the label rules the declarations hold. They must be constants of
+  the plan, so that the table declarations are known to the compiler. The
+  scope is not an operand: it is the scope the declared type of the
+  binding gives, `PerUser<SqliteDb>` for example, as for a cell. No
+  operand is read for identity. The value the declaration yields is a
+  handle: `db.query(...)` reads it by value as an operand of
+  the request ([`sqliteQuery`](#sqlitequery), "Request operands"), and
+  `db.exec(...)` is a write to it.
 - **Label rule:** none of its own. The table declarations are constants of
-  the plan. The `owner` is state written once.
+  the plan. The `owner` is state written once, from the acting principal
+  of the transaction that first writes the handle. *Assumed:* where that
+  transaction has no principal, which is the case for a declaration of
+  space scope first written in a derivation transaction, the handle has
+  no owner and stays without one, as today
+  ([Effectful built-ins](#effectful-built-ins), "The requester of a
+  request").
 
 ### `SqliteDb.exec`
 
@@ -1563,7 +1666,7 @@ Three facts about the builder explain most of the entries.
 | `PatternFactory.asScope(scope)`, `.inSpace(space, options)` | Derived copies of a pattern factory that set the instance's scope, or its target space with grants (`noteDerivedCopy`). | C, as modifiers of an instantiation. |
 | `handler(fn)` | Mints a `javascript` module with `wrapper: "handler"` (`handlerInternal` in `builder/module.ts`). Applying the factory to its state creates a stream and a node, and returns the stream. | C. Binding a handler to state is legal in the reactive tier and in function bodies. |
 | `action(fn)` | Throws at run time. The transformer lowers it to `handler(fn)(captures)` (`base/ts-transformers/src/closures/utils/capture-scaffold.ts`). | C. A handler whose state is its captures. |
-| `computed(fn)` | The transformer lowers it to `lift(fn)(captures)` (`base/ts-transformers/src/lift/transformer.ts`). | C. Promoted to the reactive tier when its body is a pure expression. |
+| `computed(fn)` | The transformer lowers it to `lift(fn)(captures)` (`base/ts-transformers/src/lift/transformer.ts`). | C. Promoted to the reactive tier when its body meets the criterion of `language-subset.md` §6.1: a pure expression that, among other conditions, instantiates no pattern and binds no handler. |
 | `lift(fn)` | Mints a `javascript` module factory; calling the factory creates a node. | C. |
 | `assert(fn)` | A `javascript` node that returns `{ ok, source, parts }`; used by pattern tests. | C. |
 | Inline JSX event handlers | The transformer lowers `onClick={() => ...}` to a handler with captures. | C. A handler binding, in the reactive tier and in function bodies. |
@@ -1630,8 +1733,9 @@ export it and the pattern corpus does not call it.
 | `groupByWithPattern`, `keyByWithPattern` | A `map` node and a `collectionIndex` node. | D. |
 | `lookup(key)`, `keys()`, `keyEntries()` | Plain reads of an index; no node. | A: reactive reads of an index. |
 | `reduce(fn, initial)`, `findIndex(fn)` | Mint a `lift` inline and apply it to the cell, so they throw inside a running action and the lift has no content-addressed identity. | A: reactive constructs. See their entries. |
-| `db.query(sql)` | Creates a `sqliteQuery` node. | B: sugar for `sqliteQuery`. |
-| `key(...)`, `asSchema(...)`, `get()`, `set(...)`, `push(...)`, `send(...)`, and the other transactional methods | No node. | Cell operations. `language-subset.md` owns the method surface. |
+| `db.query(sql)` | Creates a `sqliteQuery` node. | B: sugar for `sqliteQuery`, and legal where a request of `sqliteQuery` is: in the reactive tier, and in a `handler` or an `action`. |
+| `key(...)`, `get()`, `set(...)`, `push(...)`, `send(...)`, and the other transactional methods | No node. | Cell operations. `language-subset.md` owns the method surface. |
+| `asSchema(...)` | No node; returns the cell under another schema. | D. It is not part of the language (`cell:unsupported-method`, `language-subset.md` §4.7). |
 
 The class A rows hold in the reactive tier. In a function body a collection
 method called on a cell handle, such as `aCell.map(...)`, is a compile
@@ -1692,7 +1796,7 @@ throws outside the frames named.
 | Name | Legal in | Does |
 | --- | --- | --- |
 | `grantSpaceAccess(target, principal, level)`, `revokeSpaceAccess(target, principal)` | handler | Stage a change to a space's access list on the handler's frame. Each space's staged changes commit as a commit of the list alone, ahead of the handler's writes, and where they commit depends on the runtime (`settleSpaceAccessChanges` in `builder/space-access-change.ts`; [space access changes](../../features/space-access-changes.md)). The two arrangements are described below the table. |
-| `nameBlob(target, blobId, name)` | handler | Names a blob (`builder/blob-name.ts`). |
+| `nameBlob(target, blobId, name)` | handler | Names a blob: stages a content-addressed document under the given name in the handler's transaction (`nameBlob` in `builder/blob-name.ts`). |
 
 The staged access changes commit in one of two arrangements, which
 `settleSpaceAccessChanges` chooses after the handler body returns.
@@ -1713,15 +1817,32 @@ The staged access changes commit in one of two arrangements, which
 A client's speculative run of a handler that a serving runtime runs for the
 same event commits no access change.
 
-- **New design:** class B. Each is an effect requested from a handler whose
-  result the handler does not read. The access changes are a commit of
-  their own because the memory server admits a change to an access list
-  only as the single operation of a commit (the header comment of
-  `builder/space-access-change.ts`). On a serving runtime, where execution
-  is authoritative in the compiled design, that commit is already the first
-  step of the wave's commit, and the batches an `inSpace` instantiation
-  writes to other spaces are steps of the same commit. Whether the two
-  become one defined sequence of commits across spaces is open question 3.
+- **New design:** class B. Each is requested from a handler, and the
+  handler does not read a result. The two kinds differ in what the commit
+  does with them.
+  - The access changes are a commit of their own because the memory
+    server admits a change to an access list only as the single operation
+    of a commit (the header comment of `builder/space-access-change.ts`).
+    On a serving runtime, where execution is authoritative in the compiled
+    design, that commit is already a step of the wave's commit, and the
+    batches an `inSpace` instantiation writes to other spaces are steps
+    of the same commit. *Assumed:* the commit of a cause that crosses
+    spaces is one ordered sequence of five steps, which is not atomic:
+    the genesis commit of each space a request of the transaction
+    creates; the allocation record of each such space; the staged changes
+    to access lists, in the order the handler staged them; the batch of
+    writes for each other space; and the home writes
+    (`scheduler-and-serving-loop.md` §9.4,
+    `plan-and-label-templates.md` §3.14). The access changes are the
+    third step. They come after the first two because a handler can stage
+    a change to the access list of a space it creates in the same
+    invocation, and before every batch of writes because a grant can be
+    what admits a batch. The sequence is with the project owner (open
+    question 3).
+  - `nameBlob` is not a step of that sequence. It stages a document in
+    the event's transaction, and the document commits with the handler's
+    other writes to its space. It has no request transaction and no
+    completion, and it is not a unit of the scheduler.
 - **Request operands:** `target` is a reference in all three calls. Only
   the space it lives in is taken, from the identity of the cell
   (`spaceOfTarget` in `builder/space-access.ts`), and a target that is not
@@ -1738,7 +1859,7 @@ same event commits no access change.
 | --- | --- | --- |
 | `patternTool(pattern, extraParams?)` | Returns the plain descriptor `{ pattern, extraParams }`; no node. A model built-in instantiates the pattern at tool-call time. | D. Replaced by a pattern closure: an inline `pattern(...)` that captures the bound values, which the compiler binds as private parameters (`language-subset.md`, §4.4.2). |
 | `byRef(name)` | A factory for a registered built-in by name. Not used in the pattern corpus. | D. Built-ins are not addressed by name from authored code. |
-| `uiVariant(piece, kind)` | Returns a view node for `cf-render`; no graph node. | Unchanged; a pure function. |
+| `uiVariant(piece, kind)` | Returns the view node `<cf-render variant={kind} $cell={piece} />`; no graph node (`uiVariant` in `builder/built-in.ts`). | Unchanged; a pure function. It is view-node construction in value code, the same as writing the element in JSX, and is legal wherever JSX is: in the reactive tier and in a function body. It reads nothing of `piece`: the operand is passed on unchanged into the node's `$cell` property, so it is observed for `identity`. `kind` is read by `value`. |
 | `nameInstance(value, name)` | Records an instance name consumed by `factoryFromPattern`; emitted by the transformer only with the `instanceNames` option. | D. The compiler records instance names in the plan. |
 
 ### Pure functions and constants
@@ -1754,6 +1875,40 @@ vocabulary of `commonfabric/cfc` (`cfcAtom`, `cfcPattern`, `exchangeRule`,
 `exchangeRules`, `v`, and the constant tables in `base/api/cfc.ts`).
 `equals` is not among them: it compares identity and is a context read, as
 `plan-and-label-templates.md` §3.16 lists it.
+
+The table says where a call of each is legal and what the call observes of
+its operands, which is what `language-subset.md` §4.4 and §5.1 need for a
+row and `footprint-analysis.md` §3.4 for a transfer rule. The tiers are
+those of `language-subset.md`: M is module scope, R the reactive tier, and
+F a function body. A call in tier R is a pure function of the values it
+is given, like a call of a standard-library function. Each function is
+pure: none reads a frame, a transaction, or a cell, and none writes. The
+column "Today" is by source. The tiers are *assumed*, since
+`language-subset.md` owns where a call is legal: each function is given
+every tier in which its operands can exist.
+
+| Function | Tiers | Observes of its operands | Today |
+| --- | --- | --- | --- |
+| `valueEqual(a, b)` | M, R, F | Both operands by `value`, over the whole subtree of each. It follows no link and resolves no cell, so at a position that holds a handle or a reference it compares the two references as they are stored: `identity`, not resolved | Deep structural equality by hash, with `Object.is` for primitives (`valueEqual` in `base/data-model/src/comparison/valueEqual.ts`) |
+| `getEntityId(value)` | R, F | A handle or a reference operand by `identity`, not resolved: the identifier and path of the link it holds. Nothing the link leads to is read. A string operand by `value` | `parseLink` on the operand, then the entity reference of the link's identifier, or one derived from the identifier and the path (`getEntityId` in `runtime/runner/src/create-ref.ts`) |
+| `entityRefToString(ref)` | M, R, F | The operand by `value`. It is an entity reference, which is plain data | Formats the reference (`entityRefToString` in `base/data-model`) |
+| `renderCellReference(link, context?)` | M, R, F | Both operands by `value`. Each is a plain record of a space, an identifier, a path, and a scope, and not a handle: the function resolves nothing and reads no cell | Formats the record as a cell address relative to the context (`renderCellReference` in `runtime/runner/src/cell-reference.ts`) |
+| `isWellFormedDID(value)`, `parseDID(value)` | M, R, F | The operand by `value` | String parsing (`base/identity`) |
+| `toCompactDebugString(value, options?)`, `toIndentedDebugString(value, options?)`, the `debugStr` tag | M, R, F | Every operand by `value`, over its whole subtree: rendering reads all of it, as a template literal reads a substitution | Render a value as text (`base/data-model/src/value-debug/`) |
+| `schema(...)`, `table(...)`, `cfLink(...)`, the `cfSqlite` helpers, `cfcAtom`, `cfcPattern`, `v`, the Fabric value classes | M, R, F | Every operand by `value`, in full. Each constructs plain data from plain data | Plain functions over data |
+| `AuthSchema`, `WebhookConfigSchema`, the constant tables of `base/api/cfc.ts` | M, R, F | Constants: no operand | Frozen data |
+| `exchangeRule(...)`, `exchangeRules([...])` | M | Operands by `value`, which are constants | Freeze and return a rule declaration, which the CFC authoring contract requires to be exported and static (`language-subset.md` §3.2) |
+| `dataFile(path)` | M, R, F | `path` by `value`. *Assumed:* the path is a string literal, so that the files a program reads are known when it is compiled. The result is a constant of the program and carries no label of an input | A per-module binding that returns the text of a file attached to the program (`dataFile` in `builder/factory.ts`) |
+| `multiUserTest(descriptor)` | M, in a test file | The operand is returned unchanged | The identity function (`builder/factory.ts`) |
+
+Two rules cover the table for the footprint analysis. A function of the
+first kind reads its operands by `value` over the whole subtree, with
+`identity` at each position of handle or reference type inside it; every
+row but `getEntityId` is of this kind. `getEntityId`, with
+[`uiVariant`](#tool-and-factory-helpers) for its first operand, is of the
+second kind: it observes a handle or a reference operand for `identity`
+and reads nothing below it. `toSchema<T>()` is not in the table: it is a
+compile-time intrinsic with a type argument and no operand.
 
 In the grammar of `language-subset.md` §3.2, a module-scope *builder* is a
 call that takes a callback and yields a definition the compiler hoists and
@@ -2055,7 +2210,9 @@ Sixteen sites bind a handler inside JSX that a computed returns:
 `patterns/apps/base/person.tsx` (7), `patterns/apps/base/family-member.tsx`
 (6), and `patterns/apps/store-mapper/store-mapper.tsx` (3). Eleven more
 inline JSX event handlers sit inside a computed. All are legal and need no
-rewrite.
+rewrite. A `computed` that binds a handler is not promoted
+(`language-subset.md` §6.1), so each of these bindings is one made while
+a function body runs and follows the rule for such a binding.
 
 All sixteen have the form `h({ state })`, where `h` is a handler defined at
 module scope: `removeAddress({ person, index: i })` inside an array `map`,
@@ -2358,7 +2515,12 @@ synthesized pattern.
   `runtime/runner/src/runtime.ts`). The ruling does not mention it, and
   the corpus has `inSpace` in handlers only. The identifiers are those of
   a handler's `inSpace` request, with the computation's identity of the
-  instance in place of the handling.
+  instance in place of the handling. The question is with the project
+  owner (the continuation plan, question 50). A computation of space
+  scope has no acting principal, and its `inSpace` instantiation is
+  refused; what crosses to the other space when a later evaluation
+  changes the argument of such an instance or tears it down is
+  `scheduler-and-serving-loop.md` §9.3.
 - **Against today.** An instance is named by its place today as well, and
   its argument carries the join of the computation's transaction, which
   is the body's template. What differs is that today a synthesized
@@ -2556,7 +2718,8 @@ result pattern and runs as it would in a pattern body.
   transaction.
 - **Clients.** A client's speculative run of the handler stages the
   request and requests no effect. `navigateTo` is the one exception: a
-  client enacts it from its speculative run
+  client enacts it from its speculative run of the event, in the handler
+  or in a derivation that follows from it
   ([`navigateTo`](#navigateto)).
 
 ### Context reads
@@ -2857,7 +3020,9 @@ all.
 | `db.query` | B |
 | `SqliteDb.exec` | a cell write |
 | `eventKey`, `currentPrincipal`, `principalOf`, `principalsOf`, `profileOwnerOf`, `resultOwnerOf`, `linksOf`, `spaceOf`, `spaceAccess`, `spaceAccessOf`, `spaceMembers`, `spaceDeleted`, `equals`, `equalLinks`, `getPatternEnvironment` | context reads |
-| `grantSpaceAccess`, `revokeSpaceAccess`, `nameBlob` | B |
+| `grantSpaceAccess`, `revokeSpaceAccess` | B (steps of the event's commit) |
+| `nameBlob` | B (a document staged in the event's transaction, with no transactions of its own) |
+| `uiVariant` | unchanged, a pure function |
 | `patternTool`, `byRef`, `nameInstance`, `cell` | D |
 | Every transformer-emitted form | D |
 
@@ -2870,8 +3035,11 @@ instantiation.
 
 ## Decisions
 
-The project owner has decided the following. The entries above already
-reflect them.
+The project owner has decided the following, except where an entry says
+that it is stated by the documents and is not a ruling. The rulings are
+those of the "Decided" list of the
+[continuation plan](../../plans/compiled-pattern-language.md). The entries
+above already reflect them.
 
 - **Calls in function bodies.** Five kinds are legal: instantiating a
   pattern, creating a cell, requesting an effectful built-in, reading
@@ -2939,7 +3107,9 @@ reflect them.
   the result reads as if the data had already existed.
 - **`streamData` and `llm` are removed.**
 - **`navigateTo` requires a result cell,** so an instance that is only
-  navigated to is an instantiated pattern.
+  navigated to is an instantiated pattern. This entry is stated by this
+  document, from what `navigateTo` does today, and is not a ruling of the
+  project owner.
 - **`navigateTo` is the one effect a client enacts.** A client enacts it
   from its speculative run, reconciled with the server's result as it is
   today. A client requests no other effect.
@@ -2954,7 +3124,13 @@ reflect them.
   computation writes for an instance it makes, drops that write alone:
   the target keeps what is stored, and the rest of the transaction
   commits.
-- **`asScope` and `inSpace`** are part of the instantiation syntax.
+- **`asScope` and `inSpace`** are part of the instantiation syntax. This
+  entry is stated by the documents (`language-subset.md` §4.4 and
+  `plan-and-label-templates.md` §3.14) and is not a ruling of the project
+  owner. Where the two modifiers are legal is open in two cases: on a
+  statically resolved callee in the reactive tier (the continuation plan,
+  question 17) and on an instantiation in a computation (its question
+  50).
 - **Migration is out of scope** for this document.
 
 ## Open questions
@@ -2985,13 +3161,15 @@ with the project owner names its entry in the
    before the handler's transaction commits, and on a serving runtime as
    the first step of the wave's commit
    ([Staged changes](#staged-changes)). `scheduler-and-serving-loop.md`
-   §9.4 proposes one ordered sequence for both, which is not atomic: the
-   access changes, then the batches for other spaces, then the home
-   writes. The record of a space that an `inSpace` request creates has
-   its place in that sequence by ruling: it commits before the step in
-   the foreign space. The sequence itself is with the project owner
-   (question 15 of the plan). *Assumed:* the access change keeps
-   committing first until the two are unified in one cross-space commit.
+   §9.4 proposes one ordered sequence for both, which is not atomic. It
+   has five steps: the genesis commit of each space a request creates,
+   the allocation record of each such space, the staged access changes,
+   the batches for other spaces, and the home writes. The record of a
+   space that an `inSpace` request creates has its place in that
+   sequence by ruling: it commits before the step in the foreign space.
+   The sequence itself is with the project owner (question 15 of the
+   plan). *Assumed:* that sequence, with the access changes third, ahead
+   of every batch of writes and of the home writes.
 4. **The label of a factory value.** Not open.
    `plan-and-label-templates.md` §3.21 and §3.15 state it, the identity
    label of a stream bound from a received handler included, and it is
@@ -3001,11 +3179,14 @@ with the project owner names its entry in the
    state or handlers over plain values needs the compiler to know whether a
    collection's elements are stored inline or as links. A primitive element
    type is always inline. A record element type is a link when a handler
-   wrote the list and inline when a computation returned it, and the type
-   does not say which. `language-subset.md` §4.4.1 decides it statically,
-   from the element type and from where the collection comes from: a
-   record-typed collection is plain when the program computes it and not
-   plain when it is read from the pattern's input or from a cell. The case
+   wrote the list, or when a computation passed the records on unchanged,
+   and inline when a computation built the records, and the type does not
+   say which. `language-subset.md` §4.4.1 decides it statically, from the
+   element type and from where the collection comes from: a record-typed
+   collection is plain where the program built its records, which for the
+   result of a body is where the body's record has no reference at the
+   element path, and not plain when it is read from the pattern's input
+   or from a cell. The case
    that rule cannot decide is a stored array that holds inline records
    because a computation elsewhere produced it. *Assumed:* the runtime
    puts the element's cone in an error state there, as
@@ -3017,7 +3198,11 @@ with the project owner names its entry in the
    write whatever it can name by link. What such a call serializes was in
    no recorded request ([Effectful built-ins](#effectful-built-ins)).
    *Assumed:* out of scope for the language, and specified with the model
-   boundary's declared rule. The identifier should derive from the turn
+   boundary's declared rule: the boundary's own transactions label what a
+   language-model built-in sends that no checked request held, which is
+   the results of a tool loop, a system prompt rendered again from live
+   context after the commit, and the live transcript of a dialog
+   (question 51 of the plan). The identifier should derive from the turn
    and the call's position. No rule gives the label of the argument a
    model supplies to a pattern closure it was given as a tool, or of the
    result (question 8 of the plan).
@@ -3025,8 +3210,11 @@ with the project owner names its entry in the
    fold is recomputed, and only its label is maintained incrementally.
 8. **`sqliteDatabase` identity.** Its handle is keyed on the whole cause,
    including the inputs document, so changing the table declarations names
-   a different handle today. *Assumed:* as a state cell it takes the
-   identifier of the variable it is assigned to.
+   a different handle today. *Assumed:* its identifier derives from the
+   variable it is assigned to, as a state cell's does. The plan records
+   the declaration as an `Operation` with no request, which has a `name`
+   and `within` steps for that purpose (`plan-and-label-templates.md`
+   §1.1).
 9. **Document inconsistencies found.** They do not affect the design and
    are recorded for correction where the documents are owned:
    - the server-execution documents call the fetch family `fetchData`,
@@ -3066,9 +3254,10 @@ with the project owner names its entry in the
     author writes `.for(cause)`. *Assumed:* a `lift` or a `computed` does
     not request an effect directly, so an effect that depends on computed
     data is written in a pattern the computation instantiates, or in the
-    reactive tier. Both are question 38 of the plan. *Assumed,* and not in
-    that question: `inSpace` is legal on the callee of such an
-    instantiation, as it is today.
+    reactive tier. Both are question 38 of the plan. *Assumed:* `inSpace`
+    and `asScope` are legal on the callee of such an instantiation, as
+    they are today and as in a handler, which is question 50 of the
+    plan.
 12. **`.for(tag)` on an instantiation in a handler.** *Assumed:* the tag
     names the same instance from different events, as
     `plan-and-label-templates.md` §1.3 has it. Today the instance of such
