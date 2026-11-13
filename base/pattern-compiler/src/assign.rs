@@ -751,7 +751,9 @@ impl<'a> Resolver<'_, 'a> {
         wanted: TypeId,
         depth: u32,
     ) -> Verdict {
-        if !kind.is_cell() {
+        // The second row of §7.5.2 lists the cell kinds a value stands
+        // for. `AnyCell` is not among them, and neither is a stream.
+        if !kind.is_cell() || kind == HandleKind::Any {
             return self.refusal(
                 Class::ValueForStream,
                 from,
@@ -872,6 +874,25 @@ impl<'a> Resolver<'_, 'a> {
                 ),
                 other => other,
             },
+            // A cell of `T` given where a cell of a view of `T` is
+            // declared (§7.5.1): the value type goes forward and not in
+            // reverse, and the position is declared `ReadonlyCell` of the
+            // view.
+            HandleKind::Cell
+                if matches!(self.shape(wanted), Shape::Object(..))
+                    && forward() == Verdict::Yes
+                    && matches!(reverse(), Verdict::No(..)) =>
+            {
+                self.mismatch(
+                    Class::Handle,
+                    from,
+                    to,
+                    &format!(
+                        "a cell that can be read and written has to hold the same type, and the declared type is a view of the type the cell holds. A write through the view would store a record without the other properties: declare the position `ReadonlyCell<{}>`, or the type the cell has where the body writes through it",
+                        self.display(wanted)
+                    ),
+                )
+            }
             HandleKind::Cell => match forward().and(reverse) {
                 Verdict::No(..) => self.mismatch(
                     Class::Handle,
@@ -1411,6 +1432,9 @@ impl<'a> Resolver<'_, 'a> {
         call: &CallExpression<'a>,
         to: TypeId,
     ) -> Option<Verdict> {
+        if let Some(verdict) = self.generic_callback_against(module, call, to) {
+            return Some(verdict);
+        }
         let function = call.arguments.first().and_then(FunctionLike::of_argument)?;
         let annotated = match function {
             FunctionLike::Arrow(arrow) => arrow.return_type.is_some(),
@@ -1453,6 +1477,117 @@ impl<'a> Resolver<'_, 'a> {
             }
         };
         let returns = crate::infer::returned_expressions(function);
+        if returns.is_empty() {
+            return None;
+        }
+        Some(all(returns.into_iter().map(|returned| {
+            self.check_against(module, returned, expected)
+        })))
+    }
+
+    /// A call of an authored generic function whose result type is a type
+    /// parameter `U` or an array of it, with one argument a function
+    /// written in place where the function declares a callback that
+    /// returns `U` (§7.3, "Inference at a call"). The expected type binds
+    /// `U`, and the body of the callback is checked against it. `None`
+    /// where the call is of another form.
+    fn generic_callback_against(
+        &self,
+        module: usize,
+        call: &CallExpression<'a>,
+        to: TypeId,
+    ) -> Option<Verdict> {
+        use crate::module::symbol_of;
+        let Expression::Identifier(identifier) = unwrap(&call.callee) else {
+            return None;
+        };
+        if call.type_arguments.is_some() {
+            return None;
+        }
+        let symbol = symbol_of(self.parsed(module)?.semantic.scoping(), identifier)?;
+        let (home, symbol) = self.origin(module, symbol)?;
+        let parsed = self.parsed(home)?;
+        let scoping = parsed.semantic.scoping();
+        let function = match parsed
+            .semantic
+            .nodes()
+            .kind(scoping.symbol_declaration(symbol))
+        {
+            oxc_ast::AstKind::Function(function) => FunctionLike::Function(function),
+            oxc_ast::AstKind::VariableDeclarator(declarator) => {
+                declarator.init.as_ref().and_then(FunctionLike::of)?
+            }
+            _ => return None,
+        };
+        let (annotation, type_parameters) = match function {
+            FunctionLike::Arrow(arrow) => (
+                arrow.return_type.as_deref()?,
+                arrow.type_parameters.as_deref()?,
+            ),
+            FunctionLike::Function(function) => (
+                function.return_type.as_deref()?,
+                function.type_parameters.as_deref()?,
+            ),
+        };
+        // The type parameter the result type names, and whether the
+        // result is an array of it.
+        let parameter_of = |ty: &TSType<'a>| match ty {
+            TSType::TSTypeReference(reference) if reference.type_arguments.is_none() => {
+                match &reference.type_name {
+                    TSTypeName::IdentifierReference(name) => {
+                        let symbol = symbol_of(scoping, name)?;
+                        type_parameters
+                            .params
+                            .iter()
+                            .any(|parameter| parameter.name.symbol_id.get() == Some(symbol))
+                            .then_some(symbol)
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        let (result, expected) = match &annotation.type_annotation {
+            TSType::TSArrayType(array) => {
+                let present = self.present(to);
+                let Shape::Array(element) = self.shape(present) else {
+                    return None;
+                };
+                (parameter_of(&array.element_type)?, element)
+            }
+            other => (parameter_of(other)?, to),
+        };
+        // The one argument that is a function written in place where the
+        // function declares a callback whose result is the parameter.
+        let mut callbacks = Vec::new();
+        for (position, formal) in function.params().items.iter().enumerate() {
+            let Some(TSType::TSFunctionType(declared)) = formal
+                .type_annotation
+                .as_ref()
+                .map(|annotation| &annotation.type_annotation)
+            else {
+                continue;
+            };
+            if parameter_of(&declared.return_type.type_annotation) != Some(result) {
+                continue;
+            }
+            let written = call
+                .arguments
+                .get(position)
+                .and_then(FunctionLike::of_argument)?;
+            let annotated = match written {
+                FunctionLike::Arrow(arrow) => arrow.return_type.is_some(),
+                FunctionLike::Function(function) => function.return_type.is_some(),
+            };
+            if annotated || written.is_async() || written.is_generator() {
+                return None;
+            }
+            callbacks.push(written);
+        }
+        let [callback] = callbacks.as_slice() else {
+            return None;
+        };
+        let returns = crate::infer::returned_expressions(*callback);
         if returns.is_empty() {
             return None;
         }

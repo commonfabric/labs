@@ -615,3 +615,90 @@ fn expected_type_reaches_a_function_written_where_a_function_type_is_expected() 
         "expected \"live\" | \"retired\", found \"gone\"",
     );
 }
+
+// ----- The second round of corrections to §7.5.1, §7.2, and §7.5 -----
+
+const MESSAGE: &str = "interface Message { body: string; sentAt: number; reactions: string[] }\n";
+
+#[test]
+fn cell_is_assignable_to_a_read_only_cell_of_a_view_and_not_to_a_cell_of_one() {
+    assert_accepted(&format!(
+        "{MESSAGE}function read(cell: ReadonlyCell<{{ body: string }}>) {{ return cell.get().body; }}\n\
+         function run(message: Cell<Message>) {{ return read(message); }}\n"
+    ));
+    assert_refused(
+        &format!(
+            "{MESSAGE}function write(cell: Cell<{{ body: string }}>) {{ return cell.get().body; }}\n\
+             function run(message: Cell<Message>) {{ return write(message); }}\n"
+        ),
+        "declare the position `ReadonlyCell<{ body: string }>`",
+    );
+}
+
+#[test]
+fn any_cell_takes_every_cell_kind_and_a_stream_and_is_assignable_to_any_cell_alone() {
+    assert_accepted(
+        "function id(cell: AnyCell<unknown>) { return cell; }\n\
+         function wide(cell: AnyCell<{ name: string }>) { return cell; }\n\
+         function run(w: WriteonlyCell<string>, c: ComparableCell<string>, o: OpaqueCell<string>, s: Stream<string>,\n\
+           any: AnyCell<{ name: string; price: number }>) {\n\
+           return [id(w), id(c), id(o), id(s), id(any), wide(any)];\n\
+         }\n",
+    );
+    assert_refused(
+        "function wide(cell: AnyCell<{ name: string }>) { return cell; }\n\
+         function run(cell: Cell<{ price: number }>) { return wide(cell); }\n",
+        "the property `name` is missing",
+    );
+    assert_refused(
+        "function read(cell: ReadonlyCell<string>) { return cell; }\n\
+         function run(cell: AnyCell<string>) { return read(cell); }\n",
+        "a AnyCell where a ReadonlyCell is declared",
+    );
+    assert_refused(
+        "function id(cell: AnyCell<unknown>) { return cell; }\n\
+         function run(db: SqliteDb) { return id(db); }\n",
+        "where a AnyCell is declared",
+    );
+}
+
+#[test]
+fn value_is_not_bound_by_reference_where_an_any_cell_is_declared() {
+    // §7.5.2, the second row, lists the cell kinds a value stands for, and
+    // `AnyCell` is not among them.
+    assert_refused(
+        "const Row = pattern<{ name: AnyCell<string> }, { n: number }>(() => ({ n: 1 }));\n\
+         const P = pattern<{ name: string }, { n: number }>(({ name }) => Row({ name }));\n",
+        "a value where a AnyCell is declared",
+    );
+}
+
+#[test]
+fn expected_type_reaches_the_callback_of_an_authored_generic_function() {
+    let each =
+        "function each<T, U>(rows: T[], build: (row: T) => U): U[] { return rows.map(build); }\n\
+                function once<U>(build: () => U): U { return build(); }\n";
+    assert_accepted(&format!(
+        "{TOPPING}{each}function a(rows: string[]): Topping[] {{ return each(rows, (name) => ({{ kind: \"mix\", name }})); }}\n\
+         function b(): Topping {{ return once(() => ({{ kind: \"plain\", name: \"a\" }})); }}\n"
+    ));
+    assert_refused(
+        &format!(
+            "{TOPPING}{each}function a(rows: string[]): Topping[] {{ return each(rows, (name) => ({{ kind: \"glazed\", name }})); }}\n"
+        ),
+        "found \"glazed\"",
+    );
+}
+
+#[test]
+fn optional_property_counts_by_its_declared_type_against_a_record_of_json_values() {
+    assert_accepted(
+        "function v(value: JSONValue) { return value; }\n\
+         function run(row: { name: string; note?: string; tags?: string[] }) { return v(row); }\n",
+    );
+    assert_refused(
+        "function v(value: JSONValue) { return value; }\n\
+         function run(row: { name: string; when?: Date }) { return v(row); }\n",
+        "expected JSONValue",
+    );
+}
