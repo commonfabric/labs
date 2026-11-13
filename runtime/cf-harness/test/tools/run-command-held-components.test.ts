@@ -36,8 +36,8 @@ const sandbox: SandboxRuntime = {
   runShell: () => Promise.resolve({ stdout: "", stderr: "", exitCode: 0 }),
 };
 
-/** A Loom manifest naming each of `refs` as one component. */
-const manifest = (refs: readonly string[]) => ({
+/** A Loom manifest naming each of `refs` as one component, plus `extra`. */
+const manifest = (refs: readonly string[], extra: object = {}) => ({
   ok: true,
   id: "loom.inspect",
   result: {
@@ -45,6 +45,7 @@ const manifest = (refs: readonly string[]) => ({
     manifest: {
       loom_id: "loom-38aa85ab0d3248da",
       title: "Invites",
+      ...extra,
       components: refs.map((ref, index) => ({
         component_id: `comp-${index}`,
         subject: { mode: "reference", ref },
@@ -110,8 +111,8 @@ describe("run_command: components a host names", () => {
    * Runs one `run_command loom.inspect` turn whose answer is `manifest(refs)`,
    * returning the tool message the model read and the engine.
    */
-  const inspect = async (refs: readonly string[]) => {
-    answer = manifest(refs);
+  const inspect = async (refs: readonly string[], extra: object = {}) => {
+    answer = manifest(refs, extra);
     const engine = new CfHarnessEngine({
       model: "gpt-5.4",
       sandboxRuntime: sandbox,
@@ -181,33 +182,61 @@ describe("run_command: components a host names", () => {
       .toContain(`of:${instanceId}`);
   });
 
+  it("holds Loom's stored of: spelling, and an address under any key", async () => {
+    const own = pieces.getSpace();
+    const { seen, engine } = await inspect(
+      [`pattern:${own}/of:${instanceId}`],
+      {
+        inbox: `pattern:${own}/${instanceId}`,
+        also: [`pattern:${own}/${instanceId}`],
+      },
+    );
+    expect(seen).not.toContain(instanceId);
+    expect(seen).not.toContain("pattern:");
+    const tokens = new Set(seen.match(/cfh:a:[A-Za-z0-9]+/g));
+    // one piece, one handle, wherever and however it was spelled
+    expect(tokens.size).toBe(1);
+    expect(resolveHandleToken(engine.handleTable!, [...tokens][0])?.ref)
+      .toContain(`of:${instanceId}`);
+  });
+
   it("withholds a component it cannot hold, saying why, and never its address", async () => {
     const foreign = (await Identity.generate()).did();
+    const own = pieces.getSpace();
     const { seen } = await inspect([
       `pattern:${foreign}/${instanceId}`,
-      `pattern:${pieces.getSpace()}/${plainId}`,
-      `piece:${pieces.getSpace()}/fid1:${"A".repeat(43)}`,
-    ]);
+      `pattern:${own}/${plainId}`,
+      `pattern:${own}/of:fid1:${"A".repeat(43)}`,
+    ], { also: [`pattern:${foreign}/${plainId}`] });
     expect(seen).not.toContain(instanceId);
     expect(seen).not.toContain(plainId);
     expect(seen).not.toContain("A".repeat(43));
     expect(seen).not.toMatch(/cfh:a:/);
-    expect(seen).toContain("foreign-space");
-    expect(seen.match(/not-a-pattern-instance/g)).toHaveLength(2);
+    expect(seen.match(/ref_unheld\\":\\"foreign-space/g)).toHaveLength(1);
+    expect(seen.match(/ref_unheld\\":\\"not-a-pattern-instance/g))
+      .toHaveLength(2);
+    expect(seen).toContain('{\\"unheld\\":\\"foreign-space\\"}');
   });
 
-  it("keeps a named slug, which is not an address", async () => {
-    const { seen } = await inspect([`pattern:${pieces.getSpace()}/invites`]);
-    expect(seen).toContain(`pattern:${pieces.getSpace()}/invites`);
-    expect(seen).not.toContain("ref_unheld");
+  it("keeps a named slug and the retired piece: spelling, which are not stored addresses", async () => {
+    const own = pieces.getSpace();
+    const { seen } = await inspect([
+      `pattern:${own}/invites`,
+      `piece:${own}/${instanceId}`,
+    ]);
+    expect(seen).toContain(`pattern:${own}/invites`);
+    expect(seen).not.toContain("unheld");
   });
 
-  it("verifies at most the limit's worth of components in one answer", async () => {
-    const ref = `pattern:${pieces.getSpace()}/${instanceId}`;
-    const { seen } = await inspect(
-      Array.from({ length: HELD_COMPONENT_LIMIT + 1 }, () => ref),
+  it("verifies at most the limit's worth of distinct pieces in one answer", async () => {
+    const own = pieces.getSpace();
+    const ids = Array.from(
+      { length: HELD_COMPONENT_LIMIT + 1 },
+      (_, index) => `fid1:${String(index).padStart(43, "B")}`,
     );
-    expect(seen).not.toContain(instanceId);
-    expect(seen.match(/"limit"|\\"limit\\"/g)).toHaveLength(1);
+    const { seen } = await inspect(ids.map((id) => `pattern:${own}/${id}`));
+    expect(seen.match(/ref_unheld\\":\\"limit/g)).toHaveLength(1);
+    expect(seen.match(/ref_unheld\\":\\"not-a-pattern-instance/g))
+      .toHaveLength(HELD_COMPONENT_LIMIT);
   });
 });

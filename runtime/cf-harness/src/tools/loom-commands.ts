@@ -58,6 +58,10 @@ import {
   patternReference,
   type UnheldPatternInstance,
 } from "./loom-authoring.ts";
+import {
+  parseStoredPieceAddress,
+  type StoredPieceAddress,
+} from "../input-cells.ts";
 import { defineOwnEntry, swapTokensForRefs } from "../handle-table.ts";
 
 /** Commands whose reference fields name durable Loom components. */
@@ -91,87 +95,108 @@ const componentReferences = async (
   return result;
 };
 
-/** Most component references one answer has verified and held. */
+/**
+ * Most distinct pieces one answer verifies and holds; the rest are
+ * `limit`. SHORTCUT (2026-11-13): a fixed bound keeps one answer's Fabric
+ * reads bounded, as the deployed_patterns handoff does. Limit: a host answer
+ * naming more pieces holds only the first ones. The way back: hold each
+ * address lazily, verifying it when the model first describes or calls it.
+ */
 export const HELD_COMPONENT_LIMIT = 32;
 
-/**
- * Helper for {@link heldComponentReferences}, which reads a host's stored
- * component reference, `pattern:<space>/<piece-id>` or its legacy `piece:`
- * spelling, as the space and id it names, or `undefined` for any other text.
- */
-const componentAddress = (
-  ref: string,
-): { space: string; id: string } | undefined => {
-  const prefix = ["pattern:", "piece:"].find((p) => ref.startsWith(p));
-  if (prefix === undefined) return undefined;
-  const rest = ref.slice(prefix.length);
-  const slash = rest.indexOf("/");
-  if (slash <= 0) return undefined;
-  const id = rest.slice(slash + 1);
-  return id.includes(":") ? { space: rest.slice(0, slash), id } : undefined;
-};
+/** What one stored address became: the run's reference, or why not. */
+type HeldAddress =
+  | { ref: string }
+  | { unheld: UnheldPatternInstance | "limit" };
 
-/** Helper for {@link heldComponentReferences}, which walks one value. */
-const heldComponentReferencesIn = async (
-  context: HarnessToolContext,
+/** Helper for {@link heldComponentReferences}: each stored address in `value`. */
+const storedAddressesIn = (
   value: JSONValue,
-  budget: { remaining: number },
-): Promise<JSONValue> => {
-  if (Array.isArray(value)) {
-    const items: JSONValue[] = [];
-    for (const item of value) {
-      items.push(await heldComponentReferencesIn(context, item, budget));
-    }
-    return items;
+  found: Map<string, StoredPieceAddress>,
+): void => {
+  if (typeof value === "string") {
+    const address = parseStoredPieceAddress(value);
+    if (address !== undefined) found.set(value, address);
+  } else if (Array.isArray(value)) {
+    for (const item of value) storedAddressesIn(item, found);
+  } else if (isObjectNotArray(value)) {
+    for (const item of Object.values(value)) storedAddressesIn(item, found);
   }
-  return isObjectNotArray(value)
-    ? await heldComponentReferences(context, value, budget)
-    : value;
 };
 
-/**
- * The outbound inverse of {@link componentReferences}: every `ref` in a
- * command's answer that a host spelled as a piece's address becomes the
- * reference the run holds for that piece, so a model that inspects a Loom can
- * describe and call the pieces in it without ever holding an address. A
- * reference the run cannot hold — another space, a cell that is no whole
- * Pattern Instance, a read that failed, or one past the limit — is dropped and
- * its `ref_unheld` says why: an address never reaches the model either way.
- * A `pattern:<space>/<slug>` keeps its text, since a slug is a name.
- */
-const heldComponentReferences = async (
-  context: HarnessToolContext,
+/** Helper for {@link heldComponentReferences}: `value` with each address replaced. */
+const withHeldAddresses = (
+  value: JSONValue,
+  held: ReadonlyMap<string, HeldAddress>,
+): JSONValue => {
+  if (Array.isArray(value)) {
+    return value.map((item) => {
+      const replaced = typeof item === "string" ? held.get(item) : undefined;
+      if (replaced === undefined) return withHeldAddresses(item, held);
+      return "ref" in replaced ? replaced.ref : { unheld: replaced.unheld };
+    });
+  }
+  return isObjectNotArray(value) ? withHeldMembers(value, held) : value;
+};
+
+/** Helper for {@link withHeldAddresses}: one object's members. */
+const withHeldMembers = (
   value: JSONObject,
-  budget: { remaining: number },
-): Promise<JSONObject> => {
+  held: ReadonlyMap<string, HeldAddress>,
+): JSONObject => {
   const result: { [key: string]: JSONValue } = {};
   for (const [key, item] of Object.entries(value)) {
-    const address = (key === "ref" || key === "if_ref") &&
-        typeof item === "string"
-      ? componentAddress(item)
-      : undefined;
-    if (address === undefined) {
-      defineOwnEntry(
-        result,
-        key,
-        await heldComponentReferencesIn(context, item, budget),
-      );
-      continue;
-    }
-    let held: { ref: string } | { unheld: UnheldPatternInstance | "limit" };
-    if (budget.remaining <= 0) {
-      held = { unheld: "limit" };
+    const replaced = typeof item === "string" ? held.get(item) : undefined;
+    if (replaced === undefined) {
+      defineOwnEntry(result, key, withHeldAddresses(item, held));
+    } else if ("ref" in replaced) {
+      defineOwnEntry(result, key, replaced.ref);
     } else {
-      budget.remaining -= 1;
-      held = await heldPatternInstance(context, address.space, address.id);
-    }
-    if ("ref" in held) {
-      defineOwnEntry(result, key, held.ref);
-    } else {
-      defineOwnEntry(result, `${key}_unheld`, held.unheld);
+      defineOwnEntry(result, `${key}_unheld`, replaced.unheld);
     }
   }
   return result;
+};
+
+/**
+ * The outbound inverse of {@link componentReferences}: every string in a
+ * command's answer that spells a piece's stored address
+ * ({@link parseStoredPieceAddress}) becomes the reference the run holds for
+ * that piece, so a model that inspects a Loom can describe and call the
+ * pieces in it without ever holding an address. One the run cannot hold
+ * (another space, no whole Pattern Instance, a failed read, past the limit)
+ * is dropped: an object member gives way to `<key>_unheld` naming why, an
+ * array item to `{unheld}`. Matched by the value's shape, not its key, so a
+ * Loom's `inbox` or any other field is covered; a host spelling an address
+ * some other way (a pane url) is the host's to keep from a model. Admission
+ * is {@link heldPatternInstance}'s check alone: whatever text named the id,
+ * the run gets only an own-space whole Pattern Instance, which the generic
+ * outbound swap would mint from a bare `/of:` link without any check.
+ * Distinct pieces are verified concurrently, each once.
+ */
+const heldComponentReferences = async (
+  context: HarnessToolContext,
+  body: JSONObject,
+): Promise<JSONObject> => {
+  const found = new Map<string, StoredPieceAddress>();
+  storedAddressesIn(body, found);
+  if (found.size === 0) return body;
+  const pieces = new Map<string, Promise<HeldAddress>>();
+  const held = new Map<string, HeldAddress>();
+  await Promise.all([...found].map(async ([text, address]) => {
+    const key = `${address.space}/${address.id}`;
+    let verdict = pieces.get(key);
+    if (verdict === undefined) {
+      verdict = pieces.size >= HELD_COMPONENT_LIMIT
+        ? Promise.resolve({ unheld: "limit" as const })
+        : context.signal?.aborted
+        ? Promise.resolve({ unheld: "unavailable" as const })
+        : heldPatternInstance(context, address.space, address.id);
+      pieces.set(key, verdict);
+    }
+    held.set(text, await verdict);
+  }));
+  return withHeldMembers(body, held);
 };
 
 /** The notice every listing carries beside its entries. */
@@ -713,12 +738,7 @@ const sendCall = async (
     };
   }
   const { bodyBytes } = answered;
-  const answer = JSON.stringify(answered.body);
-  const body = answer.includes("pattern:") || answer.includes("piece:")
-    ? await heldComponentReferences(context, answered.body, {
-      remaining: HELD_COMPONENT_LIMIT,
-    })
-    : answered.body;
+  const body = await heldComponentReferences(context, answered.body);
   const { command, loomId } = invocation;
   const outcome = outcomeOf(body, bodyBytes);
   const version = isRecord(body.outputs) ? body.outputs.version : undefined;

@@ -46,14 +46,18 @@ piece identity after checking that the run holds an unrestricted whole piece.
 Source-reader references need a retained Page first: read the source, write the
 relevant material with `page.write`, then compose the Page receipt's `ref`.
 
-The same bridge runs the other way. A `ref` in any command's answer that names a
-piece by its address (`pattern:<space>/<piece-id>`, or the legacy `piece:`)
-reaches the model as the handle the run holds for that piece, once the bridge
-has checked it is a whole Pattern Instance in the session's own space. So an
-agent that inspects a Loom can describe and call the pieces in it. A component
-it cannot hold (another space, not a Pattern Instance, unreadable, or past 32 in
-one answer) loses its `ref` and gains a `ref_unheld` saying why: the address
-never reaches the model either way.
+The same bridge runs the other way. Any string in a command's answer that spells
+a piece's stored address (`pattern:<space>/<piece-id>`, or the
+`pattern:<space>/of:<piece-id>` form Loom records components in) reaches the
+model as the handle the run holds for that piece, once the bridge has checked it
+is a whole Pattern Instance in the session's own space. So an agent that
+inspects a Loom can describe and call the pieces in it. An address it cannot
+hold (another space, not a Pattern Instance, unreadable, or past 32 distinct
+pieces in one answer) is dropped, and a `<key>_unheld` member, or `{unheld}` in
+a list, says why. This is half of the rule that an address never reaches a
+model; the other half is the host's: it must not spell a piece's address to an
+agent run any other way, such as a pane url, which the bridge cannot recognize.
+Loom keeps its render blocks out of what an agent run reads for that reason.
 
 That is the useful shape of it: the declaration is the boundary, and it is a
 narrow one by construction. A field typed as one of three enum values can carry

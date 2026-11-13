@@ -11,6 +11,7 @@ import type { JSONSchema } from "@commonfabric/api";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import { parseHandleRef, resolveHandleToken } from "../handle-table.ts";
+import { PIECE_ID_PATTERN } from "../input-cells.ts";
 import {
   executeLoomAuthoringCommand,
   type LoomAuthoringCommand,
@@ -199,33 +200,32 @@ const apiBase = (value: unknown): string | undefined => {
   }
 };
 
-/** A piece id as a host names one: the `of:` id of a whole piece. */
-export const PIECE_ID_PATTERN = /^fid1:[A-Za-z0-9_-]{43}$/;
-
 /**
- * Why {@link heldPatternInstance} gave no reference for a piece a host named.
- * `restricted` is a piece the run holds only through a restricted handle.
+ * Why {@link heldPatternInstance} gave no reference for a piece. Only
+ * `unavailable` may change on a later read.
  */
 export type UnheldPatternInstance =
   | "foreign-space"
   | "not-a-pattern-instance"
-  | "restricted"
   | "unavailable";
 
 /**
- * The model-facing reference for a whole Pattern Instance a trusted host
- * names by space and piece id: the token the run already holds for it, or its
- * canonical link, which the prompt loop's outbound swap turns into a held
- * handle. It is the inverse of {@link patternReference} and holds an incoming
- * id to the same contract that function holds an outgoing token to: a whole
- * Pattern Instance in this run's own space. A host's word is what admits the
- * id; a model-supplied address never reaches this.
+ * The model-facing reference for a whole Pattern Instance named by space and
+ * piece id: the token the run already holds for it, or its canonical link,
+ * which the prompt loop's outbound swap turns into a held handle. It is the
+ * inverse of {@link patternReference}, and admits only what that function
+ * would hand back out: a whole Pattern Instance in this run's own space.
+ * `restricted` says the run already held it only through a restricted
+ * handle, whose token `ref` then is; a caller that grants composition must
+ * refuse that, while a reader may use it as the run already could.
  */
 export const heldPatternInstance = async (
   context: HarnessToolContext,
   space: string,
   id: string,
-): Promise<{ ref: string } | { unheld: UnheldPatternInstance }> => {
+): Promise<
+  { ref: string; restricted: boolean } | { unheld: UnheldPatternInstance }
+> => {
   if (!PIECE_ID_PATTERN.test(id) || context.getFabricSession === undefined) {
     return { unheld: "unavailable" };
   }
@@ -241,7 +241,7 @@ export const heldPatternInstance = async (
       schema: undefined,
     });
     await cell.sync();
-    if (getPatternIdentityRef(cell) === undefined) {
+    if (pieceId(cell) !== id || getPatternIdentityRef(cell) === undefined) {
       return { unheld: "not-a-pattern-instance" };
     }
     const held = context.handleTable?.entries.filter((entry) => {
@@ -250,12 +250,11 @@ export const heldPatternInstance = async (
         address.path.length === 0 && address.scope === "space" &&
         (address.space === undefined || address.space === own);
     }) ?? [];
-    if (held.some((entry) => entry.capability !== undefined)) {
-      return { unheld: "restricted" };
-    }
+    const restricted = held.find((entry) => entry.capability !== undefined);
     return {
-      ref: held[0]?.token ??
+      ref: restricted?.token ?? held[0]?.token ??
         createLLMFriendlyLink(cell.getAsNormalizedFullLink(), own),
+      restricted: restricted !== undefined,
     };
   } catch {
     return { unheld: "unavailable" };
@@ -295,7 +294,9 @@ const deployedPatterns = async (
       receipt.space,
       receipt.piece_id,
     );
-    if ("ref" in held) output.push({ pattern_token: held.ref });
+    if ("ref" in held && !held.restricted) {
+      output.push({ pattern_token: held.ref });
+    }
   }
   return output;
 };
