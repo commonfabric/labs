@@ -40,6 +40,9 @@ pub struct ModuleAnalysis {
     /// The receivers of method calls that have no type: the reason, the
     /// line, and the start of the receiver's text.
     pub untyped: Vec<(&'static str, u32, String)>,
+    /// Sites the measurement lists: the category, the line, and the start
+    /// of the source text.
+    pub sites: Vec<(String, u32, String)>,
 }
 
 impl ModuleAnalysis {
@@ -326,6 +329,7 @@ pub fn analyze(files: &[SourceFile]) -> ProgramAnalysis {
         ));
     }
 
+    let notes = std::mem::take(&mut resolver.types.borrow_mut().notes);
     let written = std::mem::take(&mut resolver.types.borrow_mut().written);
     let type_counts = std::mem::take(&mut resolver.types.borrow_mut().counts);
     let mut modules = Vec::new();
@@ -357,6 +361,28 @@ pub fn analyze(files: &[SourceFile]) -> ProgramAnalysis {
             },
             overloads: resolver.overloads(index),
             untyped: check.untyped,
+            sites: {
+                let mut sites: Vec<(String, u32, String)> = notes
+                    .iter()
+                    .filter(|(module, _, _)| *module == index)
+                    .filter_map(|(_, category, span)| {
+                        let parsed = parsed[index].as_ref()?;
+                        let (line, _) = parsed.lines.position(parsed.source, span.start);
+                        let text: String = span
+                            .source_text(parsed.source)
+                            .split_whitespace()
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                            .chars()
+                            .take(160)
+                            .collect();
+                        Some((category.clone(), line, text))
+                    })
+                    .collect();
+                sites.sort();
+                sites.dedup();
+                sites
+            },
         });
     }
     ProgramAnalysis { modules, failures }

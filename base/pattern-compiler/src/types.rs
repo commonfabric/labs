@@ -211,6 +211,12 @@ pub struct TypeStore {
     /// The number of required elements of each tuple type that has
     /// optional elements.
     tuple_required: HashMap<TypeId, usize>,
+    /// The call whose argument is being checked, which a site noted
+    /// inside the argument is listed with.
+    pub(crate) context: Option<Span>,
+    /// Sites the measurement lists: the module, the category, and the
+    /// span.
+    pub notes: Vec<(usize, String, Span)>,
     /// Set while a type is computed a second time to find whether its
     /// `undefined` comes from the read of an optional property alone: the
     /// read then has the property's declared type.
@@ -2386,6 +2392,14 @@ impl<'a> Resolver<'_, 'a> {
             .written
             .entry((module, label))
             .or_insert(0) += 1;
+    }
+
+    /// Records a site the measurement lists under `category`.
+    pub(crate) fn note(&self, module: usize, category: impl Into<String>, span: Span) {
+        self.types
+            .borrow_mut()
+            .notes
+            .push((module, category.into(), span));
     }
 
     /// Adds one to the count `key` of module `module`.

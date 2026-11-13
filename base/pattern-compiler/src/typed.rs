@@ -444,6 +444,50 @@ impl<'a> TypedRules<'_, '_, 'a> {
         }
     }
 
+    /// Counts and lists a write through a handle whose value type is
+    /// `unknown` (`language-subset.md` §7.8; §13, question 29).
+    fn write_through_unknown(&self, call: &CallExpression<'a>) {
+        let resolver = self.resolver;
+        let Expression::StaticMemberExpression(member) = unparen(&call.callee) else {
+            return;
+        };
+        let method = member.property.name.as_str();
+        if !matches!(
+            method,
+            "set"
+                | "update"
+                | "push"
+                | "pushAll"
+                | "addUnique"
+                | "remove"
+                | "removeByValue"
+                | "removeAll"
+                | "increment"
+                | "applyChanges"
+                | "send"
+        ) {
+            return;
+        }
+        let Ok(receiver) = resolver.typed_at(self.module, &member.object, 0) else {
+            return;
+        };
+        let Shape::Handle(_, value) = resolver.shape(resolver.present(receiver)) else {
+            return;
+        };
+        if resolver.shape(value) != Shape::Unknown {
+            return;
+        }
+        resolver.count(
+            self.module,
+            format!("types:write through a handle of `unknown`:{method}"),
+        );
+        resolver.note(
+            self.module,
+            "a write through a handle of `unknown`",
+            call.span,
+        );
+    }
+
     /// `module-scope:runtime-call` for a callee that only its type shows
     /// to be a factory (§3.2): a call at module scope of a value whose type
     /// is a pattern factory or a handler factory instantiates a pattern or
@@ -649,6 +693,7 @@ impl<'a> Visit<'a> for TypedRules<'_, '_, 'a> {
         if builder == Some(ApiValue::Builder(Builder::Pattern)) {
             self.pattern_result(it);
         }
+        self.write_through_unknown(it);
         self.rule_declaration(it);
         self.module_scope_call(it);
         self.type_arguments(it);

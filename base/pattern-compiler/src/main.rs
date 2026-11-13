@@ -19,7 +19,8 @@ commands:
   corpus <patterns directory> [--json] [--files] [--diagnostics]
       Check the pattern corpus and print the report. With --json, print the
       report as JSON. With --files, print the corpus's file list instead.
-      With --diagnostics, print every error and warning instead.
+      With --diagnostics, print every error and warning instead. With
+      --sites, print the sites the measurement lists, by category.
   bodies <file>...
       Print the bodies of the given modules as JSON.
   types <file>...
@@ -187,6 +188,27 @@ fn corpus_report(root: &str, flags: &[&str]) -> std::io::Result<bool> {
             })
         {
             println!("{diagnostic}");
+        }
+        return Ok(parsed(&analysis));
+    }
+    if flags.contains(&"--sites") {
+        let mut sites: Vec<(&str, &str, u32, &str)> = analysis
+            .modules
+            .iter()
+            .flat_map(|module| {
+                module.sites.iter().map(|(category, line, text)| {
+                    (
+                        category.as_str(),
+                        module.path.as_str(),
+                        *line,
+                        text.as_str(),
+                    )
+                })
+            })
+            .collect();
+        sites.sort();
+        for (category, path, line, text) in sites {
+            println!("{category}\t{path}:{line}\t{text}");
         }
         return Ok(parsed(&analysis));
     }

@@ -366,9 +366,14 @@ impl<'a> Resolver<'_, 'a> {
                         Shape::Handle(kind, value) => (kind, value),
                         _ => (kind, value),
                     };
-                    let property = self
-                        .property(value, key.value.as_str())
-                        .unwrap_or_else(|| self.add_unresolved());
+                    // `key` on a handle of `unknown` takes any key and
+                    // yields a handle of `unknown` (§7.8).
+                    let property = match self.shape(value) {
+                        Shape::Unknown => value,
+                        _ => self
+                            .property(value, key.value.as_str())
+                            .unwrap_or_else(|| self.add_unresolved()),
+                    };
                     current = match self.shape(property) {
                         Shape::Handle(..) => property,
                         _ => self.intern(Shape::Handle(kind, property)),

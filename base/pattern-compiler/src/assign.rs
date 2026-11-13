@@ -1033,6 +1033,9 @@ impl<'a> Resolver<'_, 'a> {
             return Verdict::Unsure;
         };
         let verdict = self.relate_in(from, to, 0, by_reference);
+        if verdict == Verdict::Yes {
+            self.note_bindings(module, expression, from, to, by_reference);
+        }
         if let Verdict::No(class, text) = &verdict {
             // Whether the value is refused only because it is read from an
             // optional property, and may so be absent (§7.6, §7.5.2).
@@ -1076,6 +1079,249 @@ impl<'a> Resolver<'_, 'a> {
             }
         }
         verdict
+    }
+
+    /// Counts and lists two kinds of accepted argument the specification
+    /// asks about (`language-subset.md` §13, questions 28 and 29): a value
+    /// bound where a handle that can write is declared, by what the value
+    /// is, and a handle of a known type given where a handle of `unknown`
+    /// is declared.
+    fn note_bindings(
+        &self,
+        module: usize,
+        expression: &Expression<'a>,
+        from: TypeId,
+        to: TypeId,
+        by_reference: bool,
+    ) {
+        let span = self
+            .types
+            .borrow()
+            .context
+            .unwrap_or_else(|| expression.span());
+        let writable = |have: &Shape, want: &Shape| {
+            matches!(
+                want,
+                Shape::Handle(HandleKind::Cell | HandleKind::WriteonlyCell, _)
+            ) && !matches!(have, Shape::Handle(..))
+        };
+        if by_reference && self.pairs(from, to, 0, &writable) {
+            let origin = self.origin_of_place(module, expression, 0);
+            self.count(
+                module,
+                format!("types:by-reference:a writable handle bound to:{origin}"),
+            );
+            self.note(
+                module,
+                format!("a writable handle bound to {origin}"),
+                expression.span(),
+            );
+        }
+        let to_unknown = |have: &Shape, want: &Shape| match (have, want) {
+            (Shape::Handle(_, value), Shape::Handle(_, wanted)) => {
+                self.shape(*wanted) == Shape::Unknown && self.shape(*value) != Shape::Unknown
+            }
+            _ => false,
+        };
+        if self.pairs(from, to, 0, &to_unknown) {
+            self.count(
+                module,
+                "types:a handle of a known type where a handle of `unknown` is declared"
+                    .to_string(),
+            );
+            self.note(
+                module,
+                "a handle of a known type where a handle of `unknown` is declared",
+                span,
+            );
+        }
+    }
+
+    /// Whether some position of `from` against `to` meets `test`: the two
+    /// types themselves, or a pair reached through the properties of two
+    /// object types, the elements of two arrays, the members of a union,
+    /// and the value types of two handles.
+    fn pairs(
+        &self,
+        from: TypeId,
+        to: TypeId,
+        depth: u32,
+        test: &dyn Fn(&Shape, &Shape) -> bool,
+    ) -> bool {
+        if depth > 6 {
+            return false;
+        }
+        let (have, want) = (self.shape(from), self.shape(to));
+        if test(&have, &want) {
+            return true;
+        }
+        let next = depth + 1;
+        match (&have, &want) {
+            (Shape::Union(members), _) => members
+                .iter()
+                .any(|member| self.pairs(*member, to, next, test)),
+            (_, Shape::Union(members)) => members
+                .iter()
+                .any(|member| self.pairs(from, *member, next, test)),
+            (Shape::Object(properties, _), Shape::Object(wanted, _)) => wanted.iter().any(|want| {
+                properties
+                    .iter()
+                    .find(|have| have.name == want.name)
+                    .is_some_and(|have| self.pairs(have.ty, want.ty, next, test))
+            }),
+            (Shape::Array(element), Shape::Array(wanted)) => {
+                self.pairs(*element, *wanted, next, test)
+            }
+            (Shape::Handle(_, value), Shape::Handle(_, wanted)) => {
+                self.pairs(*value, *wanted, next, test)
+            }
+            _ => false,
+        }
+    }
+
+    /// What the place an expression of tier R denotes is: an input, a
+    /// state cell, a value the instance computes, and so on, followed
+    /// through `const` bindings and property reads.
+    fn origin_of_place(
+        &self,
+        module: usize,
+        expression: &Expression<'a>,
+        depth: u32,
+    ) -> &'static str {
+        use oxc_ast::AstKind;
+        if depth > 8 {
+            return "not followed";
+        }
+        let next = depth + 1;
+        match expression {
+            Expression::ParenthesizedExpression(inner) => {
+                self.origin_of_place(module, &inner.expression, next)
+            }
+            Expression::TSNonNullExpression(inner) => {
+                self.origin_of_place(module, &inner.expression, next)
+            }
+            Expression::TSAsExpression(inner) => {
+                self.origin_of_place(module, &inner.expression, next)
+            }
+            Expression::StaticMemberExpression(member) => {
+                self.origin_of_place(module, &member.object, next)
+            }
+            Expression::ComputedMemberExpression(member) => {
+                self.origin_of_place(module, &member.object, next)
+            }
+            Expression::ChainExpression(chain) => match &chain.expression {
+                ChainElement::StaticMemberExpression(member) => {
+                    self.origin_of_place(module, &member.object, next)
+                }
+                ChainElement::ComputedMemberExpression(member) => {
+                    self.origin_of_place(module, &member.object, next)
+                }
+                _ => "a computed value: the result of a call",
+            },
+            Expression::BinaryExpression(_)
+            | Expression::LogicalExpression(_)
+            | Expression::ConditionalExpression(_)
+            | Expression::UnaryExpression(_)
+            | Expression::TemplateLiteral(_) => "a computed value: the result of an operator",
+            Expression::StringLiteral(_)
+            | Expression::NumericLiteral(_)
+            | Expression::BooleanLiteral(_)
+            | Expression::NullLiteral(_)
+            | Expression::ObjectExpression(_)
+            | Expression::ArrayExpression(_) => "a literal",
+            Expression::NewExpression(_) => "a state cell",
+            Expression::CallExpression(call) => {
+                if let Some(api) = self.api_callee(module, call) {
+                    return match api.as_str() {
+                        "computed" => "a computed value: the result of a `computed`",
+                        "lift" => "a computed value: the result of a `lift`",
+                        _ => "the result of a built-in",
+                    };
+                }
+                match unwrap(&call.callee) {
+                    Expression::Identifier(name) => match self.value_def(module, name) {
+                        Some(crate::module::DefKind::Lift) => {
+                            "a computed value: the result of a `lift`"
+                        }
+                        Some(crate::module::DefKind::Pattern) => "the result of a pattern",
+                        Some(crate::module::DefKind::Handler) => "a stream",
+                        _ => "a computed value: the result of a function call",
+                    },
+                    Expression::StaticMemberExpression(member) => {
+                        match member.property.name.as_str() {
+                            "of" | "for" => "a state cell",
+                            "get" | "sample" | "key" => {
+                                self.origin_of_place(module, &member.object, next)
+                            }
+                            _ => "a computed value: the result of a collection operation or of another method",
+                        }
+                    }
+                    Expression::CallExpression(inner) if self.is_lift_call(module, inner) => {
+                        "a computed value: the result of a `lift`"
+                    }
+                    _ => "a computed value: the result of a call",
+                }
+            }
+            Expression::Identifier(identifier) => {
+                let Some(parsed) = self.parsed(module) else {
+                    return "not followed";
+                };
+                let scoping = parsed.semantic.scoping();
+                let Some(symbol) = crate::module::symbol_of(scoping, identifier) else {
+                    return "a global";
+                };
+                let nodes = parsed.semantic.nodes();
+                let declaration = scoping.symbol_declaration(symbol);
+                if scoping.symbol_scope_id(symbol) == scoping.root_scope_id() {
+                    return "a module-scope binding";
+                }
+                let mut kinds = vec![nodes.kind(declaration)];
+                kinds.extend(nodes.ancestor_kinds(declaration));
+                let mut function = None;
+                for kind in kinds {
+                    match kind {
+                        AstKind::VariableDeclarator(declarator) if function.is_none() => {
+                            return match &declarator.init {
+                                Some(init) => self.origin_of_place(module, init, next),
+                                None => "not followed",
+                            };
+                        }
+                        AstKind::ArrowFunctionExpression(arrow) if function.is_none() => {
+                            function = Some(arrow.span);
+                        }
+                        AstKind::Function(found) if function.is_none() => {
+                            function = Some(found.span);
+                        }
+                        AstKind::CallExpression(call) => {
+                            let Some(function) = function else {
+                                return "not followed";
+                            };
+                            if !call
+                                .arguments
+                                .iter()
+                                .any(|argument| argument.span() == function)
+                            {
+                                return "not followed";
+                            }
+                            if self.api_callee(module, call).as_deref() == Some("pattern") {
+                                return "an input of the pattern";
+                            }
+                            // The parameter of a collection callback is an
+                            // element of the collection.
+                            return match unwrap(&call.callee) {
+                                Expression::StaticMemberExpression(member) => {
+                                    self.origin_of_place(module, &member.object, next)
+                                }
+                                _ => "not followed",
+                            };
+                        }
+                        _ => {}
+                    }
+                }
+                "not followed"
+            }
+            _ => "another expression",
+        }
     }
 
     /// A function written where a function type is expected: its body is
@@ -1651,7 +1897,18 @@ impl<'a> Assignments<'_, '_, 'a> {
             } else {
                 expected
             };
+            resolver.types.borrow_mut().context = Some(call.span);
             let verdict = resolver.check_against_in(self.module, argument, expected, by_reference);
+            resolver.types.borrow_mut().context = None;
+            // The arguments of an authored function called in tier R are
+            // listed where they are not accepted (§13, question 31).
+            if callee == Callee::Function && place == Place::Reactive && verdict != Verdict::Yes {
+                let outcome = match &verdict {
+                    Verdict::No(class, _) => class.label(),
+                    _ => "not decided",
+                };
+                resolver.note(self.module, format!("{site}: {outcome}"), call.span);
+            }
             resolver.record(self.module, &site, argument.span(), verdict);
         }
     }

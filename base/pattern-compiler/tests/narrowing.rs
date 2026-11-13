@@ -383,3 +383,17 @@ fn assignment_inside_a_loop_or_a_branch_does_not_narrow_after_it() {
         ["string | undefined", "string | undefined", "string"]
     );
 }
+
+// ----- §7.8: a handle of `unknown` -----
+
+#[test]
+fn key_on_a_handle_of_unknown_is_a_handle_of_unknown() {
+    assert_eq!(
+        types(
+            "function walk(cell: Cell<unknown>, name: string) {\n\
+               return [/*?*/(cell.key(\"a\", \"b\")), /*?*/(cell.key(name)), /*?*/(cell.get())];\n\
+             }\n"
+        ),
+        ["Cell<unknown>", "Cell<unknown>", "unknown"]
+    );
+}

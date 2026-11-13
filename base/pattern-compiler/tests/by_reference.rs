@@ -207,3 +207,65 @@ fn attributes_of_a_tag_that_names_a_pattern_are_bound_by_reference() {
         "expected string, found number",
     );
 }
+
+/// The counts of a snippet whose names begin with `prefix`.
+fn counts(snippet: &str, prefix: &str) -> Vec<(String, usize)> {
+    let analysis = analyze(&[SourceFile {
+        path: "case.tsx".to_string(),
+        text: format!("{PRELUDE}{snippet}"),
+    }]);
+    analysis.modules[0]
+        .counts
+        .iter()
+        .filter(|(key, _)| key.starts_with(prefix))
+        .map(|(key, count)| (key[prefix.len()..].to_string(), *count))
+        .collect()
+}
+
+#[test]
+fn value_bound_to_a_writable_handle_is_counted_by_what_it_is() {
+    let found = counts(
+        "const edit = handler<unknown, { name: Writable<string>; seen: ReadonlyCell<string> }>((_, state) => state.name.set(\"\"));\n\
+         const Outer = pattern<{ name: string; donuts: Donut[] }, { a: unknown }>(({ name, donuts }) => {\n\
+           const upper = computed(() => name.toUpperCase());\n\
+           const state = new Writable<string>(\"\");\n\
+           return { a: [edit({ name, seen: name }), edit({ name: upper, seen: name }), edit({ name: name + \"!\", seen: name }),\n\
+             edit({ name: state, seen: name }), donuts.map((donut) => edit({ name: donut.name, seen: name }))] };\n\
+         });\n",
+        "types:by-reference:a writable handle bound to:",
+    );
+    assert_eq!(
+        found,
+        [
+            (
+                "a computed value: the result of a `computed`".to_string(),
+                1
+            ),
+            ("a computed value: the result of an operator".to_string(), 1),
+            ("an input of the pattern".to_string(), 2),
+        ]
+    );
+}
+
+#[test]
+fn write_through_a_handle_of_unknown_is_counted() {
+    let found = counts(
+        "function put(cell: Cell<unknown>, typed: Cell<string>) { cell.set(1); cell.key(\"a\").set(2); typed.set(\"\"); }\n\
+         function run(typed: Cell<string>) { put(typed, typed); }\n",
+        "types:",
+    );
+    let found: Vec<(String, usize)> = found
+        .into_iter()
+        .filter(|(key, _)| key.contains("unknown"))
+        .collect();
+    assert_eq!(
+        found,
+        [
+            (
+                "a handle of a known type where a handle of `unknown` is declared".to_string(),
+                1
+            ),
+            ("write through a handle of `unknown`:set".to_string(), 2),
+        ]
+    );
+}

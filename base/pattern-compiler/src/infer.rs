@@ -711,6 +711,9 @@ impl<'a> Resolver<'_, 'a> {
                 "key" | "elementById" => {
                     let child = match self.shape(self.present(*value)) {
                         Shape::Object(_, Some(index)) => index,
+                        // `key` on a handle of `unknown` takes any key and
+                        // yields a handle of `unknown` (§7.8).
+                        Shape::Unknown => *value,
                         _ => self
                             .element_of(*value)
                             .unwrap_or_else(|| self.add_unresolved()),
