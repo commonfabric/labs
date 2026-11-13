@@ -2486,7 +2486,9 @@ describe("Phase 3 events-down (serving side)", () => {
     // label this space doesn't admit. For `commits` it writes nothing more;
     // for `refuses` it also copies the value into this space, which the
     // writer-fit gate refuses; for `throws` it throws an error whose message
-    // is the foreign secret; for `plain` it reads nothing labeled. The
+    // is the foreign secret; for `aborts` it aborts its transaction; for
+    // `acl` it writes the space's ACL document, which no served run may; for
+    // `plain` it reads nothing labeled. The
     // processed claim (`processed-claim.ts`) takes nothing of the join, so
     // the foreign-read handlings are delivered, and each records the outcome
     // withheld, not how it ended, so no failure message carries the secret.
@@ -2593,6 +2595,19 @@ describe("Phase 3 events-down (serving side)", () => {
           thrownMessages.push(read?.secret);
           throw new Error(read?.secret);
         }
+        if (kind === "aborts") {
+          tx.abort(new Error("the probe aborted"));
+          return;
+        }
+        if (kind === "acl") {
+          // The space's ACL document, which no served run may write.
+          servingRuntime!.getCellFromLink(
+            { space, id: `of:${space}` as never, path: [], scope: "space" },
+            undefined,
+            tx,
+          ).set({ [foreign]: "OWNER" } as never);
+          return;
+        }
         if (kind !== "refuses") return;
         servingRuntime!.getCell<{ copied?: string }>(
           space,
@@ -2616,15 +2631,17 @@ describe("Phase 3 events-down (serving side)", () => {
         commits: fireVerb(result, "bump", { kind: "commits" }, "withheld-1"),
         refuses: fireVerb(result, "bump", { kind: "refuses" }, "withheld-2"),
         throws: fireVerb(result, "bump", { kind: "throws" }, "withheld-4"),
+        aborts: fireVerb(result, "bump", { kind: "aborts" }, "withheld-5"),
+        acl: fireVerb(result, "bump", { kind: "acl" }, "withheld-6"),
         plain: fireVerb(result, "bump", { kind: "plain" }, "withheld-3"),
       };
       await clientRuntime.idle();
       await awaitAdmitted(
         server,
         () =>
-          ["commits", "refuses", "throws", "plain"].every((kind) =>
-            entryByKind(kind)?.consequenced === true
-          ),
+          ["commits", "refuses", "throws", "aborts", "acl", "plain"].every((
+            kind,
+          ) => entryByKind(kind)?.consequenced === true),
       );
       // The `commits` handling committed, after the load of the foreign
       // document its first run waited on; the `refuses` one was refused.
@@ -2658,6 +2675,8 @@ describe("Phase 3 events-down (serving side)", () => {
       expect(outcomeOf("commits")).toEqual(withheld);
       expect(outcomeOf("refuses")).toEqual(withheld);
       expect(outcomeOf("throws")).toEqual(withheld);
+      expect(outcomeOf("aborts")).toEqual(withheld);
+      expect(outcomeOf("acl")).toEqual(withheld);
       expect(outcomeOf("plain")).toEqual({ ...withheld, withheld: undefined });
       // The `throws` handling threw the foreign secret as its message, and
       // nothing of it reached the entry.
@@ -2669,7 +2688,18 @@ describe("Phase 3 events-down (serving side)", () => {
 
       // Each sender is told the same: done, with the outcome withheld,
       // whether the handling committed or not.
-      for (const kind of ["commits", "refuses", "throws"] as const) {
+      // The `acl` handling was refused for its write to the access list, not
+      // by a CFC verdict.
+      const aclRefusal = (await commitOutcomes.matching((outcome) =>
+        outcome.kind === "acl"
+      )).error as { name?: string; reason?: unknown } | undefined;
+      expect(aclRefusal?.name).toBe("StorageTransactionAborted");
+      expect(String(aclRefusal?.reason)).toContain(
+        "is the space ACL document",
+      );
+      for (
+        const kind of ["commits", "refuses", "throws", "aborts", "acl"] as const
+      ) {
         await fired[kind].reached(1);
         const { status, tx } = fired[kind].entries[0];
         expect([kind, status, isWithheldDelivery(tx)]).toEqual([
