@@ -4685,8 +4685,8 @@ export class Runner {
       defaults,
       tx,
       carried,
-      // The slots the caller names are judged as it supplies them; only the
-      // carried ones are asked about.
+      // Only the carried slots are asked about, and the staged value holds
+      // each of them as the stored argument does.
       this.#stagedArgument(tx, foldStoredArgumentSlots(argument, stored)),
     );
     const issue = stage(new Set(dropped.keys()));
