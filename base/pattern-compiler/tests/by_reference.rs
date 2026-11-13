@@ -262,9 +262,10 @@ fn write_through_a_handle_of_unknown_is_counted() {
         found,
         [
             (
-                "a handle of a known type where a handle of `unknown` is declared".to_string(),
+                "sites:a handle of a known type where `Cell<unknown>` is declared".to_string(),
                 1
             ),
+            ("sites:a write through a handle of `unknown`".to_string(), 2),
             ("write through a handle of `unknown`:set".to_string(), 2),
         ]
     );

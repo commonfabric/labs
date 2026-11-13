@@ -206,9 +206,15 @@ impl<'a> Resolver<'_, 'a> {
         let (class, why) = if source.is_empty() || target.is_empty() {
             (class, why)
         } else if source.iter().all(is_handle) && !target.iter().any(is_handle) {
-            (Class::CellForValue, "a cell where a value is declared")
+            (
+                Class::CellForValue,
+                "a cell where a value is declared. Read the cell with `get()`, or declare the position with the cell type",
+            )
         } else if target.iter().all(is_handle) && !source.iter().any(is_handle) {
-            (Class::ValueForCell, "a value where a cell is declared")
+            (
+                Class::ValueForCell,
+                "a value where a cell is declared. Pass a cell, or declare the position with the value type",
+            )
         } else if !source.is_empty()
             && source
                 .iter()
@@ -1117,23 +1123,33 @@ impl<'a> Resolver<'_, 'a> {
                 expression.span(),
             );
         }
-        let to_unknown = |have: &Shape, want: &Shape| match (have, want) {
-            (Shape::Handle(_, value), Shape::Handle(_, wanted)) => {
-                self.shape(*wanted) == Shape::Unknown && self.shape(*value) != Shape::Unknown
+        for kind in [
+            HandleKind::Cell,
+            HandleKind::ReadonlyCell,
+            HandleKind::WriteonlyCell,
+            HandleKind::ComparableCell,
+            HandleKind::OpaqueCell,
+            HandleKind::Stream,
+            HandleKind::Any,
+        ] {
+            let to_unknown = |have: &Shape, want: &Shape| match (have, want) {
+                (Shape::Handle(_, value), Shape::Handle(wanted_kind, wanted)) => {
+                    *wanted_kind == kind
+                        && self.shape(*wanted) == Shape::Unknown
+                        && self.shape(*value) != Shape::Unknown
+                }
+                _ => false,
+            };
+            if self.pairs(from, to, 0, &to_unknown) {
+                self.note(
+                    module,
+                    format!(
+                        "a handle of a known type where `{}<unknown>` is declared",
+                        kind.name()
+                    ),
+                    span,
+                );
             }
-            _ => false,
-        };
-        if self.pairs(from, to, 0, &to_unknown) {
-            self.count(
-                module,
-                "types:a handle of a known type where a handle of `unknown` is declared"
-                    .to_string(),
-            );
-            self.note(
-                module,
-                "a handle of a known type where a handle of `unknown` is declared",
-                span,
-            );
         }
     }
 

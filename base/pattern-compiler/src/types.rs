@@ -1982,7 +1982,11 @@ impl<'a> Resolver<'_, 'a> {
             // A type name of the browser (§7.10). No DOM object reaches a
             // pattern.
             _ if api::is_dom_type_name(name) => {
-                self.count(module, format!("types:dom type name:{name}"));
+                self.note(
+                    module,
+                    format!("a type name of the DOM library: {name}"),
+                    reference.span,
+                );
                 self.report(
                     module,
                     "stdlib:unsupported-member",

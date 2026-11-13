@@ -357,6 +357,14 @@ pub fn analyze(files: &[SourceFile]) -> ProgramAnalysis {
                         counts.insert(key.clone(), *count);
                     }
                 }
+                // Each listed site once, whatever number of times the
+                // rule that lists it ran.
+                let mut seen = BTreeSet::new();
+                for (module, category, span) in &notes {
+                    if *module == index && seen.insert((category.as_str(), span.start, span.end)) {
+                        *counts.entry(format!("types:sites:{category}")).or_insert(0) += 1;
+                    }
+                }
                 counts
             },
             overloads: resolver.overloads(index),

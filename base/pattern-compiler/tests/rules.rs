@@ -1185,6 +1185,21 @@ fn type_name_of_the_dom_library_is_an_unsupported_member() {
     }
     let diagnostics = check("function show(donut: Doughnut) { return donut; }\n");
     assert_eq!(ids(&diagnostics), ["subset-type:mismatch"]);
+    // A name written once is counted once (§13, question 32).
+    let analysis = analyze(&[SourceFile {
+        path: "case.tsx".to_string(),
+        text: format!(
+            "{PRELUDE}type Change = CustomEvent<{{ value: string }}>;\n\
+             const a = handler<Change, {{ n: Writable<number> }}>((_, state) => state.n.set(1));\n\
+             const b = handler<Change, {{ n: Writable<number> }}>((_, state) => state.n.set(2));\n"
+        ),
+    }]);
+    assert_eq!(
+        analysis.modules[0]
+            .counts
+            .get("types:sites:a type name of the DOM library: CustomEvent"),
+        Some(&1)
+    );
 }
 
 #[test]
