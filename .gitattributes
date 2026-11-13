@@ -25,3 +25,7 @@ patterns/tools/test-support/** test
 patterns/showcase/battleship/shared/board-view.ts test
 patterns/showcase/battleship/multiplayer/room-view.ts test
 patterns/system/notes/note-test-fixtures.tsx test
+
+# Configuration that the browser test runner reads, beside each package's
+# sources.
+**/deno-web-test.config.ts test

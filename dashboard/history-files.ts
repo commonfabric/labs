@@ -189,16 +189,14 @@ export class CacheFile<T = never> {
       if (error instanceof Deno.errors.NotFound) return undefined;
       throw error;
     }
-    let version: string | undefined;
-    try {
-      version = versionOf(await file.stat());
-    } catch (error) {
-      file.close();
-      throw error;
-    }
-    // The stream closes the file once it has been read.
-    const decoded = decode(await new Response(file.readable).text());
-    this.#version = version;
+    // The stream closes the file once it has been read, whether or not the
+    // file's version could be read.
+    const [info, text] = await Promise.all([
+      file.stat(),
+      new Response(file.readable).text(),
+    ]);
+    const decoded = decode(text);
+    this.#version = versionOf(info);
     this.#value = decoded;
     return decoded;
   }

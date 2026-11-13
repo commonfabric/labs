@@ -928,6 +928,8 @@ Deno.test("bridge: model scope-key constructors byte-agree with the real wire vo
       assert(isCanonicalKey(key), `model validator rejects constructed ${key}`);
     }
   }
+  assert(isScopeKey(SPACE_KEY), "real validator rejects the space key");
+  assert(isCanonicalKey(SPACE_KEY), "model validator rejects the space key");
   const rejectionCorpus = [
     "",
     "user",

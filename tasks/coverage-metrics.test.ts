@@ -149,6 +149,11 @@ Deno.test("source inventory helpers group tracked files by package", () => {
   assertEquals(shouldTrackSourceFile("base/static/assets/app.js"), false);
   assertEquals(shouldTrackSourceFile("base/static/src/app.js"), true);
   assertEquals(
+    shouldTrackSourceFile("base/static/deno-web-test.config.ts"),
+    false,
+  );
+  assertEquals(shouldTrackSourceFile("runtime/deno-web-test/config.ts"), true);
+  assertEquals(
     shouldTrackSourceFile("patterns/showcase/iframe-board/guest.js"),
     false,
   );

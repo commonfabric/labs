@@ -1202,10 +1202,8 @@ export class FabricClient {
     try {
       this.#port?.postMessage(encoded);
     } catch (cause) {
-      const pending = this.#pending.get(id);
-      if (!pending) return;
+      this.#pending.get(id)?.reject(cause);
       this.#pending.delete(id);
-      pending.reject(cause);
     }
   }
 

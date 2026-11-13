@@ -25,6 +25,12 @@ describe("InMemoryProgram", () => {
     });
     expect(await resolver.resolveSource("/missing.ts")).toBeUndefined();
   });
+
+  it("throws for a main module it does not hold", () => {
+    const resolver = new InMemoryProgram("/main.ts", { "/other.ts": "" });
+
+    expect(() => resolver.main()).toThrow("/main.ts not in modules.");
+  });
 });
 
 describe("FileSystemProgramResolver", () => {
@@ -45,6 +51,7 @@ describe("FileSystemProgramResolver", () => {
         name: "/dependency.ts",
         contents: "export default 2;",
       });
+      expect(await resolver.resolveSource("dependency.ts")).toBeUndefined();
 
       const filesystemRoot = path.parse(directory).root;
       const mainSpecifier = `/${
@@ -407,6 +414,49 @@ describe("FileSystemProgramResolver.resolveDataFile", () => {
     } finally {
       await Deno.remove(root, { recursive: true });
     }
+  });
+});
+
+describe("HttpProgramResolver.resolveSource", () => {
+  it("fetches the module a grounded specifier names, beside the main module", async () => {
+    const requested: string[] = [];
+    const resolver = new HttpProgramResolver(
+      "https://example.com/pattern/main.tsx",
+      (input) => {
+        requested.push(String(input));
+        return Promise.resolve(new Response("export default 2;"));
+      },
+    );
+
+    expect(await resolver.resolveSource("/lib/../dep.ts")).toEqual({
+      name: "/dep.ts",
+      contents: "export default 2;",
+    });
+    expect(requested).toEqual(["https://example.com/dep.ts"]);
+  });
+
+  it("returns undefined for a specifier that is not grounded", async () => {
+    const resolver = new HttpProgramResolver(
+      "https://example.com/main.tsx",
+      () => Promise.reject(new Error("fetched")),
+    );
+
+    expect(await resolver.resolveSource("dep.ts")).toBeUndefined();
+    expect(await resolver.resolveSource("")).toBeUndefined();
+  });
+
+  it("rejects with the status of a fetch that fails", async () => {
+    const resolver = new HttpProgramResolver(
+      "https://example.com/main.tsx",
+      () =>
+        Promise.resolve(
+          new Response("no", { status: 503, statusText: "Unavailable" }),
+        ),
+    );
+
+    await expect(resolver.resolveSource("/dep.ts")).rejects.toThrow(
+      "Failed to fetch https://example.com/dep.ts: 503 Unavailable",
+    );
   });
 });
 

@@ -85,6 +85,17 @@ describe("PathKeyMap", () => {
       expect(m.delete(["a"])).toBe(false);
       expect(m.delete(["nope"])).toBe(false);
     });
+
+    it("leaves the map empty once every value is deleted, and not before", () => {
+      const m = new PathKeyMap<number>();
+      m.set(["a", "b"], 1);
+      m.set(["a", "c", "d"], 2);
+
+      m.delete(["a", "b"]);
+      expect(m.isEmpty()).toBe(false);
+      m.delete(["a", "c", "d"]);
+      expect(m.isEmpty()).toBe(true);
+    });
   });
 
   describe("clear()", () => {

@@ -1,4 +1,4 @@
-import type { AsCell, Cell, KeyResultType } from "../index.ts";
+import type { AsCell, Cell, KeyResultType } from "../../index.ts";
 
 type ReactionCell = Cell<{
   type: Cell<string>;

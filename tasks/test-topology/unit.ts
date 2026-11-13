@@ -69,13 +69,7 @@ const BROWSER_SUFFIX = "#browser-test";
  * the reason it is written that way. Loading the suites fails on a member of
  * that shape this does not list, and on an entry for any other member.
  */
-export const RUNS_WHOLE: ReadonlyMap<string, string> = new Map([
-  [
-    "./base/identity",
-    "its tests run in a browser through deno-web-test, which takes no file " +
-    "list from a lane",
-  ],
-]);
+export const RUNS_WHOLE: ReadonlyMap<string, string> = new Map();
 
 /** What one member contributes to a unit suite. */
 interface Member {

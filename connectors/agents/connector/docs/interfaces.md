@@ -939,7 +939,7 @@ rewritten index.
 
 ## Local command ledger
 
-`CommandLedger.open(path)` reads a UTF-8 JSON file with this shape:
+`CommandLedger.open(path, system?)` reads a UTF-8 JSON file with this shape:
 
 ```json
 {
@@ -992,6 +992,12 @@ The ledger creates its directory with mode `0700` and its files with mode
 `0600`. On systems with Unix permissions, it rejects the final directory or
 either ledger slot when it is a symbolic link, belongs to another user, or
 permits group or other-user access.
+
+The optional `system` argument is a `CommandLedgerSystem`: the operating system,
+which selects the Unix or Windows layout, and a `uid()` function naming the user
+that must own the directory and files. It defaults to the running process's
+`Deno.build.os` and `Deno.uid()`, so a test can exercise either layout and the
+ownership check on any machine.
 
 `pendingPublicationCount()` reports the current outbox size. It does not expose
 receipt contents. A host uses this value when deciding whether health can return

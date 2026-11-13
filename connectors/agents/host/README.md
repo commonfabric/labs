@@ -439,6 +439,5 @@ the narrower startup-cancellation path used by `startAgentsHost()`:
 ```sh
 deno task --cwd connectors/agents/host test
 deno task cf check connectors/agents/debug-view/main.tsx --no-run
-deno task cf test connectors/agents/debug-view/main.test.tsx \
-  --root . --verbose
+deno task cf test connectors/agents/debug-view/ --root . --verbose
 ```

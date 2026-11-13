@@ -221,10 +221,10 @@ export function checkoutEntries(
 }
 
 function storedCheckoutObservations(
-  ...indexes: Array<AgentSessionIndex | null>
+  ...indexes: AgentSessionIndex[]
 ): CheckoutObservation[] {
   return indexes.flatMap((index) =>
-    (index?.checkouts ?? []).map((checkout) => ({
+    (index.checkouts ?? []).map((checkout) => ({
       gitRepo: checkout.gitRepo,
       gitBranch: checkout.gitBranch,
       gitWorktreeRoot: checkout.root,
@@ -627,12 +627,11 @@ function asIndex(
   value: unknown,
   ownerDid: string,
   expectedBucket: "recent" | "all",
-): AgentSessionIndex | null {
-  if (value === undefined || value === null) return null;
-  if (typeof value !== "object" || Array.isArray(value)) {
+): AgentSessionIndex {
+  if (!isRecord(value)) {
     throw new Error("agent session index is not an object");
   }
-  const record = value as Record<string, unknown>;
+  const record = value;
   if (
     record.schema !== AGENT_CONNECTOR_SCHEMAS.sessionIndex ||
     record.ownerDid !== ownerDid ||
@@ -1088,7 +1087,7 @@ export class AgentFabricTarget implements CommandTarget {
       "all",
     );
     const states = new Map<string, PublishedSessionState>();
-    for (const entry of index?.sessions ?? []) {
+    for (const entry of index.sessions) {
       states.set(entry.key, {
         driver: entry.driver,
         updatedAt: entry.updatedAt ?? null,
@@ -1180,8 +1179,8 @@ export class AgentFabricTarget implements CommandTarget {
     }
     throwIfPublicationCanStop();
     const previousEntries = [
-      ...(previousRecent?.sessions ?? []),
-      ...(previousAll?.sessions ?? []),
+      ...previousRecent.sessions,
+      ...previousAll.sessions,
     ];
     // The rows as the previous indexes hold them, kept apart from the working
     // rows below, which a full publication marks stale until a session is
@@ -1213,8 +1212,8 @@ export class AgentFabricTarget implements CommandTarget {
     );
     const sourceRows = new Map<string, Record<string, unknown>>(
       [
-        ...(previousRecent?.sources ?? []),
-        ...(previousAll?.sources ?? []),
+        ...previousRecent.sources,
+        ...previousAll.sources,
       ].map((
         source,
       ) => [String(source.id), { ...source }]),
@@ -1443,8 +1442,8 @@ export class AgentFabricTarget implements CommandTarget {
     throwIfPublicationCanStop();
     const generatedAt = new Date().toISOString();
     const generation = Math.max(
-      previousRecent?.generation ?? 0,
-      previousAll?.generation ?? 0,
+      previousRecent.generation,
+      previousAll.generation,
     ) + 1;
     const sources = [...sourceRows.values()].sort((left, right) =>
       String(left.id).localeCompare(String(right.id))
@@ -1749,13 +1748,12 @@ export class AgentFabricTarget implements CommandTarget {
       );
     }
     const value = await readStableCellGraphValue(this.conn, cell);
-    if (value === undefined || value === null) {
+    if (!isRecord(value)) {
       throw new Error(
-        `command receipt disappeared while reading: ${commandId}`,
+        value === undefined
+          ? `command receipt disappeared while reading: ${commandId}`
+          : `command receipt is not an object: ${commandId}`,
       );
-    }
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
-      throw new Error(`command receipt is not an object: ${commandId}`);
     }
     const receipt = parseCommandReceipt(commandId, value);
     if (receipt.ownerDid !== this.conn.ownerDid) {

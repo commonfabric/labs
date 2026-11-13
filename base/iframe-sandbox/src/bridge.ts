@@ -579,32 +579,11 @@ export class FabricBridgeHost {
     const resource = request.resource !== undefined
       ? discoverResource(this.#bridge.resources, request.resource)
       : undefined;
-    if (
-      request.handle === undefined &&
-      (!resource || request.resource === undefined)
-    ) {
-      throw bridgeError(
-        "resource-not-found",
-        `No bridge resource is named \`${request.resource ?? ""}\`.`,
-        request.resource,
-      );
-    }
 
     switch (operation) {
       case "pull": {
-        const { cell, resource: name, path } = this.#requestCell(
-          request,
-          "pull",
-        );
-        const pull = cellOperation(cell, "pull");
-        if (!pull) {
-          throw bridgeError(
-            "method-not-supported",
-            `Cell \`${name}\` is not pullable.`,
-            name,
-          );
-        }
-        return await this.#read(path, () => pull.call(cell));
+        const { cell, path } = this.#requestCell(request, "pull");
+        return await this.#read(path, () => cell.pull());
       }
       case "initialize": {
         const { cell, resource: name, path } = this.#requestCell(
@@ -726,15 +705,6 @@ export class FabricBridgeHost {
         return await method(request.value);
       }
       case "sink": {
-        if (request.subscription === undefined) {
-          throw bridgeError(
-            "method-not-supported",
-            `Resource \`${
-              request.resource ?? request.handle
-            }\` is not sinkable.`,
-            request.resource,
-          );
-        }
         let sinkResource:
           | ((
             listener: (value: FabricValue | undefined) => void,
@@ -743,7 +713,7 @@ export class FabricBridgeHost {
           | undefined;
         let receiver: object;
         let path: GuestPath | undefined;
-        if (request.handle !== undefined || resource?.kind === "cell") {
+        if (resource === undefined || resource.kind === "cell") {
           const target = this.#requestCell(request, "sink");
           const sink = cellOperation(target.cell, "sink");
           sinkResource = sink &&
@@ -751,12 +721,12 @@ export class FabricBridgeHost {
           receiver = target.cell;
           path = target.path;
         } else {
-          const sink = resource && resourceSink(resource);
+          const sink = resourceSink(resource);
           sinkResource = sink &&
             ((listener, failed) => sink.call(resource, listener, failed));
-          receiver = resource ?? {};
+          receiver = resource;
         }
-        if (!sinkResource) {
+        if (!sinkResource || request.subscription === undefined) {
           throw bridgeError(
             "method-not-supported",
             `Resource \`${

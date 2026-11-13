@@ -1334,6 +1334,72 @@ describe("github-runs", () => {
             expect(github.paths).toEqual([]);
           });
 
+          it("takes in a run delivered while the top of the list is read, over the older copy the list shows, before choosing the runs to return", async () => {
+            // The reading stops at the first failed run, which only the
+            // delivered copy shows, so taking that copy in after the runs are
+            // chosen would return every run.
+
+            const relay = new FakeRelay();
+            await relay.open();
+            const github = new FakeGitHub([
+              run(30, { status: "in_progress", conclusion: null }),
+              ...runs(29, 1),
+            ]);
+            const lists = new RunLists(undefined, relay.webhooks);
+            const finished = run(30, {
+              conclusion: "failure",
+              updated_at: new Date(Date.UTC(2026, 0, 2)).toISOString(),
+            });
+            let delivered = false;
+
+            const read1 = await lists.runs(
+              async <T>(path: string, options: GitHubRequestOptions) => {
+                if (!delivered) {
+                  delivered = true;
+                  await deliver(relay, finished);
+                }
+                return github.request<T>(path, options);
+              },
+              REPO,
+              WORKFLOW,
+              {
+                reader: "reader",
+                recheck: [],
+                wants: () => true,
+                until: (run) => run.conclusion === "failure",
+              },
+            );
+
+            expect(delivered).toBe(true);
+            expect(ids(read1)).toEqual([30]);
+            expect(read1[0].conclusion).toBe("failure");
+          });
+
+          it("places the copy read by its id of a delivered run the list leaves out, when that copy is newer", async () => {
+            const relay = new FakeRelay();
+            await relay.open();
+            const github = new FakeGitHub(runs(30, 1));
+            const lists = new RunLists(undefined, relay.webhooks);
+            await read(lists, github);
+            github.list = [run(32), ...runs(30, 1)];
+            github.unlisted = [
+              run(31, {
+                conclusion: "failure",
+                updated_at: new Date(Date.UTC(2026, 0, 2)).toISOString(),
+              }),
+            ];
+            await deliver(
+              relay,
+              run(31, { status: "in_progress", conclusion: null }),
+            );
+            await deliver(relay, run(32));
+
+            const read2 = await read(lists, github);
+
+            expect(ids(read2)).toEqual(ids(runs(32, 1)));
+            expect(read2[1].conclusion).toBe("failure");
+          });
+
           it("keeps a delivered copy of a run over a copy the list shows updated at the same moment", async () => {
             const relay = new FakeRelay();
             await relay.open();

@@ -51,6 +51,21 @@ Deno.test("session chunk identity includes its content hash", () => {
     contentHash: "sha256:first",
   });
   assertNotEquals(first, second);
+  for (const part of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+    assertThrows(
+      () =>
+        sessionChunkCause(
+          "did:key:space",
+          "did:key:owner",
+          "codex",
+          "session",
+          part,
+          "sha256:first",
+        ),
+      Error,
+      "part must be a non-negative safe integer",
+    );
+  }
 });
 
 Deno.test("session manifest identity includes its manifest hash", () => {

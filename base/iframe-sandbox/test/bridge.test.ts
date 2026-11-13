@@ -3,7 +3,11 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { FabricValue } from "@commonfabric/data-model";
-import { fabricFromRealmValue } from "@commonfabric/data-model/codecs";
+import {
+  fabricFromRealmValue,
+  realmFromFabricValue,
+} from "@commonfabric/data-model/codecs";
+import { defer } from "@commonfabric/async/defer";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 
 import {
@@ -20,8 +24,10 @@ import { connectFabric } from "../src/guest.ts";
 import {
   BRIDGE_PROTOCOL,
   BRIDGE_VERSION,
+  type BridgeRequest,
   type BridgeResolvedCell,
   GUEST_PORT_HANDOFF,
+  isBridgeHostMessage,
 } from "../src/ipc.ts";
 
 function handOff(port: MessagePort): void {
@@ -65,6 +71,65 @@ function cellResource(
       ...(options.push && { push: options.push }),
     },
   };
+}
+
+/** A request as a guest composes it, before its header and id. */
+type RawRequest = Omit<BridgeRequest, "protocol" | "version" | "type" | "id">;
+
+/**
+ * Serves `resources` over a fresh channel and speaks to the host as a guest
+ * would, one raw request at a time. Each value of `resources` is granted as
+ * given, malformed or not.
+ */
+function rawSession(resources: Record<string, unknown>) {
+  const grant: Record<string, BridgeResource> = {};
+  for (const [name, value] of Object.entries(resources)) {
+    Reflect.set(grant, name, value);
+  }
+  const channel = new MessageChannel();
+  const host = new FabricBridgeHost(createFabricBridge(grant), channel.port1);
+  const received: FabricValue[] = [];
+  const waiting = new Map<number, (response: FabricValue) => void>();
+  let nextId = 0;
+  channel.port2.onmessage = (event) => {
+    const message = fabricFromRealmValue(event.data);
+    received.push(message);
+    if (isBridgeHostMessage(message) && message.type === "response") {
+      waiting.get(message.id)?.(message);
+    }
+  };
+  return {
+    host,
+    received,
+    /** Sends `request` and resolves with its response. */
+    request(request: RawRequest): Promise<FabricValue> {
+      const id = nextId++;
+      const response = new Promise<FabricValue>((resolve) =>
+        waiting.set(id, resolve)
+      );
+      channel.port2.postMessage(realmFromFabricValue({
+        ...request,
+        protocol: BRIDGE_PROTOCOL,
+        version: BRIDGE_VERSION,
+        type: "request",
+        id,
+      }));
+      return response;
+    },
+    /** Posts `data` to the host as it stands. */
+    post(data: unknown): void {
+      channel.port2.postMessage(data);
+    },
+    close(): void {
+      host.disconnect();
+      channel.port2.close();
+    },
+  };
+}
+
+/** A response refusing a request with `code` and `message`. */
+function refusal(code: string, message: string) {
+  return { type: "response", ok: false, error: { code, message } };
 }
 
 describe("Fabric iframe bridge", () => {
@@ -1804,6 +1869,227 @@ describe("Fabric iframe bridge", () => {
       });
     } finally {
       host.disconnect();
+    }
+  });
+
+  describe("a malformed grant", () => {
+    it("returns an error describing resources whose methods are not an object", async () => {
+      const session = rawSession({ service: { kind: "service", methods: 5 } });
+      try {
+        expect(await session.request({ operation: "describe" })).toMatchObject(
+          refusal(
+            "operation-failed",
+            "Bridge resource `service` methods must be an object.",
+          ),
+        );
+      } finally {
+        session.close();
+      }
+    });
+
+    it("returns an error describing a resource that is not an object", async () => {
+      const session = rawSession({ broken: 5 });
+      try {
+        expect(await session.request({ operation: "describe" })).toMatchObject(
+          refusal(
+            "operation-failed",
+            "Bridge resource `broken` must be an object.",
+          ),
+        );
+      } finally {
+        session.close();
+      }
+    });
+
+    for (
+      const [what, cell, message] of [
+        [
+          "has no cell of its own",
+          undefined,
+          "Bridge resource `count` must declare its own cell capability.",
+        ],
+        [
+          "has a cell that is not an object",
+          5,
+          "Cell `count` must be an object.",
+        ],
+        [
+          "has a cell without `pull()`",
+          { get: () => 1 },
+          "Cell `count` must implement get() and pull().",
+        ],
+      ] as const
+    ) {
+      it(`returns an error pulling a cell resource that ${what}`, async () => {
+        const session = rawSession({
+          count: cell === undefined ? { kind: "cell" } : { kind: "cell", cell },
+        });
+        try {
+          expect(
+            await session.request({ operation: "pull", resource: "count" }),
+          ).toMatchObject(refusal("operation-failed", message));
+        } finally {
+          session.close();
+        }
+      });
+    }
+  });
+
+  describe("a request the grant cannot serve", () => {
+    const resources = {
+      count: cellResource(() => 1),
+      ticks: { kind: "stream" },
+    };
+
+    const cases: [string, RawRequest, string, string][] = [
+      [
+        "pulling a resource that is not a cell",
+        { operation: "pull", resource: "ticks" },
+        "method-not-supported",
+        "Resource `ticks` is not a cell.",
+      ],
+      [
+        "pushing to a cell without `push()`",
+        { operation: "push", resource: "count", values: [2] },
+        "method-not-supported",
+        "Cell `count` does not support push().",
+      ],
+      [
+        "pulling beneath a cell without `key()`",
+        { operation: "pull", resource: "count", path: ["field"] },
+        "method-not-supported",
+        "Cell `count` does not support key().",
+      ],
+      [
+        "sinking a cell without `sink()`",
+        { operation: "sink", resource: "count", subscription: "s1" },
+        "method-not-supported",
+        "Resource `count` is not sinkable.",
+      ],
+      [
+        "sinking a resource that is not a cell and has no sink",
+        { operation: "sink", resource: "ticks", subscription: "s1" },
+        "method-not-supported",
+        "Resource `ticks` is not sinkable.",
+      ],
+      [
+        "sinking a resource the grant does not name",
+        { operation: "sink", resource: "missing", subscription: "s1" },
+        "resource-not-found",
+        "No bridge resource is named `missing`.",
+      ],
+      [
+        "resolving a resource the grant does not name",
+        { operation: "resolve", resource: "missing" },
+        "resource-not-found",
+        "No bridge resource is named `missing`.",
+      ],
+      [
+        "pulling a handle the host never resolved",
+        { operation: "pull", handle: "cell-9" },
+        "resource-not-found",
+        "No resolved cell handle is named `cell-9`.",
+      ],
+    ];
+    for (const [what, request, code, message] of cases) {
+      it(`returns \`${code}\` ${what}`, async () => {
+        const session = rawSession(resources);
+        try {
+          expect(await session.request(request)).toMatchObject(
+            refusal(code, message),
+          );
+        } finally {
+          session.close();
+        }
+      });
+    }
+
+    it("returns `resource-not-found` calling a method of a resource the grant does not name", async () => {
+      const session = rawSession(resources);
+      try {
+        expect(
+          await session.request({
+            operation: "call",
+            resource: "missing",
+            method: "run",
+          }),
+        ).toMatchObject(
+          refusal(
+            "resource-not-found",
+            "No bridge resource is named `missing`.",
+          ),
+        );
+      } finally {
+        session.close();
+      }
+    });
+  });
+
+  it("answers nothing for a message it cannot decode or that is not a request", async () => {
+    const session = rawSession({ count: cellResource(() => 1) });
+    try {
+      session.post("not a message");
+      session.post(realmFromFabricValue({ hello: "world" }));
+      const response = await session.request({
+        operation: "pull",
+        resource: "count",
+      });
+
+      expect(response).toMatchObject({ type: "response", ok: true, value: 1 });
+      expect(session.received).toEqual([response]);
+    } finally {
+      session.close();
+    }
+  });
+
+  it("drops a request queued behind one in flight when the guest disconnects", async () => {
+    // A subscription is cancelled when the host disconnects, which is what
+    // says the disconnect request has arrived.
+
+    const pulled = defer();
+    const pullAnswer = defer<FabricValue>();
+    const cancelled = defer();
+    const writes: FabricValue[] = [];
+    const session = rawSession({
+      count: {
+        kind: "cell",
+        cell: {
+          get: () => 1,
+          pull: () => {
+            pulled.resolve();
+            return pullAnswer.promise;
+          },
+          set: (value: FabricValue) => {
+            writes.push(value);
+          },
+          sink: (listener: (value: FabricValue) => void) => {
+            listener(1);
+            return () => cancelled.resolve();
+          },
+        },
+      },
+    });
+    try {
+      await session.request({
+        operation: "sink",
+        resource: "count",
+        subscription: "s1",
+      });
+      void session.request({ operation: "pull", resource: "count" });
+      await pulled.promise;
+      void session.request({ operation: "set", resource: "count", value: 2 });
+      void session.request({ operation: "disconnect" });
+      await cancelled.promise;
+
+      pullAnswer.resolve(1);
+      // Everything the host does once the pull is answered runs in
+      // microtasks, and a timer's callback runs only once the microtask queue
+      // is empty, so this resolves after the queued request would have run.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(writes).toEqual([]);
+    } finally {
+      session.close();
     }
   });
 });

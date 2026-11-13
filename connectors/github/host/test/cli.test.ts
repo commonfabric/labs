@@ -1,9 +1,10 @@
-import { assertEquals, assertExists } from "@std/assert";
+import { assertEquals, assertExists, assertRejects } from "@std/assert";
 import { join } from "@std/path";
 import type { GithubClient } from "@commonfabric/github-connector/client";
 import type { GithubFabricTarget } from "@commonfabric/github-connector/fabric";
 import type { GithubPullRequestCollection } from "@commonfabric/github-connector/types";
 import {
+  defaultGithubHostCliDependencies,
   type GithubHostCliDependencies,
   runGithubHostCli,
 } from "../src/cli.ts";
@@ -304,4 +305,46 @@ Deno.test("GitHub CLI reports setup and cleanup failures", async () => {
   } finally {
     await Deno.remove(directory, { recursive: true });
   }
+});
+
+Deno.test("the default GitHub client posts to the configured endpoint with its token", async () => {
+  const requests: Array<{ url: string; authorization: string | null }> = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (input, init) => {
+    requests.push({
+      url: String(input),
+      authorization: new Headers(init?.headers).get("authorization"),
+    });
+    return Promise.resolve(new Response(null, { status: 503 }));
+  };
+  try {
+    const client = defaultGithubHostCliDependencies.createClient(
+      " secret-token ",
+      "https://github.example.test/graphql",
+    );
+    await assertRejects(
+      () => client.collectOpenPullRequests(),
+      Error,
+      "GitHub GraphQL request failed with 503",
+    );
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  assertEquals(requests, [{
+    url: "https://github.example.test/graphql",
+    authorization: "Bearer secret-token",
+  }]);
+});
+
+Deno.test("the default GitHub schedule repeats until it is cancelled", async () => {
+  // The test's resource sanitizer fails the test if the interval outlives
+  // the cancellation.
+  const twoTicks = Promise.withResolvers<void>();
+  let ticks = 0;
+  const cancel = defaultGithubHostCliDependencies.scheduleEvery(1, () => {
+    ticks++;
+    if (ticks === 2) twoTicks.resolve();
+  });
+  await twoTicks.promise;
+  cancel();
 });

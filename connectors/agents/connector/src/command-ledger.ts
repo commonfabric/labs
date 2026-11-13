@@ -34,6 +34,22 @@ interface ParsedLedgerFile {
 
 type WindowsLedgerSlot = "primary" | "previous";
 
+/**
+ * The facts about the running system that decide how a ledger lays out its
+ * files and which files it accepts as its own.
+ */
+export interface CommandLedgerSystem {
+  /** The operating system; `"windows"` selects the two-slot layout. */
+  readonly os: typeof Deno.build.os;
+  /** The user that must own the ledger's directory and files. */
+  uid(): number | null;
+}
+
+const RUNNING_SYSTEM: CommandLedgerSystem = {
+  os: Deno.build.os,
+  uid: Deno.uid,
+};
+
 function comparableLedgerValue(value: ParsedLedgerFile): LedgerFile {
   return {
     schema: AGENT_CONNECTOR_SCHEMAS.commandLedger,
@@ -42,6 +58,10 @@ function comparableLedgerValue(value: ParsedLedgerFile): LedgerFile {
     pendingPublicationCommandIds: [...value.pendingPublicationCommandIds]
       .sort((left, right) => left.localeCompare(right)),
   };
+}
+
+function ledgerFileContents(value: ParsedLedgerFile): string {
+  return `${JSON.stringify(comparableLedgerValue(value), null, 2)}\n`;
 }
 
 function storeReceipt(receipt: AgentSessionCommandReceipt): StoredReceipt {
@@ -98,6 +118,7 @@ function validatePrivateInfo(
   info: Deno.FileInfo,
   path: string,
   kind: "directory" | "file",
+  system: CommandLedgerSystem,
 ): void {
   if (info.isSymlink) {
     throw new Error(
@@ -107,8 +128,8 @@ function validatePrivateInfo(
   if (kind === "directory" ? !info.isDirectory : !info.isFile) {
     throw new Error(`command ledger ${kind} is not a ${kind}: ${path}`);
   }
-  if (Deno.build.os === "windows") return;
-  if (info.uid !== null && info.uid !== Deno.uid()) {
+  if (system.os === "windows") return;
+  if (info.uid !== null && info.uid !== system.uid()) {
     throw new Error(`command ledger ${kind} has a different owner: ${path}`);
   }
   if (info.mode !== null && (info.mode & 0o077) !== 0) {
@@ -118,14 +139,20 @@ function validatePrivateInfo(
   }
 }
 
-async function ensurePrivateDirectory(path: string): Promise<void> {
+async function ensurePrivateDirectory(
+  path: string,
+  system: CommandLedgerSystem,
+): Promise<void> {
   await Deno.mkdir(path, { recursive: true, mode: 0o700 });
-  validatePrivateInfo(await Deno.lstat(path), path, "directory");
+  validatePrivateInfo(await Deno.lstat(path), path, "directory", system);
 }
 
-async function validateExistingLedger(path: string): Promise<boolean> {
+async function validateExistingLedger(
+  path: string,
+  system: CommandLedgerSystem,
+): Promise<boolean> {
   try {
-    validatePrivateInfo(await Deno.lstat(path), path, "file");
+    validatePrivateInfo(await Deno.lstat(path), path, "file", system);
     return true;
   } catch (error) {
     if (error instanceof Deno.errors.NotFound) return false;
@@ -195,8 +222,9 @@ function parseLedgerFile(decoded: unknown): ParsedLedgerFile {
 
 async function readLedgerFile(
   path: string,
+  system: CommandLedgerSystem,
 ): Promise<ParsedLedgerFile | undefined> {
-  await validateExistingLedger(path);
+  await validateExistingLedger(path, system);
   try {
     return parseLedgerFile(JSON.parse(await Deno.readTextFile(path)));
   } catch (error) {
@@ -219,26 +247,23 @@ async function writeAndSync(
   contents: string,
 ): Promise<void> {
   const bytes = new TextEncoder().encode(contents);
-  let offset = 0;
-  while (offset < bytes.length) {
-    const written = await file.write(bytes.subarray(offset));
-    if (written === 0) {
-      throw new Error("command ledger write made no progress");
-    }
-    offset += written;
+  for (let offset = 0; offset < bytes.length;) {
+    offset += await file.write(bytes.subarray(offset));
   }
   await file.sync();
 }
 
-async function replaceUnixFileDurably(
+/**
+ * Writes `contents` to a new private file beside `path`, synchronizes it,
+ * renames it over `path`, and then calls `commit`. The new file is removed
+ * when any step before the rename fails.
+ */
+async function replaceFile(
   path: string,
   contents: string,
   commit: () => void,
 ): Promise<void> {
-  const directoryPath = dirname(path);
-  await ensurePrivateDirectory(directoryPath);
   const temp = `${path}.tmp-${Deno.pid}-${crypto.randomUUID()}`;
-  let renamed = false;
   try {
     const file = await Deno.open(temp, {
       createNew: true,
@@ -251,66 +276,44 @@ async function replaceUnixFileDurably(
       file.close();
     }
     await Deno.rename(temp, path);
-    renamed = true;
-    commit();
-    await syncDirectory(directoryPath);
   } catch (error) {
-    if (!renamed) {
-      try {
-        await Deno.remove(temp);
-      } catch (cleanupError) {
-        if (!(cleanupError instanceof Deno.errors.NotFound)) {
-          throw new AggregateError(
-            [error, cleanupError],
-            "command ledger write and temporary-file cleanup failed",
-          );
-        }
+    try {
+      await Deno.remove(temp);
+    } catch (cleanupError) {
+      if (!(cleanupError instanceof Deno.errors.NotFound)) {
+        throw new AggregateError(
+          [error, cleanupError],
+          "command ledger write and temporary-file cleanup failed",
+        );
       }
     }
     throw error;
   }
+  commit();
+}
+
+async function replaceUnixFileDurably(
+  path: string,
+  contents: string,
+  commit: () => void,
+  system: CommandLedgerSystem,
+): Promise<void> {
+  const directoryPath = dirname(path);
+  await ensurePrivateDirectory(directoryPath, system);
+  await replaceFile(path, contents, commit);
+  await syncDirectory(directoryPath);
 }
 
 async function writeWindowsLedgerSlot(
   path: string,
   contents: string,
   commit: () => void,
+  system: CommandLedgerSystem,
 ): Promise<void> {
-  await ensurePrivateDirectory(dirname(path));
-  const exists = await validateExistingLedger(path);
-  if (!exists) {
-    const temp = `${path}.tmp-${Deno.pid}-${crypto.randomUUID()}`;
-    let renamed = false;
-    try {
-      const file = await Deno.open(temp, {
-        createNew: true,
-        write: true,
-        mode: 0o600,
-      });
-      try {
-        await writeAndSync(file, contents);
-      } finally {
-        file.close();
-      }
-      await Deno.rename(temp, path);
-      renamed = true;
-      commit();
-      return;
-    } catch (error) {
-      if (!renamed) {
-        try {
-          await Deno.remove(temp);
-        } catch (cleanupError) {
-          if (!(cleanupError instanceof Deno.errors.NotFound)) {
-            throw new AggregateError(
-              [error, cleanupError],
-              "command ledger write and temporary-file cleanup failed",
-            );
-          }
-        }
-      }
-      throw error;
-    }
+  await ensurePrivateDirectory(dirname(path), system);
+  if (!await validateExistingLedger(path, system)) {
+    await replaceFile(path, contents, commit);
+    return;
   }
   const file = await Deno.open(path, {
     truncate: true,
@@ -327,6 +330,7 @@ async function writeWindowsLedgerSlot(
 
 export class CommandLedger {
   readonly #path: string;
+  readonly #system: CommandLedgerSystem;
   readonly #receipts: Map<string, AgentSessionCommandReceipt>;
   readonly #pendingPublicationCommandIds: Set<string>;
   readonly #mutations = new AsyncSerialQueue();
@@ -335,24 +339,30 @@ export class CommandLedger {
 
   private constructor(
     path: string,
+    system: CommandLedgerSystem,
     receipts: Map<string, AgentSessionCommandReceipt>,
     pendingPublicationCommandIds: Set<string>,
     generation: number,
     windowsSlot?: WindowsLedgerSlot,
   ) {
     this.#path = path;
+    this.#system = system;
     this.#receipts = receipts;
     this.#pendingPublicationCommandIds = pendingPublicationCommandIds;
     this.#generation = generation;
     this.#windowsSlot = windowsSlot;
   }
 
-  static async open(path: string): Promise<CommandLedger> {
-    await ensurePrivateDirectory(dirname(path));
-    if (Deno.build.os !== "windows") {
-      const parsed = await readLedgerFile(path);
+  static async open(
+    path: string,
+    system: CommandLedgerSystem = RUNNING_SYSTEM,
+  ): Promise<CommandLedger> {
+    await ensurePrivateDirectory(dirname(path), system);
+    if (system.os !== "windows") {
+      const parsed = await readLedgerFile(path, system);
       return new CommandLedger(
         path,
+        system,
         parsed?.receipts ?? new Map(),
         parsed?.pendingPublicationCommandIds ?? new Set(),
         parsed?.generation ?? 0,
@@ -361,15 +371,15 @@ export class CommandLedger {
 
     const previousPath = `${path}.previous`;
     const candidates = await Promise.allSettled([
-      readLedgerFile(path),
-      readLedgerFile(previousPath),
+      readLedgerFile(path, system),
+      readLedgerFile(previousPath, system),
     ]);
-    const valid = candidates.flatMap((result, index) =>
+    const valid = candidates.flatMap((
+      result,
+      index,
+    ): { slot: WindowsLedgerSlot; value: ParsedLedgerFile }[] =>
       result.status === "fulfilled" && result.value
-        ? [{
-          slot: (index === 0 ? "primary" : "previous") as WindowsLedgerSlot,
-          value: result.value,
-        }]
+        ? [{ slot: index === 0 ? "primary" : "previous", value: result.value }]
         : []
     ).sort((left, right) => right.value.generation - left.value.generation);
     if (
@@ -383,49 +393,46 @@ export class CommandLedger {
       );
     }
     const selected = valid[0];
+    let ledger: CommandLedger;
+    let inactivePath: string | undefined;
     if (selected) {
-      if (valid.length === 1) {
-        const mirrorPath = selected.slot === "primary" ? previousPath : path;
-        await writeWindowsLedgerSlot(
-          mirrorPath,
-          `${JSON.stringify(comparableLedgerValue(selected.value), null, 2)}\n`,
-          () => undefined,
-        );
-      }
-      return new CommandLedger(
+      ledger = new CommandLedger(
         path,
+        system,
         selected.value.receipts,
         selected.value.pendingPublicationCommandIds,
         selected.value.generation,
         selected.slot,
       );
+      if (valid.length === 1) {
+        inactivePath = selected.slot === "primary" ? previousPath : path;
+      }
+    } else {
+      const failures = candidates.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : []
+      );
+      if (failures.length > 0) {
+        throw new AggregateError(
+          failures,
+          "neither Windows command ledger slot is valid",
+        );
+      }
+      ledger = new CommandLedger(path, system, new Map(), new Set(), 0);
+      await ledger.#persist(new Map(), new Set());
+      inactivePath = previousPath;
     }
-    const failures = candidates.flatMap((result) =>
-      result.status === "rejected" ? [result.reason] : []
-    );
-    if (failures.length > 0) {
-      throw new AggregateError(
-        failures,
-        "neither Windows command ledger slot is valid",
+    if (inactivePath) {
+      await writeWindowsLedgerSlot(
+        inactivePath,
+        ledgerFileContents({
+          generation: ledger.#generation,
+          receipts: ledger.#receipts,
+          pendingPublicationCommandIds: ledger.#pendingPublicationCommandIds,
+        }),
+        () => undefined,
+        system,
       );
     }
-    const ledger = new CommandLedger(path, new Map(), new Set(), 0);
-    await ledger.#persist(new Map(), new Set());
-    await writeWindowsLedgerSlot(
-      previousPath,
-      `${
-        JSON.stringify(
-          comparableLedgerValue({
-            generation: ledger.#generation,
-            receipts: ledger.#receipts,
-            pendingPublicationCommandIds: ledger.#pendingPublicationCommandIds,
-          }),
-          null,
-          2,
-        )
-      }\n`,
-      () => undefined,
-    );
     return ledger;
   }
 
@@ -514,16 +521,16 @@ export class CommandLedger {
     const nextPendingPublicationCommandIds = new Set(
       pendingPublicationCommandIds,
     );
-    const value: LedgerFile = {
-      schema: AGENT_CONNECTOR_SCHEMAS.commandLedger,
-      generation: this.#generation + 1,
-      receipts: storedReceipts(nextReceipts),
-      pendingPublicationCommandIds: [...nextPendingPublicationCommandIds]
-        .sort((left, right) => left.localeCompare(right)),
-    };
-    const nextSlot: WindowsLedgerSlot | undefined = Deno.build.os === "windows"
-      ? this.#windowsSlot === "primary" ? "previous" : "primary"
-      : undefined;
+    const generation = this.#generation + 1;
+    const contents = ledgerFileContents({
+      generation,
+      receipts: nextReceipts,
+      pendingPublicationCommandIds: nextPendingPublicationCommandIds,
+    });
+    const nextSlot: WindowsLedgerSlot | undefined =
+      this.#system.os === "windows"
+        ? this.#windowsSlot === "primary" ? "previous" : "primary"
+        : undefined;
     const commit = () => {
       this.#receipts.clear();
       for (const [commandId, receipt] of nextReceipts) {
@@ -533,18 +540,18 @@ export class CommandLedger {
       for (const commandId of nextPendingPublicationCommandIds) {
         this.#pendingPublicationCommandIds.add(commandId);
       }
-      this.#generation = value.generation;
+      this.#generation = generation;
       this.#windowsSlot = nextSlot;
     };
-    const contents = `${JSON.stringify(value, null, 2)}\n`;
     if (nextSlot) {
       await writeWindowsLedgerSlot(
         nextSlot === "primary" ? this.#path : `${this.#path}.previous`,
         contents,
         commit,
+        this.#system,
       );
       return;
     }
-    await replaceUnixFileDurably(this.#path, contents, commit);
+    await replaceUnixFileDurably(this.#path, contents, commit, this.#system);
   }
 }
