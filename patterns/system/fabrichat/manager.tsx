@@ -2505,7 +2505,7 @@ export const FabriChatManagerCore = pattern<
               <cf-text variant="caption">
                 Your chat address: {myAddressForSession}
               </cf-text>
-              <cf-copy-button text={myAddressForSession} size="sm" icon-only />
+              <cf-copy-button text={myAddressForSession} size="sm" iconOnly />
             </cf-hstack>
           </div>
           <div

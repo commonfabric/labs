@@ -28,6 +28,7 @@
 import {
   type Cell,
   type Cfc,
+  computed,
   type Confidential,
   type CurrentPrincipal,
   currentPrincipal,
@@ -834,6 +835,40 @@ const copyOffers = handler<
   );
 });
 
+/**
+ * Copies the offers a link reaches into its own result, in a derivation, as a
+ * piece a stranger's handler starts with a link to the owner's offers would.
+ */
+const OfferCopier = pattern<
+  { offers: Default<Offer[], []> },
+  { titles: string[] }
+>(({ offers }) => ({
+  titles: computed(() => (offers ?? []).map((item) => `${item.title}`)),
+}));
+
+/** Starts an `OfferCopier` over a link to the owner's private offers. */
+const startLinkedCopier = handler<
+  void,
+  {
+    privateInbox: Writable<PrivateInboxHolder>;
+    linkedCopier: Writable<{ piece?: { titles: string[] } }>;
+  }
+>((_event, { privateInbox, linkedCopier }) => {
+  linkedCopier.set({
+    piece: OfferCopier({
+      offers: inboxOf(privateInbox.key("piece").resolveAsCell()).key("offers"),
+    }),
+  });
+});
+
+/** Turns the derived copy of the owner's offers on or off. */
+const setDerivedCopy = handler<
+  { on: boolean },
+  { derivedCopyOn: Writable<boolean> }
+>(({ on }, { derivedCopyOn }) => {
+  derivedCopyOn.set(on);
+});
+
 export interface MainInput {
   privateInbox: Writable<Default<PrivateInboxHolder, Record<never, never>>>;
   profiles: Writable<Default<ProfileHomeOutput[], []>>;
@@ -865,6 +900,12 @@ export interface MainOutput {
   olderHome: OlderHomeStandInOutput;
   copiedOffers: CopiedOffer[];
   ownPrivateInbox: PrivateInboxHolder;
+
+  /** While `setDerivedCopy` has it on, the owner's offers, by title. */
+  derivedOffers: string[];
+
+  /** The piece `startLinkedCopier` starts, once it has. */
+  linkedCopier: { piece?: { titles: string[] } };
   retainedPrivateInboxes: RetainedPrivateInboxes;
   privateInboxRefusal: PrivateInboxRefusalHolder;
 
@@ -1048,6 +1089,12 @@ export interface MainOutput {
   /** Copies the private inbox's offers into this piece. */
   copyOffers: Stream<void>;
 
+  /** Turns the derivation of `derivedOffers` on or off. */
+  setDerivedCopy: Stream<{ on: boolean }>;
+
+  /** Starts `linkedCopier`'s piece over a link to the private offers. */
+  startLinkedCopier: Stream<void>;
+
   /**
    * Creates one of the owner's profiles the way the profile-create surface
    * does, handing it the private inbox.
@@ -1223,6 +1270,19 @@ export default pattern<MainInput, MainOutput>((
     // deno-lint-ignore no-explicit-any
     profiles: profiles as any,
   });
+  const derivedCopyOn = new Writable<boolean>(false).for("derivedCopyOn");
+  const linkedCopier = new Writable<{ piece?: { titles: string[] } }>({}).for(
+    "linkedCopier",
+  );
+  // Reads the owner's offers only while it is on, so that nothing else the
+  // fixture does runs it.
+  const derivedOffers = computed(() => {
+    if (!derivedCopyOn.get()) return [] as string[];
+    const piece = privateInbox.get().piece;
+    if (piece === undefined) return [] as string[];
+    const offers = inboxOf(piece).key("offers").get() as Offer[] | undefined;
+    return (offers ?? []).map((item) => `${item.title}`);
+  });
   return {
     [NAME]: "Private inbox fixture",
     [UI]: <div>private inbox fixture</div>,
@@ -1371,6 +1431,10 @@ export default pattern<MainInput, MainOutput>((
     offer: offer({ profiles }),
     queuedOffer: queueOffer({ send: sendToPointedInbox({ profiles }) }),
     copyOffers: copyOffers({ privateInbox, copiedOffers }),
+    derivedOffers,
+    linkedCopier,
+    setDerivedCopy: setDerivedCopy({ derivedCopyOn }),
+    startLinkedCopier: startLinkedCopier({ privateInbox, linkedCopier }),
     unreadableHome,
     createUnreadableProfile: createUserScopedProfile({
       profiles: unreadableHome.profiles,

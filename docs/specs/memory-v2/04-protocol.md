@@ -528,6 +528,9 @@ interface SessionOpenRequest {
     // Present when the session's runtime names instances (see the rules and
     // INV-16). Absent means positional. Inside the signed descriptor.
     instanceNames?: true;
+    // Present when no one waits on the session's results (see the rules).
+    // Absent means the session is demand. Inside the signed descriptor.
+    demand?: false;
   };
   invocation?: SessionOpenInvocation;
   authorization?: {
@@ -700,6 +703,15 @@ Rules:
   `invite` only to a server advertising `spaceInvites`, on the open that
   redeems and on none of the session's resumes: a server that does not know
   the field would open, or refuse, the session without redeeming anything
+- a session that no one waits on declares `demand: false`: a server-side
+  component that reads and writes a space as an ordinary client and keeps its
+  sessions open for as long as it runs, such as a toolshed's webhook runtime.
+  A value other than `false` refuses the message. A client declares it on
+  every open, a resume included. A server running the serving loop counts
+  such a session of its service identity as the loop's own: it neither
+  activates the space, nor keeps it from parking, nor adds to its demand
+  (`server-side-execution/serving-loop.md` §1). A server that does not know the
+  field ignores it, and the session counts as it did before;
 - a session whose runtime names instances declares `instanceNames: true`, and
   one that declares nothing is positional; a value other than `true` refuses
   the message. A client declares it on every open, a resume included, when

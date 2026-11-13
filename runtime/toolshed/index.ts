@@ -53,6 +53,11 @@ const initializeRuntime = () => {
         memoryHost: new URL(env.MEMORY_URL),
         as: identity,
         clientBuild: toolshedClientBuild(),
+        // This runtime keeps a session on every space a webhook, ingest or
+        // token write touched for as long as the process runs, and no one
+        // waits on what those spaces compute through it. As demand, those
+        // sessions would keep each such space served until a restart.
+        demand: false,
       }),
     );
     console.log("Runtime initialized successfully");

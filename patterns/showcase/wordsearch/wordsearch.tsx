@@ -157,7 +157,7 @@ export const WordSearch = pattern<WordSearchInput, WordSearchOutput>(
               <cf-file-download
                 $data={pdf}
                 $filename={pdfName}
-                mime-type="application/pdf"
+                mimeType="application/pdf"
                 variant="primary"
                 size="sm"
               >

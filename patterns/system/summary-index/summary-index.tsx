@@ -127,7 +127,7 @@ const SummaryIndex = pattern<Input, Output>(() => {
             {filteredCount} of {entryCount} pieces
           </span>
 
-          <cf-table full-width>
+          <cf-table fullWidth>
             <tbody>
               {filtered.map((entry) => (
                 <tr>

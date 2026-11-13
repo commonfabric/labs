@@ -71,7 +71,7 @@ export class CFTextarea extends BaseElement {
     spellcheck: { type: Boolean },
     autocomplete: { type: String },
     resize: { type: String },
-    autoResize: { type: Boolean, attribute: "auto-resize" },
+    autoResize: { type: Boolean, attribute: "auto-resize", reflect: true },
     timingStrategy: { type: String, attribute: "timing-strategy" },
     timingDelay: { type: Number, attribute: "timing-delay" },
     size: { type: String, reflect: true },

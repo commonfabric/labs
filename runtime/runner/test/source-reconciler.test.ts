@@ -35,7 +35,9 @@ import {
   systemPatternSource,
 } from "../src/index.ts";
 import { readStoredCfcSchemaHash } from "../src/cfc/metadata.ts";
+import { ensurePieceRunningVerdict } from "../src/ensure-piece-running.ts";
 import { PatternsRoute } from "../src/harness/patterns-route.deno.ts";
+import type { NormalizedFullLink } from "../src/link-utils.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
 import type { MemorySpace } from "../src/storage/interface.ts";
 
@@ -84,6 +86,16 @@ function sourceWithChangedContract(marker: string): string {
   return [
     "import { computed, pattern } from 'commonfabric';",
     `export const ${SYMBOL} = pattern<{ optional?: string }, { marker: string; extra: string }>(() => ({ marker: computed(() => "${marker}"), extra: computed(() => "extra") }));`,
+    "",
+  ].join("\n");
+}
+
+/** The tracked pattern with a `ping` stream the others do not have. */
+function sourceWithStream(marker: string): string {
+  return [
+    "import { computed, handler, pattern, type Stream } from 'commonfabric';",
+    "const ping = handler<number, Record<string, never>>(() => {});",
+    `export const ${SYMBOL} = pattern<Record<string, never>, { marker: string; ping: Stream<number> }>(() => ({ marker: computed(() => "${marker}"), ping: ping({}) }));`,
     "",
   ].join("\n");
 }
@@ -2317,6 +2329,171 @@ describe("piece source reconciliation", () => {
       expect(await reconcile(piece)).toBe("rejected");
 
       expect(adoptions.refusals).toBe(1);
+    });
+
+    describe("a send to a stream only the refused source has", () => {
+      // The piece keeps running v1 once its adoption of v2 is refused, and
+      // only v2 has the `ping` stream, so a send to it finds no handler.
+
+      /** A piece running v1 whose adoption of v2 was refused by `error`. */
+      async function pieceRefusing(error: Record<string, unknown>) {
+        const piece = await pieceOffered(sourceWithStream("v2"));
+        using _adoptions = refuseAdoptions(error);
+        expect(await reconcile(piece)).toBe("rejected");
+        return piece;
+      }
+
+      /** The drop reason for a piece whose record names `offered`. */
+      function refusedDrop(
+        piece: Cell<unknown>,
+        offered: string,
+      ): string {
+        return "Event dropped: no handler registered for " +
+          `${piece.getAsNormalizedFullLink().id} after starting its piece, ` +
+          "which still runs its previous program because its update to " +
+          `\`${offered}\` was refused (\`apply-failed\`); the piece's ` +
+          "`pieceReconciliation` record has the detail";
+      }
+
+      /** Sends `1` to the piece's `ping` stream, as a served event. */
+      async function sendServed(piece: Cell<unknown>) {
+        const outcomes: unknown[] = [];
+        runtime.scheduler.queueEvent(
+          piece.key("ping").getAsNormalizedFullLink(),
+          1,
+          true,
+          undefined,
+          false,
+          { served: { onFailure: (outcome) => outcomes.push(outcome) } },
+        );
+        await runtime.idle();
+        return outcomes;
+      }
+
+      it("names the refused update and its reason in a served drop, without its detail", async () => {
+        const v1Identity = await identityFor(source("v1"));
+        const v2Identity = await identityFor(sourceWithStream("v2"));
+        const piece = await pieceRefusing(policyChanged);
+        expect(getPatternIdentityRef(piece)?.identity).toBe(v1Identity);
+        expect(getPieceReconciliation(piece)?.detail).toContain(
+          "writePolicyAnyOf",
+        );
+
+        const outcomes = await sendServed(piece);
+
+        expect(outcomes).toEqual([{
+          kind: "dropped",
+          message: refusedDrop(piece, v2Identity),
+        }]);
+      });
+
+      it("reads the refused update without loading a document", async () => {
+        // The drop reads the record off the document the start walk synced.
+        // A read through any other cell for it would start a load of its own.
+
+        const v2Identity = await identityFor(sourceWithStream("v2"));
+        const piece = await pieceRefusing(policyChanged);
+        using syncs = spy(runtime.storageManager, "syncCell");
+        const probed: { refused: unknown; syncs: number }[] = [];
+        Object.assign(
+          runtime.scheduler.accessForTestingOnly.eventQueueState,
+          {
+            loadPieceForEvent: async (
+              _runtime: Runtime,
+              link: NormalizedFullLink,
+            ) => {
+              const verdict = await ensurePieceRunningVerdict(runtime, link);
+              return {
+                ...verdict,
+                refusedUpdate: () => {
+                  const before = syncs.calls.length;
+                  const refused = verdict.refusedUpdate?.();
+                  probed.push({
+                    refused,
+                    syncs: syncs.calls.length - before,
+                  });
+                  return refused;
+                },
+              };
+            },
+          },
+        );
+
+        await sendServed(piece);
+
+        expect(probed).toEqual([{
+          refused: {
+            offered: { identity: v2Identity, symbol: SYMBOL },
+            reason: "apply-failed",
+          },
+          syncs: 0,
+        }]);
+      });
+
+      it("names the refused update in the error a client's own drop reports", async () => {
+        const v2Identity = await identityFor(sourceWithStream("v2"));
+        const piece = await pieceRefusing(tooLarge);
+        const errors: Error[] = [];
+        runtime.scheduler.onError((error) => errors.push(error));
+
+        runtime.scheduler.queueEvent(
+          piece.key("ping").getAsNormalizedFullLink(),
+          1,
+        );
+        await runtime.idle();
+
+        expect(errors).toHaveLength(1);
+        expect(errors[0]).toMatchObject({
+          name: "EventDroppedError",
+          reason: refusedDrop(piece, v2Identity),
+        });
+      });
+
+      it("says nothing of a refusal whose offered program is the one the piece runs", async () => {
+        const piece = await pieceRefusing(policyChanged);
+        const running = getPatternIdentityRef(piece)!;
+        const recorded = getPieceReconciliation(piece)!;
+        const rewritten = await runtime.editWithRetry((tx) => {
+          setPieceReconciliation(piece, tx, { ...recorded, offered: running });
+        });
+        expect(rewritten.error).toBeUndefined();
+        expect(getPieceReconciliation(piece)).toMatchObject({
+          outcome: "refused",
+          offered: running,
+        });
+
+        expect(await sendServed(piece)).toEqual([{
+          kind: "dropped",
+          message: "Event dropped: no handler registered for " +
+            `${piece.getAsNormalizedFullLink().id} after starting its piece`,
+        }]);
+      });
+
+      it("says nothing of an offer whose adoption did not land, short of a refusal", async () => {
+        // The next open proposes the offered program again, so the piece has
+        // not refused it.
+
+        const v2Identity = await identityFor(sourceWithStream("v2"));
+        const piece = await pieceRefusing(policyChanged);
+        const { reason: _reason, ...recorded } = getPieceReconciliation(piece)!;
+        const rewritten = await runtime.editWithRetry((tx) => {
+          setPieceReconciliation(piece, tx, {
+            ...recorded,
+            outcome: "unapplied",
+          });
+        });
+        expect(rewritten.error).toBeUndefined();
+        expect(getPieceReconciliation(piece)).toMatchObject({
+          outcome: "unapplied",
+          offered: { identity: v2Identity, symbol: SYMBOL },
+        });
+
+        expect(await sendServed(piece)).toEqual([{
+          kind: "dropped",
+          message: "Event dropped: no handler registered for " +
+            `${piece.getAsNormalizedFullLink().id} after starting its piece`,
+        }]);
+      });
     });
   });
 

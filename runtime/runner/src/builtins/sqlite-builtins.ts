@@ -1424,12 +1424,14 @@ export function sqliteQuery(
       runtime.trackAsyncWork(
         settleAbandonedRequest(
           runtime,
-          "sqliteQuery",
-          effectKey,
+          {
+            builtinId: "sqliteQuery",
+            effectKey,
+            identity: runIdentity,
+            scope,
+            attributeToBuiltin: true,
+          },
           (settleTx) => {
-            if (runIdentity !== undefined) {
-              settleTx.tx.scopeKeyIdentity = runIdentity;
-            }
             // The cancellation is asked again here, not only where this was
             // scheduled: `editWithRetry` runs this callback once per attempt,
             // and a retry is where the time passes in which a node can go

@@ -63,6 +63,7 @@ const buildOpen = async (
     genesisRoot?: FabricValue;
     spaceKind?: string;
     instanceNames?: true;
+    demand?: false;
     invite?: { inviteId: string; code: string };
   } = {},
 ) => {
@@ -268,6 +269,26 @@ describe("verifySessionOpenAuthorization", () => {
       Error,
       "authorization mismatch",
     );
+  });
+
+  it("binds a declaration that the session is not demand to the signed descriptor", async () => {
+    const message = await buildOpen(signedFields(), alice, { demand: false });
+    expect(await verifySessionOpenAuthorization(message, verifyOptions())).toBe(
+      alice.did(),
+    );
+    await expect(
+      verifySessionOpenAuthorization(
+        { ...message, session: {} },
+        verifyOptions(),
+      ),
+    ).rejects.toThrow("authorization mismatch");
+    const unsigned = await buildOpen(signedFields());
+    await expect(
+      verifySessionOpenAuthorization(
+        { ...unsigned, session: { demand: false } },
+        verifyOptions(),
+      ),
+    ).rejects.toThrow("authorization mismatch");
   });
 
   it("binds an invitation to the signed descriptor", async () => {

@@ -103,6 +103,25 @@ export const parseHandleRef = (refText: string): NormalizedFullLink => {
 };
 
 /**
+ * Whether `left` and `right` spell one address, which is whether
+ * {@link mintAddressHandle} gives the two one token. The comparison is of the
+ * spellings alone: a ref that embeds its space and one that leaves the same
+ * space implicit are two addresses here, as they are to the mint. Text that
+ * {@link parseHandleRef} refuses spells no address, and so shares none.
+ */
+export const handleRefsShareAddress = (
+  left: string,
+  right: string,
+): boolean => {
+  try {
+    return addressKey(parseHandleRef(left)) ===
+      addressKey(parseHandleRef(right));
+  } catch {
+    return false;
+  }
+};
+
+/**
  * Helper for minting, which serializes a complete link without context.
  * Unresolved references retain the implicit base scope of their intake form.
  */

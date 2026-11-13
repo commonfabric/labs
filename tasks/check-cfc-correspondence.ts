@@ -156,7 +156,14 @@ export interface Exemption {
  * Every `§` citation under `runtime/runner/src/cfc/` that names something
  * other than a section of the specification, on purpose.
  */
-export const EXEMPTIONS: readonly Exemption[] = [];
+export const EXEMPTIONS: readonly Exemption[] = [{
+  file: "runtime/runner/src/cfc/prepare.ts",
+  citation: "§8.12.5.1",
+  reason: "the served-run holder rule cites the section " +
+    "https://github.com/commonfabric/specs/pull/95 adds, which the pinned " +
+    "snapshot (specs#88's head) does not hold; its SPEC-PENDING marker names " +
+    "that pull request",
+}];
 
 /** A file this check reads. */
 export interface SourceFile {

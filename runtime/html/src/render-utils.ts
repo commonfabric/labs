@@ -1,3 +1,7 @@
+import {
+  isAttributePropName,
+  isEventPropName,
+} from "@commonfabric/pattern-contract/jsx-prop-names";
 import { utf8SortedKeysOf } from "@commonfabric/text/utf8";
 
 export type SetPropHandler = <T>(
@@ -13,7 +17,7 @@ export type SetPropHandler = <T>(
  */
 export const CFC_POLICY_PLACEHOLDER_TEXT = "Content hidden by policy";
 
-export const isEventProp = (key: string) => key.startsWith("on");
+export const isEventProp = isEventPropName;
 
 /**
  * Get the event type from an event prop name.
@@ -127,7 +131,7 @@ export const setPropDefault = <T>(target: T, key: string, value: unknown) => {
   // ARIA names and data-* keys are attributes; assigning a hyphenated
   // property does not expose them to accessibility APIs or dataset.
   if (
-    (key.startsWith("data-") || key.startsWith("aria-")) &&
+    isAttributePropName(key) &&
     (target as Element | null | undefined)?.nodeType === 1
   ) {
     const element = target as Element;

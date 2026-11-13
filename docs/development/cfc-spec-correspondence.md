@@ -339,8 +339,8 @@ procedure. Its record is the "Runtime-owned-store derived admission" entry in
 
 The own-space residency addition is a nonconforming semantic gap that still
 needs a ruling. Its proposal,
-[specs#71](https://github.com/commonfabric/specs/pull/71), is closed without
-merging. It admits more at the strict default, with no default-off dial and
+[specs#71](https://github.com/commonfabric/specs/pull/71), is open and
+unruled. It admits more at the strict default, with no default-off dial and
 no separate `SPEC-PENDING` marker; the existing residency marker names specs#68.
 This does not satisfy step 4 above. @danfuzz has authorized regular labs pull
 requests ahead of unresolved specs dependencies during this development phase;
@@ -388,6 +388,20 @@ marker. The snapshot stays pinned at specs#88's head, which does not define
 the route's pseudocode, so the kernel manifest carries no row for it until the
 next regeneration after the ruling. @danfuzz directed landing it this way. The
 conformance statement's §8 records the gap.
+
+The served-run holder rule (§8.12.5.1) implements
+[specs#95](https://github.com/commonfabric/specs/pull/95) ahead of its
+ruling. A served run, of any kind, admits a clause it read from a
+store whose holders don't include every holder of the target only by the
+target's residency. It refuses more than the pin at strict and persists
+nothing new, so it meets step 4's fail-closed condition against the pin.
+Against the proposal it admits one case more: residency's owner case, which
+lets a `PersonalSpace(P)` clause into a store bound to `P` and comes from the
+residency the pin's specs#68 marker already covers. Its two deciding sites
+carry the `SPEC-PENDING` marker, and the citation, to a
+section the snapshot does not hold, is exempted in
+`tasks/check-cfc-correspondence.ts`. The conformance statement's §5 records
+the gap and where the runtime differs from the proposal.
 
 The header a kernel function carries is one `@spec` tag in its doc comment,
 `@spec <chapter-file> §<section> <name> sha256:<hash>`, parsed by

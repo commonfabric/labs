@@ -127,7 +127,7 @@ export const SortableTable = pattern<SortableTableInput, SortableTableOutput>(
           {ifElse(
             isEmpty,
             <cf-empty-state message={emptyMessage} />,
-            <cf-table striped hover full-width>
+            <cf-table striped hover fullWidth>
               <thead>
                 <tr>{headerCells}</tr>
               </thead>

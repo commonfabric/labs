@@ -66,7 +66,7 @@ export default pattern<LLMTestInput>(({ title }) => {
         {llmResponse.pending
           ? (
             <div>
-              <cf-loader show-elapsed /> Thinking...
+              <cf-loader showElapsed /> Thinking...
             </div>
           )
           : llmResponse.result

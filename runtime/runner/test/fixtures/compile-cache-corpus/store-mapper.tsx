@@ -1431,7 +1431,7 @@ export default pattern<Input, Output>(
                             $value={aisle.description}
                             placeholder="Description (e.g., Bread & Cereal)"
                             rows={3}
-                            auto-resize
+                            autoResize
                           />
                         </cf-vstack>
                         <cf-button

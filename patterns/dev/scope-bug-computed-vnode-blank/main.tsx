@@ -191,7 +191,7 @@ export default pattern<ReproInput, ReproOutput>(({ counter, name }) => {
                   <cf-input
                     $value={name}
                     placeholder="Try typing"
-                    timing-strategy="immediate"
+                    timingStrategy="immediate"
                   />
                 </div>
               ))}

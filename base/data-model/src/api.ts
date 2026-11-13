@@ -22,6 +22,9 @@
  * the one name its class reports, and the interface is a member of
  * `ConcreteFabricPrimitive`.
  *
+ * TODO(danfuzz): Once `FabricRegExp` is deleted, drop this caveat: its
+ * interface narrows `.schemaType` to `object`, and is not a member.
+ *
  * This module has no imports, and can have none. `@commonfabric/api`
  * re-exports it to patterns, and the script that builds the type file the
  * sandbox is served inlines this text rather than following a specifier out of
@@ -259,7 +262,9 @@ export interface FabricPrimitive {
    * a schema names to admit this value by its class. Every instance of a class
    * reports the same name, which need not be the name of the class.
    */
-  readonly schemaType: FabricPrimitiveSchemaType;
+  // TODO(danfuzz): Once `FabricRegExp` is deleted, narrow this to
+  // `FabricPrimitiveSchemaType`.
+  readonly schemaType: FabricPrimitiveSchemaType | "object";
 }
 
 export interface FabricPrimitiveConstructor {
@@ -492,7 +497,7 @@ export declare const FabricKeyPair: FabricKeyPairConstructor;
  */
 export interface FabricRegExp extends FabricPrimitive {
   /** @inheritDoc */
-  readonly schemaType: "FabricRegExp";
+  readonly schemaType: "object";
 
   readonly source: string;
   readonly flags: string;
@@ -607,6 +612,8 @@ export declare const FabricUnavailable: FabricUnavailableConstructor;
  * Union of the concrete `FabricPrimitive` classes this module declares. Every
  * type that ranges over those classes is derived from this one.
  */
+// TODO(danfuzz): Once `FabricRegExp` is deleted, drop this caveat: it is the
+// one class declared here that this union leaves out.
 export type ConcreteFabricPrimitive =
   | FabricBytes
   | FabricDurationDay
@@ -615,7 +622,6 @@ export type ConcreteFabricPrimitive =
   | FabricEpochNsec
   | FabricHash
   | FabricKeyPair
-  | FabricRegExp
   | FabricUnavailable;
 
 /**

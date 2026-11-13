@@ -17,6 +17,7 @@ import { Runtime } from "../src/runtime.ts";
 import {
   createNonReactiveTransaction,
   type ExtendedStorageTransaction,
+  runBeforeAbort,
   TransactionWrapper,
 } from "../src/storage/extended-storage-transaction.ts";
 import type {
@@ -64,6 +65,28 @@ describe("extended-storage-transaction", () => {
     tx.markLazyMaterialize(true);
     return { tx, cell: runtime.getCell(space, cause, SCHEMA, tx) };
   };
+
+  describe("runBeforeAbort()", () => {
+    it("runs the callback first in an abort", () => {
+      const tx = runtime.edit();
+      const seen: string[] = [];
+      runBeforeAbort(tx, () => seen.push(tx.status().status));
+      tx.abort();
+      expect(seen).toEqual(["ready"]);
+    });
+
+    it("drops the callback once the transaction commits", async () => {
+      const tx = runtime.edit();
+      let calls = 0;
+      runBeforeAbort(tx, () => {
+        calls += 1;
+      });
+      expect((await tx.commit().settled).error).toBeUndefined();
+      tx.abort();
+
+      expect(calls).toBe(0);
+    });
+  });
 
   describe("content-addressed document staging", () => {
     const code = "export const staged = 1;";

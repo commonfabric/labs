@@ -87,7 +87,7 @@ otherwise complete first-time creation command into an unimplemented command.
 
 ## Last updated
 
-2026-11-01
+2026-11-13
 
 ## Terms
 
@@ -1490,7 +1490,13 @@ a read.
 
 A refused candidate is worth surfacing beyond the panel, because a piece
 nobody opens says nothing at all and the owner of the origin is usually not
-the owner of the piece. How that reaches a person is open design work.
+the owner of the piece. How that reaches a person is open design work. One
+place says it. When the piece's program has no handler for the stream
+an event is sent to — a stream only the refused candidate defines, say — the
+drop's reason names the candidate's identity and the refusal's reason, and
+points at this record for the rest. It names no more than that: a served
+drop's reason is written into the stream's dropped-event notice, and what the
+attempt reported is whatever error the refusal raised.
 
 Reconciliation is triggered by starting the piece — which a user's open does
 for most pieces on a client that runs them, the runtime does for the surfaces
