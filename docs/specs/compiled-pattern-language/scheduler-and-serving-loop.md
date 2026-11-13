@@ -60,14 +60,18 @@ The terms of the sibling documents are used unchanged: *instance*, *cone*,
 - **Cause.** What a transaction is opened for. There are four kinds: an
   event delivered to a handler, a set of changes, the completion of an
   effect, and a change of demand (section 4.5). A set of changes is the
-  commits that arrived from storage and the writes of the events of a batch
-  (section 10.2).
+  commits that arrived from storage, the commit of an effect's completion
+  among them, and the writes of the events of a batch (section 10.2).
 - **The transaction of a cause.** An event has an **event's transaction**:
   the stale cone instances the handler reads, and then the handler body.
-  Every other kind of cause has a **derivation transaction**, which
-  evaluates the stale cone instances that something demands
-  (`execution-and-storage.md` §1.1). A transaction covers one space. A cause
-  that reaches instances in two spaces has one transaction in each
+  A set of changes and a change of demand each have a **derivation
+  transaction**, which evaluates the stale cone instances that something
+  demands (`execution-and-storage.md` §1.1). The completion of an effect
+  opens no transaction beside the operation's own completion transaction:
+  its commit is one of the changes of the set of the cycle that follows
+  it, and what reads the result is evaluated in that set's derivation
+  transaction (sections 6.5 and 10.2). A transaction covers one space. A
+  cause that reaches instances in two spaces has one transaction in each
   (section 9).
 - **Batch.** The events one cycle handles in one space (section 5.1). Each
   has a transaction of its own, and one derivation transaction runs behind
@@ -182,7 +186,7 @@ recorded here because the tables depend on them.
 | P3, demand gates execution | Kept | A cone instance is evaluated only when it is stale and demanded: one of its kept outputs is demanded, or something demanded reads the target of one of its write edges, or a demanded cone instance pulls one of its outputs |
 | P4, one static write surface | Kept, and stricter | The plan lists every write edge and every write envelope, and the runtime refuses a write that neither covers (`plan-and-label-templates.md`, §3.11 and §7.4). The registration-time log that could seed a write surface is not carried over. A handler received as a factory value is the exception: its write edges are known when the binding is made, not when the binder is compiled |
 | P5, self-identification through the transaction | Changed | The source of a commit is a cause's transaction, not a node (`sourceAction` today, set in `runSchedulerAction`). The index has already been applied to that transaction's staged writes, so its own commit notification marks nothing. Materializers and effect operations keep suppression per unit |
-| P6, subscriptions are durable and runs apply deltas | Removed for slots; kept for dynamic reads | Slot entries change only when a slot is rebound, and element entries when a collection's membership changes. The journaled reads of a `dynamic` node are diffed against the registered ones after each evaluation, as a node's read log is today |
+| P6, subscriptions are durable and runs apply deltas | Removed for slots; kept for dynamic reads | Slot entries change only when a slot is rebound, element entries when a collection's membership changes, and the entries of a slot whose path holds `*` when the children of its container change. The journaled reads of a `dynamic` node are diffed against the registered ones after each evaluation, as a node's read log is today |
 | P7, convergence is bounded | Kept, at two levels | Section 8 |
 | P8, policies are time gates | Kept for the units that have gates | Effect operations, materializers, and render sinks keep `eligibleAt` and the one wake timer (`SchedulerGates` in `scheduler/gates.ts`). A cone instance has no gate of any kind (section 8.4) |
 | P9, start modes | Removed | An instance record is built from its plan, its bindings, and its basis rows. There is no `fresh` or `resume` |
@@ -198,7 +202,7 @@ recorded here because the tables depend on them.
 | §4.2 Event handlers are not nodes | | Kept | |
 | §4.3 Primary output and static side-write targets | The static writer map | Changed | The writer map is derived from the plans' kept outputs and write edges (section 2.6). The stores a raw built-in declares (`storeWrites`) have no counterpart |
 | §4.3 Materializers | `collectIdleMaterializerSeeds` and `addInvalidMaterializerPromotions` (`scheduler/settle.ts`) | Kept | Section 7 |
-| §4.4 Registration and removal | `Scheduler.register` | Changed | Loading and releasing an instance record. Loading inserts index entries for the instance's slots and reads no cell data. The entries of element slots are inserted after a collection is first evaluated (section 3.2) |
+| §4.4 Registration and removal | `Scheduler.register` | Changed | Loading and releasing an instance record. Loading inserts index entries for the instance's slots and reads no cell data. The entries of element slots are inserted after a collection is first evaluated, and those of a slot whose path holds `*` after its container is first read (section 3.2) |
 | §5.1, §5.2 Liveness | `notifyNodeLivenessChange`, `registerDependentEdge`, and the reference definition `recomputeLiveRefs` (`scheduler/dependency-graph.ts`) | Kept | The same maintenance over kept outputs and write edges instead of nodes (section 4.3) |
 | §5.3 Provisional demand, `deferUntilDemand` | `Scheduler#markProvisionalDemand`; `deferUntilDemand` is set by `collectionIndexKeys` only | Removed | A pull extends through a link inside a derivation transaction, so an instance created in a transaction is evaluated in a derivation transaction exactly when something demanded reads it (section 2.7) |
 | §6.1 The change channel | `processStorageNotification` | Kept | Section 3 |
@@ -219,10 +223,10 @@ recorded here because the tables depend on them.
 
 | Invariant | Disposition | In this design |
 | --- | --- | --- |
-| I1, live consistency | Kept | At quiescence every demanded kept output holds the value its cone computes from the current committed inputs. The exception is an output whose write a failed constraint dropped: it holds what was stored before, until a slot the constraint lists changes (section 5.6) |
-| I2, dormancy | Kept | An instance nothing demands is not evaluated, and loading, dirtying, and releasing it read no cell data. The entries of element slots are not built by loading: they come from the first evaluation of the collection (section 3.2) |
-| I3, value-gated execution | Kept | A cone instance that has been evaluated is evaluated again only when something its last evaluation read has changed, or when the process holds no memo entry for it and either its basis rows are behind the heads of its inputs or a stale consumer pulls an interim output of it, which is stored nowhere. A transaction that does not commit, a dropped write, and a withdrawn write leave a cone instance current and its output unstored, and cause no evaluation. The one exception is a cone instance that staged a side-write or made an instance in a transaction that did not commit: its memo entry is dropped, so that a later evaluation performs the write (section 3.5) |
-| I4, event order and consistency | Kept, per space | Handlers run in the order of section 5.4. Every value a handler reads from its own space is current when it reads it (section 5.3). The two exceptions are a cell a materializer creates under a cause computed from data (section 7.2) and a derived value of another space (section 9.2) |
+| I1, live consistency | Kept | At quiescence every demanded kept output holds the value its cone computes from the current committed inputs. The exception is an output whose write a failed constraint dropped: it holds what was stored before, until the instantiation key of the write changes (section 5.6) |
+| I2, dormancy | Kept | An instance nothing demands is not evaluated, and loading, dirtying, and releasing it read no cell data. The entries of element slots are not built by loading: they come from the first evaluation of the collection. The entries of a slot whose path holds `*` come from the first read of its container (section 3.2) |
+| I3, value-gated execution | Kept | A cone instance that has been evaluated is evaluated again only when something its last evaluation read has changed, or when the process holds no memo entry for it and either its basis rows are behind the heads of its inputs or a stale consumer pulls an interim output of it, which is stored nowhere. A transaction that does not commit, a dropped write, and a withdrawn write leave a cone instance current and its output unstored, and cause no evaluation. The one exception is a cone instance that staged a side-write or made an instance in a transaction that did not commit, or whose side-write was withdrawn: its memo entry is dropped, so that a later evaluation performs the write (section 3.5) |
+| I4, event order and consistency | Kept, per space | Handlers run in the order of section 5.4. Every value a handler reads from its own space is current when it reads it (section 5.3). There are five exceptions, and in each the handler reads what is stored: a cell a materializer creates under a cause computed from data (section 7.2); an address inside the envelope of a materializer of an instance that is not loaded (section 7.4); a cell that an instance that is not loaded writes through a handle, and a path of a child's argument whose writing instance is not loaded (sections 4.4 and 5.3); and a derived value of another space (section 9.2). A value of an instance marked as torn down has no current value beside the one last stored (section 2.7) |
 | I5, self-stability | Kept | The commit of a cause's transaction dirties nothing in the instances that transaction evaluated |
 | I6, bounded non-convergence | Kept, changed form | Section 8 |
 | I7, restart equivalence | Kept | Through the basis index (section 10.4) |
@@ -248,8 +252,8 @@ address index, the writer map, and demand counts. Invalidation is unchanged.
 Settle becomes the transactions of one cycle. The runner becomes cone
 evaluation, which `execution-and-storage.md` owns. Events are kept, and
 gates are kept for effect operations and materializers. Persistence is the
-serving loop's basis index and the stream index of section 5.1.
-Introspection is kept.
+serving loop's basis index, the stream index of section 5.1, and the
+pending-effect rows of section 2.3. Introspection is kept.
 
 ## 2. Units and edges
 
@@ -262,13 +266,18 @@ Introspection is kept.
 | Materializer | One `Operation` of kind `materializer` of a loaded instance | Its own, one per run (section 7) |
 
 A unit exists per scope instance where its state is scoped. The scope of a
-cone instance is the narrowest scope among the addresses its slots are bound
-to and its `dynamic` nodes read, and a cone instance of user or session
-scope is evaluated once per scope key that demands it
+cone instance is the narrowest among three things: `Output.scope` of the
+cone's outputs, the addresses its slots are bound to, and the addresses its
+`dynamic` nodes read. `Output.scope` is in the rule because a read that
+answers for the acting principal, such as `spaceAccess`, is made at an
+address every principal shares, so no address shows that the output is of
+user scope (`plan-and-label-templates.md` §1.4). A cone instance of user
+or session scope is evaluated once per scope key that demands it
 (`execution-and-storage.md` §1.8). This is what a narrowed node is today
 ([scopes](../server-side-execution/scopes.md), §2). The scheduler supplies
 the scope keys that demand an instance: they are the principals and
-sessions of the demand sources of section 2.5.
+sessions of the demand sources of section 2.5. Section 6.2 says which
+principal an operation's request transaction acts as.
 
 ### 2.2 The record of an instance
 
@@ -312,7 +321,10 @@ export interface PlanIndex {
   readonly cyclicCones: readonly Index[];
 }
 
-/** Where one slot is bound, for one scope key and one position. */
+/**
+ * Where one slot is bound, for one scope key, one position, and one child
+ * of each container that a `*` of the slot's path ranges over.
+ */
 export interface SlotBinding {
   /** The address the slot resolves to. */
   readonly bound: Address;
@@ -328,6 +340,18 @@ export interface SlotBinding {
    * hold one key have two bindings.
    */
   readonly elementKey?: string;
+  /**
+   * For a slot whose path holds `*`: the segment that takes the place of
+   * each `*` for this child, outermost first. A slot has one binding per
+   * child its path reaches (section 3.2).
+   */
+  readonly child?: Path;
+  /**
+   * For a slot whose path holds `*`: the address of each container a `*`
+   * ranges over on the way to this child, outermost first. A change of the
+   * children of one of them rebinds the slot (section 3.2).
+   */
+  readonly containers?: readonly Address[];
 }
 
 /** A derived write that storage does not hold (section 3.5). */
@@ -338,13 +362,14 @@ export interface UnstoredWrite {
   readonly write: { readonly output: Index } | { readonly edge: Index };
   /**
    * Present where a failed constraint dropped the write: the constraint, by
-   * index into `Plan.constraints`, and the label identifiers of the slots
-   * it lists. The write is not attempted again until one of those slots
-   * changes its value or its label (section 5.6).
+   * index into `Plan.constraints`, and the instantiation key of the write's
+   * template, as a hash (`plan-and-label-templates.md` §4.1, step 2). The
+   * write is not attempted again while its instantiation key is the same,
+   * and is attempted again when the key changes (section 5.6).
    */
   readonly refusal?: {
     readonly constraint: Index;
-    readonly labels: readonly Hash[];
+    readonly instantiationKey: Hash;
   };
 }
 
@@ -355,7 +380,8 @@ export interface InstanceRecord {
   readonly plan: PlanIndex;
   /**
    * By slot index and scope key. For a slot with root `element`, also by
-   * the positions of the enclosing collections, outermost first.
+   * the positions of the enclosing collections, outermost first. For a
+   * slot whose path holds `*`, also by `SlotBinding.child`.
    */
   readonly bindings: ReadonlyMap<string, SlotBinding>;
   /** Slots whose observed value changed since a cone instance read them. */
@@ -408,11 +434,21 @@ position, with the element's key as a tag, because labels are per position
 and values are per key (`plan-and-label-templates.md` §1.3). The bindings
 come from the element table (section 3.2).
 
+**Slots whose path holds `*`.** Such a slot stands for every child of a
+container, as `argument rows/*/price` stands for the price of every row.
+It is bound at one address per child the path reaches, each with a chain
+of its own (`plan-and-label-templates.md` §2.5), so it has one
+`SlotBinding` per slot, scope key and child. The bindings are not known
+when an instance is loaded, because which children a container has is
+data. They are made when the container is first read, and section 3.2 says
+what is registered for them and what rebinds them.
+
 **Unstored writes.** `unstored` is the scheduler's record of the derived
 writes that a transaction computed and storage does not hold. It is what
 the cycle of section 10.2 reads to decide that a derivation transaction is
-needed when nothing is stale, and it holds the refusal of a dropped write.
-The memo holds the values (`MemoEntry.unstored` in
+needed when nothing is stale, and it holds the refusal of a dropped write:
+the constraint and the instantiation key the verdict was reached on. The
+memo holds the values (`MemoEntry.unstored` in
 `execution-and-storage.md` §3.1).
 
 ### 2.3 The record of an effectful operation
@@ -424,13 +460,87 @@ The memo holds the values (`MemoEntry.unstored` in
   stored request; the request hash and the claim stored there; the
   addresses its last request transaction followed below the references the
   request holds (section 6.2); whether a request is outstanding in this
-  process; its gates (section 6.4); and a demand count.
+  process; its gates (section 6.4); and, for an `Operation` of a plan, a
+  demand count, which decides whether its request transaction runs
+  (section 6.2).
+
+**An operation a handler requested** is named durably by its state
+document. The document's identifier derives from the handling and the
+request's ordinal (`execution-and-storage.md` §5.4), and the document
+holds a back-link to the result cell of the instance whose handler
+requested it (§6.4 there). Three things follow from the back-link.
+
+- The operation belongs to that instance. When the instance is torn down,
+  the operation leaves the registry with the instance's other operations
+  (section 2.7), and a completion for it writes nothing once the instance
+  is marked (section 6.3).
+- The back-link names an owner and no writer. The operation's own
+  transactions write the document and no cone does, so the check of
+  section 10.4 finds no cone for an address in it, and a read of the
+  result returns what is stored.
+- Such an operation has no demand count. Its request is sent when the
+  event's transaction commits, whether or not anything demands its result
+  (section 6.2).
+
+**Pending-effect rows.** A stored hash with a pending mark says that a
+request left the process, or was about to, and that no result is stored
+yet. For an `Operation` of a plan the instance leads to it: the
+operation's record is built when the instance is loaded, and its request
+transaction compares the stored hash (section 6.2). Nothing leads to the
+state document of an operation a handler requested. No plan lists it, and
+a document the scheduler loads holds a link to it only where the handler
+stored one. The serving runtime therefore keeps one **pending-effect row**
+for each such operation whose pending mark is set, in the space's store,
+beside the basis index (section 10.4).
+
+| Column | Holds |
+| --- | --- |
+| The operation | Its state document: space, identifier, scope instance |
+| The instance | The identifier of the result cell the back-link names |
+| The requester | The principal the event was stamped with, as whom the event's transaction ran |
+
+- **When a row is written.** In the store transaction that commits the
+  event's transaction: the wave's on a serving runtime. The same store
+  transaction writes the state document with the hash and the pending
+  mark, so a mark that is stored has a row.
+- **When a row is deleted.** In the store transaction of the commit that
+  clears the pending mark, which is the completion's, or the commit that
+  writes a refusal as the operation's result. A row is also deleted when
+  its instance is torn down (section 2.7).
+- **What it is.** Identifiers only, never pushed to a client, and never
+  read at admission, like a basis row. Only the scheduler of the space's
+  serving runtime reads it, at activation and at a teardown. Where the
+  runtime shows a row in a diagnostic or to a tool, it shows it under the
+  label `plan-and-label-templates.md` §2.6 gives the rows beside the
+  documents, which is an assumption there.
+- **What activation does with a row.** The process that wrote the mark is
+  gone, and with it the outbox's copy of the request. The scheduler reads
+  the state document the row names, builds the operation's record, and
+  runs a request transaction for it, with the steps of section 6.2: it
+  reads the stored request, follows the references the request holds,
+  checks the gates, the egress ceiling among them, on the content as it is
+  then, writes the hash it computed with the pending mark, and hands the
+  request to the outbox. The transaction acts as the requester the row
+  names, with the context an evaluation for that principal has (section
+  10.3). A ceiling that fails there rejects that transaction and no other:
+  the event committed earlier and is not affected, and the operation's
+  result takes the refusal as an error state, as for a request of the
+  reactive tier (section 6.3). A row whose instance is marked as torn down
+  is deleted, and nothing is requested. No instance is loaded on account
+  of a row.
+
+That the recovered request is checked and sent with the content as it is
+at the recovery is *assumed* (open question 38). The alternative stores
+with the state document the content the first request read, which is a
+copy of data under a label of its own.
 
 ### 2.4 The record of a materializer
 
 A materializer keeps the record a node has today: the read set its last run
 journaled, the trigger addresses that made it stale, a status, gates, and its
-declared write envelope. The plan gives the envelope: it is the `writes` and
+declared write envelope. The record is process memory. What says after a
+restart or a load whether a materializer is valid is its basis rows
+(sections 7.2 and 10.4). The plan gives the envelope: it is the `writes` and
 the `envelopes` of the body that `Operation.implementation` names
 (`plan-and-label-templates.md` §3.11). The two forms of `WriteEnvelope`
 differ in what they give the scheduler.
@@ -625,23 +735,26 @@ instances its own computations made.
   dropped-event notice, and the stream's `eventWatermark` passes it. An
   event whose transaction sealed earlier in the same cycle stands.
 - **Pending effects are abandoned.** Its effect operations leave the
-  registry. A request the outbox holds and has not dispatched is removed
-  from the outbox. A request that was dispatched is not recalled, and its
+  registry: the `Operation`s of its plan, and the operations its handlers
+  requested, which belong to it by their back-link (section 2.3). A
+  request the outbox holds and has not dispatched is removed from the
+  outbox. A request that was dispatched is not recalled, and its
   completion writes nothing, as a completion for a superseded request
   writes nothing (section 6.3).
 - **Its materializers stop**, and their standing demand ends.
 - **Its rows are deleted** from the basis index and from the stream index,
-  in the wave's store transaction.
+  and its pending-effect rows with them, in the wave's store transaction.
 
 A marked instance is not loaded again (section 4.4). If the write of the
 mark is withdrawn on a conflict, the instance is not torn down in storage,
 and the next demand that reaches it loads it.
 
-*Assumed:* the transaction that tears an instance down marks every instance
-that belongs to it as well, so that a child of the reactive tier of a
+The transaction that tears an instance down marks every instance that
+belongs to it as well: its children of the reactive tier, the instances
+its own computations made, and the instances that belong to those in turn
+(`execution-and-storage.md` §2.8). A child of the reactive tier of a
 torn-down instance, reached later through a link some document holds, is
-found marked. `execution-and-storage.md` §2.8 states the mark for the
-instance itself (open question 30).
+therefore found marked.
 
 **A failed evaluation** makes no instance and tears none down. The
 instances of the last committed evaluation stay loaded, and the paths of
@@ -671,7 +784,9 @@ argument path (`plan-and-label-templates.md` §4.5), and the egress ceiling
 is checked in the operation's own request transaction.
 
 **In another space.** Section 9.3 has an `inSpace` instantiation that a
-computation makes.
+computation makes: what carries its argument, a changed argument of a
+later evaluation, and the mark of its teardown into the other space, and
+which loop does the steps of the teardown above.
 
 **On a client.** A client that speculates the enclosing instance evaluates
 an instance a computation makes like any child, and tears it down in its
@@ -692,8 +807,9 @@ one of:
 | --- | --- | --- |
 | Slot | The bound address of a slot of a loaded instance, with the slot's observation class | Marks that slot dirty in that instance's record |
 | Chain | Each link address on a slot's chain | Rebinds the slot, then marks it dirty |
+| Container | For a slot whose path holds `*`: the address of each container a `*` ranges over, observed for `enumeration` (section 3.2) | Marks the slot dirty. The next read of the slot binds it again at the children the container then has |
 | Dynamic | Each address a `dynamic` node's last evaluation journaled, with the class of the read | Adds the address to that node's trigger reads, which makes the cone instance stale |
-| Row | Each input document a basis row names, for a cone instance whose slot or dynamic entries this process does not hold (section 10.4) | Makes that cone instance stale |
+| Row | Each input document a basis row names, for a cone instance whose slot or dynamic entries this process does not hold, and for a materializer that has not run in this process (section 10.4) | Makes that cone instance stale, or marks that materializer invalid |
 | Materializer read | Each address of a materializer's read set | Marks the materializer invalid and records the address as a trigger read |
 | Operation | The request path of an effect operation's state document, each address its last request transaction followed below a reference of the request, and the result path | Marks the operation's request stale, or delivers its completion |
 
@@ -723,7 +839,8 @@ Three kinds of read have no entry.
 ### 3.2 Entries from the plan and the bindings
 
 Loading an instance builds the entries of its slots that are not element
-slots, from two inputs, and reads no cell data beyond link structure.
+slots and whose path holds no `*`, from two inputs, and reads no cell data
+beyond link structure.
 
 1. **The plan** gives each slot a root, a path, a class, and the flags
    `resolved`, `inPlace` and `sampled`.
@@ -733,7 +850,7 @@ slots, from two inputs, and reads no cell data beyond link structure.
    | --- | --- |
    | `argument` | The instance's argument document |
    | `state` | The state cell's document. Its identifier derives from the instance, the steps of `within` with the element keys, and the cell's name. For a migrated instance, the carry-over record in the result document names the stored document of a cell declared inside a compiled-in sub-pattern, and the scheme of a cell declared directly in the body, and the binding takes both from it (`execution-and-storage.md` §5.2 and §9.3) |
-   | `operation` | The result path of the operation's state document, named the same way. For an operation inside an element body, the element key is a part of the document's identifier or a segment of the path, whichever layout `execution-and-storage.md` chooses (`plan-and-label-templates.md` §2.6). The result of a materializer is read through such a slot (section 7.1) |
+   | `operation` | The result path of the operation's state document, named the same way. For an operation inside an element body, the element key is a step of `within` in the document's identifier (`execution-and-storage.md` §6). The result of a materializer is read through such a slot (section 7.1) |
    | `child` | The child's result cell, named the same way |
    | `params` | For an instance whose callee is an inline pattern written at an instantiation in a function body: the instance's parameters document. For a closure called as a factory value: the factory value, at the address the `identity` slot of the factory is bound to (`plan-and-label-templates.md` §3.15; `execution-and-storage.md` §4.6) |
    | `binding` | Bound when an event is dispatched, for the length of its transaction. For a binding of the reactive tier each state path resolves through `Binding.state` to a slot or an output of the instance. For a binding made in a function body the root is the binding state document: a copied path is a path of that document, and a path bound by reference crosses the link the document holds. No index entry |
@@ -802,9 +919,57 @@ position, the key and the binding of each element slot.
   document makes that element's cone instances stale by document until the
   table exists.
 
+**A path that holds `*`.** A slot such as `argument rows/*/price`, of
+class `value`, has no one bound address. It is bound at one address per
+child its path reaches, each with a chain of its own
+(`plan-and-label-templates.md` §2.5). Over a stored list of links to row
+documents that is one address per row, each behind the link of its row.
+
+- **When it is bound.** When the value function first asks for the slot
+  (`execution-and-storage.md` §2.2), and for a slot of a handler's
+  `Body.reads` when the event is dispatched (section 5.2). The path up to
+  the first `*` is resolved as any path is, which gives the address of the
+  container. The container's children are read, and for each child the
+  rest of the path is resolved from that child, through a link where the
+  child or a later segment holds one. A path with a second `*` repeats
+  the step at each container the first resolution ends in. The result is
+  one `SlotBinding` per child: its bound address, its chain, the segment
+  that took the place of each `*`, and the addresses of the containers
+  (section 2.2). The links crossed before the first `*` are on the chain
+  of every child.
+- **What is registered.** One slot entry per child, at its bound address,
+  with the slot's class; one chain entry per link on a child's chain; and
+  one container entry at each container, observed for `enumeration`. The
+  entries are registered after the container was read, never at load,
+  because which children a container has is data.
+- **A change at one child's bound address** marks the slot dirty. A change
+  at a link on one child's chain rebinds that child alone, as a chain
+  entry rebinds any slot.
+- **A change of a container's children** matches the container entry, as
+  a change of membership matches a collection's `enumeration` slot: a
+  child was added or removed, or the order changed. The slot becomes
+  dirty, so the cone instances that read it are stale. The evaluation
+  that reads the slot next binds it again, and the scheduler adds the
+  entries of the children that are new, removes the entries of the
+  children that are gone, and keeps the rest. Until then the slot is
+  dirty and nothing more can make its readers stale, so the entries that
+  are missing for a new child are not needed.
+- **Before the container is first read in a process,** the slot has no
+  entries. A cone instance that was never evaluated is stale anyway. One
+  that an earlier process evaluated has basis rows, which name the
+  documents the children were read from, and the scheduler registers a
+  row entry for each (section 10.4).
+- **With `sampled`** the slot has no entries of any kind (section 3.1).
+- **In an element body.** A slot with root `element` whose path holds `*`
+  has one binding per position and child.
+- **Demand and the writer map.** Each child's bound address is looked up
+  in the writer map by itself, so demand reaches the writer of each child
+  the slot reads and of no other (section 4.3).
+
 **What loading costs.** One index insert per slot that is not an element
-slot and per chain address, and one per basis row whose cone instance has
-element slots or `dynamic` nodes. Nothing is evaluated.
+slot and whose path holds no `*`, one per chain address of such a slot,
+and one per basis row whose cone instance has element slots, slots whose
+path holds `*`, or `dynamic` nodes. Nothing is evaluated.
 
 ### 3.3 Matching by observation class
 
@@ -969,20 +1134,29 @@ their cone instance is evaluated, a handler's writes while its body runs
 of a transaction before it seals: a failed constraint drops a derived write
 (section 5.6), the failure of a cone withdraws its side-writes (section
 8.2), and a body that wrote something a cone instance had read before the
-body ran withdraws the kept outputs of that cone instance that the body
-did not read by address (section 5.2). In each case the scheduler matches the
-address again, with what is stored. A cone instance that had read the
-staged value through a slot is stale again. In a derivation transaction,
-and before a handler body, it is evaluated again in the same transaction,
-against the stored value, under its own count. After a handler body it
-waits like every cone instance the body made stale (section 5.2). It does
-not fail because the writer failed, and a write dropped once is not staged
-again in the same transaction.
+body ran withdraws the derived writes of that cone instance that were not
+instantiated early (section 5.2). The third case holds for every derived
+write of the cone instance: a kept output, a side-write, a path of a
+child's argument, and a path of an effect's request. In each case the
+scheduler matches the address again, with what is stored. A cone instance
+that had read the staged value through a slot is stale again. In a
+derivation transaction, and before a handler body, it is evaluated again
+in the same transaction, against the stored value, under its own count.
+After a handler body it is not evaluated again in the event's
+transaction. The writes it staged from the value that is gone are
+unstaged with that write, and it waits for the derivation transaction
+behind the batch, like every cone instance the body made stale (section
+5.2). It does not fail because the writer failed, and a write dropped
+once is not staged again in the same transaction.
 
-**What a write that did not reach storage leaves.** A write does not reach
-storage when its event's transaction is rejected or aborted, when a
-constraint drops it, or when a conflict withdraws it at the commit. Stale
-and unstored are two states, and the scheduler keeps them apart.
+**What a write that did not reach storage leaves.** Four kinds of
+transaction do not commit: an event's transaction that a constraint on
+the handler's own writes rejected, one that was aborted, an attempt that
+was withdrawn whole at a journaled read (section 5.3), and the transaction
+of an event that is requeued (section 5.5). A write does not reach storage
+when its transaction is one of those, when a constraint drops it, or when
+it is withdrawn, by a conflict at the commit or in one of the ways above.
+Stale and unstored are two states, and the scheduler keeps them apart.
 
 - **The dirty marks of writes that did not happen are undone.** A slot that
   only the unstaged or uncommitted write had dirtied returns to its state
@@ -994,9 +1168,11 @@ and unstored are two states, and the scheduler keeps them apart.
   the refusal where a constraint dropped it, and does not evaluate the cone
   instance again on that account.
 - **A cone instance that staged a side-write or made an instance** in a
-  transaction that did not commit, or whose side-write a conflict withdrew,
-  has its memo entry dropped by cone evaluation. It is stale, and a later
-  evaluation performs the write.
+  transaction that did not commit, or whose side-write was withdrawn, by a
+  conflict or because a handler body wrote something the cone instance
+  had read, has its memo entry dropped by cone evaluation
+  (`execution-and-storage.md` §3.3). It is stale, and a later evaluation
+  performs the write.
 - **The basis rows are not advanced** for a cone instance with a write that
   did not reach storage (section 10.4). After a restart, when no memo entry
   exists, the rows are behind the heads, the cone instance is stale, and it
@@ -1006,11 +1182,21 @@ and unstored are two states, and the scheduler keeps them apart.
   third condition of `plan-and-label-templates.md` §4.1. The cycle runs a
   derivation transaction for a demanded unstored output even when nothing
   is stale (section 10.2). A write that carries a refusal is the exception
-  (section 5.6).
+  (section 5.6). The output is staged from the memo before anything in
+  the transaction reads its address, so that no reader takes the stored
+  value, which was computed before the change the unstored value holds.
+  An event's transaction is such a transaction for what its handler
+  reads: an unstored output at an address the handler reads, or that a
+  cone instance evaluated for the handler reads, is staged before that
+  read and instantiated early (section 5.2).
 - **A failed evaluation is an evaluation.** A cone instance that failed has
   a memo entry with the error state and the reads made up to the failure,
   its error state is stored like a value, and its basis rows advance. It is
-  evaluated again when something it read changes, and not before.
+  evaluated again when something it read changes, and not before. Where
+  the transaction that evaluated it does not commit, the error state is
+  unstored like any other output of that transaction, and the rows wait
+  for the transaction that stores it. That is the case when the handler
+  of an event's transaction reads the failed cone instance (section 5.5).
 
 Materializers and effect operations have transactions of their own, so their
 writes are matched when those transactions seal or commit, and each skips its
@@ -1180,8 +1366,13 @@ result document holds a pattern reference, or it lies in a document with a
 `result` back-link to such a result document, as a state cell document
 has. A cell that an instance that is not loaded writes through a handle
 names that instance nowhere, so demand on it loads nothing and a read of
-it returns what is stored. What happens for a named instance depends on
-the demand.
+it returns what is stored. The same holds for a path of a child's argument
+document that a cone of the parent writes, or a cone of the computation
+that made the instance: the argument document is linked from the child's
+result cell and names the child, and nothing stored leads from it to the
+instance whose cone writes it. Both are *assumed* (question 57 of the
+continuation plan, which records the first; open question 39). What
+happens for a named instance depends on the demand.
 
 - **Demand that stands** loads the instance: a session's tracked set, a
   render sink, an effect operation, a materializer, a warm request, and
@@ -1449,7 +1640,8 @@ registration that a start makes today.
 | The binding, for one made in a function body | The handler, as `Body.code` or the content address of a factory value, and the identifier of the binding state document |
 
 - **When a row is written.** In the store transaction of the wave whose
-  transaction first computed the stream's identifier. For a binding outside
+  transaction first computed the stream's identifier, or of the setup
+  transaction that did (section 10.8). For a binding outside
   every element body that is the first evaluation of a cone whose output
   holds the stream. For a binding in an element body it is the evaluation
   that adds the element's key. For a binding made in a function body it is
@@ -1460,13 +1652,13 @@ registration that a start makes today.
   and when its instance is torn down (section 2.7) or retired. A source
   update deletes no row: a stream identifier holds no compiled identity,
   so the row still names the stream.
-- **What it is.** Identifiers only, overwritten in place, written inside
-  the wave's store transaction, never pushed to a client, and never read at
-  admission. Those are the properties of a basis row. Only the scheduler of
-  the space's serving runtime reads it. Where the runtime shows a row in a
-  diagnostic or to a tool, it shows it under the label
-  `plan-and-label-templates.md` §2.6 gives a row of the stream index
-  ("Rows beside the documents"), which is an assumption there.
+- **What it is.** Identifiers only, overwritten in place, written inside the
+  wave's store transaction or a setup transaction's, never pushed to a client,
+  and never read at admission. Those are the properties of a basis row. Only
+  the scheduler of the space's serving runtime reads it. Where the runtime
+  shows a row in a diagnostic or to a tool, it shows it under the label
+  `plan-and-label-templates.md` §2.6 gives a row of the stream index ("Rows
+  beside the documents"), which is an assumption there.
 - **The registry comes first.** The scheduler keeps the registry in memory
   from a stream to its binding, as today. A loaded instance's streams are
   entered in it when the instance is loaded, for the bindings outside
@@ -1491,24 +1683,52 @@ in the place of the walk.
 3. For a binding in an element body, the element keys of the row name the
    cone instances the handler's `binding` slots resolve to, and the
    collection's membership is evaluated before the handler body, like any
-   stale cone instance the handler reads, so that the position that holds
-   the key is known.
+   stale cone instance the handler reads, so that the positions that hold
+   the key are known. The stream is per key and not per position, and two
+   positions can hold one key (`plan-and-label-templates.md` §1.3). The
+   handler's element slots are bound at every position that holds the
+   key, and each resolves to the join over those positions. The value is
+   the same at each of them, because they hold equal values or link to
+   one cell, and the label is the join of the labels the positions give.
+   The join is *assumed* (open question 27 of that document; question 40
+   of the continuation plan; open question 37 here).
 
 An event that cannot be routed is treated as today.
 
-- **No row.** An event on a stream that has no row cannot be routed. A
-  client can derive the identifier of a stream before the server has
-  evaluated the binding: a handler of an earlier event adds a row to a
-  collection, the client's speculative run renders the row, and the user
-  acts on it. The event then waits behind the entries that arrived before
-  it in the same space, as an event waits today whose piece an earlier
-  arrival creates ([events](../server-side-execution/events.md), §5). The
-  events that arrived after it wait with it, so the order of section 5.4
-  holds, and the batch of that cycle ends before it. The derivation
-  transaction behind the batch evaluates the binding and writes the row,
-  and the event is handled in a later cycle. An event that is the
-  earliest pending entry of its space and still has no row is unrunnable
-  and is dropped as that section has it.
+- **No row.** An event on a stream that has no row cannot be routed yet.
+  A client can derive the identifier of a stream before the server has
+  evaluated the binding (section 11.1), and the binding can come to exist
+  in more than one way. A handler of an earlier event adds a row to a
+  collection. Or a commit that is not an event does: an input the user
+  typed, a change another space pushed, or the completion of an effect.
+  In each case the client's speculative run renders the control and the
+  user acts on it, and the event can reach the server in the drain that
+  holds the commit, before any transaction has evaluated the binding.
+  Such an event is deferred, by ruling, as an event is deferred today
+  whose piece cannot be started yet
+  ([events](../server-side-execution/events.md), §5). It is not dropped
+  at once: a stream with no row is the counterpart of a piece that may
+  still start once another writer's commit lands, and not of a started
+  piece that registered no handler.
+  - The entry stays pending, and the events that arrived after it in the
+    space are deferred with it, so the order of section 5.4 holds. The
+    batch of that cycle ends before it.
+  - The derivation transaction behind the batch evaluates the binding,
+    where a session that rendered the control demands it, and the wave's
+    store transaction writes the row.
+  - The entry is drained again on the next input of the space and when a
+    wave writes a row for its stream. Where neither happens, it is
+    drained again on the backstop tick the drain arms today
+    (`#armDeferredRescan` of `SpaceServer`).
+  - A deferral counts against the deferral budget of that section, which
+    is eight (`EVENT_DEFERRAL_DROP_THRESHOLD`). It counts nothing while
+    an entry that arrived earlier in the space is still pending, because
+    that entry's handler may be what creates the binding
+    (`#anyStreamEntryPending`, called from the failure callback that
+    `#drainStreamEvents` of `SpaceServer` gives each queued entry). The
+    earliest pending entry always spends the budget.
+  - When the budget is spent, the event is dropped: the entry records
+    the dropped-event notice, and the `eventWatermark` passes it.
 - **A key no position holds.** An event on a stream of an element whose key
   left its collection is unrunnable, and is dropped in the same way.
 - **A binding the plan does not have.** After a source update, a row can
@@ -1549,22 +1769,23 @@ Before the transaction opens:
    handler: a body of the instance's plan, or a compiled handler named by
    a factory value, whose record is fetched by content address
    (`plan-and-label-templates.md`, §3.21).
-2. **Loading.** The documents the handler's bound slots name are brought
-   into the replica. Where an instance that is not loaded writes one of
-   them, the basis index decides whether it is loaded, by ruling: it is
-   loaded where the address is stale, and not where the stored value is
-   current (sections 4.4 and 10.4). The scheduler follows the handler's
-   static reads upstream through the loaded cone instances that write
-   them, as demand does (section 4.3), and makes the same check at each
-   address it reaches whose writer is in an instance that is not loaded.
-   The event holds its place in the queue while that I/O runs, and the
-   load's completion queues the next step. Nothing polls. All of this
-   happens before the transaction opens, so no attempt is withdrawn on
-   account of a static read.
+2. **Loading.** The documents the handler's bound slots name are brought into
+   the replica. A slot of `Body.reads` whose path holds `*` is bound here, at
+   each child its path reaches (section 3.2). Where an instance that is not
+   loaded writes one of them, the basis index decides whether it is loaded, by
+   ruling: it is loaded where the address is stale, and not where the stored
+   value is current (sections 4.4 and 10.4). The scheduler follows the
+   handler's static reads upstream through the loaded cone instances that write
+   them, as demand does (section 4.3), and makes the same check at each address
+   it reaches whose writer is in an instance that is not loaded. The event
+   holds its place in the queue while that I/O runs, and the load's completion
+   queues the next step. Nothing polls. All of this happens before the
+   transaction opens, so no attempt is withdrawn on account of a static read.
 3. **Materializers.** If the bound address of one of the handler's `reads`
    slots lies inside the envelope index, under an entry of an invalid
    materializer, that materializer runs first, in its own transaction
-   (section 7.2).
+   (section 7.2). Where it cannot be promoted, the event waits until it
+   has run, as that section says.
 4. **Lineage.** An event whose origin transaction committed in another space
    waits until that commit is confirmed, as today (Scheduler v2 §7.6).
 
@@ -1602,37 +1823,66 @@ slot of `Body.reads` includes a static read through a handle (section
 5.3). The handler's reads hold demand for the length of the transaction
 (section 2.5).
 
-**A derived write the body reads by address is checked first.** A handler
-body is not run again when a constraint drops a write, so a body must not
-read a value that a later check drops. A derived write that was staged
-before the body and whose target the body reads by address, through a slot
-or through a journaled read, is instantiated and its constraints are
-checked before that read returns: for a slot of `Body.reads`, after the
-cone instances above were evaluated and before the handler's argument is
-built. A write the check drops is unstaged, and the body reads what is
-stored (`plan-and-label-templates.md` §4.6; `execution-and-storage.md`
-§1.6). A value
-the handler receives for a state path that names an output of its own
-instance is not read by address: the handler's template holds the output's
-template, and the handler receives the computed value whether or not the
-output's write is stored.
+**The derived writes the handler depends on are checked first.** A handler
+body is not run again when a constraint drops a write. So neither the
+body, nor a cone instance whose value the handler receives, may have read
+a value that a later check drops. The following derived writes of this
+transaction are therefore instantiated, and their constraints checked,
+ahead of the rest of the preparation (`plan-and-label-templates.md` §4.5
+and §4.6; `execution-and-storage.md` §1.6). This is the **early step**.
+
+- Every derived write staged at an address that a slot of `Body.reads` is
+  bound to.
+- Every derived write staged at an address that was read by a cone
+  instance whose value the handler receives, directly or through any
+  number of `output` edges. A value the handler receives for a state path
+  that names an output of its own instance is not read by address: the
+  handler's template holds the output's template, and the handler
+  receives the computed value whether or not the output's write is
+  stored. But the cone instance that computed it read addresses, and a
+  write staged at one of them is among these.
+- Every derived write staged at an address that a journaled read of the
+  body reaches.
+
+The first two are checked after the cone instances above were evaluated
+and before the handler's argument is built, and the third before the
+journaled read returns. Each is instantiated after the staged writes it
+uses, which are checked first. A write the check drops is unstaged
+(section 3.5). A cone instance that had read the dropped value is stale
+again and is evaluated again, against what is stored, before the argument
+is built or the read returns. The body then reads what is stored, and
+every value the handler receives was computed from writes that passed
+their checks.
+
+**An unstored output that the handler reads.** A kept output can be
+unstored while its cone instance is current: an earlier transaction
+computed it and did not commit (section 3.5). Nothing is stale, so nothing
+would be evaluated, and the stored value was computed before the change
+that the unstored value holds. Where such an output carries no refusal and
+lies at an address of one of the three kinds above, it is staged from the
+memo before the read, and it is then a derived write of this transaction
+that the early step instantiates and checks. An unstored output that
+carries a refusal is not staged, and the reader reads what is stored, as
+for a write the early step dropped.
 
 **The body** runs once. Its writes are matched against the index as they
 are staged (section 3.5). When it returns, its requests are performed, the
-transaction is prepared, and it seals. A kept output that a cone instance
-computed before the body is a derived write of this transaction. If the
-body wrote something that cone instance had read, the cone instance is
-stale, and the derivation transaction behind the batch evaluates it again.
-What becomes of the write it staged depends on whether the body read it by
-address (`execution-and-storage.md` §1.6).
+transaction is prepared, and it seals. What a cone instance staged before
+the body is a derived write of this transaction: a kept output, a
+side-write, a path of a child's argument, or a path of an effect's
+request. If the body wrote something that cone instance had read, the cone
+instance is stale, and the derivation transaction behind the batch
+evaluates it again. What becomes of each write it staged depends on
+whether the early step instantiated it (`execution-and-storage.md` §1.6).
 
-- A write the body did not read by address is withdrawn before the
+- A write that was not instantiated early is withdrawn before the
   preparation. Its label would otherwise be instantiated from the label
-  the body staged, for a value computed from what was there before.
-- A write the body read by address was instantiated before that read, as
-  the paragraph above says, from the labels its value was computed under,
-  and the handler's own writes use it. It commits with the event's
-  transaction under that label.
+  the body staged, for a value computed from what was there before. Where
+  the write is a side-write, the memo entry of the cone instance is
+  dropped, so that the later evaluation performs it (section 3.5).
+- A write that was instantiated early was instantiated from the labels
+  its value was computed under, and the handler's own writes use it. It
+  commits with the event's transaction under that label.
 
 ### 5.3 What the static read closure allows
 
@@ -1662,8 +1912,10 @@ are known without reading anything. Four things follow.
   not converge takes an error state (section 8.1), and a handler that reads
   it fails, as `plan-and-label-templates.md` §5.4 says. The remaining
   reasons an event waits are a load in flight, a materializer that has to
-  run first, an unconfirmed origin in another space, and a stream with no
-  row (section 5.1). Each ends on a notification.
+  run first (section 7.2), an unconfirmed origin in another space, and a
+  stream with no row (section 5.1). Each ends on a notification. An event
+  deferred for a stream with no row is drained again by today's backstop
+  tick as well, which is what spends its budget when no input arrives.
 - **A read through a handle of `Body.handles` is not known before the body
   runs.** That is a read on some runs only, a read at a path the body
   computes, a read through a link the body finds in data, and a read
@@ -1681,14 +1933,17 @@ runtime looks the address up in the writer map
 | --- | --- |
 | No loaded unit, and the document of the address names no instance that is not loaded | The read returns what is stored or staged |
 | A stale cone instance of a loaded instance of the same space | It is evaluated first, inside the transaction and under the bound of section 8.1. Its write to the address is instantiated and checked before the read returns (section 5.2). The read then returns what it staged, or what is stored where the check dropped the write |
+| A current cone instance of a loaded instance of the same space, whose kept output at the address is unstored and carries no refusal | The output is staged from the memo, and instantiated and checked before the read returns (section 5.2). The read then returns it, or what is stored where the check dropped the write. Nothing is evaluated |
 | An instance of the same space that is not loaded, where the basis index shows the address current | The read returns what is stored, with the label stored there. The instance is not loaded, and the event holds no demand on it |
 | An instance of the same space that is not loaded, where the basis index shows the address stale | The attempt is withdrawn whole, the instance is loaded, and the event is dispatched again under the same handling. The event holds demand on the instance until its transaction ends, so the second attempt finds it loaded and evaluates the stale cone instance at the read, by the second row |
-| An invalid materializer, by an entry of the envelope index | The attempt is withdrawn whole, the materializer runs, and the event is dispatched again under the same handling |
+| An invalid materializer, by an entry of the envelope index | The attempt is withdrawn whole, the materializer runs, and the event is dispatched again under the same handling. Where the materializer cannot be promoted, the event waits until the derivation transaction and the materializer have run (section 7.2) |
 | An instance marked as torn down, or an instance of another space | The read returns what is stored (sections 2.7 and 9.2) |
 
-Nothing of a withdrawn attempt is committed. What the handler creates is
-named by the handling and the order of creation, so the next attempt names
-the same things. Each withdrawn attempt loads an instance or runs a
+Nothing of a withdrawn attempt is committed, and what it leaves in the memo and
+the instance record is what any transaction that does not commit leaves
+(section 3.5). Every cell, instance and effect the handler requests is named by
+the handling and its order among the handler's requests, so the next attempt
+names the same things. Each withdrawn attempt loads an instance or runs a
 materializer that the attempt before it did not have, so the attempts end.
 
 **A writer in an instance that is not loaded.** The third and fourth rows
@@ -1704,8 +1959,13 @@ and the instance is loaded only where the stored value is stale.
   that names no instance, of an instance marked as torn down, or of
   another space consults no row. A cell that an instance that is not
   loaded writes through a handle is attributed to that instance by
-  nothing stored, so a read of it returns what is stored. Section 4.4 has
-  the same limit for demand.
+  nothing stored, so a read of it returns what is stored. So is a path of
+  a child's argument document whose writing instance is not loaded: the
+  document names the child and not the instance whose cone writes the
+  path. A handler of a child that an event loaded while its parent is not
+  loaded therefore reads a computed argument path as stored, and the rows
+  of the parent's cone are not consulted. Section 4.4 has the same limit
+  for demand.
 - **What is consulted.** The basis rows of the cones of that instance
   that write the address and of the cones they depend on, and the rows of
   the instances whose outputs those cones read, as section 10.4 states
@@ -1785,14 +2045,15 @@ Two things follow for what is observable.
 | Outcome | What happens to the event | Retried |
 | --- | --- | --- |
 | A constraint fails on what the handler itself writes | The event's whole transaction is rejected: the handler's writes, its requests, and the derived writes staged before its body. The refusal is the event's consequence: the entry records the error, the stream's `eventWatermark` passes it, and the outcome is reported to whoever delivered the event, with the handler's template as its label ([events](../server-side-execution/events.md), §5). The other events of the batch are not affected | No. The verdict is a function of labels and selections |
-| A constraint fails on a derived write, in the event's transaction or in a derivation transaction | That write is dropped alone, and the rest of the transaction commits (section 5.6). The event is not affected | Not until a slot the constraint lists changes its value or its label |
+| A constraint fails on a derived write, in the event's transaction or in a derivation transaction | That write is dropped alone, and the rest of the transaction commits (section 5.6). The event is not affected | Not while the instantiation key of the write is the same |
 | The handler body throws | The event's transaction is aborted: nothing the body staged exists, and the error is the consequence | No |
-| A cone instance fails before the body | Its outputs take an error state and the rest commits. If the handler reads the failed cone instance, the handler fails | No |
-| A cone instance fails at the bound of section 8.1 | The same. It is not evaluated again until one of its inputs changes | No |
+| A cone instance that the handler does not read fails before the body | Its outputs take an error state and the rest commits | No |
+| A cone instance that the handler reads fails before the body | The handler receives an error state for that input and fails. The event's transaction is aborted, as for a body that throws, and the error is the consequence. Nothing the transaction staged is stored, and the error state of the failed cone instance is unstored (section 3.5) | No |
+| A cone instance fails at the bound of section 8.1 | The same two cases. It is not evaluated again until one of its inputs changes | No |
 | A recorded read of the handler is stale when the wave commits | The event is requeued whole and runs again once the replica holds the commit that made the read stale. Later entries of the same stream that sealed into the wave requeue behind it ([serving loop](../server-side-execution/serving-loop.md), §3d, where the rule is proposed and awaits a ruling) | Yes, on the arrival of that commit |
 | A derived write conflicts when the wave commits | That write is withdrawn alone, with the derived writes that used what it staged. The rest of the transaction commits | The cone instance is evaluated again when the conflicting commit arrives and marks it stale. A write withdrawn for a conflict on its target alone is stored again from the memo |
-| A withdrawal reaches the handler's own writes, because the handler read by address a value that a withdrawn derived write staged | The event's transaction is withdrawn whole, and the event is requeued, as for a stale read of the handler | Yes, on the arrival of the conflicting commit |
-| The handler body did not run to its end, because an input did not resolve or a journaled read reached a stale address of an instance that is not loaded or an invalid materializer (section 5.3) | The transaction is withdrawn whole and the entry stays pending | Yes, when the document arrives, the instance is loaded, or the materializer has run |
+| A withdrawal reaches the handler's own writes, because the handler read by address a value that a withdrawn derived write staged, or received a value that a cone instance computed from it | The event's transaction is withdrawn whole, and the event is requeued, as for a stale read of the handler | Yes, on the arrival of the conflicting commit |
+| The handler body did not run to its end, because an input did not resolve or a journaled read reached a stale address of an instance that is not loaded or an invalid materializer (sections 5.3 and 7.2) | The transaction is withdrawn whole and the entry stays pending | Yes, when the document arrives, the instance is loaded, or the materializer has run |
 | The handling's receipt exists already | The event was handled. The attempt is dropped | No |
 | A deterministic refusal by the memory server: a refused access-list change, a refused write to another space | The refusal is the consequence | No |
 
@@ -1829,7 +2090,11 @@ Five points go beyond today's rules.
   preparation. It uses a derived write when the body read by address a
   value that write staged: a kept output of another instance, or a cell a
   cone side-writes, that a cone instance wrote before the body, in this
-  transaction or in an earlier transaction of the batch. When the commit
+  transaction or in an earlier transaction of the batch. It uses one as
+  well when a cone instance whose value the handler received read the
+  value that write staged, because the reads of the producing cone
+  instance are reads of the handler's unit (`execution-and-storage.md`
+  §1.9). When the commit
   withdraws that derived write, the handler ran against a value that is
   not stored, and the event's transaction is withdrawn whole. The event is
   then treated as an event whose own read is stale: it is requeued and runs
@@ -1851,10 +2116,12 @@ out, so one event on one stream is one handling whoever sends it. The
 string `eventKey()` returns is a different thing: it also names the acting
 principal (`deriveEventKey` in the same file). The receipt is the
 handling's result cell, created under a create-only precondition, as
-today. Everything a handler creates without an explicit cause is named by
-the handling and its order among the handler's requests, and an event the
-handler sends by the handling and its order among the events that
-invocation sends (`plan-and-label-templates.md` §1.3).
+today. Every cell, instance and effect a handler requests without an
+explicit cause is named by the handling and its order among the handler's
+requests, and an event the handler sends by the handling and its order
+among the events that invocation sends (`plan-and-label-templates.md`
+§1.3). A binding a handler makes is not named by the handling: it is
+identified by what it holds, like every binding made in a function body.
 
 ### 5.6 A constraint that fails in another instance
 
@@ -1886,13 +2153,23 @@ constraint never rejects a derivation transaction.
 - It matches the target's address again, with what is stored, so a cone
   instance that had read the staged value is stale again (section 3.5).
 - It records the write in `InstanceRecord.unstored` with the refusal: the
-  constraint, and the label identifiers of the slots the constraint lists.
+  constraint, and the instantiation key of the write's template, which is
+  the label identifiers of the slots the template reaches under the
+  reported selections, with those selections
+  (`plan-and-label-templates.md` §4.1, step 2). A constraint on a write,
+  such as writer-fit or a write floor, lists no slot of its own, and its
+  verdict is a function of that key.
 - It does not advance the basis rows of the cone instance.
-- It does not attempt the same instantiation again until one of those slots
-  changes, since the verdict would be the same. A change of a listed slot's
-  value makes the cone instance stale, and it is evaluated. A change of a
-  listed slot's label alone instantiates the write again from the memo's
-  value (section 3.6).
+- It does not attempt the same write again while its instantiation key is
+  the same, since the verdict would be the same. It attempts the write
+  again when the key changes, in one of two ways. A slot the template
+  reaches gets another label and keeps its value: the write is
+  instantiated again from the memo's value, as for any label-only change
+  (section 3.6). Or the cone instance is stale and is evaluated again,
+  and the evaluation reports other selections or resolves another label.
+  An evaluation that computes another value under the same key attempts
+  nothing: the memo holds the new value, and the write stays unstored
+  with its refusal.
 - It reports the refusal on the scheduler's error channel with its
   structured details, as a terminal refusal is reported today. The refusal
   is a fact about labels and selections, and it is shown only where the
@@ -1913,8 +2190,8 @@ The effectful built-ins are the class B entries of the inventory: the fetch
 family, `fetchProgram`, `generateText`, `generateObject`, `llmDialog`,
 `agent`, `sqliteQuery`, `navigateTo`, the compiling half of `compileAndRun`,
 the resolving half of `cellFromUrl`, the staged access changes, and
-`nameBlob`. Each request is an effect operation, and it comes to exist in one
-of two ways:
+`nameBlob`. Each request, apart from a `nameBlob`, is an effect operation,
+and it comes to exist in one of two ways:
 
 - **In the reactive tier**, as an `Operation` of kind `effect` of a plan. Its
   state document is named from the instance, the element keys, and the
@@ -1922,7 +2199,9 @@ of two ways:
   (section 2.7).
 - **In a handler**, as an occurrence of a `BodyCall` of kind `effect`. It is
   identified by the handling and its ordinal among the handler's requests,
-  and it exists once the event's transaction commits.
+  and it exists once the event's transaction commits. Its state document
+  holds a back-link to the instance whose handler requested it, and while
+  its request is pending it has a pending-effect row (section 2.3).
 
 A `lift` or a `computed` requests no effect itself (*assumed*, question 38
 of the continuation plan). It reaches an effect through a pattern it
@@ -1937,6 +2216,12 @@ another cause.
 The staged access changes are the exception in form. A handler requests
 them and reads no result, and they have no completion: each is a step of
 the commit of the event's transaction (section 9.4).
+
+`nameBlob` is not an effect operation. It stages a content-addressed
+document in the event's transaction, as a write of the handler
+(`builtin-inventory.md`, "Staged changes"). It has no request transaction
+and no completion, it is no step of the commit sequence, and it is no
+unit.
 
 ### 6.2 The request
 
@@ -1953,17 +2238,61 @@ operation through its index entry on the request path. The request is a
 derived write, so a failed constraint on a path of it drops that path
 alone.
 
-**When an operation is demanded.** An operation is demanded when something
+**When an operation of a plan is demanded.** The demand rule is for an
+`Operation` of a plan. Such an operation is demanded when something
 demands a path of its result. It then holds demand on the cone instances
 whose write edges stage its request, so that the request is current
-whenever the result is wanted. Two kinds of request are made in order to
-act and have no result a pattern reads (`builtin-inventory.md`, "When an
-effect is demanded, and its time gates").
+whenever the result is wanted. A `navigateTo` written in the reactive tier
+is made in order to act and has no result a pattern reads, so it is
+demanded whenever its instance is. A request a handler makes waits for no
+demand: every one is sent when its event's transaction commits ("In a
+handler", below; `builtin-inventory.md`, "When an effect is demanded, and
+its time gates").
 
-- A staged change, and a `navigateTo` a handler requests, are staged in
-  the event's transaction and wait for no demand.
-- A `navigateTo` written in the reactive tier is demanded whenever its
-  instance is.
+**Who a request transaction acts as.** The request transaction of an
+operation of a plan acts as the principal of the scope key of the cone
+instance that staged the request, with the context an evaluation for that
+scope key has (section 10.3). An operation whose request a cone instance
+of user or session scope staged has one state document per scope key
+(`execution-and-storage.md` §6), and each has a request transaction of its
+own. A request a handler makes is part of the event's transaction, which
+acts as the actor of the event.
+
+A cone instance of space scope is evaluated for no principal, so a
+request it staged has no requester of that kind. What then happens
+depends on the built-in, and the table under "The requester of a request"
+in `builtin-inventory.md` has a row for each.
+
+- **A built-in that needs no requester** is requested with no principal:
+  the fetch family, which signs with the runtime's identity,
+  `generateText`, `generateObject`, a `sqliteQuery` on a database of the
+  same space without `readClearance`, the compiling half of
+  `compileAndRun`, and the resolving half of `cellFromUrl`.
+- **A built-in that needs one has an operation of narrower scope than its
+  cone instance.** The operation of `agent`, and of a `sqliteQuery` on a
+  database of another space or with `readClearance`, has user scope
+  whatever the scope of the cone instance that computes its request, or
+  session scope where the result is declared so. Its unit exists per
+  principal that demands its result, with a state document per such
+  principal, and its request transaction acts as that principal. The
+  request itself is stored once, where the cone instance staged it. A
+  unit exists only for a demanding principal, so with none the request
+  transaction does not run: the `agent` request is not made, and the
+  inventory's table has the `sqliteQuery` refused.
+- **`navigateTo` has session scope.** A request that is not a consequence
+  of an event a client session fired is refused, which is the boundary's
+  declared rule (section 6.3).
+- **Where the table gives no behavior, the request is refused,** as an
+  `inSpace` instantiation by a computation of space scope is refused
+  (section 9.3). The request is not made, and the operation's result takes
+  the refusal as an error state, which is the outcome of a failed egress
+  ceiling (section 6.3).
+
+All of this is *assumed*, and it extends question 45 of the continuation
+plan, which covers an evaluation of space scope and not an effect it
+requests (open question 36). The principal of a completion transaction and
+of a materializer's run is not decided here: each writes a store the
+runtime owns, under a label its own rule gives.
 
 When the request of a demanded operation is stale, the scheduler runs the
 operation's **request transaction**. The request is stale when a path of
@@ -2007,9 +2336,18 @@ the pending mark (`execution-and-storage.md` §1.4). The transaction
 follows the references as in step 2, on the server, and checks the egress
 ceiling. The ceiling is a constraint on what the handler itself writes, so
 a failure rejects the event (`plan-and-label-templates.md` §3.14 and
-§4.4). The outbox receives the request when the transaction commits. Such
-a request is made once: a later change behind one of its references does
-not request it again, because the occurrence belongs to one handling.
+§4.4). The hash, the claim and the pending mark carry the join of the
+templates of the body's `request` write edges, instantiated, with what
+following the references consumed, and no integrity
+(`plan-and-label-templates.md` §3.14). The outbox receives the request
+when the transaction commits, whether or not anything demands the result:
+the demand rule above does not apply. The store transaction that commits
+the event's transaction writes the operation's pending-effect row (section
+2.3). Such a request is made once: a later change behind one of its
+references does not request it again, because the occurrence belongs to
+one handling. The one case in which its request is formed again is a
+recovery, when the process that held the request is gone (sections 2.3
+and 10.6).
 
 ### 6.3 Which gate is evaluated when
 
@@ -2023,7 +2361,7 @@ not request it again, because the occurrence belongs to one handling.
 | The result's label: the built-in's declared rule over the request's label, which is the joined label of the first row, with the constants the result schema declares and the integrity the boundary declares, such as `LlmDerived` | | Yes, from the request as it stands at write-back |
 | Validation of the result: a response schema, declared ceilings on rows | | Yes. A failure is an error result |
 | Gates on a tool call of a language-model turn | | During the effect, before each call |
-| Constraints of the cones that read the result | | In the derivation transaction of the cause that the completion is, and not in the completion. A failure there drops one derived write and cannot lose the result |
+| Constraints of the cones that read the result | | In the derivation transaction that follows the completion's commit (section 6.5), and not in the completion. A failure there drops one derived write and cannot lose the result |
 
 For a request made in the reactive tier, a failed egress ceiling rejects the
 operation's request transaction and no other
@@ -2047,7 +2385,7 @@ cone. That document states it as an assumption.
 | Completion write-back | `Runtime.editWithRetry` (`runtime/runner/src/runtime.ts`) | Up to `DEFAULT_MAX_RETRIES` (5) attempts when the commit is rejected for a stale basis. Between attempts it waits in `awaitCommitRetryReadiness` for the conflicting documents to arrive. No timed backoff |
 | A claim that went silent | `tryClaimMutex` (`builtins/fetch-utils.ts`), `MUTEX_STALE_AFTER`; `REQUEST_TIMEOUT` in `builtins/llm-dialog.ts` | A pending request may be claimed again once its `lastActivity` is older than 5 seconds for the fetch family, or 5 minutes for a dialog turn. The claim exists so that several committing runtimes do not send one request twice |
 | A failed request | `builtins/fetch.ts` | Not retried. The error is written with the request hash, so the next request is one whose inputs changed |
-| Dispatch held by a budget | `SpaceOutbox` (`executor/outbox.ts`) | A request over the cap on outstanding requests, or over the egress rate, waits in the outbox. A park drops held requests, and the next activation finds them missing and requests them again |
+| Dispatch held by a budget | `SpaceOutbox` (`executor/outbox.ts`) | A request over the cap on outstanding requests, or over the egress rate, waits in the outbox. A park drops held requests, and the next activation finds them missing and requests them again: an `Operation` of a plan when its instance is loaded and its request transaction compares the hash, and a handler's request from its pending-effect row (section 2.3) |
 | An event appended to a stream of another space | The durable outbox rows of [serving loop](../server-side-execution/serving-loop.md) §5 | Delivered at least once. A transient failure keeps the row for the next attempt, and a deterministic refusal writes a failure notice in the source space |
 | Across a crash | [Serving loop](../server-side-execution/serving-loop.md), §6 | A request whose result was never committed is made again. External effects are at least once |
 
@@ -2064,12 +2402,18 @@ The network call runs in the outbox and never in the loop. When it returns:
 1. The operation's **completion transaction** writes the result or the
    error, the request hash, and clears the pending mark, with the label of
    section 6.3. It commits by itself and does not seal into a wave
-   ([serving loop](../server-side-execution/serving-loop.md), §4).
+   ([serving loop](../server-side-execution/serving-loop.md), §4). For an
+   operation a handler requested, the same store transaction deletes the
+   pending-effect row (section 2.3).
 2. The commit is matched against the index in the process that made it. The
    slots with root `operation` that are bound to the result become dirty.
-3. That is a cause of the third kind. Its derivation transaction evaluates
-   the demanded cone instances that read the result, in every instance that
-   does.
+3. That is a cause of the third kind. It opens no transaction of its own
+   beside the completion transaction. The commit joins the set of changes
+   of the cycle that follows it, and that set's one derivation transaction
+   evaluates the demanded cone instances that read the result, in every
+   instance that does, with whatever else the set made stale (section
+   10.2). On a runtime without a serving loop the commit is a set of
+   changes by itself (section 10.7).
 
 The completion transaction is the boundary's, and the derivation
 transaction is the instances'. They are two transactions because the first
@@ -2176,9 +2520,39 @@ a cause of the second kind.
   transaction evaluates it for its value and stages none of its writes.
   Where that cone instance performs a side-write, it is not evaluated
   there, and the materializer is not promoted: it runs behind the
-  derivation transaction, the reader that would have waited for it reads
-  what is stored, and the materializer's write makes that reader stale
+  derivation transaction. A reader that is a cone instance reads what is
+  stored, and the materializer's write makes it stale
   (`execution-and-storage.md` §6.7).
+- **A handler that reads inside the envelope of a materializer that
+  cannot be promoted waits.** A handler body runs once, so it cannot read
+  what is stored and be corrected. This is the case where a slot of the
+  handler's `Body.reads` is bound inside the envelope (section 5.2, step
+  3), or a journaled read of its body reaches it (section 5.3), and the
+  invalid materializer has a stale computed input whose cone instance
+  performs a side-write. The event keeps its place in the queue, the
+  events that arrived after it in the space wait behind it, and the batch
+  of the cycle ends before it. An attempt that was open at a journaled
+  read is withdrawn whole first. The cycle then runs the derivation
+  transaction behind the batch, which evaluates that cone instance and
+  performs its side-write, and then the materializer (section 10.2). The
+  end of the materializer's run releases the event, which is handled at
+  the head of the next batch. No deferral is counted, since the wait ends
+  on the run and not on a later drain. A materializer that stays invalid
+  at its budget keeps the event waiting until it has run, as an event is
+  parked today behind a node that a gate holds (section 8.3).
+- **After a restart or a load, the basis rows say whether a materializer
+  is valid.** A materializer has basis rows, keyed by its `Operation` in
+  the place of the cone (section 10.4): one per document its last run
+  read, with the document's sequence number at that run. The rows are
+  written when the writes of the run reach storage. When its instance is
+  loaded in a process that holds no read set for it, the materializer is
+  valid where it has rows and every row is at the head of its input, and
+  invalid where a row is behind or it has none. For a valid one the
+  scheduler registers a row entry at each document the rows name (section
+  3.1), so that a change to one of them marks it invalid by document. Its
+  first run in the process replaces the row entries by the entries of
+  its read set. The trigger addresses held at a restart are lost, as they
+  are for a `dynamic` node, with the same residual (section 3.4).
 - **A creation-site envelope gives nothing to wait for.** A
   `WriteEnvelope` of kind `created` names a site and no address, so it is
   not in the envelope index, and no reader's address can be found inside
@@ -2208,8 +2582,9 @@ a cause of the second kind.
   3.4, and it is how a computation behaves today.
 - A handler in the same position cannot be evaluated late. Section 5.3 says
   what happens: the attempt is withdrawn and the event is dispatched again
-  after the materializer has run. A cell under a creation-site envelope is
-  the exception, as above.
+  after the materializer has run, which for a materializer that cannot be
+  promoted is behind the derivation transaction (section 7.2). A cell
+  under a creation-site envelope is the exception, as above.
 - Fewer bodies are materializers. `collectionIndexMember`, one of the two
   built-ins that declare envelopes today, has no counterpart, because the
   per-element selector cones write a statically known target
@@ -2327,10 +2702,13 @@ The bound is one rule, and it is ruled:
   state cell (`via` of kind `state`) and through a handle (`via` of kind
   `handle`), and an edge from a cone to itself or to a cone with a lower
   index is on a cycle (`plan-and-label-templates.md` §1.4 and §3.11). The
-  compiler reports such a cycle as a warning that names the side-write,
-  `side-write:cycle` (`language-subset.md` §10.3), and does not refuse it:
-  a write that normalizes the value it reads is a cycle that settles in
-  two evaluations.
+  compiler reports an edge to a cone with a lower index, and an edge from
+  a cone to itself where no body of the cone reads its own write target,
+  as a warning that names the side-write, `side-write:cycle`. A body that
+  reads its own write target is reported as `side-write:not-idempotent`
+  and not as a cycle (`language-subset.md` §10.3). The compiler refuses
+  neither: a write that leaves a settled value unchanged is a cycle that
+  settles in two evaluations.
 
 **What the compiler cannot see.** Six kinds of cycle are found only by the
 budget:
@@ -2477,11 +2855,12 @@ space is active, which is the serving loop's rule to change (open question
 | The creation of a space an `inSpace` request names and that does not exist | The genesis commit of the new space, which makes the acting principal its owner, and then a commit of the home space that holds the allocation record alone | At the wave's commit step, ahead of the batch for that space (section 9.4) |
 | A staged change to a space's access list | An authored commit of the list alone, decided by the memory server that holds the list | At the wave's commit step, before every batch of writes |
 | A bookkeeping write a run triggers after it ended, such as a compile-cache write-back | The same foreign batch, under the triggering run's carriage | With the provisioning batches |
+| The mark of a torn-down instance in another space: an `inSpace` instance that a computation made and an evaluation no longer makes | An authored batch for that space, under the principal of the scope key the making cone instance is evaluated for | At the wave's commit step, with the batches of writes for other spaces, before the home batch |
 
 The first, the second, the fourth and the fifth exist today
 ([protocol](../server-side-execution/protocol.md), §2b;
 [serving loop](../server-side-execution/serving-loop.md), §3d and §5). The
-third is section 9.4's. The
+third is section 9.4's, and the sixth is described below. The
 child of an `inSpace` instantiation is evaluated by its own space's loop,
 when something there demands it, and never in the transaction that requested
 it (`plan-and-label-templates.md`, §3.15).
@@ -2505,6 +2884,53 @@ instantiation is refused when the request is made, and the cone instance
 fails. A computation that instantiates with `inSpace` therefore has to
 read state of user or session scope, or the instantiation belongs in a
 handler (open question 34).
+
+**A later evaluation that changes the argument.** An evaluation that makes
+the same `inSpace` instance again and computes other values for paths of
+its argument stages those paths, as it does for an instance in its own
+space (section 2.7). The argument document is in the other space, so the
+paths are carried by the second row of the table: an authored batch for
+that space, under the same principal, at the wave's commit step. The other
+space's loop receives the commit as a storage change, which dirties the
+instance's `argument` slots there.
+
+**Tearing down an instance in another space.** The transaction of the
+evaluation that no longer makes the instance covers the home space. It
+removes the instance from the instances document of the enclosing
+instance, which is a home write. The mark belongs in the setup record of
+the instance's result document, which is in the other space, so the
+transaction stages it as a step for that space: the sixth row of the
+table. Three things follow.
+
+- **The home scheduler does its part for what it holds.** It withdraws
+  the demand its own slots held through the link, and it has no record,
+  no queue and no rows for the instance.
+- **The other space's loop does the scheduler's part of section 2.7.**
+  The mark arrives there as a commit from storage. That loop finds the
+  mark at the setup record of a result document, and does for the
+  instance, and for every instance of that space that belongs to it,
+  what section 2.7 lists: it releases the record if the instance is
+  loaded, withdraws demand, drops the events queued for its streams,
+  abandons its pending effects, stops its materializers, and deletes its
+  rows from that space's basis index, stream index and pending-effect
+  rows, in the store transaction of the wave of that cycle. Where the
+  space is not active, the mark is stored all the same, a marked instance
+  is not loaded (section 4.4), and the rows are deleted when the space is
+  next activated and the loop finds them under a marked instance.
+- **The instances that belong to it.** The home transaction writes the
+  mark of the instance it made, and of no other. *Assumed:* the other
+  space's loop writes the marks of the instances that belong to that
+  instance in its space, in the derivation transaction of the set of
+  changes the arriving commit is part of, because the records that say
+  which those are, such as the instances documents, are in that space
+  (`execution-and-storage.md` §2.8; open question 40).
+
+If the home batch then does not commit, the mark stays in the other space
+while the instances document still lists the instance. The making cone
+instance is evaluated again later. Where it again makes no such instance,
+it stages the same mark and finds it stored. Where it makes the instance,
+it clears the mark and sets the instance up again
+(`execution-and-storage.md` §2.8, "Made again").
 
 ### 9.4 One commit sequence for a cause that crosses
 
@@ -2548,13 +2974,18 @@ step in that space.
    identifier of the instance requested, except with `root: true`: the
    instance identifier then derives from the identifier of the space, so
    it cannot name the record that yields that identifier
-   (`plan-and-label-templates.md` §3.14). The record is one of the writes
-   the body staged and carries the body's template. It commits by itself,
-   ahead of the wave, as a setup transaction does (section 10.8).
+   (`plan-and-label-templates.md` §3.14). The record is a write of the
+   unit that made the request and carries the body's template. It commits
+   ahead of that unit, so its label is instantiated from stored labels
+   only (§3.14 and §4.6 there; `execution-and-storage.md` §5.6 says in
+   which document it is stored). It commits by itself, at the wave's
+   commit step, ahead of the wave's derived commit.
 3. **The staged changes to access lists,** in the order the handler staged
    them.
 4. **The batch of writes for each other space:** the documents of the
-   instances an `inSpace` request made there.
+   instances an `inSpace` request made there, the argument paths a later
+   evaluation changed, and the marks of the instances there that an
+   evaluation tore down (section 9.3).
 5. **The home writes.**
 
 The genesis commit comes before the allocation record so that a record
@@ -2638,6 +3069,7 @@ on commits [s..n] arriving:
     if c appends an event: queue it               (section 5.1)
 
   for each queued event, in order:                -- the batch
+    if the event has to wait: end the batch       (sections 5.1, 7.2)
     run the event's transaction                   (section 5.2)
     seal it into the wave
     queue the events it sent to streams of this space
@@ -2658,7 +3090,8 @@ on commits [s..n] arriving:
     run one derivation transaction for what their writes made stale
 
   commit the wave: the steps of section 9.4, then one derived commit
-    with the watermark, the basis rows and the stream rows
+    with the watermark, the basis rows, the stream rows
+    and the pending-effect rows
   hand the effect requests of the wave to the outbox
 ```
 
@@ -2667,7 +3100,7 @@ on commits [s..n] arriving:
 | Changes into dirty slots | The first step on arriving commits, which is "mark dirty" today. A completion commit, a setup commit, and the open transaction's own writes are matched in process (sections 3.5, 6.5 and 10.8). A foreign commit is matched when its frame arrives (section 9.1) |
 | Demand | The demand registry the loop keeps per client session is the source. A change to it is a cause (section 4.5), processed in the next cycle |
 | The event queue | The scheduler's queue of the space's runtime, filled by the loop's drain from the durable stream entries. The events of one cycle are one batch (section 5.1) |
-| Effects | Request transactions run inside the cycle. The network call runs in the outbox after the wave's commit. The completion commits by itself and is input to the next cycle |
+| Effects | Request transactions run inside the cycle. The network call runs in the outbox after the wave's commit. The completion commits by itself, and its commit joins the set of changes of the cycle that follows (section 6.5) |
 | Materializers | Inside the cycle, after the events and the derivation transaction behind them |
 | Convergence | The evaluation budget inside each transaction. The budget per unit ends the cycle, which is the loop's budget exhaustion |
 | Links across spaces | Reads on the runtime's sessions. Writes at the wave's commit step, in the order of section 9.4 |
@@ -2676,6 +3109,10 @@ on commits [s..n] arriving:
 **One derivation transaction behind the batch.** The changes one cycle
 drains from storage and the writes of the events that cycle handled form
 one set of changes, which is one cause with one derivation transaction.
+The commit of an effect's completion is among the changes: it was matched
+in process when it was made, and the slots it dirtied are evaluated in the
+derivation transaction of the cycle that follows it, with no transaction
+of its own (section 6.5).
 The loop drains commits in batches, and a transaction per commit would
 evaluate one cone instance once per commit of a burst. That transaction
 does three things, and it runs when any of them is needed.
@@ -2742,23 +3179,28 @@ form:
   ([events](../server-side-execution/events.md), §2). A derivation
   transaction whose cause is a change of demand evaluates the scope
   instances of the demanding principal and no other principal's.
+- The request transaction of an effect operation acts as the principal
+  section 6.2 gives it, and a request transaction that a recovery runs for
+  a handler's operation as the requester of its pending-effect row
+  (section 2.3).
 
 The text of §3c is a host arrangement and changes with this design. The
 label semantics it arranges are the specification change's.
 
 ### 10.4 The basis index
 
-The basis index is the persisted form of which cone instances are current.
-The other persisted forms of scheduler state are the watermark, the stream
-watermarks, and the stream index of section 5.1. Its rows say that an
-output is current if and only if its inputs are unchanged since the
-recorded sequence numbers
-([serving loop](../server-side-execution/serving-loop.md), §3b). Its shape
-stays: identifiers and sequence numbers, by document, overwritten in place,
-written inside the wave's store transaction, never pushed and never read at
-admission. Where the runtime shows a basis row in a diagnostic or to a
-tool, it shows it under the label `plan-and-label-templates.md` §2.6 gives
-a basis row ("Rows beside the documents"), which is an assumption there.
+The basis index is the persisted form of which cone instances are current. The
+other persisted forms of scheduler state are the watermark, the stream
+watermarks, the stream index of section 5.1, and the pending-effect rows of
+section 2.3. Its rows say that an output is current if and only if its inputs
+are unchanged since the recorded sequence numbers ([serving
+loop](../server-side-execution/serving-loop.md), §3b). Its shape stays:
+identifiers and sequence numbers, by document, overwritten in place, written
+inside the wave's store transaction or a setup transaction's (section 10.8),
+never pushed and never read at admission. Where the runtime shows a basis row
+in a diagnostic or to a tool, it shows it under the label
+`plan-and-label-templates.md` §2.6 gives a basis row ("Rows beside the
+documents"), which is an assumption there.
 
 What changes is what a row is keyed by. Today the key is a durable action
 identity and the scope instance that ran. Here it is:
@@ -2766,7 +3208,7 @@ identity and the scope instance that ran. Here it is:
 | Column | Holds |
 | --- | --- |
 | The instance | The result cell's identifier and the identity of the compiled pattern |
-| The cone | Its index in the plan |
+| The cone | Its index in `Plan.cones`. For a row of a materializer, the index of its `Operation` in `Plan.operations` in the place of the cone, marked as an operation |
 | The scope instance | As today |
 | The input document | Space, identifier, scope instance |
 | The sequence number | The input's at the evaluation |
@@ -2779,14 +3221,15 @@ identity and the scope instance that ran. Here it is:
 - A cone instance that is stale and not demanded is not evaluated, and its
   rows stay behind the heads. That is the whole durable record of section
   4.6.
-- **A write that did not reach storage does not advance the rows.** When an
-  event's transaction is rejected or aborted, when a constraint drops a
-  derived write, or when a conflict withdraws one, the rows of the cone
-  instance that computed the write stay where they were. In the process
-  that evaluated it, the memo entry is current and the output is unstored
-  (section 3.5). After a restart there is no entry, the rows are behind
-  the heads, and the cone instance is found stale and evaluated again.
-  The rows advance when a later transaction stores the write.
+- **A write that did not reach storage does not advance the rows.** When a
+  transaction does not commit, because it was rejected or aborted, its attempt
+  was withdrawn, or its event was requeued, when a constraint drops a derived
+  write, or when one is withdrawn, the rows of the cone instance that computed
+  the write stay where they were (section 3.5). In the process that evaluated
+  it, the memo entry is current and the output is unstored (section 3.5). After
+  a restart there is no entry, the rows are behind the heads, and the cone
+  instance is found stale and evaluated again. The rows advance when a later
+  transaction stores the write.
 - **A failed evaluation advances the rows.** A cone instance that failed,
   at the bound of section 8.1 or otherwise, stored its error state. It is
   current after a restart as well, and is evaluated again when an input
@@ -2796,15 +3239,25 @@ identity and the scope instance that ran. Here it is:
   that swaps the pattern deletes them. The rows of an instance that was
   torn down are deleted in the same way (section 2.7).
 - Dynamic reads contribute the documents they journaled, as logged reads do
-  today. A sampled read contributes none.
+  today. A sampled read contributes none. A slot whose path holds `*`
+  contributes the document of each child it was bound at (section 3.2).
+- **A materializer has rows.** A materializer is no cone, and its rows are
+  keyed by its `Operation` in the place of the cone. A run whose writes
+  all reach storage replaces its rows as a set: one per document the run
+  read. A run whose transaction does not commit leaves them. Section 7.2
+  says how they decide, after a restart or a load, whether the
+  materializer is valid. They are deleted with the rows of the instance.
 - **Rows as entries.** A row names an input document. Where this process
   does not hold the precise entries of a cone instance, the scheduler
   registers a row entry at each document its rows name (section 3.1). That
   is the case for the element slots of a collection whose element table
-  has not been built in this process, and for the `dynamic` nodes of a
-  cone instance that has not been evaluated in it. A change to such a
+  has not been built in this process, for a slot whose path holds `*` and
+  whose container has not been read in it, and for the `dynamic` nodes of
+  a cone instance that has not been evaluated in it. A change to such a
   document makes the cone instance stale. The first evaluation in this
-  process replaces the row entries by slot, chain and dynamic entries.
+  process replaces the row entries by slot, chain, container and dynamic
+  entries. A materializer that has not run in this process has row
+  entries in the same way (section 7.2).
 
 **A read answered from the rows.** By ruling, a read of an address whose
 writer is in an instance that is not loaded consults the rows, and the
@@ -2822,8 +3275,13 @@ follows.
 2. **The cones.** The plan of the compiled pattern that the result
    document names gives the cones that write the address: the cone of
    each kept output at, above or below the path, or each cone with a
-   write edge of kind `state` to the cell. The check adds every cone from
-   which `Plan.edges` leads to one of them, over any number of edges. It
+   write edge of kind `state` to the cell. A write edge of kind `handle`
+   or `argument` is not among them: nothing stored leads from a cell
+   written through a handle, or from a child's argument document, to the
+   instance whose cone writes it, so a read of either consults no row and
+   returns what is stored (sections 4.4 and 5.3). The check adds every
+   cone from which `Plan.edges` leads to one of them, over any number of
+   edges. It
    uses the parsed plan the worker holds for that compiled pattern
    (section 10.5). Where the worker holds none, the address counts as
    stale.
@@ -2941,16 +3399,23 @@ accepts (open questions 23 and 25).
 
 ### 10.6 Recovery
 
-Recovery is the activation of section 10.2 and needs nothing further
-([serving loop](../server-side-execution/serving-loop.md), §6): the lease,
-the watermark, stale cone instances from the basis index, undelivered events
-from the stream watermarks, their bindings from the stream index, pending
-outbox rows, and effect requests found missing from their hashes. The memo
-of evaluated cone instances is process memory and starts empty, and so do
-the element tables, the registered addresses of `dynamic` nodes, their
-trigger reads, and the record of unstored writes and refusals. Sections
-3.4, 3.5 and 10.4 say why each loss is sound. Which instances a computation
-made is read from the instances document
+Recovery is the activation of section 10.2 and needs nothing further ([serving
+loop](../server-side-execution/serving-loop.md), §6): the lease, the watermark,
+stale cone instances from the basis index, undelivered events from the stream
+watermarks, their bindings from the stream index, pending outbox rows, and
+effect requests found missing from their hashes. A missing request is found in
+one of two ways. For an `Operation` of a plan it is found when the instance is
+loaded: the operation's request transaction compares the stored hash and finds
+a pending mark with no request outstanding in the process (section 6.2). For an
+operation a handler requested, activation reads the pending-effect rows of the
+space and runs a request transaction for each (section 2.3). Which
+materializers are valid is read from their basis rows (section 7.2). The memo
+of evaluated cone instances is process memory and starts empty, and so do the
+element tables, the bindings of slots whose path holds `*`, the registered
+addresses of `dynamic` nodes, their trigger reads, the read sets of
+materializers, and the record of unstored writes and refusals. Sections 3.2,
+3.4, 3.5, 7.2 and 10.4 say why each loss is sound. Which instances a
+computation made is read from the instances document
 (`execution-and-storage.md` §2.8).
 
 ### 10.7 A runtime without a serving loop
@@ -2975,6 +3440,28 @@ setup transaction of a source update does today
 | The migration of an instance (`execution-and-storage.md` §9.4) | When demand or a queued event causes the load of an instance whose stored setup record the builder path wrote | The instance stays unloaded, with its demand pending and its events holding their place in the queue, until the commit is accepted. The transaction evaluates every cone instance, with every kept output of the space's scope instance demanded, and every kept output of narrower scope for the scope keys that demand the instance. Then the record is built, and the builder-path graph of the instance is released. A withdrawn commit leaves the builder-path instance running |
 | The setup of an instance under a new compiled pattern, after a source update | When the update is applied | The same. The basis rows under the earlier compiled identity are deleted, so every cone instance starts stale |
 | The deletion of a retired document (`execution-and-storage.md` §9.6) | At idle priority, after the cycle's transactions have sealed | None beyond matching the commit |
+
+**The rows a setup transaction writes.** A migration and a setup under a
+new compiled pattern evaluate every cone instance and compute the
+identifiers of the instance's streams, in a transaction that is in no
+wave. The memo then holds those evaluations, so no later transaction of
+the process would compute them again and write their rows. The store
+transaction of a setup transaction therefore writes rows as a wave's
+does:
+
+- the basis rows of the cone instances it evaluated, under the compiled
+  identity the setup gives the instance;
+- the stream rows of the streams whose identifiers it computed (section
+  5.1), which for a migrated instance are all of its rows, since the
+  builder path keeps none;
+- and it deletes the basis rows under the earlier compiled identity, the
+  rows of the instance's materializers among them, and for a migration
+  the rows the builder path kept for the instance's nodes.
+
+A stream row of a binding the new plan lacks is kept (section 5.1), and so
+is a pending-effect row, which names no compiled identity.
+`execution-and-storage.md` §9.4, step 5, names the rows among what the
+migration writes.
 
 The commit of a setup transaction is matched against the address index in
 the process that made it, like a completion commit, so the slots of other
@@ -3030,9 +3517,9 @@ value code, and runs the scheduler of this document with three differences.
   overlay entry that is never committed
   ([speculation](../server-side-execution/speculation.md), §1). The
   client's one commit for an event is the event itself.
-- **It has no effect operations** (section 6.7), no outbox, no basis index
-  and no stream index. It enacts one effect, `navigateTo`. *Assumed:* it
-  runs no materializer (section 7.2).
+- **It has no effect operations** (section 6.7), no outbox, no basis index, no
+  stream index and no pending-effect rows. It enacts one effect, `navigateTo`.
+  *Assumed:* it runs no materializer (section 7.2).
 - **Its demand sources are render sinks.** Only what is rendered is
   evaluated.
 
@@ -3041,13 +3528,14 @@ it pending: nothing is fetched for a speculation, and the branch renders
 its loading state until the server's value arrives.
 
 **What a client cannot name.** A client cannot read the element-key salt,
-by ruling. It can therefore not derive an identifier that holds a key
-derived from a value. Three kinds of thing are affected.
+by ruling. It can therefore derive no identifier that is derived under
+that secret: one that holds a key derived from a value, and that of a part
+document. Three kinds of thing are affected.
 
 | What | Why a client cannot name it | What the client does until a stored link arrives |
 | --- | --- | --- |
-| A state cell or an operation's state declared in an element body over plain values, which exists only where the index is in the key | The `element` step of its cause holds a salted value hash | The `state` or `operation` slot has no bound address. The cone instances that read it are pending, and what they feed renders its committed value or its loading state |
-| A part document of a row keyed by a plain value | The same step is in its identifier | Nothing: a client names a kept path by the result cell and the path, never a part document, and its overlay entries are per kept path (section 11.6) |
+| A state cell declared in an element body over plain values, which exists only where the index is in the key, and the state of an operation declared in such a body | The `element` step of its cause holds a salted value hash | The `state` or `operation` slot has no bound address. The cone instances that read it are pending, and what they feed renders its committed value or its loading state |
+| A part document at or below a row of a kept collection | Its identifier is derived under the secret of the space for every key, a cell's identity included (`plan-and-label-templates.md` §2.3) | Nothing: a client names a kept path by the result cell and the path, never a part document, and its overlay entries are per kept path (section 11.6) |
 | A binding made in a function body that has a copied path | The stream's identifier holds the salted hash of the copy | The stream is pending. A control the speculative run rendered for it sends nothing until the server's link to the stream arrives. A speculative handler that makes such a binding stores no link to it in its overlay entry |
 
 A client learns such an identifier from a link the server stored: a kept
@@ -3075,7 +3563,7 @@ holds, before the server's result arrives.
 
 So a user can act on a control that a speculative run rendered, before
 the server has evaluated the binding. The event is appended to a stream
-the server has no row for yet, and it waits as section 5.1 says.
+the server has no row for yet, and it is deferred as section 5.1 says.
 
 ### 11.2 Labels of speculative values
 
@@ -3285,9 +3773,10 @@ One transaction per cause changes six things.
 - **Identifiers agree, where a client can derive them.** A handling is
   identified by its receipt, the event's identifier and the stream
   (`handlingReceiptId` in `scheduler/event-identity.ts`), which is the same
-  in the speculative and the served run. What a handler creates without an
-  explicit cause is named by the handling and its order among the
-  handler's requests, and an event the handler sends by the handling and
+  in the speculative and the served run. Every cell, instance and effect
+  a handler requests without an explicit cause is named by the handling
+  and its order among the handler's requests, and an event the handler
+  sends by the handling and
   its order among the events that invocation sends
   (`plan-and-label-templates.md` §1.3; `execution-and-storage.md` §5.4).
   The cells, instances and effects a speculative handler requests are
@@ -3295,8 +3784,8 @@ One transaction per cause changes six things.
   ([speculation](../server-side-execution/speculation.md), §4), and the
   echo of a sent event retires on that event's own consequence. The
   identifiers a client cannot derive are those of section 11.1:
-  value-keyed per-element state, a part document of a row keyed by a plain
-  value, and a binding with a copied path. What reads or uses one is
+  value-keyed per-element state, a part document at or below a row of a
+  kept collection, and a binding with a copied path. What reads or uses one is
   pending on a client until a stored link arrives.
 - **A refusal is predicted, not discovered.** An event's transaction that
   the server will reject for a gate of section 11.3 leaves no entry to
@@ -3368,9 +3857,8 @@ shows it current, and loads the instance only where it shows it stale
    batches for other spaces, then the home writes. That the allocation
    record precedes the step in the created space is ruled. The alternative
    that closes the gap of I11 is a protocol with a prepare phase. It is
-   question 15 of the continuation plan, which states the order as access
-   changes, foreign batches, home. The place of the first two steps ahead
-   of the access changes is this document's.
+   question 15 of the continuation plan, which states the same five
+   steps.
 7. **Presenting a predicted refusal.** *Assumed:* no speculative result, an
    advisory outcome to the host and the caller, a mark on the control, no
    state a pattern can read, and the event is appended regardless (section
@@ -3410,6 +3898,50 @@ shows it current, and loads the instance only where it shows it stale
     for the builder-path instances of a space beside the scheduler of this
     document, with one change channel, one event queue and one wave
     (section 10.8). It is question 24 of the continuation plan.
+36. **The requester of an effect that a cone instance of space scope
+    requests.** *Assumed:* the request transaction of an operation of a
+    plan acts as the principal of the scope key of the cone instance that
+    staged the request. At space scope there is none. A built-in that
+    needs no requester is requested with no principal. The operation of a
+    built-in that needs one, such as `agent`, has user or session scope
+    whatever the scope of the cone instance, its unit exists per principal
+    that demands its result, and without one it is not requested. Where
+    `builtin-inventory.md` gives a built-in no behavior, the request is
+    refused and the result takes the refusal as an error state (section
+    6.2; that document's "The requester of a request"). It extends
+    question 45 of the continuation plan. The principal of a completion
+    transaction and of a materializer's run is not decided.
+37. **The element slots of a handler whose key two positions hold.**
+    *Assumed:* they are bound at every position that holds the key, and
+    each resolves to the join over those positions (section 5.1). It is
+    open question 27 of `plan-and-label-templates.md` and part of
+    question 40 of the continuation plan.
+38. **The recovery of a pending effect that a handler requested.**
+    *Assumed:* activation reads the pending-effect rows and runs a request
+    transaction for each, which follows the references of the stored
+    request again, checks the egress ceiling on the content as it is
+    then, and sends that content, acting as the principal the row names
+    (section 2.3). A request that passed its ceiling when the event
+    committed can therefore be refused at the recovery, after the event's
+    other writes are stored, and the content that leaves can differ from
+    the content the first request read. The alternative stores what the
+    first request read with the operation's state.
+39. **A read of something that an instance that is not loaded writes and
+    that names it nowhere.** *Assumed:* the read returns what is stored,
+    for a cell written through a handle and for a path of a child's
+    argument document (sections 4.4, 5.3 and 10.4). The first is question
+    57 of the continuation plan. The second extends it: a handler of a
+    child whose parent is not loaded reads a computed argument as stored.
+    The alternative has the child's result document hold a link to the
+    instance that writes its argument, and adds the write edges of kind
+    `argument` to the check of section 10.4.
+40. **The teardown of an instance in another space.** *Assumed:* the home
+    transaction stages the mark as an authored batch for the other space,
+    under the principal of the scope key the making cone instance is
+    evaluated for, and the other space's loop does the scheduler's part
+    and writes the marks of the instances that belong to the torn-down one
+    in its space (section 9.3). That `inSpace` is legal at such a site is
+    question 50 of the continuation plan.
 
 ### For another document or the prototype
 
@@ -3457,11 +3989,11 @@ shows it current, and loads the instance only where it shows it stale
     event's transaction for a request a handler makes (section 6.3 here).
 20. **Per effectful built-in: when it is demanded and which time gates it
     declares** (`builtin-inventory.md`). Met by its "When an effect is
-    demanded, and its time gates": an effect is demanded with a path of
-    its result, a staged change and a handler's `navigateTo` wait for no
-    demand, the two claim timeouts stay, and the debounce of `wish` has no
-    counterpart, which it assumes. It takes the rule for a `navigateTo` of
-    the reactive tier from section 6.2 here.
+    demanded, and its time gates": an operation of a plan is demanded with a
+    path of its result, every request a handler makes is sent when its event's
+    transaction commits, the two claim timeouts stay, and the debounce of
+    `wish` has no counterpart, which it assumes. It takes the rule for a
+    `navigateTo` of the reactive tier from section 6.2 here.
 21. **A diagnostic for a cycle through a side-write**
     (`language-subset.md`). Met by `side-write:cycle` in its §10.3, a
     warning (section 8.2 here).
@@ -3489,7 +4021,9 @@ shows it current, and loads the instance only where it shows it stale
     document today and of the walk that follows it; the entries, the
     drain, the queue and the registry in memory are kept. Its §4.7 and
     §4.9 count no document for a stream that received no event, and one
-    row. What remains for the prototype is the size of the index.
+    row. An event on a stream with no row is deferred under the deferral
+    budget of today and is not dropped at once, which is part of the same
+    ruling. What remains for the prototype is the size of the index.
 27. **Materializers on a client** (the prototype). *Assumed:* a client runs
     no materializer, and reads what a materializer wrote as committed
     (section 7.2). The alternative runs it inside the speculative
@@ -3508,11 +4042,12 @@ shows it current, and loads the instance only where it shows it stale
     a cone instance, because the loop it bounds needs two runtimes that
     commit derived writes to one document (section 8.4).
 30. **The mark on the instances that belong to a torn-down instance**
-    (`execution-and-storage.md`). Its §2.8 marks an instance a computation
-    no longer makes. *Assumed:* the same transaction marks that instance's
-    children of the reactive tier and the instances its computations made,
-    so that none of them is loaded again through a link another document
-    holds (section 2.7).
+    (`execution-and-storage.md`). Met by its §2.8: the transaction that
+    marks an instance a computation no longer makes marks that instance's
+    children of the reactive tier, the instances its computations made,
+    and the instances that belong to those in turn, so that none of them
+    is loaded again through a link another document holds (section 2.7).
+    Question 40 has the case of an instance in another space.
 31. **Trigger reads across a restart** (`plan-and-label-templates.md`, and
     the specification change). Met by its §3.10 ("Trigger reads across a
     restart"). The trigger reads a `dynamic` node held are lost with the
