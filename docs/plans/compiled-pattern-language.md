@@ -45,7 +45,13 @@ next.
   between the documents followed, and its corrections are applied.
 - **Prototype:** branch `claude/compiled-pattern-prototype` holds a Rust
   crate at `base/pattern-compiler/`, the front end of stage 2. It is not
-  part of this branch.
+  part of this branch. It parses the corpus with the `oxc` parser,
+  classifies code into tiers, and applies the rules of
+  `language-subset.md` that need no types. It accepts 355 of the 425
+  corpus modules without an error. Most of the 259 errors are `any` in a
+  type (184) and `patternTool` (31). `language-subset.md` is corrected
+  for the places its author found ambiguous or without a diagnostic
+  identifier; the crate's `SPEC-NOTES.md` lists them.
 - **Specification change:** draft pull request #91 in `commonfabric/specs`
   (branch `claude/compiled-pattern-label-templates`) carries the label
   semantics as prose, pseudocode, and Lean statements. It includes the
@@ -515,6 +521,17 @@ assumption.
     (SS §7.2). *Written in:* the event holds its place until the
     materializer has run. A materializer that stays invalid keeps the
     event waiting.
+71. **A per-element handler over plain values** (LS §4.4.1, question
+    19). The ruling refuses a per-element body over plain values that
+    binds a handler without using the index. The front-end prototype
+    found that it refuses a harmless case in FabriChat: a row of buttons
+    over a constant list of six distinct reactions. Where the body
+    declares no state cell, equal elements bind equal state, and one
+    shared stream behaves as two would, which is the argument the
+    language already accepts for a binding made in a function body.
+    *Assumed:* the rule stands as ruled, and FabriChat takes the rewrite
+    of LS §12.8. The alternatives refuse only a state cell, or exempt a
+    collection the compiler can show to hold distinct values.
 
 ## Open, and not needing the owner
 
@@ -540,10 +557,6 @@ assumption.
 - **A container bound by reference from an inline plain element that two
   positions share** has two addresses and one shared evaluation. No
   document examines it.
-- **`setSchema`** is removed by `language-subset.md` §4.7 and has no
-  catalog entry. That document also does not say whether a cell handle
-  type is a data type or a code type, which its rule for imported
-  signatures depends on.
 - **Uneven wording.** `language-subset.md` says selector where the other
   documents say key function, and it cites open questions of the newer
   documents by number.
