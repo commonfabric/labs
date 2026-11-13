@@ -792,6 +792,24 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
     context?: () => PendingCommitContext,
   ): void;
 
+  /**
+   * Register a multi-space commit whose later spaces' writes are not yet in
+   * those spaces' replicas. The transaction layer commits such a transaction
+   * one space at a time and hands a space's writes to its replica only once
+   * the server has answered for the spaces before it, so until then a read
+   * of a later space does not see them. `applied` settles once the commit
+   * has handed its last space's writes to that space's replica, or has
+   * stopped short of it. Called synchronously as the commit is issued.
+   */
+  trackMultiSpaceCommitApplying?(applied: Promise<void>): void;
+
+  /**
+   * Settles once every multi-space commit registered with
+   * `trackMultiSpaceCommitApplying()` so far has handed its writes to its
+   * replicas, or stopped; `undefined` when none is still handing them over.
+   */
+  multiSpaceCommitsApplied?(): Promise<void> | undefined;
+
   /** Snapshot pending work without waiting for durability or starting I/O. */
   getDiagnostics?(): StorageDiagnostics;
 
