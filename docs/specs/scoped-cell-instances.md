@@ -696,7 +696,12 @@ labels as its own envelope joined with the confidentiality that a value read
 of each broader instance of the same id consumes: the space instance's for a
 user instance, the user and space instances' for a session instance. Entries
 labeling the pointer the broader slot holds are left out, and integrity comes
-from the instance's own envelope alone. Other readers, among them the flow
+from the instance's own envelope alone. Memory holds to the same rule when an
+edit to a collaborative field in a scoped instance labels the field's
+anchors (`docs/specs/memory-v2/07-op-views-and-annotations.md` §7.7.4), and
+the scopes that count as broader and the entries joined from them are
+decided in one place for both, `cfc-scoped-instance-labels.ts` in
+`runtime/memory/v2`. Other readers, among them the flow
 join, the labels a schema read carries across links, dereference traces and
 label introspection, read the instance's own envelope only.
 

@@ -4,6 +4,8 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import { toFileUrl } from "@std/path";
 import type { FabricValue } from "@commonfabric/api";
+import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
+import { taggedHashStringOf } from "@commonfabric/data-model";
 import {
   applyCommit,
   applyWaveCommit,
@@ -26,6 +28,7 @@ import {
   UnsupportedOpCodecError,
   WaveCommitConflictError,
 } from "../v2/engine.ts";
+import { anchorsSchemaHash } from "../v2/cfc-anchors-label.ts";
 import { executionLeaseHolder } from "../v2/execution-lease.ts";
 import {
   CODEMIRROR_CHANGESET_CODEC,
@@ -36,6 +39,7 @@ import {
 import {
   type ApplyOpOperation,
   type ConfirmedRead,
+  decodeMemoryBoundary,
   encodeMemoryBoundary,
   type Operation,
   operationAnchorsDocId,
@@ -2730,6 +2734,941 @@ describe("v2-operation-engine", () => {
           expect(storedAnchors(engine, "of:target")).toEqual({
             value: { h: 1 },
           });
+        } finally {
+          close(engine);
+          await Deno.remove(path);
+        }
+      });
+    });
+
+    describe("the label of the anchors an edit moves", () => {
+      const schemaHash = anchorsSchemaHash();
+      const schemaDoc = `cid:${schemaHash}`;
+      const secret = { confidentiality: ["secret"] };
+
+      /** The CFC envelope of a document whose label map holds `entries`. */
+      const envelope = (entries: FabricValue[], version = 1): FabricValue => ({
+        version,
+        schemaHash,
+        labelMap: { version: 1, entries },
+      });
+
+      /**
+       * Seeds `id` with the body `abc` under the CFC envelope `cfc`, and the
+       * anchors `b` at 1 and `end` at 3. An insert at 2 then moves `end` and
+       * leaves `b`.
+       */
+      const seed = (engine: Engine, id: string, cfc: FabricValue) => {
+        commit(engine, [
+          { op: "set", id: schemaDoc, value: { value: {} } },
+          { op: "set", id, value: { value: { body: "abc" }, cfc } },
+          setAnchors(id, { b: 1, end: 3 }),
+        ], { session: "session:setup" });
+      };
+      const insert = (engine: Engine, id: string) =>
+        commit(engine, [applyOp(id, "alice:1", "abc", [changes(3, 2, "X")])]);
+
+      /** The entry the engine writes for the anchor `anchor`. */
+      const moved = (anchor: string, confidentiality: FabricValue[]) => ({
+        path: [anchor],
+        origin: "derived",
+        observes: "value",
+        label: { confidentiality },
+      });
+      /** A `PolicyCertified` atom, the hereditary family, for `policy`. */
+      const certified = (policy: string) => ({
+        type: CFC_ATOM_TYPE.PolicyCertified,
+        policy,
+      });
+      const labelEntries = (engine: Engine, id: string) =>
+        (read(engine, { id: anchorsDoc(id) })?.cfc as {
+          labelMap: { entries: FabricValue[] };
+        } | undefined)?.labelMap.entries;
+
+      const alice = "did:key:z6MkAnchorsLabelAlice";
+
+      /** Commits `operations` as Alice, in her one session. */
+      const commitAsAlice = (engine: Engine, operations: Operation[]) =>
+        applyCommit(engine, {
+          sessionId: "session:alice",
+          principal: alice,
+          commit: {
+            localSeq: ++seq,
+            reads: { confirmed: [], pending: [] },
+            operations,
+          },
+        });
+
+      /**
+       * Sets the `scope` instance of `id` to the body `abc`, under an
+       * envelope holding `entries`.
+       */
+      const scopedField = (
+        id: string,
+        scope: "space" | "user" | "session",
+        entries: FabricValue[],
+      ): Operation => ({
+        op: "set",
+        id,
+        ...(scope === "space" ? {} : { scope }),
+        value: { value: { body: "abc" }, cfc: envelope(entries) },
+      });
+
+      /** The anchors document of the `scope` instance of the body of `id`. */
+      const scopedAnchorsDoc = (id: string, scope: "user" | "session") =>
+        operationAnchorsDocId({ id, scope, path: ["body"] });
+
+      /**
+       * Sets the anchors of the `scope` instance of the body of `id` to
+       * `end` at 3, under an envelope holding `entries` where any are given.
+       */
+      const scopedAnchors = (
+        id: string,
+        scope: "user" | "session",
+        entries?: FabricValue[],
+      ): Operation => ({
+        op: "set",
+        id: scopedAnchorsDoc(id, scope),
+        scope,
+        value: {
+          value: { end: 3 },
+          ...(entries === undefined ? {} : { cfc: envelope(entries) }),
+        },
+      });
+
+      /** Inserts at the start of Alice's `scope` instance of the body of `id`. */
+      const editAsAlice = (
+        engine: Engine,
+        id: string,
+        scope: "user" | "session",
+      ) =>
+        commitAsAlice(engine, [{
+          ...applyOp(id, `alice:${id}:${scope}`, "abc", [changes(3, 0, ">")]),
+          scope,
+        }]);
+
+      /** The label entries of the anchors {@link scopedAnchorsDoc} names. */
+      const scopedLabelEntries = (
+        engine: Engine,
+        id: string,
+        scope: "user" | "session",
+      ) =>
+        (read(engine, {
+          id: scopedAnchorsDoc(id, scope),
+          scope,
+          principal: alice,
+          sessionId: "session:alice",
+        })?.cfc as { labelMap: { entries: FabricValue[] } }).labelMap.entries;
+
+      it("writes no envelope for a field whose document holds no label", async () => {
+        const { engine, path } = await openTestEngine();
+        try {
+          setup(engine, "of:unlabeled", "abc");
+          commit(engine, [setAnchors("of:unlabeled", { b: 1, end: 3 })]);
+
+          const applied = insert(engine, "of:unlabeled");
+
+          expect(written(applied)).toEqual([
+            ["of:unlabeled", "patch", false],
+            [anchorsDoc("of:unlabeled"), "patch", true],
+          ]);
+          expect(read(engine, { id: anchorsDoc("of:unlabeled") })).toEqual({
+            value: { b: 1, end: 4 },
+          });
+        } finally {
+          close(engine);
+          await Deno.remove(path);
+        }
+      });
+
+      it("labels every anchor of the field, moved or not, with the confidentiality at the field's path, and no other", async () => {
+        const { engine, path } = await openTestEngine();
+        try {
+          seed(
+            engine,
+            "of:labeled",
+            envelope([{ path: ["body"], origin: "declared", label: secret }]),
+          );
+
+          const applied = insert(engine, "of:labeled");
+
+          expect(written(applied)).toEqual([
+            ["of:labeled", "patch", false],
+            [anchorsDoc("of:labeled"), "patch", true],
+          ]);
+          expect(read(engine, { id: anchorsDoc("of:labeled") })).toEqual({
+            value: { b: 1, end: 4 },
+            cfc: envelope([moved("b", ["secret"]), moved("end", ["secret"])]),
+          });
+        } finally {
+          close(engine);
+          await Deno.remove(path);
+        }
+      });
+
+      it("labels every anchor in a patch of the envelope alone for an edit that moves none", async () => {
+        const { engine, path } = await openTestEngine();
+        try {
+          seed(
+            engine,
+            "of:still",
+            envelope([{ path: ["body"], origin: "declared", label: secret }]),
+          );
+
+          // Text inserted at `end`, the end of `abc`, lands after it.
+          const applied = commit(engine, [
+            applyOp("of:still", "alice:1", "abc", [changes(3, 3, "X")]),
+          ]);
+
+          expect(written(applied)).toEqual([
+            ["of:still", "patch", false],
+            [anchorsDoc("of:still"), "patch", true],
+          ]);
+          expect(applied.revisions[1].patches).toEqual([{
+            op: "replace",
+            path: "/cfc",
+            value: envelope([moved("b", ["secret"]), moved("end", ["secret"])]),
+          }]);
+          expect(read(engine, { id: anchorsDoc("of:still") })).toEqual({
+            value: { b: 1, end: 3 },
+            cfc: envelope([moved("b", ["secret"]), moved("end", ["secret"])]),
+          });
+        } finally {
+          close(engine);
+          await Deno.remove(path);
+        }
+      });
+
+      it("stores the schema document the new envelope names where the store holds none, as a derived revision", async () => {
+        const { engine, path } = await openTestEngine();
+        try {
+          // The field's envelope names another schema, so nothing has
+          // stored the one an anchors document's envelope names.
+          const other = taggedHashStringOf({ type: "object" });
+          commit(engine, [
+            {
+              op: "set",
+              id: `cid:${other}`,
+              value: { value: { type: "object" } },
+            },
+            {
+              op: "set",
+              id: "of:first",
+              value: {
+                value: { body: "abc" },
+                cfc: {
+                  ...(envelope([{ path: ["body"], label: secret }]) as object),
+                  schemaHash: other,
+                },
+              },
+            },
+            setAnchors("of:first", { b: 1, end: 3 }),
+          ]);
+
+          const applied = insert(engine, "of:first");
+          commit(engine, [
+            applyOp("of:first", "alice:2", { epoch: 1, version: 1 }, [
+              changes(4, 0, ">"),
+            ]),
+          ]);
+
+          expect(written(applied)).toEqual([
+            ["of:first", "patch", false],
+            [schemaDoc, "set", true],
+            [anchorsDoc("of:first"), "patch", true],
+          ]);
+          expect(read(engine, { id: schemaDoc })).toEqual({ value: {} });
+          expect(labelEntries(engine, "of:first")).toEqual([
+            moved("b", ["secret"]),
+            moved("end", ["secret"]),
+          ]);
+        } finally {
+          close(engine);
+          await Deno.remove(path);
+        }
+      });
+
+      it("takes the confidentiality of entries at, above and inside the field's path, each clause once, and of none beside it", async () => {
+        const { engine, path } = await openTestEngine();
+        try {
+          seed(
+            engine,
+            "of:around",
+            envelope([
+              { path: [], label: { confidentiality: ["above"] } },
+              { path: ["*"], label: { confidentiality: ["every"] } },
+              { path: ["body"], label: { confidentiality: ["at", "above"] } },
+              { path: ["body", "0"], label: { confidentiality: ["inside"] } },
+              { path: ["title"], label: { confidentiality: ["beside"] } },
+              { path: ["body"], label: {} },
+              {
+                path: ["cfc", "labels", "body"],
+                origin: "label-metadata",
+                observes: "labelMetadata",
+                label: { confidentiality: ["template"] },
+              },
+            ]),
+          );
+
+          insert(engine, "of:around");
+
+          expect(labelEntries(engine, "of:around")).toEqual([
+            moved("b", ["above", "every", "at", "inside"]),
+            moved("end", ["above", "every", "at", "inside"]),
+          ]);
+        } finally {
+          close(engine);
+          await Deno.remove(path);
+        }
+      });
+
+      it("leaves the field's integrity out of the label", async () => {
+        const { engine, path } = await openTestEngine();
+        try {
+          seed(
+            engine,
+            "of:vouched",
+            envelope([{
+              path: ["body"],
+              label: { confidentiality: ["secret"], integrity: ["reviewed"] },
+            }, { path: ["body"], label: { integrity: ["signed"] } }]),
+          );
+
+          insert(engine, "of:vouched");
+
+          expect(labelEntries(engine, "of:vouched")).toEqual([
+            moved("b", ["secret"]),
+            moved("end", ["secret"]),
+          ]);
+        } finally {
+          close(engine);
+          await Deno.remove(path);
+        }
+      });
+
+      it("reads a label a version-2 envelope names by document", async () => {
+        const { engine, path } = await openTestEngine();
+        try {
+          const label = { confidentiality: ["referenced"], integrity: ["x"] };
+          const labelDoc = `cid:${taggedHashStringOf(label)}`;
+          commit(engine, [{
+            op: "set",
+            id: labelDoc,
+            value: { value: label },
+          }]);
+          seed(
+            engine,
+            "of:referenced",
+            envelope([{ path: ["body"], label: { $ref: labelDoc } }], 2),
+          );
+
+          insert(engine, "of:referenced");
+
+          expect(labelEntries(engine, "of:referenced")).toEqual([
+            moved("b", ["referenced"]),
+            moved("end", ["referenced"]),
+          ]);
+        } finally {
+          close(engine);
+          await Deno.remove(path);
+        }
+      });
+
+      it("adds to the envelope the document holds, and writes none where it already holds the label", async () => {
+        const { engine, path } = await openTestEngine();
+        try {
+          seed(
+            engine,
+            "of:kept",
+            envelope([{ path: ["body"], label: secret }]),
+          );
+          const held = {
+            ...(envelope([
+              { path: ["b"], origin: "derived", label: { integrity: ["i"] } },
+            ], 2) as object),
+            stampPlacement: "committed",
+          };
+          commit(engine, [{
+            op: "set",
+            id: anchorsDoc("of:kept"),
+            value: { value: { b: 1, end: 3 }, cfc: held },
+          }]);
+
+          insert(engine, "of:kept");
+          const again = commit(engine, [
+            applyOp("of:kept", "alice:2", { epoch: 1, version: 1 }, [
+              changes(4, 2, "Y"),
+            ]),
+          ]);
+
+          expect(read(engine, { id: anchorsDoc("of:kept") })).toEqual({
+            value: { b: 1, end: 5 },
+            cfc: {
+              ...held,
+              labelMap: {
+                version: 1,
+                entries: [
+                  // The integrity of `b`'s derived entry of no class meets
+                  // the edit's, which holds none.
+                  { path: ["b"], origin: "derived", label: {} },
+                  moved("b", ["secret"]),
+                  moved("end", ["secret"]),
+                ],
+              },
+            },
+          });
+          expect(again.revisions[1].patches).toEqual([
+            { op: "replace", path: "/value", value: { b: 1, end: 5 } },
+          ]);
+        } finally {
+          close(engine);
+          await Deno.remove(path);
+        }
+      });
+
+      it("joins the move's label into one entry with the writer's, joining their confidentiality and meeting their integrity", async () => {
+        const { engine, path } = await openTestEngine();
+        try {
+          seed(
+            engine,
+            "of:written",
+            envelope([{ path: ["body"], origin: "declared", label: secret }]),
+          );
+          const carols = { confidentiality: ["carol"], integrity: ["bob"] };
+          const hash = taggedHashStringOf(carols);
+          commit(engine, [
+            { op: "set", id: `cid:${hash}`, value: { value: carols } },
+            {
+              op: "set",
+              id: anchorsDoc("of:written"),
+              value: {
+                value: { b: 1, end: 3 },
+                cfc: envelope([{
+                  path: ["end"],
+                  origin: "derived",
+                  observes: "value",
+                  label: { $ref: `cid:${hash}` },
+                }], 2),
+              },
+            },
+          ]);
+
+          insert(engine, "of:written");
+
+          expect(labelEntries(engine, "of:written")).toEqual([
+            moved("end", ["carol", "secret"]),
+            moved("b", ["secret"]),
+          ]);
+        } finally {
+          close(engine);
+          await Deno.remove(path);
+        }
+      });
+
+      it("drops the integrity an anchor's writer gave it on an edit to a field that holds no label", async () => {
+        const { engine, path } = await openTestEngine();
+        try {
+          seed(engine, "of:public", envelope([]));
+          commit(engine, [{
+            op: "set",
+            id: anchorsDoc("of:public"),
+            value: {
+              value: { b: 1, end: 3 },
+              cfc: envelope([{
+                path: ["end"],
+                origin: "derived",
+                observes: "value",
+                label: { integrity: ["trusted-writer", certified("p")] },
+              }]),
+            },
+          }]);
+
+          insert(engine, "of:public");
+
+          expect(read(engine, { id: anchorsDoc("of:public") })).toEqual({
+            value: { b: 1, end: 4 },
+            cfc: envelope([{
+              path: ["end"],
+              origin: "derived",
+              observes: "value",
+              label: {},
+            }]),
+          });
+        } finally {
+          close(engine);
+          await Deno.remove(path);
+        }
+      });
+
+      it("keeps a hereditary atom the anchor's writer and the field both hold, and no other", async () => {
+        // `reviewed` is not hereditary, and the field holds `q` only inside
+        // its value, which a read of the whole field does not carry.
+
+        const { engine, path } = await openTestEngine();
+        try {
+          seed(
+            engine,
+            "of:certified",
+            envelope([
+              {
+                path: ["body"],
+                origin: "declared",
+                label: {
+                  confidentiality: ["secret"],
+                  integrity: [certified("p"), "reviewed"],
+                },
+              },
+              {
+                path: ["body", "0"],
+                origin: "declared",
+                label: { integrity: [certified("q")] },
+              },
+            ]),
+          );
+          commit(engine, [{
+            op: "set",
+            id: anchorsDoc("of:certified"),
+            value: {
+              value: { b: 1, end: 3 },
+              cfc: envelope([{
+                path: ["end"],
+                origin: "derived",
+                observes: "value",
+                label: {
+                  integrity: [certified("p"), certified("q"), "reviewed"],
+                },
+              }]),
+            },
+          }]);
+
+          insert(engine, "of:certified");
+
+          expect(labelEntries(engine, "of:certified")).toEqual([
+            {
+              path: ["end"],
+              origin: "derived",
+              observes: "value",
+              label: {
+                confidentiality: ["secret"],
+                integrity: [certified("p")],
+              },
+            },
+            moved("b", ["secret"]),
+          ]);
+        } finally {
+          close(engine);
+          await Deno.remove(path);
+        }
+      });
+
+      it("joins the confidentiality of the broader instances of a scoped field's document", async () => {
+        const { engine, path } = await openTestEngine();
+        const entity = (
+          scope: "space" | "user" | "session",
+          clause: string,
+        ): Operation =>
+          scopedField("of:scoped", scope, [{
+            path: ["body"],
+            label: { confidentiality: [clause] },
+          }]);
+        try {
+          commitAsAlice(engine, [
+            { op: "set", id: schemaDoc, value: { value: {} } },
+            entity("space", "of-space"),
+            entity("user", "of-user"),
+            entity("session", "of-session"),
+            ...(["user", "session"] as const).map((scope) =>
+              scopedAnchors("of:scoped", scope)
+            ),
+          ]);
+
+          for (const scope of ["user", "session"] as const) {
+            editAsAlice(engine, "of:scoped", scope);
+          }
+
+          expect(scopedLabelEntries(engine, "of:scoped", "user")).toEqual([
+            moved("end", ["of-user", "of-space"]),
+          ]);
+          expect(scopedLabelEntries(engine, "of:scoped", "session")).toEqual([
+            moved("end", ["of-session", "of-user", "of-space"]),
+          ]);
+        } finally {
+          close(engine);
+          await Deno.remove(path);
+        }
+      });
+
+      it("joins the whole-value stamp a broader instance holds, and no label of the pointer its slot holds", async () => {
+        // The pointer label copies the labels of the instance the redirect's
+        // writer narrowed into, which is whichever user's write stored it.
+
+        const { engine, path } = await openTestEngine();
+        try {
+          commitAsAlice(engine, [
+            { op: "set", id: schemaDoc, value: { value: {} } },
+            scopedField("of:pointer", "space", [
+              {
+                path: [],
+                origin: "derived",
+                observes: "value",
+                label: { confidentiality: ["whole-value"] },
+              },
+              {
+                path: ["body"],
+                origin: "link",
+                label: { confidentiality: ["pointer"] },
+              },
+              {
+                path: ["body"],
+                origin: "derived",
+                observes: "followRef",
+                label: { confidentiality: ["followRef"] },
+              },
+            ]),
+            scopedField("of:pointer", "user", [{
+              path: ["body"],
+              label: { confidentiality: ["of-user"] },
+            }]),
+            scopedAnchors("of:pointer", "user"),
+          ]);
+
+          editAsAlice(engine, "of:pointer", "user");
+
+          expect(scopedLabelEntries(engine, "of:pointer", "user")).toEqual([
+            moved("end", ["of-user", "whole-value"]),
+          ]);
+        } finally {
+          close(engine);
+          await Deno.remove(path);
+        }
+      });
+
+      it("keeps the integrity an anchor's writer and the field's own instance both hold, and none a broader instance alone holds", async () => {
+        // Whoever wrote the broader instance did not write the field's, so
+        // a claim stored there does not vouch for the field.
+
+        const { engine, path } = await openTestEngine();
+        const vouched = (policy: string): FabricValue => ({
+          path: ["end"],
+          origin: "derived",
+          observes: "value",
+          label: { integrity: [certified(policy)] },
+        });
+        const field = (
+          id: string,
+          scope: "space" | "user",
+          policy: string | undefined,
+        ) =>
+          scopedField(id, scope, [{
+            path: ["body"],
+            label: {
+              confidentiality: [`of-${scope}`],
+              ...(policy === undefined
+                ? {}
+                : { integrity: [certified(policy)] }),
+            },
+          }]);
+        try {
+          commitAsAlice(engine, [
+            { op: "set", id: schemaDoc, value: { value: {} } },
+            field("of:broader-vouches", "space", "p"),
+            field("of:broader-vouches", "user", undefined),
+            scopedAnchors("of:broader-vouches", "user", [vouched("p")]),
+            field("of:own-vouches", "space", undefined),
+            field("of:own-vouches", "user", "p"),
+            scopedAnchors("of:own-vouches", "user", [vouched("p")]),
+          ]);
+
+          editAsAlice(engine, "of:broader-vouches", "user");
+          editAsAlice(engine, "of:own-vouches", "user");
+
+          expect(scopedLabelEntries(engine, "of:broader-vouches", "user"))
+            .toEqual([moved("end", ["of-user", "of-space"])]);
+          expect(scopedLabelEntries(engine, "of:own-vouches", "user"))
+            .toEqual([{
+              ...moved("end", ["of-user", "of-space"]),
+              label: {
+                confidentiality: ["of-user", "of-space"],
+                integrity: [certified("p")],
+              },
+            }]);
+        } finally {
+          close(engine);
+          await Deno.remove(path);
+        }
+      });
+
+      it("throws `ProtocolError` for an edit that moves anchors of a field whose envelope it cannot read, and leaves both documents", async () => {
+        const { engine, path } = await openTestEngine();
+        try {
+          const unreadable: [string, FabricValue, string][] = [
+            [
+              "of:version",
+              { ...(envelope([]) as object), version: 3 },
+              "is not of a version the engine reads",
+            ],
+            ["of:array", [envelope([])], "is not of a version"],
+            [
+              "of:schema",
+              { version: 1, labelMap: { version: 1, entries: [] } },
+              "names no schema",
+            ],
+            [
+              "of:map",
+              { version: 1, schemaHash, labelMap: { version: 2, entries: [] } },
+              "holds no label map the engine reads",
+            ],
+            [
+              "of:entries",
+              { version: 1, schemaHash, labelMap: { version: 1 } },
+              "holds no label map the engine reads",
+            ],
+            ["of:entry", envelope(["secret"]), "has no path"],
+            [
+              "of:path",
+              envelope([{ path: "body", label: secret }]),
+              "has no path",
+            ],
+            [
+              "of:label",
+              envelope([{ path: ["body"], label: "secret" }]),
+              "is not one the engine reads",
+            ],
+            [
+              "of:member",
+              envelope([{
+                path: ["body"],
+                label: { confidentiality: ["secret"], sealed: true },
+              }]),
+              "is not one the engine reads",
+            ],
+            [
+              "of:clauses",
+              envelope([{ path: ["body"], label: { confidentiality: "s" } }]),
+              "is not one the engine reads",
+            ],
+            [
+              "of:atoms",
+              envelope([{
+                path: ["body"],
+                label: { confidentiality: ["s"], integrity: "i" },
+              }]),
+              "is not one the engine reads",
+            ],
+            [
+              "of:instance",
+              envelope([{
+                path: ["body"],
+                label: (decodeMemoryBoundary(
+                  'fvj1:{"x":{"/Bytes@1":"AQID"}}',
+                ) as { x: FabricValue }).x,
+              }]),
+              "is not one the engine reads",
+            ],
+            [
+              "of:beside",
+              envelope([
+                { path: ["body"], label: secret },
+                { path: ["title"], label: "secret" },
+              ]),
+              "is not one the engine reads",
+            ],
+            [
+              "of:reference",
+              envelope([{ path: ["body"], label: { $ref: schemaDoc } }], 1),
+              "of version 1, holds a label by reference",
+            ],
+            [
+              "of:template",
+              envelope([{
+                path: ["body"],
+                origin: "label-metadata",
+                observes: "value",
+                label: secret,
+              }]),
+              "template entry",
+            ],
+          ];
+          for (const [id, cfc, fault] of unreadable) {
+            seed(engine, id, cfc);
+
+            const edit = () => insert(engine, id);
+
+            expect(edit).toThrow(ProtocolError);
+            expect(edit).toThrow(
+              `commit operation 0: the anchors of ${id} cannot be labeled for its edit: `,
+            );
+            expect(edit).toThrow(fault);
+            expect(snapshot(engine, id).materialized).toBe("abc");
+            expect(read(engine, { id: anchorsDoc(id) })).toEqual({
+              value: { b: 1, end: 3 },
+            });
+          }
+        } finally {
+          close(engine);
+          await Deno.remove(path);
+        }
+      });
+
+      it("throws `ProtocolError` for a label reference the store holds no document for", async () => {
+        const { engine, path } = await openTestEngine();
+        try {
+          // The commit boundary refuses an envelope whose label document is
+          // absent, so these are put in place beneath the engine.
+          const stored = (id: string, reference: string) => {
+            seed(engine, id, envelope([{ path: ["body"], label: secret }], 2));
+            engine.database.prepare(
+              "UPDATE revision SET data = :data WHERE id = :id",
+            ).run({
+              id,
+              data: encodeMemoryBoundary({
+                value: { body: "abc" },
+                cfc: envelope([{
+                  path: ["body"],
+                  label: { $ref: reference },
+                }], 2),
+              }),
+            });
+          };
+          stored("of:dangling", `cid:${taggedHashStringOf(["absent"])}`);
+          stored("of:elsewhere", "https://example.test/label");
+          stored("of:nameless", "cid:");
+
+          for (const id of ["of:dangling", "of:elsewhere", "of:nameless"]) {
+            const edit = () => insert(engine, id);
+
+            expect(edit).toThrow(ProtocolError);
+            expect(edit).toThrow("names a label document");
+            expect(edit).toThrow("the store does not hold");
+          }
+        } finally {
+          close(engine);
+          await Deno.remove(path);
+        }
+      });
+
+      it("throws `ProtocolError` for a label reference to a document that does not hold a label", async () => {
+        const { engine, path } = await openTestEngine();
+        try {
+          // The commit boundary refuses an envelope whose label document is
+          // not a label, so the reference is put in place beneath the engine.
+          // The second content is a class instance, which shows no own
+          // members for a check of members alone to refuse.
+          const contents: [string, FabricValue][] = [
+            ["of:content", { title: "not a label" }],
+            [
+              "of:instance-content",
+              (decodeMemoryBoundary('fvj1:{"x":{"/Bytes@1":"AQID"}}') as {
+                x: FabricValue;
+              }).x,
+            ],
+          ];
+          for (const [id, content] of contents) {
+            const contentDoc = `cid:${taggedHashStringOf(content)}`;
+            commit(engine, [{
+              op: "set",
+              id: contentDoc,
+              value: { value: content },
+            }]);
+            seed(engine, id, envelope([{ path: ["body"], label: secret }], 2));
+            engine.database.prepare(
+              "UPDATE revision SET data = :data WHERE id = :id",
+            ).run({
+              id,
+              data: encodeMemoryBoundary({
+                value: { body: "abc" },
+                cfc: envelope(
+                  [{ path: ["body"], label: { $ref: contentDoc } }],
+                  2,
+                ),
+              }),
+            });
+
+            const edit = () => insert(engine, id);
+
+            expect(edit).toThrow(ProtocolError);
+            expect(edit).toThrow(
+              `the label document \`${contentDoc}\` the CFC envelope of the document ${id} names does not hold a label`,
+            );
+          }
+        } finally {
+          close(engine);
+          await Deno.remove(path);
+        }
+      });
+
+      it("throws `ProtocolError` where the anchors document's own envelope cannot be read", async () => {
+        const { engine, path } = await openTestEngine();
+        try {
+          seed(
+            engine,
+            "of:opaque",
+            envelope([{ path: ["body"], label: secret }]),
+          );
+          commit(engine, [{
+            op: "set",
+            id: anchorsDoc("of:opaque"),
+            value: { value: { b: 1, end: 3 }, cfc: { version: 3 } },
+          }]);
+
+          const edit = () => insert(engine, "of:opaque");
+
+          expect(edit).toThrow(ProtocolError);
+          expect(edit).toThrow(
+            `the CFC envelope of the anchors document ${
+              anchorsDoc("of:opaque")
+            } is not of a version the engine reads`,
+          );
+        } finally {
+          close(engine);
+          await Deno.remove(path);
+        }
+      });
+
+      it("returns the schema document and the labeled rewrite as derived again when the commit is sent a second time", async () => {
+        const { engine, path } = await openTestEngine();
+        try {
+          // The field's envelope names a schema of its own, stored with it,
+          // so that the store lacks the anchors schema document until the
+          // engine writes it.
+          const fieldSchema = { type: "object" };
+          commit(engine, [{
+            op: "set",
+            id: `cid:${taggedHashStringOf(fieldSchema)}`,
+            value: { value: fieldSchema },
+          }, {
+            op: "set",
+            id: "of:label-resent",
+            value: {
+              value: { body: "abc" },
+              cfc: {
+                ...(envelope([{ path: ["body"], label: secret }]) as object),
+                schemaHash: taggedHashStringOf(fieldSchema),
+              },
+            },
+          }, setAnchors("of:label-resent", { end: 3 })]);
+          const resent = {
+            sessionId: "session:alice",
+            commit: {
+              localSeq: ++seq,
+              reads: { confirmed: [], pending: [] },
+              operations: [
+                applyOp("of:label-resent", "alice:1", "abc", [
+                  changes(3, 0, ">"),
+                ]),
+              ],
+            },
+          };
+
+          const first = applyCommit(engine, resent);
+          const second = applyCommit(engine, resent);
+
+          expect(written(second)).toEqual(written(first));
+          expect(written(second)).toEqual([
+            ["of:label-resent", "patch", false],
+            [schemaDoc, "set", true],
+            [anchorsDoc("of:label-resent"), "patch", true],
+          ]);
         } finally {
           close(engine);
           await Deno.remove(path);

@@ -39,9 +39,18 @@ of the classification below.
 ## Reading the reserved position
 
 [metadata.ts](../../runtime/runner/src/cfc/metadata.ts) is the only module
-that produces labels from what stands at `["cfc"]`. Its
+in the runner that produces labels from what stands at `["cfc"]`. Its
 `interpretStoredEnvelope` is the one place that decides which of three
-outcomes a stored value gets:
+outcomes a stored value gets. Which envelopes it reads is decided by the
+checks of
+[cfc-stored-envelope.ts](../../runtime/memory/v2/cfc-stored-envelope.ts) in
+Memory, the one definition of a readable envelope. The store's labeling of
+the anchors an edit moves
+([cfc-anchors-label.ts](../../runtime/memory/v2/cfc-anchors-label.ts)) reads
+a field's envelope through the same checks, and refuses the edit for every
+envelope that fails them. Resolving the labels an envelope names stays with
+each reader; §7.7.4 of the Memory v2 operations spec says which ones the
+store resolves.
 
 - **Nothing stored.** The position holds `null`, a scalar, or nothing at
   all. The reader returns `undefined` and the document carries no labels.
@@ -79,6 +88,16 @@ one is a place a looser reader would read a labeled document as unlabeled:
   document is held to the same shape for a second reason: its content hash
   is its identity, so the shape check is what stops a record that merely
   hashes correctly from registering as a label.
+- **A label is a plain object.** A stored value can decode to a class
+  instance, such as `FabricBytes` or `FabricEpochNsec`, and one keeps its
+  state in private fields, so it shows no members of its own. A check of
+  members alone would read one at a label position as a label with no
+  clauses. So a label, inline or in a label document, is refused unless its
+  prototype is `Object.prototype` or `null`, and the store refuses a commit
+  naming a label document that is not one. The other records an envelope
+  holds each need a member a rule names (`version`, `entries`, `path`,
+  `$ref`), which none of those classes defines, so no instance passes
+  there, and their prototypes are not checked.
 - **A template-origin entry that is not keyed and classed as a template is
   not an entry.** The `label-metadata` origin marks an entry as keyed
   against the stored document rather than against `value`, and a reader
