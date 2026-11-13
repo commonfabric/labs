@@ -201,6 +201,7 @@ import {
   NativeTextEdit,
   PullError,
   PushError,
+  ReleaseOptions,
   ReplicaLoadFailureError,
   Result,
   type ScopedReadStanding,
@@ -1272,7 +1273,50 @@ export interface Options {
    *  through `installForeignScopedReadGrant`. Absent, every foreign scoped
    *  read is refused. */
   foreignScopedReadGrant?: ForeignScopedReadGrant;
+
+  /**
+   * Makes the registry that tells the manager when a document's hold token
+   * (`holdDocument()`) has been collected. Absent, it is a
+   * `FinalizationRegistry`. Tests inject their own to report a collection
+   * when they choose.
+   */
+  createHoldRegistry?: <T>(
+    cleanup: (held: T) => void,
+  ) => HoldRegistry<T>;
 }
+
+/**
+ * Where a storage manager registers each document hold token it hands out:
+ * once `token` has been collected, the registry calls the `cleanup` it was
+ * made with on `held`. A `FinalizationRegistry` is one.
+ */
+export interface HoldRegistry<T> {
+  register(token: object, held: T): void;
+}
+
+/** A manager's record of the hold token it handed out for a document. */
+type DocumentHold = {
+  /** The token, held weakly. */
+  ref: WeakRef<object>;
+
+  /**
+   * Whether the token was live at a pass asked to follow up
+   * (`ReleaseOptions.followUpOnCollection`), so that its collection asks for
+   * a pass of its own.
+   */
+  followsUp: boolean;
+};
+
+/** What a manager's hold registry holds for each token it registers. */
+type RegisteredHold = {
+  space: MemorySpace;
+
+  /** The document's key in the manager's map of hold tokens. */
+  key: string;
+
+  /** The entry for the token in that map. */
+  hold: DocumentHold;
+};
 
 /**
  * Max concurrent watch-refresh round trips per space when
@@ -1851,9 +1895,18 @@ export class StorageManager implements IStorageManager {
    * The token `holdDocument()` handed out for each document, by the
    * document's pull-kick key, held weakly: a document whose token has been
    * collected is held by nothing. Each release pass forgets the collected
-   * ones.
+   * ones, and the collection of a document's current token, once a pass
+   * asked to follow up has found it live, asks for a pass
+   * (`#holdCollected()`).
    */
-  readonly #documentHolds = new Map<string, WeakRef<object>>();
+  readonly #documentHolds = new Map<string, DocumentHold>();
+
+  /** Where each token `holdDocument()` hands out is registered, so that its
+   * collection can ask for a release pass (`subscribeHoldsCollected()`). */
+  readonly #holdRegistry: HoldRegistry<RegisteredHold>;
+
+  /** See `subscribeHoldsCollected()`. */
+  readonly #holdsCollectedObservers = new Set<() => void>();
 
   /** See `addDocumentReader()`. */
   readonly #documentReaders = new Set<
@@ -2097,6 +2150,10 @@ export class StorageManager implements IStorageManager {
     this.#eventAppendPacing = options.eventAppendPacing;
     this.#servingHomeSpace = options.servingHomeSpace;
     this.#foreignScopedReadGrant = options.foreignScopedReadGrant;
+    this.#holdRegistry = (options.createHoldRegistry ??
+      ((cleanup) => new FinalizationRegistry(cleanup)))(
+        (held: RegisteredHold) => this.#holdCollected(held),
+      );
     // Snapshot + freeze: the resolver snapshotted its own copy at
     // open(), so refusal logic must see the same fixed facts — a
     // caller mutating their map object must not desynchronize them.
@@ -2128,10 +2185,11 @@ export class StorageManager implements IStorageManager {
   /**
    * The CFC schema document syncer a test may supply, the pending-load
    * registration step, and the linked-cell sync collector, which a test
-   * drives directly.
+   * drives directly, and the observers of `subscribeHoldsCollected()`.
    */
   get accessForTestingOnly(): {
     cfcSchemaDocumentSyncer: CfcSchemaDocumentSyncer | undefined;
+    readonly holdsCollectedObservers: Set<() => void>;
     registerPendingLoad(address: {
       space: MemorySpace;
       scope: CellScope;
@@ -2155,6 +2213,7 @@ export class StorageManager implements IStorageManager {
       set cfcSchemaDocumentSyncer(value) {
         outerThis.#cfcSchemaDocumentSyncer = value;
       },
+      holdsCollectedObservers: this.#holdsCollectedObservers,
       registerPendingLoad: (address) => this.#registerPendingLoad(address),
       collectLinkedCellSyncs: (value, base, schema, promises, seen) =>
         this.#collectLinkedCellSyncs(
@@ -2843,7 +2902,7 @@ export class StorageManager implements IStorageManager {
                 address.scope,
                 address.scopeKey,
               ),
-            )?.deref() !== undefined
+            )?.ref.deref() !== undefined
           ) {
             return true;
           }
@@ -3141,6 +3200,7 @@ export class StorageManager implements IStorageManager {
   }
 
   async close(): Promise<void> {
+    this.#forgetFollowUps();
     // A detached-session resume names the session id this close rotates;
     // presenting it afterwards would mount the OLD id under a stale token.
     this.#detachedSessionResumes.clear();
@@ -3176,6 +3236,7 @@ export class StorageManager implements IStorageManager {
   }
 
   async closeNow(): Promise<void> {
+    this.#forgetFollowUps();
     this.#detachedSessionResumes.clear();
     try {
       if (this.#providers.size === 0) {
@@ -3553,12 +3614,20 @@ export class StorageManager implements IStorageManager {
       address.scope,
       address.scopeKey ?? this.#foreignInstanceKey(address.scope, identity),
     );
-    let hold = this.#documentHolds.get(key)?.deref();
-    if (hold === undefined) {
-      hold = {};
-      this.#documentHolds.set(key, new WeakRef(hold));
+    let token = this.#documentHolds.get(key)?.ref.deref();
+    if (token === undefined) {
+      token = {};
+      const hold = { ref: new WeakRef(token), followsUp: false };
+      this.#documentHolds.set(key, hold);
+      this.#holdRegistry.register(token, { space: address.space, key, hold });
     }
-    return hold;
+    return token;
+  }
+
+  /** @inheritDoc */
+  subscribeHoldsCollected(observer: () => void): Cancel {
+    this.#holdsCollectedObservers.add(observer);
+    return () => this.#holdsCollectedObservers.delete(observer);
   }
 
   /** @inheritDoc */
@@ -3570,10 +3639,11 @@ export class StorageManager implements IStorageManager {
   }
 
   /** @inheritDoc */
-  releaseUnreadDocuments(): Promise<boolean> {
+  releaseUnreadDocuments(options: ReleaseOptions = {}): Promise<boolean> {
     const pass = this.#releasePass.catch(() => false).then(async () => {
       for (const [key, hold] of this.#documentHolds) {
-        if (hold.deref() === undefined) this.#documentHolds.delete(key);
+        if (hold.ref.deref() === undefined) this.#documentHolds.delete(key);
+        else if (options.followUpOnCollection === true) hold.followsUp = true;
       }
       const results = await Promise.all(
         [...this.#providers.values()].map((provider) =>
@@ -3584,6 +3654,39 @@ export class StorageManager implements IStorageManager {
     });
     this.#releasePass = pass;
     return pass;
+  }
+
+  /**
+   * Helper for the hold registry, which tells the observers of
+   * `subscribeHoldsCollected()` that a hold token a pass asked to follow up
+   * found live has been collected, unless a pass has forgotten the token
+   * since, a new token for its document has replaced it, or its space's
+   * provider is gone. It leaves the token's entry for a pass to forget, so
+   * what a pass consults is only ever the document's current token.
+   */
+  #holdCollected({ space, key, hold }: RegisteredHold): void {
+    if (
+      !hold.followsUp || this.#documentHolds.get(key) !== hold ||
+      !this.#providers.has(space)
+    ) {
+      return;
+    }
+    for (const observer of [...this.#holdsCollectedObservers]) {
+      try {
+        observer();
+      } catch (error) {
+        console.error("holds-collected subscriber threw:", error);
+      }
+    }
+  }
+
+  /**
+   * Helper for `close()` and `closeNow()`, which unmarks every hold token, so
+   * that a token marked before the close asks for nothing once collected,
+   * even after its space has opened again.
+   */
+  #forgetFollowUps(): void {
+    for (const hold of this.#documentHolds.values()) hold.followsUp = false;
   }
 
   /** @inheritDoc */

@@ -622,7 +622,11 @@ describe("opening a space root", () => {
     expect(metadataUpdate.error).toBeUndefined();
     const metadataOnlyRoot = (await controller.getDefaultPattern(false))!;
     expect(getPatternSetupIdentityRef(metadataOnlyRoot)).toEqual(originalRef);
-    expect(controller.getArgument(metadataOnlyRoot).get()).toEqual({});
+    // Once the cells holding the argument document have been collected, the
+    // stop lets a release pass drop it, so the read syncs it first.
+    const metadataOnlyArgument = controller.getArgument(metadataOnlyRoot);
+    await metadataOnlyArgument.sync();
+    expect(metadataOnlyArgument.get()).toEqual({});
 
     const originalLoad = runtime.patternManager.loadPatternByIdentity;
     let blockedCurrentLoad = false;
