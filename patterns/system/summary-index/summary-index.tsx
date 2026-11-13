@@ -6,6 +6,7 @@ import {
   patternTool,
   type PatternToolResult,
   UI,
+  type VNode,
   wish,
   Writable,
 } from "commonfabric";
@@ -22,24 +23,16 @@ export type SummaryIndexEntry = {
 type Input = Record<string, never>;
 
 export type Output = {
+  [NAME]: string;
+  [UI]: VNode;
   entries: SummaryIndexEntry[];
   search: PatternToolResult<{ entries: SummaryIndexEntry[] }>;
 };
 
-function isCellLike<T>(value: unknown): value is { get: () => T } {
-  return !!value && typeof value === "object" &&
-    typeof (value as { get?: unknown }).get === "function";
-}
-
-function extractSummary(piece: any): string | undefined {
+function extractSummary(
+  piece: SummarizablePiece | undefined,
+): string | undefined {
   const summary = piece?.summary;
-  if (!summary) return undefined;
-
-  if (isCellLike<string>(summary)) {
-    const value = summary.get();
-    return typeof value === "string" && value.trim() ? value : undefined;
-  }
-
   return typeof summary === "string" && summary.trim() ? summary : undefined;
 }
 

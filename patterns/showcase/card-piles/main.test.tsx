@@ -11,11 +11,31 @@
  * - Move all cards to one pile (empty the other)
  * - Move card back to restore both piles
  * - Multiple shuffles preserve card count
+ * - Each pile's label, its cards' ranks and suits in the suit's color, and
+ *   the prompt an empty pile shows
  *
  * Run: deno task cf test patterns/showcase/card-piles/main.test.tsx --verbose
  */
-import { action, assert, pattern, TESTS } from "commonfabric";
+import { action, assert, pattern, TESTS, UI } from "commonfabric";
+import {
+  findElementByText,
+  findNode,
+  hasExactText,
+  hasText,
+  styleOf,
+} from "../../tools/test-support/vnode-helpers.ts";
 import CardPiles, { defaultPile1, defaultPile2 } from "./main.tsx";
+
+/** Whether `root` draws a card corner reading `face` in `color`. */
+const showsCorner = (root: unknown, face: string, color: string): boolean =>
+  findNode(
+    root,
+    (node) => hasExactText(node, face) && styleOf(node, "color") === color,
+  ) !== undefined;
+
+/** The drop zone whose label starts with `label` ("Pile 1" or "Pile 2"). */
+const dropZone = (root: unknown, label: string): unknown =>
+  findElementByText(root, "cf-drop-zone", label);
 
 export default pattern(() => {
   // =========================================================================
@@ -90,6 +110,42 @@ export default pattern(() => {
   const assert_single_total = assert(
     () => single.pile1.length + single.pile2.length === 1,
   );
+
+  // =========================================================================
+  // View: labels, suits, and the empty-pile prompt
+  // =========================================================================
+  // The defaults hold every suit: hearts and diamonds are drawn red, clubs
+  // and spades dark, each corner showing the rank and the suit's symbol.
+  const assert_defaults_view = assert(() => {
+    const ui = defaults[UI];
+    return hasText(ui, "Pile 1 (3 cards)") && hasText(ui, "Pile 2 (3 cards)") &&
+      showsCorner(ui, "A\u2665", "#dc2626") &&
+      showsCorner(ui, "7\u2666", "#dc2626") &&
+      showsCorner(ui, "Q\u2663", "#1e293b") &&
+      showsCorner(ui, "K\u2660", "#1e293b") &&
+      !hasText(ui, "Drop cards here");
+  });
+  // One card, so its label is singular, and the empty pile asks for a drop.
+  const assert_single_view = assert(() => {
+    const ui = single[UI];
+    return hasText(dropZone(ui, "Pile 1"), "Pile 1 (1 card)") &&
+      !hasText(dropZone(ui, "Pile 1"), "Drop cards here") &&
+      hasText(dropZone(ui, "Pile 2"), "Pile 2 (0 cards)") &&
+      hasText(dropZone(ui, "Pile 2"), "Drop cards here");
+  });
+
+  const action_move_single_to_pile2 = action(() => {
+    single.moveToPile2.send({ detail: { sourceCell: single.pile1[0] } });
+  });
+  const assert_single_moved_view = assert(() => {
+    const ui = single[UI];
+    return single.pile2[0]?.rank === "7" &&
+      hasText(dropZone(ui, "Pile 1"), "Pile 1 (0 cards)") &&
+      hasText(dropZone(ui, "Pile 1"), "Drop cards here") &&
+      hasText(dropZone(ui, "Pile 2"), "Pile 2 (1 card)") &&
+      !hasText(dropZone(ui, "Pile 2"), "Drop cards here") &&
+      showsCorner(dropZone(ui, "Pile 2"), "7\u2666", "#dc2626");
+  });
 
   // =========================================================================
   // Actions: Shuffle
@@ -286,6 +342,10 @@ export default pattern(() => {
       { assertion: assert_single_pile2_empty },
       { assertion: assert_single_total },
 
+      // --- View ---
+      { assertion: assert_defaults_view },
+      { assertion: assert_single_view },
+
       // --- Shuffle preserves totals ---
       { action: action_shuffle },
       { assertion: assert_total_preserved_after_shuffle },
@@ -295,6 +355,8 @@ export default pattern(() => {
       // --- Shuffle single card ---
       { action: action_shuffle_single },
       { assertion: assert_single_total_after_shuffle },
+      { action: action_move_single_to_pile2 },
+      { assertion: assert_single_moved_view },
 
       // --- Move tests: initial state ---
       { assertion: assert_move_initial_pile1 },

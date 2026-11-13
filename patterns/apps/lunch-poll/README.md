@@ -61,12 +61,14 @@ deno run -A patterns/tools/lunch-poll-diagnose.ts \
   --rounds=3
 ```
 
-`--users` and the `users` half of a `--cases` entry count sessions: every one
-opens the poll and joins it. `--voters=N` has only the first `N` of them cast in
-each vote round, the host among them, while the remaining users only observe; a
-case with fewer users than `N` is refused. The churn line then breaks down per
-session, which separates the conflicts an observer's own derivations raise from
-those its votes raise. A poll one user votes in and one only watches:
+A `--cases` entry that is not `<options>x<users>` is refused rather than
+skipped. `--users` and the `users` half of a `--cases` entry count sessions:
+every one opens the poll and joins it. `--voters=N` has only the first `N` of
+them cast in each vote round, the host among them, while the remaining users
+only observe; a case with fewer users than `N` is refused. The churn line then
+breaks down per session, which separates the conflicts an observer's own
+derivations raise from those its votes raise. A poll one user votes in and one
+only watches:
 
 ```bash
 deno run -A patterns/tools/lunch-poll-diagnose.ts \
@@ -93,8 +95,9 @@ deno run -A patterns/tools/lunch-poll-diagnose.ts --production
 Record graph size, phase elapsed time, settle time, and commit churn together. A
 fast handler measured without the rendered result graph does not represent a
 browser vote. The probe runs the server-execution OFF arm unless
-`EXPERIMENTAL_SERVER_EXECUTION` is set explicitly; headless, the ON posture
-waits on a toolshed that is not running.
+`EXPERIMENTAL_SERVER_EXECUTION` is set explicitly: set ON, the harness moves the
+derivations behind a serving memory server it hosts, and the probe no longer
+measures them in the sessions' own runtimes.
 
 Use `--program=<file>` to point the same scenario runner at another local lunch
 poll pattern variant when you intentionally want to compare a branch-local

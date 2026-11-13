@@ -8,6 +8,7 @@ import { action, assert, NAME, pattern, TESTS, UI } from "commonfabric";
 import {
   findElement,
   findElementByExactText,
+  fireClick,
 } from "../../tools/test-support/vnode-helpers.ts";
 import SortableTable from "./sortable-table.tsx";
 
@@ -34,6 +35,13 @@ export default pattern(() => {
     table.sortByColumn.send({ label: "No such column" })
   );
   const addRow = action(() => table.addRow.send({ cells: ["Food", "9.99"] }));
+  // A click on a header sorts by its column, as the stream does.
+  const clickCostHeader = action(() =>
+    fireClick(
+      findElementByExactText(table[UI], "th", "Cost"),
+      "the Cost header",
+    )
+  );
 
   return {
     [TESTS]: [
@@ -78,6 +86,12 @@ export default pattern(() => {
 
       { action: addRow },
       { assertion: assert(() => table.rowCount === 4) },
+
+      { action: clickCostHeader },
+      { assertion: assert(() => table.sortBy === "Cost") },
+      { assertion: assert(() => table.ascending === true) },
+      { assertion: assert(() => table.rows[0].cells[1] === "9.99") },
+      { assertion: assert(() => table.rows[3].cells[1] === "420.00") },
 
       // `emptyMessage` is documented as shown IN PLACE OF the table, so an
       // empty dataset renders no table and no headers at all.

@@ -78,7 +78,7 @@ export const findNode = (
 /** How many elements named `name` sit under `root`, counting nested ones. */
 export const countElements = (root: unknown, name: string): number => {
   const value = readValue(root);
-  const self = isRecord(value) && readValue(value.name) === name ? 1 : 0;
+  const self = isElement(value, name) ? 1 : 0;
   return childNodes(value).reduce<number>(
     (sum, child) => sum + countElements(child, name),
     self,
@@ -105,35 +105,58 @@ export const findNodeByText = (
   expected: string,
 ): unknown | undefined => findNode(root, (node) => hasText(node, expected));
 
+/** Whether `node` is an element with the tag name `name`. */
+export const isElement = (node: unknown, name: string): boolean => {
+  const value = readValue(node);
+  return isRecord(value) && readValue(value.name) === name;
+};
+
+/** One resolved entry of a node's `style` prop, or `undefined` without one. */
+export const styleOf = (node: unknown, key: string): unknown => {
+  const style = propValue(node, "style");
+  return isRecord(style) ? readValue(style[key]) : undefined;
+};
+
+/**
+ * Writes `value` through the cell a node binds under `prop` (`$value`,
+ * `$checked`, `$selectedIndex`, …), as the control does when a person edits
+ * it. Throws when the node binds no cell there.
+ */
+export const setBound = (
+  node: unknown,
+  prop: string,
+  value: unknown,
+  what = "the node",
+): void => {
+  if (node === undefined) throw new Error(`setBound: ${what} was not found`);
+  const bound = propsOf(node)?.[prop];
+  if (!isRecord(bound) || typeof bound.set !== "function") {
+    throw new Error(`setBound: ${what} binds no ${prop}`);
+  }
+  (bound.set as (value: unknown) => void)(value);
+};
+
 export const findElement = (
   root: unknown,
   name: string,
-): unknown | undefined =>
-  findNode(root, (node) => {
-    const value = readValue(node);
-    return isRecord(value) && readValue(value.name) === name;
-  });
+): unknown | undefined => findNode(root, (node) => isElement(node, name));
 
 export const findElementByText = (
   root: unknown,
   name: string,
   expected: string,
 ): unknown | undefined =>
-  findNode(root, (node) => {
-    const value = readValue(node);
-    return isRecord(value) && value.name === name && hasText(value, expected);
-  });
+  findNode(root, (node) => isElement(node, name) && hasText(node, expected));
 
 export const findElementByExactText = (
   root: unknown,
   name: string,
   expected: string,
 ): unknown | undefined =>
-  findNode(root, (node) => {
-    const value = readValue(node);
-    return isRecord(value) && value.name === name &&
-      hasExactText(value, expected);
-  });
+  findNode(
+    root,
+    (node) => isElement(node, name) && hasExactText(node, expected),
+  );
 
 /** Whether `node` is a clickable control whose whole text is `label`. */
 export const isButton = (label: string) => (node: unknown): boolean =>

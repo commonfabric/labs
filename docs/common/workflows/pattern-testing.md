@@ -187,6 +187,8 @@ Reading a single node:
 - `hasText(node, expected)` — whether the subtree's text contains `expected`.
 - `hasExactText(node, expected)` — whether the subtree's text, trimmed, equals
   `expected`.
+- `isElement(node, name)` — whether the node is an element with that tag name.
+- `styleOf(node, key)` — one resolved entry of the node's `style` prop.
 
 Searching for a node:
 
@@ -288,7 +290,9 @@ export default pattern(() => {
 `patterns/examples/map-demo/map-demo.test.tsx` drives both an inline arrow and a
 bound handler this way. `fireEvent(node, prop, event)` in the vnode helpers does
 the same for any event prop, and fails when the node binds nothing under it;
-`fireClick(node)` is its `onClick` case, with an empty event.
+`fireClick(node)` is its `onClick` case, with an empty event. `setBound(node,
+prop, value)` writes through the cell a control binds under a `$` prop, such as
+`$value` or `$checked`, as the control does when a person edits it.
 `patterns/examples/scoped-group-chat/submit-on-enter.test.tsx` presses Enter in
 a `cf-input` by firing its `oncf-submit`.
 
