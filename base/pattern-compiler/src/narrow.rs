@@ -944,6 +944,43 @@ impl<'a> Resolver<'_, 'a> {
                 }
             });
         }
+        // `typeof a?.b === "kind"` with a kind other than `undefined`, and
+        // `a?.b === value` with a value that is never absent: the chain did
+        // not stop.
+        if sense {
+            for (tested, other) in [(left, right), (right, left)] {
+                let chain = match tested {
+                    Expression::ChainExpression(chain) => {
+                        let present = self.typed_at(module, other, 0).is_ok_and(|ty| {
+                            self.present(ty) == ty
+                                && self.first_unresolved(ty, 0).is_none()
+                                && !matches!(
+                                    self.shape(ty),
+                                    Shape::Unknown | Shape::Null | Shape::Undefined | Shape::Void
+                                )
+                        });
+                        present.then_some(chain)
+                    }
+                    Expression::UnaryExpression(unary)
+                        if unary.operator == UnaryOperator::Typeof =>
+                    {
+                        match (unparen(&unary.argument), other) {
+                            (
+                                Expression::ChainExpression(chain),
+                                Expression::StringLiteral(kind),
+                            ) if kind.value != "undefined" => Some(chain),
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                };
+                if let Some(chain) = chain {
+                    if self.chain_tests(module, &chain.expression, reference) {
+                        return self.present(ty);
+                    }
+                }
+            }
+        }
         for (tested, value) in [(left, right), (right, left)] {
             let Some(value) = self.unit_of(module, value) else {
                 continue;

@@ -441,3 +441,25 @@ fn optional_chain_that_holds_narrows_its_receiver() {
         ]
     );
 }
+
+#[test]
+fn optional_chain_compared_with_a_present_value_narrows_its_receiver() {
+    assert_eq!(
+        types(
+            "const KIND = \"offer\";\n\
+             function show(entry: { kind: string; get?: () => string } | undefined, revision: string, maybe: string | undefined) {\n\
+               const a = entry?.kind === KIND && /*?*/entry;\n\
+               const b = entry?.kind === revision && /*?*/entry;\n\
+               const c = entry?.kind === maybe && /*?*/entry;\n\
+               const d = typeof entry?.get === \"function\" ? /*?*/entry : undefined;\n\
+               return [a, b, c, d];\n\
+             }\n"
+        ),
+        [
+            "{ kind: string; get?: () => string }",
+            "{ kind: string; get?: () => string }",
+            "{ kind: string; get?: () => string } | undefined",
+            "{ kind: string; get?: () => string }"
+        ]
+    );
+}
