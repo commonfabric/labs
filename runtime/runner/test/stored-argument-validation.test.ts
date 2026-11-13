@@ -879,9 +879,11 @@ describe("stored-argument-validation", () => {
 
     it("judges the slot as holding a link and reads none of the labeled document's value", async () => {
       // TODO(danfuzz): Which way the link goes turns on whether the document
-      // stores a label entry, which label metadata keeps observable. If that
-      // ever becomes hidden, this outcome reveals it. See the matching `TODO`
-      // at `reachesBeyondOwnData()` in `stored-argument-validation.ts`.
+      // stores a label entry holding a confidentiality atom, which label
+      // metadata keeps observable: an entry's existence and its atoms'
+      // presence. If either ever becomes hidden, this outcome reveals it. See
+      // the matching `TODO` at `reachesBeyondOwnData()` in
+      // `stored-argument-validation.ts`.
 
       const sealed = await seedDocument(
         "sealed-source",

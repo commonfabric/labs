@@ -601,9 +601,10 @@ function cellHome(cell: Cell<unknown>): HandleViewContext["home"] {
  * and that read would join its labels to everything the transaction doing the
  * judging writes, such as a nested piece's result. The reads that follow the
  * link judge what it reaches under the schema they read it with. Which way a
- * link goes turns on whether its document stores a label entry at all, which
- * label metadata keeps observable
- * (`docs/specs/cfc-label-metadata-confidentiality.md` §4), so the choice
+ * link goes turns on whether its document stores a label entry holding a
+ * confidentiality atom, which label metadata keeps observable: an entry's
+ * existence, and its atoms' presence
+ * (`docs/specs/cfc-label-metadata-confidentiality.md` §3, §4). So the choice
  * shows nothing that was hidden.
  *
  * TODO(danfuzz): A value such a read finds of the wrong type reads as
@@ -612,9 +613,10 @@ function cellHome(cell: Cell<unknown>): HandleViewContext["home"] {
  * `TODO` in `pattern-update-argument-validation.test.ts`.
  *
  * TODO(danfuzz): If label metadata ever hides whether a document stores a
- * label entry, this choice becomes a read of hidden metadata whose outcome is
- * visible (a refusal or none), and it has to be labeled or made another way.
- * See the matching `TODO` in `stored-argument-validation.test.ts`.
+ * label entry, or whether an entry holds a confidentiality atom, this choice
+ * becomes a read of hidden metadata whose outcome is visible (a refusal or
+ * none), and it has to be labeled or made another way. See the matching
+ * `TODO` in `stored-argument-validation.test.ts`.
  */
 function reachesBeyondOwnData(
   link: NormalizedFullLink,
