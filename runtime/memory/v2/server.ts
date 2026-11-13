@@ -13063,6 +13063,10 @@ const parseDecodedClientMessage = (
       parsed.session.instanceNames !== undefined &&
       parsed.session.instanceNames !== true
     ) return null;
+    // Likewise only the literal `false` declares a session not demand.
+    if (
+      parsed.session.demand !== undefined && parsed.session.demand !== false
+    ) return null;
     const client = parseClientInfo(parsed.session.client) ?? undefined;
     // A malformed ceiling refuses the message: a session opened without the
     // ceiling its client asked for would read unbounded, silently.
@@ -13117,6 +13121,7 @@ const parseDecodedClientMessage = (
         ...(parsed.session.instanceNames === true
           ? { instanceNames: true as const }
           : {}),
+        ...(parsed.session.demand === false ? { demand: false as const } : {}),
         ...(invite === undefined ? {} : { invite }),
       },
       invocation: isFabricPlainObject(parsed.invocation)

@@ -94,15 +94,16 @@ function newHost(
  * Opens a session on `space` signed by `signer`, over a connection `server`
  * takes as one from this process when `inProcess` is `true` and as one from
  * another process otherwise, and returns its client once the open has been
- * answered.
+ * answered. With `demand: false` the session declares that it is not demand.
  */
 async function openSession(
   server: Server,
   signer: Identity,
-  { inProcess }: { inProcess: boolean },
+  { inProcess, demand }: { inProcess: boolean; demand?: boolean },
 ): Promise<MemoryV2Client.Client> {
   const client = await MemoryV2Client.connect({
     transport: MemoryV2Client.loopback(server, { inProcess }),
+    ...(demand === undefined ? {} : { demand }),
   });
   await client.mount(
     space,
@@ -204,6 +205,27 @@ describe("ExecutorHost", () => {
       const { host, server, close } = newHost();
       try {
         const client = await openSession(server, service, { inProcess: true });
+        try {
+          expect(host.occupancy).toBe("vacant");
+          expect(host.spaceServer(space)).toBeUndefined();
+        } finally {
+          await client.close();
+        }
+      } finally {
+        await close();
+      }
+    });
+
+    it("leaves a space unactivated when a session signed by the service identity from another process declares it is not demand", async () => {
+      // A toolshed's webhook runtime reaches its own memory server over the
+      // network, signed with the service key, and nobody waits on it.
+
+      const { host, server, close } = newHost();
+      try {
+        const client = await openSession(server, service, {
+          inProcess: false,
+          demand: false,
+        });
         try {
           expect(host.occupancy).toBe("vacant");
           expect(host.spaceServer(space)).toBeUndefined();

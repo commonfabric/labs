@@ -56,13 +56,15 @@ describe("Server", () => {
    */
   async function mount(
     principal?: string,
-    { inProcess = true, actingAs }: {
+    { inProcess = true, actingAs, demand }: {
       inProcess?: boolean;
       actingAs?: "space-owner";
+      demand?: boolean;
     } = {},
   ): Promise<SpaceSession> {
     const client = await connect({
       transport: loopback(server, { inProcess }),
+      ...(demand === undefined ? {} : { demand }),
     });
     clients.push(client);
     return await client.mount(
@@ -558,6 +560,22 @@ describe("Server", () => {
         expect(shares.map((share) => share.sessionId)).not.toContain(
           routed.sessionId,
         );
+      });
+
+      it("omits the share of the excluded principal's session from another process that declares it is not demand", async () => {
+        // A toolshed's webhook runtime keeps its sessions open for as long as
+        // it runs, with no one waiting on them.
+
+        const relay = await mount(bob, { inProcess: false, demand: false });
+        await relay.watchSet([follow("of:root")]);
+
+        const shares = server.demandForSpace(space, { excludePrincipal: bob });
+
+        expect(shares.map((share) => share.sessionId)).not.toContain(
+          relay.sessionId,
+        );
+        expect(server.hasLiveSessionsForSpace(space, { excludePrincipal: bob }))
+          .toBe(false);
       });
 
       it("returns an anonymous session's rows with no principal in their identity", async () => {

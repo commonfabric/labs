@@ -1178,6 +1178,17 @@ export interface Options {
   clientBuild?: ClientBuild;
 
   /**
+   * Whether this manager's sessions are demand: `false` for a server-side
+   * component that reads and writes spaces as an ordinary client, keeps its
+   * sessions open for as long as it runs, and has no one waiting on what a
+   * space computes, such as a toolshed's webhook runtime. Its sessions then
+   * declare `demand: false` (the wire `SessionDescriptor.demand`), and the
+   * memory server neither serves a space for them nor keeps it served.
+   * Absent, `true`.
+   */
+  demand?: boolean;
+
+  /**
    * Base URL of the default memory host. The storage endpoint path
    * (`/api/storage/memory`) is joined internally — pass the host, not
    * the full endpoint. This storage-only route may use HTTP, HTTPS,
@@ -4683,6 +4694,7 @@ export class StorageManager implements IStorageManager {
         options.as,
         options.createSocket,
         options.clientBuild,
+        options.demand,
       ),
     );
     manager.#dynamicHosts = dynamicHosts;

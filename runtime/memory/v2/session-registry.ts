@@ -151,9 +151,11 @@ export type SessionState = {
 
   /** Whether the session is a serving loop's own, not a client's: its
    * latest open came over a connection from the process that holds this
-   * server, or declared the serving binding (a serving runtime of another
-   * process). A client signed with the same key as the serving loop is
-   * still a client. Fresh per open, in every access-list mode. */
+   * server, declared the serving binding (a serving runtime of another
+   * process), or declared that it is not demand
+   * (`SessionDescriptor.demand`). A client signed with the same key as the
+   * serving loop is still a client. Fresh per open, in every access-list
+   * mode. */
   servingOwn?: true;
 
   /** Client report supplied by the latest admitted open. */
@@ -464,7 +466,8 @@ export class SessionRegistry {
       ...(session.actingAs === "space-owner"
         ? { servingBinding: true as const }
         : {}),
-      ...(inProcess || session.actingAs === "space-owner"
+      ...(inProcess || session.actingAs === "space-owner" ||
+          session.demand === false
         ? { servingOwn: true as const }
         : {}),
       // Fresh per open, like the binding: the chain THIS open presented.

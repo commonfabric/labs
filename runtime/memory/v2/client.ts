@@ -357,6 +357,15 @@ export type ConnectOptions = {
   instanceNames?: boolean;
 
   /**
+   * Whether this client's sessions are demand (`SessionDescriptor.demand`).
+   * When `false`, every `session.open` the client sends, a reopen included,
+   * declares `demand: false`: no one waits on these sessions' results, so the
+   * server neither serves a space for them nor keeps it served. Absent or
+   * `true`, the client declares nothing and its sessions are demand.
+   */
+  demand?: boolean;
+
+  /**
    * Whether this client takes `cid:` schema documents by reference
    * (`syncCidReferencesV1`; `docs/specs/content-addressed-schemas.md`,
    * "Delivery by reference"). When `true`, its `hello` advertises the
@@ -832,6 +841,9 @@ export class Client {
   /** Whether every open declares `instanceNames: true` (`ConnectOptions`). */
   readonly #instanceNames: boolean;
 
+  /** Whether this client's sessions are demand (`ConnectOptions`). */
+  readonly #demand: boolean;
+
   /** Whether this client's `hello` offers `syncCidReferencesV1` (`ConnectOptions`). */
   readonly #offersCidReferences: boolean;
 
@@ -973,9 +985,11 @@ export class Client {
     clientInfo: Readonly<ClientInfo>,
     instanceNames: boolean,
     offersCidReferences: boolean,
+    demand: boolean,
   ) {
     this.#clientInfo = clientInfo;
     this.#instanceNames = instanceNames;
+    this.#demand = demand;
     this.#offersCidReferences = offersCidReferences;
     this.#transport = transport;
     this.#transport.setReceiver((payload) => this.#onMessage(payload));
@@ -998,6 +1012,7 @@ export class Client {
       Object.freeze(info),
       options.instanceNames === true,
       options.syncCidReferences === true,
+      options.demand !== false,
     );
     const abortError = (): Error =>
       options.signal?.reason instanceof Error
@@ -1611,6 +1626,7 @@ export class Client {
       ...mount,
       client: this.#clientInfo,
       ...(this.#instanceNames ? { instanceNames: true as const } : {}),
+      ...(this.#demand ? {} : { demand: false as const }),
     };
     const whileConnected = options.restoring === true;
     // A mount made while the connection is down waits for the reconnect to
