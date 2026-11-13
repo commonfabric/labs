@@ -330,7 +330,12 @@ The strict-only delta is:
   `cfc` logger's `writer-fit-cross-holder` key. Every other clause is measured
   as for any writer, so a same-holder misfit keeps §8.12.5's options, and a
   cross-holder clause residency covers is never offending there. A run in the
-  acting principal's own runtime is measured as before. The rule inherits the
+  acting principal's own runtime is measured as any writer is. An effect's
+  completion commits unstamped, so the rule does not govern it; the served
+  run that starts the effect is stamped and writes the node's pending state
+  from the same inputs, so a cross-holder clause in those inputs is refused
+  there, before the request is issued
+  (`served-effect-cross-holder.test.ts`). The rule inherits the
   scope note above: a served run that carries a cross-holder clause into a
   store by reference, rather than by value, is not refused, although the
   slot stamp it persists, the creating attempt's join, holds the clause.
@@ -342,9 +347,8 @@ The strict-only delta is:
   [specs#68](https://github.com/commonfabric/specs/pull/68) and
   [specs#71](https://github.com/commonfabric/specs/pull/71). This implements
   [specs#95](https://github.com/commonfabric/specs/pull/95) ahead of its
-  ruling, widened from a served event handling to every served run, and
-  its two deciding sites carry its `SPEC-PENDING` marker; the conformance
-  statement records the gap.
+  ruling, and its two deciding sites carry its `SPEC-PENDING` marker; the
+  conformance statement records where it differs from the proposal.
 
   The DECLARED half of the ceiling also admits an owner case, in one
   direction. A `PersonalSpace(owner)` LABEL clause answers a

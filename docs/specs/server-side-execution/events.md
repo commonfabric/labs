@@ -617,7 +617,10 @@ loop's duty).
   may have committed; the overlay signals `withheld`. Neither the sender
   nor a reader of the stream's space learns whether the handling
   committed. What the handling wrote stays
-  readable under its own labels. A delivery failure that ends in
+  readable under its own labels. A dispatch whose handler did not run is
+  withdrawn rather than marked, and under such a join its deferral, and the
+  drop notice its deferrals can harden into, carry fixed text in place of the
+  runner's reason, which can name a document the run reached. A delivery failure that ends in
   `needs-attention` made no claim: the event was not handled and stays
   retryable, and its record holds fixed text and the failure's class,
   `unknown` for a commit preparation, and nothing of what the run read.

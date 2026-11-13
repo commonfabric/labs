@@ -413,18 +413,22 @@ dials.
   it; `check-cfc-correspondence` exempts the citation. It refuses writes the
   pinned §8.12.5 admits, by an authored, upgraded or minted declaration or by
   the runtime-owned routes above, and persists nothing new: an over-taint
-  against the pin. Against the proposal it differs three ways. It holds every
-  served run to the rule, a derivation and bookkeeping as well as an event
-  handling, since a derivation the serving posture runs copies another
-  space's private data into a runtime-owned store otherwise: an over-taint
-  the ruling would need to adopt. Residency's owner case admits a cross-holder `PersonalSpace(P)` clause
+  against the pin. Against the proposal it differs two ways. Residency's
+  owner case admits a cross-holder `PersonalSpace(P)` clause
   into a store bound to `P`, which the proposal leaves out pending specs#68
   and specs#71: an under-taint against the proposal's text, whose holders,
   `P` alone, are inside that clause's audience. And it inherits the
   reference-write gap below: a served run that carries a cross-holder clause
   into a store by reference, rather than by value, is not refused, although
   the clause is in the slot stamp it persists. A read declared onward, whose
-  membership lands as a stamp the measurement does not reach, is the same.
+  membership lands as a stamp the measurement does not reach, is the same,
+  and so is a `data:` link of a media type other than the Fabric codec's,
+  which is written as a reference whose content rides in its URI (the codec's
+  own `data:` links and native snapshots are expanded and written as values,
+  `data-updating.ts`). A SQLite write is recorded as a SQLite operation
+  rather than a document value write, so writer-fit, and with it the rule,
+  does not see it; the column write ceiling and per-row rules gate it, and
+  are inert until a column declares `ifc` or a table declares a rule.
 - Writer-fit does not measure a reference or structure write. §8.2.6
   requires "writer-fit for the reference and structure actually persisted,
   including replica audiences", and §8.12.8 that writer-fit and upgrade

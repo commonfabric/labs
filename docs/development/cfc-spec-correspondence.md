@@ -397,10 +397,8 @@ target's residency. It refuses more than the pin at strict and persists
 nothing new, so it satisfies step 4's fail-closed condition; its two
 deciding sites carry the `SPEC-PENDING` marker, and the citation, to a
 section the snapshot does not hold, is exempted in
-`tasks/check-cfc-correspondence.ts`.
-It covers every served run, where the proposal names a served event
-handling alone. The
-conformance statement's §5 records the gap.
+`tasks/check-cfc-correspondence.ts`. The conformance statement's §5 records
+the gap and where the runtime differs from the proposal.
 
 The header a kernel function carries is one `@spec` tag in its doc comment,
 `@spec <chapter-file> §<section> <name> sha256:<hash>`, parsed by

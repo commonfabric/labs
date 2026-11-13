@@ -3919,22 +3919,23 @@ const scopedResidencyPrincipal = (
 
 /**
  * Whether `tx` is a served run the holder rule of §8.12.5.1 governs: any run
- * the serving posture executes, an event handler, a reactive computation or
- * bookkeeping, rather than the acting principal's own runtime running it.
- * Only the serving posture stamps a wave run context. A serving host can read
- * what the acting principal's own runtime could not, and code the acting
+ * the serving posture stamps with a wave run context, an event handler, a
+ * reactive computation or bookkeeping, rather than the acting principal's own
+ * runtime running it. Only the serving posture stamps one. A serving host can
+ * read what the acting principal's own runtime could not, and code the acting
  * principal controls chooses where a handler's or a computation's writes
- * land, so every kind is held to the rule.
+ * land, so every kind is held to the rule. An effect's completion commits
+ * unstamped, after the run that started it, and is not; that run writes the
+ * effect's pending state from the same inputs, so a cross-holder clause in
+ * them is refused there, before the effect is issued.
  */
 const isServedRunUnderHolderRule = (
   tx: IExtendedStorageTransaction,
 ): boolean =>
   // SPEC-PENDING https://github.com/commonfabric/specs/pull/95
   // The rule runs ahead of its ruling, at the strict default, because it
-  // only refuses more than the pinned §8.12.5 and persists nothing new. As
-  // proposed, it names a served event handling alone; every other served run
-  // is held to it too. The marker goes when a ruling covering them merges and
-  // the snapshot is re-pinned.
+  // only refuses more than the pinned §8.12.5 and persists nothing new. The
+  // marker goes when the ruling merges and the snapshot is re-pinned.
   waveRunContextOf(tx) !== undefined;
 
 /**
