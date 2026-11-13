@@ -143,6 +143,12 @@ describe("query-result-proxy view drift", () => {
     const list = other.get() as unknown[];
     other.set(undefined);
     expect(() => list.length).toThrow("now holds nothing");
+
+    const third = runtime.getCell<unknown>(space, "to-null", undefined, tx);
+    third.set({ a: 1 });
+    const record = third.get() as { a: unknown };
+    third.set(null);
+    expect(() => record.a).toThrow("now holds null");
   });
 
   it("follows a rewrite that keeps the kind", () => {

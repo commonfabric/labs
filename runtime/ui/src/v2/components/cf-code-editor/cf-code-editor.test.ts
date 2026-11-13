@@ -151,13 +151,9 @@ describe("CFCodeEditor backlink disposal handling", () => {
 
   function createBacklink(fakeThis: Record<string, unknown>): Promise<void> {
     const handler = (CFCodeEditor.prototype as unknown as {
-      createBacklinkFromPattern(
-        this: unknown,
-        text: string,
-        navigate: boolean,
-      ): Promise<void>;
+      createBacklinkFromPattern(this: unknown, text: string): Promise<void>;
     }).createBacklinkFromPattern;
-    return handler.call(fakeThis, "a note", true);
+    return handler.call(fakeThis, "a note");
   }
 
   it("logs a backlink-create failure while the runtime is alive", async () => {
@@ -241,10 +237,19 @@ describe("CFCodeEditor reference-map housekeeping", () => {
   });
 
   describe("_collectUnreferencedRefEntries()", () => {
+    /** Collects against the map and the document `self` holds. */
+    const collect = (self: Record<string, unknown>) =>
+      call(
+        "_collectUnreferencedRefEntries",
+        self,
+        self.references,
+        (self._editorView as { state: unknown }).state,
+      );
+
     it("removes an entry whose token has left the document", () => {
       const t = editorThis("no tokens left", { [KEY]: {} });
       (t.self._refKeysAtLoad as Set<string>).add(KEY);
-      call("_collectUnreferencedRefEntries", t.self);
+      collect(t.self);
       expect(t.deleted).toEqual([KEY]);
     });
 
@@ -253,14 +258,14 @@ describe("CFCodeEditor reference-map housekeeping", () => {
       // reason to believe it was ever in its document.
 
       const t = editorThis("no tokens left", { [KEY]: {} });
-      call("_collectUnreferencedRefEntries", t.self);
+      collect(t.self);
       expect(t.deleted).toEqual([]);
     });
 
     it("keeps every entry while the token is still there", () => {
       const t = editorThis(`[A][${KEY}]`, { [KEY]: {} });
       (t.self._refKeysAtLoad as Set<string>).add(KEY);
-      call("_collectUnreferencedRefEntries", t.self);
+      collect(t.self);
       expect(t.deleted).toEqual([]);
     });
 
@@ -270,7 +275,7 @@ describe("CFCodeEditor reference-map housekeeping", () => {
 
       const t = editorThis("", { [KEY]: {} });
       (t.self._refKeysAtLoad as Set<string>).add(KEY);
-      call("_collectUnreferencedRefEntries", t.self);
+      collect(t.self);
       expect(t.deleted).toEqual([]);
     });
 
@@ -281,14 +286,14 @@ describe("CFCodeEditor reference-map housekeeping", () => {
 
       const t = editorThis("no tokens left", { [KEY]: {} });
       (t.self._refKeysAtLoad as Set<string>).add(KEY);
-      call("_collectUnreferencedRefEntries", t.self);
+      collect(t.self);
       expect(t.flushes()).toBe(1);
     });
 
     it("does not flush when there is nothing to collect", () => {
       const t = editorThis(`[A][${KEY}]`, { [KEY]: {} });
       (t.self._refKeysAtLoad as Set<string>).add(KEY);
-      call("_collectUnreferencedRefEntries", t.self);
+      collect(t.self);
       expect(t.flushes()).toBe(0);
     });
   });
@@ -641,10 +646,10 @@ describe("CFCodeEditor mention-piece resolution", () => {
     const element = internals(new CFCodeEditor());
     element.mentionable = createMockCellHandle<MentionableArray>([]);
     element.pattern = createMockCellHandle("pattern");
-    let creation: [string, boolean] | undefined;
+    let creation: string | undefined;
     Object.defineProperty(element, "createBacklinkFromPattern", {
-      value: (text: string, navigate: boolean) => {
-        creation = [text, navigate];
+      value: (text: string) => {
+        creation = text;
         return Promise.resolve();
       },
     });
@@ -656,7 +661,7 @@ describe("CFCodeEditor mention-piece resolution", () => {
       "New Topic",
     );
 
-    expect(creation).toEqual(["New Topic", false]);
+    expect(creation).toBe("New Topic");
     expect(view.state.doc.toString()).toBe("[[New Topic]]");
   });
 
@@ -666,10 +671,10 @@ describe("CFCodeEditor mention-piece resolution", () => {
       { [NAME]: "Existing Topic", title: "Existing Topic", piece: pieceLink },
     ]) as unknown as CellHandle<MentionableArray>;
     element.pattern = createMockCellHandle("pattern");
-    let creation: [string, boolean] | undefined;
+    let creation: string | undefined;
     Object.defineProperty(element, "createBacklinkFromPattern", {
-      value: (text: string, navigate: boolean) => {
-        creation = [text, navigate];
+      value: (text: string) => {
+        creation = text;
         return Promise.resolve();
       },
     });
@@ -681,7 +686,7 @@ describe("CFCodeEditor mention-piece resolution", () => {
       "Top",
     );
 
-    expect(creation).toEqual(["Top", false]);
+    expect(creation).toBe("Top");
     expect(view.state.doc.toString()).toBe("[[Top]]");
   });
 
@@ -1557,13 +1562,12 @@ describe("CFCodeEditor while the worker refuses a read it computes its writes fr
     _writeRefEntry(destination: CellHandle<unknown>): string | null;
     _refusalGate(): Extension;
     _handleEditorUpdate(update: UpdateStub): void;
-    createBacklinkFromPattern(text: string, navigate: boolean): Promise<void>;
+    createBacklinkFromPattern(text: string): Promise<void>;
     _handleExternalTitleChange(
       pieceId: string,
       pieceCell: { key(key: string): CellHandle<unknown> },
     ): Promise<void>;
     addEventListener(type: string, listener: () => void): void;
-    handleBacklinkActivation(view: ViewStub): boolean;
     willUpdate(changedProperties: Map<string, unknown>): void;
     updated(changedProperties: Map<string, unknown>): void;
   };
@@ -1957,12 +1961,9 @@ describe("CFCodeEditor while the worker refuses a read it computes its writes fr
         },
       }),
     };
-    // Cmd/Ctrl+Click on a mention no piece is named for yet creates one.
-    const view = viewOver("[[New note]]", [], [], 4);
-    element._editorView = view;
+    element._editorView = viewOver("[[New note]]", [], [], 4);
 
-    expect(element.handleBacklinkActivation(view)).toBe(true);
-    await Promise.resolve();
+    await element.createBacklinkFromPattern("New note");
 
     expect(creations).toBe(0);
   });
@@ -1982,7 +1983,7 @@ describe("CFCodeEditor while the worker refuses a read it computes its writes fr
     };
     let told = 0;
     element.addEventListener("backlink-create", () => told++);
-    const creating = element.createBacklinkFromPattern("New note", false);
+    const creating = element.createBacklinkFromPattern("New note");
 
     pushRefusal(universe);
     created.resolve({

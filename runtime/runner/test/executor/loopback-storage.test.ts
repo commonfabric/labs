@@ -7,6 +7,7 @@ import { SessionRegistry } from "@commonfabric/memory/v2/server";
 import { LoopbackStorageManager } from "../../src/executor/loopback-storage.ts";
 import { inServingContext } from "../../src/executor/serving-context.ts";
 import { newLoopbackServer } from "../../src/storage/v2-emulate.ts";
+import type { StorageManager } from "../../src/storage/v2.ts";
 
 const service = await Identity.fromPassphrase("loopback storage service");
 
@@ -85,6 +86,33 @@ describe("LoopbackStorageManager", () => {
         expect(seen.length).toBeGreaterThan(0);
         expect(seen.every((serving) => serving)).toBe(true);
       });
+    });
+  });
+
+  describe("registerSpaceHostDetailed()", () => {
+    it("refuses every host hint, and the space's sessions stay on the plane", async () => {
+      const server = newLoopbackServer();
+      // Addressed as the storage manager its callers hold, whose method
+      // takes the space and the host.
+      const manager: StorageManager = LoopbackStorageManager.connect(server, {
+        as: service,
+      });
+      const space = service.did() as MemorySpace;
+      try {
+        expect(
+          manager.registerSpaceHostDetailed(space, "https://elsewhere.example"),
+        ).toStrictEqual({ accepted: false, reason: "no-remote-resolution" });
+        expect(manager.registerSpaceHost(space, "https://elsewhere.example"))
+          .toBe(false);
+        const result = await manager.open(space).sync(
+          "of:loopback-host-hint",
+          { path: [], schema: false },
+        );
+        expect(result.error).toBeUndefined();
+      } finally {
+        await manager.close();
+        await server.close();
+      }
     });
   });
 });

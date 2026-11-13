@@ -4,6 +4,7 @@ import { stringSchema } from "@commonfabric/runner/schemas";
 import { BaseElement } from "../../core/base-element.ts";
 import { createStringCellController } from "../../core/cell-controller.ts";
 import type { CFTab } from "../cf-tab/cf-tab.ts";
+import type { CFTabList } from "../cf-tab-list/cf-tab-list.ts";
 import type { CFTabPanel } from "../cf-tab-panel/cf-tab-panel.ts";
 
 /**
@@ -104,8 +105,15 @@ export class CFTabs extends BaseElement {
   declare value: CellHandle<string> | string;
   declare orientation: "horizontal" | "vertical";
 
-  /** The last known value, kept to detect external cell changes. */
+  /**
+   * The value a user click or a cell delivery last brought, or the bound
+   * value. A click under a plain value has no cell to write, so the bound
+   * value lags it until the page passes the new value back.
+   */
   private _lastKnownValue: string = "";
+
+  /** The bound value as the last update that synced the selection found it. */
+  private _boundValue: string = "";
 
   /** Cell controller for value binding */
   private _cellController = createStringCellController(this, {
@@ -121,17 +129,16 @@ export class CFTabs extends BaseElement {
       // (cell write -> onChange -> cf-change -> handler -> cell write -> ...),
       // which the scheduler reports as non-settling (CT-1745, CT-1746).
       //
-      // "cf-change" is emitted only from the user-gesture paths
-      // (handleTabClick / handleKeydown via emitUserChange). Here we just keep
-      // the visual selection in sync with the cell.
+      // "cf-change" is emitted only from handleTabClick, through
+      // emitUserChange, which a tab click reaches directly and a navigation
+      // key reaches by clicking the next tab's button. Here we just keep the
+      // visual selection in sync with the cell.
       //
       // Sync from the DELIVERED value, not a getValue() re-read: with a PLAIN
       // string binding there is no backing store for a user click's setValue
-      // to write, so getValue() still returns the stale bound literal here —
-      // re-reading it made the click-time sync a silent no-op (the
-      // "one-behind" highlight bug; see updated() for the second half).
+      // to write, so getValue() still returns the stale bound literal here.
       this._lastKnownValue = newValue;
-      this.updateTabSelection(newValue);
+      this.updateTabSelection();
     },
   });
 
@@ -148,29 +155,14 @@ export class CFTabs extends BaseElement {
     this.setAttribute("role", "tablist");
 
     // Add event listeners
-    this.addEventListener("tab-click", this.handleTabClick as EventListener);
+    this.addEventListener("tab-click", this.handleTabClick);
     this.addEventListener("keydown", this.handleKeydown);
   }
 
   override disconnectedCallback() {
     super.disconnectedCallback();
-    this.removeEventListener("tab-click", this.handleTabClick as EventListener);
+    this.removeEventListener("tab-click", this.handleTabClick);
     this.removeEventListener("keydown", this.handleKeydown);
-  }
-
-  override firstUpdated() {
-    // Initialize cell controller binding
-    this._cellController.bind(this.value, stringSchema);
-
-    // Set up slotchange listener to handle dynamically added content
-    const slot = this.shadowRoot?.querySelector("slot");
-    if (slot) {
-      slot.addEventListener("slotchange", this.handleSlotChange);
-    }
-
-    // Track initial value and initialize tab selection
-    this._lastKnownValue = this._cellController.getValue();
-    this.updateTabSelection();
   }
 
   override willUpdate(
@@ -187,24 +179,14 @@ export class CFTabs extends BaseElement {
   override updated(changedProperties: Map<string | number | symbol, unknown>) {
     super.updated(changedProperties);
 
-    const currentValue = this._cellController.getValue();
-    if (changedProperties.has("value")) {
-      // The consumer explicitly re-rendered the `value` prop — ALWAYS re-sync,
-      // even when currentValue equals _lastKnownValue. With a plain string
-      // binding, a user click updates only internal state (there is no cell to
-      // write), so the consumer's next render typically carries the SAME
-      // string the click produced; the old `!==` guard read that as a no-op
-      // while the DOM children had just been re-rendered unselected, stranding
-      // the highlight one state behind on every tap (dynamic tabs re-created
-      // inside a render computed with a plain `value`).
-      this._lastKnownValue = currentValue;
-      this.updateTabSelection();
-      return;
-    }
-    // Other updates (requestUpdate via the cell sink, orientation, …): keep
-    // the change detection so unrelated updates don't repaint selection.
-    if (currentValue !== this._lastKnownValue) {
-      this._lastKnownValue = currentValue;
+    const boundValue = this._cellController.getValue();
+    // A new `value` from the page always re-syncs, since the page may have
+    // re-created the tabs unselected while passing back the value a click
+    // already showed. Any other update re-syncs only when the bound value
+    // itself moved, so a click the page has not passed back yet stands.
+    if (changedProperties.has("value") || boundValue !== this._boundValue) {
+      this._boundValue = boundValue;
+      this._lastKnownValue = boundValue;
       this.updateTabSelection();
     }
   }
@@ -212,57 +194,27 @@ export class CFTabs extends BaseElement {
   override render() {
     return html`
       <div class="tabs" part="tabs" data-orientation="${this.orientation}">
-        <slot></slot>
+        <slot @slotchange="${this.handleSlotChange}"></slot>
       </div>
     `;
   }
 
-  private getTabs(): NodeListOf<Element> {
+  private getTabs(): NodeListOf<CFTab> {
     return this.querySelectorAll("cf-tab");
   }
 
-  private getTabPanels(): NodeListOf<Element> {
+  private getTabPanels(): NodeListOf<CFTabPanel> {
     return this.querySelectorAll("cf-tab-panel");
   }
 
-  private _pendingRetry: number | null = null;
-
   /**
-   * Syncs the tabs and panels to the selected value. `valueOverride` carries
-   * an authoritative just-delivered value (a user click or a cell delivery via
-   * the controller's `onChange`). It matters for _plain_ string bindings,
-   * where a click's `setValue()` has no backing store to write — a
-   * `getValue()` re-read here would return the stale bound literal and
-   * silently no-op the sync.
+   * Syncs the tabs and panels to the last known value: the one a user click
+   * or a cell delivery last brought, or the bound value.
    */
-  private updateTabSelection(valueOverride?: string): void {
-    // Every sync pass supersedes any pending deferred retry. The retry
-    // captures its call's valueOverride, so a retry left armed across a NEWER
-    // pass would replay the older delivery next frame, overwriting the latest
-    // selection (delivery "a" defers → delivery "b" applies synchronously →
-    // stale "a" fires). If THIS pass still can't apply, the defer branch
-    // below re-arms with the current value.
-    if (this._pendingRetry !== null) {
-      cancelAnimationFrame(this._pendingRetry);
-      this._pendingRetry = null;
-    }
-
+  private updateTabSelection(): void {
     const tabs = this.getTabs();
     const panels = this.getTabPanels();
-    const currentValue = valueOverride !== undefined
-      ? valueOverride
-      : this._cellController.getValue();
-
-    // When tabs exist in DOM but the VDOM framework hasn't set their properties yet,
-    // defer selection until the next frame when properties will be available.
-    // This handles the timing gap between DOM element creation and property assignment.
-    if (tabs.length > 0 && (tabs[0] as CFTab).value === undefined) {
-      this._pendingRetry = requestAnimationFrame(() => {
-        this._pendingRetry = null;
-        this.updateTabSelection(valueOverride);
-      });
-      return;
-    }
+    const currentValue = this._lastKnownValue;
 
     // Decide which value the selection should reflect.
     //
@@ -285,48 +237,45 @@ export class CFTabs extends BaseElement {
     // cell; writing the cell during mount/selection-sync would re-trigger that
     // computed, re-mount cf-tabs, and write again — a non-settling scheduler
     // loop (the CT-1677 settle class). So selection-sync stays a
-    // pure read: the cell is committed only on a genuine user gesture
-    // (handleTabClick / handleKeydown via emitUserChange). This mirrors
+    // pure read: the cell is committed only on a genuine user gesture, by
+    // handleTabClick through emitUserChange (a navigation key clicks the next
+    // tab's button, which reaches handleTabClick the same way). This mirrors
     // cf-input, which writes only on input events and never on bind. A consumer
     // that needs the cell to carry a default should initialize it (e.g.
     // `Writable.of("active")`).
     const isEmpty = currentValue === undefined || currentValue === "";
-    const tabValues = Array.from(tabs, (tab) => (tab as CFTab).value);
+    const tabValues = Array.from(tabs, (tab) => tab.value);
     let effectiveValue = currentValue;
     if (!isEmpty && !tabValues.includes(currentValue) && tabs.length > 0) {
-      const firstEnabled = Array.from(tabs).find(
-        (tab) => !(tab as CFTab).disabled,
-      ) as CFTab | undefined;
+      const firstEnabled = Array.from(tabs).find((tab) => !tab.disabled);
       if (firstEnabled) effectiveValue = firstEnabled.value;
     }
 
     // Update tabs - use property access instead of getAttribute
     // because JSX sets properties, not attributes
     tabs.forEach((tab) => {
-      const tabValue = (tab as CFTab).value;
-      if (tabValue === effectiveValue) {
+      if (tab.value === effectiveValue) {
         tab.setAttribute("aria-selected", "true");
         tab.setAttribute("data-selected", "true");
-        (tab as CFTab).selected = true;
+        tab.selected = true;
       } else {
         tab.setAttribute("aria-selected", "false");
         tab.removeAttribute("data-selected");
-        (tab as CFTab).selected = false;
+        tab.selected = false;
       }
     });
 
     // Update panels - use property access instead of getAttribute
     // because JSX sets properties, not attributes
     panels.forEach((panel) => {
-      const panelValue = (panel as CFTabPanel).value;
-      if (panelValue === effectiveValue) {
+      if (panel.value === effectiveValue) {
         panel.removeAttribute("hidden");
         panel.setAttribute("data-selected", "true");
-        (panel as CFTabPanel).hidden = false;
+        panel.hidden = false;
       } else {
         panel.setAttribute("hidden", "");
         panel.removeAttribute("data-selected");
-        (panel as CFTabPanel).hidden = true;
+        panel.hidden = true;
       }
     });
   }
@@ -347,7 +296,7 @@ export class CFTabs extends BaseElement {
    * element, and a listener left on the discarded element observes nothing —
    * `cf-tabs` then never hears about the replacement tabs.
    */
-  private _tabListWithSlotListener: Element | null = null;
+  private _tabListWithSlotListener: CFTabList | null = null;
 
   /**
    * Sets up a slotchange listener on cf-tab-list's internal slot.
@@ -356,16 +305,14 @@ export class CFTabs extends BaseElement {
    * tabs are actually added to the DOM.
    */
   private setupTabListSlotListener(): void {
-    const tabList = this.querySelector("cf-tab-list") as
-      | (Element & { updateComplete?: Promise<boolean> })
-      | null;
+    const tabList = this.querySelector("cf-tab-list");
     if (!tabList || tabList === this._tabListWithSlotListener) return;
 
     // Wait for cf-tab-list to have its shadow DOM ready
     const tabListSlot = tabList.shadowRoot?.querySelector("slot");
     if (!tabListSlot) {
       // cf-tab-list hasn't rendered yet, retry after it updates
-      tabList.updateComplete?.then(() => {
+      tabList.updateComplete.then(() => {
         this.setupTabListSlotListener();
       });
       return;
@@ -383,12 +330,12 @@ export class CFTabs extends BaseElement {
     }
   }
 
-  private handleTabClick = (event: CustomEvent<{ tab: Element }>) => {
-    const tab = event.detail.tab as CFTab;
+  private handleTabClick = (event: CustomEvent<{ tab: CFTab }>) => {
+    const { tab } = event.detail;
 
     // Use property access instead of getAttribute because JSX sets properties
     if (tab && tab.value && !tab.disabled) {
-      const currentValue = this._cellController.getValue();
+      const currentValue = this._lastKnownValue;
 
       if (currentValue !== tab.value) {
         // User-initiated change: write the value through to the bound cell
@@ -417,16 +364,16 @@ export class CFTabs extends BaseElement {
 
   private handleKeydown = (event: KeyboardEvent): void => {
     // Only handle keyboard navigation when focus is on a tab
-    const target = event.target as HTMLElement;
-    if (target.tagName !== "CF-TAB") return;
+    const tabs = Array.from(this.getTabs());
+    const target = tabs.find((tab) => tab === event.target);
+    if (!target) return;
 
-    const tabs = Array.from(this.getTabs()) as CFTab[];
     // Use property access instead of getAttribute because JSX sets properties
     const enabledTabs = tabs.filter((tab) => !tab.disabled);
 
     if (enabledTabs.length === 0) return;
 
-    const currentIndex = enabledTabs.findIndex((tab) => tab === target);
+    const currentIndex = enabledTabs.indexOf(target);
     let nextIndex = currentIndex;
 
     const isHorizontal = this.orientation === "horizontal";
@@ -458,13 +405,10 @@ export class CFTabs extends BaseElement {
         return;
     }
 
-    // Focus and select the next tab
+    // Focus the next tab, and click it to select it
     const nextTab = enabledTabs[nextIndex];
-    if (nextTab) {
-      nextTab.focus();
-      // Trigger click to select the tab
-      nextTab.click();
-    }
+    nextTab.focus();
+    nextTab.button?.click();
   };
 
   /**
@@ -485,11 +429,10 @@ export class CFTabs extends BaseElement {
    * Select the first tab
    */
   selectFirst(): void {
-    const tabs = this.getTabs();
     // Use property access instead of getAttribute because JSX sets properties
-    const firstEnabledTab = Array.from(tabs).find(
-      (tab) => !(tab as CFTab).disabled,
-    ) as CFTab | undefined;
+    const firstEnabledTab = Array.from(this.getTabs()).find((tab) =>
+      !tab.disabled
+    );
 
     if (firstEnabledTab?.value) {
       this._cellController.setValue(firstEnabledTab.value);
@@ -500,14 +443,19 @@ export class CFTabs extends BaseElement {
    * Select the last tab
    */
   selectLast(): void {
-    const tabs = this.getTabs();
     // Use property access instead of getAttribute because JSX sets properties
-    const enabledTabs = Array.from(tabs).filter((tab) =>
-      !(tab as CFTab).disabled
-    ) as CFTab[];
+    const enabledTabs = Array.from(this.getTabs()).filter((tab) =>
+      !tab.disabled
+    );
     const lastTab = enabledTabs[enabledTabs.length - 1];
     if (lastTab?.value) {
       this._cellController.setValue(lastTab.value);
     }
+  }
+}
+
+declare global {
+  interface HTMLElementTagNameMap {
+    "cf-tabs": CFTabs;
   }
 }

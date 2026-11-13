@@ -78,10 +78,53 @@ const TRANSFORMER_ERROR_PROGRAM: RuntimeProgram = {
   }],
 };
 
-const DYING_WORKER = new URL(
-  "./fixtures/compile-worker-that-dies.ts",
-  import.meta.url,
-);
+/** Starts a compile worker that dies on a request for `/dies.tsx`. */
+function startDyingWorker(): Worker {
+  return new Worker(
+    new URL("./fixtures/compile-worker-that-dies.ts", import.meta.url),
+    { type: "module" },
+  );
+}
+
+/** Starts a compile worker that compiles nothing and misanswers on cue. */
+function startMisansweringWorker(): Worker {
+  return new Worker(
+    new URL("./fixtures/compile-worker-that-misanswers.ts", import.meta.url),
+    { type: "module" },
+  );
+}
+
+/** A request to compile a one-module program whose entry is `main`. */
+function requestFor(main: string): ModuleCompileRequest {
+  return {
+    program: {
+      main,
+      files: [{ name: main, contents: "export const x = 1;" }],
+    },
+    authoredSources: [],
+    mounts: [],
+    moduleIdentities: new Map<string, string>(),
+    specifierAliases: new Map<string, string>(),
+    storedSource: false,
+    noCheck: true,
+    diagnosticMessages: "typescript",
+    instanceNames: false,
+  };
+}
+
+/**
+ * The name and message of `failure` where it is an error marked as a failure
+ * of the place a compile ran, and `undefined` otherwise.
+ */
+function placeFailure(
+  failure: unknown,
+): { name: string; message: string } | undefined {
+  if (
+    !(failure instanceof Error) ||
+    isDeterministicCompileFailure(markDeterministicCompileFailure(failure))
+  ) return undefined;
+  return { name: failure.name, message: failure.message };
+}
 
 /** What a compile emitted for each module, compared across two realms. */
 function emitted(modules: readonly CacheableModule[]) {
@@ -211,7 +254,7 @@ describe("ModuleCompileWorker", () => {
       });
 
       it("fails a compile its worker held when the worker dies, as a failure of the place, and compiles the next in a fresh worker", async () => {
-        worker = new ModuleCompileWorker(DYING_WORKER);
+        worker = new ModuleCompileWorker(startDyingWorker);
         const dies = { ...PROGRAM, main: "/dies.tsx" };
         dies.files = [
           { name: "/dies.tsx", contents: PROGRAM.files[0]!.contents },
@@ -257,7 +300,7 @@ describe("ModuleCompileWorker", () => {
           name: module.filename,
           contents: module.source,
         }));
-        worker = new ModuleCompileWorker(DYING_WORKER);
+        worker = new ModuleCompileWorker(startDyingWorker);
 
         const failure = await rejectionOf(() =>
           runtime(worker).harness.compileResolvedToRecordGraph(
@@ -290,6 +333,114 @@ describe("ModuleCompileWorker", () => {
 
         expect(failure).toBeInstanceOf(CompilerError);
         expect(isDeterministicCompileFailure(failure)).toBe(true);
+      });
+    });
+
+    describe("compile() when the worker misbehaves", () => {
+      it("fails a compile whose worker cannot be started, as a failure of the place, and starts one for the next", async () => {
+        let starts = 0;
+        worker = new ModuleCompileWorker(() => {
+          starts++;
+          if (starts === 1) throw new RangeError("No thread to spare");
+          if (starts === 2) throw "No thread to spare either";
+          return startMisansweringWorker();
+        });
+
+        const failures = [
+          await rejectionOf(() => worker.compile(requestFor("/main.ts"))),
+          await rejectionOf(() => worker.compile(requestFor("/main.ts"))),
+        ];
+
+        expect(failures.map(placeFailure)).toEqual([
+          { name: "RangeError", message: "No thread to spare" },
+          { name: "Error", message: "No thread to spare either" },
+        ]);
+        expect(await worker.compile(requestFor("/main.ts"))).toEqual(new Map());
+        expect(starts).toBe(3);
+      });
+
+      it("fails what its worker held, as a failure of the place, when the worker sends a message that cannot be read, and compiles the next in a fresh worker", async () => {
+        const started: Worker[] = [];
+        const firstStart = Promise.withResolvers<Worker>();
+        worker = new ModuleCompileWorker(() => {
+          const fresh = startMisansweringWorker();
+          started.push(fresh);
+          firstStart.resolve(started[0]!);
+          return fresh;
+        });
+
+        const compiling = rejectionOf(() =>
+          worker.compile(requestFor("/main.ts"))
+        );
+        (await firstStart.promise).dispatchEvent(
+          new MessageEvent("messageerror"),
+        );
+
+        expect(placeFailure(await compiling)).toEqual({
+          name: "Error",
+          message: "The compile worker sent a message that could not be read",
+        });
+        expect(await worker.compile(requestFor("/main.ts"))).toEqual(new Map());
+        expect(started.length).toBe(2);
+      });
+
+      it("fails what its worker held, as a failure of the place, when the worker sends an answer that does not decode", async () => {
+        worker = new ModuleCompileWorker(startMisansweringWorker);
+
+        const garbled = rejectionOf(() =>
+          worker.compile(requestFor("/garbled.ts"))
+        );
+        const held = rejectionOf(() => worker.compile(requestFor("/main.ts")));
+
+        const failure = await garbled;
+        expect(placeFailure(failure)).toEqual({
+          name: "Error",
+          message:
+            "The compile worker protocol carried modules that are not a list",
+        });
+        expect(await held).toBe(failure);
+        expect(await worker.compile(requestFor("/main.ts"))).toEqual(new Map());
+      });
+
+      it("fails what its worker held, as a failure of the place, when the worker answers a request it was not sent", async () => {
+        worker = new ModuleCompileWorker(startMisansweringWorker);
+
+        const failure = await rejectionOf(() =>
+          worker.compile(requestFor("/stranger.ts"))
+        );
+
+        expect(placeFailure(failure)).toEqual({
+          name: "Error",
+          message:
+            "The compile worker answered request 1000, which it does not hold",
+        });
+        expect(await worker.compile(requestFor("/main.ts"))).toEqual(new Map());
+      });
+
+      it("fails a request that cannot be sent, alone and as a failure of the place, whether or not the worker was ready", async () => {
+        worker = new ModuleCompileWorker(startMisansweringWorker);
+        const sendable = requestFor("/main.ts");
+        const unsendable = {
+          ...sendable,
+          program: {
+            ...sendable.program,
+            files: [{
+              ...sendable.program.files[0]!,
+              describe: () => "a function, which no structured clone carries",
+            }],
+          },
+        };
+
+        const queued = rejectionOf(() => worker.compile(unsendable));
+        const sent = worker.compile(sendable);
+
+        expect(placeFailure(await queued)?.name).toBe("DataCloneError");
+        expect(await sent).toEqual(new Map());
+        expect(
+          placeFailure(await rejectionOf(() => worker.compile(unsendable)))
+            ?.name,
+        ).toBe("DataCloneError");
+        expect(await worker.compile(sendable)).toEqual(new Map());
       });
     });
 
@@ -355,7 +506,7 @@ describe("ModuleCompileWorker", () => {
       });
 
       it("keeps the latest diagnostics after its worker dies", async () => {
-        worker = new ModuleCompileWorker(DYING_WORKER);
+        worker = new ModuleCompileWorker(startDyingWorker);
         await runtime(worker).harness.compileToRecordGraph(PROGRAM);
         const latest = worker.diagnostics();
         const dies: RuntimeProgram = {
@@ -383,20 +534,7 @@ describe("ModuleCompileWorker", () => {
 
     describe("close()", () => {
       it("fails a compile it still held and every later one, as failures of the place", async () => {
-        const request: ModuleCompileRequest = {
-          program: {
-            main: "/main.ts",
-            files: [{ name: "/main.ts", contents: "export const x = 1;" }],
-          },
-          authoredSources: [],
-          mounts: [],
-          moduleIdentities: new Map<string, string>(),
-          specifierAliases: new Map<string, string>(),
-          storedSource: false,
-          noCheck: true,
-          diagnosticMessages: "typescript",
-          instanceNames: false,
-        };
+        const request = requestFor("/main.ts");
         const compiling = rejectionOf(() => worker.compile(request));
         worker.close();
 

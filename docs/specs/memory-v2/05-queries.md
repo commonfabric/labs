@@ -332,32 +332,17 @@ registered, and refs to it stay unresolved.
 
 ### 5.3.3 Cycle Detection
 
-Graph traversal must handle cycles. Three cycle detection mechanisms are used,
-all derived from `traverse.ts`:
-
-#### CycleTracker
-
-Tracks visited nodes by identity. If a node is visited twice during the same
-traversal path, the second visit returns `null` (cycle detected, do not
-descend).
-
-```typescript
-// Shown for illustration only.
-class CycleTracker<K> {
-  private visiting: Set<K>;
-
-  // Returns a disposable scope if not a cycle, or null if cycle detected.
-  // On dispose, removes the key so parallel branches can visit the same node.
-  include(key: K): Disposable | null;
-}
-```
+Graph traversal must handle cycles. Two cycle detection mechanisms are used,
+both derived from `traverse.ts`:
 
 #### CompoundCycleTracker
 
-A more nuanced tracker that considers both node identity and schema context. The
-same entity can be visited multiple times with different schemas without
-triggering a false cycle. This is important because a single entity may be
-reachable via different schema paths that expose different subsets of its data.
+Tracks the nodes on the current traversal path by both node identity and schema
+context. A node visited a second time on the path under the same schema is a
+cycle, and the second visit does not descend. The same entity can be visited
+multiple times with different schemas without triggering a false cycle. This is
+important because a single entity may be reachable via different schema paths
+that expose different subsets of its data.
 
 ```typescript
 // Shown for illustration only.
@@ -392,7 +377,7 @@ type PointerCycleTracker = CompoundCycleTracker<
 #### Branches returning to their own position
 
 A combinator branch evaluates the same value at the same address as the schema
-it belongs to, so neither tracker sees it come back. A union whose handle
+it belongs to, so the tracker does not see it come back. A union whose handle
 branch names the union itself (`type Recursive = Cell<Recursive> | null`)
 returns to its own traversal without descending. The traverser keeps the memo
 keys of the traversals in progress at the current position, and a branch that

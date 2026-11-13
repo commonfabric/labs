@@ -36,6 +36,14 @@ transitions in an ordinary source module and exercise them from a plain Deno
 unit test as well; keep the browser case for the boundary only a real DOM can
 prove.
 
+A component in `runtime/ui` does not need a browser to render. A plain Deno
+test that imports `runtime/ui/src/v2/test-utils/dom.ts` ahead of anything that
+loads Lit
+gets a happy-dom document, in which the component connects, renders into its
+shadow root, and answers events, and Deno's coverage records what it ran.
+`cf-toggle.test.ts` is the worked example. What happy-dom does not implement,
+such as layout and real focus, still takes the browser case.
+
 Do not name a source file so that its path ends in `test.ts` (or `test.tsx`,
 `test.js`, `test.mjs`, `test.jsx`). `deno coverage` takes those for test files
 and leaves them out of the report, even though V8 records them and even if
@@ -204,7 +212,11 @@ suites collect authored-pattern coverage").
 `tasks/coverage-metrics.ts` scores LCOV reports. It walks the tracked source
 files under the package directories `LAYOUT.md` names and under `tasks`, and
 counts, for each file, how many lines no test covered. The top-level `scripts`
-directory is left out. The same counting serves both readers:
+directory is left out, and so is an iframe pattern's `guest.js`: that file is
+the bundle `deno bundle` writes from the `guest.ts` or `guest.tsx` beside it,
+and the metric counts the source instead. [Testing an iframe
+guest](#testing-an-iframe-guest) says how a test loads that source. The same
+counting serves both readers:
 
 - **The repository-wide figure** merges every report the full run's lanes wrote
   and rolls the counts up into `coverage-debt: <group> uncovered lines` metrics,
@@ -230,11 +242,13 @@ uncovered, unless it compiles to no code at all or opts out of coverage — see 
 file that compiles to nothing is charged
 nothing](#a-file-that-compiles-to-nothing-is-charged-nothing) and [A file that
 opts out of coverage is charged
-nothing](#a-file-that-opts-out-of-coverage-is-charged-nothing). A file with a
-record is scored against the lines that record names. For a file measured by
-Deno's V8 coverage that is every executable line; pattern instrumentation names
-only the statements it could instrument, so a pattern file's first record both
-covers real lines and drops the never-named lines out of the count.
+nothing](#a-file-that-opts-out-of-coverage-is-charged-nothing). A record that
+names none of a file's lines says nothing about which of them ran, so it counts
+as no record. A file with a record is scored against the lines that record
+names. For a file measured by Deno's V8 coverage that is every executable line;
+pattern instrumentation names only the statements it could instrument, so a
+pattern file's first record both covers real lines and drops the never-named
+lines out of the count.
 
 Gaining a record can therefore only *lower* a file's count, since the record
 names a subset of the file's lines and the rest stop being counted. A figure
@@ -300,6 +314,30 @@ test could pay its debt down, and the browser tests that do drive it report
 into nothing this metric reads. A file a Deno test could load is not such a
 file. Where its member carries a measured set, the measured-set gate is what
 holds it to its tests.
+
+### Testing an iframe guest
+
+An iframe pattern's guest (`guest.ts` or `guest.tsx`) runs in the browser, but
+a Deno test can load it as it is.
+`patterns/tools/test-support/iframe-guest.ts` loads the guest's `guest.html`
+into a simulated document, installs that document's globals, evaluates a fresh
+instance of the guest module against it, and serves the guest the resources a
+test supplies through the host end of the real bridge: in-memory cells,
+presence rooms and SQLite databases. The test drives the document as a person
+would and reads back both the document and what the guest wrote. Deno's
+coverage records the guest module like any other, so the lines its tests run
+count as covered. `patterns/examples/iframe-cursor-canvas/guest.test.ts` is the
+worked example.
+
+A guest's writes cross the bridge, a message channel, before they reach a test's
+cells, so a check that the guest wrote nothing waits for the page's `settled()`
+first: checked straight after the event, it would pass whatever the guest did.
+Engines the simulated document lacks, such as Web Audio, a canvas's drawing
+context, or WebGL, are test doubles the test supplies through the page's
+`globals` and `patchProperty()`. The tests of
+`patterns/showcase/iframe-shared-tape-lab/` (Web Audio),
+`iframe-ring-loops/` (a drawing context) and `iframe-orbital-salvage-yard/`
+(WebGL) supply them.
 
 ### A local run under coverage runs every package
 
@@ -887,6 +925,40 @@ so the absolute numbers differ. The offset is constant between two runs of the
 same tests, which is what leaves the delta comparable when the totals are not. A
 measured set's figure is narrower still: only its own suite's tests, over only
 its member's files.
+
+To see which files a group's count comes from, add `--by-file`. The command then
+prints one line for each file with uncovered lines, largest count first. Files
+with equal counts are in path order, with paths compared character by character,
+so that capital letters come before lowercase ones. A line gives the file's
+uncovered line count, then `record` or `no-record`, then the file's
+repository-relative path. A `no-record` file is one the report has no record
+for, or only a record that names none of its lines. [How the two are
+scored](#how-the-two-are-scored) says what such a file is charged. The counts of
+a group's files add up to that group's total. `--under` limits the listing to
+the files at or below one repository-relative path, such as
+`--under=runtime/memory`. A path holding no tracked source file is an error.
+
+`--lcov` reads an LCOV file in place of `--profile-dir`. One such file is the
+[combined report](#a-combined-report-for-ides) of a `main` commit, which gives
+the per-file breakdown of the repository-wide figure. That report holds the
+coverage of whichever lanes' reports downloaded, since the download step carries
+on past a failure. When a lane's report is missing, the lines only that lane
+covered count as uncovered, and a file only that lane loaded is charged as a
+file with no record. Point `--root` at a checkout of the commit the report
+measured. The list of files, and the charge for a file the report has no record
+for, both come from that checkout.
+
+Whichever way the report is read, the command refuses one that has no line of
+any tracked source file the checkout holds. That is what a report of nothing
+looks like, and what a report read against the wrong root looks like.
+
+```bash
+gsutil cp gs://commontools-build-artifacts/workspace-artifacts/labs-<commit-sha>.lcov .
+deno run --allow-read --allow-write --allow-run --allow-env \
+  tasks/coverage-metrics.ts \
+  --lcov=labs-<commit-sha>.lcov --root="$(pwd)" \
+  --by-file --under=runtime/memory
+```
 
 ## Coverage figures in the record store
 

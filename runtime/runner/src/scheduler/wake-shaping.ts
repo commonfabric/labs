@@ -182,6 +182,7 @@ export class WakeShaper {
         }, 0);
       } else {
         this.#runThunk(hold.deliver);
+        if (this.#disposed) return;
       }
     } else {
       // Sustained overflow. A caller-supplied item key coalesces last-wins for
@@ -194,7 +195,7 @@ export class WakeShaper {
     // leading edge always runs before the trailing flush even at a zero window.
     if (group.timer === undefined) {
       group.timer = setTimeout(
-        () => this.#onTick(hold.groupKey),
+        () => this.#onTick(hold.groupKey, group),
         this.#windowMs,
       );
     }
@@ -208,9 +209,7 @@ export class WakeShaper {
     }
   }
 
-  #onTick(groupKey: string): void {
-    const group = this.#groups.get(groupKey);
-    if (!group) return;
+  #onTick(groupKey: string, group: ThrottleGroup): void {
     group.tokens = Math.min(this.#capacity, group.tokens + 1); // refill one
     if (group.pending.size > 0) {
       // Trailing flush: release the whole coalesced batch as one timing sample
@@ -218,7 +217,11 @@ export class WakeShaper {
       const batch = [...group.pending.values()];
       group.pending = new Map();
       group.tokens -= 1;
-      for (const deliver of batch) this.#runThunk(deliver);
+      for (const deliver of batch) {
+        this.#runThunk(deliver);
+        // A wake that disposes the shaper ends the batch and the group's ticks.
+        if (this.#disposed) return;
+      }
     }
     if (
       group.pending.size === 0 && group.inFlight === 0 &&
@@ -227,7 +230,10 @@ export class WakeShaper {
       // Fully refilled and idle: close the group (a fresh bucket next time).
       this.#groups.delete(groupKey);
     } else {
-      group.timer = setTimeout(() => this.#onTick(groupKey), this.#windowMs);
+      group.timer = setTimeout(
+        () => this.#onTick(groupKey, group),
+        this.#windowMs,
+      );
     }
     this.#settle();
   }

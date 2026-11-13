@@ -156,6 +156,14 @@ describe("diagnostics-merge", () => {
       expect(merged.countSinceBaseline).toBe(1);
       expect(merged.averageSinceBaseline).toBe(5);
     });
+
+    it("returns an empty distribution since a baseline no part has measured past", () => {
+      const quiet = { ...timingOf([3]), cdfSinceBaseline: [] };
+      const merged = mergeTimingStats([quiet, quiet]);
+      expect(merged.cdfSinceBaseline).toEqual([]);
+      expect(merged.averageSinceBaseline).toBe(0);
+      expect(merged.cdf).toEqual([{ x: 3, y: 1 }]);
+    });
   });
 
   describe("mergeServingLoopDiagnostics()", () => {
@@ -164,6 +172,11 @@ describe("diagnostics-merge", () => {
         loggerCounts: { total: 0 },
         timingStats: {},
       });
+    });
+
+    it("returns the one part it is given", () => {
+      const only = diagnosticsOf(2, timingOf([1]));
+      expect(mergeServingLoopDiagnostics([only])).toBe(only);
     });
 
     it("adds log counts at every level of the breakdown", () => {

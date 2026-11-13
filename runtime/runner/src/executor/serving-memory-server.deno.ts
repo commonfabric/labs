@@ -196,7 +196,8 @@ const TIMER_DELAY_MAX_MS = 2_147_483_647;
 
 /**
  * The loop's policy, with what `policy` leaves unset taken from the variables
- * the toolshed bootstrap reads. The store read-through
+ * the toolshed bootstrap reads, each through `env`, by default this
+ * process's environment. The store read-through
  * (`SERVER_EXECUTION_STORE_READ_THROUGH`) and the overlapped wave commit
  * (`SERVER_EXECUTION_OVERLAP_COMMIT`) are each on for the literal `true`
  * alone, where a toolshed keeps the read-through on unless the variable is
@@ -206,19 +207,20 @@ const TIMER_DELAY_MAX_MS = 2_147_483_647;
  * milliseconds. A lane sets the first two to run every test that leaves them
  * unset under the posture; a benchmark sets the others to measure a cadence.
  */
-const policyFromEnvironment = (
+export const policyFromEnvironment = (
   policy: SpaceServerPolicy | undefined,
+  env: (name: string) => string | undefined = (name) => Deno.env.get(name),
 ): SpaceServerPolicy | undefined => {
   let resolved = policy;
   if (
     resolved?.storeReadThrough === undefined &&
-    Deno.env.get("SERVER_EXECUTION_STORE_READ_THROUGH") === "true"
+    env("SERVER_EXECUTION_STORE_READ_THROUGH") === "true"
   ) {
     resolved = { ...resolved, storeReadThrough: true };
   }
   if (
     resolved?.overlapWaveCommit === undefined &&
-    Deno.env.get("SERVER_EXECUTION_OVERLAP_COMMIT") === "true"
+    env("SERVER_EXECUTION_OVERLAP_COMMIT") === "true"
   ) {
     resolved = { ...resolved, overlapWaveCommit: true };
   }
@@ -228,7 +230,7 @@ const policyFromEnvironment = (
   // fires at once, so a value past it reads as unset rather than as a
   // cadence of immediate cuts.
   const milliseconds = (name: string): number | undefined => {
-    const raw = Deno.env.get(name) ?? "";
+    const raw = env(name) ?? "";
     const value = /^\d+$/.test(raw) ? Number.parseInt(raw, 10) : 0;
     return value > 0 && value <= TIMER_DELAY_MAX_MS ? value : undefined;
   };

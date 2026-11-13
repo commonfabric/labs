@@ -72,9 +72,8 @@ the probes.
 
 A leaf is a node with no steps under it: `null`, a boolean, a number, a string,
 `undefined`, a symbol, a bigint, or a value of a primitive type, such as
-`Bytes@1`, a temporal quantity, `Hash@1`, `KeyPair@1`, `RegExp@1` or
-`Unavailable@1`. Only a leaf has a fragment, and every leaf has one, unless a
-patch states it.
+`Bytes@1`, a temporal quantity, `Hash@1`, `KeyPair@1` or `Unavailable@1`. Only a
+leaf has a fragment, and every leaf has one, unless a patch states it.
 
 A fragment is the leaf's canonical `fvj1:` text, written on its own, prefix and
 all, as sections 10 and 11 of

@@ -2,8 +2,16 @@
  * Tests for CFFileDownload component
  */
 
+// First, so that the document it installs is there when Lit loads.
+import { mount } from "../../test-utils/dom.ts";
+
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+import { FakeTime } from "@std/testing/time";
+import {
+  createMockCellHandle,
+  pushUpdate,
+} from "../../test-utils/mock-cell-handle.ts";
 import { CFFileDownload } from "./index.ts";
 
 /**
@@ -20,7 +28,6 @@ interface CFFileDownloadPrivateAccess {
   _showNotAvailableTooltip: boolean;
   _notAvailableMessage: string;
   _notAvailableTooltipTimeout?: ReturnType<typeof setTimeout>;
-  _downloading: boolean;
   _handleClick: (e: Event) => void;
   _enableAutosave: () => Promise<boolean>;
   _disableAutosave: () => void;
@@ -1031,6 +1038,674 @@ describe("CFFileDownload", () => {
       await privateAccess._performAutosave();
 
       expect(privateAccess._autosaveTimer).toBeNull();
+    });
+  });
+
+  describe("in a document", () => {
+    // These cases mount the element and drive it through its button, the way
+    // a user does, and read what it renders. Timers run on a `FakeTime`, so
+    // the feedback and auto-save delays are stepped through rather than
+    // waited out.
+
+    let time: FakeTime;
+    let downloads: { href: string; download: string; attached: boolean }[];
+
+    // A download is an anchor the element clicks; recording it here, and
+    // cancelling its navigation, is what the browser's download would see.
+    const recordDownload = (event: Event) => {
+      const anchor = event.target;
+      if (!(anchor instanceof HTMLAnchorElement)) return;
+      event.preventDefault();
+      downloads.push({
+        href: anchor.href,
+        download: anchor.download,
+        attached: anchor.isConnected,
+      });
+    };
+
+    beforeEach(() => {
+      time = new FakeTime();
+      downloads = [];
+      document.addEventListener("click", recordDownload);
+    });
+
+    afterEach(() => {
+      document.removeEventListener("click", recordDownload);
+      document.body.replaceChildren();
+      Reflect.deleteProperty(globalThis, "showDirectoryPicker");
+      time.restore();
+    });
+
+    function mountDownload(
+      properties: Partial<
+        Pick<
+          CFFileDownload,
+          | "data"
+          | "filename"
+          | "mimeType"
+          | "base64"
+          | "disabled"
+          | "iconOnly"
+          | "allowAutosave"
+          | "feedbackDuration"
+        >
+      >,
+    ): Promise<CFFileDownload> {
+      return mount(Object.assign(new CFFileDownload(), properties));
+    }
+
+    function button(element: CFFileDownload): HTMLElement {
+      return element.shadowRoot!.querySelector("cf-button")!;
+    }
+
+    async function click(
+      element: CFFileDownload,
+      init: MouseEventInit = {},
+    ): Promise<void> {
+      button(element).dispatchEvent(
+        new MouseEvent("click", { bubbles: true, composed: true, ...init }),
+      );
+      await element.updateComplete;
+    }
+
+    /** The button's label, the indicator's class, and the tooltip's text. */
+    function shown(element: CFFileDownload) {
+      const root = element.shadowRoot!;
+      return {
+        label: button(element).textContent!.trim(),
+        title: button(element).getAttribute("title"),
+        indicator: root.querySelector(".autosave-indicator")?.className ??
+          null,
+        tooltip: root.querySelector(".autosave-tooltip")?.textContent ?? null,
+      };
+    }
+
+    /** The details of every `type` event the element dispatches from now on. */
+    function record<T>(element: CFFileDownload, type: string): T[] {
+      const details: T[] = [];
+      element.addEventListener(
+        type,
+        (event) => details.push((event as CustomEvent<T>).detail),
+      );
+      return details;
+    }
+
+    /**
+     * Resolves once the work the element has started has finished and
+     * rendered. Its auto-save writes into a `Folder`, which settles in
+     * microtasks, so draining those is enough.
+     */
+    async function settle(element: CFFileDownload): Promise<void> {
+      await time.runMicrotasks();
+      await element.updateComplete;
+    }
+
+    /**
+     * A folder the auto-save writes into, recording each file's contents. A
+     * write waits for `hold` when one is set.
+     */
+    class Folder {
+      readonly name = "backups";
+      readonly files = new Map<string, Blob>();
+      hold: Promise<void> | undefined;
+
+      getFileHandle(name: string) {
+        const writable = Object.assign(new WritableStream(), {
+          write: async (data: BufferSource | Blob | string) => {
+            await this.hold;
+            this.files.set(name, new Blob([data]));
+          },
+          close: () => Promise.resolve(),
+        });
+        return Promise.resolve({
+          createWritable: () => Promise.resolve(writable),
+        });
+      }
+
+      async contents(): Promise<string[]> {
+        return await Promise.all(
+          [...this.files.values()].map((blob) => blob.text()),
+        );
+      }
+    }
+
+    /** Mounts an element with auto-save turned on, writing into `folder`. */
+    async function mountAutosaving(
+      folder: Folder,
+      data: string,
+    ): Promise<CFFileDownload> {
+      globalThis.showDirectoryPicker = () => Promise.resolve(folder);
+      const element = await mountDownload({
+        data,
+        filename: "notes.txt",
+        mimeType: "text/plain",
+        allowAutosave: true,
+      });
+      const enabled = record(element, "cf-autosave-enabled");
+      await click(element, { altKey: true });
+      await settle(element);
+      expect(enabled).toEqual([{ directoryName: "backups" }]);
+      return element;
+    }
+
+    describe("rendering", () => {
+      it("renders an enabled download button when it has data", async () => {
+        const element = await mountDownload({ data: "hello" });
+
+        expect(shown(element)).toEqual({
+          label: "⬇ Download",
+          title: "Download file",
+          indicator: null,
+          tooltip: null,
+        });
+        expect(button(element).hasAttribute("disabled")).toBe(false);
+      });
+
+      it("renders a disabled button when it has no data", async () => {
+        const element = await mountDownload({ data: "" });
+
+        expect(button(element).hasAttribute("disabled")).toBe(true);
+      });
+
+      it("renders only the icon when `iconOnly` is set", async () => {
+        const element = await mountDownload({ data: "hello", iconOnly: true });
+
+        expect(shown(element).label).toBe("⬇");
+        expect(button(element).querySelector("slot")).toBeNull();
+      });
+
+      it("renders the Option+click hint when auto-save is allowed", async () => {
+        const element = await mountDownload({
+          data: "hello",
+          allowAutosave: true,
+        });
+
+        expect(shown(element).title).toBe(
+          "Download file · Option+click for auto-save",
+        );
+        expect(button(element).getAttribute("aria-label")).toBe(
+          "Download file, option click to enable auto-save",
+        );
+      });
+    });
+
+    describe("downloading", () => {
+      it("downloads the data through a blob anchor named with the sanitized filename", async () => {
+        const element = await mountDownload({
+          data: "hello",
+          filename: "my:notes.txt",
+          mimeType: "text/plain",
+        });
+        const successes = record(element, "cf-download-success");
+
+        await click(element);
+
+        expect(downloads).toHaveLength(1);
+        expect(downloads[0].download).toBe("my_notes.txt");
+        expect(downloads[0].attached).toBe(true);
+        expect(document.body.querySelector("a")).toBeNull();
+        const blob = await (await fetch(downloads[0].href)).blob();
+        expect(await blob.text()).toBe("hello");
+        expect(blob.type).toBe("text/plain");
+        expect(successes).toEqual([{
+          filename: "my_notes.txt",
+          size: 5,
+          mimeType: "text/plain",
+        }]);
+      });
+
+      it("decodes base64 data into the downloaded bytes", async () => {
+        const element = await mountDownload({
+          data: " AAH/ \n",
+          filename: "bytes.bin",
+          base64: true,
+        });
+
+        await click(element);
+
+        const bytes = await (await fetch(downloads[0].href)).bytes();
+        expect([...bytes]).toEqual([0, 1, 255]);
+      });
+
+      it("revokes the blob URL shortly after the download starts", async () => {
+        const element = await mountDownload({ data: "hello" });
+        await click(element);
+
+        await time.tickAsync(99);
+        expect(await (await fetch(downloads[0].href)).text()).toBe("hello");
+        await time.tickAsync(1);
+        await expect(fetch(downloads[0].href)).rejects.toThrow();
+      });
+
+      it("renders the downloaded state until the feedback duration passes", async () => {
+        const element = await mountDownload({
+          data: "hello",
+          feedbackDuration: 500,
+        });
+
+        await click(element);
+        expect(shown(element).label).toBe("✓ Downloaded!");
+        expect(shown(element).title).toBe("Downloaded!");
+
+        await time.tickAsync(499);
+        await element.updateComplete;
+        expect(shown(element).label).toBe("✓ Downloaded!");
+
+        await time.tickAsync(1);
+        await element.updateComplete;
+        expect(shown(element).label).toBe("⬇ Download");
+      });
+
+      it("restarts the feedback duration on a second download", async () => {
+        const element = await mountDownload({
+          data: "hello",
+          feedbackDuration: 500,
+        });
+
+        await click(element);
+        await time.tickAsync(400);
+        await click(element);
+        await time.tickAsync(400);
+        await element.updateComplete;
+        expect(shown(element).label).toBe("✓ Downloaded!");
+
+        await time.tickAsync(100);
+        await element.updateComplete;
+        expect(shown(element).label).toBe("⬇ Download");
+        expect(downloads).toHaveLength(2);
+      });
+
+      it("dispatches `cf-download-error` and downloads nothing for invalid base64", async () => {
+        const element = await mountDownload({
+          data: "not base64!",
+          filename: "x.bin",
+          base64: true,
+        });
+        const failures = record<{ error: Error; filename: string }>(
+          element,
+          "cf-download-error",
+        );
+
+        await click(element);
+
+        expect(failures).toHaveLength(1);
+        const { error, filename } = failures[0];
+        expect(error.message).toMatch(/^Invalid base64 data/);
+        expect(filename).toBe("x.bin");
+        expect(downloads).toEqual([]);
+        expect(shown(element).label).toBe("⬇ Download");
+      });
+
+      it("dispatches `cf-download-error` and downloads nothing for data over 100MB", async () => {
+        const element = await mountDownload({
+          data: "a".repeat(100 * 1024 * 1024 + 1),
+        });
+        const failures = record<{ error: Error }>(element, "cf-download-error");
+
+        await click(element);
+
+        expect(failures.map(({ error }) => error.message)).toEqual([
+          "File size (100MB) exceeds maximum allowed (100MB)",
+        ]);
+        expect(downloads).toEqual([]);
+      });
+
+      it("dispatches `cf-download-error` when the data is emptied under an enabled button", async () => {
+        const data = createMockCellHandle("hello");
+        const element = await mountDownload({ data });
+        const failures = record<{ error: Error }>(element, "cf-download-error");
+        // The button disables itself only on the next render, so a click can
+        // land in between.
+        pushUpdate(data, "");
+
+        button(element).dispatchEvent(
+          new MouseEvent("click", { bubbles: true, composed: true }),
+        );
+
+        expect(button(element).hasAttribute("disabled")).toBe(false);
+        expect(failures.map(({ error }) => error.message)).toEqual([
+          "No data to download",
+        ]);
+        expect(downloads).toEqual([]);
+      });
+
+      it("downloads nothing while disabled", async () => {
+        const element = await mountDownload({ data: "hello", disabled: true });
+        let events = 0;
+        element.addEventListener("cf-download-success", () => events++);
+        element.addEventListener("cf-download-error", () => events++);
+
+        await click(element);
+
+        expect(downloads).toEqual([]);
+        expect(events).toBe(0);
+      });
+
+      it("downloads nothing when disabled under a still-enabled button", async () => {
+        const element = await mountDownload({ data: "hello" });
+        let events = 0;
+        element.addEventListener("cf-download-success", () => events++);
+        element.addEventListener("cf-download-error", () => events++);
+        // As with emptied data, the click lands before the button re-renders.
+        element.disabled = true;
+
+        button(element).dispatchEvent(
+          new MouseEvent("click", { bubbles: true, composed: true }),
+        );
+
+        expect(button(element).hasAttribute("disabled")).toBe(false);
+        expect(downloads).toEqual([]);
+        expect(events).toBe(0);
+      });
+    });
+
+    describe("Option+click", () => {
+      it("shakes and shows a tooltip, then downloads, when auto-save is not allowed", async () => {
+        const element = await mountDownload({ data: "hello" });
+
+        await click(element, { altKey: true });
+
+        expect(element.classList.contains("shake")).toBe(true);
+        expect(shown(element).tooltip).toBe(
+          "Auto-save not available for this download",
+        );
+        expect(downloads).toHaveLength(1);
+
+        await time.tickAsync(2000);
+        await element.updateComplete;
+        expect(element.classList.contains("shake")).toBe(false);
+        expect(shown(element).tooltip).toBeNull();
+      });
+
+      it("restarts the tooltip's two seconds on a second Option+click", async () => {
+        const element = await mountDownload({ data: "hello" });
+
+        await click(element, { altKey: true });
+        await time.tickAsync(1500);
+        await click(element, { altKey: true });
+        await time.tickAsync(1000);
+        expect(element.classList.contains("shake")).toBe(true);
+
+        await time.tickAsync(1000);
+        expect(element.classList.contains("shake")).toBe(false);
+      });
+
+      it("shows a tooltip and downloads nothing when the folder picker is missing", async () => {
+        const element = await mountDownload({
+          data: "hello",
+          allowAutosave: true,
+        });
+
+        await click(element, { altKey: true });
+
+        expect(shown(element).tooltip).toBe(
+          "Auto-save requires Chrome or Edge",
+        );
+        expect(shown(element).label).toBe("⬇ Download");
+        expect(downloads).toEqual([]);
+      });
+
+      it("turns auto-save on, rendering it, when a folder is picked", async () => {
+        const element = await mountAutosaving(new Folder(), "hello");
+
+        expect(shown(element)).toEqual({
+          label: "🔄 Auto-save",
+          title: "Auto-save on · All changes saved",
+          indicator: "autosave-indicator saved",
+          tooltip: "Auto-save on · All changes saved",
+        });
+        expect(downloads).toEqual([]);
+      });
+
+      it("turns auto-save off when auto-save is on", async () => {
+        const element = await mountAutosaving(new Folder(), "hello");
+        const disabled = record(element, "cf-autosave-disabled");
+
+        await click(element, { altKey: true });
+
+        expect(disabled).toHaveLength(1);
+        expect(shown(element).label).toBe("⬇ Download");
+        expect(shown(element).indicator).toBeNull();
+        expect(downloads).toEqual([]);
+      });
+    });
+
+    describe("auto-save", () => {
+      it("writes a timestamped file into the folder on a click, instead of downloading", async () => {
+        const folder = new Folder();
+        const element = await mountAutosaving(folder, "hello");
+        const saves = record<{ filename: string; size: number }>(
+          element,
+          "cf-autosave-success",
+        );
+
+        await click(element);
+        await settle(element);
+
+        expect(saves).toHaveLength(1);
+        const { filename, size } = saves[0];
+        expect(filename).toMatch(
+          /^notes-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.txt$/,
+        );
+        expect(size).toBe(5);
+        expect([...folder.files.keys()]).toEqual([filename]);
+        expect(await folder.contents()).toEqual(["hello"]);
+        expect(downloads).toEqual([]);
+      });
+
+      it("renders a pending save when the data changes, and writes it a minute later", async () => {
+        const folder = new Folder();
+        const element = await mountAutosaving(folder, "v1");
+
+        element.data = "v2";
+        // `updated()` marks the save pending, which renders again.
+        await element.updateComplete;
+        await element.updateComplete;
+        expect(shown(element).indicator).toBe("autosave-indicator pending");
+        expect(shown(element).tooltip).toBe(
+          "Auto-save on · Saving soon...",
+        );
+
+        await time.tickAsync(59_999);
+        expect(folder.files.size).toBe(0);
+
+        await time.tickAsync(1);
+        await settle(element);
+        expect(await folder.contents()).toEqual(["v2"]);
+        expect(shown(element).indicator).toBe("autosave-indicator saved");
+      });
+
+      it("schedules no save for a render that leaves the data unchanged", async () => {
+        const folder = new Folder();
+        const element = await mountAutosaving(folder, "v1");
+
+        element.requestUpdate();
+        await element.updateComplete;
+        await time.tickAsync(60_000);
+        await settle(element);
+
+        expect(shown(element).indicator).toBe("autosave-indicator saved");
+        expect(folder.files.size).toBe(0);
+      });
+
+      it("keeps the save pending when the data changes during a write", async () => {
+        const folder = new Folder();
+        const element = await mountAutosaving(folder, "v1");
+        const write = Promise.withResolvers<void>();
+        folder.hold = write.promise;
+
+        await click(element);
+        expect(shown(element).label).toBe("🔄 Saving...");
+        expect(shown(element).indicator).toBe("autosave-indicator saving");
+        expect(shown(element).tooltip).toBe("Saving...");
+
+        element.data = "v2";
+        await element.updateComplete;
+        write.resolve();
+        await settle(element);
+        await element.updateComplete;
+        expect(await folder.contents()).toEqual(["v1"]);
+        expect(shown(element).indicator).toBe("autosave-indicator pending");
+
+        await time.tickAsync(60_000);
+        await settle(element);
+        expect((await folder.contents()).toSorted()).toEqual(["v1", "v2"]);
+      });
+
+      it("writes nothing when the data has been emptied", async () => {
+        const folder = new Folder();
+        const element = await mountAutosaving(folder, "v1");
+        const saves = record(element, "cf-autosave-success");
+        const failures = record(element, "cf-autosave-error");
+
+        element.data = "";
+        await element.updateComplete;
+        await time.tickAsync(60_000);
+        await settle(element);
+
+        expect(folder.files.size).toBe(0);
+        expect(saves).toEqual([]);
+        expect(failures).toEqual([]);
+      });
+
+      it("writes a pending save at once when the document is hidden", async () => {
+        const folder = new Folder();
+        const element = await mountAutosaving(folder, "v1");
+        element.data = "v2";
+        await element.updateComplete;
+        Object.defineProperty(document, "hidden", {
+          configurable: true,
+          value: true,
+        });
+
+        try {
+          document.dispatchEvent(new Event("visibilitychange"));
+          await settle(element);
+        } finally {
+          Reflect.deleteProperty(document, "hidden");
+        }
+
+        expect(await folder.contents()).toEqual(["v2"]);
+      });
+
+      it("writes nothing on a visibility change while the document is visible", async () => {
+        const folder = new Folder();
+        const element = await mountAutosaving(folder, "v1");
+        element.data = "v2";
+        await element.updateComplete;
+
+        document.dispatchEvent(new Event("visibilitychange"));
+        await settle(element);
+
+        expect(folder.files.size).toBe(0);
+      });
+    });
+
+    describe("leaving the page", () => {
+      it("cancels leaving and writes the save when one is pending", async () => {
+        const folder = new Folder();
+        const element = await mountAutosaving(folder, "v1");
+        element.data = "v2";
+        await element.updateComplete;
+        const event = new Event("beforeunload", { cancelable: true });
+
+        globalThis.dispatchEvent(event);
+        await settle(element);
+
+        expect(event.defaultPrevented).toBe(true);
+        expect(await folder.contents()).toEqual(["v2"]);
+      });
+
+      it("leaves the page alone when nothing is pending", async () => {
+        await mountAutosaving(new Folder(), "v1");
+        const event = new Event("beforeunload", { cancelable: true });
+
+        globalThis.dispatchEvent(event);
+
+        expect(event.defaultPrevented).toBe(false);
+      });
+    });
+
+    describe("removed from the document", () => {
+      it("writes no pending save", async () => {
+        const folder = new Folder();
+        const element = await mountAutosaving(folder, "v1");
+        element.data = "v2";
+        // `updated()` marks the save pending, which renders again.
+        await element.updateComplete;
+        await element.updateComplete;
+        expect(shown(element).indicator).toBe("autosave-indicator pending");
+
+        element.remove();
+        await time.tickAsync(60_000);
+        await settle(element);
+
+        expect(folder.files.size).toBe(0);
+      });
+
+      it("writes a save left pending a minute after it is added back", async () => {
+        const folder = new Folder();
+        const element = await mountAutosaving(folder, "v1");
+        element.data = "v2";
+        await element.updateComplete;
+
+        element.remove();
+        element.data = "v3";
+        await element.updateComplete;
+        await time.tickAsync(60_000);
+        await settle(element);
+        expect(folder.files.size).toBe(0);
+
+        document.body.append(element);
+        await time.tickAsync(59_999);
+        expect(folder.files.size).toBe(0);
+        await time.tickAsync(1);
+        await settle(element);
+        expect(await folder.contents()).toEqual(["v3"]);
+      });
+
+      it("renders no shake or tooltip when added back during the tooltip's two seconds", async () => {
+        const element = await mountDownload({ data: "hello" });
+        await click(element, { altKey: true });
+
+        element.remove();
+        document.body.append(element);
+        await element.updateComplete;
+
+        expect(element.classList.contains("shake")).toBe(false);
+        expect(shown(element).tooltip).toBeNull();
+      });
+
+      it("renders the idle label when added back during the feedback duration", async () => {
+        const element = await mountDownload({ data: "hello" });
+        await click(element);
+
+        element.remove();
+        document.body.append(element);
+        await element.updateComplete;
+
+        expect(shown(element)).toEqual({
+          label: "⬇ Download",
+          title: "Download file",
+          indicator: null,
+          tooltip: null,
+        });
+      });
+
+      it("leaves the page alone with a save pending", async () => {
+        const folder = new Folder();
+        const element = await mountAutosaving(folder, "v1");
+        element.data = "v2";
+        await element.updateComplete;
+        const event = new Event("beforeunload", { cancelable: true });
+
+        element.remove();
+        globalThis.dispatchEvent(event);
+        await settle(element);
+
+        expect(event.defaultPrevented).toBe(false);
+        expect(folder.files.size).toBe(0);
+      });
     });
   });
 });

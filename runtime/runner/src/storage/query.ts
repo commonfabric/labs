@@ -15,19 +15,12 @@ export class StoreObjectManager implements ObjectStorageManager {
   #store: Map<string, Revision<State>>;
   #readValues = new Map<string, IAttestation>();
 
-  /** The docs we can't read, by store key. */
-  public missingDocs = new Map<string, BaseMemoryAddress>();
-
   constructor(store = new Map<string, Revision<State>>()) {
     this.#store = store;
   }
 
   getReadDocs(): Iterable<IAttestation> {
     return this.#readValues.values();
-  }
-
-  getMissingDocs(): Iterable<BaseMemoryAddress> {
-    return this.missingDocs.values();
   }
 
   /**
@@ -45,10 +38,6 @@ export class StoreObjectManager implements ObjectStorageManager {
       const rv = { address: { ...address, path: [] }, value: storeValue?.is };
       this.#readValues.set(key, rv);
       return rv;
-    } else {
-      if (!this.missingDocs.has(key)) {
-        this.missingDocs.set(key, address);
-      }
     }
     return null;
   }

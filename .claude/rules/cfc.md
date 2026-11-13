@@ -11,6 +11,7 @@ paths:
   - "runtime/html/src/worker/reconciler.ts"
   - "runtime/html/src/worker/display-fit.ts"
   - "runtime/html/src/worker/display-fit-atoms.ts"
+  - "runtime/runtime-client/src/backends/host-read-gate.ts"
   - "runtime/cf-harness/src/cfc-*.ts"
   - "runtime/cf-harness/src/contracts/cfc-*.ts"
   - "runtime/cf-harness/src/sandbox/runsc-cfc-result.ts"
@@ -46,7 +47,7 @@ row the snapshot or the kernel contradicts; a `missing` row's `decidedToday`
 symbol its file no longer declares; and more than forty `SPEC-PENDING`
 markers in the governed source files (the runner CFC sources and tests, the
 memory package's CFC sources and their test, the three html worker modules,
-the harness's CFC sources), or one naming no specs pull request. Citations in documents are not checked. `deno task
+the host read gate, the harness's CFC sources), or one naming no specs pull request. Citations in documents are not checked. `deno task
 cfc-spec-snapshot` regenerates the snapshot from a specs checkout, and the
 manifest row is what you update when a critical function moves into the
 kernel.

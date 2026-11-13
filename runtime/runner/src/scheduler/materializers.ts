@@ -41,10 +41,7 @@ export class SchedulerMaterializers implements MaterializerIndexState {
     action: Action,
     envelopes: readonly NormalizedFullLink[] | undefined,
   ): void {
-    this.clearAction(action);
-    if (!envelopes || envelopes.length === 0) return;
-
-    this.registerAddresses(action, envelopes.map(toMemorySpaceAddress));
+    this.registerAddresses(action, envelopes?.map(toMemorySpaceAddress));
   }
 
   registerAddresses(
@@ -55,7 +52,6 @@ export class SchedulerMaterializers implements MaterializerIndexState {
     if (!envelopes || envelopes.length === 0) return;
 
     const writes = sortAndCompactPaths([...envelopes]);
-    if (writes.length === 0) return;
 
     this.materializers.add(action);
     this.#writeEnvelopes.set(action, writes);

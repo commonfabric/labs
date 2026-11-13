@@ -151,6 +151,16 @@ describe("fabric ref resolution", () => {
     ).rejects.toThrow(`Slug "missing" not found. (chain: slug:missing)`);
   });
 
+  it("throws a slug that is not one as it came, without the chain", async () => {
+    const error = await resolveFabricRefToIdentity(runtime, space, {
+      ref: { kind: "slug", slug: "Not A Slug" },
+    }).then(() => undefined, (error: Error) => error);
+
+    expect(error?.message).toBe(
+      "Slug must use lowercase letters, numbers, and single hyphens between words.",
+    );
+  });
+
   it("resolves an of: uri ref, preserving the schemed id in the chain", async () => {
     const piece = pieceCell("uri-target");
     await runtime.editWithRetry((tx) => {

@@ -785,6 +785,59 @@ describe("reactive wave withdrawal", () => {
       runtime.scheduler.unsubscribe(derive);
     });
   }
+  it("derives again when an authored commit left one output with no value and the run's other output committed", async () => {
+    const output = runtime.getCell<string>(space, "partial-output", undefined);
+    const kept = runtime.getCell<string>(space, "partial-kept", undefined);
+    const outputLink = output.getAsNormalizedFullLink();
+    const wave = newWave();
+    const resultLink = createSigilLinkFromParsedLink(
+      runtime.getCell(space, "partial-result", undefined)
+        .getAsNormalizedFullLink(),
+    );
+    const authored = runtime.edit();
+    output.withTx(authored).setMetaRaw(
+      "result",
+      resultLink,
+      rawMetaWriteAuthorization,
+    );
+    expect((await authored.commit().settled).error).toBeUndefined();
+    let flushing = false;
+    let recoveryWave: WaveAccumulator | undefined;
+    runtime.installSealDestination({
+      seal: (tx) => (flushing ? recoveryWave ??= newWave() : wave).seal(tx),
+    }, {
+      runStamper: (tx, info) =>
+        stampWaveRunContext(tx, { actionId: info.actionId, kind: info.kind }),
+    });
+    let runs = 0;
+    const rerun = Promise.withResolvers<void>();
+    const derive: Action = (tx) => {
+      if (++runs === 2) rerun.resolve();
+      tx.writeValueOrThrow(outputLink, "derived");
+      tx.writeValueOrThrow(kept.getAsNormalizedFullLink(), "derived");
+    };
+    actions.push(derive);
+    runtime.scheduler.subscribe(derive, {
+      reads: [],
+      shallowReads: [],
+      writes: [],
+    }, { isEffect: true });
+    await runtime.scheduler.idleWithPendingCommits();
+    expect(runs).toBe(1);
+
+    flushing = true;
+    const outcome = await wave.commitWave(newSink());
+    await wave.settled();
+    expect(outcome.dispositions).toEqual([
+      { kind: "partially-dropped", droppedOps: 1 },
+    ]);
+    expect(kept.get()).toBe("derived");
+    await rerun.promise;
+    await runtime.scheduler.idleWithPendingCommits();
+    expect(runs).toBe(2);
+    runtime.scheduler.unsubscribe(derive);
+  });
+
   it("leaves a run down when one of its outputs lost to an authored value", async () => {
     // Running again writes both outputs, and the replica now holds the commits
     // they lost to, so the wave would let the authored value be overwritten.

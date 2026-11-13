@@ -856,6 +856,14 @@ discards what it wrote, and runs it again, and that next run gets the DID.
 [`space-access.md`](../../features/space-access.md#the-spaces-own-did) has the
 details.
 
+`spaceOf(target)` follows the links `target` holds, reading the document each
+one names. A pattern that holds cells in other spaces by link, such as a list
+of `Cell<unknown>` handles, and needs only each one's space, calls
+`spaceOfLink(target)` instead: it returns the space the cell's own link names
+and reads nothing there. It returns `undefined` in the same cases `spaceOf()`
+does, for a `target` of `undefined` and in a run naming an unresolved
+`inSpace()` space.
+
 ### Telling a deleted space
 
 `spaceDeleted(target)` returns whether a space is deleted, so a pattern that

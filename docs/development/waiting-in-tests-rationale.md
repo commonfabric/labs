@@ -293,7 +293,7 @@ document](waiting-in-tests.md#the-runtime-client-suite-stays-on-the-real-clock)
 states the working rules; this is the analysis behind them.
 
 Most of its tests need no wait at all, or only a macrotask drain — a
-`setTimeout(fn, 0)` that lets the scheduler's own `queueTask` dispatch land,
+`setTimeout(fn, 0)` that lets the scheduler's own pass land,
 an awaited round-trip, or a sink fire once. Those drains cross one macrotask
 boundary, carry no real-time floor, and stay as they are. The two
 positive-delay sleeps that were not drains have been made event-driven

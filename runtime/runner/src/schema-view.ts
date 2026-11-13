@@ -276,14 +276,6 @@ const childSchema = (
   return false;
 };
 
-const declaredDefault = (schema: JSONSchema): FabricValue | undefined => {
-  if (!isObjectOrArray(schema)) return undefined;
-  const resolved = ContextualFlowControl.resolveSchemaRefs(schema);
-  return isObjectOrArray(resolved)
-    ? resolved.default as FabricValue | undefined
-    : undefined;
-};
-
 /**
  * Returns the schema's own default after resolving its root reference.
  * Defaults inside combinator branches are decided by traversal of those
@@ -291,8 +283,13 @@ const declaredDefault = (schema: JSONSchema): FabricValue | undefined => {
  */
 export const defaultForAbsentValue = (
   schema: JSONSchema | undefined,
-): FabricValue | undefined =>
-  isObjectOrArray(schema) ? declaredDefault(schema) : undefined;
+): FabricValue | undefined => {
+  if (!isObjectOrArray(schema)) return undefined;
+  const resolved = ContextualFlowControl.resolveSchemaRefs(schema);
+  return isObjectOrArray(resolved)
+    ? resolved.default as FabricValue | undefined
+    : undefined;
+};
 
 /**
  * Build a view over `value` at `link`, or report that the data does not match.

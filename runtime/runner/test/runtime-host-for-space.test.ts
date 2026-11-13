@@ -369,6 +369,31 @@ describe("Runtime.registerSpaceHost", () => {
         }
       });
 
+      it("refuses a foreign origin whose meta read disposal cancels, without a warning", async () => {
+        // The meta request is answered only by its cancellation.
+        const fetch: typeof globalThis.fetch = (_input, init) =>
+          new Promise((_resolve, reject) => {
+            const signal = init?.signal;
+            signal?.addEventListener("abort", () => reject(signal.reason), {
+              once: true,
+            });
+          });
+        const { runtime, seen } = routedRuntime({
+          memoryUrl: new URL("http://router.test/"),
+          fetch,
+        });
+        const warnings = await warningsDuring(async () => {
+          const resolving = runtime.resolveSpaceHost(spaceB, foreign);
+          expect(runtime.registerSpaceHostDetailed(spaceB, foreign))
+            .toEqual({ accepted: false, reason: "foreign-host-unresolved" });
+          await runtime.dispose();
+          expect(await resolving)
+            .toEqual({ accepted: false, reason: "foreign-host-unread" });
+        });
+        expect(seen).toEqual([]);
+        expect(warnings).toEqual([]);
+      });
+
       it("refuses a foreign origin whose meta document redirected off its deployment", async () => {
         const fetch: typeof globalThis.fetch = () =>
           Promise.resolve(

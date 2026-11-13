@@ -87,6 +87,25 @@ describe("normalizeSandboxResult", () => {
     expect(child.v).toBe(42);
   });
 
+  it("reports a record carrying an encodable form as one value, not by its members", () => {
+    const record = { toEncodableForm: () => ({}), value: 1 };
+
+    expect(() => normalizeSandboxResult({ record }, "act")).toThrow(
+      'Action returned a Object at path "record".\n  in action: act\n',
+    );
+  });
+
+  it("reports an array with an extra property at the array, not at its elements", () => {
+    const array: number[] & { extra?: number } = [1, 2];
+    array.extra = 3;
+
+    expect(() => normalizeSandboxResult({ array })).toThrow(
+      'Action returned a Array at path "array".\nActions must return ' +
+        "FabricValues, Reactives, or Cells.\nNot representable as a " +
+        "`FabricValue`: array that is not an inert array",
+    );
+  });
+
   it("rejects custom instances with null-rooted prototypes", () => {
     class NullRooted {
       value = 1;

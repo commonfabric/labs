@@ -1,4 +1,10 @@
-import type { VNode, WishParams, WishState, WishTag } from "@commonfabric/api";
+import type {
+  VNode,
+  WishErrorCode,
+  WishParams,
+  WishState,
+  WishTag,
+} from "@commonfabric/api";
 import { internSchema } from "@commonfabric/data-model-schema";
 import {
   debugStr,
@@ -118,10 +124,19 @@ const profileElementListSchema = internSchema(
 );
 
 class WishError extends Error {
-  constructor(message: string) {
+  /** The `errorCode` a wish reports for this error. */
+  readonly code: WishErrorCode;
+
+  constructor(message: string, code: WishErrorCode = "failed") {
     super(message);
     this.name = "WishError";
+    this.code = code;
   }
+}
+
+/** The `errorCode` a wish reports for a thrown `error`. */
+function errorCodeOf(error: unknown): WishErrorCode {
+  return error instanceof WishError ? error.code : "failed";
 }
 
 /** The error a wish reports when the profile roster is confirmed empty. */
@@ -130,7 +145,7 @@ const NO_PROFILE_ERROR = "No profile exists yet";
 /** A confirmed empty profile roster, for which Wish offers creation. */
 class NoProfileError extends WishError {
   constructor() {
-    super(NO_PROFILE_ERROR);
+    super(NO_PROFILE_ERROR, "no-match");
   }
 }
 
@@ -363,6 +378,7 @@ type SharedHashtagState = {
   result?: Cell<unknown>;
   candidates: Cell<unknown>[];
   error?: unknown;
+  errorCode?: WishErrorCode;
   [UI]?: VNode | Cell<unknown>;
 };
 
@@ -739,18 +755,22 @@ function requireDiscoveryCandidate(
 function throwNoDiscoveryMatch(ctx: WishContext, message: string): never {
   const failure = ctx.candidateFailures.values().next().value;
   if (failure) throw failure;
-  throw new WishError(message);
+  throw new WishError(message, "no-match");
 }
 
-/** Searches favorites in home space for pieces matching a hashtag. */
+/**
+ * Searches favorites in home space for pieces matching a hashtag, or returns
+ * `undefined` when there is no home space to search: a serving runtime whose
+ * run carries no requesting identity (see `homeSpaceUserDID`).
+ */
 function searchFavoritesForHashtag(
   ctx: WishContext,
   searchTermWithoutHash: string,
   pathPrefix: string[],
-): BaseResolution[] {
+): BaseResolution[] | undefined {
   const queryKey = sanitizeQueryKey(`#${searchTermWithoutHash}`);
   const userDID = homeSpaceUserDID(ctx);
-  if (!userDID) return [];
+  if (!userDID) return undefined;
 
   const favoritesCell = measureWishPhase(
     "favorites-cell",
@@ -831,7 +851,6 @@ function searchMentionablesForHashtag(
     queryKey,
     () =>
       mentionables.filter((pieceCell: Cell<any>) => {
-        if (!pieceCell) return false;
         const resolved = pieceCell.resolveAsCell();
         if (!requireDiscoveryCandidate(resolved, ctx)) return false;
 
@@ -962,6 +981,9 @@ function searchByHashtag(
   const searchProfile = ctx.scope?.includes("profile");
 
   const allMatches: BaseResolution[] = [];
+  // Whether a searched scope could not be looked at, so that finding nothing
+  // is not reported as confirmed none.
+  let favoritesUnsearched = false;
 
   if (searchFavorites) {
     const matches = searchFavoritesForHashtag(
@@ -969,7 +991,8 @@ function searchByHashtag(
       searchTermWithoutHash,
       parsed.path,
     );
-    for (const match of matches) allMatches.push(match);
+    if (matches === undefined) favoritesUnsearched = true;
+    for (const match of matches ?? []) allMatches.push(match);
   }
 
   if (searchMentionables) {
@@ -1004,6 +1027,17 @@ function searchByHashtag(
   }
 
   if (allMatches.length === 0) {
+    if (favoritesUnsearched) {
+      // A scope that was searched and could not load a candidate names the
+      // real failure; the missing identity is reported only when nothing
+      // else went wrong.
+      const failure = ctx.candidateFailures.values().next().value;
+      if (failure) throw failure;
+      throw new WishError(
+        `User identity DID not available to search favorites for ` +
+          `"${searchTerm}"`,
+      );
+    }
     const parts: string[] = [];
     if (searchFavorites) parts.push("favorites");
     if (searchMentionables) parts.push("mentionables");
@@ -1218,6 +1252,7 @@ function resolveHomeSpaceTarget(
  */
 type IntervalNowTimer = {
   cell: Cell<number>;
+  intervalMs: number;
   timerId: ReturnType<typeof setTimeout> | undefined;
   // Bumped when the timer is torn down, so in-flight ticks become no-ops.
   generation: number;
@@ -1321,9 +1356,7 @@ function scheduleIntervalNowTick(
   const now = Date.now();
   const nextBoundary = (Math.floor(now / intervalMs) + 1) * intervalMs;
   const delay = nextBoundary - now;
-  const generation = timer.generation;
   timer.timerId = setTimeout(() => {
-    if (generation !== timer.generation) return; // torn down
     writeIntervalNowTick(runtime, timer, intervalMs);
     scheduleIntervalNowTick(runtime, timer, intervalMs);
   }, delay);
@@ -1360,7 +1393,13 @@ function acquireIntervalNowTimer(
   let timer = timers.get(key);
   if (!timer) {
     const cell = intervalNowCell(runtime, space, intervalMs, tx);
-    timer = { cell, timerId: undefined, generation: 0, refCount: 0 };
+    timer = {
+      cell,
+      intervalMs,
+      timerId: undefined,
+      generation: 0,
+      refCount: 0,
+    };
     timers.set(key, timer);
   }
 
@@ -1386,15 +1425,11 @@ function acquireIntervalNowTimer(
   return timer;
 }
 
-function releaseIntervalNowTimer(
-  runtime: Runtime,
-  space: MemorySpace,
-  intervalMs: number,
-): void {
-  const timers = intervalNowTimers.get(runtime);
-  const key = intervalNowTimerKey(space, intervalMs);
-  const timer = timers?.get(key);
-  if (!timer) return;
+/** Drops the interval #now timer `state` holds, if it holds one. */
+function releaseIntervalNow(state: IntervalNowState, ctx: WishContext): void {
+  const timer = state.timer;
+  if (timer === undefined) return;
+  state.timer = undefined;
 
   timer.refCount--;
   if (timer.refCount > 0) return;
@@ -1405,13 +1440,14 @@ function releaseIntervalNowTimer(
   // left in place; deleting it would race a re-acquire of the same
   // content-addressed cell and could blank another tab still ticking it.
   stopIntervalNowTimer(timer);
-  timers!.delete(key);
+  getRuntimeIntervalNowTimers(ctx.runtime).delete(
+    intervalNowTimerKey(ctx.parentCell.space, timer.intervalMs),
+  );
 }
 
 /** The interval #now timer a wish() instance currently holds. */
 type IntervalNowState = {
-  cell: Cell<number> | undefined;
-  intervalMs: number; // 0 = none held
+  timer: IntervalNowTimer | undefined;
   cancelRegistered: boolean;
 };
 
@@ -1436,15 +1472,7 @@ function handleIntervalNow(
     // The wish navigated away from an interval #now (to the one-shot #now or a
     // different query). Drop the shared interval timer we were holding so it can
     // stop ticking once no instance wants it, instead of waiting for teardown.
-    if (state.intervalMs !== 0) {
-      releaseIntervalNowTimer(
-        ctx.runtime,
-        ctx.parentCell.space,
-        state.intervalMs,
-      );
-      state.intervalMs = 0;
-      state.cell = undefined;
-    }
+    releaseIntervalNow(state, ctx);
     return false;
   }
 
@@ -1480,59 +1508,34 @@ function handleIntervalNow(
   // confirmed absence it may fill. The previous interval keeps beating
   // through the wait, and is released when the replacement's load fails:
   // the wish reports the failure and holds no timer nothing consumes.
-  if (state.intervalMs !== intervalMs) {
+  let timer = state.timer;
+  if (timer?.intervalMs !== intervalMs) {
     try {
       ctx.readiness.requireDocument(
         intervalNowCell(ctx.runtime, ctx.parentCell.space, intervalMs, ctx.tx),
         ctx.tx,
       );
     } catch (error) {
-      if (!(error instanceof DocumentPending) && state.intervalMs !== 0) {
-        releaseIntervalNowTimer(
-          ctx.runtime,
-          ctx.parentCell.space,
-          state.intervalMs,
-        );
-        state.intervalMs = 0;
-        state.cell = undefined;
-      }
+      if (!(error instanceof DocumentPending)) releaseIntervalNow(state, ctx);
       throw error;
     }
-    if (state.intervalMs !== 0) {
-      releaseIntervalNowTimer(
-        ctx.runtime,
-        ctx.parentCell.space,
-        state.intervalMs,
-      );
-    }
-    const timer = acquireIntervalNowTimer(
+    releaseIntervalNow(state, ctx);
+    timer = state.timer = acquireIntervalNowTimer(
       ctx.runtime,
       ctx.parentCell.space,
       intervalMs,
       ctx.tx,
     );
-    state.cell = timer.cell;
-    state.intervalMs = intervalMs;
   }
 
   if (!state.cancelRegistered) {
-    addCancel(() => {
-      if (state.intervalMs !== 0) {
-        releaseIntervalNowTimer(
-          ctx.runtime,
-          ctx.parentCell.space,
-          state.intervalMs,
-        );
-        state.intervalMs = 0;
-        state.cell = undefined;
-      }
-    });
+    addCancel(() => releaseIntervalNow(state, ctx));
     state.cancelRegistered = true;
   }
 
   // The action does not read the ticking cell — the timer owns it — so ticks
   // do not re-trigger this action; consumers of the result cell still react.
-  const resultCell = state.cell!;
+  const resultCell = timer.cell;
   const candidatesCell = ctx.runtime.getImmutableCell(
     ctx.parentCell.space,
     [resultCell],
@@ -1596,9 +1599,9 @@ function resolveSpaceTarget(
 ): BaseResolution[] | null {
   // #now is special — not scope-dependent.
   if (parsed.key === "#now") {
-    // Interval #now is handled by handleIntervalNow() before resolveBase.
-    if (parsed.path.length > 0) return null;
-
+    // Interval #now, a #now with a path, is handled by handleIntervalNow()
+    // before resolveBase.
+    //
     // One-shot #now captures the load time ONCE and keeps it, durably. The value
     // lives in a content-addressed cell keyed by the wish node's piece and
     // output spot, written only when the cell is still empty — so
@@ -1766,7 +1769,7 @@ function sharedHashtagResolverKey(
   return JSON.stringify({
     space: parentSpace,
     query: formatTarget(parsed),
-    scope: scope ?? null,
+    scope,
   });
 }
 
@@ -1867,6 +1870,7 @@ function createSharedHashtagResolver(
         result: undefined,
         candidates: [],
         error: errorMessage,
+        errorCode: errorCodeOf(error),
         [UI]: errorUI(errorMessage),
       });
     } finally {
@@ -1897,8 +1901,8 @@ function createSharedHashtagResolver(
 function acquireSharedHashtagResolver(
   ctx: WishContext,
   parsed: ParsedWishTarget,
+  key: string,
 ): SharedHashtagResolver {
-  const key = sharedHashtagResolverKey(ctx.parentCell.space, parsed, ctx.scope);
   const resolvers = getRuntimeSharedHashtagResolvers(ctx.runtime);
   let resolver = resolvers.get(key);
   if (!resolver) {
@@ -1909,16 +1913,16 @@ function acquireSharedHashtagResolver(
   return resolver;
 }
 
-function releaseSharedHashtagResolver(runtime: Runtime, key: string): void {
-  const resolvers = sharedHashtagResolvers.get(runtime);
-  const resolver = resolvers?.get(key);
-  if (!resolver) return;
-
+function releaseSharedHashtagResolver(
+  runtime: Runtime,
+  key: string,
+  resolver: SharedHashtagResolver,
+): void {
   resolver.refCount--;
   if (resolver.refCount > 0) return;
 
   resolver.cancel();
-  resolvers?.delete(key);
+  getRuntimeSharedHashtagResolvers(runtime).delete(key);
 }
 
 /**
@@ -2365,11 +2369,14 @@ export function wish(
   // Per-instance cached #now cell — prevents non-idempotent re-runs from
   // Date.now() producing a different value each time the sync action fires.
   let nowCell: Cell<unknown> | undefined;
-  let sharedHashtagKey: string | undefined;
+  // The shared hashtag resolver this instance holds a reference to, and the
+  // key it is registered under.
+  let sharedHashtag:
+    | { key: string; resolver: SharedHashtagResolver }
+    | undefined;
   // Per-instance interval #now state
   const nowState: IntervalNowState = {
-    cell: undefined,
-    intervalMs: 0,
+    timer: undefined,
     cancelRegistered: false,
   };
 
@@ -2490,9 +2497,13 @@ export function wish(
   });
 
   function releaseCurrentSharedHashtagResolver(): void {
-    if (!sharedHashtagKey) return;
-    releaseSharedHashtagResolver(runtime, sharedHashtagKey);
-    sharedHashtagKey = undefined;
+    if (!sharedHashtag) return;
+    releaseSharedHashtagResolver(
+      runtime,
+      sharedHashtag.key,
+      sharedHashtag.resolver,
+    );
+    sharedHashtag = undefined;
   }
 
   function getCurrentSharedHashtagResolver(
@@ -2504,12 +2515,11 @@ export function wish(
       parsed,
       ctx.scope,
     );
-    const existing = sharedHashtagResolvers.get(runtime)?.get(nextKey);
-    if (nextKey === sharedHashtagKey && existing) return existing;
+    if (sharedHashtag?.key === nextKey) return sharedHashtag.resolver;
 
     releaseCurrentSharedHashtagResolver();
-    const resolver = acquireSharedHashtagResolver(ctx, parsed);
-    sharedHashtagKey = nextKey;
+    const resolver = acquireSharedHashtagResolver(ctx, parsed, nextKey);
+    sharedHashtag = { key: nextKey, resolver };
     return resolver;
   }
 
@@ -2534,13 +2544,12 @@ export function wish(
     sendResult(tx, scoped);
   }
 
-  // Transactions that already carry the wish-state failure observer — one
-  // callback per action tx, however many sendWishState calls it makes.
-  const wishFailureObservedTxs = new WeakSet<IExtendedStorageTransaction>();
   // One in-flight failure-UI write per state doc: the scheduler retries a
   // refused wish action (bounded), and each retry's failure observer would
   // otherwise start its own surfacing write racing the others on the same
-  // doc and the same fields.
+  // doc and the same fields. The same holds for one action transaction that
+  // sends its state twice, as a run that fails after sending its state does
+  // when it sends the failure in its place.
   const wishFailureUIInFlight = new Set<string>();
 
   /**
@@ -2560,8 +2569,6 @@ export function wish(
     tx: IExtendedStorageTransaction,
     stateCell: Cell<any>,
   ): void {
-    if (wishFailureObservedTxs.has(tx)) return;
-    wishFailureObservedTxs.add(tx);
     const link = stateCell.getAsNormalizedFullLink();
     // The failed run's demand-supplied identity (a served per-instance run
     // stamps it on its transaction; clients and the OFF arm carry none): the
@@ -2606,9 +2613,10 @@ export function wish(
   }
 
   /**
-   * Write `{error, [UI]}` into the wish state doc in its own committed
-   * bookkeeping transaction, presenting the two fields it writes and nothing
-   * else. The commit it reports was refused with the whole wish-state
+   * Write `{error, errorCode, [UI]}` into the wish state doc in its own
+   * committed bookkeeping transaction, presenting the fields it writes and
+   * nothing else. `errorCode` is written so that a state that held a
+   * `"no-match"` before does not go on saying so beside this failure. The commit it reports was refused with the whole wish-state
    * envelope in play, and that envelope is the document's stored one.
    *
    * Bounded retries for the transient classes only: a stale-basis conflict
@@ -2652,16 +2660,17 @@ export function wish(
     // there, and that link persists a label entry under `[UI]/props/$cell`,
     // so on such a document `[UI]` is one of those paths.
     //
-    // The schema named is `true`. The wish-state schema declares no value
-    // shape and no label at either path: `error` is `true` there, and `[UI]`
-    // is an opaque handle. `true` declares nothing, so a stored claim at
-    // either path is not checked against this write; and a candidate
+    // The schema named is `true`. The wish-state schema declares no label at
+    // these paths and no value shape a report could break: `error` is `true`
+    // there, `errorCode` a string, and `[UI]` an opaque handle. `true`
+    // declares nothing, so a stored claim at any of them is not checked
+    // against this write; and a candidate
     // declaring nothing is covered by whatever the document has stored,
     // which keeps the report out of the schema merge.
     //
     // The requirement is decided per document rather than per path. What
     // bounds the report is this transaction: it is created here, carries
-    // these two writes and no others, and the transaction whose refusal it
+    // these three writes and no others, and the transaction whose refusal it
     // reports is a separate one that has already settled.
     const report = (
       path: readonly string[],
@@ -2680,6 +2689,7 @@ export function wish(
       });
     };
     report([...stateLink.path, "error"], message);
+    report([...stateLink.path, "errorCode"], "failed");
     report(
       [...stateLink.path, UI],
       errorUI(message) as unknown as Parameters<
@@ -2745,7 +2755,7 @@ export function wish(
       context: Record<string, any>;
       initialResults?: unknown;
     },
-    providedTx?: IExtendedStorageTransaction,
+    tx: IExtendedStorageTransaction,
   ) {
     // Per-demanding-identity slot (the F2 fix; see the slot map above).
     const sidecarUser = homeSpaceUserDID(ctx) ?? runtime.userIdentityDID;
@@ -2755,7 +2765,6 @@ export function wish(
       (): SuggestionSidecarSlot => ({}),
     );
     slot.input = input;
-    const tx = providedTx || runtime.edit();
 
     if (!slot.resultCell) {
       slot.resultCell = runtime.getCell(
@@ -2807,11 +2816,6 @@ export function wish(
           sidecarRunOptions(SUGGESTION_SURFACE),
         );
       }
-    }
-
-    if (!providedTx) {
-      runtime.prepareTxForCommit(tx);
-      tx.commit();
     }
 
     return slot.resultCell;
@@ -2990,10 +2994,7 @@ export function wish(
     }
   }
 
-  function launchProfileCreatePattern(
-    ctx: WishContext,
-    providedTx?: IExtendedStorageTransaction,
-  ): Cell<any> {
+  function launchProfileCreatePattern(ctx: WishContext): Cell<any> {
     // Phase 5: the sidecar cells key by the HOME-SPACE user — the
     // demanding identity on a serving runtime (two users' create
     // surfaces must not collide on the service DID), the runtime's own
@@ -3026,7 +3027,7 @@ export function wish(
       inputId: "wish-profile-name-input",
       buttonId: "wish-profile-create-button",
     };
-    const tx = providedTx || runtime.edit();
+    const tx = ctx.tx;
 
     if (!slot.resultCell) {
       slot.resultCell = runtime.getCell(
@@ -3134,18 +3135,13 @@ export function wish(
       );
     }
 
-    if (!providedTx) {
-      runtime.prepareTxForCommit(tx);
-      tx.commit();
-    }
-
     return slot.resultCell;
   }
 
   function profileCreateUI(ctx: WishContext): VNode {
     return h("cf-render", {
       "data-profile-create-ui": "wish",
-      $cell: launchProfileCreatePattern(ctx, ctx.tx),
+      $cell: launchProfileCreatePattern(ctx),
     });
   }
 
@@ -3157,7 +3153,7 @@ export function wish(
   function profilePickerUI(ctx: WishContext): VNode {
     return h("cf-render", {
       "data-profile-picker-ui": "wish",
-      $cell: launchProfilePickerPattern(ctx, ctx.tx),
+      $cell: launchProfilePickerPattern(ctx),
     });
   }
 
@@ -3166,10 +3162,7 @@ export function wish(
   // sigil links) so the picker can render natively, select (stamp MRU), set
   // the default, retire a profile, and create another. Mirrors
   // launchProfileCreatePattern's deferred-fetch/run handling.
-  function launchProfilePickerPattern(
-    ctx: WishContext,
-    providedTx?: IExtendedStorageTransaction,
-  ): Cell<any> {
+  function launchProfilePickerPattern(ctx: WishContext): Cell<any> {
     // Per-demanding-identity slot (the F2 fix) — the slot key is the
     // same expression the cell cause keys on; see
     // launchProfileCreatePattern.
@@ -3217,7 +3210,7 @@ export function wish(
         homeDefaultPattern.key("privateInbox").getAsNormalizedFullLink(),
       ),
     };
-    const tx = providedTx || runtime.edit();
+    const tx = ctx.tx;
 
     if (!slot.resultCell) {
       slot.resultCell = runtime.getCell(
@@ -3263,7 +3256,7 @@ export function wish(
         (pattern) => {
           if (cancelled || !slot.resultCell) return;
           if (pattern) {
-            runSidecarInOwnTx(
+            return runSidecarInOwnTx(
               slot.resultCell,
               pattern,
               PROFILE_PICKER_SURFACE,
@@ -3275,7 +3268,7 @@ export function wish(
             // the picker sidecar cell so the picker slot doesn't stay blank
             // forever. `.result` is unaffected: under CT-1829 it rides the main
             // wish state (ordered[0]), not this sidecar.
-            commitPatternErrorUI(
+            return commitPatternErrorUI(
               slot.resultCell,
               `Can't load ${PROFILE_PICKER_SURFACE.name}`,
             );
@@ -3285,7 +3278,7 @@ export function wish(
         // Defensive: a throw inside the `.then` body (or a truly-rejecting
         // open) would otherwise be an unhandled rejection. Surface it too.
         if (!cancelled && slot.resultCell) {
-          commitPatternErrorUI(
+          return commitPatternErrorUI(
             slot.resultCell,
             describeFailure(error),
           );
@@ -3300,11 +3293,6 @@ export function wish(
         slot.resultCell.withTx(tx),
         sidecarRunOptions(PROFILE_PICKER_SURFACE),
       );
-    }
-
-    if (!providedTx) {
-      runtime.prepareTxForCommit(tx);
-      tx.commit();
     }
 
     return slot.resultCell;
@@ -3357,6 +3345,7 @@ export function wish(
                   result: undefined,
                   candidates: [],
                   error: errorMsg,
+                  errorCode: "failed",
                   [UI]: errorUI(errorMsg),
                 } satisfies WishState<any>,
                 outputScope,
@@ -3665,6 +3654,7 @@ export function wish(
                     result: undefined,
                     candidates: [],
                     error: errorMsg,
+                    errorCode: errorCodeOf(e),
                     [UI]: ui,
                   } satisfies WishState<any>,
                   wishOutputScope(
@@ -3734,6 +3724,7 @@ export function wish(
                 result: undefined,
                 candidates: [],
                 error: errorMsg,
+                errorCode: "failed",
                 [UI]: errorUI(errorMsg),
               } satisfies WishState<any>,
               inputScope,

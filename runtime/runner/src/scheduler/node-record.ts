@@ -389,36 +389,12 @@ export class NodeRegistry {
     return this.#records.get(action)?.kind === "effect";
   }
 
-  isKnownComputation(action: Action): boolean {
-    return this.#records.get(action)?.kind === "computation";
-  }
-
   *nodes(kind?: NodeKind): IterableIterator<SchedulerNode> {
     for (const record of this.#all) {
       if (kind === undefined || record.kind === kind) {
         yield record;
       }
     }
-  }
-
-  size(kind: NodeKind): number {
-    return kind === "effect"
-      ? this.#activeEffects.size
-      : this.#activeComputations.size;
-  }
-
-  isAncestor(
-    sourceAction: Action,
-    candidateAncestor: Action,
-  ): boolean {
-    let parentAction = this.#records.get(sourceAction)?.parentAction;
-    while (parentAction) {
-      if (parentAction === candidateAncestor) {
-        return true;
-      }
-      parentAction = this.#records.get(parentAction)?.parentAction;
-    }
-    return false;
   }
 
   #captureParentAction(

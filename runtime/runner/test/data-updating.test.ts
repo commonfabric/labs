@@ -42,6 +42,7 @@ import {
 } from "../src/storage/reactivity-log.ts";
 import { getTransactionWriteDetails } from "../src/storage/transaction-inspection.ts";
 import { toURI } from "../src/uri-utils.ts";
+import { captureLogs } from "./support/captured-logs.ts";
 
 const signer = await Identity.fromPassphrase("test operator");
 const space = signer.did();
@@ -285,6 +286,32 @@ describe("data-updating", () => {
       expect(changes.length).toBe(1);
       expect(changes[0].location).toEqual(current);
       expect(changes[0].value).toBe(100);
+    });
+
+    it("logs each key it recurses into at the debug level", () => {
+      const testCell = runtime.getCell<{ user: { name: string } }>(
+        space,
+        "normalizeAndDiff debug recursion",
+        undefined,
+        tx,
+      );
+      testCell.set({ user: { name: "John" } });
+      using logs = captureLogs("normalizeAndDiff");
+
+      normalizeAndDiff(
+        runtime,
+        tx,
+        testCell.key("user").getAsNormalizedFullLink(),
+        { name: "Jane" },
+      );
+
+      const recursions = logs.logs.filter((log) =>
+        log.key === "diff" && log.text.startsWith("[DIFF_RECURSE]")
+      ).map(({ level, text }) => ({ level, text }));
+      expect(recursions).toEqual([{
+        level: "debug",
+        text: "[DIFF_RECURSE] Recursing into key='name' childPath=user.name",
+      }]);
     });
 
     it("should detect object property changes", () => {
@@ -1269,6 +1296,53 @@ describe("data-updating", () => {
     expect(destinationCell.get()).toEqual({ value: 42 });
   });
 
+  describe("link-write policy inputs", () => {
+    /** The sources of the link writes `tx` recorded a policy input for. */
+    const linkWriteSources = (): string[] =>
+      tx.getCfcState().writePolicyInputs.flatMap((input) =>
+        input.kind === "link-write" ? [input.source.id] : []
+      );
+
+    it("records a link to a stored document and not a bare link to a content-addressed one", () => {
+      expect(tx.getCfcState().enforcementMode).not.toBe("disabled");
+      const holder = runtime.getCell<Record<string, unknown>>(
+        space,
+        "link-write policy holder",
+        undefined,
+        tx,
+      );
+      holder.set({});
+      const stored = runtime.getCell(
+        space,
+        "link-write policy stored",
+        undefined,
+        tx,
+      )
+        .getAsNormalizedFullLink();
+
+      diffAndUpdate(
+        runtime,
+        tx,
+        holder.key("stored").getAsNormalizedFullLink(),
+        createSigilLinkFromParsedLink(stored),
+      );
+      diffAndUpdate(
+        runtime,
+        tx,
+        holder.key("addressed").getAsNormalizedFullLink(),
+        createSigilLinkFromParsedLink({
+          ...stored,
+          id: "cid:link-write-policy-content",
+        }),
+      );
+
+      expect(linkWriteSources()).toEqual([stored.id]);
+      expect(isSigilLink(
+        tx.readValueOrThrow(holder.key("addressed").getAsNormalizedFullLink()),
+      )).toBe(true);
+    });
+  });
+
   describe("a link written into the slot it resolves to", () => {
     // A slot whose content is realized at a narrower scope holds a
     // same-document link to that instance: a write redirect, or the plain
@@ -2113,6 +2187,44 @@ describe("data-updating", () => {
       };
       expect(view.first).toEqual({ name: "Ada" });
       expect(view.list[0]).toEqual({ name: "Ada" });
+    });
+
+    it("leaves an untouched stored element inline although an inline property shares it", () => {
+      // The stored tree keeps reference identity through raw reads, so the
+      // element written back is the stored element itself, and the walk
+      // has already visited it at `first`.
+      const testCell = runtime.getCell<unknown>(
+        space,
+        "untouched alias stays inline",
+        undefined,
+        tx,
+      );
+      const shared = Object.freeze({ name: "Ada" });
+      testCell.setRaw(
+        Object.freeze({ first: shared, list: Object.freeze([shared]) }),
+      );
+      const stored = testCell.getRaw() as {
+        first: { name: string };
+        list: { name: string }[];
+      };
+      expect(stored.list[0]).toBe(stored.first);
+      let draws = 0;
+
+      diffAndUpdate(
+        runtime,
+        tx,
+        testCell.getAsNormalizedFullLink(),
+        { first: stored.first, list: [stored.list[0], { name: "Bo" }] },
+        "untouched alias stays inline",
+        undefined,
+        () => `seed-${draws++}`,
+      );
+
+      expect(draws).toBe(1);
+      const raw = testCell.getRaw() as { first: unknown; list: unknown[] };
+      expect(raw.first).toEqual({ name: "Ada" });
+      expect(raw.list[0]).toEqual({ name: "Ada" });
+      expect(parseLink(raw.list[1], testCell)?.id).not.toBe(undefined);
     });
 
     it("promotes a shared object with nested content without creating a cycle", () => {
@@ -2965,6 +3077,19 @@ describe("compactChangeSet", () => {
       expect(result[1].location.path).toEqual(["foo", "b"]);
     });
 
+    it("does not subsume a child below a key the parent sets to a primitive", () => {
+      const changes: ChangeSet = [
+        makeChange(["foo"], { a: 1 }),
+        makeChange(["foo", "a", "b"], 2),
+      ];
+      const result = compactChangeSet(changes);
+
+      expect(result.map((change) => change.location.path)).toEqual([
+        ["foo"],
+        ["foo", "a", "b"],
+      ]);
+    });
+
     it("should subsume child when parent is deleted (undefined)", () => {
       // Deleting parent also deletes all children
       const changes: ChangeSet = [
@@ -3173,6 +3298,39 @@ describe("compactChangeSet", () => {
       value: value as any,
     });
 
+    it("writes each change on its own when the transaction has no batch hook", () => {
+      const writes: Array<
+        [ChangeSet[0]["location"], unknown, { delete: true } | undefined]
+      > = [];
+      const txWithoutBatch = {
+        writeValueOrThrow(
+          address: ChangeSet[0]["location"],
+          value: unknown,
+          options?: { delete: true },
+        ) {
+          writes.push([address, value, options]);
+        },
+      } as unknown as IExtendedStorageTransaction;
+      const removal: ChangeSet[0] = {
+        ...makeBatchChange(["profile", "age"], undefined),
+        delete: true,
+      };
+
+      applyChangeSet(txWithoutBatch, [
+        makeBatchChange(["profile", "name"], "Ada"),
+        removal,
+      ]);
+
+      expect(writes).toEqual([
+        [
+          makeBatchChange(["profile", "name"], "Ada").location,
+          "Ada",
+          undefined,
+        ],
+        [removal.location, undefined, { delete: true }],
+      ]);
+    });
+
     it("prefers the transaction batch hook when applying a change set", () => {
       const batches: Array<
         Array<{ address: ChangeSet[0]["location"]; value: unknown }>
@@ -3328,6 +3486,57 @@ describe("scope-isolation write guard", () => {
       dest.key("profile").getAsNormalizedFullLink(),
     );
     expect(isSigilLink(stored)).toBe(true);
+  });
+
+  it("names both scopes and the path in its warning", () => {
+    const dest = runtime.getCell<{ profile?: unknown }>(
+      space,
+      "scope-guard-message-dest",
+      {
+        type: "object",
+        properties: { profile: { type: "object" } },
+      } as const satisfies JSONSchema,
+      tx,
+    );
+    dest.set({});
+    using logs = captureLogs("normalizeAndDiff");
+
+    diffAndUpdate(
+      runtime,
+      tx,
+      dest.key("profile").getAsNormalizedFullLink(),
+      scopedLinkValue("scope-guard-message-target", "user"),
+    );
+
+    const warnings = logs.logs.filter((log) => log.level === "warn");
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].text).toContain(
+      'Storing a user-scoped link in space-scoped data at path "profile"',
+    );
+  });
+
+  it("does not warn when the slot's schema is `true`", () => {
+    const dest = runtime.getCell<{ profile?: unknown }>(
+      space,
+      "scope-guard-true-dest",
+      undefined,
+      tx,
+    );
+    dest.set({});
+    const slot = {
+      ...dest.key("profile").getAsNormalizedFullLink(),
+      schema: true,
+    };
+
+    const before = warnCounts();
+    diffAndUpdate(
+      runtime,
+      tx,
+      slot,
+      scopedLinkValue("scope-guard-true-target", "user"),
+    );
+    expect(warnCounts()).toBe(before);
+    expect(isSigilLink(tx.readValueOrThrow(slot))).toBe(true);
   });
 
   it("does not warn when the slot's schema declares the scope", () => {

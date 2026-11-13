@@ -285,14 +285,16 @@ export function parseLinkPrimitive(
       id = base.id;
     }
 
-    return pinImmutableCell({
-      ...(id && { id }),
-      path: path.map((p) => p.toString()),
-      ...(resolvedSpace && { space: resolvedSpace }),
-      ...(resolvedScope && { scope: resolvedScope }),
-      ...(link.schema !== undefined && { schema: link.schema }),
-      ...(link.overwrite === "redirect" && { overwrite: "redirect" }),
-    }, id);
+    // Every read that crosses a link parses one, so the optional members are
+    // assigned where they are set, in this order: a spread in an object
+    // literal copies its source member by member.
+    const paths = path.map((p) => p.toString());
+    const parsed: NormalizedLink = id ? { id, path: paths } : { path: paths };
+    if (resolvedSpace) parsed.space = resolvedSpace;
+    if (resolvedScope) parsed.scope = resolvedScope;
+    if (link.schema !== undefined) parsed.schema = link.schema;
+    if (link.overwrite === "redirect") parsed.overwrite = "redirect";
+    return pinImmutableCell(parsed, id);
   }
   throw new Error(
     debugStr`Link is not a primitive: $quote${value}`,

@@ -130,6 +130,12 @@ class LoopbackSessionFactory implements SessionFactory {
    */
   #instanceNames = namesInstancesByDefault();
 
+  /**
+   * Whether this factory's connections take `cid:` schema documents by
+   * reference: what `setSyncCidReferences()` last chose, and until then not.
+   */
+  #syncCidReferences = false;
+
   constructor(
     plane: LoopbackPlane,
     route: Pick<RouteOptions, "createTransport"> | undefined,
@@ -190,22 +196,23 @@ class LoopbackSessionFactory implements SessionFactory {
     this.#instanceNames = enabled;
   }
 
+  /** @inheritDoc */
+  setSyncCidReferences(enabled: boolean): void {
+    this.#syncCidReferences = enabled;
+  }
+
   async create(
     space: MemorySpace,
-    signer?: Signer,
+    signer: Signer,
     mountOptions: MemoryClient.MountOptions = {},
   ) {
-    if (signer === undefined) {
-      throw new Error(
-        "loopback serving sessions require the service identity signer",
-      );
-    }
     // A routed session dials the owner over the network, with the handshake
     // attempts the routed plane gives its own sessions.
     const client = await MemoryClient.connect({
       transport: this.#transport(space, signer),
       client: this.#clientInfo,
       instanceNames: this.#instanceNames,
+      syncCidReferences: this.#syncCidReferences,
       ...(this.#routeFor(space, signer) === undefined
         ? {}
         : { firstHandshakeAttempts: MEMORY_FIRST_HANDSHAKE_ATTEMPTS }),

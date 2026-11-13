@@ -374,6 +374,60 @@ describe("view render reads", () => {
     }
   });
 
+  it("walks every cell again after a reset notification", async () => {
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: StorageManager.emulate({ as: signer }),
+    });
+    try {
+      const label = runtime.getCell(space, "reset label", undefined);
+      const root = runtime.getCell(space, "reset root", undefined);
+      await runtime.editWithRetry((tx) => {
+        label.withTx(tx).set("label");
+        root.withTx(tx).set({
+          type: "vnode",
+          name: "div",
+          props: {},
+          children: [label],
+        });
+      });
+      const view = {
+        id: "reset",
+        revision: 0,
+        mode: "speculate" as const,
+        componentContractVersion: "1",
+        query: {
+          roots: [{
+            id: root.getAsNormalizedFullLink().id,
+            selector: { path: [] },
+          }],
+        },
+      };
+      const memo = new ViewRenderWalkMemo(runtime.scopeKeyIdentity);
+      const walk = () =>
+        collectViewRenderReads(
+          runtime,
+          space,
+          view,
+          runtime.scopeKeyIdentity,
+          memo,
+        );
+      const first = walk();
+      const walked = memo.accessForTestingOnly.walked;
+      expect(walked).toBeGreaterThan(0);
+
+      memo.notify({ type: "reset", space });
+      expect(memo.accessForTestingOnly.size).toBe(0);
+      expect(walk()).toEqual(first);
+      expect(memo.accessForTestingOnly.walked).toBe(2 * walked);
+      expect(walk()).toEqual(first);
+      expect(memo.accessForTestingOnly.walked).toBe(2 * walked);
+    } finally {
+      await runtime.storageManager.synced();
+      await runtime.dispose();
+    }
+  });
+
   it("returns no binding contract for an undeclared component property", () => {
     expect(
       componentReadSchema("custom-component", "value", { type: "string" }, {}),

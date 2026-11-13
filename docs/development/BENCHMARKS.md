@@ -1348,8 +1348,10 @@ outside the timed interval.
 The reused-memo case includes its first miss. The cleared-memo control clears
 only the active snapshot memo before each request; storage read caches remain
 active. That control includes clearing the map and journaling the additional
-reads. Both cases still merge label views for every request. They measure the
-cost of repeated derivation in this fixture, not a whole-pattern speedup.
+reads. The memo holds each dereference's merged view as well as the view at
+each address, so the reused-memo case merges label views once and the
+cleared-memo control merges them for every request. They measure the cost of
+repeated derivation in this fixture, not a whole-pattern speedup.
 
 Untimed diagnostics verify one metadata read with reuse and one per request
 with clearing. These are transaction read activities, not proxy-access counts
@@ -1902,14 +1904,16 @@ connector, browser, or external store. After each render, a labeled-copy action
 reads every title and writes plain row values into an ordinary writable store,
 exercising writer-fit preparation separately from generated view outputs.
 The file stays identical between arms;
-only the runtime flags change:
+only the CFC flags change. Both arms run on the server-execution OFF arm, which
+CFC disabled requires and where the test's CFC posture governs every handler
+(served handlers run under the serving runtime's posture instead):
 
 ```sh
 # Arm A: enforcement disabled, flow labels off.
-deno task cf test runtime/cli/test/fixtures/cfc-flow-labels/mapped-render.test.tsx --cfc-enforcement-mode disabled --cfc-flow-labels off --verbose --stats-threshold 0 --no-idempotency-check
+EXPERIMENTAL_SERVER_EXECUTION=false deno task cf test runtime/cli/test/fixtures/cfc-flow-labels/mapped-render.test.tsx --cfc-enforcement-mode disabled --cfc-flow-labels off --verbose --stats-threshold 0 --no-idempotency-check
 
 # Arm B: shell enforcement and flow-label posture.
-deno task cf test runtime/cli/test/fixtures/cfc-flow-labels/mapped-render.test.tsx --cfc-shell-posture --verbose --stats-threshold 0 --no-idempotency-check
+EXPERIMENTAL_SERVER_EXECUTION=false deno task cf test runtime/cli/test/fixtures/cfc-flow-labels/mapped-render.test.tsx --cfc-shell-posture --verbose --stats-threshold 0 --no-idempotency-check
 ```
 
 The output names the resolved posture and each N. `render_1`, `render_2`, and

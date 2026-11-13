@@ -2765,12 +2765,15 @@ export const buildCfHarnessOperatorSystemPrompt = (
     "- Stop once you have enough evidence to answer.",
   ];
   appendHostMountInstructions(lines, config);
+  // The caller's instructions come before the result contract: a caller's
+  // standing instructions are commonly the same in every run while its result
+  // schema is per call, and the provider caches only the prefix runs share.
+  appendAdditionalInstructions(lines, config.systemPrompt);
   appendStructuredResultInstructions(
     lines,
     config.structuredResult,
     config.allowedToolIds,
   );
-  appendAdditionalInstructions(lines, config.systemPrompt);
   return lines.join("\n");
 };
 
@@ -2811,12 +2814,15 @@ export const buildCfHarnessBatchSystemPrompt = (
     lines.push("");
     appendHostMountInstructions(lines, config);
   }
+  // The caller's instructions come before the result contract: a caller's
+  // standing instructions are commonly the same in every run while its result
+  // schema is per call, and the provider caches only the prefix runs share.
+  appendAdditionalInstructions(lines, config.systemPrompt);
   appendStructuredResultInstructions(
     lines,
     config.structuredResult,
     config.allowedToolIds,
   );
-  appendAdditionalInstructions(lines, config.systemPrompt);
   return lines.join("\n");
 };
 

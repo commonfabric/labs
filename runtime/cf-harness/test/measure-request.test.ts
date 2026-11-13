@@ -75,6 +75,90 @@ describe("measure-request", () => {
     expect(new Set(rows.map((row) => row.toolsBytes)).size).toBe(1);
   });
 
+  it("measures a run recorded with the result contract after the instructions as one recorded with it before them", async () => {
+    const before = await measureRequest(dir);
+    Deno.writeTextFileSync(
+      join(dir, "transcript.json"),
+      JSON.stringify([
+        {
+          role: "system",
+          content: [
+            "You are cf-harness.",
+            "",
+            "Additional instructions:",
+            "Answer in one line.",
+            "",
+            "Structured result contract:",
+            "Result schema (JSON):",
+            JSON.stringify({ type: "object" }),
+          ].join("\n"),
+        },
+        { role: "user", content: "Granted references for this run: none." },
+        { role: "user", content: "count to 100" },
+        { role: "assistant", content: "" },
+      ]),
+    );
+    expect(await measureRequest(dir)).toEqual(before);
+  });
+
+  it("takes no heading the instructions quote for the real contract or schema, in either recorded order", async () => {
+    const quoted = [
+      "Answer in one line, like this example:",
+      "",
+      "Structured result contract:",
+      "Result schema (JSON):",
+      JSON.stringify({ type: "object", required: ["quoted"] }),
+      "That is all.",
+    ];
+    // The same instructions, as long, quoting no heading.
+    const defused = quoted.map((line) =>
+      line.replace("contract:", "contrakt:").replace("(JSON)", "(JSAN)")
+    );
+    const schema = JSON.stringify({ type: "object" });
+    const orders: Record<string, (instructions: string[]) => string[]> = {
+      "schema before the instructions": (instructions) => [
+        "You are cf-harness.",
+        "Result schema (JSON):",
+        schema,
+        "",
+        "Additional instructions:",
+        ...instructions,
+      ],
+      "contract after the instructions": (instructions) => [
+        "You are cf-harness.",
+        "",
+        "Additional instructions:",
+        ...instructions,
+        "",
+        "Structured result contract:",
+        "Result schema (JSON):",
+        schema,
+      ],
+      "no result schema": (instructions) => [
+        "You are cf-harness.",
+        "",
+        "Additional instructions:",
+        ...instructions,
+      ],
+    };
+    const measured = async (lines: string[]) => {
+      Deno.writeTextFileSync(
+        join(dir, "transcript.json"),
+        JSON.stringify([
+          { role: "system", content: lines.join("\n") },
+          { role: "user", content: "count to 100" },
+          { role: "assistant", content: "" },
+        ]),
+      );
+      return await measureRequest(dir);
+    };
+    for (const [order, system] of Object.entries(orders)) {
+      expect(await measured(system(quoted)), order).toEqual(
+        await measured(system(defused)),
+      );
+    }
+  });
+
   it("measures a recorded run with no result schema, additional instructions or pattern index", async () => {
     Deno.writeTextFileSync(
       join(dir, "transcript.json"),

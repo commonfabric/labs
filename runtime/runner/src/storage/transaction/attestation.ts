@@ -153,9 +153,29 @@ export const claim = (
   identity?: ScopeKeyIdentity,
   durable = false,
 ): Result<State, IStorageTransactionInconsistent> => {
+  const { state, actual } = claimedValue(address, replica, identity, durable);
+  if (valueEqual(expected, actual)) {
+    return { ok: state };
+  } else {
+    return {
+      error: StateInconsistency({ address, expected, actual }),
+    };
+  }
+};
+
+/**
+ * The value `claim()` compares an attestation at `address` against: what
+ * `replica` holds there now, with the replica's state record for the
+ * document.
+ */
+export const claimedValue = (
+  address: IMemoryAddress,
+  replica: ISpaceReplica,
+  identity?: ScopeKeyIdentity,
+  durable = false,
+): { state: State; actual: FabricValue | undefined } => {
   const type = address.type ?? "application/json";
   const state = replica.get(address) ?? { the: type, of: address.id };
-  const source = attest(state);
   const actual = type === "application/json" &&
       address.path.length === 0 &&
       typeof replica.getDocument === "function"
@@ -168,15 +188,8 @@ export const claim = (
         )
         : replica.getDocument(address.id, address.scope, identity),
     )
-    : read(source, address)?.ok?.value;
-
-  if (valueEqual(expected, actual)) {
-    return { ok: state };
-  } else {
-    return {
-      error: StateInconsistency({ address, expected, actual }),
-    };
-  }
+    : read(attest(state), address)?.ok?.value;
+  return { state, actual };
 };
 
 /**
@@ -289,7 +302,7 @@ export const load = (
     return cached;
   }
 
-  logger.debug("storage-datauri-parse", () => ["Parsing data URI"]);
+  logger.debug("storage-datauri-parse", "Parsing data URI");
 
   let result: Result<
     IAttestation,

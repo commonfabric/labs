@@ -417,38 +417,20 @@ export class CFTextarea extends BaseElement {
     });
 
     // Register with form after binding is complete
-    this._formField.register(this.name);
+    this._formField.register();
 
     if (this.autofocus) {
       this.textarea?.focus();
-    }
-
-    // Store initial height for auto-resize
-    if (this.autoResize && this.textarea) {
-      this._minHeight = this.textarea.scrollHeight;
-      this.adjustHeight();
     }
 
     this._updateAccessibilityAttributes();
   }
 
   override connectedCallback() {
-    // Set host attributes before super triggers rendering.
-    // Cannot be in the constructor — the custom element spec forbids
-    // setAttribute during construction.
-    if (!this.hasAttribute("role")) {
-      this.setAttribute("role", "textbox");
-    }
-    if (!this.hasAttribute("exportparts")) {
-      this.setAttribute("exportparts", "textarea");
-    }
     super.connectedCallback();
+    // Host attributes are set here rather than in the constructor, where the
+    // custom element spec forbids setAttribute.
     this._updateAccessibilityAttributes();
-  }
-
-  override disconnectedCallback() {
-    super.disconnectedCallback();
-    // Controllers handle cleanup automatically via ReactiveController
   }
 
   override willUpdate(
@@ -485,19 +467,16 @@ export class CFTextarea extends BaseElement {
       applyThemeToElement(this, this.theme);
     }
 
-    if (changedProperties.has("value") && this.autoResize) {
-      this.adjustHeight();
-    }
-
-    if (changedProperties.has("autoResize")) {
-      if (this.autoResize) {
-        this.resize = "none";
-        if (this.textarea) {
-          this._minHeight = this.textarea.scrollHeight;
-          this.adjustHeight();
-        }
-      } else {
-        this.resize = "vertical";
+    const textarea = this.textarea;
+    if (this.autoResize && textarea) {
+      // The height it takes as auto-resize begins is the least it shrinks to.
+      if (changedProperties.has("autoResize")) {
+        this._minHeight = textarea.scrollHeight;
+      }
+      if (
+        changedProperties.has("autoResize") || changedProperties.has("value")
+      ) {
+        this.adjustHeight(textarea);
       }
     }
 
@@ -558,7 +537,7 @@ export class CFTextarea extends BaseElement {
 
     // Auto-resize if enabled
     if (this.autoResize) {
-      this.adjustHeight();
+      this.adjustHeight(textarea);
     }
 
     // Emit custom input event
@@ -582,7 +561,6 @@ export class CFTextarea extends BaseElement {
   }
 
   private _handleFocus(_event: Event) {
-    this._cellController.onFocus();
     this.emit("cf-focus", {
       value: this.getValue(),
       name: this.name,
@@ -682,20 +660,15 @@ export class CFTextarea extends BaseElement {
   }
 
   /**
-   * Adjust height for auto-resize functionality
+   * Fits `textarea`'s height to its content, for auto-resize.
    */
-  private adjustHeight(): void {
-    if (!this.textarea || !this.autoResize) return;
-
+  private adjustHeight(textarea: HTMLTextAreaElement): void {
     // Reset height to recalculate
-    (this.textarea as HTMLTextAreaElement).style.height = "auto";
+    textarea.style.height = "auto";
 
     // Set new height based on scrollHeight
-    const newHeight = Math.max(
-      this._minHeight,
-      (this.textarea as HTMLTextAreaElement).scrollHeight,
-    );
-    (this.textarea as HTMLTextAreaElement).style.height = `${newHeight}px`;
+    const newHeight = Math.max(this._minHeight, textarea.scrollHeight);
+    textarea.style.height = `${newHeight}px`;
   }
 
   override focus(options?: FocusOptions): void {
@@ -711,24 +684,6 @@ export class CFTextarea extends BaseElement {
   }
 
   /**
-   * Select all text in the textarea
-   */
-  select(): void {
-    this.textarea?.select();
-  }
-
-  /**
-   * Set selection range in the textarea
-   */
-  setSelectionRange(
-    start: number,
-    end: number,
-    direction?: "forward" | "backward" | "none",
-  ): void {
-    this.textarea?.setSelectionRange(start, end, direction);
-  }
-
-  /**
    * Check validity of the textarea
    */
   checkValidity(): boolean {
@@ -736,30 +691,9 @@ export class CFTextarea extends BaseElement {
   }
 
   /**
-   * Report validity of the textarea
-   */
-  reportValidity(): boolean {
-    return this.textarea?.reportValidity() ?? true;
-  }
-
-  /**
-   * Get the validity state
-   */
-  get validity(): ValidityState | undefined {
-    return this.textarea?.validity;
-  }
-
-  /**
    * Get validation message
    */
   get validationMessage(): string {
     return this.textarea?.validationMessage || "";
-  }
-
-  /**
-   * Set custom validity message
-   */
-  setCustomValidity(message: string): void {
-    this.textarea?.setCustomValidity(message);
   }
 }

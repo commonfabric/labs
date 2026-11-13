@@ -3263,9 +3263,9 @@ interface CFPromptInputAttributes<T> extends CFHTMLAttributes<T> {
 
 interface CFAttachmentsBarAttributes<T> extends CFHTMLAttributes<T> {
   "removable"?: boolean;
-  "pinnedCells"?: any;
-  "oncf-remove"?: EventHandler<{ id: string }>;
-  "oncf-click"?: EventHandler<{ id: string; attachment: any }>;
+  "pinnedCells"?: CellLike<Array<{ path: string; name: string }>>;
+  "oncf-remove"?: EventHandler<{ path: string }>;
+  "oncf-click"?: EventHandler<{ path: string; name: string }>;
 }
 
 interface CFTagsAttributes<T> extends CFHTMLAttributes<T> {
@@ -3282,14 +3282,10 @@ interface CFToolbarAttributes<T> extends CFHTMLAttributes<T> {
 interface CFTableAttributes<T> extends CFHTMLAttributes<T> {
   "striped"?: boolean;
   "bordered"?: boolean;
-  "size"?: "xs" | "sm" | "md" | "lg" | "xl" | "sm" | "md" | "lg";
+  "size"?: "sm" | "md" | "lg";
   "sticky-header"?: boolean;
   "full-width"?: boolean;
   "hover"?: boolean;
-  "oncf-table-sort"?: EventHandler<{
-    columnIndex: number;
-    ascending: boolean;
-  }>;
 }
 
 type CFKeybindAttributes<T> = Omit<CFHTMLAttributes<T>, "key"> & {
@@ -4113,6 +4109,13 @@ interface CFCodeEditorAttributes<T> extends CFHTMLAttributes<T> {
   "tabIndent"?: boolean;
   "theme"?: "light" | "dark";
   "mode"?: "code" | "prose";
+
+  /**
+   * In prose mode with Markdown, draws `$…$` and `$$…$$` TeX formulas with
+   * KaTeX, showing a formula's TeX where the selection touches it.
+   */
+  "math"?: boolean;
+
   "autofocus"?: boolean;
   "cursorPosition"?: "start" | "end";
   "oncf-change"?: any;

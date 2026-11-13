@@ -3,6 +3,7 @@ import { expect } from "@std/expect";
 
 import {
   importModuleGraphNow,
+  loadModuleGraph,
   type VirtualModuleRecord,
 } from "../src/sandbox/esm-module-loader.ts";
 
@@ -183,5 +184,40 @@ describe("importModuleGraphNow", () => {
     const records = new Map<string, VirtualModuleRecord>();
     expect(() => importModuleGraphNow("cf:module/missing", { records }))
       .toThrow();
+  });
+
+  it("throws for an import with no record before evaluating any module, unverified", () => {
+    const log: string[] = [];
+    const records = new Map<string, VirtualModuleRecord>([
+      [
+        "cf:module/main",
+        record(["cf:module/missing"], [], () => {
+          log.push("main");
+        }),
+      ],
+    ]);
+
+    expect(() =>
+      importModuleGraphNow("cf:module/main", { records, verify: false })
+    ).toThrow("Unknown module specifier: cf:module/missing");
+    expect(log).toEqual([]);
+  });
+
+  it("throws for a later import of a specifier the graph does not hold", () => {
+    const records = new Map<string, VirtualModuleRecord>([
+      [
+        "cf:module/main",
+        record([], ["value"], (exports) => {
+          exports.value = 1;
+        }),
+      ],
+    ]);
+    const graph = loadModuleGraph("cf:module/main", { records });
+
+    expect(graph.namespace.value).toBe(1);
+    expect(graph.importNow("cf:module/main")).toBe(graph.namespace);
+    expect(() => graph.importNow("cf:module/absent")).toThrow(
+      "Unknown module specifier: cf:module/absent",
+    );
   });
 });

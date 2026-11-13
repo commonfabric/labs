@@ -36,7 +36,7 @@ import { join } from "@std/path";
 import { assert, assertEquals } from "@std/assert";
 import { Identity } from "@commonfabric/identity";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
-import { waitForSettled } from "@commonfabric/runner/executor/watermark";
+import { waitForSettledThroughHead } from "@commonfabric/runner/executor/watermark";
 import type { MemorySpace } from "@commonfabric/runner";
 import {
   SERVER_EXECUTION_EFFECTS_DOC_ID,
@@ -222,13 +222,22 @@ describe("sx2 effect channel (Phase 4 gates)", () => {
       );
     }
 
-    // Settle the space (the retirement wave included), then take one
-    // more round trip through the same session subscription and drain
-    // the runtime behind it: a resurrected intent would have to reach
-    // this client that way, and enacting it would have to run here. The
-    // convergence stands — ONE navigation, nothing resurrected.
+    // Settle the space: the serving loop covers every authored commit
+    // the server holds, the ack among them. The retirement reads the
+    // store directly, so the drained instance can appear a wave before
+    // the loop takes in the ack's commit, which is where the ack is
+    // counted. Then take one more round trip through the same session
+    // subscription and drain the runtime behind it: a resurrected
+    // intent would have to reach this client that way, and enacting it
+    // would have to run here. The convergence stands — ONE navigation,
+    // nothing resurrected.
     await cc.runtime.storageManager.synced();
-    await waitForSettled(cc.runtime, space, 1, { timeoutMs: 30_000 });
+    const head = await cc.runtime.storageManager.open(space).serverHeadSeq?.();
+    assert(head !== undefined, "the ON arm's provider reports the head");
+    await withStuckNet(
+      waitForSettledThroughHead(cc.runtime, space, head),
+      "the serving loop to cover the ack",
+    );
     await effectsCell.sync();
     await cc.runtime.idle();
     assertEquals(

@@ -137,9 +137,6 @@ export class CFAccordionItem extends BaseElement {
     }
   `;
 
-  private _contentWrapper: HTMLElement | null = null;
-  private _content: HTMLElement | null = null;
-
   constructor() {
     super();
     this.value = "";
@@ -147,21 +144,15 @@ export class CFAccordionItem extends BaseElement {
     this.expanded = false;
   }
 
+  /** The element whose height opens and closes the content, once rendered. */
   get contentWrapper(): HTMLElement | null {
-    if (!this._contentWrapper) {
-      this._contentWrapper =
-        this.shadowRoot?.querySelector(".content-wrapper") as HTMLElement ||
-        null;
-    }
-    return this._contentWrapper;
+    return this.shadowRoot?.querySelector<HTMLElement>(".content-wrapper") ??
+      null;
   }
 
+  /** The element holding the content, once rendered. */
   get content(): HTMLElement | null {
-    if (!this._content) {
-      this._content =
-        this.shadowRoot?.querySelector(".content") as HTMLElement || null;
-    }
-    return this._content;
+    return this.shadowRoot?.querySelector<HTMLElement>(".content") ?? null;
   }
 
   override updated(changedProperties: Map<string | number | symbol, unknown>) {
@@ -170,16 +161,6 @@ export class CFAccordionItem extends BaseElement {
     if (changedProperties.has("expanded")) {
       this.updateContentHeight();
     }
-  }
-
-  override firstUpdated() {
-    // Cache references
-    this._contentWrapper =
-      this.shadowRoot?.querySelector(".content-wrapper") as HTMLElement || null;
-    this._content = this.shadowRoot?.querySelector(".content") as HTMLElement ||
-      null;
-    // Set initial content height
-    this.updateContentHeight();
   }
 
   override render() {
@@ -222,14 +203,10 @@ export class CFAccordionItem extends BaseElement {
     const wrapper = this.contentWrapper;
     const content = this.content;
 
-    if (!wrapper || !content) return;
-
-    if (this.expanded) {
-      // Get the actual height of the content
-      const height = content.scrollHeight;
-      wrapper.style.height = `${height}px`;
-    } else {
-      wrapper.style.height = "0px";
+    if (wrapper && content) {
+      wrapper.style.height = this.expanded
+        ? `${content.scrollHeight}px`
+        : "0px";
     }
   }
 

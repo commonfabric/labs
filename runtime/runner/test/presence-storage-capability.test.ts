@@ -20,9 +20,13 @@ type SessionRecord = {
 /**
  * A storage manager whose sessions are stand-ins, each numbered and each
  * recording what presence asked of it, so that a replica replacement's
- * second session is told apart from the first.
+ * second session is told apart from the first. A join through a session
+ * whose number `hold` returns a promise for lands when that promise does,
+ * and fails when it rejects.
  */
-const buildStorage = () => {
+const buildStorage = (
+  hold: (session: number) => Promise<void> | undefined = () => undefined,
+) => {
   const sessions: SessionRecord[] = [];
   const storage = new (class extends V2StorageManager {
     constructor() {
@@ -66,7 +70,9 @@ const buildStorage = () => {
                     return Promise.resolve();
                   },
                 };
-                return Promise.resolve(membership);
+                return (hold(number) ?? Promise.resolve()).then(() =>
+                  membership
+                );
               },
             } as unknown as MemoryV2Client.SpaceSession;
             return Promise.resolve({ client, session });
@@ -260,4 +266,79 @@ describe("presence storage capability", () => {
     await fresh.leave();
     await storage.closeNow();
   });
+  it("sends nothing for a membership that has left, and forwards it nothing", async () => {
+    const { storage, sessions } = buildStorage();
+    const provider = storage.open(signer.did());
+    if (!hasPresenceStorageCapability(provider)) return;
+    const events: MemoryV2Client.PresenceEvent[] = [];
+    const membership = await provider.joinPresenceRoom(
+      ROOM,
+      (event) => events.push(event),
+    );
+    await membership.leave();
+    membership.publish({ name: "Ada", facets: {} });
+    sessions[0].observer?.({
+      kind: "upsert",
+      participant: {
+        participantId: "late",
+        revision: 1,
+        name: "Late",
+        facets: {},
+      },
+    });
+    expect(sessions[0].published).toEqual([]);
+    expect(events.map((event) => event.kind)).toEqual(["snapshot"]);
+    await storage.closeNow();
+  });
+
+  it("leaves a join that lands after the storage closed, and rejects it", async () => {
+    const landing = Promise.withResolvers<void>();
+    const reached = Promise.withResolvers<void>();
+    const { storage, sessions } = buildStorage(() => {
+      reached.resolve();
+      return landing.promise;
+    });
+    const provider = storage.open(signer.did());
+    if (!hasPresenceStorageCapability(provider)) return;
+    const joining = provider.joinPresenceRoom(ROOM, () => {});
+    const refused = expect(joining).rejects.toThrow("memory provider closed");
+    await reached.promise;
+    expect(sessions[0].joins).toEqual([ROOM]);
+    await storage.closeNow();
+    landing.resolve();
+    await refused;
+    expect(sessions[0].leaves).toBe(1);
+  });
+
+  for (const outcome of ["lands", "fails"] as const) {
+    it(`rejoins on the replacement session when the route is replaced while a join ${outcome} on the replaced one`, async () => {
+      const landing = Promise.withResolvers<void>();
+      const reached = Promise.withResolvers<void>();
+      const { storage, sessions } = buildStorage((session) => {
+        if (session !== 1) return undefined;
+        reached.resolve();
+        return landing.promise;
+      });
+      const provider = storage.open(signer.did());
+      if (!hasPresenceStorageCapability(provider)) return;
+      const joining = provider.joinPresenceRoom(ROOM, () => {});
+      await reached.promise;
+      expect(sessions[0].joins).toEqual([ROOM]);
+
+      expect(
+        storage.registerSpaceHost(signer.did(), "https://hinted-toolshed.test"),
+      ).toBe(true);
+      if (outcome === "lands") landing.resolve();
+      else landing.reject(new Error("the replaced session closed"));
+      const membership = await joining;
+      await storage.crossSpaceSettled();
+
+      expect(membership.participantId).toBe("participant:2");
+      expect(sessions[1].joins).toEqual([ROOM]);
+      // A membership the replaced session granted is given back.
+      expect(sessions[0].leaves).toBe(outcome === "lands" ? 1 : 0);
+      await membership.leave();
+      await storage.closeNow();
+    });
+  }
 });

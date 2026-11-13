@@ -42,7 +42,10 @@ import {
   experimentalForDeployment,
   shellDeployment,
 } from "../lib/env.ts";
-import { runtimeHostFlags } from "../lib/host-toggles.ts";
+import {
+  runtimeExperimentalHostFlags,
+  runtimeHostFlags,
+} from "../lib/host-toggles.ts";
 import { type BrowserTelemetry, initBrowserOtel } from "../lib/otel.ts";
 import { UnavailableSpaceRetry } from "../lib/unavailable-space-retry.ts";
 import { shouldRecreateRuntime } from "../lib/runtime-lifecycle.ts";
@@ -311,7 +314,10 @@ export class XRootView extends BaseView implements ShellApp {
           identity: app.identity,
           apiUrl: app.apiUrl,
           memoryUrl: deployment.memoryUrl,
-          experimental: experimentalForDeployment(deployment.experimental),
+          experimental: {
+            ...experimentalForDeployment(deployment.experimental),
+            ...runtimeExperimentalHostFlags(),
+          },
           // Select the deployed shell's immutable worker asset graph. Source
           // runs keep the explicit mutable /scripts URL below.
           clientVersion: COMMIT_SHA,
@@ -498,18 +504,11 @@ export class XRootView extends BaseView implements ShellApp {
     if (!changedProperties.has("app")) {
       return;
     }
+    // The first state set creates the runtime; a later one recreates it only
+    // where it changes what the runtime is built from.
     const previous = changedProperties.get("app");
-    const current = this.app;
-
-    // If the first set, or if removed, run
-    const flipState = (!previous && current) ||
-      !current;
-
-    const stateChanged = !!previous &&
-      shouldRecreateRuntime(previous, current);
-
-    if (flipState || stateChanged) {
-      this.#rt.run([current]);
+    if (!previous || shouldRecreateRuntime(previous, this.app)) {
+      this.#rt.run([this.app]);
     }
   }
 

@@ -360,6 +360,30 @@ describe("cf-custody-answer", () => {
     state.element.disconnectedCallback();
   });
 
+  it("drops what it shows, and asks nothing, once the worker refuses its terms, but not its output", async () => {
+    const slot: { answer?: string } = {};
+    const state = setup([() => {
+      slot.answer = "sushi";
+      return Promise.resolve({ instance: "instance", answer: "sushi" });
+    }], slot);
+    state.element.connectedCallback();
+    // A request made while the connection's is out waits on it.
+    await state.element.accessForTestingOnly.publish();
+    expect(state.element.accessForTestingOnly.answer).toBe("sushi");
+
+    // The output is the worker's to release: its refusal changes nothing.
+    pushRefusal(state.output);
+    expect(state.element.accessForTestingOnly.answer).toBe("sushi");
+    // Refused terms name no instance to show.
+    pushRefusal(state.terms);
+    expect(state.element.accessForTestingOnly.answer).toBeUndefined();
+    expect(state.element.accessForTestingOnly.published).toBe(false);
+    await state.element.accessForTestingOnly.publish();
+    expect(state.requests).toHaveLength(1);
+    state.element.connected = false;
+    state.element.disconnectedCallback();
+  });
+
   it("keeps no request queued once the one it waited on publishes", async () => {
     let release: (() => void) | undefined;
     const slot: { answer?: string } = {};

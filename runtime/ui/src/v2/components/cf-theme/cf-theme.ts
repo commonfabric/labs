@@ -29,8 +29,12 @@ export function unwrapThemeCellValues(
   if (isCellHandle(value)) {
     // A theme value the worker will not show, or has not answered, reads as
     // `undefined`, which the object branch below leaves out, so the default
-    // takes its place.
-    return valueForDisplay(value);
+    // takes its place, as it does for a cell inside its own value.
+    if (seen.has(value)) return undefined;
+    seen.add(value);
+    const unwrapped = unwrapThemeCellValues(valueForDisplay(value), seen);
+    seen.delete(value);
+    return unwrapped;
   }
 
   if (!value || typeof value !== "object") {
@@ -56,45 +60,27 @@ export function unwrapThemeCellValues(
   return out;
 }
 
-export function subscribeToThemeCellValues(
-  value: unknown,
-  onChange: () => void,
-  seen = new WeakSet<object>(),
-): Array<() => void> {
-  const unsubs: Array<() => void> = [];
-
+/**
+ * The `CellHandle`s `value` reaches, each once: those it holds, through
+ * arrays, objects, and cycles, and those the values of those cells hold in
+ * turn.
+ */
+export function themeCellHandles(value: unknown): Set<CellHandle<unknown>> {
+  const cells = new Set<CellHandle<unknown>>();
+  const seen = new WeakSet<object>();
   const visit = (current: unknown) => {
     if (isCellHandle(current)) {
-      const cellVal = current as CellHandle<unknown>;
-      let didReceiveInitialValue = false;
-      const changed = () => {
-        if (!didReceiveInitialValue) {
-          didReceiveInitialValue = true;
-          return;
-        }
-        onChange();
-      };
-      const off = cellVal.subscribe(changed, { onRefused: changed });
-      unsubs.push(off);
+      if (cells.has(current)) return;
+      cells.add(current);
+      visit(valueForDisplay(current));
       return;
     }
-
-    if (!current || typeof current !== "object") {
-      return;
-    }
-
-    if (seen.has(current)) {
-      return;
-    }
+    if (!current || typeof current !== "object" || seen.has(current)) return;
     seen.add(current);
-
-    for (const child of Object.values(current)) {
-      visit(child);
-    }
+    for (const child of Object.values(current)) visit(child);
   };
-
   visit(value);
-  return unsubs;
+  return cells;
 }
 
 /**
@@ -148,7 +134,11 @@ export class CFThemeProvider extends BaseElement {
   @property({ attribute: false })
   accessor _guestPresentation: IframePresentation | null = null;
 
-  #unsubs: Array<() => void> = [];
+  /**
+   * The cells the theme reaches ({@link themeCellHandles}) while connected,
+   * each with the cancel of its subscription.
+   */
+  readonly #followed = new Map<CellHandle<unknown>, () => void>();
 
   /** The enclosing `cf-theme`'s theme, or `undefined` for an outermost one. */
   #enclosing: CFTheme | undefined;
@@ -175,6 +165,7 @@ export class CFThemeProvider extends BaseElement {
     // Reconnected elsewhere, it is outermost unless a provider answers again.
     this.#enclosing = undefined;
     super.connectedCallback();
+    this.#follow();
     if (this.hasUpdated) this._recomputeAndApply();
     // Re-resolve when user toggles theme preference (data-theme attribute)
     document.addEventListener(
@@ -183,14 +174,10 @@ export class CFThemeProvider extends BaseElement {
     );
   }
 
-  override firstUpdated(changed: Map<string | number | symbol, unknown>) {
-    super.firstUpdated(changed);
-    this._recomputeAndApply();
-  }
-
   override updated(changed: Map<string | number | symbol, unknown>) {
     super.updated(changed);
     if (changed.has("theme")) {
+      this.#follow();
       this._recomputeAndApply();
     }
   }
@@ -209,10 +196,9 @@ export class CFThemeProvider extends BaseElement {
     applyThemeToElement(this, computed, around);
     this._computedTheme = computed;
     this.#provideGuestPresentation();
-    this.#setupSubscriptions();
 
-    // Manage the matchMedia listener based on the resolved colorScheme
-    if (this._computedTheme.colorScheme === "auto") {
+    // Follow the system scheme for an `auto` theme while connected.
+    if (this.isConnected && this._computedTheme.colorScheme === "auto") {
       if (
         !this._mediaQuery && typeof globalThis !== "undefined" &&
         globalThis.matchMedia
@@ -241,21 +227,41 @@ export class CFThemeProvider extends BaseElement {
     this._guestPresentation = next;
   }
 
-  #setupSubscriptions() {
-    // Clear previous subscriptions
-    for (const off of this.#unsubs) off();
-    this.#unsubs = [];
-
-    this.#unsubs = subscribeToThemeCellValues(
-      this.theme,
-      () => this._recomputeAndApply(),
-    );
+  /**
+   * Subscribes to the cells the theme reaches while the element is connected,
+   * and to nothing otherwise: to each it does not yet follow, cancelling the
+   * subscription to each it no longer reaches. A cell's change recomputes the
+   * theme and follows again, since its new value can reach other cells. A
+   * subscription hears nothing of the value it starts with, which the theme
+   * was computed from.
+   */
+  #follow(): void {
+    const cells = this.isConnected
+      ? themeCellHandles(this.theme)
+      : new Set<CellHandle<unknown>>();
+    for (const [cell, cancel] of this.#followed) {
+      if (cells.has(cell)) continue;
+      cancel();
+      this.#followed.delete(cell);
+    }
+    for (const cell of cells) {
+      if (this.#followed.has(cell)) continue;
+      let started = false;
+      const changed = () => {
+        if (!started) {
+          started = true;
+          return;
+        }
+        this._recomputeAndApply();
+        this.#follow();
+      };
+      this.#followed.set(cell, cell.subscribe(changed, { onRefused: changed }));
+    }
   }
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
-    for (const off of this.#unsubs) off();
-    this.#unsubs = [];
+    this.#follow();
     if (this._mediaQuery) {
       this._mediaQuery.removeEventListener("change", this._onMediaChange);
       this._mediaQuery = undefined;

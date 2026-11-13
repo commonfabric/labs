@@ -29,8 +29,8 @@ export const CSP = `` +
   `script-src ${HOST_ORIGIN} 'unsafe-inline' ${SCRIPT_CDNS.join(" ")};` +
   // Styles: Allow 1P, inline, Google Fonts.
   `style-src ${HOST_ORIGIN} 'unsafe-inline' ${STYLE_CDNS.join(" ")};` +
-  // Fonts: Allow 1P, inline.
-  `font-src ${HOST_ORIGIN} 'unsafe-inline' ${FONT_CDNS.join(" ")};` +
+  // Fonts: Allow 1P, data URIs, Google Fonts.
+  `font-src ${HOST_ORIGIN} data: ${FONT_CDNS.join(" ")};` +
   // Images: Allow 1P, data URIs.
   `img-src ${HOST_ORIGIN} data:;` +
   // Disabling until we have a concrete case.
@@ -47,8 +47,6 @@ export const CSP = `` +
   // `default-src` is used correctly as a fallback for
   // prefetch
   //`prefetch-src 'none';` +
-  // Fonts: Use default (disabled)
-  //`font-src 'none';` +
   // Media: Use default (disabled)
   //`media-src 'none';` +
   // Manifest: Use default (disabled)

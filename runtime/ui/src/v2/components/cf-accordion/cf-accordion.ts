@@ -1,4 +1,4 @@
-import { css, html } from "lit";
+import { css, html, type PropertyValues } from "lit";
 import { BaseElement } from "../../core/base-element.ts";
 
 /**
@@ -25,10 +25,30 @@ import { BaseElement } from "../../core/base-element.ts";
 
 export type AccordionType = "single" | "multiple";
 
+/**
+ * Reads a `value` attribute: a JSON list of strings names several items, and
+ * anything else names the one item whose value it is.
+ */
+function parseValue(attribute: string | null): string | string[] {
+  if (attribute === null) return [];
+  try {
+    const parsed: unknown = JSON.parse(attribute);
+    if (
+      Array.isArray(parsed) &&
+      parsed.every((value) => typeof value === "string")
+    ) {
+      return parsed;
+    }
+  } catch {
+    // Not JSON, so the attribute is a single value.
+  }
+  return attribute;
+}
+
 export class CFAccordion extends BaseElement {
   static override properties = {
     type: { type: String },
-    value: { type: String },
+    value: { converter: { fromAttribute: parseValue } },
     collapsible: { type: Boolean },
   };
   static override styles = css`
@@ -68,16 +88,6 @@ export class CFAccordion extends BaseElement {
       "cf-accordion-toggle",
       this.handleItemToggle as EventListener,
     );
-
-    // Parse value from attribute if it's a string
-    const valueAttr = this.getAttribute("value");
-    if (valueAttr) {
-      try {
-        this.value = JSON.parse(valueAttr);
-      } catch {
-        this.value = valueAttr;
-      }
-    }
   }
 
   override disconnectedCallback() {
@@ -88,16 +98,17 @@ export class CFAccordion extends BaseElement {
     );
   }
 
-  override updated(changedProperties: Map<string | number | symbol, unknown>) {
+  override willUpdate() {
+    // A single accordion opens at most one item, the first one listed.
+    if (this.type === "single" && Array.isArray(this.value)) {
+      this.value = this.value[0] || "";
+    }
+  }
+
+  override updated(changedProperties: PropertyValues<this>) {
     super.updated(changedProperties);
 
     if (changedProperties.has("value") || changedProperties.has("type")) {
-      // Ensure value type matches accordion type
-      if (this.type === "single" && Array.isArray(this.value)) {
-        this.value = this.value[0] || "";
-      }
-
-      // Update item states
       this.updateItemStates();
     }
   }

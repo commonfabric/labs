@@ -56,11 +56,12 @@ export class CFScrollArea extends BaseElement {
   declare private _isDraggingVertical: boolean;
   declare private _isDraggingHorizontal: boolean;
 
-  private _scrollContainer: HTMLElement | null = null;
-  private _verticalScrollbar: HTMLElement | null = null;
-  private _horizontalScrollbar: HTMLElement | null = null;
-  private _verticalThumb: HTMLElement | null = null;
-  private _horizontalThumb: HTMLElement | null = null;
+  private _dragStartY = 0;
+  private _dragStartX = 0;
+  private _scrollStartY = 0;
+  private _scrollStartX = 0;
+  private _rafId: number | null = null;
+  private _hideTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
     super();
@@ -69,156 +70,40 @@ export class CFScrollArea extends BaseElement {
     this._isDraggingHorizontal = false;
   }
 
-  get scrollContainer(): HTMLElement | null {
-    if (!this._scrollContainer) {
-      this._scrollContainer =
-        this.shadowRoot?.querySelector(".scroll-container") as HTMLElement ||
-        null;
-    }
-    return this._scrollContainer;
+  get #scrollContainer(): HTMLElement | null {
+    return this.renderRoot.querySelector(".scroll-container");
   }
 
-  get verticalScrollbar(): HTMLElement | null {
-    if (!this._verticalScrollbar) {
-      this._verticalScrollbar =
-        this.shadowRoot?.querySelector(".scrollbar-vertical") as HTMLElement ||
-        null;
-    }
-    return this._verticalScrollbar;
+  get #verticalScrollbar(): HTMLElement | null {
+    return this.renderRoot.querySelector(".scrollbar-vertical");
   }
 
-  get horizontalScrollbar(): HTMLElement | null {
-    if (!this._horizontalScrollbar) {
-      this._horizontalScrollbar = this.shadowRoot?.querySelector(
-        ".scrollbar-horizontal",
-      ) as HTMLElement || null;
-    }
-    return this._horizontalScrollbar;
+  get #horizontalScrollbar(): HTMLElement | null {
+    return this.renderRoot.querySelector(".scrollbar-horizontal");
   }
 
-  get verticalThumb(): HTMLElement | null {
-    if (!this._verticalThumb) {
-      this._verticalThumb = this.shadowRoot?.querySelector(
-        ".scrollbar-thumb-vertical",
-      ) as HTMLElement || null;
-    }
-    return this._verticalThumb;
+  get #verticalThumb(): HTMLElement | null {
+    return this.renderRoot.querySelector(".scrollbar-thumb-vertical");
   }
 
-  get horizontalThumb(): HTMLElement | null {
-    if (!this._horizontalThumb) {
-      this._horizontalThumb = this.shadowRoot?.querySelector(
-        ".scrollbar-thumb-horizontal",
-      ) as HTMLElement || null;
-    }
-    return this._horizontalThumb;
+  get #horizontalThumb(): HTMLElement | null {
+    return this.renderRoot.querySelector(".scrollbar-thumb-horizontal");
   }
 
-  private _dragStartY = 0;
-  private _dragStartX = 0;
-  private _scrollStartY = 0;
-  private _scrollStartX = 0;
-  private _rafId: number | null = null;
-  private _hideTimeoutId: ReturnType<typeof setTimeout> | null = null;
-
-  override firstUpdated() {
-    // Set up event listeners
-    if (this._scrollContainer) {
-      this._scrollContainer.addEventListener("scroll", this.handleScroll);
-      this._scrollContainer.addEventListener(
-        "mouseenter",
-        this.handleMouseEnter,
-      );
-      this._scrollContainer.addEventListener(
-        "mouseleave",
-        this.handleMouseLeave,
-      );
-    }
-
-    // Set up vertical scrollbar
-    if (
-      this._verticalThumb &&
-      (this.orientation === "vertical" || this.orientation === "both")
-    ) {
-      this._verticalThumb.addEventListener(
-        "mousedown",
-        this.handleVerticalThumbMouseDown,
-      );
-      this._verticalScrollbar?.addEventListener(
-        "click",
-        this.handleVerticalTrackClick,
-      );
-    }
-
-    // Set up horizontal scrollbar
-    if (
-      this._horizontalThumb &&
-      (this.orientation === "horizontal" || this.orientation === "both")
-    ) {
-      this._horizontalThumb.addEventListener(
-        "mousedown",
-        this.handleHorizontalThumbMouseDown,
-      );
-      this._horizontalScrollbar?.addEventListener(
-        "click",
-        this.handleHorizontalTrackClick,
-      );
-    }
-
-    // Initial update
+  override updated() {
     this.updateScrollbars();
   }
 
   override disconnectedCallback() {
     super.disconnectedCallback();
 
-    // Clean up event listeners
-    if (this._scrollContainer) {
-      this._scrollContainer.removeEventListener("scroll", this.handleScroll);
-      this._scrollContainer.removeEventListener(
-        "mouseenter",
-        this.handleMouseEnter,
-      );
-      this._scrollContainer.removeEventListener(
-        "mouseleave",
-        this.handleMouseLeave,
-      );
-    }
+    if (this._isDraggingVertical) this.handleVerticalThumbMouseUp();
+    if (this._isDraggingHorizontal) this.handleHorizontalThumbMouseUp();
 
-    if (this._verticalThumb) {
-      this._verticalThumb.removeEventListener(
-        "mousedown",
-        this.handleVerticalThumbMouseDown,
-      );
-    }
-
-    if (this._horizontalThumb) {
-      this._horizontalThumb.removeEventListener(
-        "mousedown",
-        this.handleHorizontalThumbMouseDown,
-      );
-    }
-
-    if (this._verticalScrollbar) {
-      this._verticalScrollbar.removeEventListener(
-        "click",
-        this.handleVerticalTrackClick,
-      );
-    }
-
-    if (this._horizontalScrollbar) {
-      this._horizontalScrollbar.removeEventListener(
-        "click",
-        this.handleHorizontalTrackClick,
-      );
-    }
-
-    // Cancel animation frame
     if (this._rafId !== null) {
       cancelAnimationFrame(this._rafId);
     }
 
-    // Clear timeout
     if (this._hideTimeoutId !== null) {
       clearTimeout(this._hideTimeoutId);
     }
@@ -232,24 +117,42 @@ export class CFScrollArea extends BaseElement {
 
     return html`
       <div class="scroll-area" part="root">
-        <div class="scroll-container" part="viewport">
+        <div
+          class="scroll-container"
+          part="viewport"
+          @scroll="${this.handleScroll}"
+          @mouseenter="${this.handleMouseEnter}"
+          @mouseleave="${this.handleMouseLeave}"
+        >
           <div class="scroll-content" part="content">
             <slot></slot>
           </div>
         </div>
         ${showVertical
           ? html`
-            <div class="scrollbar scrollbar-vertical" part="scrollbar-vertical">
-              <div class="scrollbar-thumb scrollbar-thumb-vertical"
-                part="thumb-vertical"></div>
+            <div
+              class="scrollbar scrollbar-vertical"
+              part="scrollbar-vertical"
+              @click="${this.handleVerticalTrackClick}"
+            >
+              <div
+                class="scrollbar-thumb scrollbar-thumb-vertical"
+                part="thumb-vertical"
+                @mousedown="${this.handleVerticalThumbMouseDown}"
+              ></div>
             </div>
           `
           : ""} ${showHorizontal
           ? html`
-            <div class="scrollbar scrollbar-horizontal" part="scrollbar-horizontal">
+            <div
+              class="scrollbar scrollbar-horizontal"
+              part="scrollbar-horizontal"
+              @click="${this.handleHorizontalTrackClick}"
+            >
               <div
                 class="scrollbar-thumb scrollbar-thumb-horizontal"
                 part="thumb-horizontal"
+                @mousedown="${this.handleHorizontalThumbMouseDown}"
               ></div>
             </div>
           `
@@ -280,58 +183,46 @@ export class CFScrollArea extends BaseElement {
   };
 
   private updateScrollbars(): void {
-    if (!this._scrollContainer) return;
-
-    const {
-      scrollTop,
-      scrollLeft,
-      scrollHeight,
-      scrollWidth,
-      clientHeight,
-      clientWidth,
-    } = this._scrollContainer;
-
-    // Update vertical scrollbar
-    if (
-      this._verticalThumb && this._verticalScrollbar &&
-      (this.orientation === "vertical" || this.orientation === "both")
-    ) {
+    const container = this.#scrollContainer;
+    const verticalThumb = this.#verticalThumb;
+    const verticalScrollbar = this.#verticalScrollbar;
+    if (container && verticalThumb && verticalScrollbar) {
+      const { scrollTop, scrollHeight, clientHeight } = container;
       const scrollRatio = clientHeight / scrollHeight;
       const thumbHeight = Math.max(30, clientHeight * scrollRatio);
       const scrollableHeight = clientHeight - thumbHeight;
       const thumbPosition = (scrollTop / (scrollHeight - clientHeight)) *
         scrollableHeight;
 
-      this._verticalThumb.style.height = `${thumbHeight}px`;
-      this._verticalThumb.style.transform = `translateY(${thumbPosition}px)`;
+      verticalThumb.style.height = `${thumbHeight}px`;
+      verticalThumb.style.transform = `translateY(${thumbPosition}px)`;
 
       // Show/hide scrollbar based on content
       if (scrollHeight > clientHeight) {
-        this._verticalScrollbar.classList.add("scrollbar-visible");
+        verticalScrollbar.classList.add("scrollbar-visible");
       } else {
-        this._verticalScrollbar.classList.remove("scrollbar-visible");
+        verticalScrollbar.classList.remove("scrollbar-visible");
       }
     }
 
-    // Update horizontal scrollbar
-    if (
-      this._horizontalThumb && this._horizontalScrollbar &&
-      (this.orientation === "horizontal" || this.orientation === "both")
-    ) {
+    const horizontalThumb = this.#horizontalThumb;
+    const horizontalScrollbar = this.#horizontalScrollbar;
+    if (container && horizontalThumb && horizontalScrollbar) {
+      const { scrollLeft, scrollWidth, clientWidth } = container;
       const scrollRatio = clientWidth / scrollWidth;
       const thumbWidth = Math.max(30, clientWidth * scrollRatio);
       const scrollableWidth = clientWidth - thumbWidth;
       const thumbPosition = (scrollLeft / (scrollWidth - clientWidth)) *
         scrollableWidth;
 
-      this._horizontalThumb.style.width = `${thumbWidth}px`;
-      this._horizontalThumb.style.transform = `translateX(${thumbPosition}px)`;
+      horizontalThumb.style.width = `${thumbWidth}px`;
+      horizontalThumb.style.transform = `translateX(${thumbPosition}px)`;
 
       // Show/hide scrollbar based on content
       if (scrollWidth > clientWidth) {
-        this._horizontalScrollbar.classList.add("scrollbar-visible");
+        horizontalScrollbar.classList.add("scrollbar-visible");
       } else {
-        this._horizontalScrollbar.classList.remove("scrollbar-visible");
+        horizontalScrollbar.classList.remove("scrollbar-visible");
       }
     }
   }
@@ -342,8 +233,8 @@ export class CFScrollArea extends BaseElement {
       this._hideTimeoutId = null;
     }
 
-    this._verticalScrollbar?.classList.add("scrollbar-hover");
-    this._horizontalScrollbar?.classList.add("scrollbar-hover");
+    this.#verticalScrollbar?.classList.add("scrollbar-hover");
+    this.#horizontalScrollbar?.classList.add("scrollbar-hover");
   }
 
   private hideScrollbarsDelayed(): void {
@@ -352,8 +243,8 @@ export class CFScrollArea extends BaseElement {
     }
 
     this._hideTimeoutId = globalThis.setTimeout(() => {
-      this._verticalScrollbar?.classList.remove("scrollbar-hover");
-      this._horizontalScrollbar?.classList.remove("scrollbar-hover");
+      this.#verticalScrollbar?.classList.remove("scrollbar-hover");
+      this.#horizontalScrollbar?.classList.remove("scrollbar-hover");
       this._hideTimeoutId = null;
     }, 1000);
   }
@@ -368,29 +259,28 @@ export class CFScrollArea extends BaseElement {
 
     this._isDraggingVertical = true;
     this._dragStartY = event.clientY;
-    this._scrollStartY = this._scrollContainer?.scrollTop || 0;
+    this._scrollStartY = this.#scrollContainer?.scrollTop || 0;
 
     document.addEventListener("mousemove", this.handleVerticalThumbMouseMove);
     document.addEventListener("mouseup", this.handleVerticalThumbMouseUp);
 
-    this._verticalScrollbar?.classList.add("scrollbar-dragging");
+    this.#verticalScrollbar?.classList.add("scrollbar-dragging");
   };
 
   private handleVerticalThumbMouseMove = (event: MouseEvent): void => {
-    if (
-      !this._isDraggingVertical || !this._scrollContainer ||
-      !this._verticalThumb
-    ) return;
+    const container = this.#scrollContainer;
+    const thumb = this.#verticalThumb;
+    if (!this._isDraggingVertical || !container || !thumb) return;
 
     const deltaY = event.clientY - this._dragStartY;
-    const { scrollHeight, clientHeight } = this._scrollContainer;
-    const thumbHeight = parseFloat(this._verticalThumb.style.height) || 0;
+    const { scrollHeight, clientHeight } = container;
+    const thumbHeight = parseFloat(thumb.style.height) || 0;
     const scrollableHeight = clientHeight - thumbHeight;
     const scrollRatio = deltaY / scrollableHeight;
     const newScrollTop = this._scrollStartY +
       scrollRatio * (scrollHeight - clientHeight);
 
-    this._scrollContainer.scrollTop = newScrollTop;
+    container.scrollTop = newScrollTop;
   };
 
   private handleVerticalThumbMouseUp = (): void => {
@@ -401,7 +291,7 @@ export class CFScrollArea extends BaseElement {
     );
     document.removeEventListener("mouseup", this.handleVerticalThumbMouseUp);
 
-    this._verticalScrollbar?.classList.remove("scrollbar-dragging");
+    this.#verticalScrollbar?.classList.remove("scrollbar-dragging");
 
     // Check if mouse is still over the component
     const isHovering = this.matches(":hover");
@@ -411,20 +301,20 @@ export class CFScrollArea extends BaseElement {
   };
 
   private handleVerticalTrackClick = (event: MouseEvent): void => {
-    if (!this._scrollContainer || !this._verticalThumb) return;
+    const container = this.#scrollContainer;
+    const scrollbar = this.#verticalScrollbar;
+    const thumb = this.#verticalThumb;
+    if (!container || !scrollbar || !thumb || event.target === thumb) return;
 
-    const target = event.target as HTMLElement;
-    if (target === this._verticalThumb) return;
-
-    const rect = this._verticalScrollbar!.getBoundingClientRect();
+    const rect = scrollbar.getBoundingClientRect();
     const clickY = event.clientY - rect.top;
-    const thumbHeight = parseFloat(this._verticalThumb.style.height) || 0;
-    const { scrollHeight, clientHeight } = this._scrollContainer;
+    const thumbHeight = parseFloat(thumb.style.height) || 0;
+    const { scrollHeight, clientHeight } = container;
     const scrollRatio = (clickY - thumbHeight / 2) /
       (clientHeight - thumbHeight);
     const newScrollTop = scrollRatio * (scrollHeight - clientHeight);
 
-    this._scrollContainer.scrollTop = Math.max(
+    container.scrollTop = Math.max(
       0,
       Math.min(newScrollTop, scrollHeight - clientHeight),
     );
@@ -440,29 +330,28 @@ export class CFScrollArea extends BaseElement {
 
     this._isDraggingHorizontal = true;
     this._dragStartX = event.clientX;
-    this._scrollStartX = this._scrollContainer?.scrollLeft || 0;
+    this._scrollStartX = this.#scrollContainer?.scrollLeft || 0;
 
     document.addEventListener("mousemove", this.handleHorizontalThumbMouseMove);
     document.addEventListener("mouseup", this.handleHorizontalThumbMouseUp);
 
-    this._horizontalScrollbar?.classList.add("scrollbar-dragging");
+    this.#horizontalScrollbar?.classList.add("scrollbar-dragging");
   };
 
   private handleHorizontalThumbMouseMove = (event: MouseEvent): void => {
-    if (
-      !this._isDraggingHorizontal || !this._scrollContainer ||
-      !this._horizontalThumb
-    ) return;
+    const container = this.#scrollContainer;
+    const thumb = this.#horizontalThumb;
+    if (!this._isDraggingHorizontal || !container || !thumb) return;
 
     const deltaX = event.clientX - this._dragStartX;
-    const { scrollWidth, clientWidth } = this._scrollContainer;
-    const thumbWidth = parseFloat(this._horizontalThumb.style.width) || 0;
+    const { scrollWidth, clientWidth } = container;
+    const thumbWidth = parseFloat(thumb.style.width) || 0;
     const scrollableWidth = clientWidth - thumbWidth;
     const scrollRatio = deltaX / scrollableWidth;
     const newScrollLeft = this._scrollStartX +
       scrollRatio * (scrollWidth - clientWidth);
 
-    this._scrollContainer.scrollLeft = newScrollLeft;
+    container.scrollLeft = newScrollLeft;
   };
 
   private handleHorizontalThumbMouseUp = (): void => {
@@ -473,7 +362,7 @@ export class CFScrollArea extends BaseElement {
     );
     document.removeEventListener("mouseup", this.handleHorizontalThumbMouseUp);
 
-    this._horizontalScrollbar?.classList.remove("scrollbar-dragging");
+    this.#horizontalScrollbar?.classList.remove("scrollbar-dragging");
 
     // Check if mouse is still over the component
     const isHovering = this.matches(":hover");
@@ -483,19 +372,19 @@ export class CFScrollArea extends BaseElement {
   };
 
   private handleHorizontalTrackClick = (event: MouseEvent): void => {
-    if (!this._scrollContainer || !this._horizontalThumb) return;
+    const container = this.#scrollContainer;
+    const scrollbar = this.#horizontalScrollbar;
+    const thumb = this.#horizontalThumb;
+    if (!container || !scrollbar || !thumb || event.target === thumb) return;
 
-    const target = event.target as HTMLElement;
-    if (target === this._horizontalThumb) return;
-
-    const rect = this._horizontalScrollbar!.getBoundingClientRect();
+    const rect = scrollbar.getBoundingClientRect();
     const clickX = event.clientX - rect.left;
-    const thumbWidth = parseFloat(this._horizontalThumb.style.width) || 0;
-    const { scrollWidth, clientWidth } = this._scrollContainer;
+    const thumbWidth = parseFloat(thumb.style.width) || 0;
+    const { scrollWidth, clientWidth } = container;
     const scrollRatio = (clickX - thumbWidth / 2) / (clientWidth - thumbWidth);
     const newScrollLeft = scrollRatio * (scrollWidth - clientWidth);
 
-    this._scrollContainer.scrollLeft = Math.max(
+    container.scrollLeft = Math.max(
       0,
       Math.min(newScrollLeft, scrollWidth - clientWidth),
     );

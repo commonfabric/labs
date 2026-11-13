@@ -212,6 +212,60 @@ describe("XAppView recovering a failed load", () => {
     });
   });
 
+  describe("across leaving and rejoining the document", () => {
+    it("runs a failed load again while it is in the document, and not while it is out of it", async () => {
+      const restore = installBrowserGlobals(PAGE_HREF);
+      const errors = stub(console, "error", () => {});
+      try {
+        const { XAppView } = await import("../src/views/AppView.ts");
+        // Joining the document starts Lit's update cycle, which would render
+        // into a DOM this test does not have. The view under test is the one
+        // that skips rendering and nothing else.
+        class UnrenderedAppView extends XAppView {
+          protected override shouldUpdate(): boolean {
+            return false;
+          }
+        }
+        const runtime = stubRuntime();
+        const view = new UnrenderedAppView();
+        view.app = {
+          identity: {},
+          config: {},
+          view: { spaceDid: SPACE },
+        } as never;
+        view.space = SPACE;
+        view.rt = runtime.rt as never;
+
+        // Joining the document with its runtime already set is what has it
+        // listen, ahead of any update.
+        view.connectedCallback();
+        view._spaceRootPattern.run();
+        await view._spaceRootPattern.taskComplete.catch(() => {});
+        runtime.restore();
+        await view._spaceRootPattern.taskComplete.catch(() => {});
+        const whileIn = runtime.rootLoads;
+
+        view.disconnectedCallback();
+        runtime.restore();
+        await view._spaceRootPattern.taskComplete.catch(() => {});
+        const whileOut = runtime.rootLoads;
+
+        view.connectedCallback();
+        runtime.restore();
+        await view._spaceRootPattern.taskComplete.catch(() => {});
+
+        expect({ whileIn, whileOut, rejoined: runtime.rootLoads }).toEqual({
+          whileIn: 2,
+          whileOut: 2,
+          rejoined: 3,
+        });
+      } finally {
+        errors.restore();
+        restore();
+      }
+    });
+  });
+
   describe("once its space admits the runtime's principal again", () => {
     it("runs a selection showing a failed load again, and shows the piece", async () => {
       const restore = installBrowserGlobals(PAGE_HREF);

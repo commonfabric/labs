@@ -57,6 +57,9 @@ describe("topics-browser-measurement", () => {
    * Whether the deployment serves the board's view: its page shows what the
    * serving runtime delivers and runs no lift's module, so no sample taken on
    * it can attribute a run by position, and the samplers refuse one whole.
+   * Read whether or not the deployment declares its shell's posture: the lane
+   * serving the first-party default builds its shell with no posture define,
+   * and that shell runs whatever arm the toolshed publishes.
    */
   let servedViews: boolean;
   let program: TopicsProgram;
@@ -66,7 +69,7 @@ describe("topics-browser-measurement", () => {
   // cites the other, so the pivot has a row to build and a backlink to find.
   beforeAll(async () => {
     posture = await readTopicsBrowserPosture(env.API_URL, env.FRONTEND_URL);
-    servedViews = posture.declared && posture.servedViews;
+    servedViews = posture.servedViews;
     program = await prepareTopicsProgram();
     identity = await seedIdentity(
       `topics browser measurement ${crypto.randomUUID()}`,

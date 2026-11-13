@@ -33,7 +33,7 @@ import type { MemorySpace, Result } from "../storage/interface.ts";
 import type { HostOccupancy } from "./host.ts";
 import type { ServedAclChangeData } from "./served-acl-change.ts";
 import type { SpaceServerPolicy } from "./space-server.ts";
-import type { ServingLoopStats } from "./stats.ts";
+import type { ServingLoopCounters, ServingLoopStats } from "./stats.ts";
 import { LifecycleVerbFailure } from "./lifecycle-verb.ts";
 import type {
   LifecyclePhaseTiming,
@@ -251,11 +251,11 @@ export type PlaneNotices = {
   "host.stats": { stats: ServingLoopStats };
 
   /**
-   * The `events` block of the counters alone, posted ahead of each wave
-   * commit. It updates the copy the last `host.stats` left, which the next
-   * `host.stats` replaces whole.
+   * The counters without the settle blocks, posted ahead of each wave
+   * commit. They update the copy the last `host.stats`
+   * left, which the next `host.stats` replaces whole.
    */
-  "host.eventStats": { events: ServingLoopStats["events"] };
+  "host.counters": { counters: ServingLoopCounters };
   "host.activationSettled": {
     space: MemorySpace;
     outcome: "active" | "refused" | "failed";

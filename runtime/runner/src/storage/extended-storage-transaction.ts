@@ -1,12 +1,9 @@
 import type { TextChange } from "@commonfabric/api";
 import {
   deepFreeze,
-  type FabricPlainObject,
   type FabricValue,
   hashOf,
   hashStringOf,
-  type MutableFabricPlainObjectLayer,
-  shallowMutableClone,
   taggedHashStringOf,
 } from "@commonfabric/data-model";
 import { internSchema } from "@commonfabric/data-model-schema";
@@ -32,7 +29,6 @@ import {
   parseSignedOwnerReleaseByIntentRequest,
   verifyOwnerReleaseByIntentSignature,
 } from "@commonfabric/memory/v2/cfc-owner-release-by-intent";
-import { isArrayIndexPropertyName } from "@commonfabric/js-values/arrays";
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { toUnpaddedBase64url } from "@commonfabric/bytes/base64url";
@@ -190,7 +186,6 @@ import {
   type IExtendedStorageTransaction,
   type IMemorySpaceAddress,
   type InactiveTransactionError,
-  type INotFoundError,
   type IReadActivity,
   type IReadOptions,
   type IStorageTransaction,
@@ -423,6 +418,43 @@ function sealJournalMembers(members: object): void {
 function isEmptyPlainRecord(value: unknown): boolean {
   return isPlainObject(value, false) &&
     Object.getOwnPropertyNames(value).length === 0;
+}
+
+/**
+ * Freezes `trace` where it stands, as `deepFreeze()` would. A trace and two
+ * addresses holding only the members their types declare are five objects,
+ * frozen by hand without the cache entry `deepFreeze()` adds for each object,
+ * which is most of what recording a trace costs. The types require every
+ * member they declare, so a trace and addresses with as many members as that
+ * hold no other. A trace holding any other member goes through `deepFreeze()`.
+ */
+function freezeDereferenceTrace(
+  trace: CfcDereferenceTrace,
+): CfcDereferenceTrace {
+  const { source, target } = trace;
+  if (
+    ownMemberCount(trace) !== 3 || ownMemberCount(source) !== 4 ||
+    ownMemberCount(target) !== 4
+  ) {
+    return deepFreeze(trace);
+  }
+  Object.freeze(source.path);
+  Object.freeze(source);
+  Object.freeze(target.path);
+  Object.freeze(target);
+  return Object.freeze(trace);
+}
+
+/**
+ * Helper for `freezeDereferenceTrace()`, which counts the own enumerable
+ * members of `record`, the ones `deepFreeze()` freezes.
+ */
+function ownMemberCount(record: object): number {
+  let count = 0;
+  for (const key in record) {
+    if (Object.hasOwn(record, key)) count++;
+  }
+  return count;
 }
 
 // Read-only view of the transaction's CFC state, returned by getCfcState().
@@ -2068,19 +2100,9 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     key: string,
     variant: string,
   ): { value: unknown } | undefined {
-    // Both caches key on path and schema, not on which instant is being read,
-    // and they are dropped on write to stay level with current state. A read
-    // resolving against an earlier epoch is describing a different instant, so
-    // it neither takes from them nor adds to them — serving one across that
-    // boundary would hand a materialized read's value to a current one, or the
-    // reverse.
-    if (this.#readEpoch !== undefined) return undefined;
-    // Cell traversals, like link-resolution memos, must stay within their
-    // ambient read classification; a scheduler probe cannot authorize a get.
-    variant = `${
-      this.#snapshotMemoKey(undefined, this.#ambientReadMeta)
-    }|${variant}`;
-    const cached = this.#readResultCache.get(key)?.get(variant);
+    const cacheVariant = this.#readResultCacheVariant(variant);
+    if (cacheVariant === undefined) return undefined;
+    const cached = this.#readResultCache.get(key)?.get(cacheVariant);
     if (cached === undefined) {
       this.#readResultCacheMisses++;
     } else {
@@ -2094,17 +2116,60 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     variant: string,
     value: unknown,
   ): void {
-    if (this.#readEpoch !== undefined) return;
-    variant = `${
-      this.#snapshotMemoKey(undefined, this.#ambientReadMeta)
-    }|${variant}`;
+    const cacheVariant = this.#readResultCacheVariant(variant);
+    if (cacheVariant === undefined) return;
     let byVariant = this.#readResultCache.get(key);
     if (byVariant === undefined) {
       byVariant = new Map();
       this.#readResultCache.set(key, byVariant);
     }
-    byVariant.set(variant, { value });
+    byVariant.set(cacheVariant, { value });
     this.#readResultCacheSets++;
+  }
+
+  /**
+   * Helper for `getCachedReadResult()` and `setCachedReadResult()`, which
+   * returns the key a read of `variant` files under in a view's entry of the
+   * read result cache, or `undefined` when this transaction may neither serve
+   * nor store a cached read.
+   */
+  #readResultCacheVariant(variant: string): string | undefined {
+    // This cache keys on path and schema, not on which instant is being read,
+    // and is dropped on write to stay level with current state. A read
+    // resolving against an earlier epoch is describing a different instant, so
+    // it neither takes from it nor adds to it — serving one across that
+    // boundary would hand a materialized read's value to a current one, or the
+    // reverse.
+    if (this.#readEpoch !== undefined || !this.#memoizesReads()) {
+      return undefined;
+    }
+    // Cell traversals, like link-resolution memos, must stay within their
+    // ambient read classification; a scheduler probe cannot authorize a get.
+    return `${
+      this.#snapshotMemoKey(undefined, this.#ambientReadMeta)
+    }|${variant}`;
+  }
+
+  /**
+   * Helper for `getSnapshotMemo()` and `#readResultCacheVariant()`, which
+   * returns whether this transaction may serve or store a memoized read.
+   */
+  #memoizesReads(): boolean {
+    return (
+      // A finished transaction answers no reads, so nothing it memoized
+      // earlier may be handed out as if it had.
+      this.status().status === "ready" &&
+      // Once CFC is prepared, the read path's `read-after-prepare`
+      // invalidation is load-bearing: a memoized read issues no reads and
+      // would leave a prepared digest standing over a read it never made.
+      this.#cfcState.prepare.status !== "prepared" &&
+      // The UI-input blind-write mode tags every read it sees
+      // `ignoreReadForCommit`. An entry made under it, served after it is
+      // cleared, would stand in for reads that are supposed to carry a
+      // value-equality commit precondition — and the precondition would
+      // simply not be there.
+      !isUiInputBlindWriteTx(this)
+    );
   }
 
   resetCurrentReadMemoization(): void {
@@ -2112,19 +2177,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   }
 
   getSnapshotMemo(): Map<string, unknown> | undefined {
-    // A finished transaction answers no reads, so nothing it memoized earlier
-    // may be handed out as if it had.
-    if (this.status().status !== "ready") return undefined;
-    // Once CFC is prepared, the read path's `read-after-prepare` invalidation
-    // is load-bearing: a memoized resolution issues no reads and would leave a
-    // prepared digest standing over a read it never made.
-    if (this.#cfcState.prepare.status === "prepared") return undefined;
-    // The UI-input blind-write mode tags every read it sees
-    // `ignoreReadForCommit`. An entry made under it, served after it is
-    // cleared, would stand in for reads that are supposed to carry a
-    // value-equality commit precondition — and the precondition would simply
-    // not be there.
-    if (isUiInputBlindWriteTx(this)) return undefined;
+    if (!this.#memoizesReads()) return undefined;
     const epoch = this.#readEpoch;
     const meta = this.#ambientReadMeta;
     if (epoch === undefined && meta === undefined) return this.#snapshotMemo;
@@ -2270,7 +2323,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     // identity-stable. Mirrors the chokepoint pattern on
     // `recordCfcWritePolicyInput()`; together they ensure every CfcAddress
     // that flows into the digest input lives behind a deep-frozen wrapper.
-    traces.push(deepFreeze(trace));
+    traces.push(freezeDereferenceTrace(trace));
     this.#cfcInstrumentation.onDereferenceTrace?.(traces.length);
     if (changesDigest) {
       this.invalidateCfc("dereference-trace-added");
@@ -2920,10 +2973,8 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       schema: storedSchema,
       releasedClauseDigests: request.releasedClauseDigests,
     });
-    if (plan.schema === undefined) {
-      refuse("the document stores no schema");
-    }
-    const lowered = plan.schema;
+    // A plan over a stored schema always returns one.
+    const lowered = plan.schema ?? storedSchema;
     // Deliberately NOT marked CFC-relevant, like an owner release: the checks
     // above are the whole of the verification, and a throw leaves nothing
     // written.
@@ -3071,15 +3122,15 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    */
   #preparedActivityStands(): boolean {
     const prepared = this.#preparedSnapshot;
-    // A prepared state always has its snapshot; without one there is nothing
-    // the commit could be shown to match.
-    if (prepared === undefined) return false;
     const current = this.#activitySnapshot();
     if (current === prepared) {
       this.#cfcInstrumentation.onPreparedDigest?.("memo");
       return true;
     }
-    return this.#digestOf(current) === this.#digestOf(prepared);
+    // A prepared state always has its snapshot; without one there is nothing
+    // the commit could be shown to match.
+    return prepared !== undefined &&
+      this.#digestOf(current) === this.#digestOf(prepared);
   }
 
   #buildPreparedDigestInput(): PreparedDigestInput {
@@ -3178,17 +3229,17 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       }));
     }
 
-    // The four arrays above hold records frozen where they were made. Every
-    // other member is small, and holds records the transaction deep-froze
-    // when it recorded them or containers built here, which `deepFreeze()`
-    // finishes.
+    // The four arrays above hold records frozen where they were made, and so
+    // do the dereference traces (`freezeDereferenceTrace()`). Every other
+    // member is small, and holds records the transaction deep-froze when it
+    // recorded them or containers built here, which `deepFreeze()` finishes.
     return Object.freeze({
       consumedReads: Object.freeze(consumedReads),
       attemptedWrites: Object.freeze(attemptedWrites),
       writes: Object.freeze(writes),
       writeAttemptLog: Object.freeze(writeAttemptLog),
+      dereferenceTraces: Object.freeze([...this.#cfcState.dereferenceTraces]),
       ...deepFreeze({
-        dereferenceTraces: [...this.#cfcState.dereferenceTraces],
         triggerReads: [...this.#cfcState.triggerReads],
         writePolicyInputs: [...this.#cfcState.writePolicyInputs],
         ...(this.#cfcState.assertedValueRoots.length > 0
@@ -4199,78 +4250,9 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       value,
       writeChokepointMark(options),
     );
-    if (
-      writeResult.error &&
-      (writeResult.error.name === "NotFoundError")
-    ) {
-      if (options?.delete) {
-        // Deleting a slot whose path doesn't exist is a no-op; don't
-        // materialize intermediates just to remove nothing.
-        return;
-      }
-      // Create parent entries if needed.
-      // errorPath includes the missing key (consistent with read errors).
-      // lastExistingPath is one level up - the actual last existing parent.
-      const errorPath = (writeResult.error as INotFoundError).path;
-      const lastExistingPath = errorPath.slice(0, -1);
-      // When document doesn't exist (errorPath is []), we don't need to read -
-      // just start with {}. But if errorPath has content (e.g., ["foo"]), the
-      // document exists and we need to read from lastExistingPath to preserve
-      // existing fields.
-      let valueObj: MutableFabricPlainObjectLayer;
-      if (errorPath.length === 0) {
-        valueObj = {};
-      } else {
-        const currentValue = this.readOrThrow({
-          ...address,
-          path: lastExistingPath,
-        }, { meta: ignoreReadForScheduling });
-        if (!isObjectOrArray(currentValue)) {
-          // This should have already been caught as type mismatch error
-          throw new Error(
-            `Value at path ${address.path.join("/")} is not an object`,
-          );
-        }
-        // Stored objects are deep-frozen by `fabricFromConvertibleJsValue()`.
-        // Clone before mutation to avoid `TypeError` on frozen objects: this
-        // always copies (the value may be the transaction's working copy, which
-        // must not be mutated in place), and it deep-freezes the bound children
-        // as inexpensive defense-in-depth against accidental deeper mutation of
-        // the shared input.
-        valueObj = shallowMutableClone(
-          currentValue,
-        ) as MutableFabricPlainObjectLayer;
-      }
-      const remainingPath = address.path.slice(lastExistingPath.length);
-      if (remainingPath.length === 0) {
-        throw new Error(
-          `Invalid error path: ${errorPath.join("/")}`,
-        );
-      }
-      const lastKey = remainingPath.pop()!;
-      let nextValue: MutableFabricPlainObjectLayer = valueObj;
-      // Create intermediate containers. The container type depends on whether
-      // the NEXT key (the one that will access this container) is a valid array
-      // index.
-      for (let i = 0; i < remainingPath.length; i++) {
-        const key = remainingPath[i];
-        const nextKey = remainingPath[i + 1] ?? lastKey;
-        const isNextKeyArrayIndex = isArrayIndexPropertyName(nextKey);
-        nextValue =
-          nextValue[key] =
-            (isNextKeyArrayIndex ? [] : {}) as FabricPlainObject;
-      }
-      nextValue[lastKey] = value;
-      const parentAddress = { ...address, path: lastExistingPath };
-      const writeResultRetry = this.tx.write(
-        parentAddress,
-        valueObj,
-        writeChokepointMark(),
-      );
-      if (writeResultRetry.error) {
-        throw toThrowable(writeResultRetry.error);
-      }
-    } else if (writeResult.error) {
+    // The storage transaction creates whatever containers the path needs,
+    // so an error here is a refusal of the write itself.
+    if (writeResult.error) {
       throw toThrowable(writeResult.error);
     }
     this.#noteWrite();

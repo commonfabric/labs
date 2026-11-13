@@ -13,7 +13,7 @@ workloads, byte-identical across arms, adjacent runs, counters over
 latencies, no latency quoted above load ~5, causation by ablation.
 
 The executor and its two execution postures are implemented in the current
-repository. The first-party default is OFF; explicit `true` selects ON.
+repository. The first-party default is ON; explicit `false` selects OFF.
 OW28's served `compileAndRun` path and scoped child lifecycle have direct
 acceptance coverage. The coverage register tracks the Phase 7 gate evidence
 and independently scoped follow-ups.
@@ -37,9 +37,17 @@ records the current dispositions; the
 records the omission evidence and the bounded status investigation.
 The first-party default and flip records belong to the
 [`serverExecution` registry](../development/EXPERIMENTAL_OPTIONS.md#serverexecution).
-The ON soak is paused. A renewed ON rollout follows the Phase 7 gate
-dispositions and the owner's rollout decision; the flip record alone does not
-establish current readiness.
+The default is ON again since 2026-11-11 and the ON soak runs on main; the
+post-soak removal PR (Phase 7 task 2) retires the flag and the OFF path.
+
+**Delta 2026-11-11 (the re-FLIP): `SERVER_EXECUTION_DEFAULT_ENABLED` →
+`true` by the owner's rollout decision, as the data-only change the
+2026-09-02 hygiene provides for: the constant plus current-status prose, with
+no workflow, test, or role edit. The two-arm lanes resolve `default` = ON and
+`opposite` = OFF (the explicit-`false` guard on the opposite-built shell,
+with the `server-execution-off` record variant). Explicit `false` selects
+OFF per deployment and is the rollback lever. The ON soak resumes at this
+change's merge.**
 
 **Delta 2026-10-31 (the verbs on the space's memory session): under ON, a
 lifecycle verb travels only as a `pattern.lifecycle` memory request on the

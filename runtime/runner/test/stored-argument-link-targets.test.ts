@@ -62,6 +62,20 @@ const childTakesLabel = (marker: string): RuntimeProgram =>
     "",
   ].join("\n"));
 
+/**
+ * A pattern whose argument declares what `far` holds, which its body never
+ * reads, and which reports `marker`, which names the version.
+ */
+const farUnread = (marker: string): RuntimeProgram =>
+  programOf([
+    "import { pattern } from 'commonfabric';",
+    "interface Args { far: { n: number } }",
+    "export default pattern<Args, { marker: string }>(() => {",
+    `  return { marker: ${JSON.stringify(marker)} };`,
+    "});",
+    "",
+  ].join("\n"));
+
 /** A pattern with no nodes, over an open argument. */
 const emptyPattern = programOf([
   "import { pattern } from 'commonfabric';",
@@ -191,6 +205,96 @@ describe("stored argument link targets", () => {
     });
   });
 
+  describe("a piece stored under another pattern", () => {
+    let server: MemoryV2Server.Server;
+    const runtimes: { runtime: Runtime; storage: EmulatedStorageManager }[] =
+      [];
+
+    beforeEach(() => {
+      server = newSharedServer();
+    });
+    afterEach(async () => {
+      for (const { runtime, storage } of runtimes.splice(0)) {
+        await runtime.dispose();
+        await storage.close();
+      }
+      await server.close();
+    });
+
+    const newRuntime = (): Runtime => {
+      const storage = EmulatedStorageManager.connectTo(server, { as: signer });
+      const runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: storage,
+      });
+      runtimes.push({ runtime, storage });
+      return runtime;
+    };
+
+    it("starts at the new version requesting nothing its argument links in another space", async () => {
+      // The setup reads the argument it stored as it stands, raw, and judges
+      // the link in `far` as a link. Nothing at either version reads what
+      // `far` reaches, so a runtime that first sees the piece at the update
+      // has no reason to load it.
+
+      const elsewhere = (await Identity.fromPassphrase(
+        "stored-argument-link-targets far space",
+      )).did();
+      const author = newRuntime();
+      const far = author.getCell(elsewhere, "far value", undefined);
+      const farTx = author.edit();
+      far.withTx(farTx).set({ n: 1 });
+      expect((await farTx.commit().settled).error).toBeUndefined();
+      const tx = author.edit();
+      const first = await author.patternManager.compilePattern(
+        farUnread("v1"),
+        { space, tx },
+      );
+      const authored = author.getCell<Record<string, unknown>>(
+        space,
+        "piece linking another space",
+        undefined,
+        tx,
+      );
+      author.run(tx, first, { far }, authored);
+      author.prepareTxForCommit(tx);
+      expect((await tx.commit().settled).error).toBeUndefined();
+      await authored.pull();
+      await author.idle();
+      await author.storageManager.synced();
+      author.runner.stop(authored);
+
+      const cold = newRuntime();
+      const piece = cold.getCell<Record<string, unknown>>(
+        space,
+        "piece linking another space",
+      );
+      await piece.sync();
+      const provider = cold.storageManager.open(elsewhere);
+      const sync = provider.sync;
+      const requested: string[] = [];
+      provider.sync = (id, selector, scope, instance) => {
+        requested.push(id);
+        return sync.call(provider, id, selector, scope, instance);
+      };
+      try {
+        const second = await cold.patternManager.compilePattern(
+          farUnread("v2"),
+          { space },
+        );
+        await cold.runSynced(piece, second);
+        await cold.runner.idlePieceInstantiationSettlements();
+        await cold.idle();
+        await cold.storageManager.synced();
+        expect(await piece.key("marker").pull()).toBe("v2");
+      } finally {
+        provider.sync = sync;
+      }
+
+      expect(requested).toStrictEqual([]);
+    });
+  });
+
   describe("a pre-sync captured for another principal", () => {
     let storageManager: ReturnType<typeof StorageManager.emulate>;
     let runtime: Runtime;
@@ -269,6 +373,86 @@ describe("stored argument link targets", () => {
 
       expect(requested).toContain(argument.getAsNormalizedFullLink().id);
       expect(requested).not.toContain(ownTarget.getAsNormalizedFullLink().id);
+    });
+  });
+
+  describe("an argument linking out of its own space", () => {
+    let storageManager: ReturnType<typeof StorageManager.emulate>;
+    let runtime: Runtime;
+
+    beforeEach(() => {
+      storageManager = StorageManager.emulate({ as: signer });
+      runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager,
+      });
+    });
+    afterEach(async () => {
+      await runtime?.dispose();
+      await storageManager?.close();
+    });
+
+    it("requests the targets in the argument's space and none in another", async () => {
+      // Setup reads no link that leaves the argument's space and scope, so
+      // naming such a target would load a document nothing in the setup
+      // reads, and for a Home linking each of its rooms, every room.
+
+      const elsewhere = (await Identity.fromPassphrase(
+        "stored-argument-link-targets elsewhere",
+      )).did();
+      const far = runtime.getCell(elsewhere, "far target", undefined);
+      const farTx = runtime.edit();
+      far.withTx(farTx).set({ n: 2 });
+      expect((await farTx.commit().settled).error).toBeUndefined();
+      const tx = runtime.edit();
+      const near = runtime.getCell(space, "near target", undefined, tx);
+      near.set({ n: 1 });
+      const argument = runtime.getCell<Record<string, unknown>>(
+        space,
+        "argument linking out",
+        undefined,
+        tx,
+      );
+      argument.set({ near, far });
+      const piece = runtime.getCell<Record<string, unknown>>(
+        space,
+        "piece over an argument linking out",
+        undefined,
+        tx,
+      );
+      piece.set({});
+      piece.setMetaRaw(
+        "argument",
+        argument.getAsWriteRedirectLink({ base: piece }),
+        rawMetaWriteAuthorization,
+      );
+      expect((await tx.commit().settled).error).toBeUndefined();
+      await runtime.storageManager.synced();
+
+      const pattern = await runtime.patternManager.compilePattern(
+        emptyPattern,
+        { space },
+      );
+      const requested: string[] = [];
+      const restores = [space, elsewhere].map((target) => {
+        const provider = storageManager.open(target);
+        const sync = provider.sync;
+        provider.sync = (id, selector, scope, instance) => {
+          requested.push(id);
+          return sync.call(provider, id, selector, scope, instance);
+        };
+        return () => {
+          provider.sync = sync;
+        };
+      });
+      try {
+        await runtime.runner.syncStoredPieceCells(piece, pattern);
+      } finally {
+        for (const restore of restores) restore();
+      }
+
+      expect(requested).toContain(near.getAsNormalizedFullLink().id);
+      expect(requested).not.toContain(far.getAsNormalizedFullLink().id);
     });
   });
 });

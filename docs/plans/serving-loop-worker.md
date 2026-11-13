@@ -34,10 +34,13 @@ posture, documents, all through `Engine.*` on an engine object. The wave commit
 sink's reads run there too: the heads a rebase decides on, the paths written
 since a sequence, an intrusion, and the paths the session that fired an event
 overwrote. Every one of those is a SQLite query; the engine's decoded-document
-cache is keyed by revision identity, and its branch-head cache is dropped
-whenever the connection's data version shows another connection's commit, so a
-second connection to the same WAL-mode file reads every committed revision and
-serves nothing stale. The worker opens one engine per space it serves,
+cache is keyed by revision identity, and its branch cache holds a branch's fork
+point, which never changes, and a head the branch has reached, which only moves
+forward. A read at a branch's head finds its row through the `head` table, and a
+read at a given sequence asks SQLite for the branch's head only when that
+sequence is past the head the cache holds, so a second connection to the same
+WAL-mode file reads every committed revision and serves nothing stale. The
+worker opens one engine per space it serves,
 read-through included, at the file the main thread names once it has opened the
 space itself. A store that is not a file cannot be shared this way, so the
 worker needs a file store. The lease is the memory server's map, which the
@@ -68,14 +71,14 @@ out is applied on the main thread, where the server sees each one land: the
 worker sends the `WaveSpaceCommit` (data throughout: operations, preconditions,
 confirmed reads, annotations, basis rows, consequence ids, delegated carriage,
 outbox appends) in the memory boundary's encoding, and the main thread applies
-it through a sink of its own per session, returning the result. The counter that
-keys the session's commits stays with the worker, because the outbox's own
-writes draw from the same counter under the same session: each commit crosses
-with the number the worker minted for it, and the main thread's sink is handed
-that number. The served-ACL-change commit crosses the same way, as the list of
-changes it applies; the main thread rebuilds the function from the list. A
-foreign batch and a change to another space's list leave the worker for that
-space's owner over the worker's own routed session
+it through a sink of its own under the sending session, returning the result.
+The counter that keys the session's commits stays with the worker, because the
+outbox's own writes draw from the same counter under the same session: each
+commit crosses with the number the worker minted for it, and the main thread's
+sink is handed that number. The served-ACL-change commit crosses the same way,
+as the list of changes it applies; the main thread rebuilds the function from
+the list. A foreign batch and a change to another space's list leave the worker
+for that space's owner over the worker's own routed session
 ([owner routing](../specs/server-side-execution/serving-loop.md#2-the-lease-single-deriver-operationally), on by default), and only the
 home batch and the home's changes cross the port; a host given no route sends
 them across the port with the home's.
@@ -141,13 +144,14 @@ the main thread registers a stats provider that returns the workers' latest
 copies taken together with the last copy of each worker that has closed
 (`stats-merge.ts`), so `/api/health/stats` keeps its shape and waits on
 nothing. Just ahead of each
-wave commit the worker also posts the `events` block alone, which the main
-thread merges into that copy: the whole counters, settle series included,
-cost about as much to post as a commit. The events post travels on the port
-the commit does, whose messages the main thread handles in order, so a client
-that has seen a wave's commit reads event counters that include what that
-wave's drain counted, and a later full post, never older than an events post
-before it, replaces the merged block with everything else. The loop's own
+wave commit the worker also posts its counters without the settle blocks
+(`ServingLoopCounters`), which the main thread merges into that copy: the
+settle series cost about as much to post as a commit. The counters post
+travels on the port the commit does, whose messages the main thread handles
+in order, so a client that has seen a wave's commit reads counters that
+include what that wave counted before its commit, and a later full post,
+never older than a counters post before it, replaces the merged counters
+with everything else. The loop's own
 logger counts and timing statistics are each worker realm's own, so they
 cross on request (`ServingLoopHandle.diagnostics()`), each serving worker's
 with those of the compile worker it starts under `compile-worker:` logger

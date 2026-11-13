@@ -32,7 +32,7 @@ export function forEachFabricContainerValue(
 }
 
 class ContainerVisitor extends DefaultValueVisitor {
-  readonly #seen = new WeakSet<object>();
+  readonly #seen = new Set<object>();
   readonly #callback: (value: FabricContainerValue) => void;
   readonly #allowCycles: boolean;
 
@@ -93,7 +93,7 @@ export function estimateFabricValueSize(value: FabricValue): number {
 }
 
 class SizeVisitor extends DefaultValueVisitor {
-  readonly #seen = new WeakSet<object>();
+  readonly #seen = new Set<object>();
   #size = 0;
 
   get size(): number {
