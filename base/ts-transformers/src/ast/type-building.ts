@@ -18,6 +18,7 @@ import {
   readBindingAnnotation,
   readValueSymbol,
 } from "@commonfabric/schema-generator/value-annotation";
+import { spellingsWhere } from "@commonfabric/schema-generator/wrapper-names";
 import type { CrossStageState, TransformationContext } from "../core/mod.ts";
 import type { CaptureTreeNode } from "../utils/capture-tree.ts";
 import { createPropertyName } from "../utils/identifiers.ts";
@@ -1301,9 +1302,10 @@ export function getPreservedBindingTypeNode(
 /**
  * Helper for `getPreservedBindingTypeNode()`, which replaces each reference to
  * a type alias that names a wrapper-carrying type with the type node the alias
- * names, at the node itself, a member of a union or an intersection, and an
- * argument of `Writable` or of a scope wrapper. Returns the node it was given
- * when none of those is such a reference.
+ * names, at the positions `shouldPreserveBindingDeclaredTypeNode()` inspects:
+ * the node itself, a member of a union or an intersection, and the argument of
+ * a cell wrapper that keeps it or of a scope wrapper. Returns the node it was
+ * given when none of those is such a reference.
  *
  * Two kinds of reference stay as written. One names a type that carries no
  * wrapper: nothing in it needs the authored spelling, so the alias keeps its
@@ -1367,16 +1369,18 @@ function resolveTypeAliasReferences(
     // it finds there from the alias's type, where a `Default<typeof X>` is
     // left holding only `X`'s declared type, and so loses its value unless
     // that type is a literal one.
-    const wrapperName = getWrapperName(typeNode, checker);
-    const typeArguments =
-      wrapperName === "Writable" || scopeForWrapperName(wrapperName)
-        ? resolveAll(typeNode.typeArguments)
-        : undefined;
-    return typeArguments
+    const name = getWrapperName(typeNode, checker);
+    const [argument, ...rest] = typeNode.typeArguments;
+    const resolved = argument && name !== undefined &&
+        (ARGUMENT_KEEPING_WRAPPER_NAMES.has(name) ||
+          scopeForWrapperName(name) !== undefined)
+      ? resolve(argument)
+      : argument;
+    return resolved && resolved !== argument
       ? ts.factory.updateTypeReferenceNode(
         typeNode,
         typeNode.typeName,
-        ts.factory.createNodeArray(typeArguments),
+        ts.factory.createNodeArray([resolved, ...rest]),
       )
       : typeNode;
   }
@@ -1413,12 +1417,40 @@ const BODY_STRIPPED_WRAPPER_NAMES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Returns the name of the wrapper `reference` names — `Writable`, or one of
- * the wrappers a pattern body strips — and `undefined` for a reference to
- * anything else. A type of the author's own that shares a wrapper's name is
- * something else: the name counts only where it resolves to the declaration
- * `commonfabric` exports. Given no checker, or a node the checker cannot
- * resolve, as a synthesized one is, the spelling alone decides.
+ * The cell wrappers whose argument a binding's emitted type keeps as its
+ * author wrote it. A binding declared with one is captured as that cell, and
+ * capability narrowing wraps the argument it reads from the authored node, so a
+ * wrapper the pattern body strips from that argument reaches the capture's
+ * schema. The argument read is the first, the value the cell holds.
+ */
+const ARGUMENT_KEEPING_WRAPPER_NAMES = spellingsWhere({
+  Cell: true,
+  Writable: true,
+  ReadonlyCell: true,
+  WriteonlyCell: true,
+  ComparableCell: true,
+  Stream: true,
+  // A pattern body reads an opaque cell as its value, and a `computed()`
+  // captures that value. Its authored node would be captured as a cell.
+  OpaqueCell: false,
+  // An annotation for its argument itself. Capability narrowing would read its
+  // authored node as a cell.
+  Reactive: false,
+  // Its argument describes a database, not a value that has a default.
+  SqliteDb: false,
+  // Interfaces typing constructor values, not wrappers a type is declared with.
+  CellTypeConstructor: false,
+  ScopedCellTypeConstructor: false,
+});
+
+/**
+ * Returns the name of the wrapper `reference` names — a cell wrapper that
+ * keeps its argument, or one of the wrappers a pattern body strips — and
+ * `undefined` for a reference to anything else. A type of the author's own
+ * that shares a wrapper's name is something else: the name counts only where it
+ * resolves to the declaration `commonfabric` exports. Given no checker, or a
+ * node the checker cannot resolve, as a synthesized one is, the spelling alone
+ * decides.
  */
 function getWrapperName(
   reference: ts.TypeReferenceNode,
@@ -1428,7 +1460,10 @@ function getWrapperName(
     ? reference.typeName
     : reference.typeName.right;
   const name = identifier.text;
-  if (name !== "Writable" && !BODY_STRIPPED_WRAPPER_NAMES.has(name)) {
+  if (
+    !ARGUMENT_KEEPING_WRAPPER_NAMES.has(name) &&
+    !BODY_STRIPPED_WRAPPER_NAMES.has(name)
+  ) {
     return undefined;
   }
   const symbol = checker?.getSymbolAtLocation(identifier);
@@ -1441,7 +1476,8 @@ function getWrapperName(
 /**
  * Returns `true` for a declared type that carries a wrapper the pattern body's
  * view of a binding strips: as the type itself, as a member of a union or an
- * intersection, or as the argument of `Writable`.
+ * intersection, or as the argument of a cell wrapper that keeps it
+ * (`ARGUMENT_KEEPING_WRAPPER_NAMES`).
  */
 export function shouldPreserveBindingDeclaredTypeNode(
   typeNode: ts.TypeNode,
@@ -1453,9 +1489,11 @@ export function shouldPreserveBindingDeclaredTypeNode(
 
   if (ts.isTypeReferenceNode(unwrapped)) {
     const name = getWrapperName(unwrapped, checker);
-    return name === "Writable"
-      ? unwrapped.typeArguments?.some(carries) ?? false
-      : name !== undefined;
+    if (name !== undefined && ARGUMENT_KEEPING_WRAPPER_NAMES.has(name)) {
+      const argument = unwrapped.typeArguments?.[0];
+      return argument !== undefined && carries(argument);
+    }
+    return name !== undefined;
   }
 
   if (ts.isUnionTypeNode(unwrapped) || ts.isIntersectionTypeNode(unwrapped)) {
