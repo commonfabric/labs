@@ -20,7 +20,7 @@ use crate::declared::{Declared, Origin};
 use crate::module::{symbol_of, Binding};
 use crate::program::Resolver;
 use crate::syntax::{static_key_name, unwrap, FunctionLike};
-use crate::types::{HandleKind, Property, Shape, TypeId};
+use crate::types::{HandleKind, Parameter, Property, Shape, Signature, TypeId};
 
 const MAX_DEPTH: u32 = 14;
 
@@ -461,7 +461,23 @@ impl<'a> Resolver<'_, 'a> {
                 self.of(Shape::Handle(HandleKind::Stream, event))
             }
             "handler" | "pattern" => Ok(self.factory_type(module, call, depth)),
-            "lift" => self.of(Shape::Function),
+            "lift" => {
+                let parameters = match (self.type_argument(module, call, 0), Self::callback(call)) {
+                    (Some(input), _) => Some(vec![Parameter {
+                        ty: input,
+                        optional: false,
+                        rest: false,
+                    }]),
+                    (None, Some(callback)) => {
+                        Some(self.written_parameters(module, callback.params(), &[], 0))
+                    }
+                    (None, None) => None,
+                };
+                Ok(self.function_with(Signature {
+                    parameters,
+                    result: self.lift_result(module, call, depth).ok(),
+                }))
+            }
             "equals" | "valueEqual" | "isWellFormedDID" => self.of(Shape::Boolean),
             "eventKey"
             | "entityRefToString"
@@ -1033,15 +1049,110 @@ impl<'a> Resolver<'_, 'a> {
 
     /// The type of an expression of another form: JSX, a function, and the
     /// rest, which has none.
-    pub(crate) fn infer_other(&self, expression: &Expression<'a>) -> Declared {
+    pub(crate) fn infer_other(
+        &self,
+        module: usize,
+        expression: &Expression<'a>,
+        depth: u32,
+    ) -> Declared {
         match expression {
             Expression::JSXElement(_) | Expression::JSXFragment(_) => {
                 self.of(Shape::Opaque("VNode".to_string()))
             }
             Expression::ArrowFunctionExpression(_) | Expression::FunctionExpression(_) => {
-                self.of(Shape::Function)
+                let function = FunctionLike::of(expression).ok_or(Origin::Other)?;
+                Ok(self.function_value(module, function, depth))
             }
             _ => Err(Origin::Other),
+        }
+    }
+
+    /// The function type of a function written in the source: its
+    /// parameter types as annotated, and its result type as annotated or
+    /// inferred (§7.1, §7.6).
+    pub(crate) fn function_value(
+        &self,
+        module: usize,
+        function: FunctionLike<'_, 'a>,
+        depth: u32,
+    ) -> TypeId {
+        let parameters = self.written_parameters(module, function.params(), &[], 0);
+        let result = self.function_return(module, function, None, depth).ok();
+        self.function_with(Signature {
+            parameters: Some(parameters),
+            result,
+        })
+    }
+
+    /// The parameters the callee of `call` declares, with the callee's type
+    /// parameters bound for this call. `None` where the callee has no
+    /// signature this slice knows.
+    pub(crate) fn callee_parameters(
+        &self,
+        module: usize,
+        call: &CallExpression<'a>,
+        depth: u32,
+    ) -> Option<Vec<Parameter>> {
+        if depth > MAX_DEPTH {
+            return None;
+        }
+        let next = depth + 1;
+        let parsed = self.parsed(module)?;
+        let callee = unwrap(&call.callee);
+        if self.api_name(module, callee).is_some() {
+            return None;
+        }
+        if let Expression::Identifier(identifier) = callee {
+            let symbol = symbol_of(parsed.semantic.scoping(), identifier)?;
+            let (home, symbol) = self.origin(module, symbol)?;
+            let parsed = self.parsed(home)?;
+            let declaration = parsed.semantic.scoping().symbol_declaration(symbol);
+            let function = match parsed.semantic.nodes().kind(declaration) {
+                AstKind::Function(function) => Some(FunctionLike::Function(function)),
+                AstKind::VariableDeclarator(declarator)
+                    if matches!(declarator.id, BindingPattern::BindingIdentifier(_))
+                        && declarator.type_annotation.is_none() =>
+                {
+                    declarator.init.as_ref().and_then(FunctionLike::of)
+                }
+                _ => None,
+            };
+            if let Some(function) = function {
+                let type_parameters = match function {
+                    FunctionLike::Arrow(arrow) => arrow.type_parameters.as_deref(),
+                    FunctionLike::Function(function) => function.type_parameters.as_deref(),
+                };
+                let env = self.bind_type_parameters(
+                    home,
+                    function,
+                    type_parameters,
+                    Some((module, call)),
+                    next,
+                );
+                return Some(self.written_parameters(home, function.params(), &env, 0));
+            }
+        }
+        let callee = self.typed_at(module, callee, next).ok()?;
+        self.parameters_of(callee)
+    }
+
+    /// The parameters a value of type `callee` is called with: those of a
+    /// function type, the input of a pattern factory, and the state of a
+    /// handler factory (§4.4.2).
+    pub(crate) fn parameters_of(&self, callee: TypeId) -> Option<Vec<Parameter>> {
+        let callee = self.present(callee);
+        let one = |ty: TypeId| {
+            Some(vec![Parameter {
+                ty,
+                optional: false,
+                rest: false,
+            }])
+        };
+        match self.shape(callee) {
+            Shape::Function => self.signature(callee).parameters,
+            Shape::PatternFactory(input, _) => one(input),
+            Shape::HandlerFactory(_, state) => one(state),
+            _ => None,
         }
     }
 

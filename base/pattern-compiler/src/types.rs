@@ -122,6 +122,24 @@ pub struct Property {
     pub optional: bool,
 }
 
+/// One parameter of a function type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Parameter {
+    pub ty: TypeId,
+    /// Whether a call may leave the argument out.
+    pub optional: bool,
+    /// Whether the parameter is a rest parameter, whose type is an array.
+    pub rest: bool,
+}
+
+/// The signature of a function type (§7.1). A part is `None` where the
+/// declaration the type was made from does not give it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Signature {
+    pub parameters: Option<Vec<Parameter>>,
+    pub result: Option<TypeId>,
+}
+
 /// One annotation on a type node (§8.1).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Annotation {
@@ -154,8 +172,8 @@ pub struct TypeStore {
     /// The number of written types of each module by how far they were
     /// evaluated.
     pub written: HashMap<(usize, &'static str), usize>,
-    /// The result type of each function type whose signature gives one.
-    results: HashMap<TypeId, TypeId>,
+    /// The signature of each function type whose declaration gives one.
+    signatures: HashMap<TypeId, Signature>,
     /// The type arguments of each standard-library object type.
     code_arguments: HashMap<TypeId, Vec<TypeId>>,
     /// The functions whose return type is being inferred.
@@ -333,7 +351,11 @@ impl<'a> Resolver<'_, 'a> {
             TSType::TSTypeLiteral(literal) => self.members(module, &literal.members, env, next),
             TSType::TSFunctionType(function) => {
                 let result = self.resolve(module, &function.return_type.type_annotation, env, next);
-                self.function_type(Some(result))
+                let parameters = self.written_parameters(module, &function.params, env, next);
+                self.function_with(Signature {
+                    parameters: Some(parameters),
+                    result: Some(result),
+                })
             }
             TSType::TSConstructorType(_) => self.add(Shape::Function),
             TSType::TSTypeOperatorType(operator) => {
@@ -436,9 +458,14 @@ impl<'a> Resolver<'_, 'a> {
                         let result = method.return_type.as_ref().map(|annotation| {
                             self.resolve(module, &annotation.type_annotation, env, depth)
                         });
+                        let parameters =
+                            self.written_parameters(module, &method.params, env, depth);
                         properties.push(Property {
                             name,
-                            ty: self.function_type(result),
+                            ty: self.function_with(Signature {
+                                parameters: Some(parameters),
+                                result,
+                            }),
                             optional: method.optional,
                         });
                     }
@@ -487,6 +514,11 @@ impl<'a> Resolver<'_, 'a> {
         match (self.shape(object), self.shape(index)) {
             (Shape::Array(element), Shape::Number) => element,
             (Shape::Tuple(elements), Shape::Number) => self.union(elements),
+            (Shape::Tuple(elements), Shape::Literal(position)) => position
+                .parse::<usize>()
+                .ok()
+                .and_then(|position| elements.get(position).copied())
+                .unwrap_or_else(|| self.unresolved(Why::NotEvaluated)),
             (Shape::Object(..), Shape::Literal(key)) => self
                 .property(object, key.trim_matches(['"', '\'']))
                 .unwrap_or_else(|| self.unresolved(Why::NotEvaluated)),
@@ -1103,16 +1135,26 @@ impl<'a> Resolver<'_, 'a> {
                 Some((operand, _)) => operand,
                 None => self.unresolved(Why::NotEvaluated),
             },
-            "ReturnType" => match first.map(|operand| self.shape(operand)) {
-                Some(Shape::HandlerFactory(event, _)) => {
+            "ReturnType" => match first.map(|operand| (operand, self.shape(operand))) {
+                Some((_, Shape::HandlerFactory(event, _))) => {
                     self.add(Shape::Handle(HandleKind::Stream, event))
                 }
-                Some(Shape::PatternFactory(_, output)) => output,
+                Some((_, Shape::PatternFactory(_, output))) => output,
+                Some((function, Shape::Function)) => self
+                    .function_result(function)
+                    .unwrap_or_else(|| self.unresolved(Why::NotEvaluated)),
                 _ => self.unresolved(Why::NotEvaluated),
             },
-            "Parameters" => match first.map(|operand| self.shape(operand)) {
-                Some(Shape::PatternFactory(input, _)) => self.add(Shape::Tuple(vec![input])),
-                Some(Shape::HandlerFactory(_, state)) => self.add(Shape::Tuple(vec![state])),
+            "Parameters" => match first.map(|operand| (operand, self.shape(operand))) {
+                Some((_, Shape::PatternFactory(input, _))) => self.add(Shape::Tuple(vec![input])),
+                Some((_, Shape::HandlerFactory(_, state))) => self.add(Shape::Tuple(vec![state])),
+                Some((function, Shape::Function)) => match self.signature(function).parameters {
+                    Some(parameters) if parameters.iter().all(|parameter| !parameter.rest) => self
+                        .add(Shape::Tuple(
+                            parameters.iter().map(|parameter| parameter.ty).collect(),
+                        )),
+                    _ => self.unresolved(Why::NotEvaluated),
+                },
                 _ => self.unresolved(Why::NotEvaluated),
             },
             "Exclude" | "Extract" => match (first, arguments.get(1)) {
@@ -1205,11 +1247,21 @@ impl<'a> Resolver<'_, 'a> {
                 if let Some(annotation) = &declarator.type_annotation {
                     return self.resolve(module, &annotation.type_annotation, &Env::new(), depth);
                 }
-                match &declarator.init {
+                let known = match &declarator.init {
                     Some(init) => self.type_of_initializer(module, init, depth),
                     None => self.unresolved(Why::TypeofValue),
+                };
+                match self.shape(known) {
+                    // The inferred type of the binding (§7.1).
+                    Shape::Unresolved(Why::TypeofValue) => self
+                        .declared_symbol_type(module, symbol, depth)
+                        .unwrap_or(known),
+                    _ => known,
                 }
             }
+            AstKind::Function(_) => self
+                .declared_symbol_type(module, symbol, depth)
+                .unwrap_or_else(|_| self.unresolved(Why::TypeofValue)),
             _ => self.unresolved(Why::TypeofValue),
         }
     }
@@ -1423,18 +1475,69 @@ impl<'a> Resolver<'_, 'a> {
             .or_insert(0) += 1;
     }
 
-    /// A function type with the result type `result`, where one is known.
-    pub(crate) fn function_type(&self, result: Option<TypeId>) -> TypeId {
+    /// A function type with the signature `signature`.
+    pub(crate) fn function_with(&self, signature: Signature) -> TypeId {
         let function = self.add(Shape::Function);
-        if let Some(result) = result {
-            self.types.borrow_mut().results.insert(function, result);
-        }
+        self.types
+            .borrow_mut()
+            .signatures
+            .insert(function, signature);
         function
+    }
+
+    /// The signature of a function type. It is empty for a function type
+    /// made with none.
+    pub fn signature(&self, function: TypeId) -> Signature {
+        self.types
+            .borrow()
+            .signatures
+            .get(&function)
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// The result type of a function type, where its signature gives one.
     pub(crate) fn function_result(&self, function: TypeId) -> Option<TypeId> {
-        self.types.borrow().results.get(&function).copied()
+        self.signature(function).result
+    }
+
+    /// The parameter types a written parameter list declares. A parameter
+    /// without an annotation has a type that is not evaluated.
+    pub(crate) fn written_parameters(
+        &self,
+        module: usize,
+        parameters: &FormalParameters<'a>,
+        env: &[(SymbolId, TypeId)],
+        depth: u32,
+    ) -> Vec<Parameter> {
+        let env = env.to_vec();
+        let mut written: Vec<Parameter> = parameters
+            .items
+            .iter()
+            .map(|parameter| Parameter {
+                ty: match &parameter.type_annotation {
+                    Some(annotation) => {
+                        self.resolve(module, &annotation.type_annotation, &env, depth)
+                    }
+                    None => self.unresolved(Why::NotEvaluated),
+                },
+                optional: parameter.optional || parameter.initializer.is_some(),
+                rest: false,
+            })
+            .collect();
+        if let Some(rest) = &parameters.rest {
+            written.push(Parameter {
+                ty: match &rest.type_annotation {
+                    Some(annotation) => {
+                        self.resolve(module, &annotation.type_annotation, &env, depth)
+                    }
+                    None => self.unresolved(Why::NotEvaluated),
+                },
+                optional: true,
+                rest: true,
+            });
+        }
+        written
     }
 
     /// A standard-library object type with its type arguments, such as
@@ -1536,7 +1639,28 @@ impl<'a> Resolver<'_, 'a> {
                 .map(|ty| show(*ty))
                 .collect::<Vec<_>>()
                 .join(" | "),
-            Shape::Function => "(function)".to_string(),
+            Shape::Function => {
+                let signature = self.signature(ty);
+                match (signature.parameters, signature.result) {
+                    (None, None) => "(function)".to_string(),
+                    (parameters, result) => format!(
+                        "({}) => {}",
+                        parameters.map_or_else(
+                            || "...".to_string(),
+                            |parameters| parameters
+                                .iter()
+                                .map(|parameter| format!(
+                                    "{}{}",
+                                    if parameter.rest { "..." } else { "" },
+                                    show(parameter.ty)
+                                ))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ),
+                        result.map_or_else(|| "(not inferred)".to_string(), show)
+                    ),
+                }
+            }
             Shape::Handle(kind, value) => format!("{kind:?}<{}>", show(value)),
             Shape::PatternFactory(input, output) => {
                 format!("PatternFactory<{}, {}>", show(input), show(output))

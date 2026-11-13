@@ -267,3 +267,52 @@ fn property_chosen_by_a_key_that_is_not_static_has_the_union_of_the_property_typ
          function show(status: \"open\" | \"done\") { return STYLE[status].toUpperCase(); }\n",
     );
 }
+
+#[test]
+fn callback_passed_to_a_function_typed_parameter_takes_its_parameter_types() {
+    assert_typed(
+        "function each(items: string[], visit: (item: string, index: number) => string) { return items.map(visit); }\n\
+         function show(items: string[]) { return each(items, (item, index) => item.trim() + index.toFixed(0)); }\n",
+    );
+}
+
+#[test]
+fn callback_passed_to_a_generic_function_takes_the_bound_parameter_type() {
+    assert_typed(
+        "function each<T>(items: T[], visit: (item: T) => string) { return items.map(visit); }\n\
+         function show(items: { name: string }[]) { return each(items, (item) => item.name.trim()); }\n",
+    );
+}
+
+#[test]
+fn callback_passed_to_a_function_value_or_a_method_takes_its_parameter_types() {
+    assert_typed(
+        "interface Tools { visit(each: (name: string) => string): string }\n\
+         function show(run: (step: (count: number) => string) => string, tools: Tools) {\n\
+           return run((count) => count.toFixed(1)) + tools.visit((name) => name.trim());\n\
+         }\n",
+    );
+}
+
+#[test]
+fn function_initializer_takes_parameter_types_from_the_annotation() {
+    assert_typed("const format: (price: number) => string = (price) => price.toFixed(2);\n");
+}
+
+#[test]
+fn parameters_and_return_type_of_a_function_are_computed() {
+    assert_typed(
+        "function priceOf(donut: { name: string }, count: number): number[] { return [count]; }\n\
+         function show(donut: Parameters<typeof priceOf>[0], prices: ReturnType<typeof priceOf>, step: Parameters<(n: number) => void>[0]) {\n\
+           return donut.name.trim() + prices.join(\",\") + step.toFixed(0);\n\
+         }\n",
+    );
+}
+
+#[test]
+fn function_declaration_used_as_a_value_has_a_function_type() {
+    assert_typed(
+        "function label(n: number): string { return String(n); }\n\
+         function show() { const f = label; return f(1).trim(); }\n",
+    );
+}

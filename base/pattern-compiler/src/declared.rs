@@ -197,7 +197,7 @@ impl<'a> Resolver<'_, 'a> {
             | Expression::UpdateExpression(_)
             | Expression::SequenceExpression(_)
             | Expression::AssignmentExpression(_) => self.infer_operator(module, expression, next),
-            _ => self.infer_other(expression),
+            _ => self.infer_other(module, expression, next),
         }
     }
 
@@ -392,6 +392,13 @@ impl<'a> Resolver<'_, 'a> {
                 (&parameter.pattern, base)
             }
             AstKind::CatchParameter(_) => return Err(Origin::Reassigned),
+            AstKind::Function(function) => {
+                return Ok(self.function_value(
+                    module,
+                    FunctionLike::Function(function),
+                    depth + 1,
+                ));
+            }
             _ => return Err(Origin::Other),
         };
         let mut path = Vec::new();
@@ -512,6 +519,22 @@ impl<'a> Resolver<'_, 'a> {
                 AstKind::ArrowFunctionExpression(_)
                 | AstKind::Function(_)
                 | AstKind::Program(_) => break,
+                // A function that initializes a binding with a written
+                // function type takes its parameter types from it.
+                AstKind::VariableDeclarator(declarator) => {
+                    let (Some(function_span), Some(annotation), Some(init)) =
+                        (function_span, &declarator.type_annotation, &declarator.init)
+                    else {
+                        break;
+                    };
+                    if FunctionLike::of(init).is_none_or(|f| f.span() != function_span) {
+                        break;
+                    }
+                    let expected = self.resolve_type(module, &annotation.type_annotation);
+                    return self
+                        .parameter_of_function_type(expected, index.unwrap_or(0))
+                        .ok_or(Origin::UntypedParameter);
+                }
                 AstKind::CallExpression(call) => {
                     let Some(function_span) = function_span else {
                         break;
@@ -565,6 +588,40 @@ impl<'a> Resolver<'_, 'a> {
                 .ok_or(Origin::UntypedParameter);
         }
         self.contextual_parameter(module, call, position, index, depth)
+            .or_else(|origin| {
+                // The function type the callee declares for the argument
+                // gives the callback its parameter types (§7.6).
+                let expected = self
+                    .callee_parameters(module, call, depth)
+                    .and_then(|parameters| parameters.get(position).copied())
+                    .ok_or(origin)?;
+                self.parameter_of_function_type(expected.ty, index)
+                    .ok_or(origin)
+            })
+    }
+
+    /// The type of parameter `index` of the function type `function`.
+    fn parameter_of_function_type(&self, function: TypeId, index: usize) -> Option<TypeId> {
+        let function = match self.shape(function) {
+            Shape::Union(members) => {
+                let mut functions = members
+                    .into_iter()
+                    .filter(|member| self.shape(*member) == Shape::Function);
+                let first = functions.next()?;
+                if functions.next().is_some() {
+                    return None;
+                }
+                first
+            }
+            _ => function,
+        };
+        if self.shape(function) != Shape::Function {
+            return None;
+        }
+        self.signature(function)
+            .parameters?
+            .get(index)
+            .map(|parameter| parameter.ty)
     }
 
     /// Whether the elements of a collection of this type are plain values

@@ -110,10 +110,14 @@ one that accepts less. The crate implements the document as it stands at commit
 22. **A call of an overloaded function** (§7.9). Overloads are refused, and a
     call of one still has to have a type for the code around it. Chosen: the
     result type of the first signature.
-23. **A function type** (§7.1). The crate keeps the result type of a written
-    function type and of a method signature, and not the parameter types, so a
-    callback passed to a function-typed parameter gets no parameter types from
-    it.
+23. **The parameter types of a function written in place** (§7.6). A function
+    type keeps its parameter types and its result type. A function written in
+    place takes the types of its parameters from their annotations, from the
+    function type its callee declares for the argument, or from the annotation
+    of the binding it initializes. In any other position, such as a property
+    of an object literal or a returned value, a parameter without an
+    annotation has no type in the function's own type, and the parameter is
+    counted as untyped.
 24. **Generic functions** (§7.3). A type parameter is bound from a written type
     argument, or from the argument whose parameter is the type parameter, an
     array of it, or a handle of it. Any other parameter stays unbound, and the
