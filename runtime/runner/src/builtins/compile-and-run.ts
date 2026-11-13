@@ -562,10 +562,14 @@ function compileAndRunServed(
         runtime.trackAsyncWork(
           settleAbandonedRequest(
             runtime,
-            "compileAndRun",
-            effectKey,
+            {
+              builtinId: "compileAndRun",
+              effectKey,
+              identity,
+              scope: pending.getAsNormalizedFullLink().scope ?? "space",
+              attributeToBuiltin: true,
+            },
             (settleTx) => {
-              settleTx.tx.scopeKeyIdentity = identity;
               const current = snapshotQueryResult(
                 inputs.asSchema<RuntimeProgram>(programSchema).withTx(settleTx)
                   .get(),

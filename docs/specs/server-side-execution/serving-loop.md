@@ -1349,7 +1349,11 @@ seal resolves its scoped writes (the defaults setup seeds in the
 start's own transaction among them) against the same instances
 rather than the wave-level service identity. The stamp still
 carries no acting principal (protocol.md §1's "The SpaceServer's
-own writes"). A piece-start
+own writes"). A builtin's ending for a request that never
+went out (builtins.md §2) is stamped `bookkeeping` the same way,
+with the staging run's identity, when it has one, as its
+addressing, and seals into the open wave behind the writes that
+run's predecessors left pending there. A piece-start
 commit that FAILS after start() resolved (the path is
 fire-and-forget by design) must SURFACE — loudly logged in every
 arm and counted into §7's `structureLoadFailures` on a serving
