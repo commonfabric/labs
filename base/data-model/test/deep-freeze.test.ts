@@ -650,6 +650,13 @@ describe("deep-freeze", () => {
       deepFreeze(a);
       forgetDeepFrozenCacheForTestingOnly();
       expect(isDeepFrozen(a)).toBe(true);
+    });
+
+    it("returns the same object from `deepFreeze()` for a frozen self-referential object", () => {
+      const a: Record<string, unknown> = { x: 1 };
+      a.self = a;
+      deepFreeze(a);
+      forgetDeepFrozenCacheForTestingOnly();
       expect(deepFreeze(a)).toBe(a);
     });
 
@@ -659,6 +666,13 @@ describe("deep-freeze", () => {
       });
       forgetDeepFrozenCacheForTestingOnly();
       expect(isDeepFrozen(tree)).toBe(true);
+    });
+
+    it("returns the same tree from `deepFreeze()` for a frozen tree holding a `FabricInstance`", () => {
+      const tree = deepFreeze({
+        error: FabricError.fromNativeError(new Error("boom")),
+      });
+      forgetDeepFrozenCacheForTestingOnly();
       expect(deepFreeze(tree)).toBe(tree);
     });
 
