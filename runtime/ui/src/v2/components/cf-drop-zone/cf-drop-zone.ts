@@ -29,9 +29,10 @@ import type { DragState } from "../../core/drag-state.ts";
  * id, space and path, leaving out the main thread's display copy of its label.
  *
  * A drop delivers the drag's `droppedCell` where it has one, once that has
- * resolved, so `cf-drop` follows the release by a round trip to the worker.
- * It delivers nothing where that resolution fails, or where the zone has
- * left the document by the time it lands.
+ * resolved, so `cf-drop` can follow the release by as much as a round trip
+ * to the worker. It delivers nothing where that resolution fails, or where
+ * the zone has left the document by the time it lands. Drops dispatch in the
+ * order of their releases, across every zone, whichever resolves first.
  *
  * @slot - Default slot for wrapped content
  *
@@ -40,6 +41,15 @@ import type { DragState } from "../../core/drag-state.ts";
  *   <div>Drop items here</div>
  * </cf-drop-zone>
  */
+/** How many released drops have yet to dispatch or fail. */
+let pendingDrops = 0;
+
+/**
+ * Settles once every drop released so far has dispatched or failed. Each
+ * waiting drop chains onto it, so that drops dispatch in release order.
+ */
+let earlierDrops: Promise<void> = Promise.resolve();
+
 export class CFDropZone extends BaseElement {
   static override styles = [
     BaseElement.baseStyles,
@@ -202,18 +212,25 @@ export class CFDropZone extends BaseElement {
           },
         });
       };
-      if (dragState.droppedCell) {
-        dragState.droppedCell.then(
-          (cell) => {
-            if (this.isConnected) drop(cell);
+      const { cell, droppedCell } = dragState;
+      if (!droppedCell && pendingDrops === 0) {
+        drop(cell);
+        return;
+      }
+      pendingDrops++;
+      earlierDrops = earlierDrops
+        .then(() => droppedCell ?? cell)
+        .then(
+          (resolved) => {
+            if (this.isConnected) drop(resolved);
           },
           (error) => {
             console.error("Failed to resolve the dropped cell:", error);
           },
-        );
-      } else {
-        drop(dragState.cell);
-      }
+        )
+        .finally(() => {
+          pendingDrops--;
+        });
     }
   }
 

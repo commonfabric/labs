@@ -252,6 +252,31 @@ describe("CFDropZone", () => {
         });
       });
 
+      it("dispatches drops in the order of their releases", async () => {
+        const { zone } = await mountZone();
+        const first = Promise.withResolvers<CellHandle>();
+        const second = Promise.withResolvers<CellHandle>();
+        const other = createMockCellHandle<unknown>({ title: "Note" }, {
+          id: "snapshot:other" as `${string}:${string}`,
+        });
+        const dropped: unknown[] = [];
+        const both = Promise.withResolvers<void>();
+        zone.addEventListener("cf-drop", (event) => {
+          dropped.push((event as CustomEvent).detail.sourceCellRef.id);
+          if (dropped.length === 2) both.resolve();
+        });
+        beginDrag(150, 125, "card", first.promise);
+        endDrag();
+        beginDrag(150, 125, "card", second.promise);
+        endDrag();
+
+        second.resolve(other);
+        first.resolve(resolved);
+        await both.promise;
+
+        expect(dropped).toEqual(["snapshot:resolved", "snapshot:other"]);
+      });
+
       it("dispatches no `cf-drop` where the dropped cell fails to resolve", async () => {
         const { events } = await mountZone();
 
@@ -274,9 +299,13 @@ describe("CFDropZone", () => {
 
         zone.remove();
         droppedCell.resolve(resolved);
-        // The zone's own reaction was registered on release, so it has run
-        // by the time one registered now does.
-        await droppedCell.promise.then(() => {});
+        // Drops dispatch in release order, so one released later over a zone
+        // still in the document arrives once the first has settled.
+        const { zone: later } = await mountZone();
+        const laterDrop = nextDrop(later);
+        beginDrag(150, 125, "card", Promise.resolve(resolved));
+        endDrag();
+        await laterDrop;
 
         expect(events.map(({ type }) => type)).toEqual([
           "cf-drag-enter",

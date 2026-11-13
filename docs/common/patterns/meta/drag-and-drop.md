@@ -8,7 +8,7 @@ Enable drag-and-drop interactions between cells using `cf-drag-source` and `cf-d
 
 Wraps content that can be dragged. The dragged cell is passed to any drop zone that accepts it.
 
-What a drop passes is the cell `$cell` resolves to when the press begins. Inside a `.map()` over a list of inline entries, that is the entry the row showed at that moment, even when a reorder has since moved another entry into the row. `equals()` matches it to that entry in the list's `.get()`.
+What a drop passes is the cell `$cell` resolves to when the press begins, or, where `$cell` is rebound before the drag starts, what the new binding resolves to. Inside a `.map()` over a list of inline entries, that is the entry the row showed at that moment, even when a reorder has since moved another entry into the row. `equals()` matches it to that entry in the list's `.get()`.
 
 | Attribute | Type | Description |
 |-----------|------|-------------|
@@ -28,7 +28,7 @@ Marks a region where items can be dropped. Provides visual feedback (dashed outl
 
 | Event | Payload | Description |
 |-------|---------|-------------|
-| `oncf-drop` | `{ detail: { sourceCell: Writable<T>, type?: string } }` | Fired when a valid drop occurs, once the dragged cell has resolved (a round trip to the worker after the release) |
+| `oncf-drop` | `{ detail: { sourceCell: Writable<T>, type?: string } }` | Fired when a valid drop occurs, once the dragged cell has resolved: its resolution starts when the press begins, and a release before it lands waits for it |
 | `oncf-drag-enter` | `{ detail: { sourceCell: Cell, type?: string } }` | Fired when drag enters the zone |
 | `oncf-drag-leave` | `{ detail: {} }` | Fired when drag leaves the zone |
 
