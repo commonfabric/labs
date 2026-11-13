@@ -1,12 +1,13 @@
 # Stream markers out of stored data
 
-**Status:** stage 1 has landed, as #7583. Stage 2 is open as #7589, rebased
-onto `main` past it. Stage 3 is not started. Investigated against `main` at `59e8a2540` (2026-09-15); line
-references are to that tree unless an item names a stage branch. A file is
-named by its repository path the first time and by its basename after
-that (`runner.ts` is `runtime/runner/src/runner.ts`, `builder/pattern.ts` is
-`runtime/runner/src/builder/pattern.ts`); `docs/` and `scripts/` paths are
-from the repository root.
+**Status:** stage 1 has landed, as #7583 (2026-09-18), and stage 2 as #7589
+(2026-09-20); one stage 2 item, the served-execution fixtures, is still open.
+Stage 3 is not started. Investigated against `main` at `59e8a2540` (2026-09-15);
+line references are to that tree unless an item names a stage branch. A file is
+named by its repository path the first time and by its basename after that
+(`runner.ts` is `runtime/runner/src/runner.ts`, `builder/pattern.ts` is
+`runtime/runner/src/builder/pattern.ts`); `docs/` and `scripts/` paths are from
+the repository root.
 
 **Summary.** A handler's event stream is stored today as a document whose value
 is the sentinel `{ "$stream": true }`. That sentinel is the only thing handler
@@ -197,7 +198,7 @@ rejected, exactly as today. Rule 3 keeps that restriction on purpose.
 Without the sentinel the derived document holds the `result` back-link meta and
 nothing else. It is still listed (the memory server's entity page selects
 current ids with no value condition, `runtime/memory/v2/engine.ts:2188`), still
-the id a served event's sidecar entry names (`of:stream-events:` docs,
+the id a served event's entry names (`of:stream-events:` docs,
 `runtime/memory/v2/engine.ts:2577`), and still found by event auto-start. What
 it no longer does is describe itself: a reader that has only the document cannot
 tell it is a stream.
@@ -253,9 +254,9 @@ replaces the value read there.
 ## Stages
 
 Three PRs. The first keeps the value fallback so nothing that still holds a
-sentinel breaks; the last removes it. Stage 1 landed as #7583, and stage 2 is
-open as #7589. A checked item is done in that PR; an unchecked item under
-stage 2 is still owed there. Where a stage does something other
+sentinel breaks; the last removes it. Stage 1 landed as #7583, and stage 2 as
+#7589. A checked item is done in that PR; an unchecked item under stage 2 is
+still owed. Where a stage does something other
 than what the list first said, the item says what it does now and why.
 
 ### Stage 1 — Runner: stop writing, stop needing (#7583)
@@ -545,40 +546,22 @@ ignored, and nothing reads it.
 This plan leaves a stream's document in place as a back-link-only record
 because a bare stream id says nothing about who owns it: the owner's result id
 is hashed into the id (`createRef({}, { parent, type: "internal", cause })`
-at `link-utils.ts:856`) but cannot be read back out. The follow-up makes the
-owner recoverable from the address itself, so any party holding a stream's id
-can name the owner's result document with no lookup and no record. It is the
-next plan after this one, and this plan is written on the assumption that it
-happens. What it changes:
-
-- **Identity.** A stream's id carries its owner's result id and its cause in
-  a form a reader can take apart, either as a stream entity kind minted into
-  the URI scheme (`link-utils.ts:845`; `EntityKind` is only `"computed"`
-  today) or as a structured id. It is minted from owner and cause, as derived
-  ids are today, and never content-addressed: a `cid:` id is a function of
-  the value, every stream's value is the same nothing, and what tells two
-  streams apart is the owner and cause that live in meta. Every existing
-  stream re-materializes under a new id. That is the migration decision 1
-  declines here, and the follow-up's first section states it and the cutover
-  for it.
-- **Sidecars.** A stream's event sidecar hashes the stream link
-  (`runtime/memory/v2.ts:407`), so it moves with the id; entries in flight at
-  the cutover drain first or are rewritten.
-- **Readers.** The inspector, FUSE, the shuttle listing and the runtime's
-  bare-address case classify a stream from its id alone. The owner walk stage
-  3 adds is deleted; the link-schema stamp and the handle kind stay, since
-  dispatch and `send()` decide from them and neither depends on the id.
-- **Auto-start.** `ensurePieceRunning` reads a stream's owner from the address
-  and skips the back-link chain for it.
-- **The document.** Nothing writes to it and nothing reads it. Whether the
-  record exists at all becomes the storage question the unification in
-  `docs/specs/space-model/2-storage-format.md:95` answers, and can be settled
-  there.
+at `link-utils.ts:856`) but cannot be read back out.
+[Streams as positions on their owner](streams-as-positions.md) is the next
+plan, and this plan is written on the assumption that it happens. It goes
+further than recovering the owner from the id: a stream its owner exposes in
+its result is addressed as a path on the owner's result document, one it does
+not is addressed by a `stream:` id over the owner's hash, neither has a
+document of its own, every stream re-materializes under its new address, and
+the owner walk stage 3 adds is deleted with it. Its first stage moves only
+the streams an owner exposes and needs none of this plan's walk; whether stage
+3 here wires the walk into `Cell.isStream` and the proxy depends on whether its
+later stages are committed to, as its Ordering section says.
 
 What this plan does in anticipation: stream-ness decisions key on the link
-schema and the handle kind, both of which survive an id change; the owner
-walk is one shared function, so the follow-up deletes one thing; and nothing
-new is written onto the stream document that a migration would have to carry.
+schema and the handle kind, both of which survive an address change; the owner
+walk is one shared function, so the next plan deletes one thing; and nothing
+new is written onto the stream document that a cutover would have to carry.
 
 ## Not in scope
 
