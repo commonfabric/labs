@@ -72,10 +72,11 @@ try {
       dropped.resolve();
     }
   });
-  // Deno ends a process with nothing left to do before its finalizers run, so
-  // an open port keeps this one going until the storage manager reports a
-  // token collected. What follows from the report needs nothing to keep it
-  // going, so a report that asks for no pass ends the process unresolved.
+  // Deno can end a process with nothing left to do before its pending
+  // finalizers run, so an open port keeps this one going until the storage
+  // manager reports a token collected. What follows from the report needs
+  // nothing to keep it going, so a report that asks for no pass ends the
+  // process unresolved; a manager that never reports leaves it running.
   keepAlive.port1.onmessage = () => {};
   readerStorage.subscribeHoldsCollected(() => keepAlive.port1.close());
 
