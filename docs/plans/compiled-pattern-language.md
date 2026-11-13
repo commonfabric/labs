@@ -147,6 +147,12 @@ is relitigated.
   and not derived from the request. The allocation is recorded in a step
   that commits before the step in the foreign space, so that a retry
   names the same space.
+- A handler's pending effect is requested again at activation after a
+  restart, with the references followed and the egress ceiling checked
+  on the content as it is then.
+- Nothing in this design bounds an effect whose completion changes its
+  own request, or a cycle across two spaces. They fall under rate limits
+  in general, which this design does not specify. To be revisited.
 - A client cannot read the element-key salt. It cannot name value-keyed
   per-element state, or a binding with copied captures, before the server
   stores a link.
@@ -199,6 +205,17 @@ is relitigated.
   instance an evaluation no longer makes is torn down. An effect in the
   instance is requested again when its request changes, as for any effect
   whose input changed.
+- An instance made in a `lift` or a `computed` is identified by the
+  enclosing instance, the body's name and the calls and callbacks it is
+  written in, the site, and the ordinal of the instantiation among those
+  the evaluation makes at that site, or by an explicit cause where the
+  author writes `.for(cause)`. The compiler warns on an instantiation in
+  a loop or a callback of a function body that has no `.for(cause)`. A
+  `lift` or a `computed` does not request an effect directly.
+- An explicit cause in a handler names the same thing on every event: a
+  cell a handler creates under `.for(cause)` is one cell, with its
+  existence label fixed at first creation. Without an explicit cause an
+  identifier minted in a handler derives from the event.
 - A function body may call two kinds of factory value: a pattern factory,
   which it instantiates, and a handler factory, which it binds. Both are
   resolved at run time from their own compiled records. A `lift` result is
@@ -232,15 +249,32 @@ is relitigated.
   a compile error. A body that binds a handler and declares no state cell
   is accepted: equal elements bind equal state, and they share one
   stream.
+- Where a per-element body over plain values instantiates a child, the
+  position joins the element key, so equal elements have a child each.
 - Stored per-element state is not carried over from the current runtime.
 
 **Labels**
 
-- Template labels are equal to or tighter than today's, with two deliberate
-  exceptions. One is the collection index, where the keys of absent elements
-  join a bucket's membership label. The other is a read through a handle
-  that is static because every run that returns normally makes it: a run
-  that throws before the read carries the read's label all the same.
+- Template labels are equal to or tighter than today's, with three
+  deliberate exceptions. One is the collection index, where the keys of
+  absent elements join a bucket's membership label. The second is a read
+  through a handle that is static because every run that returns normally
+  makes it: a run that throws before the read carries the read's label
+  all the same. The third is what is stored once for an element key (an
+  effect's request and result, operation state, a child's argument, a
+  side-write, a binding's copied state): where positions that hold equal
+  plain values resolve to different labels, it carries the join. The
+  third is to be revisited.
+- A read through a handle at a static place that is conditional stays
+  dynamic.
+- `minBy`, `maxBy`, and a keyed lookup break a tie among equal keys by
+  the first position in the collection's order.
+- The argument a language model supplies to a pattern closure given to
+  it as a tool carries the label of the model's output. The result
+  carries the label of the instance's own result.
+- A language-model built-in checks the egress ceiling on every send, not
+  only at the request: a tool-loop result, a system prompt rendered
+  again, and a dialog's live transcript.
 - `findIndex`, `some`, and `every` use the prefix rule: elements after the
   deciding one do not join the label.
 - A factory value that changes under a child tears the child down and starts
@@ -259,19 +293,11 @@ record.
 **Label rules.** Each changes what Contextual Flow Control decides, so the
 answer goes to the specification with the document.
 
-6. **Ties among equal keys** (A2). `minBy`, `maxBy`, and a keyed lookup
-   break a tie by the smallest element key and state that no element value
-   enters the choice. For a plain-value element the key is a hash of the
-   whole value. The proposed correction is the first position in source
-   order.
 7. **The integrity of a closure's factory value** (record, section 2).
    *Assumed, and written into the specification:* it takes no integrity
    from its captures.
-8. **A closure given to a built-in as a tool** (K12). No rule gives the
-   label of the argument the model supplies or of the result.
-9. **Conditional reads through handles** (FA question 1). A third of the
-   handle reads in the corpus are at a static place and conditional.
-   *Assumed:* they stay dynamic, which keeps labels equal or tighter.
+<!-- The list restarts so that the numbers below stay as cited. -->
+
 10. **A value passed on unchanged is a reference** (FA question 2).
     *Assumed:* yes, as today, which makes "the stored value is a link to
     the original" a rule of the language.
@@ -295,13 +321,6 @@ answer goes to the specification with the document.
     is refused.
 <!-- The list restarts so that the numbers below stay as cited. -->
 
-19. **`.for(tag)` in a handler** (K13). The plan document and the inventory
-    have it name the same thing across events; today every identifier
-    minted in a handler derives from the event.
-20. **Bounds beyond one transaction** (SS question 9, findings 11 and
-    12). The bound on a cone within a transaction is ruled. Open: whether
-    an effect whose completion changes its own request, or a cycle across
-    two spaces, is bounded at all.
 21. **Event order per space** (SS question 10). *Assumed:* the proposal of
     Scheduler v2 §7.5.
 
@@ -335,14 +354,8 @@ answer goes to the specification with the document.
 30. **`inspectConfLabel` on an interim value** (K3). The plan document
     instantiates the value's template when asked; the inventory answers
     `notAvailable`. The ruling says an interim value is not labeled.
-31. **A child instantiated per element over equal plain values.** The
-    compile error for shared per-element state covers a body that declares
-    a state cell or binds a handler. A body that instantiates a child is
-    not covered: the child's result cell is named by the element key, so
-    two equal plain elements share one child and its state. A
-    factory-typed element is a plain value, so
-    `factories.map((F) => F({ ... }))` is the plain case. *Assumed:* the
-    error is as ruled and does not cover it.
+<!-- The list restarts so that the numbers below stay as cited. -->
+
 32. **Context reads in the pattern body** (`builtin-inventory.md`, open
     question 10). The language subset refuses `eventKey` and
     `currentPrincipal` there and no document decides the others. Today
@@ -375,20 +388,6 @@ answer goes to the specification with the document.
     are withdrawn, which leaves it visible that the write did not happen,
     as it is today; a child's argument and an effect's request take the
     error state.
-38. **An instance made in a `lift` or a `computed`.** The ruling allows
-    the instantiation and leaves two things to assume. *Assumed:* the
-    instance is identified by the enclosing instance, the body's name
-    and the calls and callbacks it is written in, the site, and the
-    ordinal of the instantiation among those the evaluation makes at that
-    site, or by an explicit cause where the author writes
-    `.for(cause)`; and a `lift` or a `computed` still does not request an
-    effect directly, so an effect that depends on computed data is
-    written in a pattern, inline or named, that the computation
-    instantiates. With the ordinal, a site in a loop names its instances
-    by loop order: removing the first record gives each instance the
-    argument of the next record and tears down the last one, unless the
-    author writes `.for(cause)`.
-
 **From the second round of passes.** "PL" is
 `plan-and-label-templates.md`, "LS" is `language-subset.md`, and "BI" is
 `builtin-inventory.md`. Each is written into the documents as an
@@ -400,15 +399,8 @@ assumption.
     label it staged. *Assumed:* those are withdrawn with it and the rest
     commits. The alternative evaluates and checks them again at the
     commit.
-40. **What is stored once per element key** (PL §2.6, question 27; ES
-    §2.5). Positions that hold equal plain values share one key. An
-    effect's request and result, operation state, a child's argument, a
-    side-write, and a binding's copied state are stored once for the key.
-    *Assumed:* where the positions resolve to different labels, what is
-    stored carries the join. That is looser than today, where each
-    occurrence has its own run, and would be a third exception to "equal
-    to or tighter". The alternative keys these as per-element state is
-    keyed.
+<!-- The list restarts so that the numbers below stay as cited. -->
+
 41. **Where a result is split** (ES §4.10, question 32). *Assumed:* the
     split points are the root of a kept output, a row of a kept
     collection, and a node of the rendered tree at any depth; a part is
@@ -447,11 +439,8 @@ assumption.
     instance and change which documents exist.
 50. **`inSpace` and `asScope` on an instantiation in a computation** (PL
     §3.14; BI question 11). *Assumed:* legal, as in a handler.
-51. **What a language-model built-in sends that no checked request held**
-    (BI question 6): tool-loop results, a system prompt rendered again
-    from live context after the commit, and the live transcript of a
-    dialog. The egress ceiling checked at the request covers none of it.
-    *Assumed:* the boundary's own transactions label it.
+<!-- The list restarts so that the numbers below stay as cited. -->
+
 52. **Trigger reads lost at a restart** (PL §3.10, question 29). A body
     with a sampled read can be evaluated because of a change at an
     address it does not read again, and after a restart that address's
@@ -500,11 +489,8 @@ assumption.
     request, and are not requested without a demanding principal, as
     today. The principal of a completion's transaction and of a
     materializer's run is not decided. It extends question 45.
-62. **A handler's pending effect after a restart** (SS §2.3, question 38;
-    PL §3.14). *Assumed:* the request is made again at activation, with
-    the references followed and the egress ceiling checked on the content
-    as it is then. A request that passed when the event committed can be
-    refused then, and the content sent can differ.
+<!-- The list restarts so that the numbers below stay as cited. -->
+
 63. **The allocation record of a created space stays when the unit that
     asked for it does not commit** (PL §4.6, question 32). *Assumed:*
     accepted, as the one exception to "no write commits that used a write
@@ -524,9 +510,8 @@ assumption.
     *Assumed:* the body is handed handles down to the cut and finds
     nothing below it, the one exception to "narrowing the argument does
     not change what the body does".
-68. **A cell a handler creates under an explicit cause** names the same
-    cell across events, with its existence label fixed at first creation
-    (PL §3.14, FA §7.5). It extends question 19.
+<!-- The list restarts so that the numbers below stay as cited. -->
+
 69. **`sqliteDatabase`** (BI, LS §4.7). *Assumed:* legal in the reactive
     tier only, with table declarations that are static; a database first
     written with no acting principal has no owner, so a rule that names
@@ -568,6 +553,8 @@ assumption.
   `Default<typeof INITIAL_SHOTS>` names a call result and is to take a
   static default; and `aboutRecordOf` in FabriChat's `manager.tsx` needs
   no overload once `key` flattens.
+- **The rulings of 2026-11-13 are being written into the documents,**
+  and specs pull request #91 does not follow them yet.
 - **Four rulings are not yet in `language-subset.md`:** the per-element
   rule narrowed to state cells (§4.4.1, §12.8, and the catalog entry),
   `key` flattening handles, the function type in data, and the static
