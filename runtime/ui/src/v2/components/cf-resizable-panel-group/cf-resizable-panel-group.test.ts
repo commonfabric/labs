@@ -783,4 +783,35 @@ describe("CFResizablePanelGroup", () => {
       expect(page.first.style.width).toBe("36%");
     });
   });
+
+  describe("members", () => {
+    it("starts no drag from a press on a panel, by mouse or touch", async () => {
+      const page = await mounted("horizontal");
+      expect(mouse(page.first, "mousedown", 100, 0)).toBe(false);
+      expect(touch(page.first, "touchstart", { clientX: 100, clientY: 0 }))
+        .toBe(false);
+      expect(page.group.classList.contains("resizing")).toBe(false);
+    });
+
+    it("ends a drag when the group is taken out of the page", async () => {
+      const page = await mounted("horizontal");
+      expect(mouse(page.handle, "mousedown", 100, 0)).toBe(true);
+      expect(page.group.classList.contains("resizing")).toBe(true);
+      page.group.remove();
+      expect(page.group.classList.contains("resizing")).toBe(false);
+    });
+
+    it("ignores an element leaving that never joined it", async () => {
+      const page = await mounted("horizontal");
+      page.group.memberLeft(document.createElement("div"));
+      expect(page.first.style.width).toBe("36%");
+    });
+
+    it("adopts the panels and handles already inside it when it connects", async () => {
+      const page = built("horizontal");
+      await mount(page.group);
+      expect(page.first.style.width).toBe("36%");
+      expect(page.handle.dataset.orientation).toBe("horizontal");
+    });
+  });
 });

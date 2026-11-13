@@ -37,6 +37,14 @@ export interface PanelGroupMembers {
 /** The group each member has joined. */
 const groups = new WeakMap<HTMLElement, PanelGroupMembers>();
 
+/** Whether `element` is an instance of the class defined for its name, which
+ * runs its lifecycle callbacks. */
+export function isUpgraded(element: Element): boolean {
+  return customElements.get(element.localName)?.prototype.isPrototypeOf(
+    element,
+  ) ?? false;
+}
+
 /** The nearest panel group element above `member`, upgraded or not. */
 export function owningGroupElement(member: Element): Element | null {
   return member.parentElement?.closest(PANEL_GROUP_TAG) ?? null;

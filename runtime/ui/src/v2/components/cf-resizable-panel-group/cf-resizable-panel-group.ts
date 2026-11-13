@@ -3,6 +3,7 @@ import { BaseElement } from "../../core/base-element.ts";
 import { CFResizablePanel } from "../cf-resizable-panel/cf-resizable-panel.ts";
 import {
   adopt,
+  isUpgraded,
   owningGroupElement,
   type PanelGroupMembers,
 } from "./membership.ts";
@@ -204,7 +205,7 @@ export class CFResizablePanelGroup extends BaseElement
           "cf-resizable-panel, cf-resizable-handle",
         )
       ) {
-        if (member.matches(":defined") && owningGroupElement(member) === this) {
+        if (isUpgraded(member) && owningGroupElement(member) === this) {
           adopt(member, this);
         }
       }
