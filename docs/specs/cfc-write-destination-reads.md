@@ -115,6 +115,17 @@ public pending flag through a trigger read. Conflict detection remains in
 force. This lets trusted publication machinery update a shared result whose
 shape label withholds it from the observing runtime.
 
+**The setup's result comparison.** A pattern setup builds the projection it
+places on the piece's result document, the pattern's own result bound to the
+piece, and compares it with the one the document stores to decide whether to
+write it (`#nextResultProjection()` in
+[`runner.ts`](../../runtime/runner/src/runner.ts)). That read of the stored
+result carries `writeDestinationRead`: what it finds decides whether the
+setup writes, never what. The name a setup carries over from the stored result
+is what it writes, so the setup reads it again, at its own slot, without the
+marker. So a label an earlier attempt left on the result's root does not join
+a later setup's flow join, and comes off when that setup rewrites the root.
+
 The marker is opt-in at a call site, never derived from the shape of a read,
 which is what makes the failure direction the safe one: a destination read
 nobody marks stays in the join and over-taints, where a marker reaching a

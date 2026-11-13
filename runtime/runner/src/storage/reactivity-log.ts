@@ -557,8 +557,10 @@ const machineryReadMarker: unique symbol = Symbol(
  * setting operations up or plumbing their results: binding node IO
  * (write-redirect resolution), collecting static redirect write targets,
  * dependency seeding's input/output materialization, result-write plumbing
- * (`sendValueToBinding`), and the list coordinators' container scaffolding
- * (presence probes, slot-identity diffs, `length` during instantiation).
+ * (`sendValueToBinding`), the list coordinators' container scaffolding
+ * (presence probes, slot-identity diffs, `length` during instantiation), and
+ * a setup's probes of the references a stored argument it stages again
+ * carries (`Runner.#readStoredArgument`).
  * Sibling of `schedulerDependencyRead` (§8.10.1: dependency-discovery reads
  * are not consumed inputs) but deliberately NARROWER in effect, and what it
  * excludes depends on what the marked read observed. A marked read that
