@@ -36,6 +36,16 @@ next.
   remains of K12), the corpus counts (K4, K5, A16, F20), and the numbering
   gap after §3.19 of the plan document (K7), which stays because other
   documents cite the numbers after it.
+- **Second cross-read record:**
+  [`../history/specs/compiled-pattern-language/cross-read-2026-11-12.md`](../history/specs/compiled-pattern-language/cross-read-2026-11-12.md)
+  is the same review made after those passes, by five readers, one per
+  seam between documents: 85 findings, numbered 1.1 to 5.17, of which 23
+  would stop an implementer. Its corrections are applied in all seven
+  documents, by seven authors working at the same time from one list of
+  decisions for the findings that offered a choice.
+- **Prototype:** branch `claude/compiled-pattern-prototype` holds a Rust
+  crate at `base/pattern-compiler/`, the front end of stage 2. It is not
+  part of this branch.
 - **Specification change:** draft pull request #91 in `commonfabric/specs`
   (branch `claude/compiled-pattern-label-templates`) carries the label
   semantics as prose, pseudocode, and Lean statements. It includes the
@@ -453,21 +463,80 @@ assumption.
     a row is kept, and an event for a binding the new plan lacks cannot
     be run.
 
+**From the corrections after the second cross-read.**
+
+59. **An explicit cause in the reactive tier** (LS §4.7, question 17; PL
+    §1.3, question 31). *Assumed:* `.for(cause)` there takes a string
+    literal, which takes the place of the declaration's name. A cause
+    that is data is legal only in a function body.
+60. **A `computed` that binds a handler is not promoted** (LS §6.1),
+    because promotion would turn a binding made in a function body into
+    one of the reactive tier. Ten `computed` calls of the corpus fail on
+    this alone. It widens question 49.
+61. **A built-in that needs a requester, where no principal demands it**
+    (BI "The requester of a request"; SS §6.2, question 36). *Assumed:*
+    `agent`, a cross-space or clearance-reading `sqliteQuery`, and
+    `navigateTo` have user or session scope whatever computes their
+    request, and are not requested without a demanding principal, as
+    today. The principal of a completion's transaction and of a
+    materializer's run is not decided. It extends question 45.
+62. **A handler's pending effect after a restart** (SS §2.3, question 38;
+    PL §3.14). *Assumed:* the request is made again at activation, with
+    the references followed and the egress ceiling checked on the content
+    as it is then. A request that passed when the event committed can be
+    refused then, and the content sent can differ.
+63. **The allocation record of a created space stays when the unit that
+    asked for it does not commit** (PL §4.6, question 32). *Assumed:*
+    accepted, as the one exception to "no write commits that used a write
+    that does not".
+64. **Tearing down an instance in another space** (SS §9.3, question 40;
+    ES §2.8). *Assumed:* the home transaction writes the mark of the
+    instance it made, and the other space's loop marks the instances that
+    belong to it there.
+65. **`asScope` on a child** (ES §4.6, question 52). *Assumed:* the scope
+    changes only the child's state cell documents. A kept output of the
+    child that reads no such cell is stored once for the space, where
+    today the whole result cell is per user or session.
+66. **Spaces created without a name by the current runtime** are not
+    found by a compiled instance, because the allocation record is named
+    by the request's own identifier (ES §5.6).
+67. **A handle below the cut of a recursive type** (FA §2.2, request 22).
+    *Assumed:* the body is handed handles down to the cut and finds
+    nothing below it, the one exception to "narrowing the argument does
+    not change what the body does".
+68. **A cell a handler creates under an explicit cause** names the same
+    cell across events, with its existence label fixed at first creation
+    (PL §3.14, FA §7.5). It extends question 19.
+69. **`sqliteDatabase`** (BI, LS §4.7). *Assumed:* legal in the reactive
+    tier only, with table declarations that are static; a database first
+    written with no acting principal has no owner, so a rule that names
+    the owner admits nobody.
+70. **A handler that reads a materializer that cannot run ahead of it**
+    (SS §7.2). *Written in:* the event holds its place until the
+    materializer has run. A materializer that stays invalid keeps the
+    event waiting.
+
 ## Open, and not needing the owner
 
-Both rounds of passes are done, and each document's requests to the others
-are marked met where they are. What is left:
-
+- **The corrections after the second cross-read were written in
+  parallel.** Each author checked that the sections of other documents it
+  cites exist, and not what the others were writing into them at the same
+  time. The overview's sentences that cite `scheduler-and-serving-loop.md`
+  §5.5, §6.1, §7.2, §10.2 and `language-subset.md` §4.7, §6.1 were
+  written from the list of decisions. A short read of those seams is
+  owed, and `execution-and-storage.md` lists new requests 53 to 63 to the
+  scheduler and plan documents that nobody has checked.
 - **The pattern closure's remaining gaps** (K12): which output or argument
   path holds which entry of `Plan.closures`, a conditional between two
   closures, and a closure called through `inSpace`.
-- **Corpus counts** differ among `language-subset.md`,
-  `builtin-inventory.md`, and `footprint-analysis.md` (K4, K5, A16, F20).
 - **`execution-and-storage.md` leaves two things unspecified:** how the
   arrangement of part documents is computed again when a conflict
   withdraws writes at the commit, after the size rule ran; and how the
   instances that belong to a torn-down instance are found when it is not
   loaded.
+- **`scheduler-and-serving-loop.md` does not say** whether a compiled
+  handler that reads an output of a builder-path instance reads a current
+  value (§10.8).
 - **`footprint-analysis.md`, owner question 2** says the current treatment
   of a value passed on unchanged "is what keeps such a body from reading
   the record". A probe showed that a `lift` that returns an input record
@@ -488,23 +557,20 @@ The open questions each document ends with stay where they are.
 
 ## Known limits of what exists
 
-- **The cross-read did not cover every section.** Each reader states what
-  was not read in full at the end of its section of the record. The
-  overview was checked against the three new documents only in part.
-- **Specs pull request #91 is behind `plan-and-label-templates.md`** in
-  what section 2 of the record lists and the passes did not reach:
-  stateful element bodies; the run-time schema check of a child instance
-  and that its argument is always stored; `.for(tag)` with its frozen
-  existence label, `asScope`, and a cell cause computed from data; the
-  declared-default exception of error states; most context reads; the
-  array capture of `map`; the group-mode rules, tie rules, and nullish
-  keys of the collection index and the aggregates; and the pull request's
-  description. It does not state the bound of ten evaluations, the
-  handling identified by its receipt, or that a client cannot read the
-  salt. It has not been reviewed. Its Lean development states the two
-  target theorems; everything added after the first draft is prose and
-  pseudocode only, and the calculus models no body calls, references, or
-  bindings.
+- **Neither cross-read covered every section.** Each reader states what
+  was not read in full at the end of its section of the record. In the
+  second, no reader read `footprint-analysis.md` against the execution or
+  scheduler documents.
+- **Specs pull request #91 follows `plan-and-label-templates.md`** for
+  every label rule the passes and both rounds of corrections wrote, as
+  prose and pseudocode. It reduces the order of steps of a commit across
+  spaces to two rules, and five questions for the owner (7, 11, 36, 39,
+  43) are stated in it without a mark. Its description on GitHub is from
+  the first draft; a current one is drafted and not posted. It has not
+  been reviewed. Its Lean development states the two target theorems and
+  is unchanged since the first draft: the calculus models no body calls,
+  references, bindings, element keys, error states, or outputs stored
+  between causes, so every rule about those is prose and pseudocode only.
 - **Claims about the current system are verified unevenly.** Each pass
   reported what it did not verify. Among them: that running a new pattern
   on an occupied result cell stops the one running there, which three
@@ -521,16 +587,16 @@ The open questions each document ends with stay where they are.
   `runtime/runner/src/ensure-piece-running.ts`), and
   `scheduler-and-serving-loop.md` §5.1 describes the source. That
   specification is outside this work and is not corrected here.
-- **No one has read the seven documents against each other since the
-  passes.** The overview's author read the six detailed documents and
-  the differences found were corrected, but that was not a full
-  cross-read.
-- **Corpus numbers are syntactic.** They come from throwaway scripts over
-  the parse tree with no type information, and three runs disagree on the
-  totals. The share of `computed` calls that promote, the count of
-  per-element callbacks that bind a handler without the index, and how
-  often footprint analysis widens (83 of 1,962 bodies, 4.2%, counting
-  helpers) all need the type-checker prototype.
+- **Corpus numbers are syntactic, from one measurement.**
+  `language-subset.md` §11.1 states the method: the files the pattern type
+  check compiles and what they import, 425 modules, read with the
+  TypeScript parser and no type checker. The three documents quote it and
+  mark each figure that needs types or that the measurement did not
+  reproduce. The tables of `footprint-analysis.md` §11.3 to §11.5 come
+  from that document's own script and cover 1,962 of the 1,966 bodies.
+  How often footprint analysis widens (83 of those 1,962 bodies, 4.2%),
+  and which per-element callbacks run over plain values, need the type
+  checker.
 - **Factory values depend on pending work.** On this branch a factory can
   be stored but not read back as something callable. Pull request #4687 in
   this repository implements
@@ -547,16 +613,17 @@ The open questions each document ends with stay where they are.
 
 1. **The owner rules** on the questions above. A ruling is added to
    [Decided](#decided) and the question removed.
-2. **Read the documents against each other again,** with readers briefed
-   as below, and record the result beside the first record.
-3. **Bring specs pull request #91 up to `plan-and-label-templates.md`**
-   for what [Known limits](#known-limits-of-what-exists) lists, and for
-   each ruling.
-4. **One corpus measurement** with one stated method, so that the three
-   documents quote the same totals.
-5. **Begin stage 2 of the overview's staging:** prototype the subset type
-   checker and footprint analysis, and replace the syntactic corpus numbers
-   with type-checked ones.
+2. **Read the seams the last corrections touched,** as
+   [Open, and not needing the owner](#open-and-not-needing-the-owner)
+   lists them, and correct what differs.
+3. **Stage 2 of the overview's staging,** on branch
+   `claude/compiled-pattern-prototype`: after the front end, the subset
+   type checker, then footprint analysis, and then the corpus numbers
+   that need types. A place where the prototype finds the specification
+   ambiguous or not implementable is corrected in the document that owns
+   the rule.
+4. **Post the drafted description to specs pull request #91** and ask for
+   its review, when the owner decides it leaves draft.
 
 ### Briefing an author
 
